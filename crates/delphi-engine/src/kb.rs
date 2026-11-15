@@ -609,6 +609,7 @@ impl Kb {
             conn.execute("UPDATE kb_documents SET content_blake3 = '', mtime_ns = 0", [])?;
             conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('chunker_version', ?1)", [CHUNKER_VERSION])?;
         }
+        rescope_project_research(&conn)?;
         Ok(Kb { conn, embedder: None, floor: None, seed: None, seeded: 0, reranker: None })
     }
 
@@ -1057,6 +1058,35 @@ fn drop_vectors(conn: &Connection, doc_id: Option<i64>) -> Result<(), KbError> {
     Ok(())
 }
 
+/// The version of the vector scopes ([`vec_scope`]). 2: a project's research has a scope of its own (`specs/115` §3 item 7).
+const VEC_SCOPE_VERSION: &str = "2";
+
+/// Once per index: the vectors of project research that were stored under the project's one scope are dropped, so the next
+/// embedding pass stores them again under the research scope (their chunks become pending; nothing else is touched and no text
+/// is re-read). One transaction, stamped in the same one: interrupted, it has done nothing and runs again; with the stamp present
+/// it is one read of a key. Until those vectors are back, such a row is found by its words, as any chunk awaiting a vector is.
+fn rescope_project_research(conn: &Connection) -> Result<(), KbError> {
+    let at: Option<String> = conn.query_row("SELECT value FROM kb_meta WHERE key = 'vec_scope_version'", [], |r| r.get(0)).ok();
+    if at.as_deref() == Some(VEC_SCOPE_VERSION) {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    if has_vec(&tx) {
+        let docs: Vec<i64> = {
+            let mut st = tx.prepare("SELECT doc_id FROM kb_documents WHERE (zone = 'project' AND rel_path LIKE 'projects/%/files/research/%') OR (zone = 'research' AND rel_path LIKE 'research/projects/%')")?;
+            let rows = st.query_map([], |r| r.get::<_, i64>(0))?;
+            rows.flatten().collect()
+        };
+        for doc in docs {
+            drop_vectors(&tx, Some(doc))?;
+            tx.execute("DELETE FROM kb_chunk_vec WHERE chunk_id IN (SELECT chunk_id FROM kb_chunks WHERE doc_id = ?1)", [doc])?;
+        }
+    }
+    tx.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('vec_scope_version', ?1)", [VEC_SCOPE_VERSION])?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Who may see a vector: `''` for shared text, the role's name for `memory/agents/<role>/`, `'~'` for any other
 /// memory file (visible to no role). The authoritative check is the SQL filter in `allowed`; this only lets the
 /// nearest-neighbour search skip what could never be returned.
@@ -1066,7 +1096,20 @@ fn vec_scope(zone: &str, rel_path: &str) -> String {
     }
     if zone == "project" {
         // A project layer's vectors are its own (`@<id>`), so a role's nearest-neighbour search does not spend its candidates on them.
-        return rel_path.strip_prefix("projects/").and_then(|r| r.split('/').next()).map(|id| format!("@{}", id)).unwrap_or_else(|| "~".into());
+        // Its research is apart again (`@<id>/research`, `specs/115` §3 item 7): the one part another project may be shown, so a search
+        // can name exactly those vectors before it takes its nearest.
+        let mut parts = rel_path.strip_prefix("projects/").unwrap_or("").split('/');
+        return match (parts.next().filter(|id| !id.is_empty()), parts.next(), parts.next()) {
+            (Some(id), Some("files"), Some("research")) => format!("@{}/research", id),
+            (Some(id), _, _) => format!("@{}", id),
+            _ => "~".into(),
+        };
+    }
+    if zone == crate::research_index::ZONE {
+        // A project's claims (`research/projects/<id>/…`) are that project's research; the rest of the zone is the workspace's.
+        if let Some(id) = rel_path.strip_prefix("research/projects/").and_then(|r| r.split('/').next()).filter(|id| !id.is_empty()) {
+            return format!("@{}/research", id);
+        }
     }
     if zone == "episodes" {
         if let Some(trace_file) = rel_path.rsplit("/traces/").next() {
@@ -1077,6 +1120,39 @@ fn vec_scope(zone: &str, rel_path: &str) -> String {
         }
     }
     String::new()
+}
+
+/// The vector scopes ([`vec_scope`]) that can hold a row `opts` may see, when they can be listed; `None` when they cannot (the
+/// operator's own search, which reads every role's memory), and the nearest-neighbour search is then not narrowed. It only
+/// narrows: `allowed_sql` still decides every row. Each entry is a role name or a project id that was checked, so the list holds
+/// no text from outside.
+///
+/// * A role: shared text, its own memory, its project's layer and research, and the research of the projects shared with it.
+/// * No role, and every zone asked for is `project` (or `research` in a search for project research only): exactly the project
+///   scopes. This is how the host tools ask for a project's files and for shared research.
+///
+/// Findings are not narrowed this way: a finding's project is its mission's stamp, not its path, so it stays in the shared scope
+/// and is judged per row after the cut.
+fn vec_scopes(opts: &SearchOpts) -> Option<Vec<String>> {
+    let own = opts.project.as_deref().filter(|id| project_id_ok(id));
+    let only = opts.shared.as_ref().is_some_and(|s| s.only);
+    // The dedicated leg leaves the session's own project files out (`allowed_sql`), so their scope is not a candidate either.
+    let mut project: Vec<String> = own.iter().flat_map(|id| if only { vec![format!("@{}/research", id)] } else { vec![format!("@{}", id), format!("@{}/research", id)] }).collect();
+    project.extend(shared_ids(opts).iter().map(|id| format!("@{}/research", id)));
+    match &opts.role {
+        Some(r) if valid_role(r) => {
+            let mut scopes = vec![String::new(), r.clone()];
+            scopes.extend(project);
+            Some(scopes)
+        }
+        Some(_) => Some(vec![String::new()]),
+        None => {
+            let zones = opts.zones.as_ref()?;
+            let project_only = !zones.is_empty() && zones.iter().all(|z| *z == "project" || (only && *z == crate::research_index::ZONE));
+            // No project scope at all matches nothing, which is what the filter would return.
+            project_only.then(|| if project.is_empty() { vec!["~none".to_string()] } else { project })
+        }
+    }
 }
 
 fn trusted(source_type: &str, status: &str) -> bool {
@@ -1467,13 +1543,10 @@ impl Kb {
         if !opts.include_untrusted {
             sql.push_str(" AND trusted = 1");
         }
-        if let Some(r) = &opts.role {
-            if valid_role(r) {
-                let layer = opts.project.as_deref().filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).map(|id| format!(", '@{}'", id)).unwrap_or_default();
-                sql.push_str(&format!(" AND scope IN ('', '{}'{})", r, layer));
-            } else {
-                sql.push_str(" AND scope = ''");
-            }
+        // `specs/115` §3 item 7: the project filter is applied BEFORE the nearest candidates are taken, wherever the scopes a visible
+        // row can have are known, so a large project (or a large home layer) cannot crowd a small project's research out of them.
+        if let Some(scopes) = vec_scopes(opts) {
+            sql.push_str(&format!(" AND scope IN ({})", scopes.iter().map(|s| format!("'{}'", s)).collect::<Vec<_>>().join(", ")));
         }
         sql.push_str(" ORDER BY distance");
         let near: Vec<(i64, f32)> = {
@@ -3364,6 +3437,85 @@ mod tests {
         assert_eq!(paths(SearchOpts { role: Some("%".into()), ..Default::default() }), vec!["context/ok.md"], "a role name cannot widen the filter");
         assert_eq!(paths(SearchOpts::default()).len(), 3, "the operator sees every role's memory, nothing untrusted or inactive");
         assert_eq!(paths(SearchOpts { include_untrusted: true, ..Default::default() }).len(), 5);
+    }
+
+    /// `specs/115` AC-6 (§3 item 7): with ten thousand passages in project A and ten in project B, a question answered only in B's
+    /// research returns B's passage from the vector leg. A's passages are all nearer the question than B's and none is visible to
+    /// the search, so a search that takes its nearest 120 first and filters after finds nothing; the project filter now comes first.
+    #[test]
+    fn a_large_project_cannot_crowd_a_small_projects_research_out_of_the_vector_candidates() {
+        const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        const C: &str = "cccccccccccccccccccccccccccccccc";
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.attach_embedder(concepts()).unwrap();
+        // A: 100 specs of 100 sections each, every section nothing but the question's own words.
+        let spec: String = (0..100).map(|j| format!("## Section {j}\n\nzebra stripes zebra stripes\n\n")).collect();
+        for i in 0..100 {
+            kb.upsert_from(&format!("projects/{A}/files/specs/s{i}.md"), "project", UNTRUSTED, &format!("# Spec {i}\n\n{spec}"), "t").unwrap();
+        }
+        // B: ten research passages; one answers the question, in more words than A's (so it is farther from it than all of A's).
+        for k in 0..9 {
+            kb.upsert_from(&format!("projects/{B}/files/research/r{k}.md"), "project", UNTRUSTED, &format!("# Note {k}\n\npipe buffer notes number {k}\n"), "t").unwrap();
+        }
+        let answer = format!("projects/{B}/files/research/answer.md");
+        kb.upsert_from(&answer, "project", UNTRUSTED, "# Answer\n\nzebra stripes were seen on the stuck child\n", "t").unwrap();
+        kb.embed_pending(&mut |_, _| {}).unwrap();
+        let (with_vectors, chunks) = kb.vector_counts().unwrap();
+        assert!(chunks >= 10_010 && with_vectors == chunks, "the fixture: ten thousand passages in A and ten in B, all embedded ({with_vectors} of {chunks})");
+        let ask = |opts: SearchOpts| -> Vec<String> { kb.search("zebra stripes", &SearchOpts { legs: Legs::VectorOnly, include_untrusted: true, ..opts }).unwrap().into_iter().map(|h| h.rel_path).collect() };
+        // B's own session, asking for its project as the host tools do.
+        assert_eq!(ask(SearchOpts { zones: Some(vec!["project"]), project: Some(B.into()), ..Default::default() }), std::slice::from_ref(&answer));
+        // A session of a third project that B's and A's research is shared with: B's passage, and none of A's specs.
+        let shared = Some(SharedResearch { projects: vec![(A.into(), "alpha".into()), (B.into(), "beta".into())], ..Default::default() });
+        assert_eq!(ask(SearchOpts { zones: Some(vec!["project"]), project: Some(C.into()), shared: shared.clone(), ..Default::default() }), std::slice::from_ref(&answer));
+        assert_eq!(ask(SearchOpts { zones: Some(vec!["project", "research"]), project: Some(C.into()), shared: shared.clone().map(|s| SharedResearch { only: true, ..s }), ..Default::default() }), std::slice::from_ref(&answer));
+        // An agent's search (a role) of project C with the same list.
+        assert_eq!(ask(SearchOpts { role: Some("builder".into()), project: Some(C.into()), shared, ..Default::default() }), std::slice::from_ref(&answer));
+        // The fixture does crowd: a search that cannot name its scopes (the operator's, no zone) takes A's passages as its nearest
+        // and, since none of them is B's, returns nothing of B's from this leg.
+        assert!(ask(SearchOpts { project: Some(B.into()), ..Default::default() }).is_empty(), "the un-narrowed search is crowded, as before");
+        // The scopes a search names are the ones the rows were stored under.
+        assert_eq!(vec_scope("project", &answer), format!("@{B}/research"));
+        assert_eq!(vec_scope("project", &format!("projects/{A}/files/specs/s1.md")), format!("@{A}"));
+        assert_eq!(vec_scope("project", &format!("projects/{A}/layer/research/x.md")), format!("@{A}"), "only the project's own research folder");
+        assert_eq!(vec_scope("research", &format!("research/projects/{A}/internal/c-1.json")), format!("@{A}/research"));
+        assert_eq!(vec_scope("research", "research/claims/c-1.json"), "");
+        assert_eq!(vec_scopes(&SearchOpts { zones: Some(vec!["project"]), ..Default::default() }), Some(vec!["~none".to_string()]), "no project: no project scope");
+        assert_eq!(vec_scopes(&SearchOpts::default()), None, "the operator's search is not narrowed");
+        assert_eq!(vec_scopes(&SearchOpts { zones: Some(vec!["project", "findings"]), project: Some(B.into()), ..Default::default() }), None, "findings are in the shared scope");
+        assert_eq!(vec_scopes(&SearchOpts { role: Some("%".into()), project: Some(B.into()), ..Default::default() }), Some(vec![String::new()]), "a role name cannot widen the scopes");
+        assert_eq!(vec_scopes(&SearchOpts { zones: Some(vec!["project"]), project: Some("%".into()), shared: Some(SharedResearch { projects: vec![("' OR 1=1".into(), "x".into())], ..Default::default() }), ..Default::default() }), Some(vec!["~none".to_string()]));
+    }
+
+    /// The one-time re-scope (`specs/115` §3 item 7): the vectors of project research stored before the research scope existed are
+    /// dropped once, so they are embedded again under it; nothing else is touched, and a second run does nothing.
+    #[test]
+    fn project_research_vectors_are_rescoped_once_and_the_second_run_does_nothing() {
+        const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.attach_embedder(concepts()).unwrap();
+        kb.upsert_from(&format!("projects/{A}/files/research/r.md"), "project", UNTRUSTED, "# R\n\nzebra stripes\n", "t").unwrap();
+        kb.upsert_from(&format!("projects/{A}/files/specs/s.md"), "project", UNTRUSTED, "# S\n\nzebra stripes\n", "t").unwrap();
+        kb.upsert("context/c.md", "context", &ok_doc("zebra stripes"), "t").unwrap();
+        kb.embed_pending(&mut |_, _| {}).unwrap();
+        assert_eq!(kb.vector_counts().unwrap(), (3, 3));
+        let stamp = |kb: &Kb| kb.conn.query_row("SELECT value FROM kb_meta WHERE key = 'vec_scope_version'", [], |r| r.get::<_, String>(0)).ok();
+        assert_eq!(stamp(&kb).as_deref(), Some(VEC_SCOPE_VERSION), "a new index is stamped when it is made");
+        rescope_project_research(&kb.conn).unwrap();
+        assert_eq!(kb.vector_counts().unwrap(), (3, 3), "stamped: nothing to do");
+        // An index from before the research scope has no stamp.
+        kb.conn.execute("DELETE FROM kb_meta WHERE key = 'vec_scope_version'", []).unwrap();
+        rescope_project_research(&kb.conn).unwrap();
+        assert_eq!(kb.vector_counts().unwrap(), (2, 3), "only the research file's vector was dropped");
+        let left: i64 = kb.conn.query_row("SELECT COUNT(*) FROM kb_vec", [], |r| r.get(0)).unwrap();
+        assert_eq!((left, stamp(&kb).as_deref()), (2, Some(VEC_SCOPE_VERSION)), "no orphaned vector, and the run is recorded");
+        // Awaiting its vector, the row is still found by its words.
+        let lexical = kb.search("zebra", &SearchOpts { legs: Legs::LexicalOnly, include_untrusted: true, zones: Some(vec!["project"]), project: Some(A.into()), ..Default::default() }).unwrap();
+        assert_eq!(lexical.len(), 2);
+        assert_eq!(kb.embed_pending(&mut |_, _| {}).unwrap(), 1, "the next pass embeds it again");
+        rescope_project_research(&kb.conn).unwrap();
+        assert_eq!(kb.vector_counts().unwrap(), (3, 3));
     }
 
     #[test]

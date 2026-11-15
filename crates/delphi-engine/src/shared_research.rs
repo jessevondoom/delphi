@@ -111,13 +111,21 @@ pub fn host_search(ws_dir: &Path, home: &Path, db: &Path, cwd: &Path, query: &st
         role: None,
         limit: (limit * 2).min(10),
         include_untrusted: true,
-        zones: Some(vec!["project", crate::research_index::ZONE, crate::finding_record::ZONE]),
+        zones: Some(vec!["project", crate::research_index::ZONE]),
         project: Some(own.as_str().to_string()),
         findings: FindingsView::Scope(crate::finding_record::scope_word(Some(own.as_str()))),
         shared: Some(shared),
         ..Default::default()
     };
-    let Ok(found) = crate::retrieval::search(home, db, query, opts) else { return HostFound::default() };
+    // Two searches, one answer. Files and claims first: every row they may return is in a project's research scope, so the vector
+    // leg takes its nearest among exactly those (`specs/115` §3 item 7). Findings apart: their project is the mission's stamp, so
+    // they are judged after the cut and must not bring the home layer's vectors into the first search's candidates.
+    let Ok(mut found) = crate::retrieval::search(home, db, query, opts.clone()) else { return HostFound::default() };
+    if let Ok(findings) = crate::retrieval::search(home, db, query, SearchOpts { zones: Some(vec![crate::finding_record::ZONE]), ..opts }) {
+        found.withheld += findings.withheld;
+        found.hits.extend(findings.hits);
+        found.hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    }
     let mut out = HostFound { withheld: found.withheld, ..Default::default() };
     // Kept here as well as in the filter, so a change to the filter cannot widen this answer by itself: a row of another project
     // only when the index says it is shared, and of this project only its own claims. A superseded or draft document is not offered.
