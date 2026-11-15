@@ -698,6 +698,19 @@ mod tests {
         (t, g)
     }
 
+    // specs/115 §8: the research-sharing setting lives in `config.toml` and a project's private flag in `local/projects.json`. No role
+    // may write (or read) either, whatever its globs, so an agent cannot widen what its own session reads.
+    #[test]
+    fn the_files_that_hold_research_sharing_and_the_private_flag_are_closed_to_every_role() {
+        let (_t, g) = setup();
+        for file in ["config.toml", "local/projects.json", "Config.toml", "./config.toml", "local/../config.toml", "local/./projects.json"] {
+            for a in [Access::Write, Access::Read] {
+                assert!(g.check_policy(file, a).is_err(), "{file} {a:?}");
+            }
+        }
+        assert!(never_writable("config.toml").is_some() && never_writable("local/projects.json").is_some());
+    }
+
     // specs/010 §8.2: a stored connector result is reachable only by its exact name, read-only.
     #[test]
     fn payloads_are_readable_only_by_their_exact_hash_name() {

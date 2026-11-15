@@ -325,13 +325,36 @@ fn list(home_dir: &Path, cwd: &Path, explicit: Option<String>) -> Result<()> {
     } else {
         for record in records {
             println!(
-                "{}\t{}\t{}",
+                "{}\t{}\t{}{}",
                 record.project_id,
                 record.display_name,
-                record.root.display()
+                record.root.display(),
+                if record.private { "\tprivate" } else { "" }
             );
         }
     }
+    Ok(())
+}
+
+const PRIVATE_USAGE: &str = "usage: delphi project private <name> on|off";
+
+/// `delphi project private <name> on|off` (`specs/115` §2 item 2): the operator's flag on one project of the workspace. It is
+/// the operator's command: it writes the workspace's project list, which no agent can reach (`local/` is closed to every role).
+fn private(home_dir: &Path, cwd: &Path, explicit: Option<String>, name: &str, word: &str) -> Result<()> {
+    let on = match word {
+        "on" => true,
+        "off" => false,
+        _ => bail!("{PRIVATE_USAGE}"),
+    };
+    let ws = workspace_for_inspection(home_dir, cwd, explicit)?.ok_or_else(|| anyhow!("no workspace yet: register a project first"))?;
+    let (record, changed) = home::set_project_private(&ws.dir, name, on)?;
+    let now = if on {
+        "private: it shares none of its research with the workspace's other projects; its own sessions still read what the others share"
+    } else {
+        "not private: its research is readable from the workspace's other projects while `[projects] research_sharing` is \"workspace\""
+    };
+    println!("Project `{}` ({}) {} {}.", record.display_name, record.project_id, if changed { "is now" } else { "was already" }, now);
+    println!("Nothing was copied or deleted; the next search follows the flag.");
     Ok(())
 }
 
@@ -470,6 +493,10 @@ pub fn cli(args: &[String]) -> i32 {
         }
         Some("list") => list(&home_dir, &cwd, explicit),
         Some("scope") => scope(&home_dir, &cwd, explicit),
+        Some("private") => match (positional.get(1), positional.get(2)) {
+            (Some(name), Some(word)) => private(&home_dir, &cwd, explicit, name, word),
+            _ => Err(anyhow!(PRIVATE_USAGE)),
+        },
         Some("relink") => {
             let id = positional
                 .get(1)
@@ -490,7 +517,7 @@ pub fn cli(args: &[String]) -> i32 {
             clone_project(&home_dir, explicit, &root)
         }
         _ => Err(anyhow!(
-            "usage: delphi project register [path] | init [path] [--yes] | list | scope | index [path] [--refresh] | relink <id> <new-path> | clone [path]"
+            "usage: delphi project register [path] | init [path] [--yes] | list | scope | index [path] [--refresh] | private <name> on|off | relink <id> <new-path> | clone [path]"
         )),
     };
     match result {

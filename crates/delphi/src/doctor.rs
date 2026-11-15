@@ -147,6 +147,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_history(ws, &cfg, &mut r);
     // 21. Knowledge health (specs/119 §5): the same lines as `delphi kb health`, as facts.
     check_knowledge_health(home, ws, &mut r);
+    // 22. Research recall across projects (specs/115 §4 item 3): the setting and the private projects.
+    check_research_sharing(ws, &cfg, &mut r);
     // 18. Settings that were removed because their features are always on (specs/098 §13.2): one line per key an old config still carries.
     check_removed_settings(&cfg, &mut r);
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);
@@ -269,6 +271,18 @@ fn check_knowledge_health(home: &Path, ws: &Workspace, r: &mut Report) {
     for line in delphi_engine::knowledge_health::gather(home, &ws.dir, now).lines(now) {
         r.push(Level::Ok, "21 knowledge-health", "", line.text);
     }
+}
+
+/// `22 research-sharing` (`specs/115` §4 item 3): the `[projects] research_sharing` setting as the next search will read it, and the
+/// projects the operator marked private, by name. A fact; only a value that is neither word is a warning, because it is then read as
+/// `project` (what cannot be read shares nothing), which may not be what the operator meant.
+fn check_research_sharing(ws: &Workspace, cfg_text: &str, r: &mut Report) {
+    const CHECK: &str = "22 research-sharing";
+    let set = toml::from_str::<toml::Value>(cfg_text).ok().and_then(|v| v.get("projects").and_then(|p| p.get("research_sharing")).cloned());
+    if let Some(v) = set.filter(|v| !matches!(v.as_str(), Some("project" | "workspace"))) {
+        r.warn(CHECK, "config.toml", format!("[projects] research_sharing = {v} is neither \"project\" nor \"workspace\": it is read as \"project\" (nothing is shared between projects)"));
+    }
+    r.push(Level::Ok, CHECK, "", delphi_engine::scope::research_sharing_line(&ws.dir));
 }
 
 /// Background validation says something only when it is switched on: whether it is running, or why it stopped (a cap, a backlog, a rolled-back tier).
@@ -1416,6 +1430,27 @@ mod tests {
         assert!(named("not toml [").is_empty(), "an unreadable config is reported elsewhere");
         // a key that is still a setting is not named
         assert!(named("[research]\nfetch_per_host = 3\nfetch_per_run = 20\n").is_empty());
+    }
+
+    /// `specs/115` §4 item 3: the doctor prints the setting and the private projects, and warns only on a value that is neither word.
+    #[test]
+    fn doctor_prints_the_research_sharing_setting_and_the_private_projects() {
+        let (_t, _home, ws, proj) = setup();
+        let lines = |cfg: &str| {
+            fs::write(ws.dir.join("config.toml"), cfg).unwrap();
+            let mut r = Report::default();
+            check_research_sharing(&ws, cfg, &mut r);
+            r.findings.into_iter().filter(|f| f.check == "22 research-sharing").map(|f| (f.level, f.message)).collect::<Vec<_>>()
+        };
+        let got = lines("[workspace]\nname = \"w\"\n");
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(got[0].0 == Level::Ok && got[0].1.starts_with("[projects] research_sharing = \"workspace\"") && got[0].1.ends_with("private projects: none"), "{got:?}");
+        let rec = crate::home::register_project(&ws.dir, &proj).unwrap();
+        crate::home::set_project_private(&ws.dir, &rec.display_name, true).unwrap();
+        let got = lines("[projects]\nresearch_sharing = \"project\"\n");
+        assert!(got.len() == 1 && got[0].1.starts_with("[projects] research_sharing = \"project\"") && got[0].1.ends_with(&format!("private projects (1): {}", rec.display_name)), "{got:?}");
+        let got = lines("[projects]\nresearch_sharing = \"everyone\"\n");
+        assert!(got.len() == 2 && got.iter().any(|(l, m)| *l == Level::Warn && m.contains("read as \"project\"")) && got.iter().any(|(_, m)| m.starts_with("[projects] research_sharing = \"project\"")), "{got:?}");
     }
 
     #[test]

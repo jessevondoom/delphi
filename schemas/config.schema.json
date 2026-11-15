@@ -391,6 +391,14 @@
         "start_chars": { "type": "integer", "minimum": 0, "maximum": 16000, "default": 4000, "description": "How many characters the start passages may take in all (specs/116 section 4.2)." }
       }
     },
+    "projects": {
+      "type": "object",
+      "description": "Research recall across the workspace's projects (specs/115 section 2). The operator's setting: no agent can write it.",
+      "additionalProperties": false,
+      "properties": {
+        "research_sharing": { "enum": ["project", "workspace"], "default": "workspace", "description": "workspace: a session may read the research of the workspace's other projects that are not private, labelled with the project and as not checked; nothing else of another project is readable. project: a project's research is read by that project only. Read at each search, so a change needs no restart." }
+      }
+    },
     "hooks": { "type": "object", "description": "`[[hooks.observe]]` and `[[hooks.deny]]` (specs/018): commands that can only watch or refuse." }
   },
   "additionalProperties": true,

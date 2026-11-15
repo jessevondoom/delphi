@@ -591,6 +591,8 @@ pub struct Config {
     pub mcp: McpConfig,
     /// `[retrieval]`: knowledge retrieval for agents (`specs/064` §4).
     pub retrieval: RetrievalConfig,
+    /// `[projects]`: research recall across the workspace's projects (`specs/115` §2).
+    pub projects: ProjectsConfig,
     /// `[agents]`: operator direct interaction, fleet accessibility, and quarantine (`specs/063` §3.1).
     pub agents: AgentsConfig,
     /// `[host.models.<host>]`: the model name each council role's subagent file asks for on a host that takes free names (`specs/086` §6.3).
@@ -699,6 +701,24 @@ pub const MAX_START_CHARS: usize = 16_000;
 impl Default for RetrievalConfig {
     fn default() -> RetrievalConfig {
         RetrievalConfig { auto: true, start_passages: 6, start_chars: 4000 }
+    }
+}
+
+/// `[projects]` (`specs/115` §2 item 1). `research_sharing`: `workspace` (the default) lets a session read the research of the
+/// workspace's other projects that are not private, labelled; `project` keeps a project's research to that project. The engine
+/// reads the key from the file at each search (`scope::research_sharing`), so a change needs no restart; here it is type-checked.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProjectsConfig {
+    pub research_sharing: String,
+}
+
+/// The two values of `[projects] research_sharing`.
+pub const RESEARCH_SHARING: [&str; 2] = ["project", "workspace"];
+
+impl Default for ProjectsConfig {
+    fn default() -> ProjectsConfig {
+        ProjectsConfig { research_sharing: "workspace".into() }
     }
 }
 
@@ -1111,6 +1131,13 @@ impl Config {
                 Ok(v) if v.start_passages > MAX_START_PASSAGES || v.start_chars > MAX_START_CHARS => errs.push(format!("[retrieval]: start_passages is at most {} and start_chars at most {} (specs/116 §4 item 2)", MAX_START_PASSAGES, MAX_START_CHARS)),
                 Ok(v) => cfg.retrieval = v,
                 Err(e) => errs.push(format!("[retrieval]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("projects") {
+            match v.clone().try_into::<ProjectsConfig>() {
+                Ok(v) if !RESEARCH_SHARING.contains(&v.research_sharing.as_str()) => errs.push("[projects] research_sharing: \"project\" or \"workspace\" (specs/115 §2)".to_string()),
+                Ok(v) => cfg.projects = v,
+                Err(e) => errs.push(format!("[projects]: {}", e)),
             }
         }
         if let Some(v) = root.get("host") {
@@ -1691,6 +1718,19 @@ pub(crate) mod tests {
         assert!(!McpConfig::read("[mcp]\nsession_hooks = false\n").unwrap().session_hooks);
         assert!(McpConfig::read("[mcp]\nsession_hooks = \"yes\"\n").is_none());
         assert!(McpConfig::read("[mcp]\nmax_packs_per_task = -1\n").is_none() && McpConfig::read("[mcp]\nmax_packs_per_session = \"many\"\n").is_none());
+    }
+
+    /// `specs/115` §2 item 1: research is shared across a workspace's projects unless the operator says `project`.
+    #[test]
+    fn research_sharing_defaults_to_workspace_and_takes_only_its_two_words() {
+        assert_eq!(Config::parse("").unwrap().projects.research_sharing, "workspace");
+        assert_eq!(Config::parse("[projects]\n").unwrap().projects.research_sharing, "workspace");
+        for word in RESEARCH_SHARING {
+            assert_eq!(Config::parse(&format!("[projects]\nresearch_sharing = \"{word}\"\n")).unwrap().projects.research_sharing, word);
+        }
+        for bad in ["research_sharing = \"all\"", "research_sharing = true", "research_sharing = \"Workspace\"", "research_sharin = \"project\""] {
+            assert!(Config::parse(&format!("[projects]\n{bad}\n")).is_err(), "{bad}");
+        }
     }
 
     /// `specs/116` §4 item 2: a span starts with six passages and 4,000 characters unless the operator says otherwise, inside fixed ceilings.

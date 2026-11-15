@@ -215,6 +215,10 @@ sandbox = "off"
 # start_passages = 6                 # how many passages a span starts with (at most 10; at most 2 from one document; 0: none)
 # start_chars = 4000                 # how many characters they may take in all (at most 16000)
 
+# Research recall across projects (specs/115). Yours to set: no agent can write this file.
+# [projects]
+# research_sharing = "workspace"     # workspace (default): a session may read the research of this workspace's other projects, labelled with the project, and nothing else of them. project: a project's research stays in that project. `delphi project private <name> on` keeps one project out either way
+
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the
 # PROMOTE conditions permit; the effective mode is the lower of this value and the latch.

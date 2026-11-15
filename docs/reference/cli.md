@@ -67,11 +67,12 @@ Register, scaffold, and inspect directory project scopes.
   delphi project init [path] [--yes] [--workspace <name>] [--home <dir>]
   delphi project list | scope [--workspace <name>] [--home <dir>]
   delphi project index [path] [--refresh] [--workspace <name>] [--home <dir>]
+  delphi project private <name> on|off [--workspace <name>] [--home <dir>]
   delphi project relink <project-id> <new-path> [--home <dir>]
   delphi project clone [path] [--home <dir>]
 ```
 
-A project is a directory scope; Git is optional. `register` writes the identity marker and central project record. `init` lists paths first, asks for confirmation, and creates only missing project folders and `_index.md`; in non-interactive use, pass `--yes`. Existing files are preserved. `index` reports whether `_index.md` is current; `index --refresh` regenerates it (and `.delphi-index/` category indexes for large projects) from the files allowed by `.gitignore`, `.delphiignore` and the default exclusions (credentials, hidden files, caches, build and dependency trees, files over 2 MiB; symlinks are not followed). A hand-edited `_index.md` is never overwritten: a proposed replacement goes to `.delphi-index/proposed-index.md` and the command exits 3.
+A project is a directory scope; Git is optional. `register` writes the identity marker and central project record. `private <name> on` marks a project private (specs/115): it shares none of its research with the workspace's other projects, while its own sessions still read what the others share; `off` clears the flag. The name is the project's display name or its id (`project list` shows both, and `private` beside a private one). Nothing is copied or deleted; the next search follows the flag, and `delphi doctor` prints the setting and the private projects. `init` lists paths first, asks for confirmation, and creates only missing project folders and `_index.md`; in non-interactive use, pass `--yes`. Existing files are preserved. `index` reports whether `_index.md` is current; `index --refresh` regenerates it (and `.delphi-index/` category indexes for large projects) from the files allowed by `.gitignore`, `.delphiignore` and the default exclusions (credentials, hidden files, caches, build and dependency trees, files over 2 MiB; symlinks are not followed). A hand-edited `_index.md` is never overwritten: a proposed replacement goes to `.delphi-index/proposed-index.md` and the command exits 3.
 
 ### `delphi auth`
 
