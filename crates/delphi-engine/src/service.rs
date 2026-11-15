@@ -8455,7 +8455,8 @@ mod tests {
         let n = crate::provisional_notes::find(&ws, "m1", e.payload["id"].as_str().unwrap()).expect("the tier kept the run note");
         assert!(n.role == "scout" && n.kind == "practice" && n.tier == delphi_core::provenance::Tier::L0 && n.tainted(), "{n:?}");
         assert!(n.label().ends_with("from untrusted content"), "{}", n.label());
-        assert_eq!(events_of(&f, crate::provisional_notes::EVENT).len(), 1);
+        // Kept once. (Other notes the run's events stage, such as a capture on contact, may be kept beside it.)
+        assert_eq!(events_of(&f, crate::provisional_notes::EVENT).iter().filter(|k| k.payload["id"] == e.payload["id"]).count(), 1);
         // The result is as before: what the run teaches is not in it.
         let run_id = svc.research.lock().unwrap().as_ref().unwrap().run_id.clone();
         let result = svc.research_jobs.result(&run_id, crate::research_console::SESSION).expect("the job's result");
