@@ -189,9 +189,9 @@ _No standard scope section; open the spec._
 
 ## 120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time
 
-**120: The app scope: a key paired from a terminal, and grants that widen one at a time** · draft (per source at `b23b27e27207`) · tier 0 · [source](../../specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md)
+**120: The app scope: a key paired from a terminal, and grants that widen one at a time** · approved (per source at `740ebf7cd5d6`) · tier 0 · [source](../../specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md)
 
-**source excerpt, untrusted** · `specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md` lines 24-28
+**source excerpt, untrusted** · `specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md` lines 25-29
 
 ```text
 | # | Observation (2026-11-14) |

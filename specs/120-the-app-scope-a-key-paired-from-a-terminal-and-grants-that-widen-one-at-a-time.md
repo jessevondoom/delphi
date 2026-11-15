@@ -3,7 +3,8 @@ id: spec-120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-on
 title: "120: The app scope: a key paired from a terminal, and grants that widen one at a time"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: draft   # written on 2026-11-14 from the operator's direction in a host session: "shouldn't we be able to launch in a secure scope even without user involvement by spawning the app from a terminal with a signed key exchange or similar? i agree to narrowing scope but i think we start narrow and expand explicitly in order to maintain secure operations and support a wide feature set in the app." The direction is the operator's; the design is not yet approved. It amends an operator decision (2026-10-25, spec 005 section 2.1), so only the operator can approve it.
+status: approved   # by the operator, 2026-11-14, in a host session: "approve 120. add to the build plan". The spec was written from the operator's direction earlier that day ("shouldn't we be able to launch in a secure scope even without user involvement by spawning the app from a terminal with a signed key exchange or similar? i agree to narrowing scope but i think we start narrow and expand explicitly in order to maintain secure operations and support a wide feature set in the app."). The operator was shown a summary of the design and its open questions, not every line. It amends an operator decision (2026-10-25, spec 005 section 2.1).
+approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, app, auth, scope, keys, grants, security]
 
 # Spec 120: The app scope
 
-> **Status: draft, 2026-11-14.** Follows the knowledge-loop specs (112 to 119).
+> **Status: approved by the operator, 2026-11-14** (see the frontmatter). Follows the knowledge-loop specs (112 to 119).
 > **Amends:** [`specs/005`](005-console-and-narrator-tui.md) §2.1 (a token for a scope that acts goes only to a client at a terminal; operator decision 2026-10-25) and [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §7, which says that if the app is ever to act it gets "a scope of its own that a terminal vouches for once and that can be revoked, designed in its own spec". This is that spec. **Extends:** [`specs/117`](117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md) §6.
 
 ---

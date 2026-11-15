@@ -141,7 +141,7 @@ Hours by spec, from each spec's slice table:
 | 119 | readiness | 39-52 |
 | | **Total** | **359-474** |
 
-The app scope of [`specs/120`](120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md) (a draft, 35-46 hours) is outside this table; its first three slices can be built at any step and its fourth after step 7.
+The app scope of [`specs/120`](120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md) (approved 2026-11-14 and added to the build plan, 35-46 hours) is outside this table: K1 to K3 can be built at any step, K4 after 112 R6 and 117 E1, K5 and K6 after 117 E5. With it the program is 394 to 520 hours.
 
 Hours are build hours for one builder with tests, as in earlier specs' slice tables. They leave out review, the operator's reading and the red-team passes named in each spec.
 
