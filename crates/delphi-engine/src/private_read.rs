@@ -81,7 +81,8 @@ pub struct Read {
 
 /// Every file of this crate that returns, or can return, the text of a private entry. The inventory test below checks the table against
 /// the accessors it scans for; a reader of private text that is not here fails it.
-pub const READS: [Read; 23] = [
+pub const READS: [Read; 24] = [
+    Read { file: "retrieval.rs", what: "`passages` (`specs/116` §4): reads, with `chunk_content`, the text of the chunks a search just returned, for a span's start context (`span_start`) and the agent's `kb_search`", how: How::NoReturn { why: "it reads only what the search returned, and neither caller sets `include_staged`, so no staged or host-noted entry is among the hits; the index lists no private library source (`Library::indexable`). It returns no private entry's text" } },
     Read { file: "service.rs", what: "`host.search_kb`: the `noted` layer returns entries a host left, with the preview; one the daemon stored private is private text handed to the host. (The same file's `kb.search` and `kb.get` serve the console and the narrator pane with `include_staged`: the operator's own view, not a seat; the per-method tables `HOST_SURFACE` and `MCP_SURFACE` name every method a host can call)", how: How::Marks },
     Read { file: "library_claims.rs", what: "`claim_slice`: opening `@library/claim/<id>`; also reads `source.md` and `excerpts` to check an anchor or a support count, which return counts and verdicts and no text", how: How::Withholds { proof_file: "delphi-engine/src/private_read.rs", proof_test: "a_claim_that_rests_on_a_private_source_is_withheld_from_the_seat_that_opens_it" } },
     Read { file: "engine.rs", what: "block 5 of a span: opens a claim pointer through `claim_slice` (above)", how: How::Withholds { proof_file: "delphi-engine/src/private_read.rs", proof_test: "a_claim_that_rests_on_a_private_source_is_withheld_from_the_seat_that_opens_it" } },

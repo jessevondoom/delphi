@@ -681,16 +681,24 @@ impl AgentsConfig {
     }
 }
 
-/// `[retrieval]` (`specs/064` §4.2). `auto`: a root span starts with at most three passages from the knowledge base.
+/// `[retrieval]` (`specs/064` §4.2, `specs/116` §4 item 2). `auto`: a span starts with passages from the knowledge base. `start_passages`
+/// and `start_chars`: how many, and how many characters in all (six and 4,000 by default; at most ten and 16,000; zero in either
+/// gives a span none).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RetrievalConfig {
     pub auto: bool,
+    pub start_passages: usize,
+    pub start_chars: usize,
 }
+
+/// The most `[retrieval] start_passages` and `start_chars` may be.
+pub const MAX_START_PASSAGES: usize = 10;
+pub const MAX_START_CHARS: usize = 16_000;
 
 impl Default for RetrievalConfig {
     fn default() -> RetrievalConfig {
-        RetrievalConfig { auto: true }
+        RetrievalConfig { auto: true, start_passages: 6, start_chars: 4000 }
     }
 }
 
@@ -1100,6 +1108,7 @@ impl Config {
         }
         if let Some(v) = root.get("retrieval") {
             match v.clone().try_into::<RetrievalConfig>() {
+                Ok(v) if v.start_passages > MAX_START_PASSAGES || v.start_chars > MAX_START_CHARS => errs.push(format!("[retrieval]: start_passages is at most {} and start_chars at most {} (specs/116 §4 item 2)", MAX_START_PASSAGES, MAX_START_CHARS)),
                 Ok(v) => cfg.retrieval = v,
                 Err(e) => errs.push(format!("[retrieval]: {}", e)),
             }
@@ -1682,6 +1691,19 @@ pub(crate) mod tests {
         assert!(!McpConfig::read("[mcp]\nsession_hooks = false\n").unwrap().session_hooks);
         assert!(McpConfig::read("[mcp]\nsession_hooks = \"yes\"\n").is_none());
         assert!(McpConfig::read("[mcp]\nmax_packs_per_task = -1\n").is_none() && McpConfig::read("[mcp]\nmax_packs_per_session = \"many\"\n").is_none());
+    }
+
+    /// `specs/116` §4 item 2: a span starts with six passages and 4,000 characters unless the operator says otherwise, inside fixed ceilings.
+    #[test]
+    fn the_start_budget_defaults_to_six_passages_and_four_thousand_characters_and_is_bounded() {
+        let d = Config::parse("").unwrap().retrieval;
+        assert_eq!((d.auto, d.start_passages, d.start_chars), (true, 6, 4000));
+        let set = Config::parse("[retrieval]\nstart_passages = 3\nstart_chars = 1500\n").unwrap().retrieval;
+        assert_eq!((set.auto, set.start_passages, set.start_chars), (true, 3, 1500));
+        assert_eq!(Config::parse("[retrieval]\nstart_passages = 0\n").unwrap().retrieval.start_passages, 0, "zero gives a span none");
+        for bad in ["start_passages = 11", "start_chars = 16001", "start_passages = -1", "start_pasages = 3"] {
+            assert!(Config::parse(&format!("[retrieval]\n{bad}\n")).is_err(), "{bad}");
+        }
     }
 
     #[test]
