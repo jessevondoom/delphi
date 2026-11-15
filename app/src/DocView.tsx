@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Agent } from './Badge.tsx';
 import { Rich } from './Rich.tsx';
 import { spec } from './avatar.ts';
@@ -6,7 +6,7 @@ import type { Bridge } from './bridge.ts';
 import { dayOf, docTarget, frontmatter, sourceWords, titleOf, type Doc, type Hit } from './kb.ts';
 import type { Info } from './types.ts';
 
-type Props = { bridge: Bridge | null; info: Info | null; light: boolean; path: string; hit?: Hit };
+type Props = { bridge: Bridge | null; info: Info | null; light: boolean; path: string; hit?: Hit; lead?: ReactNode; over?: ReactNode };
 
 // Front matter the facts already show, or that only repeats the title.
 const SHOWN = new Set(['title', 'name', 'author', 'source_type', 'confidence', 'status', 'timestamp', 'tags', 'id']);
@@ -17,7 +17,7 @@ const tagsOf = (v?: string): string[] => (v ? v.replace(/^\[|\]$/g, '').split(',
  * drawn in full. A link to another document opens it here, with a way back; a link to a page, a deck, a picture or a recording
  * opens outside the window. Read-only.
  */
-export function DocView({ bridge, info, light, path, hit }: Props) {
+export function DocView({ bridge, info, light, path, hit, lead, over }: Props) {
   const [trail, setTrail] = useState<string[]>([]);
   const [doc, setDoc] = useState<Doc | null>(null);
   const [problem, setProblem] = useState('');
@@ -55,7 +55,7 @@ export function DocView({ bridge, info, light, path, hit }: Props) {
         {doc.stale && <span className="chip warn">changed since it was indexed</span>}
         <span className="time" style={{ overflowWrap: 'anywhere' }}>{shownHit?.pointer ?? doc.path}</span>
       </div>
-      <h1 className="question" style={{ fontSize: 26 }}>{titleOf(doc.path, doc.text)}</h1>
+      {lead && trail.length === 0 ? <div className="lead">{lead}<div className="stack">{over}<h1 className="question" style={{ fontSize: 26 }}>{titleOf(doc.path, doc.text)}</h1></div></div> : <h1 className="question" style={{ fontSize: 26 }}>{titleOf(doc.path, doc.text)}</h1>}
       <dl className="facts">
         {(author || meta.author) && <div><dt>Author</dt><dd>{author ? <Agent info={info} role={author} light={light} /> : meta.author}</dd></div>}
         {meta.source_type && <div><dt>Source</dt><dd>{sourceWords(meta.source_type)}</dd></div>}

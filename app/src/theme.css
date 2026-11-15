@@ -48,8 +48,16 @@ h1, h2, h3, p, dl, dd, ol, ul { margin: 0; padding: 0; }
 .bdg { display: inline-flex; align-items: center; flex: none; height: 1.6em; padding: 0 .5em; border-radius: .4em; background: currentColor; font: 700 1em/1 var(--mono); white-space: pre; }
 .bdg i { display: inline-block; width: 1ch; text-align: center; font-style: normal; color: var(--ink); }
 .bdg.wait { animation: bdg-ring 1.6s infinite; }
+/* A blink and a pan are frames of the face set by the window (each chip on a timer of its own); only the ring is CSS. */
 @keyframes bdg-ring { 0%, 100% { box-shadow: 0 0 0 .22em rgba(250, 204, 21, 0); } 50% { box-shadow: 0 0 0 .22em rgba(250, 204, 21, .45); } }
 @media (prefers-reduced-motion: reduce) { .bdg { animation: none !important; } }
+/* The large form: crown, seven-cell face on the plate, chin. `--c` is the fill; 1em is one cell's height. */
+.mascot { display: inline-flex; flex-direction: column; flex: none; width: 7ch; font: 700 1em/1 var(--mono); }
+.mascot-crown { display: grid; grid-template-columns: repeat(7, 1fr); height: .42em; }
+.mascot-crown i.on { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent); }
+.mascot-face { display: flex; padding: .42em 0; background: var(--c); border-radius: .16em .16em 0 0; }
+.mascot-face i { flex: 1; text-align: center; font-style: normal; color: var(--ink); white-space: pre; }
+.mascot-chin { height: .36em; border-radius: 0 0 .22em .22em; background: color-mix(in srgb, var(--c) 62%, #000); }
 /* An agent, always: chip, name in bold in its colour, role in regular grey. */
 .agent-id { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; line-height: 1.2; }
 .agent-id .who { font-weight: 700; color: var(--c); white-space: nowrap; }
@@ -151,6 +159,8 @@ button.menu-row:hover, button.menu-row.on { background: var(--sel); }
 .md-picture:disabled { cursor: default; }
 .md-picture canvas { display: block; max-width: 100%; height: auto; }
 .md-caption { padding: 0 10px 8px; font-size: 12px; color: var(--muted); text-align: left; }
+.lead { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.lead .stack { gap: 8px; }
 .said.doc { font-size: 15px; line-height: 1.65; max-width: 760px; }
 .field { height: 44px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line2); background: var(--panel); color: var(--text); font: 400 14px var(--sans); width: 100%; }
 .field.large { height: 52px; padding: 0 16px; border-radius: 10px; font-size: 16px; }

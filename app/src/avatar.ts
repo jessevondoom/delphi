@@ -67,3 +67,52 @@ export function motionOf(activity: string): string {
   if (activity === 'idle' || activity === 'working') return '';
   return 'still';
 }
+
+// ---- Expression and motion (spec 111 §4) ----
+
+/** A face starts a blink this long after its last one: a time of its own between the two, so no two faces blink together. */
+export const BLINK_MIN_MS = 9000;
+export const BLINK_MAX_MS = 33000;
+/** How long each frame of a blink is held, and how long a thinking face looks each way. */
+export const BLINK_FRAME_MS = 150;
+export const PAN_MS = 900;
+
+/** When the next blink starts, in ms from now: `rand` is a number in [0, 1), `Math.random()` by default. */
+export function nextBlinkDelay(rand: number = Math.random()): number {
+  const r = Number.isFinite(rand) ? Math.min(Math.max(rand, 0), 1) : 0.5;
+  return Math.round(BLINK_MIN_MS + r * (BLINK_MAX_MS - BLINK_MIN_MS));
+}
+
+/** A face blinks while the agent is idle or working; every other expression holds. */
+export const blinks = (activity: string): boolean => activity === 'idle' || activity === 'working';
+
+/**
+ * The frames of a role's blink, as three-cell faces: the table's `blink_steps`, else its one blink face. A one-off agent's own
+ * face blinks mechanically: each eye becomes `-` and the mouth stays (spec 087 §3.2).
+ */
+export function blinkFrames(info: Info | null, role: string, face?: string): string[] {
+  if (face) {
+    const c = Array.from(face);
+    return [[c[0] === ' ' ? ' ' : '-', c[1] ?? ' ', c[2] === ' ' ? ' ' : '-'].join('')];
+  }
+  const r = spec(info).roles[role];
+  if (!r) return ['-_-'];
+  if (r.blink_steps?.length) return r.blink_steps;
+  return r.badge.blink ? [r.badge.blink.cells] : [];
+}
+
+/** The mascot's seven-cell face row for an activity; a role the table does not know gets its three cells centred. */
+export function mascotRow(info: Info | null, role: string, activity: string): string {
+  const r = spec(info).roles[role];
+  const row = r?.mascot?.[activity] ?? r?.mascot?.idle;
+  if (row) return row.padEnd(7, ' ');
+  const f = faceOf(info, role, activity).cells.join('');
+  return `  ${f}  `;
+}
+
+/** The mascot's crown: which of its seven cells hold a point, and the colour of the points. */
+export function crownOf(info: Info | null, role: string): { cells: boolean[]; color: string } {
+  const r = spec(info).roles[role];
+  const cells = Array.from((r?.crown ?? '').padEnd(7, ' ')).slice(0, 7).map((c) => c !== ' ');
+  return { cells, color: r?.crown_rgb ?? '#cbd5e1' };
+}

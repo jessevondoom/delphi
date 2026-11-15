@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Agent } from '../Badge.tsx';
+import { Agent, Mascot } from '../Badge.tsx';
 import { DocView } from '../DocView.tsx';
 import { spec } from '../avatar.ts';
 import type { Bridge } from '../bridge.ts';
@@ -34,6 +34,7 @@ export function Team({ bridge, info, light }: Props) {
   const skillList = useMemo(() => skillRows(skills.length ? skills : docs).filter((s) => !filter.trim() || s.name.toLowerCase().includes(filter.trim().toLowerCase())), [skills, docs, filter]);
   const first = agents[0]?.path ?? skillList[0]?.path ?? '';
   const path = open || first;
+  const shownRole = agents.find((a) => a.path === path)?.role;
 
   return (
     <>
@@ -66,7 +67,9 @@ export function Team({ bridge, info, light }: Props) {
         </div>
       </section>
       <article className="main" aria-label="Manifest">
-        {path ? <DocView bridge={bridge} info={info} light={light} path={path} /> : <div className="empty">Choose an agent or a skill to read its manifest.</div>}
+        {path ? (
+          <DocView bridge={bridge} info={info} light={light} path={path} lead={shownRole && shownRole in known ? <Mascot info={info} role={shownRole} light={light} size={26} /> : undefined} over={shownRole ? <Agent info={info} role={shownRole} light={light} /> : undefined} />
+        ) : <div className="empty">Choose an agent or a skill to read its manifest.</div>}
       </article>
     </>
   );

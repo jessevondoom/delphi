@@ -9,6 +9,10 @@ export type AvatarRole = {
   /** Per activity: the three cells between the brackets, and which of them is the mouth (the rest are eyes). */
   badge: Record<string, { cells: string; mouth: number | null }>;
   blink_steps?: string[];
+  /** The mascot: its crown (seven cells, `▄` where there is a point), the crown's colour, and per activity its seven-cell face row. */
+  crown?: string;
+  crown_rgb?: string;
+  mascot?: Record<string, string>;
   alert_eye?: { dark: string; light: string };
 };
 export type AvatarSpec = { version: number; eye: { dark: string; light: string }; roles: Record<string, AvatarRole> };
