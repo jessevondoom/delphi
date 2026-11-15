@@ -43,6 +43,8 @@ pub mod page_meta;
 pub mod page_search;
 #[path = "library_page_validate.rs"]
 pub mod page_validate;
+#[path = "library_topics.rs"]
+pub mod topics;
 #[path = "library_reading.rs"]
 mod reading;
 #[path = "library_workspace.rs"]

@@ -71,6 +71,9 @@ pub struct EngineService {
     /// When the background validator was last looked at, and whether a check of its is running now.
     background_checked: std::sync::atomic::AtomicI64,
     background_running: std::sync::atomic::AtomicBool,
+    /// The idle rebuild of topic pages (`specs/117` §2 item 3): when it last looked, and whether a rebuild is running.
+    topics_checked: std::sync::atomic::AtomicI64,
+    topics_running: std::sync::atomic::AtomicBool,
     /// The merge trigger (`specs/102` §3.2): when the merge ledger was last looked at, and the byte offset the daemon has read to
     /// (`None` until the first look, which starts at the ledger's end so an old merge never concludes a later prompt).
     merge_checked: std::sync::atomic::AtomicI64,
@@ -338,6 +341,9 @@ fn host_err(e: crate::host_rpc::HostErr) -> RpcError {
     err(c, e.to_string())
 }
 
+/// How often the daemon looks for a topic page to rebuild while idle (`specs/117` §2 item 3).
+const TOPICS_TICK_SECS: i64 = 600;
+
 fn need_console(ctx: &CallContext) -> Result<(), RpcError> {
     if ctx.scope == Scope::Console {
         Ok(())
@@ -369,7 +375,7 @@ impl EngineService {
         let _ = engine.research_ask.set(tx);
         // One queue for every research run, under the one limits table (`specs/112` §4 item 6).
         let research_queue = crate::research_jobs::Jobs::with_limits(&engine.settings.research_limits);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: research_queue,
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: research_queue,
             #[cfg(test)]
             research_web: Mutex::new(None), panels: Arc::new(Mutex::new(HashMap::new())) });
         // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
@@ -2394,6 +2400,7 @@ impl EngineService {
                 svc.timer_tick().await;
                 svc.acquire_tick().await;
                 svc.background_validate_tick().await;
+                svc.topics_tick().await;
                 svc.merge_ledger_tick().await;
                 svc.health_tick().await;
             }
@@ -2488,6 +2495,32 @@ impl EngineService {
         tokio::spawn(async move {
             let _ = svc.engine.background_validate_tick(&m, svc.last_operator.load(SeqCst), tasks).await;
             svc.background_running.store(false, SeqCst);
+        });
+    }
+
+    /// Every `TOPICS_TICK_SECS`, while the operator has been quiet for `fact_background::IDLE_SECS` and no task runs: rebuild one due topic
+    /// page (`specs/117` §2 item 3), within `[library.pages] per_day`, unless `auto_rebuild = false`. One at a time, in its own task.
+    async fn topics_tick(self: &Arc<Self>) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = (self.engine.clock_unix)();
+        let pages = self.engine.cfg.get().library.pages.clone();
+        if !pages.enabled || !pages.auto_rebuild || now - self.topics_checked.load(SeqCst) < TOPICS_TICK_SECS {
+            return;
+        }
+        self.topics_checked.store(now, SeqCst);
+        if now - self.last_operator.load(SeqCst) < crate::fact_background::IDLE_SECS || !self.running.lock().unwrap().is_empty() {
+            return;
+        }
+        if self.topics_running.swap(true, SeqCst) {
+            return;
+        }
+        let svc = self.clone();
+        tokio::spawn(async move {
+            // Fixed words only: a reason can carry a page's or a claim's text, which the error log never holds.
+            if let Some(Err(_)) = svc.engine.topic_idle_rebuild().await {
+                delphi_core::elog::warn("daemon", "topic_rebuild_failed", "an idle rebuild of a topic page did not finish", json!({}));
+            }
+            svc.topics_running.store(false, SeqCst);
         });
     }
 
@@ -2926,6 +2959,14 @@ impl EngineService {
         let mut v = e.to_json();
         v["markdown"] = json!(md);
         Ok(v)
+    }
+
+    /// `pages.rebuild`: the operator rebuilds one topic's page now (`specs/117` §2 item 2). Console only; it calls the writer and the validator.
+    async fn pages_rebuild(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let slug = p["slug"].as_str().unwrap_or("").to_string();
+        let e = self.engine.clone().topic_rebuild(&slug).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        Ok(e.to_json())
     }
 
     async fn pages_pin(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -4704,6 +4745,7 @@ impl Extension for ServiceExt {
                 "pages.list" => svc.pages_list(params, ctx).await,
                 "pages.open" => svc.pages_open(params, ctx).await,
                 "pages.pin" => svc.pages_pin(params, ctx).await,
+                "pages.rebuild" => svc.pages_rebuild(params, ctx).await,
                 "pages.dispute" => svc.pages_dispute(params, ctx).await,
                 "pages.promote" => svc.pages_promote(params, ctx).await,
                 "digest.act" => svc.digest_act(params, ctx).await,

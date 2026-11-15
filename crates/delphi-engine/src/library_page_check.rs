@@ -185,7 +185,7 @@ pub fn markers(text: &str) -> Vec<Cite> {
     scan(text).into_iter().flat_map(|(_, _, c)| c).filter(|c| seen.insert((c.source, c.id.clone()))).collect()
 }
 
-fn strip_markers(text: &str) -> String {
+pub(super) fn strip_markers(text: &str) -> String {
     let mut out = String::new();
     let mut at = 0;
     for (s, e, _) in scan(text) {
@@ -200,7 +200,7 @@ pub fn norm(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn blocks(body: &str) -> Vec<String> {
+pub(super) fn blocks(body: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur: Vec<&str> = Vec::new();
     for l in body.lines() {

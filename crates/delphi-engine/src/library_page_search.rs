@@ -120,15 +120,15 @@ fn print(parts: &[&str]) -> String {
 }
 
 /// What a claim looks like to a page: its status, text and whether it is still live.
-fn claim_print(c: &Value) -> String {
+pub(super) fn claim_print(c: &Value) -> String {
     print(&["claim", c["id"].as_str().unwrap_or(""), status(c).as_str(), c["text"].as_str().unwrap_or(""), &c["superseded_by"].to_string()])
 }
 
-fn source_print(id: &str, m: &Value) -> String {
+pub(super) fn source_print(id: &str, m: &Value) -> String {
     print(&["source", id, m["content_hash"].as_str().unwrap_or(""), &m["version"].to_string(), m["status"].as_str().unwrap_or(""), &m["retired"].to_string(), &m["purged"].to_string()])
 }
 
-fn norm_ws(s: &str) -> String {
+pub(super) fn norm_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -448,7 +448,7 @@ impl Library {
         if v["day"].as_u64() == Some(Self::today(now)) { v["count"].as_u64().unwrap_or(0) as u32 } else { 0 }
     }
 
-    fn count_page(&self, now: u64) {
+    pub(super) fn count_page(&self, now: u64) {
         let n = self.pages_today(now) + 1;
         if self.ensure().is_ok() {
             let _ = std::fs::write(self.pages_dir().join("budget.json"), json!({"day": Self::today(now), "count": n}).to_string());
@@ -563,7 +563,7 @@ impl Library {
         SearchedPage { entry: self.entry_of(key, &v, r.now, r.settings.external_ttl_secs, false), path: self.page_file(key), markdown: md, cached: false }
     }
 
-    fn cited_labels(&self, md: &str) -> Vec<String> {
+    pub(super) fn cited_labels(&self, md: &str) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for c in super::page_check::markers(md) {
             if !out.contains(&c.label()) {
@@ -579,7 +579,7 @@ fn span(secs: u64) -> String {
 }
 
 /// The writer's draft made fit for the check: no code fence around it, and no longer than the page cap, cut at a paragraph.
-fn clean_draft(d: &str, max_tokens: u64) -> String {
+pub(super) fn clean_draft(d: &str, max_tokens: u64) -> String {
     let mut t = d.trim();
     if let Some(rest) = t.strip_prefix("```") {
         t = rest.split_once('\n').map_or("", |(_, b)| b).trim_end().strip_suffix("```").unwrap_or(rest).trim();

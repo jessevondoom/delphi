@@ -291,4 +291,82 @@ impl Engine {
         }
         Ok(PageRun { page, notes })
     }
+
+    /// The material for a topic's page (`specs/117` §2 item 4): what the library holds for it.
+    pub fn topic_material(&self, lib: &Library, side: &serde_json::Value) -> crate::library::page_search::Gathered {
+        lib.topic_gather_library(side, Some(&self.ws.dir))
+    }
+
+    /// Rebuild one topic's page now (`specs/117` §2 item 2): the operator's `delphi pages rebuild`, or the idle rebuild. The writer and the
+    /// validator are the search page's; the validator's tokens are journalled against the background share, as a search page's are.
+    pub async fn topic_rebuild(self: &Arc<Self>, slug: &str) -> Result<crate::library::topics::TopicEntry, String> {
+        let settings = self.cfg.get().library.pages.clone();
+        if !settings.enabled {
+            return Err("generated pages are off ([library.pages] enabled = false)".into());
+        }
+        let lib = Library::in_home(&self.ws.home);
+        let side = lib.topic_side(slug).ok_or_else(|| format!("no topic `{}`", slug))?;
+        let now = (self.clock_unix)();
+        let gathered = self.topic_material(&lib, &side);
+        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
+        let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
+        let ledger = self.validator.ledger();
+        let state = state_dir(&self.ws.dir);
+        let week = crate::fact_serve::shares_of(&self.ws.dir, "pages").install_week;
+        let gate = move || share_allows(&state, week, now);
+        let before = ledger.spent();
+        let req = crate::library::topics::TopicRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, gathered };
+        let built = lib.topic_rebuild(req, &writer, &validator, &ledger, &gate).await?;
+        let used = ledger.spent().saturating_sub(before);
+        if used > 0 {
+            Journal::new(&state_dir(&self.ws.dir)).append("span", json!({"mission": BACKGROUND, "tokens": used, "page": true}), now);
+        }
+        Ok(built)
+    }
+
+    /// The idle rebuild (`specs/117` §2 item 3): make a topic for each research topic that has none, then rebuild the due topic that
+    /// waited longest (never built first, then the oldest build). `None` when nothing is due, pages are off, `auto_rebuild` is off or
+    /// today's `per_day` is spent. The caller decides that the daemon is idle.
+    pub async fn topic_idle_rebuild(self: &Arc<Self>) -> Option<Result<crate::library::topics::TopicEntry, String>> {
+        let settings = self.cfg.get().library.pages.clone();
+        if !settings.enabled || !settings.auto_rebuild {
+            return None;
+        }
+        let now = (self.clock_unix)().max(0) as u64;
+        let lib = Library::in_home(&self.ws.home);
+        if lib.pages_today(now) >= settings.per_day {
+            return None;
+        }
+        lib.topics_from_research(&self.ws.dir, now);
+        let ctx = crate::library::topics::DueCtx { ws: Some(&self.ws.dir), now };
+        let mut due: Vec<_> = lib.topic_pages(&ctx).into_iter().filter(|t| t.due.is_some()).collect();
+        due.sort_by_key(|t| (t.built.is_some(), t.built.unwrap_or(0)));
+        let slug = due.first()?.slug.clone();
+        Some(self.topic_rebuild(&slug).await)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::testkit::*;
+
+    /// `specs/117` §2 item 3: the idle rebuild does nothing with `auto_rebuild = false`, builds a due topic otherwise, and then has
+    /// nothing left to do. A topic with no material is the claims page, so no model is called.
+    #[tokio::test]
+    async fn the_idle_rebuild_builds_a_due_topic_only_when_it_is_on() {
+        let f = setup(vec![], 5.0, |_| {});
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        let off = crate::testkit::CONFIG.replace("[access]", "[library.pages]\nauto_rebuild = false\n[access]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&off).unwrap());
+        assert!(f.engine.topic_idle_rebuild().await.is_none(), "off: nothing is rebuilt");
+        assert!(std::fs::read(lib.root().join("pages/lighthouse-lamps.md")).is_err());
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(crate::testkit::CONFIG).unwrap());
+        let built = f.engine.topic_idle_rebuild().await.expect("a due topic").expect("built");
+        assert_eq!((built.slug.as_str(), built.version, built.outcome.as_deref()), ("lighthouse-lamps", 1, Some("claims_only")));
+        assert!(f.engine.topic_idle_rebuild().await.is_none(), "nothing is due any more");
+        assert_eq!(f.model.requests().len(), 0);
+    }
 }
