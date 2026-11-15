@@ -169,6 +169,7 @@ pub mod research_images;
 pub mod research_chain;
 pub mod research_host;
 pub mod research_jobs;
+pub mod research_migrate;
 pub mod research_observed;
 pub mod research_record;
 pub mod research_plan;

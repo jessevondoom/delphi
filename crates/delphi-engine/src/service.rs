@@ -710,6 +710,8 @@ impl EngineService {
             let _ = crate::research_record::point_run(&ws.dir, &c.session, &research_id, t, project_name);
         }
         let recorder = topic.clone().map(|topic| crate::research_record::RunRecorder { topic, run_id: research_id.clone() });
+        // `specs/112` §3.2: the claims the run keeps name its topic, and its project when it has one.
+        let (claims_topic, claims_project) = (topic.as_ref().map(|t| t.id.clone()), project.as_ref().map(|(name, _)| name.clone()));
         let (engine, wsd, home, q) = (self.engine.clone(), ws.dir.clone(), ws.home.clone(), question.clone());
         // The wider fetch (`specs/098` §7.5 item 7a, slice S1d): the URLs this run's searches returned are written to the session's log when
         // the run ends, so a claim the host later proposes with one of them as its source can be refetched by the daemon.
@@ -730,7 +732,7 @@ impl EngineService {
             let retractions = crate::retractions::Policy::load(&home.join("library"), engine.settings.retractions);
             let retractions_line = engine.settings.retractions.then(|| retractions.status_line(&delphi_core::time::now_rfc3339(), engine.settings.retractions_stale_days));
             let refresh_home = home.clone();
-            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()) };
+            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()), topic: claims_topic, project: claims_project };
             let redactor = delphi_core::redact::Redactor::new();
             // Citation chaining (`specs/101` §6): the index exists only when the switch is on; off, nothing is ever sent to it.
             let cites = engine.settings.chain.enabled.then(|| crate::research_host::LiveCites::new(crate::fact_fetch::FetchPolicy::default(), engine.settings.chain.endpoint.clone()).with_doi_endpoint(engine.settings.chain.doi_endpoint.clone()));

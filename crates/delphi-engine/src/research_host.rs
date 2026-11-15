@@ -388,11 +388,44 @@ pub struct LiveLibrary {
     /// The pages the run's web fetched (`specs/112` §4.3). A page the run read is captured from here and never fetched again. `None`
     /// captures no page that was read: there is nothing to take it from, and it is not fetched a second time.
     pub held: Option<Arc<Held>>,
+    /// The research topic the run belongs to (`specs/112` §2.1): each claim the run writes to the library names it.
+    pub topic: Option<String>,
+    /// The registered project the run belongs to, by name: its claims are scoped to that project (`specs/112` §3.2).
+    pub project: Option<String>,
+}
+
+impl LiveLibrary {
+    /// The central library, counting corroboration with the default numbers, as every other writer of a research claim's tags does.
+    fn library(&self) -> crate::library::Library {
+        crate::library::Library::in_home(&self.home)
+    }
+
+    /// The anchor of a claim into one source: the source, the quote found in that source's text, and the page's address as locator.
+    fn anchor(source_id: &str, quote: &str, url: &str) -> crate::library::claims::AnchorSpec {
+        crate::library::claims::AnchorSpec { source_id: source_id.to_string(), locator: Some(url.to_string()), quote: quote.to_string(), prefix: None, suffix: None }
+    }
 }
 
 impl Library for LiveLibrary {
+    /// What the library already holds: the claims the ledger lists (every run's extractions, kept as a log) and the research
+    /// fingerprints of the library's own claims (`specs/112` §3), but for the claims scoped to another project, which this run may
+    /// neither be offered nor add to.
     fn known_fingerprints(&self) -> BTreeSet<String> {
-        std::fs::read_to_string(&self.ledger).unwrap_or_default().lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter_map(|v| v["fingerprint"].as_str().map(String::from)).collect()
+        let mut known: BTreeSet<String> = std::fs::read_to_string(&self.ledger).unwrap_or_default().lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter_map(|v| v["fingerprint"].as_str().map(String::from)).collect();
+        known.extend(self.library().research_fingerprints(self.project.as_deref()));
+        known
+    }
+
+    /// A claim the library holds, found again on a page of this run (`specs/112` §3.3): it gains an anchor into the page's source and
+    /// the run's topic. A claim only the ledger knows (staged before claims reached the library, and not yet migrated) has no library
+    /// claim to add to, and gets none here: `delphi research migrate` writes those.
+    fn anchor_known(&self, fingerprint: &str, x: &Extracted, source_id: &str, url: &str) -> Option<String> {
+        let lib = self.library();
+        lib.claim_by_fingerprint(fingerprint)?;
+        let text = crate::research_run::assertion(x);
+        let anchors = [Self::anchor(source_id, &x.quote, url)];
+        let (claim, _) = lib.add_research_claim(&crate::library::claims::ResearchClaim { text: &text, fingerprint, project: self.project.as_deref(), topic: self.topic.as_deref(), anchors: &anchors }).ok()?;
+        claim["id"].as_str().map(String::from)
     }
 
     /// A page the run read is kept from the snapshot the run's one fetch built, so the stored hash is of the text the scout read and no
@@ -445,7 +478,12 @@ impl Library for LiveLibrary {
     /// A staged claim is one ledger line: `noted`, with where it came from. Nothing here marks a claim validated. The line carries the
     /// tags every claim keeps from the day it is staged (`specs/098` §7.6): origins, trusted sources, whether anything contradicts it,
     /// and how the sources' earlier claims fared (`specs/055` §3.8).
-    fn stage_claim(&self, c: &ClaimRec) -> Result<(), String> {
+    ///
+    /// The ledger stays an append-only log of what each run extracted (`specs/112` §3.4). The claim itself is written to the library
+    /// (`library/claims/<id>.json`, §3.1) with one anchor per source, the project when the run has one, and the run's topic; its
+    /// status is left to be derived, so it reads *noted*, and the run's own verdict and counts are not copied onto it. A claim whose
+    /// fingerprint the library already carries gains the anchors and the topic instead (§3.3). The library's id is returned.
+    fn stage_claim(&self, c: &ClaimRec) -> Result<Option<String>, String> {
         use std::io::Write;
         if let Some(dir) = self.ledger.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -460,11 +498,15 @@ impl Library for LiveLibrary {
             track.disproved += r.disproved;
         }
         let line = json!({"fingerprint": c.fingerprint, "id": c.id, "subject": c.x.subject, "predicate": c.x.predicate, "object": c.x.object, "scope": c.x.scope, "time": c.x.time,
-            "quote": c.x.quote, "source_ids": c.source_ids, "source_urls": c.source_urls, "status": "noted", "trust": "external_untrusted", "retrieved": c.retrieved, "requested_by": self.label,
+            "quote": c.x.quote, "source_ids": c.source_ids, "source_urls": c.source_urls, "status": "noted", "trust": "external_untrusted", "retrieved": c.retrieved, "requested_by": self.label, "topic": self.topic,
             "tags": {"origins": c.support.origins, "trusted_sources": c.support.trusted_sources, "contradicted": c.contested,
                      "track": {"claims": track.claims, "stood": track.stood, "contested": track.contested, "disproved": track.disproved}}});
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&self.ledger).map_err(|e| e.to_string())?;
-        writeln!(f, "{line}").map_err(|e| e.to_string())
+        writeln!(f, "{line}").map_err(|e| e.to_string())?;
+        let text = crate::research_run::assertion(&c.x);
+        let anchors: Vec<crate::library::claims::AnchorSpec> = c.source_ids.iter().enumerate().filter_map(|(i, s)| Some(Self::anchor(s, c.quotes.get(i)?, c.source_urls.get(i).map_or(c.x.locator.as_str(), String::as_str)))).collect();
+        let written = lib.add_research_claim(&crate::library::claims::ResearchClaim { text: &text, fingerprint: &c.fingerprint, project: self.project.as_deref(), topic: self.topic.as_deref(), anchors: &anchors });
+        Ok(written.ok().and_then(|(claim, _)| claim["id"].as_str().map(String::from)))
     }
 
     /// A lead is one line in `host-leads.jsonl` beside the claims ledger: what the search returned for a page the fetcher will not
@@ -592,7 +634,7 @@ mod tests {
     #[test]
     fn a_lead_is_one_capped_line_written_once_with_no_control_characters() {
         let dir = tempfile::tempdir().unwrap();
-        let lib = LiveLibrary { home: dir.path().to_path_buf(), ledger: dir.path().join("research/host-claims.jsonl"), label: "host:test".into(), retractions: crate::retractions::Policy::off(), held: None };
+        let lib = LiveLibrary { home: dir.path().to_path_buf(), ledger: dir.path().join("research/host-claims.jsonl"), label: "host:test".into(), retractions: crate::retractions::Policy::off(), held: None, topic: None, project: None };
         let row = Row { title: format!("A title\u{7}with{}", "t".repeat(500)), url: "https://blog.example/a".into(), snippet: format!("snippet\u{1b}[31m{}", "s".repeat(900)) };
         lib.note_lead(&row).unwrap();
         lib.note_lead(&row).unwrap();
@@ -873,7 +915,7 @@ mod tests {
         w.search_via("does aspirin lower fever").unwrap();
         let page = w.fetch(url).unwrap();
         assert_eq!((page.url.as_str(), page.text.as_str()), (url, text));
-        let lib = LiveLibrary { home: home.path().to_path_buf(), ledger: home.path().join("research/host-claims.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: Some(w.held.clone()) };
+        let lib = LiveLibrary { home: home.path().to_path_buf(), ledger: home.path().join("research/host-claims.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: Some(w.held.clone()), topic: None, project: None };
         let id = lib.capture(&page.url, &page.text, false).await.unwrap();
         let meta = crate::library::Library::in_home(home.path()).read_meta(&id).unwrap();
         let hash: String = Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
@@ -882,14 +924,14 @@ mod tests {
         // the check: the quote is found in the text that was read, and nothing is fetched
         let ctx = JobCtx::with_budget(5);
         let x = Extracted { subject: "aspirin".into(), predicate: "lowers".into(), object: "fever".into(), scope: String::new(), time: String::new(), quote: "lowers fever in adults".into(), locator: url.into() };
-        let claim = ClaimRec { id: "c".into(), fingerprint: "f".into(), group: "g".into(), x, source_ids: vec![id.clone()], source_urls: vec![url.into()], from_trusted: false, state: delphi_core::research::ClaimState::Captured, retrieved: "2026-11-14".into(), support: Default::default(), contested: false };
+        let claim = ClaimRec { id: "c".into(), fingerprint: "f".into(), group: "g".into(), x, source_ids: vec![id.clone()], source_urls: vec![url.into()], quotes: vec!["lowers fever in adults".into()], from_trusted: false, state: delphi_core::research::ClaimState::Captured, retrieved: "2026-11-14".into(), support: Default::default(), contested: false };
         assert_eq!(LiveValidator.check(&ctx, &claim, &[&page]).await.unwrap(), Verdict::Supports);
         assert_eq!(LiveValidator.check(&ctx, &claim, &[]).await.unwrap(), Verdict::Inconclusive, "with no page of the run to read, the check does not go and get one");
         assert_eq!((ctx.steps(), ctx.check_steps()), (0, 1), "the check counts against its own budget and never the search's");
         assert_eq!(canned::served(url), 1, "one fetch: the capture and the check asked for nothing");
         // a text the run did not read at that address is refused, not fetched; and so is a page with no held snapshot at all
         assert!(lib.capture(&page.url, "some other text", false).await.is_err());
-        let unheld = LiveLibrary { held: None, ..LiveLibrary { home: home.path().to_path_buf(), ledger: home.path().join("l.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: None } };
+        let unheld = LiveLibrary { held: None, ..LiveLibrary { home: home.path().to_path_buf(), ledger: home.path().join("l.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: None, topic: None, project: None } };
         assert!(unheld.capture(&page.url, &page.text, false).await.is_err());
         assert_eq!(canned::served(url), 1);
     }
@@ -915,6 +957,132 @@ mod tests {
         assert_eq!(w.allowance.used(), 0, "a trusted page takes none of the wider fetch's allowance");
     }
 
+    // ---- `specs/112` R2: a run's kept claims are library claims; the same claim found again gains an anchor ----
+
+    fn fever_claim() -> Extracted {
+        Extracted { subject: "aspirin".into(), predicate: "lowers".into(), object: "fever".into(), scope: "adults".into(), time: String::new(), quote: "lowers fever in adults".into(), locator: String::new() }
+    }
+
+    /// One run's worth of the live path for one page: the run's own search returns `url`, the page is fetched once and captured, and
+    /// the claim `x` it states is staged, or, when the library already holds it, anchored. Returns the library claim's id.
+    async fn run_keeps(home: &std::path::Path, topic: &str, project: Option<&str>, url: &str, text: &str, x: &Extracted, state: delphi_core::research::ClaimState) -> Option<String> {
+        canned(url, text);
+        let w = searching(&[url]);
+        w.search_via("a question").unwrap();
+        let page = w.fetch(url).unwrap();
+        let lib = LiveLibrary { home: home.to_path_buf(), ledger: home.join("ws/research/host-claims.jsonl"), label: "host:test/m".into(), retractions: crate::retractions::Policy::off(), held: Some(w.held.clone()), topic: Some(topic.to_string()), project: project.map(String::from) };
+        let source_id = lib.capture(&page.url, &page.text, false).await.unwrap();
+        let fp = crate::research_plan::claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
+        if lib.known_fingerprints().contains(&fp) {
+            return lib.anchor_known(&fp, x, &source_id, &page.url);
+        }
+        let rec = ClaimRec { id: fp[..12].to_string(), group: "g".into(), fingerprint: fp, x: x.clone(), source_ids: vec![source_id], source_urls: vec![page.url.clone()], quotes: vec![x.quote.clone()], from_trusted: false, state, retrieved: "2026-11-14".into(), support: crate::corroboration::Support { origins: 7, trusted_sources: 7, ..Default::default() }, contested: false };
+        lib.stage_claim(&rec).unwrap()
+    }
+
+    /// AC-4: two runs find the same claim on two origins. The library holds one claim with two anchors and both topics, not two.
+    #[tokio::test]
+    async fn two_runs_that_find_the_same_claim_on_two_origins_make_one_library_claim_with_two_anchors() {
+        use delphi_core::research::ClaimState;
+        let home = tempfile::tempdir().unwrap();
+        let (t1, t2) = (crate::research_record::topic_id("does aspirin lower fever"), crate::research_record::topic_id("what lowers a fever"));
+        let x = fever_claim();
+        let first = run_keeps(home.path(), &t1, None, "https://r2-origin-a.example/study", "The trial found aspirin lowers fever in adults.", &x, ClaimState::Captured).await.expect("the first run writes the claim");
+        let l = crate::library::Library::in_home(home.path());
+        assert_eq!(l.claims().len(), 1);
+        let c = l.claim(&first).unwrap();
+        assert_eq!((c["text"].as_str(), c["kind"].as_str(), c["scope"].as_str(), c["project"].is_null()), (Some("aspirin lowers fever"), Some("fact"), Some("team"), true), "{c}");
+        assert_eq!(c["topics"], json!([t1]));
+        assert_eq!(c["anchors"].as_array().unwrap().len(), 1);
+        let a = &c["anchors"][0];
+        assert_eq!((a["quote"].as_str(), a["locator"].as_str(), a["state"].as_str(), a["via"].as_str()), (Some("lowers fever in adults"), Some("https://r2-origin-a.example/study"), Some("active"), Some("research")), "{a}");
+        assert_eq!(crate::library::claims::status(&c).as_str(), "noted", "a research claim starts noted");
+        // AC-2, first half: the claim is in `library/claims/`, and a page search on the topic gathers it.
+        assert!(home.path().join("library/claims").join(format!("{first}.json")).is_file());
+        let gathered = l.gather("does aspirin lower a fever", crate::library::pages::Scope::Internal, &[]);
+        assert!(gathered.claims.iter().any(|g| g["id"] == first.as_str()), "a page search gathers the run's claim: {:?}", gathered.hits());
+        // The second run, another origin, another topic: the same claim.
+        let second = run_keeps(home.path(), &t2, None, "https://r2-origin-b.example/review", "A review agrees: aspirin lowers fever in adults.", &x, ClaimState::Captured).await.expect("the second run adds to the claim");
+        assert_eq!(second, first, "one claim, not two");
+        assert_eq!(l.claims().len(), 1);
+        let c = l.claim(&first).unwrap();
+        let sources: Vec<&str> = c["anchors"].as_array().unwrap().iter().filter_map(|a| a["source_id"].as_str()).collect();
+        assert_eq!(sources.len(), 2, "two anchors: {c}");
+        assert_ne!(sources[0], sources[1], "into two sources");
+        assert_eq!(c["topics"], json!([t1, t2]), "the claim names both topics");
+        assert_eq!(c["fingerprints"].as_array().unwrap().len(), 1);
+        for s in &sources {
+            assert!(l.read_meta(s).unwrap()["cited_by"].as_array().unwrap().iter().any(|id| id == first.as_str()), "the source knows the claim cites it");
+        }
+        assert_eq!(crate::library::claims::status(&c).as_str(), "noted", "two origins are not three: still noted");
+        // The same page read again adds no third anchor, and the same topic is named once.
+        let third = run_keeps(home.path(), &t2, None, "https://r2-origin-b.example/review", "A review agrees: aspirin lowers fever in adults.", &x, ClaimState::Captured).await.unwrap();
+        assert_eq!(third, first);
+        let c = l.claim(&first).unwrap();
+        assert_eq!((c["anchors"].as_array().unwrap().len(), c["topics"].as_array().unwrap().len()), (2, 2));
+        // The ledger stays a log of what was extracted: one line, for the run that first extracted the claim; nothing was rewritten.
+        let ledger = std::fs::read_to_string(home.path().join("ws/research/host-claims.jsonl")).unwrap();
+        assert_eq!(ledger.lines().count(), 1, "{ledger}");
+        assert!(ledger.contains(&format!("\"topic\":\"{t1}\"")), "{ledger}");
+    }
+
+    /// `specs/112` §3.1, §3.2 and §9: a run's claim is scoped to the run's project; the run's own verdict and counts are not copied
+    /// onto the library claim, whose status is derived; and a source the library does not hold gives no anchor.
+    #[tokio::test]
+    async fn a_run_in_a_project_scopes_its_claims_and_nothing_the_run_decided_reaches_the_library_claim() {
+        use delphi_core::research::ClaimState;
+        let home = tempfile::tempdir().unwrap();
+        let topic = crate::research_record::topic_id("does aspirin lower fever in the alpha project");
+        // The run "confirmed" the claim and counted seven origins. None of that is the library's business.
+        let id = run_keeps(home.path(), &topic, Some("alpha"), "https://r2-project.example/study", "The trial found aspirin lowers fever in adults.", &fever_claim(), ClaimState::Confirmed).await.unwrap();
+        let l = crate::library::Library::in_home(home.path());
+        let c = l.claim(&id).unwrap();
+        assert_eq!((c["scope"].as_str(), c["project"].as_str()), (Some("project"), Some("alpha")), "{c}");
+        assert!(c.get("validation").is_none() && c.get("status").is_none() && c.get("trust").is_none(), "{c}");
+        assert_eq!(crate::library::claims::status(&c).as_str(), "noted");
+        assert_ne!(c["support"]["origins"], 7, "the count is the library's own, from the anchors: {c}");
+        // A project's claim is offered to that project's missions and to no other (`pull`, the rule that already exists).
+        assert!(l.pull("aspirin lowers fever", None, 5).is_empty());
+        assert!(l.pull("aspirin lowers fever", Some("beta"), 5).is_empty());
+        assert_eq!(l.pull("aspirin lowers fever", Some("alpha"), 5).len(), 1);
+        // Nothing crosses a project's edge: another project, or a run outside any project, that finds the same claim neither adds to
+        // alpha's claim nor takes it over, and makes no second one. (Whether one project may read another's research is `specs/115`.)
+        let before = l.claim(&id).unwrap();
+        for other in [Some("beta"), None] {
+            let t = crate::research_record::topic_id("the same thing asked somewhere else");
+            let got = run_keeps(home.path(), &t, other, "https://r2-elsewhere.example/study", "Elsewhere too: aspirin lowers fever in adults.", &fever_claim(), ClaimState::Captured).await;
+            assert_eq!(got, None, "{other:?}");
+        }
+        assert_eq!(l.claim(&id).unwrap(), before, "alpha's claim is exactly as it was");
+        assert_eq!(l.claims().len(), 1);
+        // A different claim of a run outside any project is a claim of the team.
+        let other = Extracted { object: "pain".into(), quote: "eases pain in adults".into(), ..fever_claim() };
+        let free = run_keeps(home.path(), &topic, None, "https://r2-free.example/study", "It also eases pain in adults, they wrote.", &other, ClaimState::Captured).await.unwrap();
+        assert_eq!(l.claim(&free).unwrap()["scope"], "team");
+        // A run inside a project that finds the team's claim adds its anchor (a page anyone may read) and not its topic id, which is
+        // made from the project's own question.
+        let asked_in_beta = crate::research_record::topic_id("a question only the beta project asked");
+        let again = run_keeps(home.path(), &asked_in_beta, Some("beta"), "https://r2-beta.example/study", "Beta's page says it eases pain in adults as well.", &other, ClaimState::Captured).await;
+        assert_eq!(again.as_deref(), Some(free.as_str()));
+        let team = l.claim(&free).unwrap();
+        assert_eq!((team["anchors"].as_array().unwrap().len(), team["scope"].as_str()), (2, Some("team")), "{team}");
+        assert_eq!(team["topics"], json!([topic]), "the project's topic id did not leave the project: {team}");
+        // A claim whose source the library does not hold is still a claim, with no anchor to count.
+        let lib = LiveLibrary { home: home.path().to_path_buf(), ledger: home.path().join("ws/research/host-claims.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: None, topic: Some(topic.clone()), project: None };
+        let x = Extracted { object: "swelling".into(), ..fever_claim() };
+        let fp = crate::research_plan::claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
+        let rec = ClaimRec { id: fp[..12].to_string(), group: "g".into(), fingerprint: fp, x, source_ids: vec!["s-not-held".into()], source_urls: vec!["https://gone.example/x".into()], quotes: vec!["lowers fever in adults".into()], from_trusted: true, state: ClaimState::Captured, retrieved: "2026-11-14".into(), support: Default::default(), contested: false };
+        let bare = lib.stage_claim(&rec).unwrap().unwrap();
+        assert!(l.claim(&bare).unwrap()["anchors"].as_array().unwrap().is_empty());
+        // A topic id that is not one is refused by the library, so nothing but a topic id is ever written as one.
+        let bad = LiveLibrary { topic: Some("../../etc".into()), ..lib };
+        let y = Extracted { object: "clotting".into(), ..fever_claim() };
+        let fp = crate::research_plan::claim_fingerprint(&y.subject, &y.predicate, &y.object, &y.scope, &y.time);
+        let rec = ClaimRec { id: fp[..12].to_string(), group: "g".into(), fingerprint: fp.clone(), x: y, source_ids: vec![], source_urls: vec![], quotes: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "2026-11-14".into(), support: Default::default(), contested: false };
+        assert_eq!(bad.stage_claim(&rec).unwrap(), None);
+        assert!(l.claim_by_fingerprint(&fp).is_none());
+    }
+
     // ---- citation chaining, the live side (`specs/101` §6) ----
 
     /// A source as the fetcher leaves it: public, a hash, a DOI on its record. `edit` changes the record before it is written back.
@@ -934,7 +1102,7 @@ mod tests {
     }
 
     fn live_library(home: &std::path::Path) -> LiveLibrary {
-        LiveLibrary { home: home.to_path_buf(), ledger: home.join("ledger.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: None }
+        LiveLibrary { home: home.to_path_buf(), ledger: home.join("ledger.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: None, topic: None, project: None }
     }
 
     #[test]

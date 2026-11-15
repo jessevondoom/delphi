@@ -13,6 +13,7 @@
     "source_ids": { "type": "array", "items": { "type": "string" } },
     "kb_hits": { "type": "array", "items": { "type": "string" } },
     "new_claims": { "type": "integer", "minimum": 0, "description": "Deduplicated staged candidates, not search hits." },
+    "library_claims": { "type": "array", "items": { "type": "string", "pattern": "^c-[0-9a-f]{1,30}$" }, "description": "The library claims this run wrote or added an anchor to (specs/112 section 3): `library/claims/<id>.json`. A claim the library already held is listed here and not in `claims`; it gained an anchor and the topic. Each reads `noted` until the library's own rules say otherwise." },
     "contradictions": { "type": "array", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Claim ids that disagree." } },
     "corroboration_pass": {
       "type": "object",
@@ -136,6 +137,7 @@
       "required": ["id", "assertion", "source_ids", "quote", "locator", "retrieved", "licence", "knowledge_status", "contested"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
+        "claim_id": { "type": "string", "pattern": "^c-[0-9a-f]{1,30}$", "description": "The library claim this claim was written as (specs/112 section 3.1). Its status there is derived by the library and is not this run's `knowledge_status`." },
         "assertion": { "type": "string", "minLength": 1 },
         "source_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
         "quote": { "type": "string" },

@@ -98,8 +98,15 @@ pub trait Library: Send + Sync {
     /// (`specs/112` §4.3). An empty `text` is a page the run never read (a chained work's landing address, `specs/101` §6 item 8); the
     /// library fetches that one itself, once.
     fn capture<'a>(&'a self, url: &'a str, text: &'a str, trusted: bool) -> BoxFut<'a, Result<String, String>>;
-    /// Stage a claim by capture on contact (`specs/052`): `noted` unless a check is queued.
-    fn stage_claim(&self, claim: &ClaimRec) -> Result<(), String>;
+    /// Stage a claim by capture on contact (`specs/052`): `noted` unless a check is queued. The claim is written as a library claim
+    /// (`specs/112` §3.1) and its id there is returned; `None` when the library kept no claim for it.
+    fn stage_claim(&self, claim: &ClaimRec) -> Result<Option<String>, String>;
+    /// A page of this run states a claim the library already holds (its fingerprint is in [`known_fingerprints`](Library::known_fingerprints)):
+    /// the claim gains an anchor into the page's source and the run's topic instead of a second claim being made (`specs/112` §3.3).
+    /// Returns the library claim's id, or `None` when the library has no claim to add to. The default adds nothing.
+    fn anchor_known(&self, _fingerprint: &str, _x: &Extracted, _source_id: &str, _url: &str) -> Option<String> {
+        None
+    }
     /// Keep a search result the fetcher will not reach as a `noted` lead: its address, title and snippet, dated, with where it came
     /// from, and nothing more (`specs/098` §7.5 item 1). It is never validated and is not a page. The default keeps nothing.
     fn note_lead(&self, _row: &Row) -> Result<(), String> {
@@ -176,6 +183,8 @@ pub struct ClaimRec {
     pub x: Extracted,
     pub source_ids: Vec<String>,
     pub source_urls: Vec<String>,
+    /// The quote found in each source's text, in the order of `source_ids`: what each of the claim's anchors keeps (`specs/112` §3.2).
+    pub quotes: Vec<String>,
     pub from_trusted: bool,
     pub state: ClaimState,
     pub retrieved: String,
@@ -227,7 +236,7 @@ pub fn validation_order(claims: &[ClaimRec]) -> Vec<usize> {
     first
 }
 
-fn claim_json(c: &ClaimRec, contested: bool) -> Value {
+fn claim_json(c: &ClaimRec, contested: bool, library_id: Option<&str>) -> Value {
     let base: Status = if contested && c.state != ClaimState::Refuted { claim_status(ClaimState::Contradicted) } else { claim_status(c.state) };
     // Three or more independent origins lift a `noted` claim to `corroborated`; contested, checking, validated and disproved all win
     // over a count (`specs/098` §7.6). The count and the trusted-source flag are shown, never read as a reason to trust anything.
@@ -235,12 +244,22 @@ fn claim_json(c: &ClaimRec, contested: bool) -> Value {
     let tags = Tags { origins: c.support.origins, trusted_sources: c.support.trusted_sources, would_ratify: false, protected: false };
     let status = raise_for_tags(base, &tags, &tier_params());
     let detail = if let Some(d) = tier_detail(status, c.support.origins, c.support.trusted_sources) { d } else { format!("{} independent origin(s) · trusted_sources: {}", c.support.origins, c.support.trusted_sources) };
-    json!({
-        "id": c.id, "assertion": format!("{} {} {}", c.x.subject, c.x.predicate, c.x.object).split_whitespace().collect::<Vec<_>>().join(" "),
+    let mut v = json!({
+        "id": c.id, "assertion": assertion(&c.x),
         "source_ids": c.source_ids, "quote": c.x.quote, "locator": c.x.locator, "retrieved": c.retrieved, "licence": "unknown",
         "knowledge_status": status.as_str(), "contested": contested, "from_trusted_source": c.from_trusted,
         "corroboration": {"origins": c.support.origins, "trusted_sources": c.support.trusted_sources, "detail": detail},
-    })
+    });
+    // The library claim this one became (`specs/112` §3.1). An id, and nothing that changes how the claim reads here.
+    if let Some(id) = library_id {
+        v["claim_id"] = json!(id);
+    }
+    v
+}
+
+/// A claim as one line: its subject, predicate and object. The text a library claim is written with.
+pub fn assertion(x: &Extracted) -> String {
+    format!("{} {} {}", x.subject, x.predicate, x.object).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The corroboration of one claim from the sources the run captured for it: its citations are pages the daemon fetched itself, and the
@@ -336,20 +355,24 @@ fn coverage_report(r: &Rungs, kb: usize, trusted_claims: usize, web_claims: usiz
 
 /// Read one page into the claim set: keep it as a source, extract its claims, and merge a claim already known into the claim that holds
 /// it (a second citation) or start a new one. The scout's quote was found in the page's text by code, so each citation is quote-verified.
-/// `true` when the page was kept as a source (whether or not any claim came out of it), `false` when the library refused it. Either
-/// way the run's record is told (`specs/112` §2.2).
-async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) -> bool {
+/// `Some` when the page was kept as a source (whether or not any claim came out of it), `None` when the library refused it. Either
+/// way the run's record is told (`specs/112` §2.2). What `Some` holds is the ids of the library claims that were already held and
+/// gained an anchor from this page (§3.3).
+async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) -> Option<Vec<String>> {
     let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else {
         note(deps, |r| r.refused(&page.url, "capture_failed"));
-        return false;
+        return None;
     };
     note(deps, |r| r.page(&page.url, &source_id, deps.library.content_hash(&source_id).as_deref()));
-    let Ok(found) = deps.scout.extract(question, page).await else { return true };
+    let mut anchored = Vec::new();
+    let Ok(found) = deps.scout.extract(question, page).await else { return Some(anchored) };
     for x in found {
         let fp = claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
         match set.add(&fp, &source_id) {
-            Added::Known => {}
+            // The library already holds this claim: it gains an anchor into this page and the run's topic, and no second claim.
+            Added::Known => anchored.extend(deps.library.anchor_known(&fp, &x, &source_id, &page.url)),
             Added::New => claims.push(ClaimRec {
+                quotes: vec![x.quote.clone()],
                 id: fp[..12].to_string(),
                 group: claim_fingerprint(&x.subject, &x.predicate, "", &x.scope, &x.time),
                 fingerprint: fp,
@@ -367,13 +390,14 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, ret
                     if !c.source_ids.contains(&source_id) {
                         c.source_ids.push(source_id.clone());
                         c.source_urls.push(page.url.clone());
+                        c.quotes.push(x.quote.clone());
                     }
                     c.from_trusted |= trusted;
                 }
             }
         }
     }
-    true
+    Some(anchored)
 }
 
 /// Tell the run's record something, when the run has one.
@@ -631,6 +655,8 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     let (mut seen, mut claims, mut spent) = (Seen::default(), Vec::<ClaimRec>::new(), false);
     // Every page the run read, with the text it read: the check works from these and fetches nothing (`specs/112` §4.3).
     let mut read: Vec<Page> = Vec::new();
+    // The library claims this run wrote or added an anchor to (`specs/112` §3): what its record lists as its claims.
+    let mut library_claims: Vec<String> = Vec::new();
     let (mut pages_read, mut trusted_kept) = (0usize, 0usize);
     let retrieved = day();
     let mut cov = Rungs::default();
@@ -737,9 +763,10 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             if trusted {
                 trusted_kept += 1;
             }
-            if ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
+            if let Some(anchored) = ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
                 log.kept(li);
                 read.push(page);
+                library_claims.extend(anchored);
             } else {
                 log.dropped(li, "capture_failed", 1);
             }
@@ -835,9 +862,10 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                         continue;
                     }
                     let trusted = deps.web.is_trusted(&page.url);
-                    if ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
+                    if let Some(anchored) = ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
                         log.kept(li);
                         read.push(page);
+                        library_claims.extend(anchored);
                     } else {
                         log.dropped(li, "capture_failed", 1);
                     }
@@ -877,10 +905,12 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         c.support = support_of(c, deps);
         c.contested = contested.contains(&c.id);
     }
-    for c in &claims {
-        let _ = deps.library.stage_claim(c);
-    }
-    let claim_values: Vec<Value> = claims.iter().map(|c| claim_json(c, c.contested)).collect();
+    // Each kept claim becomes a library claim (`specs/112` §3.1); the library's id for it goes on the claim in the result.
+    let staged: Vec<Option<String>> = claims.iter().map(|c| deps.library.stage_claim(c).ok().flatten()).collect();
+    library_claims.extend(staged.iter().flatten().cloned());
+    let mut once = BTreeSet::new();
+    library_claims.retain(|id| once.insert(id.clone()));
+    let claim_values: Vec<Value> = claims.iter().zip(&staged).map(|(c, id)| claim_json(c, c.contested, id.as_deref())).collect();
     let answer = match deps.scout.answer(question, &claims).await {
         Ok(a) => a.chars().take(7900).collect::<String>(),
         Err(_) => String::new(),
@@ -908,6 +938,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "answer": if answer.is_empty() { "No claim could be drawn from the sources read. (not validated)".to_string() } else { format!("{} (not validated: model synthesis)", answer) },
         "claims": claim_values, "citations": claims.iter().flat_map(|c| c.source_urls.iter().cloned()).collect::<BTreeSet<_>>(),
         "source_ids": source_ids, "kb_hits": set.kb_hits(), "new_claims": set.new_claims(), "contradictions": conflicts,
+        "library_claims": library_claims,
         "freshness": {"retrieved": retrieved, "last_checked": retrieved},
         "budget_used": {"steps": ctx.steps(), "check_steps": ctx.check_steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
@@ -1006,11 +1037,18 @@ mod tests {
         }
     }
 
+    /// A staged claim's id, its source ids, and the quote found in each source.
+    type Staged = (String, Vec<String>, Vec<String>);
+
     #[derive(Default)]
     struct FakeLib {
         known: BTreeSet<String>,
         captured: Mutex<Vec<(String, bool)>>,
         staged: Mutex<Vec<String>>,
+        /// For each staged claim: its id, its sources and the quote found in each.
+        staged_quotes: Mutex<Vec<Staged>>,
+        /// Each anchor a known claim gained: its fingerprint, the source, the quote.
+        anchored: Mutex<Vec<(String, String, String)>>,
         leads: Mutex<Vec<String>>,
         /// Describe each captured source for the corroboration count (the real library always does).
         describe: bool,
@@ -1069,9 +1107,18 @@ mod tests {
                 Ok(format!("src-{}", host(url)))
             })
         }
-        fn stage_claim(&self, c: &ClaimRec) -> Result<(), String> {
+        fn stage_claim(&self, c: &ClaimRec) -> Result<Option<String>, String> {
             self.staged.lock().unwrap().push(c.id.clone());
-            Ok(())
+            self.staged_quotes.lock().unwrap().push((c.id.clone(), c.source_ids.clone(), c.quotes.clone()));
+            Ok(Some(format!("c-{}", c.id)))
+        }
+        /// As the live library does: a claim it holds gains an anchor; one it does not hold has nothing to add to.
+        fn anchor_known(&self, fingerprint: &str, x: &Extracted, source_id: &str, _url: &str) -> Option<String> {
+            if !self.known.contains(fingerprint) {
+                return None;
+            }
+            self.anchored.lock().unwrap().push((fingerprint.to_string(), source_id.to_string(), x.quote.clone()));
+            Some(format!("c-{}", &fingerprint[..12]))
         }
         fn content_hash(&self, source_id: &str) -> Option<String> {
             Some(format!("sha256:of-{source_id}"))
@@ -1260,8 +1307,8 @@ mod tests {
         assert_eq!(v["kb_hits"].as_array().unwrap().len(), 1);
         assert_eq!(f.lib.staged.lock().unwrap().len(), 1, "only the new claim is staged");
         let recs = [
-            ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support::default(), contested: false },
-            ClaimRec { id: "b".into(), fingerprint: "b".into(), group: "g2".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: true, state: ClaimState::Captured, retrieved: "".into(), support: Support::default(), contested: false },
+            ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], quotes: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support::default(), contested: false },
+            ClaimRec { id: "b".into(), fingerprint: "b".into(), group: "g2".into(), x: x("o"), source_ids: vec![], source_urls: vec![], quotes: vec![], from_trusted: true, state: ClaimState::Captured, retrieved: "".into(), support: Support::default(), contested: false },
         ];
         assert_eq!(validation_order(&recs), [1, 0]);
     }
@@ -1728,7 +1775,7 @@ mod tests {
     #[tokio::test]
     async fn the_validator_queue_ignores_the_count() {
         // The count is display: the order the validator works in is decided by the trusted fast lane alone (`specs/098` §12 item 17).
-        let rich = ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support { origins: 9, trusted_sources: 9, ..Default::default() }, contested: false };
+        let rich = ClaimRec { id: "a".into(), fingerprint: "a".into(), group: "g".into(), x: x("o"), source_ids: vec![], source_urls: vec![], quotes: vec![], from_trusted: false, state: ClaimState::Captured, retrieved: "".into(), support: Support { origins: 9, trusted_sources: 9, ..Default::default() }, contested: false };
         let poor = ClaimRec { id: "b".into(), from_trusted: true, support: Support::default(), ..rich.clone() };
         assert_eq!(validation_order(&[rich, poor]), [1, 0]);
     }
@@ -2154,5 +2201,42 @@ mod tests {
         let plain = Fixture::new(Verdict::Inconclusive);
         let (_, w) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &plain.deps()).await.unwrap());
         assert_eq!(w["claims"].as_array().unwrap().len(), 2, "{w}");
+    }
+
+    // ---- `specs/112` R2: kept claims become library claims; a claim the library holds gains an anchor ----
+
+    #[tokio::test]
+    async fn each_kept_claim_is_staged_with_the_quote_found_in_each_of_its_sources_and_carries_its_library_id() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        let quoted = |object: &str, quote: &str| Extracted { quote: quote.into(), ..x(object) };
+        f.scout.0.insert("https://who.int/a".into(), vec![quoted("fever", "the who's own words")]);
+        f.scout.0.insert("https://nih.gov/b".into(), vec![quoted("fever", "the nih's own words")]);
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let staged = f.lib.staged_quotes.lock().unwrap().clone();
+        let fever = fever(&v);
+        let (_, sources, quotes) = staged.iter().find(|(id, _, _)| Some(id.as_str()) == fever["id"].as_str()).expect("the fever claim was staged");
+        assert_eq!(sources, &["src-who.int", "src-nih.gov"]);
+        assert_eq!(quotes, &["the who's own words", "the nih's own words"], "one quote per source, each the words found in that source");
+        assert_eq!(fever["claim_id"].as_str(), Some(format!("c-{}", fever["id"].as_str().unwrap()).as_str()), "{fever}");
+        let ids: Vec<&str> = v["library_claims"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert_eq!(ids.len(), v["claims"].as_array().unwrap().len(), "every kept claim is a library claim: {v}");
+        assert!(v["claims"].as_array().unwrap().iter().all(|c| ids.contains(&c["claim_id"].as_str().unwrap())));
+    }
+
+    /// `specs/112` §3.3, the runner's half of AC-4: a claim the library already holds is not made a second time; it gains an anchor
+    /// into the page that states it, and the run's record lists it.
+    #[tokio::test]
+    async fn a_claim_the_library_already_holds_gains_an_anchor_instead_of_a_second_claim() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        let held = claim_fingerprint("aspirin", "reduces", "fever", "adults", "");
+        f.lib.known.insert(held.clone());
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let anchored = f.lib.anchored.lock().unwrap().clone();
+        assert_eq!(anchored.iter().map(|(fp, src, _)| (fp.as_str(), src.as_str())).collect::<Vec<_>>(), [(held.as_str(), "src-who.int"), (held.as_str(), "src-nih.gov")], "an anchor for each page that states it");
+        assert!(!f.lib.staged.lock().unwrap().iter().any(|id| held.starts_with(id.as_str())), "no second claim is staged");
+        assert_eq!(v["claims"].as_array().unwrap().len(), 1, "only the claim that is new to the library is one of the run's own: {v}");
+        let ids: Vec<&str> = v["library_claims"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert_eq!(ids.iter().filter(|id| **id == format!("c-{}", &held[..12])).count(), 1, "listed once, though two pages stated it: {ids:?}");
+        assert_eq!(ids.len(), 2, "the held claim that gained anchors and the new claim: {ids:?}");
     }
 }

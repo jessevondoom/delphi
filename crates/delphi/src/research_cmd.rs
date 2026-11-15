@@ -3,6 +3,9 @@
 //! `topics` lists the research records on disk and `show` prints one (`specs/112` §2, §5.3): read-only, from the files a run left in
 //! `research/topics/<topic-id>/` of the workspace or of a registered project. Record text is data and is printed as such.
 //!
+//! `migrate` writes the claims an older `research/host-claims.jsonl` lists as library claims (`specs/112` §3.4). It is a dry run
+//! unless `--apply` is given, and `--apply` is refused inside an agent seat.
+//!
 //! `log` prints the search log of a finished host research job (`specs/101` §3): read-only, it prints what the daemon wrote beside the
 //! result, and calls no model and no network.
 //!
@@ -17,7 +20,7 @@ pub struct Options {
     pub json: bool,
 }
 
-const USAGE: &str = "usage: delphi research topics [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]";
+const USAGE: &str = "usage: delphi research topics [--json] [--home <dir>] [--workspace <name>]\n       delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]";
 
 /// `args` is what follows the command name: `log <id> [flags]` or `retractions import|status [<file>] [flags]`.
 pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
@@ -25,6 +28,7 @@ pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
         Some("topics") => topics(ws_dir, o),
         Some("show") => show(ws_dir, args, o),
         Some("log") => log(ws_dir, args, o),
+        Some("migrate") => migrate(home, ws_dir, args, o),
         Some("retractions") => retractions(home, ws_dir, args, o),
         _ => {
             eprintln!("{USAGE}");
@@ -87,6 +91,26 @@ fn show(ws_dir: &Path, args: &[String], o: &Options) -> i32 {
             1
         }
     }
+}
+
+/// `delphi research migrate [--apply]` (`specs/112` §3.4): the claims `research/host-claims.jsonl` lists, as library claims. It
+/// prints what it would do and changes nothing; only `--apply` writes, and only the operator may ask for that.
+fn migrate(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
+    use delphi_engine::{library::Library, research_migrate as rm};
+    let apply = args.iter().any(|a| a == "--apply");
+    if apply && crate::xenia_terminal::inside_an_agent_seat() {
+        eprintln!("delphi research migrate --apply: refused; writing claims into the library is the operator's to ask for and this process was started by an agent seat. Without --apply it prints what it would do.");
+        return 2;
+    }
+    let lib = Library::in_home(home).with_support(settings(ws_dir).support);
+    let plan = rm::plan(ws_dir, &lib);
+    let applied = (apply && plan.found).then(|| rm::apply(&plan, &lib));
+    if o.json {
+        println!("{}", serde_json::to_string_pretty(&rm::to_json(&plan, applied.as_ref())).unwrap_or_else(|_| "{}".into()));
+    } else {
+        print!("{}", rm::render(&plan, applied.as_ref()));
+    }
+    i32::from(applied.is_some_and(|a| a.failed > 0))
 }
 
 fn log(ws_dir: &Path, args: &[String], o: &Options) -> i32 {
@@ -200,6 +224,54 @@ mod tests {
         assert_eq!(cli(h, d.path(), &strings(&["log", "../etc/passwd"]), &Options { json: false }), 1, "only a clean id names a file");
         assert_eq!(cli(h, d.path(), &strings(&["log"]), &Options { json: false }), 2);
         assert_eq!(cli(h, d.path(), &strings(&["frobnicate", "r-t-1"]), &Options { json: false }), 2, "not a subcommand");
+    }
+
+    /// `specs/112` AC-8, through the command: `migrate` without `--apply` writes nothing, in the library or the workspace; with it,
+    /// the claims the file lists are library claims, and the file is as it was.
+    #[test]
+    fn migrate_is_a_dry_run_until_apply_is_given() {
+        use delphi_engine::library::{AddOpts, Budgets, Level, Library};
+        fn tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
+            let (mut out, mut stack) = (Vec::new(), vec![dir.to_path_buf()]);
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else {
+                        out.push((p.strip_prefix(dir).unwrap().to_string_lossy().to_string(), std::fs::read(&p).unwrap()));
+                    }
+                }
+            }
+            out.sort();
+            out
+        }
+        let (home, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let lib = Library::in_home(home.path());
+        let page = ws.path().join("page.md");
+        std::fs::write(&page, "Aspirin lowers fever in adults, the trial found.").unwrap();
+        let source = lib.add_file(&page, &AddOpts { licence: Some("CC0-1.0".into()), level: Some(Level::Full), ..AddOpts::default() }, &Budgets::default()).unwrap().id;
+        std::fs::create_dir_all(ws.path().join("research")).unwrap();
+        let line = json!({"fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "subject": "aspirin", "predicate": "lowers", "object": "fever", "quote": "lowers fever in adults", "source_ids": [source], "source_urls": ["https://example.org/a"], "status": "validated"});
+        std::fs::write(ws.path().join("research/host-claims.jsonl"), format!("{line}\n")).unwrap();
+        let (home_before, ws_before) = (tree(home.path()), tree(ws.path()));
+        for json in [false, true] {
+            assert_eq!(cli(home.path(), ws.path(), &strings(&["migrate"]), &Options { json }), 0);
+        }
+        assert_eq!(tree(home.path()), home_before, "a dry run changed the library");
+        assert_eq!(tree(ws.path()), ws_before, "a dry run changed the workspace");
+        assert!(lib.claims().is_empty());
+        assert_eq!(cli(home.path(), ws.path(), &strings(&["migrate", "--apply"]), &Options { json: false }), 0);
+        let claims = lib.claims();
+        assert_eq!(claims.len(), 1);
+        assert_eq!((claims[0]["text"].as_str(), delphi_engine::library::claims::status(&claims[0]).as_str()), (Some("aspirin lowers fever"), "noted"), "what the line called itself is not copied");
+        assert_eq!(tree(ws.path()), ws_before, "the file is a log: applying does not change it");
+        assert_eq!(cli(home.path(), ws.path(), &strings(&["migrate", "--apply"]), &Options { json: true }), 0, "again: nothing new");
+        assert_eq!(lib.claims().len(), 1);
+        // A workspace with no file has nothing to migrate, and says so without making anything.
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(cli(home.path(), empty.path(), &strings(&["migrate", "--apply"]), &Options { json: false }), 0);
+        assert!(tree(empty.path()).is_empty());
     }
 
     /// `specs/112` §5.3: `topics` lists the records on disk and `show` prints one; both only read.

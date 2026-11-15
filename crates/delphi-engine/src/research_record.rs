@@ -606,9 +606,10 @@ pub fn render(topic: &Topic, rec: &Value) -> String {
 }
 
 /// Write how a job ended into its record (`research_jobs::Jobs::submit_with`'s `on_end`): the state, and for a run that produced a
-/// result, its answer, its search log and the ids of its claims. A failure to write is not the job's.
+/// result, its answer, its search log and the ids of its claims: the library claims it wrote or added an anchor to (`specs/112`
+/// §3). A failure to write is not the job's.
 pub fn record_end(topic: &Topic, run_id: &str, ended: &crate::research_jobs::Ended<'_>) {
-    let ids: Vec<String> = ended.result.and_then(|r| r["claims"].as_array()).into_iter().flatten().filter_map(|c| c["id"].as_str().map(String::from)).collect();
+    let ids: Vec<String> = ended.result.and_then(|r| r["library_claims"].as_array()).into_iter().flatten().filter_map(|c| c.as_str().map(String::from)).collect();
     let _ = topic.finish(run_id, ended.state.as_str(), ended.result, &ids, ended.error, ended.ms);
 }
 
