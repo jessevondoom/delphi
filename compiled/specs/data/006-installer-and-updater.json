@@ -114,7 +114,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/006-installer-and-updater.md",
-    "sha256": "4e43e7327b237dbb5ce11375030c40b5da40a91cfae8f63708dbe1629755815c"
+    "sha256": "809340f94d76daf9c1b66091a522ffe07f066601e76668c71db82f1df40a4213"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +127,7 @@
       },
       "text": "status: approved   # by the operator, 2026-10-23, after Council 002; amendments 004-A1, 006-A1..A6 approved by the operator 2026-10-23 to 2026-10-25 and folded in"
     },
-    "sha256": "4e43e7327b237dbb5ce11375030c40b5da40a91cfae8f63708dbe1629755815c",
+    "sha256": "809340f94d76daf9c1b66091a522ffe07f066601e76668c71db82f1df40a4213",
     "word": "approved"
   },
   "spec": {
@@ -142,10 +142,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2150,
+      "end": 2322,
       "end_line": 27,
       "line": 23,
-      "start": 1213
+      "start": 1385
     },
     "text": "This specification defines how Delphi is packaged, distributed to multiple operators, initialized, and updated without ever corrupting operator-private memory or active worktrees:\n1. **Single-Binary Embedded Seed Packaging (`delphi` / `delphi-core`):** Shipping the compiled runtime with an embedded, hash-verified snapshot of built-in `GOVERNANCE.md`, `SPEC.md`, `REVIEW.md`, `agents/`, `skills/`, `themes/`, `templates/`, seed `context/` and `memory/` templates.\n2. **Multi-Operator Distribution Channels:** Signed binary installer (`curl -fsSL ... | sh`), Homebrew Tap, and GitHub Releases with Ed25519 / Minisign signature verification.\n3. **The Three-Zone Ownership Model:** Strict separation between **Zone 1 (Core Upstream)**, **Zone 2 (Team-Shared Context & Specs)**, and **Zone 3 (Operator-Private Memory & Worktrees)**.\n4. **Atomic Updater (`delphi update`), Team Sync (`delphi sync`), and Health Validator (`delphi doctor`).**"
   }

@@ -19,39 +19,54 @@ pub struct Template {
     pub host: &'static str,
     pub exe: &'static str,
     pub id: &'static str,
+    /// The host version the add and remove rows were run on.
     pub proven_on: &'static str,
+    /// The host version the update rows were run on (spec 074 §10.5): its own proof, not the add row's.
+    pub proven_update: &'static str,
     pub dirs: &'static [&'static str],
     pub add: [&'static [&'static str]; 2],
     pub remove: [&'static [&'static str]; 2],
+    /// Spec 074 §10.2: the host's own update of an installed plugin. Empty for a host with no proven row.
+    pub update: &'static [&'static [&'static str]],
     pub writes: &'static str,
     pub manual_add: &'static str,
     pub manual_remove: &'static str,
+    pub manual_update: &'static str,
 }
 
 pub const TEMPLATES: [Template; 2] = [
     Template {
         host: "claude-code",
         exe: "claude",
-        id: "claude-v1",
+        // v2: the update row was added (spec 074 §10.2), so an audit line tells the two sets of rows apart.
+        id: "claude-v2",
         proven_on: "Claude Code 2.1.314",
+        proven_update: "Claude Code 2.1.325",
         dirs: &[".local/bin", ".claude/local", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
         add: [&["plugin", "marketplace", "add", SOURCE], &["plugin", "install", "delphi@delphi"]],
         remove: [&["plugin", "uninstall", "delphi@delphi"], &["plugin", "marketplace", "remove", "delphi"]],
         writes: "~/.claude/plugins/ (marketplace and plugin files), ~/.claude/settings.json (enabledPlugins, extraKnownMarketplaces)",
         manual_add: "claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi",
         manual_remove: "claude plugin uninstall delphi@delphi && claude plugin marketplace remove delphi",
+        // Proven on Claude Code 2.1.325 to refresh a stale marketplace clone by itself (spec 074 §10.5).
+        update: &[&["plugin", "update", "delphi@delphi"]],
+        manual_update: "claude plugin update delphi@delphi",
     },
     Template {
         host: "copilot",
         exe: "copilot",
-        id: "copilot-v1",
+        id: "copilot-v2",
         proven_on: "Copilot CLI 1.0.105",
+        proven_update: "Copilot CLI 1.0.111",
         dirs: &[".local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
         add: [&["plugin", "marketplace", "add", SOURCE], &["plugin", "install", "delphi@delphi"]],
         remove: [&["plugin", "uninstall", "delphi@delphi"], &["plugin", "marketplace", "remove", "delphi"]],
         writes: "~/.copilot/ (settings.json: enabledPlugins, extraKnownMarketplaces; installed-plugins/)",
         manual_add: "copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi",
         manual_remove: "copilot plugin uninstall delphi@delphi && copilot plugin marketplace remove delphi",
+        // Both proven to run on Copilot CLI 1.0.111; whether the second refreshes the catalog alone was not established.
+        update: &[&["plugin", "marketplace", "update", "delphi"], &["plugin", "update", "delphi@delphi"]],
+        manual_update: "copilot plugin marketplace update delphi && copilot plugin update delphi@delphi",
     },
 ];
 
@@ -147,13 +162,13 @@ pub fn find_host_above(dirs: &[PathBuf], name: &str, floor: Option<&Path>) -> Re
     Err(format!("`{name}` was not found in {}", dirs.iter().map(|d| sanitize(&d.display().to_string())).collect::<Vec<_>>().join(", ")))
 }
 
-/// The fixed argv of the two steps (no shell; every element is a constant).
-pub fn argv(exe: &Path, steps: &[&[&str]; 2]) -> Vec<Vec<String>> {
+/// The fixed argv of each step (no shell; every element is a constant).
+pub fn argv(exe: &Path, steps: &[&[&str]]) -> Vec<Vec<String>> {
     steps.iter().map(|st| std::iter::once(exe.display().to_string()).chain(st.iter().map(|x| x.to_string())).collect()).collect()
 }
 
 /// The plan text: everything the operator would consent to. Dynamic values are sanitised.
-pub fn render_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, addable: bool) -> String {
+pub fn render_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, addable: bool, link: &connect_run::Link, home: &Path) -> String {
     let mut o = String::new();
     o.push_str(&format!("delphi connect {}: plan (nothing has been run or written)\n", t.host));
     o.push_str(&format!("host CLI: {} (resolves to {})\n", sanitize(&exe.listed.display().to_string()), sanitize(&exe.canonical.display().to_string())));
@@ -166,6 +181,7 @@ pub fn render_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, addable:
     o.push_str("environment: only a fixed safe PATH, HOME, LANG and LC_*, TERM and a private TMPDIR; proxy, token, loader, Git, npm, Python, Ruby and XDG variables are dropped\n");
     o.push_str(&format!("source: {SOURCE}, a GitHub repository, fetched by {} at connect time; it then tracks Delphi's releases (no commit or version is pinned: spec 071 D-5(B))\n", t.exe));
     o.push_str(&format!("expected writes: {}\n", t.writes));
+    o.push_str(&connect_run::link_line(link, home));
     o.push_str("network: github.com, as the host decides\n");
     o.push_str(&format!("state found now: {}: {}\n", pre.state.name(), sanitize(&pre.detail)));
     if addable {
@@ -184,8 +200,43 @@ pub fn confirmation(host: &str, plan: &str) -> String {
     format!("CONNECT {host} {h}")
 }
 
+/// Spec 074 §10.2 item 1: what `delphi update` says about the host plugins once the program is current. One line for each host
+/// whose Delphi plugin is older than this release, with the cure, and one when a plugin is installed and cannot be launched.
+/// Read-only: it runs no host CLI and writes nothing.
+pub fn host_plugin_notes(home: &Path, release: &str, launch: &mcp_check::Launchable) -> Vec<String> {
+    use mcp_check::State;
+    let mut out = Vec::new();
+    let mut installed = false;
+    for host in ["claude-code", "copilot", "codex"] {
+        let Ok(c) = mcp_check::check_host(host, home, release) else { continue };
+        installed |= matches!(c.state, State::Configured | State::Stale | State::Incompatible);
+        if c.state != State::Stale {
+            continue;
+        }
+        let cure = match template(host).filter(|t| !t.update.is_empty()) {
+            Some(t) => format!("`delphi connect {host} --update` (or `{}`)", t.manual_update),
+            None => c.fix.as_deref().map_or_else(|| format!("see `delphi mcp --check {host}`"), |f| format!("`{}`", sanitize(f))),
+        };
+        out.push(format!("{host}: the Delphi plugin there was not updated with the program: {}. Update it: {cure}", sanitize(&c.detail)));
+    }
+    // Not launchable, or launchable as another install: either way the plugin does not run the program just updated.
+    if installed && (!launch.ok || !launch.this_binary) {
+        out.push(format!("host plugins: launchable: {}", sanitize(&launch.line())));
+    }
+    out
+}
+
+/// Spec 074 §10.3 item 1: beside the host's own command, the consented way to cure a stale plugin, for a host with an update row.
+pub fn update_pointer(host: &str, state: mcp_check::State) -> Option<String> {
+    (state == mcp_check::State::Stale && template(host).is_some_and(|t| !t.update.is_empty())).then(|| format!("delphi connect {host} --update"))
+}
+
+/// Spec 074 §10.3 item 2: how to let Claude Code keep the plugin current by itself. Claude Code documents only this interactive
+/// route for a marketplace the operator added, so Delphi neither sets nor reads the setting.
+pub const AUTO_UPDATE_TIP: &str = "tip: Claude Code does not auto-update a marketplace you added yourself. To let it keep the Delphi plugin current, run `/plugin` in a session, open Marketplaces, select `delphi` and choose Enable auto-update. Until then, `delphi update` tells you when the plugin falls behind";
+
 fn usage() -> i32 {
-    eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]\n       delphi connect claude-code --theme [--dry-run | --remove] [--light | --dark]");
+    eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]\n       delphi connect claude-code|copilot --update [--dry-run]\n       delphi connect claude-code --theme [--dry-run | --remove] [--light | --dark]");
     2
 }
 
@@ -194,9 +245,15 @@ pub fn cmd(args: &[String]) -> i32 {
     let status = rest.contains(&"--status");
     let dry = rest.contains(&"--dry-run");
     let remove = rest.contains(&"--remove");
+    let update = rest.contains(&"--update");
     let Some(host) = rest.iter().find(|a| !a.starts_with("--")) else { return usage() };
     // Spec 110 X2: Codex and Gemini CLI install Delphi's own files, not a marketplace plugin. `--remove --dry-run` previews a removal.
     if crate::connect_files::handles(host) {
+        if update {
+            // Spec 074 §10.2 item 6: these hosts have no marketplace plugin that connect manages.
+            eprintln!("delphi connect: `--update` is for the hosts that install the Delphi plugin (claude-code, copilot). For {host}, `delphi connect {host} --status` says what is stale and `delphi connect {host}` writes Delphi's files again");
+            return 2;
+        }
         if [status, dry, remove].iter().filter(|x| **x).count() > 1 && !(dry && remove && !status) || rest.iter().any(|a| a.starts_with("--") && !matches!(*a, "--status" | "--dry-run" | "--remove")) {
             return usage();
         }
@@ -223,7 +280,8 @@ pub fn cmd(args: &[String]) -> i32 {
         eprintln!("delphi connect: `{}` is not a host connect supports (claude-code, copilot, codex, gemini); use the manual commands from `delphi mcp --print-config {}`", sanitize(host), sanitize(host));
         return 2;
     };
-    if [status, dry, remove].iter().filter(|x| **x).count() > 1 || rest.iter().any(|a| a.starts_with("--") && !matches!(*a, "--status" | "--dry-run" | "--remove")) {
+    // One mode at a time; `--update --dry-run` previews an update.
+    if [status, dry, remove, update].iter().filter(|x| **x).count() > 1 && !(update && dry && !status && !remove) || rest.iter().any(|a| a.starts_with("--") && !matches!(*a, "--status" | "--dry-run" | "--remove" | "--update")) {
         return usage();
     }
     let Some(home) = std::env::var("HOME").ok().filter(|h| Path::new(h).is_absolute()) else {
@@ -241,9 +299,12 @@ pub fn cmd(args: &[String]) -> i32 {
     };
     if status {
         println!("{}: {}: {}", t.host, pre.state.name(), sanitize(&pre.detail));
-        println!("{}: launchable: {}", t.host, mcp_check::LAUNCHABLE);
+        println!("{}: launchable: {}", t.host, sanitize(&crate::launchable_now(home).line()));
         println!("{}: launch path: {}", t.host, crate::launch_path_line(home));
         println!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| "nothing to do".into()));
+        if let Some(p) = update_pointer(t.host, pre.state) {
+            println!("or:   {p} (the same update, run for you after you confirm its plan)");
+        }
         return 0;
     }
     if !dry {
@@ -253,15 +314,28 @@ pub fn cmd(args: &[String]) -> i32 {
         }
     }
     let addable = connect_run::addable(t, &pre, home);
+    let link = connect_run::link_now(home);
     let exe = match find_host(&search_dirs(t, home), t.exe) {
         Ok(exe) => exe,
         Err(e) => {
-            eprintln!("delphi connect: {e}. Manual commands: {}", if remove { t.manual_remove } else { t.manual_add });
+            eprintln!("delphi connect: {e}. Manual commands: {}", if remove { t.manual_remove } else if update { t.manual_update } else { t.manual_add });
             return 1;
         }
     };
+    if update {
+        if let Err(e) = connect_run::updatable(t, home) {
+            eprintln!("delphi connect: {e}");
+            return 2;
+        }
+    }
+    if dry && update {
+        let plan = connect_run::update_plan(t, &exe, &pre, &link, home);
+        print!("{plan}");
+        println!("confirmation that `delphi connect {} --update` will require for exactly this plan: {}", t.host, connect_run::update_confirmation(t.host, &plan));
+        return 0;
+    }
     if dry {
-        let plan = render_plan(t, &exe, &pre, addable);
+        let plan = render_plan(t, &exe, &pre, addable, &link, home);
         print!("{plan}");
         println!("confirmation that `delphi connect {}` will require for exactly this plan: {}", t.host, confirmation(t.host, &plan));
         return 0;
@@ -275,13 +349,20 @@ pub fn cmd(args: &[String]) -> i32 {
         let plan = connect_run::remove_plan(t, &exe);
         let expect = connect_run::remove_confirmation(t.host, &plan);
         (plan, expect)
+    } else if update {
+        let plan = connect_run::update_plan(t, &exe, &pre, &link, home);
+        let expect = connect_run::update_confirmation(t.host, &plan);
+        (plan, expect)
     } else {
         if !addable {
             eprintln!("delphi connect: something of Delphi's is already present, and connect only adds what is absent: {}: {}", pre.state.name(), sanitize(&pre.detail));
             eprintln!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| format!("see `delphi connect {} --status`", t.host)));
+            if let Some(p) = update_pointer(t.host, pre.state) {
+                eprintln!("or:   {p}");
+            }
             return 2;
         }
-        let plan = render_plan(t, &exe, &pre, true);
+        let plan = render_plan(t, &exe, &pre, true, &link, home);
         let expect = confirmation(t.host, &plan);
         (plan, expect)
     };
@@ -292,11 +373,20 @@ pub fn cmd(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let result = if remove { connect_run::remove(t, &proof, &exe, home, &delphi_home) } else { connect_run::connect(t, &proof, &exe, home, &delphi_home, release) };
+    let result = if remove {
+        connect_run::remove(t, &proof, &exe, home, &delphi_home)
+    } else if update {
+        connect_run::update(t, &proof, &exe, home, &delphi_home, release, &link)
+    } else {
+        connect_run::connect(t, &proof, &exe, home, &delphi_home, release, &link)
+    };
     match result {
         Ok(m) => {
             println!("{m}");
             if !remove && t.host == "claude-code" {
+                println!("{AUTO_UPDATE_TIP}");
+            }
+            if !remove && !update && t.host == "claude-code" {
                 // Spec 106 §12 G6 item 3: a role's name is bold in the host's own text with `badge_style = "markdown"`, and in colour in a
                 // status line Delphi never writes for you.
                 println!("tip: `[mcp] badge_style = \"markdown\"` in config.toml makes a role's name bold where it signs; for a status line naming the adopted role in its colour, add \"statusLine\": {{\"type\": \"command\", \"command\": \"delphi mcp --statusline --host claude-code\"}} to Claude Code's settings.json yourself");
@@ -378,16 +468,67 @@ mod tests {
         exe_in(&t.path().join("x"), 0o755);
         let mut h = find_host_above(&[t.path().join("x")], "claude", Some(&root(&t))).unwrap();
         let pre = mcp_check::Check { state: mcp_check::State::Missing, detail: "not installed\nFORGED: yes".into(), fix: None };
-        let plan = render_plan(template("copilot").unwrap(), &h, &pre, true);
+        let none = connect_run::Link::Unavailable;
+        let plan = render_plan(template("copilot").unwrap(), &h, &pre, true, &none, t.path());
         assert!(plan.contains("plugin marketplace add jessevondoom/delphi") && plan.contains("plugin install delphi@delphi"));
+        assert!(plan.contains("launch path: the plugin runs") && plan.contains("no link is made"), "the plan says what happens to the launch path: {plan}");
+        let made = render_plan(template("copilot").unwrap(), &h, &pre, true, &connect_run::Link::Make("/opt/homebrew/bin/delphi".into()), t.path());
+        assert!(made.contains("this would make it a link to /opt/homebrew/bin/delphi"));
+        assert_ne!(confirmation("copilot", &made), confirmation("copilot", &plan), "the link is part of what is confirmed");
         assert!(plan.contains("not probed") && plan.contains("this would add"));
         assert!(!plan.contains("\nFORGED"), "a control character cannot start a new line");
         let c = confirmation("copilot", &plan);
         assert!(c.starts_with("CONNECT copilot ") && c.len() == "CONNECT copilot ".len() + 12);
         h.sha256 = "0".repeat(64);
-        assert_ne!(confirmation("copilot", &render_plan(template("copilot").unwrap(), &h, &pre, true)), c, "another plan needs another confirmation");
+        assert_ne!(confirmation("copilot", &render_plan(template("copilot").unwrap(), &h, &pre, true, &none, t.path())), c, "another plan needs another confirmation");
         let present = mcp_check::Check { state: mcp_check::State::Configured, detail: "x".into(), fix: None };
-        assert!(render_plan(template("copilot").unwrap(), &h, &present, false).contains("connect would refuse"));
+        assert!(render_plan(template("copilot").unwrap(), &h, &present, false, &none, t.path()).contains("connect would refuse"));
+    }
+
+    /// Spec 074 §10.2 item 1: `delphi update` names a plugin the program has outrun, and stays silent otherwise.
+    #[test]
+    fn update_names_a_stale_plugin_with_its_cure_and_says_nothing_for_a_host_without_one() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let ok = mcp_check::Launchable { ok: true, this_binary: true, detail: "x".into() };
+        let no = mcp_check::Launchable { ok: false, this_binary: false, detail: "nothing at the launch path".into() };
+        let other = mcp_check::Launchable { ok: true, this_binary: false, detail: "a different `delphi`".into() };
+        assert!(host_plugin_notes(home, "0.6.2", &no).is_empty(), "no plugin anywhere: nothing to say, even about the launch path");
+        std::fs::create_dir_all(home.join(".claude/plugins")).unwrap();
+        std::fs::write(home.join(".claude/plugins/installed_plugins.json"), r#"{"version":2,"plugins":{"delphi@delphi":[{"scope":"user","version":"0.5.4"}]}}"#).unwrap();
+        std::fs::write(home.join(".claude/settings.json"), r#"{"enabledPlugins":{"delphi@delphi":true}}"#).unwrap();
+        let notes = host_plugin_notes(home, "0.6.2", &ok);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].starts_with("claude-code: ") && notes[0].contains("plugin 0.5.4 is older than this binary (0.6.2)"), "{notes:?}");
+        assert!(notes[0].contains("`delphi connect claude-code --update`") && notes[0].contains("`claude plugin update delphi@delphi`"), "{notes:?}");
+        let notes = host_plugin_notes(home, "0.6.2", &no);
+        assert!(notes.len() == 2 && notes[1].starts_with("host plugins: launchable: no (nothing at the launch path)"), "{notes:?}");
+        // Current: silent about the release, and still says when it cannot be launched or when the plugin runs another install.
+        assert!(host_plugin_notes(home, "0.5.4", &ok).is_empty());
+        let skew = host_plugin_notes(home, "0.5.4", &other);
+        assert!(skew.len() == 1 && skew[0].contains("launchable: yes (a different `delphi`)"), "{skew:?}");
+        for tm in &TEMPLATES {
+            assert!(tm.id.ends_with("-v2") && tm.proven_update != tm.proven_on, "{}: the update rows carry their own proof", tm.host);
+        }
+        assert_eq!(host_plugin_notes(home, "0.5.4", &no).len(), 1);
+        // Codex has no update row: its own fix is printed.
+        std::fs::create_dir_all(home.join(".codex/plugins/cache/delphi/delphi/0.5.4")).unwrap();
+        std::fs::write(home.join(".codex/config.toml"), "[plugins.\"delphi@delphi\"]\nenabled = true\n").unwrap();
+        let notes = host_plugin_notes(home, "0.6.2", &ok);
+        assert!(notes.iter().any(|n| n.starts_with("codex: ") && n.contains("`codex plugin add delphi@delphi`") && !n.contains("--update")), "{notes:?}");
+    }
+
+    /// Spec 074 §10.3: the consented update is named beside the host's own command only where it exists and only for a stale plugin.
+    #[test]
+    fn the_update_pointer_is_for_a_stale_plugin_on_a_host_with_an_update_row() {
+        use mcp_check::State;
+        assert_eq!(update_pointer("claude-code", State::Stale).as_deref(), Some("delphi connect claude-code --update"));
+        assert_eq!(update_pointer("copilot", State::Stale).as_deref(), Some("delphi connect copilot --update"));
+        assert_eq!(update_pointer("codex", State::Stale), None, "codex has no row");
+        for s in [State::Configured, State::Missing, State::Incompatible, State::Unknown, State::Unverified] {
+            assert_eq!(update_pointer("claude-code", s), None);
+        }
+        assert!(AUTO_UPDATE_TIP.contains("/plugin") && AUTO_UPDATE_TIP.contains("Enable auto-update") && !AUTO_UPDATE_TIP.contains('\n'));
     }
 
     #[test]
@@ -398,6 +539,10 @@ mod tests {
         assert_eq!(cmd(&a(&["vim", "--dry-run"])), 2);
         assert_eq!(cmd(&a(&["codex", "--status", "--remove"])), 2, "codex flags are exclusive too");
         assert_eq!(cmd(&a(&["claude-code", "--dry-run", "--status"])), 2);
+        assert_eq!(cmd(&a(&["claude-code", "--update", "--remove"])), 2, "one mode at a time");
+        assert_eq!(cmd(&a(&["claude-code", "--update", "--status"])), 2);
+        assert_eq!(cmd(&a(&["codex", "--update"])), 2, "codex has no marketplace plugin that connect manages");
+        assert_eq!(cmd(&a(&["gemini", "--update", "--dry-run"])), 2);
         assert_eq!(cmd(&a(&[])), 2);
     }
 }
