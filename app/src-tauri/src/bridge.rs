@@ -59,6 +59,57 @@ pub fn kb_target_ok(target: &str) -> bool {
     target.len() <= 2048 && !target.contains(['\n', '\r', '#']) && KB_READS.contains(&path)
 }
 
+/// The most pixels a side the window may ask a picture for (spec 118 §4 item 3). The daemon holds the same ceiling; the
+/// bridge holds it too, so a window that asks for more never makes the daemon decode and send it.
+pub const IMAGE_SIDE_MAX: u64 = 1600;
+
+/// The `kb.get` target the bridge sends for a target the window asked for, or `None` when the window may not make that
+/// read. Every target must pass [`kb_target_ok`]. A picture's size, `max`, is clamped to 1 to [`IMAGE_SIDE_MAX`] here,
+/// read the way the daemon reads it (percent-decoded name and value, the last one given counts); a `max` that is not a
+/// number is dropped, so the daemon's default applies. A library picture (`src=lib:...`) is refused: the app may ask for
+/// one only once it has a licence record (spec 118 §4 item 4, which needs slice P1's record); that form of the read goes
+/// here when it does.
+pub fn kb_target(target: &str) -> Option<String> {
+    if !kb_target_ok(target) {
+        return None;
+    }
+    let Some(("/v1/image", query)) = target.split_once('?') else { return Some(target.to_string()) };
+    let mut kept: Vec<String> = Vec::new();
+    let mut max = None;
+    for part in query.split('&').filter(|p| !p.is_empty()) {
+        let (k, v) = part.split_once('=').unwrap_or((part, ""));
+        match query_decode(k).as_str() {
+            "max" => max = Some(query_decode(v)),
+            "src" if query_decode(v).starts_with("lib:") => return None,
+            _ => kept.push(part.to_string()),
+        }
+    }
+    if let Some(n) = max.and_then(|v| v.parse::<u64>().ok()) {
+        kept.push(format!("max={}", n.clamp(1, IMAGE_SIDE_MAX)));
+    }
+    Some(format!("/v1/image?{}", kept.join("&")))
+}
+
+/// A query name or value decoded as the daemon decodes it (`kbserve::parse_query`): `+` is a space, `%XX` a byte.
+fn query_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match (b[i], b.get(i + 1).copied().and_then(hex), b.get(i + 2).copied().and_then(hex)) {
+            (b'+', _, _) => out.push(b' '),
+            (b'%', Some(h), Some(l)) => {
+                out.push(h * 16 + l);
+                i += 2;
+            }
+            (c, _, _) => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// How the bridge finds the socket: the app's asks `delphi`; a test's names its own.
 pub type Locator = Box<dyn Fn() -> Option<(Value, PathBuf)> + Send + Sync>;
 
@@ -503,6 +554,29 @@ mod tests {
             assert!(!kb_target_ok(bad), "{bad}");
         }
         assert!(!kb_target_ok(&format!("/v1/search?q={}", "x".repeat(2100))));
+    }
+
+    #[test]
+    fn a_pictures_size_is_clamped_by_the_bridge_and_library_pictures_wait_for_their_licence_record() {
+        let t = |s: &str| kb_target(s);
+        // Not a picture: sent as written; not a listed read: refused as before.
+        assert_eq!(t("/v1/doc?path=a.md&max=99999").as_deref(), Some("/v1/doc?path=a.md&max=99999"));
+        assert_eq!(t("/v1/health?max=1"), None);
+        assert_eq!(t("/v1/image?path=a.md&src=x.png").as_deref(), Some("/v1/image?path=a.md&src=x.png"), "no `max`: the daemon's default");
+        assert_eq!(t("/v1/image?path=a.md&src=x.png&max=1200").as_deref(), Some("/v1/image?path=a.md&src=x.png&max=1200"));
+        assert_eq!(t("/v1/image?max=99999&path=a.md&src=x.png").as_deref(), Some("/v1/image?path=a.md&src=x.png&max=1600"), "past the ceiling is the ceiling");
+        assert_eq!(t("/v1/image?path=a.md&src=x.png&max=0").as_deref(), Some("/v1/image?path=a.md&src=x.png&max=1"));
+        // Read as the daemon reads it: a percent-encoded name or value, and the last of several, are found and clamped.
+        assert_eq!(t("/v1/image?path=a.md&src=x.png&m%61x=%39%39%39%39%39").as_deref(), Some("/v1/image?path=a.md&src=x.png&max=1600"));
+        assert_eq!(t("/v1/image?path=a.md&max=10&src=x.png&max=7000").as_deref(), Some("/v1/image?path=a.md&src=x.png&max=1600"));
+        assert_eq!(t("/v1/image?path=a.md&src=x.png&max=18446744073709551616").as_deref(), Some("/v1/image?path=a.md&src=x.png"), "too big to be a number: the default");
+        for not_a_number in ["-5", "1e9", "+5", "12px", ""] {
+            assert_eq!(t(&format!("/v1/image?path=a.md&src=x.png&max={not_a_number}")).as_deref(), Some("/v1/image?path=a.md&src=x.png"), "{not_a_number}");
+        }
+        // A library picture is not a read the app makes until it has a licence record (spec 118 §4 item 4).
+        for lib in ["/v1/image?src=lib:src1/a.png", "/v1/image?src=lib%3Asrc1/a.png&max=400", "/v1/image?path=a.md&src=x.png&src=lib:s/a.png"] {
+            assert_eq!(t(lib), None, "{lib}");
+        }
     }
 
     #[test]

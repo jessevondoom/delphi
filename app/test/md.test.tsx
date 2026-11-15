@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Rich } from '../src/Rich.tsx';
+import { PICTURE_SIDE_MAX, Rich, pictureSide, pictureTarget } from '../src/Rich.tsx';
 import { inline, isWeb, parse, resolvePath } from '../src/md.ts';
 
 test('emphasis, code, links and pictures are found in a line, and anything unbalanced stays as written', () => {
@@ -61,4 +61,16 @@ test('a link or a picture in a document resolves inside the workspace, and only 
   assert.equal(resolvePath(undefined, 'img/c.png'), null);
   assert.ok(isWeb('https://example.com/a?b=c') && isWeb('http://example.com'));
   for (const no of ['javascript:alert(1)', 'file:///etc/hosts', 'https://exa mple.com', 'ftp://x', '']) assert.ok(!isWeb(no), no);
+});
+
+test('a picture is asked for at the size of the space it is drawn in, at most 1,600 pixels a side (spec 118 §4 item 3)', () => {
+  assert.equal(PICTURE_SIDE_MAX, 1600);
+  assert.equal(pictureSide(640, 1), 640);
+  assert.equal(pictureSide(640, 2), 1280, 'in device pixels, so it is sharp on a dense screen');
+  assert.equal(pictureSide(860.4, 1.5), 1291);
+  assert.equal(pictureSide(1200, 2), 1600, 'never past the ceiling');
+  for (const none of [0, -10, Number.NaN, Number.POSITIVE_INFINITY]) assert.equal(pictureSide(none, 2), 160, `nothing to measure (${none}): the daemon's default`);
+  assert.equal(pictureSide(500, Number.NaN), 500, 'a nonsense ratio is 1');
+  assert.equal(pictureSide(500, 40), 1600, 'a ratio is at most 4');
+  assert.equal(pictureTarget('missions/m/report.md', 'img/a b.png?x=1#y', 900), '/v1/image?path=missions%2Fm%2Freport.md&src=img%2Fa%20b.png&max=900');
 });

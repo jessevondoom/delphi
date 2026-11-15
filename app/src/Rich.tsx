@@ -14,9 +14,34 @@ export type RichContext = {
 const PICTURE = /\.(png|jpe?g|gif)$/i;
 const isDocument = (path: string): boolean => /\.(md|mdx|markdown|txt)$/i.test(path);
 
-/** A picture beside a workspace document, asked of the daemon as pixels and painted on a canvas. A click opens the file. */
+/** The daemon's own size when none is named, and the most the window may ask for (spec 118 §4 item 3). */
+export const PICTURE_SIDE_DEFAULT = 160;
+export const PICTURE_SIDE_MAX = 1600;
+
+/** Pixels a side to ask a picture for: as wide as the space it is drawn in, in device pixels, at most 1,600. With no width
+ * to measure (a test, a hidden pane) it is the daemon's default. The daemon never enlarges a picture, so asking for more
+ * than a picture has costs nothing. */
+export function pictureSide(cssWidth: number, dpr: number): number {
+  if (!Number.isFinite(cssWidth) || cssWidth <= 0) return PICTURE_SIDE_DEFAULT;
+  return Math.max(1, Math.min(PICTURE_SIDE_MAX, Math.ceil(cssWidth * pixelRatio(dpr))));
+}
+
+/** Device pixels to a CSS pixel, 1 to 4 (a nonsense ratio is 1). */
+function pixelRatio(dpr: number): number {
+  return Number.isFinite(dpr) && dpr > 0 ? Math.min(dpr, 4) : 1;
+}
+
+/** The image read for a picture beside a document, at `side` pixels a side. */
+export function pictureTarget(docPath: string, src: string, side: number): string {
+  return `/v1/image?path=${encodeURIComponent(docPath)}&src=${encodeURIComponent(src.split(/[?#]/)[0]!)}&max=${side}`;
+}
+
+/** A picture beside a workspace document, asked of the daemon as pixels at the size of the space it is drawn in, and
+ * painted on a canvas. A click opens the file. A library picture (`lib:`) is not asked for: the app may show one only
+ * with its licence record (spec 118 §4 item 4), which is not built yet. */
 function Picture({ src, alt, ctx }: { src: string; alt: string; ctx: RichContext }) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const frame = useRef<HTMLButtonElement>(null);
   const path = resolvePath(ctx.docPath, src);
   const local = !!ctx.bridge && !!ctx.docPath && !!path && PICTURE.test(src.split(/[?#]/)[0]!);
   // A picture the window has no way to ask for is its words from the first frame, not an empty box.
@@ -26,7 +51,10 @@ function Picture({ src, alt, ctx }: { src: string; alt: string; ctx: RichContext
     if (!local || !ctx.bridge || !ctx.docPath) { setState('none'); return; }
     let gone = false;
     setState('wait');
-    ctx.bridge.kb(`/v1/image?path=${encodeURIComponent(ctx.docPath)}&src=${encodeURIComponent(src.split(/[?#]/)[0]!)}`)
+    // The space the picture may take: the text column it sits in (the button is no wider than its picture yet).
+    const room = frame.current?.parentElement?.clientWidth ?? 0;
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
+    ctx.bridge.kb(pictureTarget(ctx.docPath, src, pictureSide(room, dpr)))
       .then((r) => {
         if (gone) return;
         const b = r.body as { width?: number; height?: number; rgba?: string };
@@ -38,6 +66,8 @@ function Picture({ src, alt, ctx }: { src: string; alt: string; ctx: RichContext
         if (px.length !== b.width * b.height * 4) { setState('none'); return; }
         el.width = b.width;
         el.height = b.height;
+        // Drawn at its size in CSS pixels, so a picture asked for in device pixels is sharp, not twice as large.
+        el.style.width = `${Math.round(b.width / pixelRatio(dpr))}px`;
         el.getContext('2d')?.putImageData(new ImageData(px, b.width, b.height), 0, 0);
         setState('shown');
       })
@@ -52,7 +82,7 @@ function Picture({ src, alt, ctx }: { src: string; alt: string; ctx: RichContext
     return can ? <button type="button" className="md-link" onClick={open}>{alt || src} (picture, opens outside)</button> : <span className="md-alt">{alt || src}</span>;
   }
   return (
-    <button type="button" className="md-picture" onClick={open} disabled={!can} aria-label={alt ? `${alt}: open the picture` : 'Open the picture'}>
+    <button ref={frame} type="button" className="md-picture" onClick={open} disabled={!can} aria-label={alt ? `${alt}: open the picture` : 'Open the picture'}>
       <canvas ref={canvas} role="img" aria-label={alt} style={{ visibility: state === 'shown' ? 'visible' : 'hidden' }} />
       {alt && <span className="md-caption">{alt}</span>}
     </button>

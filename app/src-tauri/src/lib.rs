@@ -62,12 +62,13 @@ fn session(bridge: State<'_, Arc<Bridge>>) -> Result<Value, String> {
     bridge.call(Method::SessionSnapshot, json!({}))
 }
 
-/// One knowledge base read (`kb.get`): search, a listing or a document, and nothing else under `/v1/`.
+/// One knowledge base read (`kb.get`): search, a listing, a document or a picture beside one, and nothing else under
+/// `/v1/`. A picture's size is clamped here as well as by the daemon (`bridge::kb_target`).
 #[tauri::command(async)]
 fn kb(bridge: State<'_, Arc<Bridge>>, target: String) -> Result<Value, String> {
-    if !bridge::kb_target_ok(&target) {
+    let Some(target) = bridge::kb_target(&target) else {
         return Err("that is not a knowledge base read this app makes".into());
-    }
+    };
     bridge.call(Method::KbGet, json!({ "target": target }))
 }
 
