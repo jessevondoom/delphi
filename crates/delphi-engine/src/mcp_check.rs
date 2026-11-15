@@ -155,7 +155,10 @@ fn launchable_in(home: &Path, install_dir: Option<&Path>, machine_dirs: &[std::p
     Launchable { ok: true, this_binary, detail }
 }
 
-const FIX_INSTALL: &str = "claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi";
+/// The install command for a host whose plugin is missing, naming this build's marketplace repository (spec 074 §11).
+fn fix_install(host_cli: &str, install: &str) -> String {
+    format!("{host_cli} plugin marketplace add {} && {host_cli} plugin {install} delphi@delphi", crate::mcp_hosts::MARKETPLACE_REPO)
+}
 
 /// Read a small regular file the user owns, without following a symlink or blocking on a FIFO.
 fn safe_read(path: &Path) -> Result<Option<Vec<u8>>, String> {
@@ -205,7 +208,7 @@ pub fn check_claude_code(home: &Path, binary_release: &str) -> Check {
         return unknown(format!("installed_plugins.json is not the schema checked on Claude Code {CLAUDE_CODE_VERSION}"));
     }
     let Some(entries) = doc["plugins"].get(PLUGIN_KEY).and_then(|e| e.as_array()).filter(|e| !e.is_empty()) else {
-        return Check { state: State::Missing, detail: "the Delphi plugin is not installed".into(), fix: Some(FIX_INSTALL.into()) };
+        return Check { state: State::Missing, detail: "the Delphi plugin is not installed".into(), fix: Some(fix_install("claude", "install")) };
     };
     let Some(entry) = entries.iter().find(|e| e["scope"] == "user") else {
         return unknown("the Delphi plugin is installed only for a project or local scope, which is not checked");
@@ -351,11 +354,11 @@ pub fn check_copilot(home: &Path) -> Check {
         Err(e) => return unknown(format!("settings.json {e}")),
     };
     let Ok(settings) = serde_json::from_slice::<serde_json::Value>(&settings) else { return unknown("settings.json is not valid JSON") };
-    let fix = "copilot plugin marketplace add jessevondoom/delphi && copilot plugin install delphi@delphi";
+    let fix = fix_install("copilot", "install");
     match settings["enabledPlugins"].get(PLUGIN_KEY).and_then(|v| v.as_bool()) {
         Some(true) => Check { state: State::Configured, detail: "the Delphi plugin is installed and enabled (Copilot CLI records no release, so it is not compared)".into(), fix: None },
         Some(false) => Check { state: State::Missing, detail: "the Delphi plugin is installed but disabled".into(), fix: Some(format!("copilot plugin install {PLUGIN_KEY}")) },
-        None => Check { state: State::Missing, detail: "the Delphi plugin is not installed".into(), fix: Some(fix.into()) },
+        None => Check { state: State::Missing, detail: "the Delphi plugin is not installed".into(), fix: Some(fix) },
     }
 }
 
@@ -368,11 +371,11 @@ pub fn check_codex(home: &Path, binary_release: &str) -> Check {
         Err(e) => return unknown(format!("config.toml {e}")),
     };
     let Ok(cfg) = String::from_utf8(cfg).map_err(|_| ()).and_then(|t| t.parse::<toml::Table>().map_err(|_| ())) else { return unknown("config.toml is not valid TOML") };
-    let fix = "codex plugin marketplace add jessevondoom/delphi && codex plugin add delphi@delphi";
+    let fix = fix_install("codex", "add");
     let enabled = cfg.get("plugins").and_then(|p| p.as_table()).and_then(|p| p.get(PLUGIN_KEY)).and_then(|p| p.as_table()).map(|p| p.get("enabled").and_then(|e| e.as_bool()));
     match enabled {
-        None => return Check { state: State::Missing, detail: "the Delphi plugin is not installed".into(), fix: Some(fix.into()) },
-        Some(Some(false)) => return Check { state: State::Missing, detail: "the Delphi plugin is installed but disabled".into(), fix: Some(fix.into()) },
+        None => return Check { state: State::Missing, detail: "the Delphi plugin is not installed".into(), fix: Some(fix.clone()) },
+        Some(Some(false)) => return Check { state: State::Missing, detail: "the Delphi plugin is installed but disabled".into(), fix: Some(fix) },
         Some(_) => {}
     }
     let cache = home.join(".codex/plugins/cache/delphi/delphi");
@@ -552,7 +555,7 @@ mod tests {
         assert_eq!(check_claude_code(t.path(), "0.5.3").state, State::Unknown);
         write(t.path(), ".claude/plugins/installed_plugins.json", r#"{"version":2,"plugins":{}}"#);
         let m = check_claude_code(t.path(), "0.5.3");
-        assert_eq!((m.state, m.fix.as_deref()), (State::Missing, Some(FIX_INSTALL)));
+        assert_eq!((m.state, m.fix.as_deref()), (State::Missing, Some(fix_install("claude", "install").as_str())));
         write(t.path(), ".claude/plugins/installed_plugins.json", r#"{"version":3,"plugins":{}}"#);
         assert_eq!(check_claude_code(t.path(), "0.5.3").state, State::Unknown);
         write(t.path(), ".claude/plugins/installed_plugins.json", "{not json");

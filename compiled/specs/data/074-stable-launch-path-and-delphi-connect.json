@@ -34,106 +34,112 @@
     },
     {
       "level": 2,
-      "line": 71,
+      "line": 72,
       "number": "4",
       "title": "Slices (one per pull request; none starts before approval)"
     },
     {
       "level": 2,
-      "line": 81,
+      "line": 82,
       "number": "5",
       "title": "Testing"
     },
     {
       "level": 2,
-      "line": 85,
+      "line": 86,
       "number": "6",
       "title": "Council record and questions"
     },
     {
       "level": 2,
-      "line": 89,
+      "line": 90,
       "number": "7",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 93,
+      "line": 94,
       "number": "8",
       "title": "Recorded proof and build notes (C2, 2026-11-04)"
     },
     {
       "level": 2,
-      "line": 106,
+      "line": 107,
       "number": "9",
       "title": "C3 template table, proof and Council re-review (Copilot, 2026-11-04)"
     },
     {
       "level": 2,
-      "line": 120,
+      "line": 121,
       "number": "10",
       "title": "Amendment (2026-11-14): a durable install"
     },
     {
       "level": 3,
-      "line": 135,
+      "line": 136,
       "number": "10.1",
       "title": "S1: the plugin launches a stable path"
     },
     {
       "level": 3,
-      "line": 143,
+      "line": 144,
       "number": "10.2",
       "title": "U1: one update moment"
     },
     {
       "level": 3,
-      "line": 158,
+      "line": 159,
       "number": "10.3",
       "title": "U2: the hint, and the host's own auto-update"
     },
     {
       "level": 3,
-      "line": 163,
+      "line": 164,
       "number": "10.4",
       "title": "R1: the `stable` release channel"
     },
     {
       "level": 3,
-      "line": 170,
+      "line": 171,
       "number": "10.5",
       "title": "Recorded proofs (2026-11-14)"
     },
     {
       "level": 3,
-      "line": 183,
+      "line": 184,
       "number": "10.6",
       "title": "Tests"
     },
     {
       "level": 3,
-      "line": 187,
+      "line": 188,
       "number": "10.7",
       "title": "Panel review and what changed (2026-11-14)"
+    },
+    {
+      "level": 2,
+      "line": 209,
+      "number": "11",
+      "title": "Amendment (2026-11-15): the source is the installer's to name"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/074-stable-launch-path-and-delphi-connect.md",
-    "sha256": "f02274b98971f1512410525cd1ea53cc44ed5b3d070b9dc1784da3c984ec32c6"
+    "sha256": "82d7197e7bcb79d3d0e585b5f8c7da544c179c2ac3d90843fd3a97bd381c58b2"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 662,
+        "end": 818,
         "end_line": 6,
         "line": 6,
         "start": 179
       },
-      "text": "status: approved   # by the operator, 2026-11-04 (\"approve 074\"), after a Council (3 seats, 2 rounds, all APPROVE-WITH-AMENDMENTS, amendments folded in): approves L0, L1 and C1. C2 was gated on the recorded GitHub-source proof (requirement 7), recorded in §8 on 2026-11-04, and is built; C3 stays gated on its own proof and a Council re-review. Amended 2026-11-14 (§10, \"do all 4. make any needed spec adjustments.\"): approves S1, U1, U2 and R1, on a summary and without a Council."
+      "text": "status: approved   # by the operator, 2026-11-04 (\"approve 074\"), after a Council (3 seats, 2 rounds, all APPROVE-WITH-AMENDMENTS, amendments folded in): approves L0, L1 and C1. C2 was gated on the recorded GitHub-source proof (requirement 7), recorded in §8 on 2026-11-04, and is built; C3 stays gated on its own proof and a Council re-review. Amended 2026-11-14 (§10, \"do all 4. make any needed spec adjustments.\"): approves S1, U1, U2 and R1, on a summary and without a Council. Amended 2026-11-15 (§11, \"plesse do make it configurable. on the install side too not the repo side. we want to support forks.\"): approves F1, unreviewed."
     },
-    "sha256": "f02274b98971f1512410525cd1ea53cc44ed5b3d070b9dc1784da3c984ec32c6",
+    "sha256": "82d7197e7bcb79d3d0e585b5f8c7da544c179c2ac3d90843fd3a97bd381c58b2",
     "word": "approved"
   },
   "spec": {
