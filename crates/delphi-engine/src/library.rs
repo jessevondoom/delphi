@@ -626,9 +626,8 @@ impl Library {
         }
     }
 
-    /// Capture a URL through the V2a fetcher (`specs/055` §3.4).
-    pub async fn add_url(&self, policy: &FetchPolicy, url: &str, opts: &AddOpts, budgets: &Budgets) -> Result<Stored, String> {
-        let b = Budgets { text: opts.raise_text.unwrap_or(budgets.text), source: opts.raise_source.unwrap_or(budgets.source), ..*budgets };
+    /// The record a web page starts from: its address without a fragment, the source id that address gives, and the fields every capture has.
+    fn url_record(url: &str, opts: &AddOpts) -> Result<(String, String, Map<String, Value>), String> {
         let canonical = delphi_adapter::reqwest::Url::parse(url).map_err(|_| "not a URL".to_string()).map(|mut u| {
             u.set_fragment(None);
             u.to_string()
@@ -638,6 +637,13 @@ impl Library {
         let mut meta = Self::base_meta(opts, "webpage", &host);
         meta.insert("URL".into(), json!(canonical));
         meta.insert("canonical_url".into(), json!(canonical));
+        Ok((canonical, id, meta))
+    }
+
+    /// Capture a URL through the V2a fetcher (`specs/055` §3.4).
+    pub async fn add_url(&self, policy: &FetchPolicy, url: &str, opts: &AddOpts, budgets: &Budgets) -> Result<Stored, String> {
+        let b = Budgets { text: opts.raise_text.unwrap_or(budgets.text), source: opts.raise_source.unwrap_or(budgets.source), ..*budgets };
+        let (canonical, id, meta) = Self::url_record(url, opts)?;
         let mut policy = policy.clone();
         policy.max_bytes = b.text as usize;
         match fetch_snapshot_checked(&policy, &canonical).await {
@@ -648,94 +654,164 @@ impl Library {
                 Ok(s)
             }
             Err(e) => Err(e.to_string()),
-            Ok((snap, _evidence)) => {
-                let title = snap.title.for_daemon().clone();
-                if !title.is_empty() && opts.title.is_none() {
-                    meta.insert("title".into(), json!(title));
-                }
-                meta.insert("retrieved".into(), json!(snap.retrieved));
-                meta.insert("content_hash".into(), json!(format!("sha256:{}", snap.id)));
-                meta.insert("origin".into(), json!(snap.origin));
-                meta.insert("source_class".into(), json!(SourceList::default().classify(snap.final_url.for_daemon()).class.as_str()));
-                // What corroboration (`specs/098` §7.6) needs to know, frozen at capture so that a list edited later cannot count for a
-                // claim captured earlier: whether the class is Weak only by default, and the trusted-list entry that covered the host.
-                meta.insert("source_unfamiliar".into(), json!(SourceList::default().unfamiliar(snap.final_url.for_daemon())));
-                if let Some(entry) = crate::research_setup::lists(&self.root, self.root.parent().unwrap_or(&self.root)).ok().and_then(|l| l.allows_url(&canonical).cloned()) {
-                    meta.insert("trusted_entry".into(), json!({"host": entry.host, "topics": entry.topics, "added": entry.added}));
-                }
-                meta.insert("tags".into(), json!([]));
-                if let Some((_, l)) = snap.headers.for_daemon().iter().find(|(k, _)| k == "content-language") {
-                    meta.insert("language".into(), json!(l.split(',').next().unwrap_or("").trim()));
-                }
-                let found = meta::read(&canonical, snap.headers.for_daemon(), &String::from_utf8_lossy(snap.body_for_daemon()), snap.text.for_daemon(), opts.doi.as_deref());
-                for (k, v) in found.fields {
-                    let set_by_operator = (k == "title" && opts.title.is_some()) || (k == "licence" && opts.licence.is_some()) || (k == "rights_holder" && opts.rights_holder.is_some());
-                    if !set_by_operator {
-                        meta.insert(k, v);
-                    }
-                }
-                let licence = meta["licence"].as_str().unwrap_or("unknown").to_string();
-                meta.insert("share_alike".into(), json!(matches!(classify(&licence), Licence::Open { share_alike: true, .. })));
-                Self::attribute(&mut meta, opts.attribution_text.as_ref(), &snap.origin);
-                let mut notes = found.notes;
-                let mut requested = opts.level;
-                if snap.cloaked {
-                    meta.insert("cloaked".into(), json!(true));
-                    notes.push("the page showed different text to a browser than to the daemon (cloaking); kept as a pointer".into());
-                    requested = Some(Level::Pointer);
-                }
-                let (text, over) = if snap.truncated { (None, true) } else { (Some(format!("{}{}\n", if title.is_empty() { String::new() } else { format!("# {}\n\n", title) }, snap.text.for_daemon())), false) };
-                if over {
-                    notes.push(format!("the page is over the {}-byte text limit; kept as a pointer", b.text));
-                    requested = Some(Level::Pointer);
-                }
-                let mut temp_assets = None;
-                if opts.save_images {
-                    let html = String::from_utf8_lossy(snap.body_for_daemon());
-                    let refs = delphi_adapter::research::images::extract(&html, &canonical);
-                    if !refs.is_empty() {
-                        let stage_assets = self.root.join(".staging").join(format!("assets-{}-{}", id, std::process::id()));
-                        let _ = std::fs::remove_dir_all(&stage_assets);
-                        if std::fs::create_dir_all(&stage_assets).is_ok() {
-                            let trusted = crate::research_setup::lists(&self.root, self.root.parent().unwrap_or(&self.root)).unwrap_or_else(|_| delphi_adapter::research::trusted::TrustedList::parse(include_str!("../../../context/sources/trusted.toml"), None).unwrap());
-                            if let Ok(transport) = delphi_adapter::research::transport::HttpTransport::new() {
-                                let mut count = 0;
-                                for r in refs {
-                                    if count >= 3 { break; }
-                                    if let Some(entry) = trusted.allows_url(&r.url) {
-                                        if delphi_adapter::research::images::resolve(&transport, &trusted, &r, entry, &canonical).is_ok() {
-                                            if let Ok(bytes) = delphi_adapter::research::images::get_bytes(&transport, &trusted, &r.url, "image/png, image/jpeg, image/gif", delphi_adapter::research::images::MAX_IMAGE_BYTES) {
-                                                if let Some(ext) = delphi_adapter::research::images::sniff(&bytes) {
-                                                    if let Ok(pic) = delphi_docs::pixels::decode(&bytes) {
-                                                        if pic.width >= 48 && pic.height >= 48 {
-                                                            let hash = blake3::hash(&bytes).to_hex().to_string();
-                                                            let fname = format!("{}.{}", hash, ext);
-                                                            if std::fs::write(stage_assets.join(&fname), &bytes).is_ok() {
-                                                                count += 1;
-                                                            }
-                                                        }
+            Ok((snap, _evidence)) => self.store_snapshot(id, meta, &canonical, &snap, opts, &b, b.text),
+        }
+    }
+
+    /// Capture a page the daemon has already fetched (`specs/112` §4.3): the snapshot a research run read is the one that is kept and
+    /// hashed, so the page is not fetched a second time. Everything else is what [`Library::add_url`] does with the snapshot it fetches
+    /// itself: the same record, the same licence reading, the same cloaking and size rules. No request leaves from here (unless
+    /// `opts.save_images` asks for the page's images, which a research run never does).
+    pub fn add_fetched(&self, url: &str, snap: &crate::fact_fetch::Snapshot, opts: &AddOpts, budgets: &Budgets) -> Result<Stored, String> {
+        let b = Budgets { text: opts.raise_text.unwrap_or(budgets.text), source: opts.raise_source.unwrap_or(budgets.source), ..*budgets };
+        let (canonical, id, meta) = Self::url_record(url, opts)?;
+        self.store_snapshot(id, meta, &canonical, snap, opts, &b, snap.size as u64)
+    }
+
+    /// Keep the pictures a research run saved for a source whose text is kept (`specs/112` §4 item 1; the picture step is
+    /// `research_images`, which decided each picture's licence by code and wrote the files into `dir`). The files go to the
+    /// source's `assets/`, where pages find them, and each one's record (file, address, licence, author, attribution line) goes into
+    /// the source's own record as `images`: what the console job's entry kept in its frontmatter. Only a source held in full, not
+    /// purged, takes pictures; a file whose name is not a plain picture name is left out; the per-source and library budgets hold.
+    /// Returns how many pictures the source now lists.
+    pub fn attach_pictures(&self, id: &str, dir: &Path, records: &[Value], budgets: &Budgets) -> Result<usize, String> {
+        let mut meta = self.read_meta(id).ok_or("no such source")?;
+        if meta["capture_level"] != "full" || !meta["purged"].is_null() {
+            return Err("pictures are kept only with a source whose text is kept".into());
+        }
+        let plain = |name: &str| !name.is_empty() && name.len() <= 100 && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') && matches!(name.rsplit_once('.').map(|(_, e)| e), Some("png" | "jpg" | "gif"));
+        let kept: Vec<&Value> = records.iter().filter(|r| r["file"].as_str().is_some_and(|f| plain(f) && dir.join(f).is_file())).collect();
+        let bytes: u64 = kept.iter().filter_map(|r| std::fs::metadata(dir.join(r["file"].as_str()?)).ok()).map(|m| m.len()).sum();
+        let held = dir_bytes(&self.source_dir(id));
+        if held + bytes > budgets.source || self.used_bytes() + bytes > budgets.library {
+            return Err("the pictures would pass the source's or the library's budget; none was kept".into());
+        }
+        let assets = self.source_dir(id).join("assets");
+        std::fs::create_dir_all(&assets).map_err(|e| e.to_string())?;
+        for r in &kept {
+            let f = r["file"].as_str().unwrap_or_default();
+            std::fs::copy(dir.join(f), assets.join(f)).map_err(|e| format!("{}: {}", f, e))?;
+        }
+        meta["images"] = Value::Array(kept.iter().map(|r| (*r).clone()).collect());
+        self.write_json(&self.source_dir(id).join("meta.json"), &meta)?;
+        self.log("pictures", json!({"id": id, "count": kept.len(), "bytes": bytes}));
+        Ok(kept.len())
+    }
+
+    /// Keep one snapshot as a source. `limit` is the byte cap the snapshot was fetched under, for the note a truncated page gets.
+    #[allow(clippy::too_many_arguments)]
+    fn store_snapshot(&self, id: String, mut meta: Map<String, Value>, canonical: &str, snap: &crate::fact_fetch::Snapshot, opts: &AddOpts, b: &Budgets, limit: u64) -> Result<Stored, String> {
+        let title = snap.title.for_daemon().clone();
+        if !title.is_empty() && opts.title.is_none() {
+            meta.insert("title".into(), json!(title));
+        }
+        meta.insert("retrieved".into(), json!(snap.retrieved));
+        meta.insert("content_hash".into(), json!(format!("sha256:{}", snap.id)));
+        meta.insert("origin".into(), json!(snap.origin));
+        meta.insert("source_class".into(), json!(SourceList::default().classify(snap.final_url.for_daemon()).class.as_str()));
+        // What corroboration (`specs/098` §7.6) needs to know, frozen at capture so that a list edited later cannot count for a
+        // claim captured earlier: whether the class is Weak only by default, and the trusted-list entry that covered the host.
+        meta.insert("source_unfamiliar".into(), json!(SourceList::default().unfamiliar(snap.final_url.for_daemon())));
+        if let Some(entry) = crate::research_setup::lists(&self.root, self.root.parent().unwrap_or(&self.root)).ok().and_then(|l| l.allows_url(canonical).cloned()) {
+            meta.insert("trusted_entry".into(), json!({"host": entry.host, "topics": entry.topics, "added": entry.added}));
+        }
+        meta.insert("tags".into(), json!([]));
+        if let Some((_, l)) = snap.headers.for_daemon().iter().find(|(k, _)| k == "content-language") {
+            meta.insert("language".into(), json!(l.split(',').next().unwrap_or("").trim()));
+        }
+        let found = meta::read(canonical, snap.headers.for_daemon(), &String::from_utf8_lossy(snap.body_for_daemon()), snap.text.for_daemon(), opts.doi.as_deref());
+        for (k, v) in found.fields {
+            let set_by_operator = (k == "title" && opts.title.is_some()) || (k == "licence" && opts.licence.is_some()) || (k == "rights_holder" && opts.rights_holder.is_some());
+            if !set_by_operator {
+                meta.insert(k, v);
+            }
+        }
+        let licence = meta["licence"].as_str().unwrap_or("unknown").to_string();
+        meta.insert("share_alike".into(), json!(matches!(classify(&licence), Licence::Open { share_alike: true, .. })));
+        Self::attribute(&mut meta, opts.attribution_text.as_ref(), &snap.origin);
+        let mut notes = found.notes;
+        let mut requested = opts.level;
+        if snap.cloaked {
+            meta.insert("cloaked".into(), json!(true));
+            notes.push("the page showed different text to a browser than to the daemon (cloaking); kept as a pointer".into());
+            requested = Some(Level::Pointer);
+        }
+        let (text, over) = if snap.truncated { (None, true) } else { (Some(format!("{}{}\n", if title.is_empty() { String::new() } else { format!("# {}\n\n", title) }, snap.text.for_daemon())), false) };
+        if over {
+            notes.push(format!("the page is over the {}-byte text limit; kept as a pointer", limit));
+            requested = Some(Level::Pointer);
+        }
+        let mut temp_assets = None;
+        if opts.save_images {
+            let html = String::from_utf8_lossy(snap.body_for_daemon());
+            let refs = delphi_adapter::research::images::extract(&html, canonical);
+            if !refs.is_empty() {
+                let stage_assets = self.root.join(".staging").join(format!("assets-{}-{}", id, std::process::id()));
+                let _ = std::fs::remove_dir_all(&stage_assets);
+                if std::fs::create_dir_all(&stage_assets).is_ok() {
+                    let trusted = crate::research_setup::lists(&self.root, self.root.parent().unwrap_or(&self.root)).unwrap_or_else(|_| delphi_adapter::research::trusted::TrustedList::parse(include_str!("../../../context/sources/trusted.toml"), None).unwrap());
+                    if let Ok(transport) = delphi_adapter::research::transport::HttpTransport::new() {
+                        let mut count = 0;
+                        for r in refs {
+                            if count >= 3 { break; }
+                            if let Some(entry) = trusted.allows_url(&r.url) {
+                                if delphi_adapter::research::images::resolve(&transport, &trusted, &r, entry, canonical).is_ok() {
+                                    if let Ok(bytes) = delphi_adapter::research::images::get_bytes(&transport, &trusted, &r.url, "image/png, image/jpeg, image/gif", delphi_adapter::research::images::MAX_IMAGE_BYTES) {
+                                        if let Some(ext) = delphi_adapter::research::images::sniff(&bytes) {
+                                            if let Ok(pic) = delphi_docs::pixels::decode(&bytes) {
+                                                if pic.width >= 48 && pic.height >= 48 {
+                                                    let hash = blake3::hash(&bytes).to_hex().to_string();
+                                                    let fname = format!("{}.{}", hash, ext);
+                                                    if std::fs::write(stage_assets.join(&fname), &bytes).is_ok() {
+                                                        count += 1;
                                                     }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                                if count > 0 {
-                                    temp_assets = Some(stage_assets);
-                                }
                             }
+                        }
+                        if count > 0 {
+                            temp_assets = Some(stage_assets);
                         }
                     }
                 }
-                let mut s = self.store(Prepared { id, meta, text, assets: temp_assets.as_deref().map(Path::to_path_buf), requested, excerpts: None, imported: false }, &b)?;
-                if let Some(a) = &temp_assets {
-                    let _ = std::fs::remove_dir_all(a);
-                }
-                notes.append(&mut s.notes);
-                s.notes = notes;
-                Ok(s)
             }
         }
+        let mut s = self.store(Prepared { id, meta, text, assets: temp_assets.as_deref().map(Path::to_path_buf), requested, excerpts: None, imported: false }, b)?;
+        if let Some(a) = &temp_assets {
+            let _ = std::fs::remove_dir_all(a);
+        }
+        notes.append(&mut s.notes);
+        s.notes = notes;
+        Ok(s)
+    }
+
+    /// A source Delphi did not read and does not hold (`specs/113` §2 item 4, §3 item 1): what a host read through its own tools, a
+    /// file of the operator's ingested by reference, a person. It is stored as a private pointer: the locator, the title, the date and
+    /// (for a file) its hash, never a body. It is private, so it never leaves the install, is never indexed, and is never fetched; it has
+    /// no address and no origin of the daemon's, so it never counts as an origin for corroboration (`Library::cites_of`). The id is a
+    /// hash of the kind and locator, so the locator is not spelled in it. Returns the source id.
+    pub fn add_private_pointer(&self, kind: &str, locator: &str, title: &str, retrieved: &str, content_hash: Option<&str>) -> Result<String, String> {
+        let one = |s: &str, n: usize| -> String { s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+        let (locator, title) = (one(locator, 500), one(title, 300));
+        if locator.is_empty() {
+            return Err("a private source names where it is (its locator)".into());
+        }
+        let kind = one(kind, 20);
+        let id = format!("private-{}", &sha256_hex(format!("{kind}\0{locator}").as_bytes())[..16]);
+        let opts = AddOpts { private: true, ..Default::default() };
+        let mut meta = Self::base_meta(&opts, if kind == "file" { "document" } else { kind.as_str() }, if title.is_empty() { "untitled" } else { title.as_str() });
+        meta.insert("source_kind".into(), json!(kind));
+        meta.insert("locator".into(), json!(locator));
+        meta.insert("fetch_mode".into(), json!("host_reported"));
+        meta.insert("retrieved".into(), json!(one(retrieved, 40)));
+        if let Some(h) = content_hash {
+            meta.insert("content_hash".into(), json!(one(h, 80)));
+        }
+        meta.insert("tags".into(), json!([]));
+        Ok(self.store(Prepared { id, meta, text: None, assets: None, requested: Some(Level::Pointer), excerpts: None, imported: false }, &Budgets::default())?.id)
     }
 
     /// Capture a local text or Markdown file the operator names.

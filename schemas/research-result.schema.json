@@ -7,12 +7,52 @@
   "required": ["status", "answer", "claims", "source_ids", "kb_hits", "new_claims", "budget_used", "answered_by", "identity", "signature"],
   "properties": {
     "status": { "enum": ["done", "partial", "failed", "cancelled"] },
-    "answer": { "type": "string", "maxLength": 8000, "description": "Model synthesis, labelled not validated. Raw page text is never returned." },
+    "answer": { "type": "string", "maxLength": 8000, "description": "The answer, not validated (specs/114 section 5). Its last line is its label and says what was done: `written by the scout from N claims, not validated` for Markdown the scout wrote from the kept claims and code checked (every statement ends with `[c-…]` claim markers; `Not found.` under a sub-question no claim answers), or `list of claims (no synthesis)` for the code-built list a run returns when no answer was written or none passed the check. Raw page text is never returned." },
+    "synthesis": {
+      "type": "object",
+      "required": ["by", "claims", "attempts"],
+      "description": "How the answer was made (specs/114 section 5): `scout` when the scout's answer passed the check, `list` when the code-built list was used, `none` when the run kept no claim.",
+      "properties": {
+        "by": { "enum": ["scout", "list", "none"] },
+        "claims": { "type": "integer", "minimum": 0, "description": "How many claims the answer was written from." },
+        "attempts": { "type": "integer", "minimum": 0, "maximum": 2, "description": "Answer calls made: an answer the check rejects is written once more." },
+        "rejected": { "type": "array", "maxItems": 2, "items": { "type": "string", "pattern": "^[0-9]+ finding\\(s\\)$" }, "description": "For each answer the check rejected, how many findings it made. Counts only." },
+        "label": { "type": "string", "maxLength": 80 }
+      },
+      "additionalProperties": false
+    },
+    "known_before": {
+      "type": "object",
+      "required": ["claims", "topics", "sources", "kb"],
+      "description": "What Delphi already held on the question before the run searched (specs/114 section 3), as the session that asked could have found it by searching, and nothing more: claim ids with their status and one-line statement, research topics that overlap, sources held with their age, pointers into the knowledge base. Compare with `claims` to see what the run added.",
+      "properties": {
+        "claims": { "type": "array", "items": { "type": "object", "required": ["id", "status", "text"], "properties": { "id": { "type": "string" }, "status": { "type": "string" }, "text": { "type": "string", "maxLength": 240 } }, "additionalProperties": false } },
+        "topics": { "type": "array", "items": { "type": "object", "required": ["id", "question", "overlap", "score", "workspace"], "properties": { "id": { "type": "string" }, "question": { "type": "string", "maxLength": 240 }, "overlap": { "type": "number", "minimum": 0, "maximum": 1 }, "score": { "type": ["number", "null"] }, "workspace": { "type": "boolean" } }, "additionalProperties": false } },
+        "sources": { "type": "array", "items": { "type": "object", "required": ["id", "url", "age_days", "fresh"], "properties": { "id": { "type": "string" }, "url": { "type": "string" }, "age_days": { "type": ["integer", "null"], "minimum": 0 }, "fresh": { "type": "boolean" } }, "additionalProperties": false } },
+        "kb": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "read_from_library": { "type": "array", "items": { "type": "string" }, "description": "Pages the run read from the library and did not fetch (specs/114 section 3 item 4): the library held each as a public page, its text kept, checked within its recheck window." },
+    "plan": { "enum": ["scout", "fixed", "continued"], "description": "Who made the run's plan (specs/114 section 4): the scout's plan call, the fixed plan (that call failed or returned nothing usable), or the record of the topic the run continued." },
+    "sub_questions": {
+      "type": "array",
+      "description": "The plan's sub-questions with their coverage when the run ended; empty under the fixed plan. A sub-question is covered when the claims tagged to it are stated by at least two origins, or when the plan marked it known. The uncovered ones are what a continued run searches for.",
+      "items": {
+        "type": "object",
+        "required": ["n", "text", "status", "covered", "claims", "origins"],
+        "properties": { "n": { "type": "integer", "minimum": 1 }, "text": { "type": "string", "maxLength": 200 }, "status": { "enum": ["known", "partly", "open"] }, "covered": { "type": "boolean" }, "claims": { "type": "integer", "minimum": 0 }, "origins": { "type": "integer", "minimum": 0 } },
+        "additionalProperties": false
+      }
+    },
+    "stopped": { "enum": ["covered", "no_new_claims", "step_budget", "page_budget", "no_more_queries", "plan_done"], "description": "Why the run stopped sending queries (specs/114 section 4 item 5)." },
+    "rounds": { "type": "integer", "minimum": 0, "description": "How many rounds of queries the run sent." },
     "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
     "citations": { "type": "array", "items": { "type": "string" } },
     "source_ids": { "type": "array", "items": { "type": "string" } },
     "kb_hits": { "type": "array", "items": { "type": "string" } },
     "new_claims": { "type": "integer", "minimum": 0, "description": "Deduplicated staged candidates, not search hits." },
+    "library_claims": { "type": "array", "items": { "type": "string", "pattern": "^c-[0-9a-f]{1,30}$" }, "description": "The library claims this run wrote or added an anchor to (specs/112 section 3): `library/claims/<id>.json`. A claim the library already held is listed here and not in `claims`; it gained an anchor and the topic. Each reads `noted` until the library's own rules say otherwise." },
     "contradictions": { "type": "array", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Claim ids that disagree." } },
     "corroboration_pass": {
       "type": "object",
@@ -56,9 +96,14 @@
     "budget_used": {
       "type": "object",
       "required": ["steps"],
-      "properties": { "steps": { "type": "integer", "minimum": 0 }, "ms": { "type": "integer", "minimum": 0 } },
+      "properties": {
+        "steps": { "type": "integer", "minimum": 0 },
+        "check_steps": { "type": "integer", "minimum": 0, "description": "Steps of the check, which has a budget of its own: a quarter of the run's, at least two (specs/112 section 4.4). Never counted in `steps`." },
+        "ms": { "type": "integer", "minimum": 0 }
+      },
       "additionalProperties": false
     },
+    "topic_id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$", "description": "The research topic the run's record is kept under (specs/112 section 2): `research/topics/<topic_id>/` in the workspace, or in the project's folder. `delphi research show <topic_id>` prints it." },
     "answered_by": { "type": "string", "minLength": 1 },
     "consulted": { "type": "array", "items": { "type": "string" } },
     "identity": { "$ref": "#/$defs/identity" },
@@ -83,14 +128,14 @@
     },
     "search_line": {
       "type": "object",
-      "description": "One search. `query` is the same redacted string that was sent; a search withheld because its claim rests on a private source has `withheld: private` and no `query`. Every line the daemon ran balances: hits = duplicates + kept + the sum of not_kept.",
+      "description": "One search. `query` is the same redacted string that was sent; a search withheld because its claim rests on a private source has `withheld: private` and no `query`, and one withheld because it named one of the workspace's privacy identifiers and too little was left without it (spec 119 section 2.7) has `withheld: identifier` and no `query`. Every line the daemon ran balances: hits = duplicates + kept + the sum of not_kept.",
       "required": ["rung", "source", "purpose", "at", "hits", "kept", "duplicates", "not_kept"],
       "properties": {
         "rung": { "enum": ["kb", "trusted", "close", "web"] },
         "source": { "type": "string", "pattern": "^(kb|trusted|(host|search|doi|archive|citation):[a-z0-9._-]{1,40})$", "description": "Of whom: the knowledge base, the operator's trusted list, a host tool the host declared, or a provider. doi, archive and citation are reserved for later slices of spec 101." },
         "purpose": { "enum": ["kb", "topic", "trusted", "gap", "support", "contradiction", "corroboration", "declared", "chain"] },
         "query": { "type": "string", "maxLength": 200 },
-        "withheld": { "const": "private" },
+        "withheld": { "enum": ["private", "identifier"] },
         "at": { "type": "string" },
         "hits": { "type": "integer", "minimum": 0 },
         "kept": { "type": "integer", "minimum": 0 },
@@ -131,6 +176,7 @@
       "required": ["id", "assertion", "source_ids", "quote", "locator", "retrieved", "licence", "knowledge_status", "contested"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
+        "claim_id": { "type": "string", "pattern": "^c-[0-9a-f]{1,30}$", "description": "The library claim this claim was written as (specs/112 section 3.1). Its status there is derived by the library and is not this run's `knowledge_status`." },
         "assertion": { "type": "string", "minLength": 1 },
         "source_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
         "quote": { "type": "string" },
@@ -150,7 +196,9 @@
           "additionalProperties": false
         },
         "contested": { "type": "boolean" },
-        "from_trusted_source": { "type": "boolean", "description": "Provenance only; does not change knowledge_status." }
+        "from_trusted_source": { "type": "boolean", "description": "Provenance only; does not change knowledge_status." },
+        "sub_question": { "type": "integer", "minimum": 1, "description": "The number of the plan's sub-question the claim is tagged to (specs/114 section 4 item 3), when it has one." },
+        "counter_evidence": { "const": true, "description": "The claim was first read on a page a contradiction query returned (specs/114 section 4 item 7). A tag; it changes no status." }
       },
       "additionalProperties": false
     },

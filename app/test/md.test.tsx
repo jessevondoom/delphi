@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Rich } from '../src/Rich.tsx';
+import { PICTURE_SIDE_MAX, Rich, pictureSide, pictureTarget } from '../src/Rich.tsx';
 import { inline, isWeb, parse, resolvePath } from '../src/md.ts';
+import { STILL_CSS, asksToLoad, isMermaid, mermaidConfig } from '../src/diagram.ts';
 
 test('emphasis, code, links and pictures are found in a line, and anything unbalanced stays as written', () => {
   assert.deepEqual(inline('a **b** and `c` d'), [{ t: 'text', s: 'a ' }, { t: 'strong', c: [{ t: 'text', s: 'b' }] }, { t: 'text', s: ' and ' }, { t: 'code', s: 'c' }, { t: 'text', s: ' d' }]);
@@ -61,4 +62,39 @@ test('a link or a picture in a document resolves inside the workspace, and only 
   assert.equal(resolvePath(undefined, 'img/c.png'), null);
   assert.ok(isWeb('https://example.com/a?b=c') && isWeb('http://example.com'));
   for (const no of ['javascript:alert(1)', 'file:///etc/hosts', 'https://exa mple.com', 'ftp://x', '']) assert.ok(!isWeb(no), no);
+});
+
+test('a picture is asked for at the size of the space it is drawn in, at most 1,600 pixels a side (spec 118 §4 item 3)', () => {
+  assert.equal(PICTURE_SIDE_MAX, 1600);
+  assert.equal(pictureSide(640, 1), 640);
+  assert.equal(pictureSide(640, 2), 1280, 'in device pixels, so it is sharp on a dense screen');
+  assert.equal(pictureSide(860.4, 1.5), 1291);
+  assert.equal(pictureSide(1200, 2), 1600, 'never past the ceiling');
+  for (const none of [0, -10, Number.NaN, Number.POSITIVE_INFINITY]) assert.equal(pictureSide(none, 2), 160, `nothing to measure (${none}): the daemon's default`);
+  assert.equal(pictureSide(500, Number.NaN), 500, 'a nonsense ratio is 1');
+  assert.equal(pictureSide(500, 40), 1600, 'a ratio is at most 4');
+  assert.equal(pictureTarget('missions/m/report.md', 'img/a b.png?x=1#y', 900), '/v1/image?path=missions%2Fm%2Freport.md&src=img%2Fa%20b.png&max=900');
+});
+
+test('a Mermaid block is its text until the window draws it, and its text is never HTML (spec 118 §5 item 4)', () => {
+  const hostile = 'graph TD\n  A["<img src=x onerror=alert(1)>"] --> B\n  click A "javascript:alert(2)"';
+  const html = renderToStaticMarkup(<Rich text={`Before\n\n\`\`\`Mermaid\n${hostile}\n\`\`\`\n\n\`\`\`js\nnot a diagram\n\`\`\``} />);
+  assert.ok(html.includes('<figure class="md-diagram" aria-busy="true"><pre class="code"><span class="md-lang">mermaid</span>graph TD'), html);
+  assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
+  for (const bad of ['<img', '<svg', 'href=', '<script']) assert.ok(!html.includes(bad), `${bad} in ${html}`);
+  assert.ok(html.includes('<pre class="code"><span class="md-lang">js</span>not a diagram</pre>'), 'another language is code, as before');
+  assert.ok(isMermaid(' mermaid ') && isMermaid('MERMAID') && !isMermaid('mermaidjs') && !isMermaid(''));
+});
+
+test('Mermaid runs strict, and a diagram cannot change that or anything that decides how its labels are cleaned', () => {
+  const c = mermaidConfig(true);
+  assert.equal(c.securityLevel, 'strict');
+  assert.equal(c.startOnLoad, false);
+  assert.equal(c.htmlLabels, false);
+  assert.equal(mermaidConfig(false).theme, 'default');
+  for (const k of ['securityLevel', 'secure', 'dompurifyConfig', 'htmlLabels', 'flowchart', 'themeCSS', 'maxTextSize']) assert.ok((c.secure as string[]).includes(k), k);
+  // A diagram whose text could make a style load something is shown as its text, not drawn.
+  for (const t of ['style A fill:url(http://x/y)', 'classDef c background:image-set("http://x" 1x)', 'style A fill:\\75rl(http://x)', '{"primaryColor": "\\u0075rl(x)"}', 'a: "\\x75rl(x)"', '@import "x";', '@font-face{}']) assert.ok(asksToLoad(t), t);
+  for (const t of ['graph TD\n  A-->B', 'style A fill:#f9f,stroke:#333', 'A["a (b) url"]', 'A["C:\\\\path"]']) assert.ok(!asksToLoad(t), t);
+  assert.equal(STILL_CSS, '*{animation:none!important;transition:none!important}');
 });

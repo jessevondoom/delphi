@@ -132,9 +132,28 @@ impl LiveNote {
 
 /// The notes of one mission that are still live, oldest first: every `learn.staged` minus every `learn.dropped`.
 pub fn live_notes(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
+    notes_of(mission, events, true)
+}
+
+/// A mission's live notes wherever they live now: its staged notes, and those kept in the provisional tier (`specs/116` §2)
+/// whose file is still there, oldest first. One the operator marked wrong or kept, or that expired, is not among them. What a
+/// reader of a session's own history wants (`host_recall`); a review of staged notes wants [`live_notes`].
+pub fn live_notes_anywhere(ws_dir: &Path, mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
+    let kept: BTreeSet<&str> = events.iter().filter(|e| e.kind == crate::provisional_notes::EVENT).filter_map(|e| e.payload["id"].as_str()).collect();
+    if kept.is_empty() {
+        return live_notes(mission, events);
+    }
+    let there: BTreeSet<String> = crate::provisional_notes::list(ws_dir).into_iter().filter(|n| n.mission == mission).map(|n| n.note).collect();
+    notes_of(mission, events, false).into_iter().filter(|n| !kept.contains(n.id.as_str()) || there.contains(&n.id)).collect()
+}
+
+fn notes_of(mission: &str, events: &[EventEnvelope], staged_only: bool) -> Vec<LiveNote> {
     let mut notes: Vec<LiveNote> = Vec::new();
     for e in events {
         match e.kind.as_str() {
+            // A note kept in the provisional tier (`specs/116` §2) lives in its file from then on: it leaves the staged list, and
+            // `provisional_notes` lists it.
+            crate::provisional_notes::EVENT if !staged_only => {}
             "learn.staged" => {
                 let Some(id) = e.payload["id"].as_str() else { continue };
                 notes.push(LiveNote {
@@ -153,7 +172,7 @@ pub fn live_notes(mission: &str, events: &[EventEnvelope]) -> Vec<LiveNote> {
             }
             // A note the operator kept (`delphi learn keep`, `specs/108` M2) is closed like a resolved proposal. Note ids
             // (`n…`, `h…`) and proposal ids (`p…`) never collide, so a proposal's resolution closes no note.
-            "learn.dropped" | "learn.proposal_resolved" => {
+            "learn.dropped" | "learn.proposal_resolved" | crate::provisional_notes::EVENT => {
                 if let Some(id) = e.payload["id"].as_str() {
                     notes.retain(|n| n.id != id);
                 }
@@ -374,6 +393,8 @@ pub struct StagedNote {
     pub id_suffix: &'static str,
     /// Set only by the agent `note` tool (`specs/050` OD-5): the note stops being retrieved after this date.
     pub valid_until: Option<String>,
+    /// Set only by the agent `note` tool (`specs/116` §2 item 1): what the note is about, one of `provisional_notes::KINDS`.
+    pub note_kind: Option<&'static str>,
 }
 
 impl StagedNote {
@@ -391,6 +412,9 @@ impl StagedNote {
         let mut payload = serde_json::json!({"id": self.id(), "trigger": self.trigger, "summary": self.summary, "event_seqs": self.event_seqs, "tier": self.tier.as_str()});
         if let Some(d) = &self.valid_until {
             payload["valid_until"] = serde_json::json!(d);
+        }
+        if let Some(k) = self.note_kind {
+            payload["note_kind"] = serde_json::json!(k);
         }
         // S3 (specs/083 §5): the digest a later dismissal is matched against.
         payload["source_hash"] = serde_json::json!(self.source_hash());
@@ -667,13 +691,13 @@ impl Stager {
         if !self.on(trigger) || self.contact_seen.len() >= CONTACT_CAP || !self.contact_seen.insert(key) {
             return None;
         }
-        Some(Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: vec![e.seq], summary, tier: self.tier(task, base), id_suffix, valid_until: None }))
+        Some(Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: vec![e.seq], summary, tier: self.tier(task, base), id_suffix, valid_until: None, note_kind: None }))
     }
 
     pub fn observe(&mut self, e: &EventEnvelope) -> Vec<Capture> {
         let task = e.task_id.as_deref();
         let mk = |s: &Stager, trigger: &'static str, summary: String, seqs: Vec<u64>, base: Tier| {
-            Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: seqs, summary: clip(&summary), tier: s.tier(task, base), id_suffix: "", valid_until: None })
+            Capture::Note(StagedNote { trigger, task_id: task.map(String::from), role: e.agent.clone(), event_seqs: seqs, summary: clip(&summary), tier: s.tier(task, base), id_suffix: "", valid_until: None, note_kind: None })
         };
         let mut out = Vec::new();
         match e.kind.as_str() {
@@ -695,6 +719,14 @@ impl Stager {
                 }
                 return out;
             }
+            // Kept in the provisional tier (`specs/116` §2 item 2): it leaves by expiry, not by crowding, so it no longer counts
+            // toward `max_notes` and is never evicted. The per-task and per-mission caps counted it when it was staged.
+            crate::provisional_notes::EVENT => {
+                if let Some(id) = e.payload["id"].as_str() {
+                    self.live.retain(|l| l != id);
+                }
+                return out;
+            }
             // The `note` tool's request. It is the one `learn.*` event that makes a note; the note it makes is `learn.staged`.
             "learn.note" => {
                 let kept = task.map(|t| self.agent_notes.entry(t.to_string()).or_insert(0));
@@ -709,6 +741,8 @@ impl Stager {
                     out.push(mk(self, "agent_note", text.to_string(), vec![e.seq], base));
                     if let Some(Capture::Note(n)) = out.last_mut() {
                         n.valid_until = e.payload["valid_until"].as_str().filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string());
+                        // Only a word of the fixed list; anything else is left out and the note is filed as the narrowest kind.
+                        n.note_kind = crate::provisional_notes::KINDS.into_iter().find(|k| e.payload["kind"].as_str() == Some(*k));
                     }
                 }
             }
@@ -1357,6 +1391,42 @@ mod tests {
         assert_eq!(tainted[0].tier, Tier::L1);
         let off = Stager::new(LearningSettings { triggers: ["escalation".to_string()].into(), ..Default::default() }).observe(&note(1, "t", "L3"));
         assert!(off.is_empty());
+    }
+
+    /// `specs/116` §2 item 2: the per-task cap stays; a note kept in the provisional tier leaves the staged list and is never
+    /// evicted by crowding, while a mission whose notes are not kept is evicted past `max_notes` as before.
+    #[test]
+    fn a_note_kept_in_the_provisional_tier_leaves_the_staged_list_and_is_never_evicted() {
+        let run = |keep: bool| {
+            let mut s = Stager::new(LearningSettings { max_notes: 10, ..Default::default() });
+            let (mut log, mut evicted) = (Vec::new(), 0);
+            for i in 1..=30u64 {
+                let task = format!("t{i}");
+                for c in s.observe(&at(i, Some(&task), "learn.note", json!({"text": format!("note number {i}"), "tier": "L3", "kind": if i == 1 { "fact" } else { "lesson" }}))) {
+                    match c {
+                        Capture::Note(n) => {
+                            assert_eq!(n.note_kind, (i == 1).then_some("fact"), "only a word of the fixed list is carried");
+                            let e = n.to_event("m_1");
+                            assert_eq!(e.payload.get("note_kind").and_then(|k| k.as_str()), (i == 1).then_some("fact"));
+                            log.push(e.clone());
+                            s.observe(&e);
+                            if keep {
+                                let kept = ev(None, crate::provisional_notes::EVENT, json!({"id": n.id(), "file": "provisional/builder/x.md"}));
+                                assert!(s.observe(&kept).is_empty(), "it triggers nothing");
+                                log.push(kept);
+                            }
+                        }
+                        Capture::Evict(id) => {
+                            evicted += 1;
+                            log.push(ev(None, "learn.dropped", json!({"id": id, "reason": "evicted"})));
+                        }
+                    }
+                }
+            }
+            (live_notes("m_1", &log).len(), evicted, Stager::replay(LearningSettings { max_notes: 10, ..Default::default() }, &log).live.len())
+        };
+        assert_eq!(run(true), (0, 0, 0), "kept notes are not staged notes, and none was evicted; a restart agrees");
+        assert_eq!(run(false), (10, 20, 10), "without the tier the oldest are evicted past the cap, as before");
     }
 
     #[test]

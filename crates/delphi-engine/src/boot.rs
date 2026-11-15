@@ -86,6 +86,26 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(n) = root.get("research").and_then(|r| r.get("thin_below")).and_then(|v| v.as_integer()).filter(|v| *v >= 1) {
         s.thin_below = n.min(50) as usize;
     }
+    // `specs/114` §3 item 3: when a new question continues a topic Delphi has. A share of the question's content words (above 0, at
+    // most 1) and a retrieval score (0 to 1); anything else keeps the default.
+    let bar = |key: &str| root.get("research").and_then(|r| r.get(key)).and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64)));
+    if let Some(x) = bar("continue_overlap").filter(|x| *x > 0.0 && *x <= 1.0) {
+        s.continue_bar.overlap = x;
+    }
+    if let Some(x) = bar("continue_score").filter(|x| (0.0..=1.0).contains(x)) {
+        s.continue_bar.score = x;
+    }
+    // Due topics (`specs/112` §5.2): the days after which a topic's newest run is old, and the bounds a record's own figure is
+    // held to. Each is 1 to 3650 days; anything else keeps the default, and bounds the wrong way round keep both defaults.
+    if let Some(r) = root.get("research") {
+        let days = |k: &str| r.get(k).and_then(|v| v.as_integer()).filter(|v| (1..=3650).contains(v)).map(|v| v as u64);
+        let d = crate::research_record::Refresh::default();
+        let (min, max) = match (days("refresh_days_min").unwrap_or(d.min), days("refresh_days_max").unwrap_or(d.max)) {
+            (min, max) if min <= max => (min, max),
+            _ => (d.min, d.max),
+        };
+        s.research_refresh = crate::research_record::Refresh { days: days("refresh_days").unwrap_or(d.days), min, max };
+    }
     // Archived copies (`specs/101` §5, §8): a boolean, off unless it is exactly `true`; the endpoint must be an https URL, else the pinned
     // default stays. Any other value of either keeps the default.
     if let Some(r) = root.get("research") {
@@ -136,6 +156,38 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         }
         if let Some(n) = r.get("fetch_per_run").and_then(|v| v.as_integer()).filter(|v| (1..=100).contains(v)) {
             s.wider_fetch.per_run = n as usize;
+        }
+    }
+    // `[research.limits]` (`specs/112` §4 item 6): the one limits table of a research run. Each key is a count inside its range; a
+    // value outside it, or of the wrong kind, keeps the default (the host runner's figure of before the table).
+    if let Some(t) = root.get("research").and_then(|r| r.get("limits")) {
+        let l = &mut s.research_limits;
+        let count = |k: &str, lo: i64, hi: i64| t.get(k).and_then(|v| v.as_integer()).filter(|v| (lo..=hi).contains(v));
+        for (i, d) in ["quick", "survey", "deep"].iter().enumerate() {
+            if let Some(n) = count(&format!("pages_{d}"), 1, 40) {
+                l.pages[i] = n as usize;
+            }
+            if let Some(n) = count(&format!("steps_{d}"), 1, 200) {
+                l.steps[i] = n as u32;
+            }
+        }
+        if let Some(n) = count("job_secs", 30, 3600) {
+            l.job_secs = n as u64;
+        }
+        if let Some(n) = count("concurrent", 1, 8) {
+            l.concurrent = n as usize;
+        }
+        if let Some(n) = count("page_chars", 1000, 200_000) {
+            l.page_chars = n as usize;
+        }
+        if let Some(d) = t.get("depth").and_then(|v| v.as_str()).and_then(delphi_core::research::Depth::parse) {
+            l.depth = d;
+        }
+        if let Some(n) = count("pictures_per_source", 0, 50) {
+            l.pictures_per_source = n as usize;
+        }
+        if let Some(n) = count("pictures_per_run", 0, 200) {
+            l.pictures_per_run = n as usize;
         }
     }
     // `[research] retractions` and `retractions_stale_days` (`specs/101` §4, §8): a boolean, off unless exactly `true`; the age is 1 to 3650
@@ -537,6 +589,38 @@ mod tests {
         }
     }
 
+    // `specs/112` §4 item 6: the limits of the two runners are one table, and its defaults are the host runner's figures.
+    #[test]
+    fn the_research_limits_are_one_table_whose_defaults_are_the_host_runners_and_a_bad_value_keeps_the_default() {
+        use crate::research_run::Limits;
+        use delphi_core::research::Depth;
+        let d = settings_from(&toml::from_str("").unwrap()).research_limits;
+        assert_eq!(d, Limits::default());
+        assert_eq!((d.pages, d.steps, d.job_secs, d.concurrent, d.page_chars, d.depth), ([3, 6, 10], [5, 15, 30], 600, 2, 24_000, Depth::Survey), "what the host runner had before the table");
+        assert_eq!((d.job_secs, d.concurrent), (crate::research_jobs::JOB_TIMEOUT.as_secs(), crate::research_jobs::MAX_CONCURRENT));
+        assert_eq!((d.pictures_per_source, d.pictures_per_run), (6, 24), "the console job's picture caps: the host runner kept none");
+        let set = settings_from(&toml::from_str("[research.limits]\npages_quick = 2\npages_deep = 20\nsteps_survey = 40\njob_secs = 900\nconcurrent = 1\npage_chars = 8000\ndepth = \"deep\"\npictures_per_source = 0\npictures_per_run = 3\n").unwrap()).research_limits;
+        assert_eq!((set.pages, set.steps, set.job_secs, set.concurrent, set.page_chars, set.depth, set.pictures_per_source, set.pictures_per_run), ([2, 6, 20], [5, 40, 30], 900, 1, 8000, Depth::Deep, 0, 3));
+        assert_eq!((set.pages_at(Depth::Deep), set.steps_at(Depth::Survey)), (20, 40));
+        for bad in ["pages_quick = 0", "pages_deep = 500", "steps_quick = \"many\"", "job_secs = 5", "concurrent = 0", "concurrent = 99", "page_chars = 10", "depth = \"forever\"", "pictures_per_run = -1"] {
+            assert_eq!(settings_from(&toml::from_str(&format!("[research.limits]\n{bad}\n")).unwrap()).research_limits, Limits::default(), "{bad}");
+        }
+    }
+
+    // `specs/112` §5.2: when a research topic is due. Ninety days unless set; a bad value keeps the default.
+    #[test]
+    fn a_topic_is_refreshed_after_ninety_days_unless_set_and_a_bad_value_keeps_the_default() {
+        use crate::research_record::Refresh;
+        let of = |text: &str| settings_from(&toml::from_str(text).unwrap()).research_refresh;
+        assert_eq!((of(""), Refresh::default()), (Refresh { days: 90, min: 7, max: 730 }, Refresh { days: 90, min: 7, max: 730 }));
+        assert_eq!(of("[research]\nrefresh_days = 30\nrefresh_days_min = 1\nrefresh_days_max = 365\n"), Refresh { days: 30, min: 1, max: 365 });
+        assert_eq!(of("[research]\nthin_below = 4\nrefresh_days = 180\n"), Refresh { days: 180, min: 7, max: 730 });
+        for bad in ["refresh_days = 0", "refresh_days = -5", "refresh_days = 99999", "refresh_days = \"often\"", "refresh_days_min = 0", "refresh_days_max = 99999"] {
+            assert_eq!(of(&format!("[research]\n{bad}\n")), Refresh::default(), "{bad}");
+        }
+        assert_eq!(of("[research]\nrefresh_days_min = 400\nrefresh_days_max = 30\n"), Refresh::default(), "bounds the wrong way round keep both defaults");
+    }
+
     #[test]
     fn archived_copies_are_off_by_default_the_endpoint_must_be_https_and_a_bad_value_keeps_the_default() {
         use crate::library::ArchiveConfig;
@@ -614,6 +698,16 @@ mod tests {
         assert_eq!(settings_from(&toml::from_str("[research]\nthin_below = 500\n").unwrap()).thin_below, 50);
         for bad in ["thin_below = 0", "thin_below = -2", "thin_below = \"many\""] {
             assert_eq!(settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).thin_below, 3, "{bad}");
+        }
+        // `[research] continue_overlap`, `continue_score` (specs/114 §3 item 3): defaults 0.5 and 0.003; a share above 0 and at most 1,
+        // a score from 0 to 1; anything else keeps the default.
+        let bar = |toml_text: &str| settings_from(&toml::from_str(toml_text).unwrap()).continue_bar;
+        assert_eq!((bar("").overlap, bar("").score), (0.5, 0.003));
+        assert_eq!((bar("[research]\ncontinue_overlap = 0.8\ncontinue_score = 0.1\n").overlap, bar("[research]\ncontinue_overlap = 0.8\ncontinue_score = 0.1\n").score), (0.8, 0.1));
+        assert_eq!(bar("[research]\ncontinue_overlap = 1\n").overlap, 1.0, "a whole number is read");
+        for bad in ["continue_overlap = 0", "continue_overlap = 1.5", "continue_overlap = \"most\"", "continue_score = -0.1", "continue_score = 2"] {
+            let b = bar(&format!("[research]\n{bad}\n"));
+            assert_eq!((b.overlap, b.score), (0.5, 0.003), "{bad}");
         }
         assert_eq!(settings_from(&toml::from_str("[seats]\nrequire_families = 0\n").unwrap()).require_families, None, "0 is not a requirement");
     }

@@ -41,7 +41,7 @@ const SLOW_WAIT: Duration = Duration::from_secs(80);
 fn socket_wait(method: &str) -> Duration {
     match method {
         // Spec 104 §2, §12 A1: `host.ask_family` hands back its id at once (the quick wait); `host.ask_result` may hold 25 s.
-        "host.ask_result" | "host.request_help" | "host.help_result" | "host.council_result" | "host.research_result" | "host.council_brief" | "host.council_status" => SLOW_WAIT,
+        "host.ask_result" | "host.request_help" | "host.help_result" | "host.council_result" | "host.research_result" | "host.council_brief" | "host.council_status" | "host.record_research" => SLOW_WAIT,
         _ => QUICK_WAIT,
     }
 }
@@ -486,6 +486,13 @@ pub fn tools() -> Value {
             "annotations": writes("Propose a research entry to Delphi")
         },
         {
+            "name": crate::finding_record::TOOL,
+            "title": "Record what an investigation concluded",
+            "description": crate::finding_record::host_description(),
+            "inputSchema": crate::finding_record::host_input_schema(),
+            "annotations": writes("Record an investigation's finding in Delphi")
+        },
+        {
             "name": "propose_council_record",
             "title": "Stage an unaudited agenda (import)",
             "description": "Stage the outcome of an agenda you ran yourself as an import: barrier none, source host-reported. It is not a Council record, and anything you send that is labelled one (council_format, venue: daemon, a Council kind) is refused.",
@@ -748,7 +755,10 @@ pub fn tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What to find out, in general terms."},
+                    "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What to find out, in general terms. Required unless topic_id is given."},
+                    "topic_id": {"type": "string", "maxLength": 57, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$", "description": "Continue a research topic instead of asking a new question: the topic_id an earlier research_result gave. The new run asks the topic's own question, begins from what the earlier runs did not find, and does not read again a page whose content has not changed. Give question or topic_id."},
+                    "note": {"type": "string", "maxLength": 120, "description": "With topic_id only: one line, in general terms, that narrows the continued search."},
+                    "new": {"type": "boolean", "default": false, "description": "Before it searches, the run looks up what Delphi already holds on the question (the result reports it as known_before). When a research topic Delphi has overlaps your question strongly, the run continues that topic with the topic's own question, and the reply says so. Pass true to research your question as a topic of its own instead."},
                     "depth": {"type": "string", "enum": ["quick", "survey", "deep"], "default": "survey"},
                     "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."},
                     "host_searches": {
@@ -766,7 +776,6 @@ pub fn tools() -> Value {
                         }
                     }
                 },
-                "required": ["question"],
                 "additionalProperties": false
             },
             "annotations": {"title": "Ask Delphi to research", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
@@ -786,7 +795,7 @@ pub fn tools() -> Value {
         {
             "name": "research_result",
             "title": "Read a research result",
-            "description": "The result of a research job this session raised: an answer (not validated), claims each with its knowledge_status, quote and source, contradictions, citations, what was already known and what is new, and who answered (signature). Pass wait: true to wait up to 25 seconds. When you use the result, say it came from Delphi research and carry the knowledge_status with it.",
+            "description": "The result of a research job this session raised: an answer (not validated), claims each with its knowledge_status, quote and source, contradictions, citations, what was already known and what is new, and who answered (signature). The answer's last line says what it is: `written by the scout from N claims, not validated` (Markdown with a [c-…] claim marker on every statement and `Not found.` where nothing answered a part), or `list of claims (no synthesis)`. known_before is what Delphi held before the run; sub_questions are the parts the scout broke the question into, each covered or not; stopped says why the run ended. Pass wait: true to wait up to 25 seconds. When you use the result, say it came from Delphi research and carry the knowledge_status with it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"research_id": {"type": "string", "minLength": 1, "maxLength": 64}, "wait": {"type": "boolean", "default": false}, "lines": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8, "description": "How many lines of the tail to return while it runs."}},
@@ -794,6 +803,13 @@ pub fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": annotations("Read a research result")
+        },
+        {
+            "name": "record_research",
+            "title": "Hand Delphi research you did",
+            "description": "Hand Delphi a finished piece of research you did with your own tools, before you answer: the question, your answer (Markdown, at most 24 KiB), the sources (a URL, or a description for one with no public address, with its title, the date you read it, its kind and whether it is private), the claims (each a sentence with the exact quote and the index of its source), the searches you ran (where, and the words) and the gaps. Delphi keeps it as a research topic. For a public web source it fetches the page itself, under its own rules, and looks for each quote: a quote it finds is an anchor; one it does not is kept as host-reported, not found. A source that is private, or internal, a file or a person, is never fetched: Delphi keeps only its locator, title and date, and its claims stay private. Everything is stored noted and not validated; anything you say about trust or status is ignored. At most 40 claims and 40 sources per call, 10 calls per session per hour. Pass topic_id to add to a topic Delphi gave you. Changes no file in your project.",
+            "inputSchema": crate::host_research::input_schema(),
+            "annotations": {"title": "Hand Delphi research you did", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
         },
         {
             "name": "cancel_job",
@@ -1050,6 +1066,7 @@ impl Server {
             }),
             "propose_note" => self.daemon("host.propose_note", args),
             "propose_kb_entry" => self.daemon("host.propose_kb_entry", args),
+            "record_finding" => self.daemon("host.record_finding", args),
             "request_test_authorization" => self.daemon("host.request_test_authorization", args),
             "propose_council_record" => self.propose_council_record(args),
             "record_session_summary" => self.daemon("host.record_session_summary", args),
@@ -1073,6 +1090,7 @@ impl Server {
             "request_research" => self.daemon("host.request_research", args),
             "research_status" => self.daemon("host.research_status", args),
             "research_result" => self.daemon("host.research_result", args),
+            "record_research" => self.daemon("host.record_research", args),
             "cancel_job" => self.daemon("host.cancel_job", args),
             "ask_family" => self.ask_family(args, job),
             "ask_result" => self.daemon("host.ask_result", args),
@@ -1102,7 +1120,7 @@ impl Server {
             return Ok((Use::parse(args.get("use"))?, "asked for".to_string()));
         }
         Ok(match self.host_session.adopted.lock().unwrap().clone() {
-            Some((role, u)) => (u, format!("the default for {role}")),
+            Some((role, u)) => (u, crate::host_labels::default_reason(&role, u)),
             None => (Use::Explore, "the default".to_string()),
         })
     }
@@ -1826,7 +1844,7 @@ mod tests {
     /// back its id at once (`specs/104` §12 A1), so it takes the quick wait.
     #[test]
     fn the_socket_outlasts_the_daemons_own_wait_for_every_method_that_waits() {
-        for m in ["host.ask_result", "host.request_help", "host.help_result", "host.council_result", "host.research_result", "host.council_brief", "host.council_status"] {
+        for m in ["host.ask_result", "host.request_help", "host.help_result", "host.council_result", "host.research_result", "host.council_brief", "host.council_status", "host.record_research"] {
             assert!(socket_wait(m) > Duration::from_secs(45), "{m}");
         }
         for m in ["host.ask_family", "host.propose_note", "host.council_open", "host.council_submit", "host.request_council", "host.cancel_job"] {
@@ -1899,13 +1917,14 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "session_brief", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "recall_sessions", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "cancel_job", "ask_family", "ask_result"]);
+        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "session_brief", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "recall_sessions", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "record_research", "cancel_job", "ask_family", "ask_result"]);
         assert_eq!(socket_wait("host.recall_sessions"), QUICK_WAIT, "recall is a quick read");
         for t in tools {
-            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "record_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
-            assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research", "{}", t["name"]);
+            // `record_research` makes the daemon fetch the public pages the host names, under its runner's rules (`specs/113` §2 item 3).
+            assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research" || t["name"] == "record_research", "{}", t["name"]);
             assert_eq!(t["inputSchema"]["additionalProperties"], false, "{}", t["name"]);
         }
         assert_eq!(call(&mut s, json!({"jsonrpc": "2.0", "id": 4, "method": "completion/complete"}))["error"]["code"], -32601);
@@ -2785,18 +2804,26 @@ mod tests {
         assert!(reads.iter().all(|r| r.as_object().unwrap().keys().all(|k| ["id", "checked", "author"].contains(&k.as_str()))), "ids and labels only: {reads:?}");
         assert!(reads.iter().any(|r| r["author"] == "operator" && r["checked"] == "validated"), "{reads:?}");
 
+        // `specs/116` §8.4: the two checking roles explore by default too, and are told what they are reading; `verify` when they ask.
         assert!(!text_of(&call_tool(&mut s, "get_agent", json!({"role": "validator"}))).is_empty());
         let v = kb(&mut s, json!({"query": "quokka procedure"}));
-        assert!(v.contains("use: \"verify\" (the default for validator)") && !v.contains("the quokka procedure"), "verify serves no project file: {v}");
-        let asked = kb(&mut s, json!({"query": "quokka procedure", "use": "explore"}));
-        assert!(asked.contains("use: \"explore\" (asked for)") && asked.contains("the quokka procedure"), "an explicit use wins: {asked}");
-        assert!(kb(&mut s, json!({"query": "quokka procedure", "use": null})).contains("(the default for validator)"), "a null use is no use");
+        assert!(v.contains("use: \"explore\" (the default for validator: unvalidated text is included and labelled as such; pass use \"verify\" for validated text only)") && v.contains("the quokka procedure"), "the explore default: {v}");
+        let asked = kb(&mut s, json!({"query": "quokka procedure", "use": "verify"}));
+        assert!(asked.contains("use: \"verify\" (asked for)") && !asked.contains("the quokka procedure"), "verify serves no project file: {asked}");
+        assert!(kb(&mut s, json!({"query": "quokka procedure", "use": null})).contains("(the default for validator: "), "a null use is no use");
 
         // A failed get_agent adopts nothing; the next role adopted replaces the last.
         assert_eq!(call_tool(&mut s, "get_agent", json!({"role": "nobody"}))["result"]["isError"], true);
-        assert!(kb(&mut s, json!({"query": "quokka procedure"})).contains("(the default for validator)"));
+        assert!(kb(&mut s, json!({"query": "quokka procedure"})).contains("(the default for validator: "));
         call_tool(&mut s, "get_agent", json!({"role": "investigator"}));
-        assert!(kb(&mut s, json!({"query": "quokka procedure"})).contains("use: \"verify\" (the default for investigator)"));
+        let i = kb(&mut s, json!({"query": "quokka procedure"}));
+        assert!(i.contains("use: \"explore\" (the default for investigator: unvalidated text is included and labelled as such;") && i.contains("the quokka procedure"), "{i}");
+        let asked = kb(&mut s, json!({"query": "quokka procedure", "use": "verify"}));
+        assert!(asked.contains("use: \"verify\" (asked for)") && !asked.contains("the quokka procedure"), "the investigator verifies when it asks: {asked}");
+        // A role whose manifest says `verify` keeps that default: the key is unchanged, the release no longer sets it for any role.
+        *s.host_session.adopted.lock().unwrap() = Some(("validator".into(), crate::host_labels::Use::Verify));
+        let st = kb(&mut s, json!({"query": "quokka procedure"}));
+        assert!(st.contains("use: \"verify\" (the default for validator)") && !st.contains("the quokka procedure"), "{st}");
         call_tool(&mut s, "get_agent", json!({"role": "architect"}));
         let a = kb(&mut s, json!({"query": "quokka procedure"}));
         assert!(a.contains("use: \"explore\" (the default for architect)"), "{a}");
@@ -2805,7 +2832,7 @@ mod tests {
         assert_eq!(call_tool(&mut s, "kb_retrieve", json!({"query": "quokka", "use": "trust me"}))["result"]["isError"], true);
 
         // The pack says its role's default in one line.
-        assert!(text_of(&call_tool(&mut s, "get_agent", json!({"role": "validator"}))).contains("\n- search_use: verify (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)\n"));
+        assert!(text_of(&call_tool(&mut s, "get_agent", json!({"role": "validator"}))).contains("\n- search_use: explore (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)\n"));
         assert!(text_of(&call_tool(&mut s, "get_agent", json!({"role": "architect"}))).contains("\n- search_use: explore ("));
 
         // The local readers report what they returned too.
@@ -2832,8 +2859,9 @@ mod tests {
                     let role = if i % 2 == 0 { "validator" } else { "architect" };
                     let a = s.call("get_agent", &json!({"role": role}), &Job::none()).unwrap();
                     let k = s.call("kb_retrieve", &json!({"query": "quokka procedure"}), &Job::none()).unwrap().unwrap();
-                    let explore = k.contains("use: \"explore\" (the default for architect)");
-                    (a.is_ok() && (explore || k.contains("use: \"verify\" (the default for validator)")), explore)
+                    // Both roles explore by default since `specs/116` §8.4; the answer still names exactly one adopted role.
+                    let explore = k.contains("use: \"explore\" (the default for ");
+                    (a.is_ok() && explore && (k.contains("(the default for architect)") != k.contains("(the default for validator: ")), explore)
                 })
             })
             .collect();
@@ -2842,7 +2870,7 @@ mod tests {
         let explored = got.iter().filter(|(_, e)| *e).count();
         assert_eq!(s.host_session.reported.lock().unwrap().iter().filter(|(v, _)| v == "kb_retrieve").count(), explored, "each explore answer, and only those, carried a passage to report");
         s.call("get_agent", &json!({"role": "investigator"}), &Job::none()).unwrap().unwrap();
-        assert_eq!(s.host_session.adopted.lock().unwrap().clone(), Some(("investigator".to_string(), crate::host_labels::Use::Verify)));
+        assert_eq!(s.host_session.adopted.lock().unwrap().clone(), Some(("investigator".to_string(), crate::host_labels::Use::Explore)));
     }
 
     #[test]

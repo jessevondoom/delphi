@@ -177,6 +177,12 @@ fn never_writable(key: &str) -> Option<String> {
     if key.starts_with("about/") || key == "about" {
         return Some("about/ is the release's own reference (read-only)".into());
     }
+    // `missions/<id>/findings/**` (`specs/116` §5.2): only the daemon's `record_finding` writes a finding, after it has checked the
+    // evidence, so a file there is never one an agent's file tools made.
+    let mut seg = key.split('/');
+    if (seg.next(), seg.nth(1)) == (Some("missions"), Some("findings")) {
+        return Some("findings are written by the daemon (use `record_finding`)".into());
+    }
     if let Some(rest) = key.strip_prefix("scratch/") {
         if let Some(why) = scratch_refused(rest) {
             return Some(why);
@@ -618,6 +624,18 @@ mod tests {
         assert!(never_readable("context/domains/x.md", "scout").is_none());
     }
 
+    /// `specs/116` §5.2: a mission's findings folder is the daemon's to write and every role's to read.
+    #[test]
+    fn a_missions_findings_are_read_by_every_role_and_written_by_none() {
+        for k in ["missions/m1/findings/x.md", "missions/m1/findings", "missions/m1/findings/deep/x.md"] {
+            assert!(never_writable(k).is_some_and(|why| why.contains("record_finding")), "{k}");
+            assert!(never_readable(k, "builder").is_none() && never_readable(k, "scout").is_none(), "{k}");
+        }
+        for k in ["missions/m1/research/findings/x.md", "missions/m1/research/x.md", "missions/findings/x.md", "context/findings/x.md"] {
+            assert!(never_writable(k).is_none(), "{k}");
+        }
+    }
+
     /// `specs/098` §12 item 13: entries a host or the web left in the knowledge base live under `local/staged/`, which no role may read
     /// through the file tools. A seat reaches one only through a search it runs or a pointer, never by a path in a brief.
     #[test]
@@ -678,6 +696,19 @@ mod tests {
             protected,
         };
         (t, g)
+    }
+
+    // specs/115 §8: the research-sharing setting lives in `config.toml` and a project's private flag in `local/projects.json`. No role
+    // may write (or read) either, whatever its globs, so an agent cannot widen what its own session reads.
+    #[test]
+    fn the_files_that_hold_research_sharing_and_the_private_flag_are_closed_to_every_role() {
+        let (_t, g) = setup();
+        for file in ["config.toml", "local/projects.json", "Config.toml", "./config.toml", "local/../config.toml", "local/./projects.json"] {
+            for a in [Access::Write, Access::Read] {
+                assert!(g.check_policy(file, a).is_err(), "{file} {a:?}");
+            }
+        }
+        assert!(never_writable("config.toml").is_some() && never_writable("local/projects.json").is_some());
     }
 
     // specs/010 §8.2: a stored connector result is reachable only by its exact name, read-only.
@@ -987,6 +1018,33 @@ mod tests {
         assert!(matches!(g.check("memory/agents/red-team/lessons.md", Access::Read), Err(Denied::NeverReadable(_))));
         assert!(matches!(g.check("memory/agents/RED-TEAM/lessons.md", Access::Read), Err(Denied::NeverReadable(_))));
         assert!(matches!(g.check("operator/profile.md", Access::Read), Err(Denied::NeverReadable(_))));
+    }
+
+    // specs/120 §2 item 5, §8: the record of the desktop app's keys and grants is under `operator/`, which no agent tool
+    // reads, lists or writes, by any spelling and whatever globs the role holds. An agent that could write it could pair a
+    // key or give one a grant.
+    #[test]
+    fn the_app_key_record_is_unreachable_by_any_agent_tool() {
+        let (t, mut g) = setup();
+        let home = t.path();
+        let record = home.join(crate::app_keys::KEYS_FILE);
+        fs::create_dir_all(record.parent().unwrap()).unwrap();
+        fs::write(&record, "{\"version\":1,\"keys\":[]}\n").unwrap();
+        symlink(&record, home.join("wt/keylink")).unwrap();
+        symlink(record.parent().unwrap(), home.join("wt/oplink")).unwrap();
+        g.read_globs = vec!["*".into(), "**".into()];
+        g.write_globs = vec!["**".into(), "@worktree/**".into(), "operator/**".into()];
+        for spelling in [
+            "operator/app-keys.json", "OPERATOR/app-keys.json", "Operator/App-Keys.json", "./operator/app-keys.json", "operator//app-keys.json", "operator/./app-keys.json", "operator/app-keys.json.tmp",
+            "../operator/app-keys.json", "@worktree/../operator/app-keys.json", "@project/app/../../operator/app-keys.json", "~/.delphi/operator/app-keys.json", "@worktree/keylink", "@worktree/oplink/app-keys.json",
+        ] {
+            assert!(g.check(spelling, Access::Read).is_err(), "`{}` must not be readable", spelling);
+            assert!(g.read_file(spelling, 100).is_err(), "`{}` must not be readable", spelling);
+            assert!(g.write_atomic(spelling, b"{\"version\":1,\"keys\":[{\"grants\":[\"request\"]}]}").is_err(), "`{}` must not be writable", spelling);
+        }
+        assert!(matches!(g.check("operator/app-keys.json", Access::Write), Err(Denied::NeverReadable(_) | Denied::NeverWritable(_))));
+        assert!(matches!(g.list("operator"), Err(Denied::NeverReadable(_))));
+        assert_eq!(fs::read_to_string(&record).unwrap(), "{\"version\":1,\"keys\":[]}\n", "nothing was written");
     }
 
     #[test]

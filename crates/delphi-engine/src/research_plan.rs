@@ -28,6 +28,9 @@ pub enum QueryKind {
     Topic,
     Trusted,
     Gap,
+    /// A query for one sub-question of the scout's plan (`specs/114` §4): the scout's own, or one built from the sub-question's
+    /// words. It is cleaned and guarded by the runner like the question before it is sent.
+    Sub,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +87,33 @@ pub fn clean_query(question: &str, redactor: &Redactor) -> Option<String> {
 /// The queries a job sends, in order. `sites` are the trusted-list domains (`TrustedList::site_filters`).
 pub fn plan(question: &str, depth: Depth, sites: &[String], redactor: &Redactor) -> Vec<PlannedQuery> {
     let Some(topic) = clean_query(question, redactor) else { return Vec::new() };
+    plan_topic(topic, depth, sites)
+}
+
+/// What [`plan_guarded`] decided.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Planned {
+    /// The queries to send, in order.
+    pub queries: Vec<PlannedQuery>,
+    /// The kinds of the queries that are not sent because the question names one of the workspace's privacy identifiers and too
+    /// little is left without it (`specs/119` §2 item 7). The search log lists each as withheld, with no text.
+    pub withheld: Vec<QueryKind>,
+}
+
+/// [`plan`], with the identifier guard applied to the question before any query is built from it (`specs/119` §2 item 7): the three
+/// content words the rule asks for are counted in the question, not in the words the planner adds. `guard` is
+/// `query_guard::guard` with the workspace's identifiers.
+pub fn plan_guarded(question: &str, depth: Depth, sites: &[String], redactor: &Redactor, guard: &dyn Fn(&str) -> crate::query_guard::Guarded) -> Planned {
+    use crate::query_guard::Guarded;
+    let Some(topic) = clean_query(question, redactor) else { return Planned::default() };
+    match guard(&topic) {
+        Guarded::Clean => Planned { queries: plan_topic(topic, depth, sites), withheld: Vec::new() },
+        Guarded::Stripped(without) => Planned { queries: plan_topic(without, depth, sites), withheld: Vec::new() },
+        Guarded::Withheld => Planned { queries: Vec::new(), withheld: plan_topic(topic, depth, sites).into_iter().map(|q| q.kind).collect() },
+    }
+}
+
+fn plan_topic(topic: String, depth: Depth, sites: &[String]) -> Vec<PlannedQuery> {
     let trusted = site_queries(&topic, sites, SITES_PER_QUERY).into_iter().next().map(|text| PlannedQuery { kind: QueryKind::Trusted, text });
     let mut out = Vec::new();
     match depth {
@@ -96,6 +126,30 @@ pub fn plan(question: &str, depth: Depth, sites: &[String], redactor: &Redactor)
     }
     out.truncate(MAX_QUERIES);
     out
+}
+
+/// The queries of a plan that a continued run sends (`specs/112` §5.1): those its record's gaps ask for. A gap is one of the fixed
+/// phrases of `research_record::gaps_of` and only chooses among `planned`; no word of it enters a query. The trusted rung found
+/// nothing: the trusted query. The web rung found nothing: the topic and gap queries. Thin coverage or a spent budget: all of
+/// them. The knowledge-base rung is searched on this machine and asks for no query. With no gap that asks for one (a refresh of
+/// a topic that had none), the whole plan is sent.
+pub fn for_gaps(planned: Vec<PlannedQuery>, gaps: &[String]) -> Vec<PlannedQuery> {
+    let (mut trusted, mut web) = (false, false);
+    for g in gaps {
+        if g.starts_with("trusted:") {
+            trusted = true;
+        } else if g.starts_with("web:") {
+            web = true;
+        } else if g.starts_with("coverage is thin") || g.starts_with("a step budget ran out") {
+            (trusted, web) = (true, true);
+        }
+    }
+    let chosen: Vec<PlannedQuery> = planned.iter().filter(|q| if q.kind == QueryKind::Trusted { trusted } else { web }).cloned().collect();
+    if chosen.is_empty() {
+        planned
+    } else {
+        chosen
+    }
 }
 
 /// Search the wider web too? Only when the trusted domains answered too little.
@@ -266,6 +320,19 @@ mod tests {
         assert_eq!(clean_query("/etc/passwd /var/log/x 10.1.2.3 why", &r), None);
         assert_eq!(clean_query("   \n  ", &r), None);
         assert!(plan("/etc/passwd /var/log/x 10.1.2.3 why", Depth::Deep, &sites(), &r).is_empty());
+        // specs/119 §2 item 7: the guard looks at the question, before the planner's own words are added. With enough left every query is
+        // built from the question without the identifier; with too little, none is built and each kind is reported as withheld.
+        let ids = vec!["heron".to_string()];
+        let guard = |q: &str| crate::query_guard::guard(q, &ids);
+        let p = plan_guarded("how does Heron handle intermittent fasting studies", Depth::Deep, &sites(), &r, &guard);
+        assert_eq!((p.queries.len(), p.withheld.len()), (3, 0));
+        assert!(p.queries.iter().all(|q| !q.text.to_lowercase().contains("heron") && q.text.contains("intermittent fasting studies")), "{:?}", p.queries);
+        let p = plan_guarded("heron rollout plan", Depth::Deep, &sites(), &r, &guard);
+        assert!(p.queries.is_empty(), "the planner's own words do not make up the three: {:?}", p.queries);
+        assert_eq!(p.withheld, vec![QueryKind::Topic, QueryKind::Trusted, QueryKind::Gap]);
+        let p = plan_guarded("intermittent fasting blood pressure", Depth::Quick, &sites(), &r, &guard);
+        assert_eq!(p.queries, plan("intermittent fasting blood pressure", Depth::Quick, &sites(), &r), "no identifier: the plan is unchanged");
+        assert_eq!(plan_guarded("/etc/passwd 10.1.2.3", Depth::Deep, &sites(), &r, &guard), Planned::default());
     }
 
     #[test]

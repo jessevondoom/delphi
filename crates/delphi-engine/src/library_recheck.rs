@@ -29,6 +29,34 @@ pub enum Recheck {
 }
 
 impl Library {
+    /// The source the daemon captured from `url` and its kept text, when that text may stand in for a fetch of the page
+    /// (`specs/114` §3 item 4): the record is the web page's own (its address is this one), it is public, not purged, not
+    /// retired, its text is kept whole, and it was last checked within [`RECHECK_AFTER_DAYS`] of `now`. `None` for anything else:
+    /// a private source, excerpts or a pointer, a source past its window, a record that does not say when it was checked.
+    /// Reads two files; fetches nothing and changes nothing.
+    pub fn fresh_text_of_url(&self, url: &str, now: i64) -> Option<(String, String)> {
+        let (canonical, id, _) = Self::url_record(url, &AddOpts::default()).ok()?;
+        let meta = self.read_meta(&id)?;
+        let public_page = meta["canonical_url"].as_str() == Some(canonical.as_str()) && canonical.starts_with("http") && !is_private(&meta) && !claims::is_internal_source(&meta);
+        if !public_page || !meta["purged"].is_null() || !meta["retired"].is_null() || meta["capture_level"] != "full" {
+            return None;
+        }
+        let last = meta["last_checked"].as_str().or(meta["retrieved"].as_str()).and_then(delphi_core::time::parse_rfc3339)?;
+        if now - last > RECHECK_AFTER_DAYS * 86_400 || last > now + 86_400 {
+            return None;
+        }
+        let text = std::fs::read_to_string(self.source_dir(&id).join("source.md")).ok()?;
+        (!text.trim().is_empty()).then_some((id, text))
+    }
+
+    /// Days since the source was last checked, and whether that is within its recheck window; `None` when its record does not say.
+    pub fn checked_age(&self, id: &str, now: i64) -> Option<(i64, bool)> {
+        let meta = self.read_meta(id)?;
+        let last = meta["last_checked"].as_str().or(meta["retrieved"].as_str()).and_then(delphi_core::time::parse_rfc3339)?;
+        let days = ((now - last).max(0)) / 86_400;
+        Some((days, now - last <= RECHECK_AFTER_DAYS * 86_400))
+    }
+
     pub async fn recheck_on_open(&self, policy: &FetchPolicy, id: &str, budgets: &Budgets) -> Result<Recheck, String> {
         let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0);
         self.recheck_at(policy, id, budgets, now).await

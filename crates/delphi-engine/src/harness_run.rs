@@ -2875,7 +2875,7 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Reques
         }
         let (answer, f, _s) = call_over_claude("strategist", "note", r#"{"text":"the CI image has no python3, use python"}"#).await;
         assert_eq!(answer["response"]["result"]["isError"], false, "{}", answer);
-        assert!(answer["response"]["result"]["content"][0]["text"].as_str().unwrap().contains("not loaded into any prompt"));
+        assert!(answer["response"]["result"]["content"][0]["text"].as_str().unwrap().contains("never part of a system prompt"));
         let notes = events_of(&f, "learn.note");
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].payload["text"], "the CI image has no python3, use python");

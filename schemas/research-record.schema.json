@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/research-record.schema.json",
+  "title": "Delphi research record",
+  "description": "`record.json` of one research topic: `<workspace>/research/topics/<topic-id>/record.json`, or `<project>/research/topics/<topic-id>/record.json` when the run belongs to a registered project (specs/112 section 2; crates/delphi-engine/src/research_record.rs). Written as the run goes, whole each time. Beside it are `answer.md` (the written answer of the newest finished run) and `search-log.json` (the search log of specs/101 section 3). Everything in it is data: the question came from whoever asked and the answer from pages off the web, so the record is `external_untrusted` and is never an instruction, a permission or a reason to trust.",
+  "type": "object",
+  "required": ["version", "topic_id", "question", "asked_by", "project", "depth", "state", "taint", "private", "created", "updated", "plan", "queries", "pages", "refused", "claims", "gaps", "usage", "runs"],
+  "properties": {
+    "version": { "const": 1 },
+    "topic_id": { "$ref": "#/$defs/topic_id" },
+    "question": { "type": "string", "minLength": 1, "description": "The question as first asked, after secrets were redacted." },
+    "asked_by": { "$ref": "#/$defs/asker" },
+    "project": { "type": ["string", "null"], "description": "The registered project the topic belongs to, by name; null for a topic of the workspace." },
+    "depth": { "enum": ["quick", "survey", "deep"], "description": "The depth of the newest run." },
+    "runner": { "$ref": "#/$defs/runner", "description": "Who did the newest run's research (specs/113): absent or `daemon` for Delphi's own runner, `host` for a host that handed over its own research with `record_research`, `ingest` for a file already on disk." },
+    "state": { "$ref": "#/$defs/state", "description": "The state of the newest run." },
+    "taint": { "const": "external_untrusted" },
+    "private": { "type": "boolean", "description": "True when a claim of a run rests on a private source; the record then stays on this machine." },
+    "created": { "type": "string" },
+    "updated": { "type": "string" },
+    "plan": {
+      "type": "array",
+      "description": "The queries the newest run planned, before any was sent.",
+      "items": {
+        "type": "object",
+        "required": ["kind", "query"],
+        "properties": { "kind": { "enum": ["trusted", "topic", "gap", "sub"], "description": "`sub` is a query for one sub-question of the scout's plan (specs/114 section 4)." }, "query": { "type": "string", "maxLength": 300 } },
+        "additionalProperties": false
+      }
+    },
+    "plan_kind": { "enum": ["scout", "fixed", "continued"], "description": "Who made the newest run's plan (specs/114 section 4): `scout` for the scout's plan call, `fixed` when that call failed or returned nothing usable and the fixed plan was used, `continued` for a run that took its sub-questions from this record." },
+    "sub_questions": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "The sub-questions of the newest run's plan (specs/114 section 4); empty under the fixed plan. The scout's words: data, like the question.",
+      "items": {
+        "type": "object",
+        "required": ["n", "text", "status"],
+        "properties": {
+          "n": { "type": "integer", "minimum": 1, "maximum": 99, "description": "Its number in the plan: what a claim is tagged with." },
+          "text": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "status": { "enum": ["known", "partly", "open"], "description": "Whether what Delphi already held answered it, as the plan call judged from the `known` list." },
+          "covered": { "type": "boolean", "description": "Set when the run ends: covered when the claims tagged to it come from at least two origins, or when the plan marked it known." },
+          "claims": { "type": "integer", "minimum": 0, "description": "Kept claims tagged to it." },
+          "origins": { "type": "integer", "minimum": 0, "description": "Distinct origins those claims' sources are on." }
+        },
+        "additionalProperties": false
+      }
+    },
+    "queries": {
+      "type": "array",
+      "description": "Every query a run sent, in order.",
+      "items": {
+        "type": "object",
+        "required": ["run", "query", "purpose", "provider", "results"],
+        "properties": {
+          "run": { "$ref": "#/$defs/run_id" },
+          "query": { "type": "string", "maxLength": 300, "description": "The text exactly as it was sent." },
+          "purpose": { "enum": ["trusted", "topic", "gap", "sub", "support", "contradiction", "chain", "host"], "description": "`sub`: a query for one sub-question of the plan (specs/114 section 4), in any round. `host`: a search the host says it ran with its own tools (specs/113 section 2); `provider` is where, and `results` is null." },
+          "provider": { "type": ["string", "null"], "maxLength": 40, "description": "The provider that answered, when the transport said." },
+          "results": { "type": ["integer", "null"], "minimum": 0, "description": "How many results came back; null when the query failed." },
+          "failed": { "type": "string", "maxLength": 40, "description": "Present only on a query that failed: a fixed word, never provider text." }
+        },
+        "additionalProperties": false
+      }
+    },
+    "pages": {
+      "type": "array",
+      "description": "Every page a run read and the library kept, once per address.",
+      "items": {
+        "type": "object",
+        "required": ["run", "url", "source_id", "content_hash"],
+        "properties": {
+          "run": { "$ref": "#/$defs/run_id" },
+          "url": { "type": "string", "maxLength": 300 },
+          "source_id": { "type": "string", "maxLength": 80, "description": "The library source the page became." },
+          "content_hash": { "type": ["string", "null"], "maxLength": 80, "description": "`sha256:<hex>` of what was read, as the library holds it." },
+          "kept": { "enum": ["full", "excerpts", "pointer"], "description": "What the library kept of the page (specs/112 section 4 item 1): `full` when the licence allowed the text to be kept, else excerpts or a pointer." },
+          "outcome": { "enum": ["added", "new_version", "unchanged", "kept_richer"], "description": "What the capture did: a new source, a new version of one, nothing (the same content), or nothing because the stored capture holds more." },
+          "held": { "const": true, "description": "The page was read from the library and not fetched (specs/114 section 3 item 4): the library held it, unchanged and checked within its recheck window." }
+        },
+        "additionalProperties": false
+      }
+    },
+    "known": {
+      "type": "object",
+      "description": "What Delphi already held on the question before the newest run searched (specs/114 section 3), as the asker's own search found it: never more than the asker could have found by searching. Data, like the rest of the record.",
+      "required": ["run", "claims", "topics", "sources", "kb"],
+      "properties": {
+        "run": { "$ref": "#/$defs/run_id" },
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "status", "text"],
+            "properties": { "id": { "type": "string", "maxLength": 40 }, "status": { "type": "string", "maxLength": 20 }, "text": { "type": "string", "maxLength": 240, "description": "The claim as one line. Never its quote." } },
+            "additionalProperties": false
+          }
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "question", "overlap", "score", "workspace"],
+            "properties": {
+              "id": { "type": "string", "maxLength": 60 },
+              "question": { "type": "string", "maxLength": 240 },
+              "overlap": { "type": "number", "minimum": 0, "maximum": 1, "description": "The share of the new question's content words the topic's question has." },
+              "score": { "type": ["number", "null"], "description": "The retrieval score of the topic's best result." },
+              "workspace": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "url", "age_days", "fresh"],
+            "properties": {
+              "id": { "type": "string", "maxLength": 80 },
+              "url": { "type": "string", "maxLength": 300 },
+              "age_days": { "type": ["integer", "null"], "minimum": 0, "description": "Days since the library last checked the source." },
+              "fresh": { "type": "boolean", "description": "Its text is kept and it was checked within its recheck window." }
+            },
+            "additionalProperties": false
+          }
+        },
+        "kb": { "type": "array", "items": { "type": "string", "maxLength": 200 }, "description": "Pointers to what the knowledge base holds on the question; no text." }
+      },
+      "additionalProperties": false
+    },
+    "refused": {
+      "type": "array",
+      "description": "Pages a run did not read, and why.",
+      "items": {
+        "type": "object",
+        "required": ["run", "url", "reason"],
+        "properties": {
+          "run": { "$ref": "#/$defs/run_id" },
+          "url": { "type": "string", "maxLength": 300 },
+          "reason": { "enum": ["not_fetchable", "refused", "fetch_failed", "capture_failed", "weak_source", "excluded_source"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "private_sources": {
+      "type": "array",
+      "description": "Sources a run rests on that Delphi did not read (specs/113 section 2 item 4, section 3): a host's private or internal source, a file, a person. Each is a private pointer in the library (locator, title, date); the record names only its id and kind, and is then private.",
+      "items": {
+        "type": "object",
+        "required": ["run", "source_id", "kind"],
+        "properties": {
+          "run": { "$ref": "#/$defs/run_id" },
+          "source_id": { "type": "string", "maxLength": 80 },
+          "kind": { "enum": ["web", "internal", "file", "person"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "pointers": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "description": "The URLs an ingested file lists (specs/113 section 3 item 3): source pointers, fetched only with `--fetch`." },
+    "flags": { "type": "array", "items": { "enum": ["no sources listed"] }, "description": "Fixed flags on an ingested topic: `no sources listed` for a file that names no source (specs/113 section 3 item 6)." },
+    "ingest": {
+      "type": "object",
+      "description": "A topic `delphi research ingest` wrote (specs/113 section 3): the file it rests on, read in place, and every content hash it was ingested at. A file whose hash is listed is skipped.",
+      "required": ["path", "content_hash", "source_id", "hashes"],
+      "properties": {
+        "path": { "type": "string" },
+        "content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "source_id": { "type": "string", "maxLength": 80 },
+        "hashes": { "type": "array", "items": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+      },
+      "additionalProperties": false
+    },
+    "claims": { "type": "array", "items": { "type": "string", "maxLength": 80 }, "description": "The ids of the claims the topic's runs produced, once each." },
+    "gaps": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "description": "What the newest finished run reports it did not find, which is what a continued run starts from. For a run that had a plan of sub-questions (specs/114 section 4): the sub-questions it left uncovered, in the scout's words. For a run on the fixed plan: fixed phrases read from its coverage report." },
+    "usage": {
+      "type": "object",
+      "required": ["steps", "check_steps", "ms", "tokens"],
+      "description": "Step and time use, summed over the topic's runs. `tokens` is null: the runner does not meter the scout's model calls.",
+      "properties": {
+        "steps": { "type": "integer", "minimum": 0 },
+        "check_steps": { "type": "integer", "minimum": 0 },
+        "ms": { "type": "integer", "minimum": 0 },
+        "tokens": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "description": "One entry per time the topic was run.",
+      "items": {
+        "type": "object",
+        "required": ["run_id", "asked_by", "depth", "state", "started", "ended", "steps", "check_steps", "ms"],
+        "properties": {
+          "run_id": { "$ref": "#/$defs/run_id" },
+          "asked_by": { "$ref": "#/$defs/asker" },
+          "depth": { "enum": ["quick", "survey", "deep"] },
+          "state": { "$ref": "#/$defs/state" },
+          "started": { "type": "string" },
+          "ended": { "type": ["string", "null"] },
+          "steps": { "type": "integer", "minimum": 0 },
+          "check_steps": { "type": "integer", "minimum": 0 },
+          "ms": { "type": "integer", "minimum": 0 },
+          "runner": { "$ref": "#/$defs/runner" },
+          "error": { "type": "string", "maxLength": 300 },
+          "continued": { "type": "boolean", "description": "True on a run that continued the topic (specs/112 section 5): it began from the record's gaps." },
+          "note": { "type": "string", "maxLength": 120, "description": "The one line a continued run was given to narrow its search. Data, like the question." },
+          "unchanged": { "type": "integer", "minimum": 0, "description": "On a continued run: pages the record already held that were fetched, found unchanged and not read again." },
+          "stopped": { "enum": ["covered", "no_new_claims", "step_budget", "page_budget", "no_more_queries", "plan_done"], "description": "Why the run stopped sending queries (specs/114 section 4 item 5): every sub-question was covered, two rounds in a row added no claim, a budget ran out, no uncovered sub-question had a query left, or (the fixed plan, which has no sub-questions) the planned queries were sent." },
+          "rounds": { "type": "integer", "minimum": 0, "description": "How many rounds of queries the run sent." }
+        },
+        "additionalProperties": false
+      }
+    },
+    "result": { "type": "object", "description": "What the newest finished run returned, without its `answer` (kept in `answer.md`) and its `search_log` (kept in `search-log.json`); `research_result` is answered from the three together (schemas/research-result.schema.json)." },
+    "result_run": { "$ref": "#/$defs/run_id", "description": "The run `result` belongs to." },
+    "refresh_days": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "Optional. The days after which this topic's newest run is old and the topic is listed as due (specs/112 section 5). Held between `[research] refresh_days_min` and `refresh_days_max`; without it the topic uses `[research] refresh_days`." }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "topic_id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$", "maxLength": 57, "description": "A slug of the question and eight hex characters of its hash." },
+    "run_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+    "state": { "enum": ["queued", "running", "done", "partial", "failed", "cancelled"] },
+    "runner": { "enum": ["daemon", "host", "ingest"] },
+    "asker": {
+      "type": "object",
+      "required": ["kind", "label"],
+      "description": "Who asked: the operator, a Delphi role, or a host and the model it says it runs. A label and nothing more.",
+      "properties": { "kind": { "enum": ["operator", "role", "host"] }, "label": { "type": "string", "maxLength": 120, "pattern": "^[^\\u0000-\\u001f\\u007f]*$" } },
+      "additionalProperties": false
+    }
+  }
+}

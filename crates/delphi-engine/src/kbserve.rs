@@ -54,8 +54,11 @@ const REFRESH_EVERY: Duration = Duration::from_secs(10);
 const MAX_DOC_BYTES: u64 = 512 * 1024;
 /// An image file larger than this is not drawn (`specs/029` §9); the reader shows its alt text instead.
 const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
-/// The most pixels a side of the picture sent to the console has: the reader shrinks it to the window, so more is waste.
+/// The most pixels a side of the picture sent when the caller names no size: the console's reader shrinks it to the
+/// window, so more is waste there.
 const IMAGE_SIDE: usize = 160;
+/// The most a caller may ask for with `max` (`specs/118` §4 item 3): a picture drawn at a readable size in the app.
+pub const IMAGE_SIDE_MAX: usize = 1600;
 
 pub struct Reply {
     pub status: u16,
@@ -263,18 +266,23 @@ impl Reader<'_> {
 }
 
 impl Reader<'_> {
-    /// `GET /v1/image?path=<document>&src=<href as written in it>`: a picture the document points at, decoded and
-    /// shrunk to at most 160 pixels a side, as `{width, height, rgba}` (base64, four bytes a pixel). The reader paints
-    /// it in half-block cells. The file must sit inside the document's own directory (no `..`, no absolute path, no
-    /// symlink out of it) and be a PNG, JPEG or GIF of at most 8 MiB; the document must be one this view may read.
+    /// `GET /v1/image?path=<document>&src=<href as written in it>[&max=<pixels>]`: a picture the document points at,
+    /// decoded and shrunk to at most `max` pixels a side (default 160, at most 1,600; `specs/118` §4 item 3), as
+    /// `{width, height, rgba}` (base64, four bytes a pixel). A picture smaller than `max` comes at its own size: it is
+    /// never enlarged. The console's reader paints it in half-block cells; the app on a canvas. The file must sit inside
+    /// the document's own directory (no `..`, no absolute path, no symlink out of it) and be a PNG, JPEG or GIF of at
+    /// most 8 MiB; the document must be one this view may read.
     fn image(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
+        let side = image_side(q);
         // A picture of the library, named by the page that shows it (`specs/097` §4.3): `src=lib:<source>/<file>`. Only the
         // operator's view reads the library; the file must be a plain-named picture in that source's own `assets/`.
+        // `max` applies here too. The refusal of an asset with no licence record (`specs/118` §2 item 2) belongs here,
+        // with slice P1's record; until then the app's bridge does not pass this form (`app/src-tauri/src/bridge.rs`).
         if let Some(r) = q.get("src").and_then(|s| s.strip_prefix("lib:")) {
             let (Some(home), true) = (self.home, self.operator) else { return Ok(fail(403, "the library's pictures are served to the operator's console only")) };
             let Some((sid, file)) = r.split_once('/') else { return Ok(fail(400, "`src` must be lib:<source>/<file>")) };
             let Some(file) = crate::library::Library::in_home(home).asset_file(sid, file) else { return Ok(fail(404, "no such picture in the library")) };
-            return self.picture(&file);
+            return self.picture(&file, side);
         }
         // `src=kb:<document>#<picture>` names a document's own picture in one value, the way a page writes it.
         let kb_form = q.get("src").and_then(|s| s.strip_prefix("kb:")).and_then(|s| s.split_once('#'));
@@ -302,22 +310,28 @@ impl Reader<'_> {
         if !file.starts_with(&dir) || !file.is_file() {
             return Ok(fail(404, "no such image next to the document"));
         }
-        self.picture(&file)
+        self.picture(&file, side)
     }
 
-    /// Decode a picture file already confined by the caller, and shrink it to the reader's size.
-    fn picture(&self, file: &Path) -> Result<Reply, String> {
+    /// Decode a picture file already confined by the caller, and shrink it to at most `side` pixels a side
+    /// (`fit` never enlarges).
+    fn picture(&self, file: &Path, side: usize) -> Result<Reply, String> {
         if std::fs::metadata(file).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_IMAGE_BYTES {
             return Ok(fail(413, "image too large to draw"));
         }
         let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
         let img = match delphi_docs::pixels::decode(&bytes) {
-            Ok(i) => delphi_docs::pixels::fit(&i, IMAGE_SIDE, IMAGE_SIDE),
+            Ok(i) => delphi_docs::pixels::fit(&i, side, side),
             Err(e) => return Ok(fail(415, &e.0)),
         };
         use base64::Engine as _;
         Ok(reply(200, json!({"width": img.width, "height": img.height, "rgba": base64::engine::general_purpose::STANDARD.encode(&img.rgba)})))
     }
+}
+
+/// The `max` of an image read: pixels a side, 1 to [`IMAGE_SIDE_MAX`]; absent or not a number, the console's 160.
+fn image_side(q: &HashMap<String, String>) -> usize {
+    num(q, "max", IMAGE_SIDE).clamp(1, IMAGE_SIDE_MAX)
 }
 
 fn num(q: &HashMap<String, String>, key: &str, default: usize) -> usize {
@@ -711,6 +725,36 @@ mod tests {
         assert_eq!(get(&mut api, "/v1/image?path=specs/web.md&src=img/grad.png").0, 404, "an untrusted document is not served over this view, nor are its images");
         assert_eq!(get(&mut api, "/v1/image?path=specs/alpha.md").0, 400);
         assert_eq!(get(&mut api, "/v1/image?path=specs/nope.md&src=img/grad.png").0, 404);
+    }
+
+    /// AC-5 (`specs/118` §6 item 5): `max` asks for a larger picture, up to 1,600 pixels a side, and never enlarges one.
+    #[test]
+    fn max_sizes_a_picture_up_to_its_own_size_and_never_past_the_ceiling() {
+        let (home, ws) = workspace();
+        let specs = ws.path().join("base/specs");
+        std::fs::create_dir_all(&specs).unwrap();
+        let png = |w: usize, h: usize| delphi_docs::png::encode(&delphi_docs::png::Image { width: w, height: h, rgba: vec![200; w * h * 4] }, &[]);
+        std::fs::write(specs.join("wide.png"), png(2400, 1200)).unwrap();
+        std::fs::write(specs.join("small.png"), png(800, 400)).unwrap();
+        let mut api = Api::new(home.path(), ws.path()).unwrap();
+        let size = |api: &mut Api, q: &str| {
+            let (s, b) = get(api, &format!("/v1/image?path=specs/alpha.md&{q}"));
+            assert_eq!(s, 200, "{q}: {b}");
+            use base64::Engine as _;
+            let (w, h) = (b["width"].as_u64().unwrap(), b["height"].as_u64().unwrap());
+            assert_eq!(base64::engine::general_purpose::STANDARD.decode(b["rgba"].as_str().unwrap()).unwrap().len() as u64, w * h * 4);
+            (w, h)
+        };
+        assert_eq!(size(&mut api, "src=wide.png&max=1200"), (1200, 600), "a larger original comes 1,200 pixels on its longer side");
+        assert_eq!(size(&mut api, "src=small.png&max=1200"), (800, 400), "a smaller original comes at its own size, never enlarged");
+        assert_eq!(size(&mut api, "src=wide.png"), (160, 80), "no `max` is the console's 160, as before");
+        assert_eq!(size(&mut api, "src=wide.png&max=99999"), (1600, 800), "past the ceiling is the ceiling");
+        assert_eq!(size(&mut api, "src=wide.png&max=-4"), (160, 80), "not a number of pixels is the default");
+        assert_eq!(size(&mut api, "src=wide.png&max=0"), (1, 1), "zero is the least there is, one pixel a side");
+        assert_eq!(size(&mut api, "src=wide.png&max=%31%32%30%30"), (1200, 600), "the value is read after percent-decoding, as the bridge reads it");
+        // The daemon's `kb.get` serves the operator's view through the same reader, with the target as written.
+        let operator = Reader { kb: &api.kb, ws: ws.path(), operator: true, home: Some(home.path()) }.get("/v1/image?path=specs/alpha.md&src=wide.png&max=1200");
+        assert_eq!((operator.status, operator.body["width"].as_u64(), operator.body["height"].as_u64()), (200, Some(1200), Some(600)));
     }
 
     #[test]

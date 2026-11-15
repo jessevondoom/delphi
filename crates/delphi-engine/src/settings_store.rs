@@ -229,6 +229,18 @@ mod tests {
         }
     }
 
+    /// `specs/115` §8: whether one project may read another's research is the operator's decision. Neither the setting nor a
+    /// project's private flag is among the keys the `change_setting` tool, a prompt or a suggestion can set, under any spelling.
+    #[test]
+    fn research_sharing_and_the_private_flag_are_not_settings_an_agent_can_change() {
+        for k in ["projects.research_sharing", "research_sharing", "projects", "[projects] research_sharing", "projects.private", "project.private", "private", "PROJECTS.RESEARCH_SHARING", "role_tier.projects.research_sharing"] {
+            for v in [json!("workspace"), json!("project"), json!("on"), json!(true)] {
+                let e = parse(k, &v, &enabled()).unwrap_err();
+                assert!(e.contains("cannot be changed this way") || e.contains("not an enabled role") || e.contains("not an available role"), "{k} = {v}: {e}");
+            }
+        }
+    }
+
     #[test]
     fn pace_is_a_setting_by_name_and_is_not_saved() {
         use crate::route::Pace;

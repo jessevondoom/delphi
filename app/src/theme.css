@@ -160,6 +160,10 @@ button.menu-row:hover, button.menu-row.on { background: var(--sel); }
 .md-picture:disabled { cursor: default; }
 .md-picture canvas { display: block; max-width: 100%; height: auto; }
 .md-caption { padding: 0 10px 8px; font-size: 12px; color: var(--muted); text-align: left; }
+.md-diagram { margin: 0; display: flex; flex-direction: column; gap: 6px; max-width: 100%; }
+.md-diagram img { display: block; max-width: 100%; height: auto; align-self: flex-start; }
+.md-diagram .md-caption { padding: 0; }
+.md-diagram summary { cursor: pointer; }
 .lead { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
 .lead .stack { gap: 8px; }
 .said.doc { font-size: 15px; line-height: 1.65; max-width: 860px; }

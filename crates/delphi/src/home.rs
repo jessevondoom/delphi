@@ -105,6 +105,9 @@ pub struct ProjectRecord {
     pub root: PathBuf,
     pub display_name: String,
     pub created_unix: u64,
+    /// `specs/115` §2 item 2: a private project shares none of its research with the workspace's other projects. Written only when set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -178,7 +181,7 @@ pub fn register_project(ws_dir: &Path, root: &Path) -> Result<ProjectRecord> {
 
     let project_id = new_project_id()?;
     let display_name = root.file_name().map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "project".into());
-    let record = ProjectRecord { project_id: project_id.clone(), root: root.clone(), display_name, created_unix: unix_now() };
+    let record = ProjectRecord { project_id: project_id.clone(), root: root.clone(), display_name, created_unix: unix_now(), private: false };
     let marker_bytes = serde_json::to_vec_pretty(&serde_json::json!({"schema": 1, "project_id": project_id}))?;
     fs::write(&marker, marker_bytes).with_context(|| format!("writing project marker {}", marker.display()))?;
     registry.projects.insert(record.project_id.clone(), record.clone());
@@ -191,6 +194,27 @@ pub fn register_project(ws_dir: &Path, root: &Path) -> Result<ProjectRecord> {
 
 pub fn project_records(ws_dir: &Path) -> Result<Vec<ProjectRecord>> {
     Ok(read_registry(ws_dir)?.projects.into_values().collect())
+}
+
+/// Set or clear a project's private flag (`specs/115` §2 item 2). `name` is the project's display name (any case) or its id; a
+/// name two projects share is refused, so the flag is never set on the wrong one. Returns the record and whether it changed.
+/// Nothing else is written, copied or deleted: the flag takes effect at the next search.
+pub fn set_project_private(ws_dir: &Path, name: &str, private: bool) -> Result<(ProjectRecord, bool)> {
+    let mut registry = read_registry(ws_dir)?;
+    let ids: Vec<String> = registry.projects.values().filter(|r| r.project_id == name || r.display_name.eq_ignore_ascii_case(name)).map(|r| r.project_id.clone()).collect();
+    let id = match ids.as_slice() {
+        [one] => one.clone(),
+        [] => bail!("no project named `{name}` is registered in this workspace; `delphi project list` shows them"),
+        many => bail!("{} projects are named `{name}`; name one by its id: {}", many.len(), many.join(", ")),
+    };
+    let record = registry.projects.get_mut(&id).expect("the id was just found");
+    let changed = record.private != private;
+    record.private = private;
+    let record = record.clone();
+    if changed {
+        write_registry(ws_dir, &registry)?;
+    }
+    Ok((record, changed))
 }
 
 pub fn relink_project(ws_dir: &Path, project_id: &str, new_root: &Path) -> Result<ProjectRecord> {
@@ -233,7 +257,7 @@ pub fn clone_project(ws_dir: &Path, root: &Path) -> Result<ProjectRecord> {
     fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     let new_id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     let new_name = root.file_name().map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "project".into());
-    let new_record = ProjectRecord { project_id: new_id.clone(), root: root.clone(), display_name: new_name, created_unix: unix_now() };
+    let new_record = ProjectRecord { project_id: new_id.clone(), root: root.clone(), display_name: new_name, created_unix: unix_now(), private: false };
     let marker_bytes = serde_json::to_vec_pretty(&serde_json::json!({"schema": 1, "project_id": new_id}))?;
     fs::write(&marker, marker_bytes).with_context(|| format!("writing project marker {}", marker.display()))?;
     registry.projects.insert(new_record.project_id.clone(), new_record.clone());
@@ -582,6 +606,38 @@ mod tests {
         assert_eq!(marker["project_id"].as_str(), Some(record.project_id.as_str()));
         assert_eq!(project_records(&ws.dir).unwrap(), vec![record.clone()]);
         assert_eq!(resolve_workspace(&home, &root.join("nested"), None), Resolve::Found("default".into()));
+    }
+
+    /// `specs/115` §2 item 2: the flag is set by name or id, survives every later write of the list, is refused for an unknown or a
+    /// shared name, and an entry that never had it stays as it was written.
+    #[test]
+    fn the_private_flag_is_set_by_name_kept_by_later_writes_and_refused_when_the_name_is_not_one_project() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        let (alpha, beta, twin) = (t.path().join("alpha"), t.path().join("beta"), t.path().join("x/alpha"));
+        for d in [&alpha, &beta, &twin] {
+            fs::create_dir_all(d).unwrap();
+        }
+        let ws = init(&InitOptions { home, workspace: "default".into(), projects: vec![], theme: "greek".into() }).unwrap();
+        let a = register_project(&ws.dir, &alpha).unwrap();
+        let b = register_project(&ws.dir, &beta).unwrap();
+        assert!(!a.private && !fs::read_to_string(registry_path(&ws.dir)).unwrap().contains("\"private\""), "no project is private from the start, and the key is not written");
+        let (rec, changed) = set_project_private(&ws.dir, "ALPHA", true).unwrap();
+        assert!(rec.private && changed && rec.project_id == a.project_id);
+        assert!(!set_project_private(&ws.dir, "alpha", true).unwrap().1, "setting it again changes nothing");
+        // Another write of the list (a new registration) keeps the flag.
+        let c = register_project(&ws.dir, &twin).unwrap();
+        let by_id = |id: &str| project_records(&ws.dir).unwrap().into_iter().find(|r| r.project_id == id).unwrap();
+        assert!(by_id(&a.project_id).private && !by_id(&b.project_id).private && !by_id(&c.project_id).private);
+        // Two projects now share the name `alpha`: the name is refused and the id decides.
+        let err = set_project_private(&ws.dir, "alpha", false).unwrap_err().to_string();
+        assert!(err.contains("2 projects are named") && by_id(&a.project_id).private, "{err}");
+        assert!(set_project_private(&ws.dir, &a.project_id, false).unwrap().1 && !by_id(&a.project_id).private);
+        assert!(set_project_private(&ws.dir, "gamma", true).unwrap_err().to_string().contains("no project named"));
+        // The engine reads the same flag (`scope::project_entries`).
+        set_project_private(&ws.dir, "beta", true).unwrap();
+        let seen: Vec<(String, bool)> = delphi_engine::scope::project_entries(&ws.dir).into_iter().map(|e| (e.id.as_str().to_string(), e.private)).collect();
+        assert!(seen.contains(&(b.project_id.clone(), true)) && seen.contains(&(a.project_id.clone(), false)), "{seen:?}");
     }
 
     #[test]

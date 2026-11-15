@@ -11,8 +11,45 @@ npm run app         # only the app bundle
 
 How it is put together:
 
-- `src/` is the window (TypeScript and React). `bridge.ts` is its only way to the daemon: a few named reads and three kinds of notification, served by the app or, with no app, by a fixture. `view.ts`, `kb.ts`, `output.ts`, `team.ts` and `md.ts` (Markdown, as data) turn what the daemon sends into what a screen shows; they are pure and are where the tests are. `screens/` draws, `Rich.tsx` draws Markdown and `DocView.tsx` a document. `avatar.ts` and `Badge.tsx` draw an agent (chip, name, role) from the avatar table the CLI sends. `theme.css` is the look.
-- `src-tauri/` is the bridge (Rust). `locate.rs` finds the daemon by asking `delphi daemon where`; `client.rs` is a small client of the narrator socket that can name nine read methods and no others; `bridge.rs` keeps the two connections, forwards notifications in order and re-attaches; `lib.rs` is the commands the window may call: seven reads, and three that act outside the window on a click (show a file, open a file of a listed kind, open a web address). It is outside the repository's Cargo workspace, with its own lock file, and builds into `target/app/`.
+- `src/` is the window (TypeScript and React). `bridge.ts` is its only way to the daemon: a few named reads and three kinds of notification, served by the app or, with no app, by a fixture. `view.ts`, `kb.ts`, `output.ts`, `team.ts` and `md.ts` (Markdown, as data) turn what the daemon sends into what a screen shows; they are pure and are where the tests are. `screens/` draws, `Rich.tsx` draws Markdown and `DocView.tsx` a document. A Mermaid block is drawn by the bundled renderer (`@mermaid-js/tiny`, one pinned file with no dependencies, loaded by `mermaid-load.ts` the first time a diagram is shown) in strict mode; `diagram.ts` cleans what it draws and shows it only as an `<img>`, or shows the text when it cannot (spec 118 §5 item 4). `npm run check-diagrams` (`dev/diagram-check.mjs`, part of `dev/build.sh`, needs Chrome or Chromium) draws hostile diagrams from `test/browser/cases.ts` in headless Chrome and fails if any runs script, navigates or fetches. `avatar.ts` and `Badge.tsx` draw an agent (chip, name, role) from the avatar table the CLI sends. `theme.css` is the look.
+- `src-tauri/` is the bridge (Rust). `locate.rs` finds the daemon by asking `delphi daemon where`; `client.rs` is a small client of the daemon that can name nine read methods and no others, and that begins a connection in one of two ways: with the narrator socket's token, or, for a paired app, by signing the app socket's challenge (spec 120); `key.rs` is the app's key: the ticket a terminal hands over, the key pair, where it is kept, and the one shape that is ever signed; `bridge.rs` keeps the two connections, forwards notifications in order and re-attaches; `lib.rs` is the commands the window may call: seven reads, and three that act outside the window on a click (show a file, open a file of a listed kind, open a web address). It is outside the repository's Cargo workspace, with its own lock file, and builds into `target/app/`.
 - `dev/` holds the dependency gate, the icon makers, the build script and the smoke test.
+
+## The app's key (spec 120)
+
+`delphi app`, in a terminal, starts the app with a pairing ticket on its standard input. The bridge reads it (only from a pipe, one line of 64 hex digits, for at most two seconds), makes an Ed25519 key pair, sends the public half and the ticket to the daemon's app socket (`app.pair`), and keeps the private half under the short name the daemon gave it. From then on, started from anywhere, it opens both of its connections on the app socket by signing the daemon's challenge (`app.hello`): the nonce, the daemon's instance id, the protocol version and the path of the socket it connected to. With no key, a key the daemon refuses, or a daemon with no app socket, it attaches on the narrator socket and reads, as before, and says why in the connection's `detail`. A refused key is offered once per run, not on every re-attach. The window can ask for the same nine reads either way: `client::Method` did not grow.
+
+Two programs with no code in common have to sign and check the same text, so one test vector is held by both: `crates/delphi-core/src/app_handshake.vector`, checked by `key.rs` here and by `app_keys.rs` in the daemon.
+
+`cargo run --example pair_probe` (named in `DELPHI_APP`, with a scratch `DELPHI_HOME`) is the same path with no window, for checking a daemon and a bridge against each other.
+
+### Where the private key is kept
+
+- **macOS:** one generic-password item in the login keychain, service `dev.delphi.desktop.app-key`, account the Delphi home's path (a key belongs to one home's daemons).
+- **Elsewhere** (no keychain): `app/key.json` under the Delphi home, mode 0600 in a folder of mode 0700. A key file that others can read is refused, not used. This is the one file the app writes under the home.
+
+The key store is asked for the key at most once in the app's life, and only when a daemon with an app socket is there.
+
+### What an unsigned build gets from the keychain
+
+Spec 120 §8 asks for this to be checked. Checked on 2026-11-15, macOS 27.0.1, with `examples/keychain_probe.rs` (two builds of one program, each signed only by the linker: `Signature=adhoc`, `flags=adhoc,linker-signed`, no team, different code hashes), with the keychain's prompts turned off so that a read the system would have asked about fails instead:
+
+| What | Result | |
+| :-- | :-- | :-- |
+| A build stores an item and reads it back | read, no prompt | verified |
+| The same build copied to another path reads it | read, no prompt: the keychain knows the program by its code, not its path | verified |
+| A different build (another code hash, same name) reads it | refused (`-25293`) | verified |
+| A different build deletes it | refused (`-25244`) | verified |
+| A different build writes over it | **succeeds, with no prompt**; afterwards neither build can read the item (`-25293` for both), and only the build that created it can delete it | verified |
+| With prompts on, the refused read becomes a dialog asking the operator to allow the new build, once or always | from Apple's documentation of keychain access control | not verified (no dialog was put on the operator's screen) |
+| The item cannot go in the data-protection keychain, which would tie it to the app's identity across updates | that keychain needs an entitlement only a signed, provisioned app has | not verified |
+| The built `Delphi.app` is signed the same way as the probes | its program is `adhoc,linker-signed`, with the same code hash as the bare `delphi-app`, no team, `Info.plist` not bound, no sealed resources | verified (`codesign -dvvv`) |
+| So `Delphi.app` gets from the keychain what the probes got | follows from the row above | not verified (the app itself was not run against the keychain) |
+
+What follows for the app:
+
+1. **The key is protected from other programs' eyes, including other builds of this app.** A program running as the operator cannot read it without the operator answering a dialog. That is more than the key file gives.
+2. **Every rebuild or update of an unsigned app is a stranger to its own key.** The first time a new build needs the key, macOS refuses it, or, since the app leaves the keychain's prompts on, asks the operator to allow it (the dialog is the part not verified above). Allowed always, that build should not be asked again. Denied, the app reads on the narrator socket and says so; pairing again does not help until the old item is allowed or deleted in Keychain Access, because the app will not write over a key it could not read (and writing over it would leave an item no build can read). A signed app would be known by its developer identity and keep its key across updates.
+3. **The key can be destroyed, not stolen, by any program running as the operator** (the write-over above). The app then reads on the narrator socket until `delphi app` pairs it again. Spec 120 §8 does not defend against software running as the operator, and this is inside that.
 
 The fixture (`src/fixture/sim.json`) is a recording: the state and events of the terminal narrator's simulator, taken before that simulator was retired, with two councils added in the daemon's shape. It is edited by hand from here on; the shapes it must keep are the daemon's (`crates/delphi-engine/src/observe.rs`). The built-in avatar table (`src/avatar-spec.json`) is the console library's, and a test fails when the two differ.

@@ -195,17 +195,165 @@ fn every_agent_and_skill_manifest_satisfies_its_schema() {
     assert!(agents >= 9 && skills >= 40, "found {} agents and {} skills", agents, skills);
 }
 
-/// `specs/109` §13.1 item 1: `search_use` is `explore` or `verify`; the two checking roles say `verify` and validate.
+/// `specs/109` §13.1 item 1: `search_use` is `explore` or `verify`. `specs/116` §8.4: the two checking roles say `explore` (they read
+/// unvalidated research on their first rung and ask for `verify`); `verify` is still a valid value.
 #[test]
-fn search_use_is_explore_or_verify_and_the_two_checking_roles_validate_with_verify() {
+fn search_use_is_explore_or_verify_and_the_two_checking_roles_explore_by_default() {
     for role in ["validator", "investigator"] {
         let fm = frontmatter(&root().join("agents").join(role).join("AGENT.md"));
-        assert_eq!(fm["search_use"], json!("verify"), "{role}");
+        assert_eq!(fm["search_use"], json!("explore"), "{role}");
         must_pass("agent-manifest.schema.json", role, &fm);
+        let mut verify = fm.clone();
+        verify["search_use"] = json!("verify");
+        must_pass("agent-manifest.schema.json", "search_use: verify", &verify);
         let mut bad = fm.clone();
         bad["search_use"] = json!("always");
         must_fail("agent-manifest.schema.json", "search_use: always", &bad);
     }
+}
+
+/// `specs/112` AC-1, for the host runner: the record the program writes validates against the one schema, at every step of a run
+/// (queued, running with what it has found, finished with its result, and after a second run of the same topic).
+#[test]
+fn the_research_record_the_program_writes_follows_its_schema() {
+    use delphi_engine::research_record::{Asker, Begin, Topic};
+    let ws = tempfile::tempdir().unwrap();
+    let begin = |run_id: &'static str, asked_by: Asker| Topic::begin(ws.path(), &Begin { question: "Does aspirin reduce fever?", asked_by, project: None, depth: delphi_core::research::Depth::Survey, run_id }).unwrap();
+    let read = |t: &Topic| t.read().unwrap();
+    let t = begin("r-t-1", Asker::host("host:claude-code/some-model"));
+    must_pass("research-record.schema.json", "a record that is queued", &read(&t));
+    t.running("r-t-1").unwrap();
+    t.plan(&[("trusted", "aspirin fever site:who.int"), ("topic", "aspirin fever"), ("gap", "aspirin fever children")]).unwrap();
+    t.query("r-t-1", "aspirin fever site:who.int", "trusted", Some("brave"), Ok(3)).unwrap();
+    t.query("r-t-1", "aspirin fever", "topic", None, Err("no_results")).unwrap();
+    t.query("r-t-1", "aspirin reduces fever disputed OR incorrect OR false", "contradiction", Some("brave"), Ok(0)).unwrap();
+    t.page("r-t-1", "https://who.int/a", "s-abc", Some("sha256:00")).unwrap();
+    t.page("r-t-1", "https://nih.gov/b", "s-def", None).unwrap();
+    // The keep step (`specs/112` §4 item 1): what the library kept of a page, in fixed words; anything else is not written.
+    t.kept("https://who.int/a", "full", "added").unwrap();
+    t.kept("https://nih.gov/b", "pointer", "unchanged").unwrap();
+    assert!(t.kept("https://nih.gov/b", "everything", "added").is_err() && t.kept("https://nih.gov/b", "full", "validated").is_err());
+    assert_eq!((read(&t)["pages"][0]["kept"].as_str(), read(&t)["pages"][1]["outcome"].as_str()), (Some("full"), Some("unchanged")));
+    for why in ["not_fetchable", "refused", "fetch_failed", "capture_failed", "weak_source", "excluded_source"] {
+        t.refused("r-t-1", "https://blog.example/x", why).unwrap();
+    }
+    // `specs/114`: what was known before the search, a page read from the library, who made the plan and its sub-questions.
+    t.known("r-t-1", &json!({"claims": [{"id": "c-0123456789ab", "status": "noted", "text": "aspirin reduces fever"}], "topics": [{"id": "a-topic-0123abcd", "question": "what lowers a fever", "overlap": 0.5, "score": null, "workspace": true}], "sources": [{"id": "s-abc", "url": "https://who.int/a", "age_days": null, "fresh": false}], "kb": ["knowledge/fever.md#L4"]})).unwrap();
+    t.held("https://who.int/a").unwrap();
+    t.plan(&[("trusted", "aspirin fever site:who.int"), ("sub", "aspirin fever dose"), ("gap", "aspirin fever limitations OR criticism OR disputed")]).unwrap();
+    t.query("r-t-1", "aspirin fever dose", "sub", Some("brave"), Ok(2)).unwrap();
+    t.planned("scout", &json!([{"n": 1, "text": "What dose lowers a fever?", "status": "open"}, {"n": 2, "text": "Is it safe for children?", "status": "partly"}, {"n": 3, "text": "What is already known?", "status": "known"}])).unwrap();
+    assert!(t.planned("improvised", &json!([])).is_err());
+    assert_eq!((read(&t)["pages"][0]["held"].as_bool(), read(&t)["plan_kind"].as_str()), (Some(true), Some("scout")));
+    must_pass("research-record.schema.json", "a record of a run that is going", &read(&t));
+    let result = json!({
+        "plan": "scout", "stopped": "no_more_queries", "rounds": 2,
+        "sub_questions": [{"n": 1, "text": "What dose lowers a fever?", "status": "open", "covered": true, "claims": 2, "origins": 2}, {"n": 2, "text": "Is it safe for children?", "status": "partly", "covered": false, "claims": 0, "origins": 0}],
+        "synthesis": { "by": "scout", "claims": 1, "attempts": 1, "label": "written by the scout from 1 claim, not validated" },
+        "coverage": "thin", "coverage_report": { "thin_below": 3, "counted": 1, "rungs": [{ "rung": "kb", "searched": true, "entries_found": 0, "kept": 0, "reason": "kb_empty" }], "host_rungs": ["close", "web"], "leads_kept": 0 },
+        "answer": "An answer [c-abc123abc123].\n\nwritten by the scout from 1 claim, not validated", "claims": [{ "id": "abc123abc123" }], "source_ids": ["s-abc"], "kb_hits": [], "new_claims": 1,
+        "budget_used": { "steps": 4, "check_steps": 1 }, "answered_by": "scout", "search_log": { "version": 1, "private": true, "lines": [], "flow": {} }
+    });
+    t.finish("r-t-1", "partial", Some(&result), &["abc123abc123".to_string()], None, 1234).unwrap();
+    let rec = read(&t);
+    must_pass("research-record.schema.json", "a record of a finished run", &rec);
+    assert_eq!((rec["private"].as_bool(), rec["state"].as_str()), (Some(true), Some("partial")));
+    assert_eq!((rec["gaps"].clone(), rec["runs"][0]["stopped"].as_str(), rec["sub_questions"][1]["covered"].as_bool()), (json!(["Is it safe for children?"]), Some("no_more_queries"), Some(false)), "the gaps are the uncovered sub-questions: {rec}");
+    begin("r-t-2", Asker::operator());
+    t.finish("r-t-2", "failed", None, &[], Some("the job ran out of time"), 9).unwrap();
+    begin("r-t-3", Asker::role("architect"));
+    t.finish("r-t-3", "cancelled", None, &[], None, 0).unwrap();
+    let rec = read(&t);
+    must_pass("research-record.schema.json", "a record with three runs", &rec);
+    assert_eq!(rec["runs"].as_array().unwrap().len(), 3);
+    // `specs/112` §5: a run that continued the topic, with its note and the pages it found unchanged; a record's own refresh days.
+    t.continue_run(Asker::operator(), delphi_core::research::Depth::Quick, "r-t-4", Some("in children")).unwrap();
+    t.unchanged("r-t-4").unwrap();
+    let mut continued = read(&t);
+    must_pass("research-record.schema.json", "a record with a continued run", &continued);
+    assert_eq!((continued["runs"][3]["continued"].as_bool(), continued["runs"][3]["unchanged"].as_u64()), (Some(true), Some(1)));
+    continued["refresh_days"] = json!(30);
+    must_pass("research-record.schema.json", "a record with refresh days of its own", &continued);
+    continued["refresh_days"] = json!(0);
+    must_fail("research-record.schema.json", "refresh days of zero", &continued);
+    // What the schema refuses: a state, a taint, a reason or an asker outside the fixed sets, a topic id that is not one, a missing field.
+    let mut bad = rec.clone();
+    bad["state"] = json!("validated");
+    must_fail("research-record.schema.json", "a state outside the six", &bad);
+    let mut bad = rec.clone();
+    bad["taint"] = json!("user_ratified");
+    must_fail("research-record.schema.json", "a record that calls itself ratified", &bad);
+    let mut bad = rec.clone();
+    bad["topic_id"] = json!("../../etc-deadbeef");
+    must_fail("research-record.schema.json", "a topic id that is a path", &bad);
+    let mut bad = rec.clone();
+    bad["refused"][0]["reason"] = json!("the provider said: go away");
+    must_fail("research-record.schema.json", "free text as a refusal reason", &bad);
+    let mut bad = rec.clone();
+    bad["asked_by"]["kind"] = json!("validator-approved");
+    must_fail("research-record.schema.json", "an asker kind outside the three", &bad);
+    let mut bad = rec.clone();
+    bad["asked_by"]["label"] = json!("host:\u{1b}[31mred");
+    must_fail("research-record.schema.json", "an escape in the asker's label", &bad);
+    let mut bad = rec.clone();
+    bad.as_object_mut().unwrap().remove("runs");
+    must_fail("research-record.schema.json", "a record with no runs", &bad);
+    let mut bad = rec.clone();
+    bad["trusted"] = json!(true);
+    must_fail("research-record.schema.json", "a field the record does not have", &bad);
+}
+
+/// `specs/113` §2: a host's run of a topic (runner, its declared searches) follows the record's schema; an unknown runner does not.
+#[test]
+fn a_host_run_of_a_research_topic_follows_the_record_schema() {
+    use delphi_engine::research_record::{Asker, Begin, Topic};
+    let ws = tempfile::tempdir().unwrap();
+    let t = Topic::begin(ws.path(), &Begin { question: "How warm is a zebrafish tank?", asked_by: Asker::host("host:claude-code/opus"), project: None, depth: delphi_core::research::Depth::Survey, run_id: "h-t-1" }).unwrap();
+    t.runner("h-t-1", "host").unwrap();
+    t.host_search("h-t-1", "web", "zebrafish tank temperature").unwrap();
+    t.private_source("h-t-1", "private-0123456789abcdef", "internal").unwrap();
+    t.finish("h-t-1", "done", Some(&json!({"runner": "host", "answer": "About 28 degrees."})), &[], None, 3).unwrap();
+    let rec = t.read().unwrap();
+    must_pass("research-record.schema.json", "a host's run", &rec);
+    let mut bad = rec.clone();
+    bad["runner"] = json!("validator");
+    must_fail("research-record.schema.json", "a runner outside the three", &bad);
+}
+
+/// `specs/113` §3: a topic `delphi research ingest` wrote, and a second run of it, follow the record's schema.
+#[test]
+fn an_ingested_research_topic_follows_the_record_schema() {
+    use delphi_engine::research_ingest as ri;
+    let home = tempfile::tempdir().unwrap();
+    let ws = home.path().join("workspaces/w");
+    std::fs::create_dir_all(&ws).unwrap();
+    let file = ws.join("note.md");
+    std::fs::write(&file, "# Tank notes\n\nZebrafish tanks are kept at about 28 degrees in most labs.\n").unwrap();
+    let p = ri::plan(&ws, std::slice::from_ref(&file));
+    let done = ri::apply(home.path(), &p[0], "i-1", &[], None).unwrap().unwrap();
+    std::fs::write(&file, "# Tank notes\n\nZebrafish tanks are kept at about 27 degrees in some labs.\n").unwrap();
+    ri::apply(home.path(), &ri::plan(&ws, std::slice::from_ref(&file))[0], "i-2", &[], None).unwrap().unwrap();
+    let topic = delphi_engine::research_record::Topic::at(&ws, done["topic_id"].as_str().unwrap()).unwrap();
+    must_pass("research-record.schema.json", "an ingested topic with two runs", &topic.read().unwrap());
+}
+
+/// `specs/113` §6: the tool `record_research` declares the schema that `schemas/record-research.schema.json` holds, and a call shaped as
+/// the spec says satisfies it while the 41st claim does not.
+#[test]
+fn the_record_research_tool_declares_the_schema_in_schemas() {
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(root().join("schemas/record-research.schema.json")).unwrap()).unwrap();
+    let tools = delphi_engine::mcp_host::tools();
+    let declared = tools.as_array().unwrap().iter().find(|t| t["name"] == "record_research").expect("the tool is declared")["inputSchema"].clone();
+    let mut bare = file.clone();
+    for k in ["$schema", "$id", "title", "description"] {
+        bare.as_object_mut().unwrap().remove(k);
+    }
+    assert_eq!(bare, declared, "schemas/record-research.schema.json and host_research::input_schema drifted apart");
+    let call = json!({"question": "q", "answer": "a", "sources": [{"locator": "https://x.example/a", "kind": "web", "private": false}], "claims": [{"text": "t", "quote": "q q q", "source": 0}], "searches": [{"where": "web", "query": "w"}], "gaps": ["g"]});
+    must_pass("record-research.schema.json", "a call as the spec shapes it", &call);
+    let mut over = call.clone();
+    over["claims"] = json!((0..41).map(|i| json!({"text": format!("c{i}")})).collect::<Vec<_>>());
+    must_fail("record-research.schema.json", "41 claims", &over);
 }
 
 #[test]
@@ -227,6 +375,23 @@ fn research_results_follow_their_schema_and_refuse_control_characters_in_identit
         { "rung": "close", "searched": false, "entries_found": 0, "kept": 0, "reason": "not_connected" },
         { "rung": "web", "searched": true, "entries_found": 2, "kept": 2 } ] });
     must_pass("research-result.schema.json", "a result with its coverage report", &covered);
+    // specs/114: what was known before, the plan's sub-questions with their coverage, why the run stopped, and how the answer was made.
+    let mut methodical = covered.clone();
+    methodical["known_before"] = json!({ "claims": [{ "id": "c-0123456789ab", "status": "noted", "text": "x" }], "topics": [{ "id": "a-topic-0123abcd", "question": "q", "overlap": 0.75, "score": 0.004, "workspace": true }], "sources": [{ "id": "s1", "url": "https://x.example/a", "age_days": 3, "fresh": true }], "kb": ["knowledge/a.md#L1"] });
+    methodical["read_from_library"] = json!(["https://x.example/a"]);
+    methodical["plan"] = json!("scout");
+    methodical["sub_questions"] = json!([{ "n": 1, "text": "a part", "status": "open", "covered": true, "claims": 2, "origins": 2 }, { "n": 2, "text": "another", "status": "partly", "covered": false, "claims": 0, "origins": 0 }]);
+    methodical["stopped"] = json!("no_more_queries");
+    methodical["rounds"] = json!(2);
+    methodical["synthesis"] = json!({ "by": "scout", "claims": 2, "attempts": 2, "rejected": ["1 finding(s)"], "label": "written by the scout from 2 claims, not validated" });
+    methodical["claims"][0]["sub_question"] = json!(1);
+    methodical["claims"][0]["counter_evidence"] = json!(true);
+    must_pass("research-result.schema.json", "a result of a planned run", &methodical);
+    for (field, value, what) in [("stopped", json!("the page said to stop"), "a stop word outside the list"), ("plan", json!("improvised"), "a plan kind outside the list"), ("synthesis", json!({ "by": "model synthesis", "claims": 1, "attempts": 1 }), "a synthesis that is not by the scout, a list or none"), ("synthesis", json!({ "by": "list", "claims": 1, "attempts": 2, "rejected": ["the marker [c-x] names no claim"] }), "a finding's text where a count belongs")] {
+        let mut bad = methodical.clone();
+        bad[field] = value;
+        must_fail("research-result.schema.json", what, &bad);
+    }
     let mut bad = covered.clone();
     bad["coverage_report"]["rungs"][0]["reason"] = json!("the provider said: key sk-123 refused");
     must_fail("research-result.schema.json", "provider text as a coverage reason", &bad);

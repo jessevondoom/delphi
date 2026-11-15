@@ -1,16 +1,50 @@
-//! What the research job needs from the workspace (`specs/028` §10): the two trusted-source lists, the configured search engines with
-//! their keys, a transport and the scout. Reading files and resolving keys can block (a keychain, a helper command), so the caller runs
-//! [`deps`] on a blocking thread.
+//! What a research run needs from the workspace (`specs/028` §10): the two trusted-source lists and the configured search engines
+//! with their keys. Reading files and resolving keys can block (a keychain, a helper command), so the caller reads them on a
+//! blocking thread (`EngineService::load_run_web`).
 
 use crate::engine::Engine;
-use crate::fact_sources::SourceList;
-use crate::research::{Deps, EngineJudge, Limits, Scope};
 use delphi_adapter::credential::{CredentialRef, Resolved, Resolver};
 use delphi_adapter::research::search::ProviderSpec;
-use delphi_adapter::research::transport::HttpTransport;
 use delphi_adapter::research::trusted::TrustedList;
 use std::path::Path;
 use std::sync::Arc;
+
+/// The command that sets a search engine up (`specs/119` §2 item 1). Every message that says research cannot search names it.
+pub const SETUP_COMMAND: &str = "delphi research setup";
+
+/// What `[search]` says about engines (`specs/119` §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineState {
+    /// `providers = []`: no engine can be asked, and a research request is refused.
+    None,
+    /// No `providers` key: only the keyless default of `specs/028` §12 is asked. The operator has chosen nothing.
+    DefaultOnly,
+    /// The operator wrote `providers` and it names at least one engine.
+    Chosen,
+}
+
+pub fn engine_state(search: &delphi_adapter::research::SearchConfig) -> EngineState {
+    match (search.providers.is_empty(), search.explicit) {
+        (true, _) => EngineState::None,
+        (false, false) => EngineState::DefaultOnly,
+        (false, true) => EngineState::Chosen,
+    }
+}
+
+/// [`engine_state`] of a `config.toml`'s text, as the doctor reads it; `None` when the file or its `[search]` table cannot be read.
+pub fn engine_state_in(config_text: &str) -> Option<EngineState> {
+    let root: toml::Value = toml::from_str(config_text).ok()?;
+    let gemini = root.get("endpoints").and_then(|e| e.as_array()).is_some_and(|a| a.iter().any(|e| e.get("family").and_then(|f| f.as_str()) == Some("gemini")));
+    match root.get("search") {
+        Some(t) => delphi_adapter::research::SearchConfig::parse(t, gemini).ok().map(|s| engine_state(&s)),
+        None => Some(EngineState::DefaultOnly),
+    }
+}
+
+/// What a research request is told when no engine can be asked (`specs/119` §2 item 4).
+pub fn no_engine_message() -> String {
+    format!("research cannot run: no search engine is set up (`providers` under [search] in config.toml is empty). The operator sets one up at a terminal with `{}`", SETUP_COMMAND)
+}
 
 /// The default list shipped in this build, used when the workspace's copy of `context/sources/trusted.toml` is missing.
 const SHIPPED_LIST: &str = include_str!("../../../context/sources/trusted.toml");
@@ -42,29 +76,22 @@ pub fn engines(engine: &Engine) -> Vec<ProviderSpec> {
         .collect()
 }
 
-pub fn deps(engine: &Arc<Engine>, ws: &Path, home: &Path, scope: Scope) -> Result<Deps, String> {
-    if engine.cfg.get().search.providers.is_empty() {
-        return Err("research is turned off: `providers` under [search] in config.toml is empty".into());
-    }
-    let list = lists(ws, home)?;
-    let date = (engine.clock)().get(..10).unwrap_or("").to_string();
-    Ok(Deps {
-        transport: Arc::new(HttpTransport::new()?),
-        judge: Arc::new(EngineJudge(engine.clone())),
-        list: Arc::new(list),
-        engines: engines(engine),
-        ws_dir: ws.to_path_buf(),
-        scope,
-        validator: Arc::new(SourceList::new(engine.cfg.get().validator.sources.clone())),
-        weak_sources: engine.cfg.get().validator.weak_sources,
-        date,
-        limits: Limits::default(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // specs/119 §2: what counts as an engine. An empty list is none; no table is the keyless default, which the operator did not choose.
+    #[test]
+    fn the_engine_state_is_none_for_an_empty_list_default_for_no_table_and_chosen_for_a_written_one() {
+        assert_eq!(engine_state_in(""), Some(EngineState::DefaultOnly));
+        assert_eq!(engine_state_in("[search]\n"), Some(EngineState::DefaultOnly));
+        assert_eq!(engine_state_in("[search]\nproviders = []\n"), Some(EngineState::None));
+        assert_eq!(engine_state_in("[search]\nproviders = [\"parallel\"]\n"), Some(EngineState::Chosen));
+        assert_eq!(engine_state_in("[search]\nproviders = [\"brave\"]\n[search.brave]\ncredential = \"keychain:brave-search-key\"\n"), Some(EngineState::Chosen));
+        assert_eq!(engine_state_in("[search]\nproviders = [\"nonesuch\"]\n"), None, "a table that cannot be read");
+        assert_eq!(engine_state_in("not toml ["), None);
+        assert!(no_engine_message().contains("`delphi research setup`"));
+    }
 
     #[test]
     fn the_shipped_list_is_a_valid_default_and_the_operators_adds_to_it() {

@@ -2,7 +2,10 @@
 import { readFileSync } from 'node:fs';
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
-const ALLOWED = ['@tauri-apps/api', 'react', 'react-dom'];
+// `@mermaid-js/tiny` is Mermaid built into one file with no dependencies, for the diagrams of spec 118 §5 item 4. It must
+// stay that way: a dependency of its own fails the check below.
+const ALLOWED = ['@tauri-apps/api', 'react', 'react-dom', '@mermaid-js/tiny'];
+const NO_DEPENDENCIES = ['@mermaid-js/tiny'];
 const MAX_PROD_PACKAGES = 10;
 const problems = [];
 
@@ -13,6 +16,11 @@ for (const group of ['dependencies', 'devDependencies']) {
 }
 for (const name of Object.keys(pkg.dependencies ?? {})) if (!ALLOWED.includes(name)) problems.push(`production dependency not on the allowlist: ${name}`);
 for (const name of ALLOWED) if (!(name in (pkg.dependencies ?? {}))) problems.push(`allowlisted but missing: ${name}`);
+for (const name of NO_DEPENDENCIES) {
+  const entry = lock.packages[`node_modules/${name}`] ?? {};
+  const own = { ...entry.dependencies, ...entry.optionalDependencies, ...entry.peerDependencies };
+  if (Object.keys(own).length) problems.push(`${name} must have no dependencies of its own: ${Object.keys(own).join(', ')}`);
+}
 
 const prod = Object.entries(lock.packages).filter(([k, v]) => k && !v.dev && !v.optional);
 if (prod.length > MAX_PROD_PACKAGES) problems.push(`production tree has ${prod.length} packages (limit ${MAX_PROD_PACKAGES})`);

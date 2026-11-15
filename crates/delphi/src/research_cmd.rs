@@ -1,4 +1,18 @@
-//! `delphi research log <id>` and `delphi research retractions import|status`.
+//! `delphi research topics`, `delphi research show <topic-id>`, `delphi research log <id>` and `delphi research retractions import|status`.
+//!
+//! `topics` lists the research records on disk and `show` prints one (`specs/112` §2, §5.3): read-only, from the files a run left in
+//! `research/topics/<topic-id>/` of the workspace or of a registered project. Record text is data and is printed as such.
+//!
+//! `topics --due` lists the topics that are due and why, and `continue <topic-id>` asks the running daemon for a new run on a
+//! topic (`specs/112` §5). `continue` is the one subcommand here that starts work that spends tokens and reaches the network: it is
+//! refused inside an agent seat, and the daemon gives its console token only to a process at a terminal.
+//!
+//! `migrate` writes the claims an older `research/host-claims.jsonl` lists as library claims (`specs/112` §3.4). It is a dry run
+//! unless `--apply` is given, and `--apply` is refused inside an agent seat.
+//!
+//! `ingest` turns research files already on disk (a project's `research/` Markdown, the workspace's imported summaries) into research
+//! topics (`specs/113` §3): the file a private source, its body the answer by reference. A dry run unless `--apply`, which is refused
+//! inside an agent seat.
 //!
 //! `log` prints the search log of a finished host research job (`specs/101` §3): read-only, it prints what the daemon wrote beside the
 //! result, and calls no model and no network.
@@ -7,19 +21,24 @@
 //! and, when `[research] retractions` is on, checks every source in the library against it. **It never calls a service**, and takes a path,
 //! not a URL: downloading the file is the operator's act (the repository is `gitlab.com/crossref/retraction-watch-data`).
 
-use delphi_engine::search_log;
+use delphi_engine::{research_record, search_log};
 use std::path::Path;
 
 pub struct Options {
     pub json: bool,
 }
 
-const USAGE: &str = "usage: delphi research log <research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]";
+const USAGE: &str = "usage: delphi research topics [--due] [--json] [--home <dir>] [--workspace <name>]\n       delphi research continue <topic-id> [--note <text>] [--json] [--home <dir>] [--workspace <name>]\n       delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research ingest <path>... | --all [--apply] [--fetch] [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]\n       delphi research setup [--engine <name>] [--credential <env:NAME|keychain:name>] [--url <instance>] [--cx <id>] [--no-test] [--home <dir>] [--workspace <name>]";
 
 /// `args` is what follows the command name: `log <id> [flags]` or `retractions import|status [<file>] [flags]`.
 pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
     match args.first().map(String::as_str) {
+        Some("topics") => topics(home, ws_dir, args, o),
+        Some("continue") => continue_topic(home, ws_dir, args, o),
+        Some("show") => show(ws_dir, args, o),
         Some("log") => log(ws_dir, args, o),
+        Some("migrate") => migrate(home, ws_dir, args, o),
+        Some("ingest") => ingest(home, ws_dir, args, o),
         Some("retractions") => retractions(home, ws_dir, args, o),
         _ => {
             eprintln!("{USAGE}");
@@ -34,13 +53,227 @@ fn operand(args: &[String], after: usize) -> Option<&str> {
     for a in &args[after.min(args.len())..] {
         if skip {
             skip = false;
-        } else if matches!(a.as_str(), "--home" | "--workspace") {
+        } else if matches!(a.as_str(), "--home" | "--workspace" | "--note") {
             skip = true;
         } else if !a.starts_with('-') {
             return Some(a.as_str());
         }
     }
     None
+}
+
+/// `delphi research topics`: every research record of the workspace and of its registered projects, newest first. With `--due`,
+/// only the topics that are due and why (`specs/112` §5.2). Reading only: nothing is run again from here.
+fn topics(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
+    if args.iter().any(|a| a == "--due") {
+        let due = research_record::due_topics(ws_dir, home, &settings(ws_dir).research_refresh);
+        if o.json {
+            let rows: Vec<serde_json::Value> = due.iter().map(|(t, r, why)| serde_json::json!({"topic_id": t.id, "question": r["question"], "project": r["project"], "updated": r["updated"], "due": why})).collect();
+            println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".into()));
+        } else {
+            print!("{}", research_record::render_due(&due));
+        }
+        return 0;
+    }
+    let all = research_record::list(ws_dir);
+    if o.json {
+        let rows: Vec<serde_json::Value> = all
+            .iter()
+            .map(|(t, r)| serde_json::json!({"topic_id": t.id, "question": r["question"], "state": r["state"], "project": r["project"], "private": r["private"], "updated": r["updated"], "runs": r["runs"].as_array().map_or(0, Vec::len), "pages": r["pages"].as_array().map_or(0, Vec::len), "claims": r["claims"].as_array().map_or(0, Vec::len)}))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".into()));
+    } else {
+        print!("{}", research_record::render_list(&all));
+    }
+    0
+}
+
+/// What `delphi research continue` sends the daemon, checked before any connection is made: `Err` is what to print.
+fn continue_params(ws_dir: &Path, args: &[String]) -> Result<serde_json::Value, String> {
+    let id = operand(args, 1).ok_or_else(|| USAGE.to_string())?;
+    let shown: String = id.chars().filter(|c| !c.is_control()).take(80).collect();
+    if research_record::find(ws_dir, id).is_none() {
+        return Err(format!("delphi research continue: no research topic `{shown}`: `delphi research topics` lists them"));
+    }
+    let note = args.iter().position(|a| a == "--note").and_then(|i| args.get(i + 1)).map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+    if note.as_ref().is_some_and(|n| n.chars().count() > research_record::NOTE_CAP || n.chars().any(char::is_control)) {
+        return Err(format!("delphi research continue: --note is one line of at most {} characters", research_record::NOTE_CAP));
+    }
+    Ok(serde_json::json!({"topic_id": id, "note": note}))
+}
+
+/// `delphi research continue <topic-id> [--note <text>]` (`specs/112` §5.1): ask the running daemon for a new run on the topic.
+/// The run begins from the record's gaps and does not read again a page the record holds unchanged. It spends tokens and reaches
+/// the network, so it is the operator's to ask for: refused inside an agent seat, and the daemon gives its console token only
+/// to a process at a terminal.
+fn continue_topic(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
+    use delphi_core::client::{Client, ClientError};
+    use delphi_core::proto::{code, Scope};
+    if crate::xenia_terminal::inside_an_agent_seat() {
+        eprintln!("delphi research continue: refused; a research run spends tokens and reaches the network, so it is the operator's to ask for, and this process was started by an agent seat. An agent asks with its `request_research` tool.");
+        return 2;
+    }
+    let params = match continue_params(ws_dir, args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return if e == USAGE { 2 } else { 1 };
+        }
+    };
+    let call = || -> Result<serde_json::Value, String> {
+        let l = delphi_core::spawn::layout(home, ws_dir).map_err(|e| e.to_string())?;
+        let mut c = Client::connect(&l.sock).map_err(|e| format!("no daemon is listening ({e}); start `delphi` for this workspace first"))?;
+        let tok = c.issue_token(Scope::Console).map_err(|e| match e {
+            ClientError::Rpc { code: k, .. } if k == code::TTY_REQUIRED => "the daemon only gives a token to a process attached to a terminal: run this in a terminal".to_string(),
+            other => other.to_string(),
+        })?;
+        c.hello(&tok).map_err(|e| e.to_string())?;
+        c.call("research.continue", params.clone()).map_err(|e| match e {
+            ClientError::Rpc { message, .. } => message,
+            other => other.to_string(),
+        })
+    };
+    match call() {
+        Ok(v) if o.json => {
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".into()));
+            0
+        }
+        Ok(v) => {
+            let id = v["topic_id"].as_str().filter(|id| research_record::valid_topic_id(id)).unwrap_or("?");
+            println!("continuing research topic {id}: a new run was queued (research id {}).", v["research_id"].as_str().unwrap_or("?").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(64).collect::<String>());
+            println!("It begins from the record's gaps and does not read again a page the record holds unchanged. `delphi research show {id}` prints the record as the run goes.");
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi research continue: {}", e.chars().filter(|c| !c.is_control()).take(300).collect::<String>());
+            1
+        }
+    }
+}
+
+/// `delphi research show <topic-id>`: one record and its answer.
+fn show(ws_dir: &Path, args: &[String], o: &Options) -> i32 {
+    let Some(id) = operand(args, 1) else {
+        eprintln!("{USAGE}");
+        return 2;
+    };
+    let Some(topic) = research_record::find(ws_dir, id) else {
+        eprintln!("delphi research show: no research topic `{}`: `delphi research topics` lists them", id.chars().filter(|c| !c.is_control()).take(80).collect::<String>());
+        return 1;
+    };
+    match topic.read() {
+        Ok(rec) if o.json => {
+            println!("{}", serde_json::to_string_pretty(&rec).unwrap_or_else(|_| "{}".into()));
+            0
+        }
+        Ok(rec) => {
+            print!("{}", research_record::render(&topic, &rec));
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi research show: {e}");
+            1
+        }
+    }
+}
+
+/// `delphi research migrate [--apply]` (`specs/112` §3.4): the claims `research/host-claims.jsonl` lists, as library claims. It
+/// prints what it would do and changes nothing; only `--apply` writes, and only the operator may ask for that.
+fn migrate(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
+    use delphi_engine::{library::Library, research_migrate as rm};
+    let apply = args.iter().any(|a| a == "--apply");
+    if apply && crate::xenia_terminal::inside_an_agent_seat() {
+        eprintln!("delphi research migrate --apply: refused; writing claims into the library is the operator's to ask for and this process was started by an agent seat. Without --apply it prints what it would do.");
+        return 2;
+    }
+    let lib = Library::in_home(home).with_support(settings(ws_dir).support);
+    let plan = rm::plan(ws_dir, &lib);
+    let applied = (apply && plan.found).then(|| rm::apply(&plan, &lib));
+    if o.json {
+        println!("{}", serde_json::to_string_pretty(&rm::to_json(&plan, applied.as_ref())).unwrap_or_else(|_| "{}".into()));
+    } else {
+        print!("{}", rm::render(&plan, applied.as_ref()));
+    }
+    i32::from(applied.is_some_and(|a| a.failed > 0))
+}
+
+/// The operands after the subcommand word: every word that is not a flag or a flag's value.
+fn operands(args: &[String], after: usize) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut skip = false;
+    for a in &args[after.min(args.len())..] {
+        if skip {
+            skip = false;
+        } else if matches!(a.as_str(), "--home" | "--workspace") {
+            skip = true;
+        } else if !a.starts_with('-') {
+            out.push(a.as_str());
+        }
+    }
+    out
+}
+
+/// `delphi research ingest <path>... | --all [--apply]` (`specs/113` §3): research files already on disk become research topics. It
+/// prints what it would do and changes nothing; only `--apply` writes, and only the operator may ask for that.
+fn ingest(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
+    use delphi_engine::research_ingest as ri;
+    let apply = args.iter().any(|a| a == "--apply");
+    if apply && crate::xenia_terminal::inside_an_agent_seat() {
+        eprintln!("delphi research ingest --apply: refused; writing research topics and library records is the operator's to ask for and this process was started by an agent seat. Without --apply it prints what it would do.");
+        return 2;
+    }
+    let mut paths: Vec<std::path::PathBuf> = operands(args, 1).into_iter().map(std::path::PathBuf::from).collect();
+    if args.iter().any(|a| a == "--all") {
+        paths.extend(ri::all_paths(ws_dir));
+    }
+    if paths.is_empty() {
+        eprintln!("{USAGE}");
+        return 2;
+    }
+    let mut items = ri::plan(ws_dir, &paths);
+    let mut failed = 0;
+    if apply {
+        let identifiers = delphi_engine::query_guard::identifiers(ws_dir);
+        // `--fetch` (§3 item 3): a listed URL is read by the daemon's own fetcher, and only on the trusted lists: an address a file names
+        // is no search result of Delphi's, so the wider fetch does not reach it. Without the flag nothing is fetched.
+        let web = if args.iter().any(|a| a == "--fetch") {
+            let built = (|| -> Result<_, String> {
+                let transport = delphi_adapter::research::transport::HttpTransport::new()?;
+                let lists = delphi_engine::research_setup::lists(ws_dir, home)?;
+                Ok(delphi_engine::research_host::LiveWeb::new(std::sync::Arc::new(transport), std::sync::Arc::new(lists), vec![], Default::default()))
+            })();
+            match built {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    eprintln!("delphi research ingest --fetch: {e}");
+                    return 1;
+                }
+            }
+        } else {
+            None
+        };
+        let fetch = |u: &str| -> Result<delphi_engine::host_research::Fetched, String> {
+            use delphi_engine::research_run::Web;
+            let w = web.as_ref().ok_or_else(|| "not fetched".to_string())?;
+            let page = w.fetch(u)?;
+            let snap = w.held.read_as(&page.url, &page.text).ok_or_else(|| "fetch_failed".to_string())?;
+            Ok((page.url, snap))
+        };
+        let fetch_ref: Option<delphi_engine::host_research::FetchFn<'_>> = if web.is_some() { Some(&fetch) } else { None };
+        for (n, item) in items.iter_mut().enumerate() {
+            if let Err(e) = ri::apply(home, item, &ri::run_id(n), &identifiers, fetch_ref) {
+                eprintln!("delphi research ingest: {}: {e}", item.path.display());
+                item.action = ri::Action::Refused(format!("not written: {e}"));
+                failed += 1;
+            }
+        }
+    }
+    if o.json {
+        println!("{}", serde_json::to_string_pretty(&ri::to_json(&items, apply)).unwrap_or_else(|_| "{}".into()));
+    } else {
+        print!("{}", ri::render(&items, apply));
+    }
+    i32::from(failed > 0)
 }
 
 fn log(ws_dir: &Path, args: &[String], o: &Options) -> i32 {
@@ -153,7 +386,109 @@ mod tests {
         assert_eq!(cli(h, d.path(), &strings(&["log", "r-none"]), &Options { json: false }), 1, "no such log");
         assert_eq!(cli(h, d.path(), &strings(&["log", "../etc/passwd"]), &Options { json: false }), 1, "only a clean id names a file");
         assert_eq!(cli(h, d.path(), &strings(&["log"]), &Options { json: false }), 2);
-        assert_eq!(cli(h, d.path(), &strings(&["show", "r-t-1"]), &Options { json: false }), 2);
+        assert_eq!(cli(h, d.path(), &strings(&["frobnicate", "r-t-1"]), &Options { json: false }), 2, "not a subcommand");
+    }
+
+    /// `specs/112` AC-8, through the command: `migrate` without `--apply` writes nothing, in the library or the workspace; with it,
+    /// the claims the file lists are library claims, and the file is as it was.
+    #[test]
+    fn migrate_is_a_dry_run_until_apply_is_given() {
+        use delphi_engine::library::{AddOpts, Budgets, Level, Library};
+        fn tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
+            let (mut out, mut stack) = (Vec::new(), vec![dir.to_path_buf()]);
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else {
+                        out.push((p.strip_prefix(dir).unwrap().to_string_lossy().to_string(), std::fs::read(&p).unwrap()));
+                    }
+                }
+            }
+            out.sort();
+            out
+        }
+        let (home, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let lib = Library::in_home(home.path());
+        let page = ws.path().join("page.md");
+        std::fs::write(&page, "Aspirin lowers fever in adults, the trial found.").unwrap();
+        let source = lib.add_file(&page, &AddOpts { licence: Some("CC0-1.0".into()), level: Some(Level::Full), ..AddOpts::default() }, &Budgets::default()).unwrap().id;
+        std::fs::create_dir_all(ws.path().join("research")).unwrap();
+        let line = json!({"fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "subject": "aspirin", "predicate": "lowers", "object": "fever", "quote": "lowers fever in adults", "source_ids": [source], "source_urls": ["https://example.org/a"], "status": "validated"});
+        std::fs::write(ws.path().join("research/host-claims.jsonl"), format!("{line}\n")).unwrap();
+        let (home_before, ws_before) = (tree(home.path()), tree(ws.path()));
+        for json in [false, true] {
+            assert_eq!(cli(home.path(), ws.path(), &strings(&["migrate"]), &Options { json }), 0);
+        }
+        assert_eq!(tree(home.path()), home_before, "a dry run changed the library");
+        assert_eq!(tree(ws.path()), ws_before, "a dry run changed the workspace");
+        assert!(lib.claims().is_empty());
+        assert_eq!(cli(home.path(), ws.path(), &strings(&["migrate", "--apply"]), &Options { json: false }), 0);
+        let claims = lib.claims();
+        assert_eq!(claims.len(), 1);
+        assert_eq!((claims[0]["text"].as_str(), delphi_engine::library::claims::status(&claims[0]).as_str()), (Some("aspirin lowers fever"), "noted"), "what the line called itself is not copied");
+        assert_eq!(tree(ws.path()), ws_before, "the file is a log: applying does not change it");
+        assert_eq!(cli(home.path(), ws.path(), &strings(&["migrate", "--apply"]), &Options { json: true }), 0, "again: nothing new");
+        assert_eq!(lib.claims().len(), 1);
+        // A workspace with no file has nothing to migrate, and says so without making anything.
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(cli(home.path(), empty.path(), &strings(&["migrate", "--apply"]), &Options { json: false }), 0);
+        assert!(tree(empty.path()).is_empty());
+    }
+
+    /// `specs/112` §5.3: `topics` lists the records on disk and `show` prints one; both only read.
+    #[test]
+    fn it_lists_the_research_topics_and_shows_one_and_writes_nothing() {
+        use delphi_engine::research_record::{Asker, Begin, Topic};
+        let d = tempfile::tempdir().unwrap();
+        let h = d.path();
+        let o = Options { json: false };
+        assert_eq!(cli(h, d.path(), &strings(&["topics"]), &o), 0, "no topics yet is not an error");
+        assert!(!d.path().join("research").exists(), "listing creates nothing");
+        let t = Topic::begin(d.path(), &Begin { question: "Does aspirin reduce fever?", asked_by: Asker::host("host:claude-code/m"), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
+        let result = json!({"answer": "An answer.", "budget_used": {"steps": 2, "check_steps": 1}, "search_log": {"version": 1, "private": false, "lines": [], "flow": {"found": 0, "duplicates_removed": 0, "kept": 0, "not_kept": {}, "searches": 0, "withheld": 0}}});
+        t.finish("r-t-1", "done", Some(&result), &[], None, 5).unwrap();
+        let before = std::fs::read(t.record_path()).unwrap();
+        for json in [false, true] {
+            let o = Options { json };
+            assert_eq!(cli(h, d.path(), &strings(&["topics"]), &o), 0);
+            assert_eq!(cli(h, d.path(), &strings(&["show", t.id.as_str()]), &o), 0);
+            assert_eq!(cli(h, d.path(), &strings(&["show", "--workspace", "w", t.id.as_str()]), &o), 0, "a flag's value is not the id");
+            assert_eq!(cli(h, d.path(), &strings(&["log", t.id.as_str()]), &o), 0, "the topic's search log, by the topic's id");
+        }
+        assert_eq!(std::fs::read(t.record_path()).unwrap(), before, "showing a record does not change it");
+        assert_eq!(cli(h, d.path(), &strings(&["show", "r-t-1"]), &o), 1, "a research id is not a topic id");
+        assert_eq!(cli(h, d.path(), &strings(&["show", "nope-deadbeef"]), &o), 1, "no such topic");
+        assert_eq!(cli(h, d.path(), &strings(&["show", "../../etc/passwd"]), &o), 1, "only a topic id names a folder");
+        assert_eq!(cli(h, d.path(), &strings(&["show"]), &o), 2);
+    }
+
+    /// `specs/112` §5: `topics --due` only reads, and `continue` checks what it was given before it connects to anything.
+    #[test]
+    fn due_topics_are_listed_without_writing_and_continue_checks_its_topic_and_note_first() {
+        use delphi_engine::research_record::{Asker, Begin, Topic};
+        let d = tempfile::tempdir().unwrap();
+        let h = d.path();
+        let t = Topic::begin(d.path(), &Begin { question: "Does aspirin reduce fever?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
+        t.finish("r-t-1", "done", Some(&json!({"answer": "An answer.", "budget_used": {"steps": 2, "check_steps": 1}})), &[], None, 5).unwrap();
+        let before = std::fs::read(t.record_path()).unwrap();
+        for json in [false, true] {
+            assert_eq!(cli(h, d.path(), &strings(&["topics", "--due"]), &Options { json }), 0);
+        }
+        assert_eq!(std::fs::read(t.record_path()).unwrap(), before, "listing what is due changes no record");
+        let p = continue_params(d.path(), &strings(&["continue", "--home", "/x", t.id.as_str(), "--note", " in children "])).unwrap();
+        assert_eq!(p, json!({"topic_id": t.id, "note": "in children"}), "a flag's value is not the id");
+        assert_eq!(continue_params(d.path(), &strings(&["continue", t.id.as_str()])).unwrap()["note"], serde_json::Value::Null);
+        assert_eq!(continue_params(d.path(), &strings(&["continue"])).unwrap_err(), USAGE);
+        for bad in ["nope-deadbeef", "../../etc/passwd", "r-t-1"] {
+            assert!(continue_params(d.path(), &strings(&["continue", bad])).unwrap_err().contains("no research topic"), "{bad}");
+        }
+        let long = "x".repeat(research_record::NOTE_CAP + 1);
+        for note in [long.as_str(), "two\nlines"] {
+            assert!(continue_params(d.path(), &strings(&["continue", t.id.as_str(), "--note", note])).unwrap_err().contains("--note is one line"), "{note:?}");
+        }
+        assert_eq!(std::fs::read(t.record_path()).unwrap(), before, "checking starts nothing");
     }
 
     #[test]

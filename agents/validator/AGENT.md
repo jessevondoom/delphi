@@ -13,7 +13,7 @@ authorized_skills:
   - spec-driven-build
 memory_scope: "memory/agents/validator/"
 max_turn_budget: 25
-search_use: verify
+search_use: explore
 ---
 
 # Agent: Validator (`agents/validator/AGENT.md`)

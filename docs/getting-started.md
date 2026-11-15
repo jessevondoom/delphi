@@ -58,14 +58,18 @@ Delphi builds against an approved spec ("No Spec, No Build"). If you have none, 
 
 ### Research and the knowledge base
 
-Type `/research <topic>` (or ask in chat and approve the card the agent raises, or use the knowledge window's expand page; `/research status` and `/research cancel` manage it) and the job fetches pages and sorts them by the source's trust class, which code decides, never a model:
+Type `/research <topic>` (or ask in chat and approve the card the agent raises, or use the knowledge window's expand page; `/research status` and `/research cancel` manage it) and one research run starts. It is the same runner a host agent's `request_research` uses: it searches the trusted sources first, reads a few pages, and leaves a research record (a topic, listed by `delphi research topics` and printed by `delphi research show <topic-id>`). What is kept is decided by code, never a model:
 
-- **Default project:** pages from primary or reputable-secondary sources (standards bodies, governments, Wikipedia, peer-reviewed publishers and so on) go into the knowledge base at once. Pages from anything else are held under `local/pending/web/`, labelled weak, and are not searchable until you decide.
-- **Registered project:** research is saved in the project's `research/web/` and is never shared automatically. Promote what is worth keeping with `/retro`.
+- **Sources go to the library.** A page whose trusted-list entry allows reuse in full under an open licence has its text kept, with its pictures where each picture's own licence allows; any other page is kept as a pointer (its address and record, no text).
+- **Claims are noted.** Each claim the scout read out of a page, with the quote that supports it, becomes a library claim marked noted, not validated.
+- **A weak source** (a host one of the validator's lists calls weak) is kept as a pointer only and never counts as corroboration; with `[validator] weak_sources = "off"` it is not kept at all.
+- **Registered project:** the record is kept in the project's own `research/topics/` and its claims are scoped to the project.
 
-When an agent asks for research, you always get a card first. Once the job ends, the agent is told how it went (how many pages were kept, held or left out, or why it did not run) at the start of its next turn, so it can search what was kept. It never receives page text in that note.
-- **Reviewing held pages:** `/validate` lists them; `/validate pass` promotes every page whose source the allow list now trusts (it also runs when a session opens); `/validate ratify <n>` or `discard <n>` decides one at a time. Add `project=<name>` for a project's pages. Ratified pages are searchable but noted as not validated.
-- **A nudge:** about once a week, when five or more pages are waiting, the orchestrator says so in the chat.
+When an agent asks for research, you always get a card first. Once the run ends, the agent is told how it went (how many sources were kept, held or left out, how many claims were noted, the topic id, or why it did not run) at the start of its next turn, so it can search what was kept. It never receives page text in that note. One such run goes at a time, and it waits in the same queue as host runs.
+- **Pages held before:** pages an earlier version held under `local/pending/web/` or a project's `research/web/` are still there. `/validate` lists them; `/validate pass` promotes every page whose source the allow list now trusts (it also runs when a session opens); `/validate ratify <n>` or `discard <n>` decides one at a time. Add `project=<name>` for a project's pages. Ratified pages are searchable but noted as not validated. Nothing new is written to those folders.
+- **Continue a topic:** `/research continue <topic-id> [note]` (or `delphi research continue <topic-id> [--note <text>]` at a terminal) starts a new run on a topic that has a record. It asks the topic's own question, sends the queries for what the record did not find, and does not read again a page whose content has not changed; the note is one line that narrows the search.
+- **Due topics:** a topic is due when its newest run is older than `[research] refresh_days` (90 by default), or when a source it rests on has changed or been retracted. `delphi research topics --due` lists them with the reason. Nothing is run again until you or an agent asks: a run spends tokens and reaches the network.
+- **A nudge:** about once a week, when five or more such pages are waiting or a research topic is due, the orchestrator says so in the chat.
 
 Weak sources are never treated as corroboration. The fact validator looks a journal page's DOI up at doi.org and counts the page only if it is registered to a publisher; a failed lookup is a no. Not built yet: renaming the word "mission" in commands (new session logs are already stored under `local/sessions/`, but "session" already names a span of a mission, so the words wait for a decision).
 

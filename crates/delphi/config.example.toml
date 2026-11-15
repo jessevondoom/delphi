@@ -211,7 +211,24 @@ sandbox = "off"
 
 # Knowledge retrieval for agents (specs/064).
 # [retrieval]
-# auto = true                        # a root span starts with at most 3 passages from the knowledge base; false: only when an agent calls kb_search
+# auto = true                        # a span (a task, and each agent it dispatches) starts with passages from the knowledge base; false: only when an agent calls kb_search
+# start_passages = 6                 # how many passages a span starts with (at most 10; at most 2 from one document; 0: none)
+# start_chars = 4000                 # how many characters they may take in all (at most 16000)
+
+# Research recall across projects (specs/115). Yours to set: no agent can write this file.
+# [projects]
+# research_sharing = "workspace"     # workspace (default): a session may read the research of this workspace's other projects, labelled with the project, and nothing else of them. project: a project's research stays in that project. `delphi project private <name> on` keeps one project out either way
+# own_project_boost = 0.001          # added to the score of a result of the session's own project, so it ranks ahead of another project's at equal score (0 to 0.1)
+
+# Memory that grows (specs/116 sections 2 and 3). A note an agent keeps (the `note` tool, a host's propose_note or session summary, a
+# capture on contact) is also filed under local/memory/provisional/<role>/. It is never an instruction and never part of a system prompt:
+# a later span of the same role may be given it as a passage of data labelled "unreviewed note by <role>, <date>" (at most two of the
+# passages it starts with), any role may be given a note of kind `fact`, and a note written after reading untrusted content, or by a
+# host, is never given automatically. A note expires after 30 days (three uses extend it once by 90); you promote one with
+# `delphi learn keep` and reject one with `delphi learn wrong`.
+# [memory]
+# provisional = true                 # false: notes stage as before and no provisional note is kept, indexed or retrieved; read at each use
+# digest_daily = 10                  # items the digest shows a day (0 to 100)
 
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the
@@ -339,6 +356,43 @@ sandbox = "off"
 # substantiated_enabled = true
 # vetted_enabled = true
 # fast_lane_enabled = true            # the validator is offered a higher rung's claims first (queue order only; the claim's status never changes)
+#
+# The limits of a research run (specs/112 section 4 item 6). One table for every caller: /research in the console, an inside agent's
+# request_research and a host's all run on the one runner, in one queue. The defaults are the host runner's figures of before the
+# table. A run reads at most pages_<depth> pages inside steps_<depth> searches and fetches (the check has a quarter of that on top, at
+# least two) and returns "partial" when the budget runs out. A value outside its range keeps the default.
+# [research.limits]
+# pages_quick = 3                     # 1 to 40
+# pages_survey = 6
+# pages_deep = 10
+# steps_quick = 5                     # 1 to 200
+# steps_survey = 15
+# steps_deep = 30
+# job_secs = 600                      # a running job is stopped after this long (30 to 3600)
+# concurrent = 2                      # jobs that run at once, whoever asked (1 to 8); the rest wait in order
+# page_chars = 24000                  # how much of one page the scout reads (1000 to 200000)
+# depth = "survey"                    # the depth of a run from the console or an inside agent: quick | survey | deep
+# pictures_per_source = 6             # pictures kept with a source whose text is kept, in a console or inside-agent run (0 keeps none)
+# pictures_per_run = 24
+#
+# Due research topics (specs/112 section 5). A topic is due when its newest run is older than refresh_days, or when a source it rests
+# on has changed or been retracted. Due topics are only listed (`delphi research topics --due`, the weekly digest): nothing is run
+# again until you or an agent asks (`delphi research continue <topic-id>`), because a run spends tokens and reaches the network.
+# A record may carry a refresh_days of its own; it is held between refresh_days_min and refresh_days_max. Each is 1 to 3650 days.
+# [research]
+# refresh_days = 90
+# refresh_days_min = 7
+# refresh_days_max = 730
+#
+# Known first (specs/114 section 3). Before a research run searches, it looks up what Delphi already holds on the question, as the
+# asker could have found it by searching. When a topic Delphi has overlaps the new question strongly, the run continues that topic
+# instead of starting a new one, unless the request says `new: true`. "Strongly" is both of these: the topic's question has at least
+# continue_overlap of the new question's content words (above 0, at most 1), and the topic's best search result scores at least
+# continue_score (0 to 1; the index's fused rank score: about 0.003 for a result that holds every word of a question and ranks first by
+# keywords, 0.02 to 0.05 for one that is near the question by meaning when an embedding model is installed).
+# [research]
+# continue_overlap = 0.5
+# continue_score = 0.003
 
 # Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
 # and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it

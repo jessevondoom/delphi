@@ -10,10 +10,12 @@
     "test": "TZ=UTC node --import tsx --test --test-force-exit test/*.test.ts test/*.test.tsx",
     "check-deps": "node dev/check-deps.mjs",
     "check": "npm run check-deps && npm run typecheck && npm test && npm run build",
+    "check-diagrams": "node --import tsx dev/diagram-check.mjs",
     "app": "tauri build --bundles app",
     "app:dev": "tauri dev"
   },
   "dependencies": {
+    "@mermaid-js/tiny": "12.2.0",
     "@tauri-apps/api": "2.12.4",
     "react": "19.3.1",
     "react-dom": "19.3.1"

@@ -385,11 +385,19 @@ async function research(ctx: Ctx, args: string[]): Promise<string> {
       const s = await ctx.cmd.call('research.status', {});
       return `research on ${sanitize(String(s?.topic ?? ''))}: ${sanitize(String(s?.phase ?? 'unknown'))} · ${Number(s?.found ?? 0)} found, ${Number(s?.read ?? 0)} read, ${Number(s?.skipped ?? 0)} skipped`;
     }
+    // `/research continue <topic-id> [note]` (specs/112 §5): a new run on a topic that has a record. Only an id as the daemon makes
+    // them is one; `continue` followed by anything else is a topic to research like any other.
+    if (args[0] === 'continue' && topicNote(args[1], '')) {
+      const note = args.slice(2).join(' ').trim();
+      const v = await ctx.cmd.call('research.continue', { topic_id: args[1], note: note || undefined });
+      void watchResearch(ctx);
+      return `continuing research topic ${topicNote(v?.topic_id, '') || args[1]}: ${sanitize(String(v?.topic ?? ''))}. The run begins from what the record did not find and does not read again a page that has not changed. /research status · /research cancel`;
+    }
     const topic = args.join(' ').trim();
-    if (!topic) return 'usage: /research <topic> · /research status · /research cancel';
-    await ctx.cmd.call('research.start', { topic, cwd: ctx.info.cwd });
+    if (!topic) return 'usage: /research <topic> · /research continue <topic-id> [note] · /research status · /research cancel';
+    const started = await ctx.cmd.call('research.start', { topic, cwd: ctx.info.cwd });
     void watchResearch(ctx);
-    return `researching ${sanitize(topic)}. Trusted sources enter the knowledge base (inside a registered project, its research folder instead); others are held for /validate. /research status · /research cancel`;
+    return `researching ${sanitize(topic)}${topicNote(started?.topic_id, ' as topic ')}. Trusted sources are read first; what is kept goes to the library and its claims are noted, not validated (inside a registered project the record stays in the project). /research status · /research cancel`;
   } catch (e) { return errText(e); }
 }
 
@@ -402,9 +410,15 @@ async function watchResearch(ctx: Ctx): Promise<void> {
     const phase = String(s?.phase);
     if (!['done', 'failed', 'cancelled'].includes(phase)) continue;
     const counts = `${Number(s?.found ?? 0)} found, ${Number(s?.read ?? 0)} read, ${Number(s?.skipped ?? 0)} skipped`;
-    ctx.post(phase === 'done' ? `research on ${sanitize(String(s?.topic ?? ''))} finished: ${counts}. /validate lists anything held back.` : `research ${phase}${s?.error ? ': ' + sanitize(String(s.error)) : ''} (${counts})`, phase === 'done' ? 'ok' : 'error');
+    const claims = Number(s?.report?.claims ?? 0);
+    ctx.post(phase === 'done' ? `research on ${sanitize(String(s?.topic ?? ''))} finished: ${counts}, ${claims} claim${claims === 1 ? '' : 's'} noted${topicNote(s?.topic_id, '. Its record is topic ')}${s?.topic_id ? ` (delphi research show ${topicNote(s?.topic_id, '')})` : ''}. /validate lists research held back before.` : `research ${phase}${s?.error ? ': ' + sanitize(String(s.error)) : ''} (${counts})`, phase === 'done' ? 'ok' : 'error');
     return;
   }
+}
+
+/** A research topic id from the daemon, shown only when it is one (a slug and eight hex characters; specs/112 §2). */
+function topicNote(id: unknown, lead: string): string {
+  return typeof id === 'string' && /^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$/.test(id) ? lead + id : '';
 }
 
 /** `/validate`: research held back from the knowledge base (`specs/058` §14). Ratifying puts one entry in the index as noted, not validated. */

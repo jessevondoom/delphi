@@ -48,6 +48,51 @@ pub struct AnchorSpec {
     pub suffix: Option<String>,
 }
 
+/// The longest quote a research anchor keeps, in characters: the scout's own bound on a quote (`research_host::parse_claims`).
+pub const RESEARCH_QUOTE_MAX: usize = 400;
+
+/// A claim a research run kept, on its way into the library (`specs/112` §3).
+#[derive(Debug, Clone)]
+pub struct ResearchClaim<'a> {
+    /// The statement: subject, predicate and object in one line.
+    pub text: &'a str,
+    /// The run's fingerprint of the claim (`research_plan::claim_fingerprint`): the same claim found again has the same one.
+    pub fingerprint: &'a str,
+    /// The registered project the run belongs to, by name. The claim is then scoped to it.
+    pub project: Option<&'a str>,
+    /// The research topic the run belongs to.
+    pub topic: Option<&'a str>,
+    /// One per source the claim was found in: the source, the quote found in that source's text, and where.
+    pub anchors: &'a [AnchorSpec],
+}
+
+/// Is this source (its `meta.json`) a private or internal one, for the guards of `specs/115` §2 item 3? **The one predicate.**
+/// It is true for exactly two things: a source the library treats as private (`is_private`), and a private pointer of `specs/113`
+/// §2 item 4 and §3 item 1 ([`is_private_pointer`]: what a host read through its own tools, a file ingested by reference, a person,
+/// or a source a host marked private). Nothing else. The label, the mark, the index listing and the origin count follow from it.
+pub fn is_internal_source(meta: &Value) -> bool {
+    is_private(meta) || is_private_pointer(meta)
+}
+
+/// Is this the record of a private pointer (`Library::add_private_pointer`, ids `private-<hash>`)? Such a record says the host
+/// reported it and names a locator instead of holding a body. The library stores every one as private, so `is_private` is true of
+/// it as well; this asks the record itself, so a pointer whose `private` word was lost is still an internal source.
+fn is_private_pointer(meta: &Value) -> bool {
+    meta["fetch_mode"] == "host_reported" && meta["locator"].is_string() && meta["source_kind"].is_string()
+}
+
+/// May a run of `project` (or of no project) add to this claim? A claim scoped to a project belongs to that project alone, as
+/// `Library::pull` has it: it is offered to no other project and to no run outside one, so neither may add to it.
+fn open_to(claim: &Value, project: Option<&str>) -> bool {
+    claim["scope"] != "project" || project.is_some_and(|p| claim["project"].as_str().is_some_and(|q| q.eq_ignore_ascii_case(p.trim())))
+}
+
+/// The id of the claim that says `text` (already cleaned) as `kind` in `scope`: content-addressed, so the same statement is the same claim.
+fn content_id(kind: &str, scope: &str, text: &str) -> String {
+    let norm = text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    format!("c-{}", &sha256_hex(format!("{}\0{}\0{}", kind, scope, norm).as_bytes())[..12])
+}
+
 /// Who may record a validation: the validator role's daemon path or the operator. Never a model's own say-so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Validator {
@@ -294,8 +339,7 @@ impl Library {
                 return Err(format!("no claim `{}` to supersede", s));
             }
         }
-        let norm = text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
-        let id = format!("c-{}", &sha256_hex(format!("{}\0{}\0{}", kind, scope, norm).as_bytes())[..12]);
+        let id = content_id(&kind, &scope, &text);
         let mut claim = self.claim(&id).unwrap_or_else(|| {
             let now = delphi_core::time::now_rfc3339();
             json!({"id": id, "text": text, "kind": kind, "scope": scope, "created": now, "last_confirmed": now, "contested_by": [], "anchors": [], "cited_by": []})
@@ -343,6 +387,189 @@ impl Library {
         self.cite(&spec.source_id, claim_id)?;
         self.log("claim_anchor", json!({"id": claim_id, "source": spec.source_id}));
         Ok(self.refresh_support(claim_id).unwrap_or(claim))
+    }
+
+    /// The library claim that carries this research fingerprint, if one does.
+    pub fn claim_by_fingerprint(&self, fingerprint: &str) -> Option<Value> {
+        if fingerprint.is_empty() {
+            return None;
+        }
+        self.claims().into_iter().find(|c| c["fingerprints"].as_array().is_some_and(|f| f.iter().any(|x| x == fingerprint)))
+    }
+
+    /// The research fingerprints of the claims a run of `project` (or of no project) may add to: every claim's but those scoped to
+    /// another project.
+    pub fn research_fingerprints(&self, project: Option<&str>) -> Vec<String> {
+        self.claims().iter().filter(|c| open_to(c, project)).flat_map(|c| c["fingerprints"].as_array().cloned().unwrap_or_default()).filter_map(|f| f.as_str().map(String::from)).collect()
+    }
+
+    /// Write a claim a research run kept as a library claim (`specs/112` §3.1 to §3.3). `true` when it was merged into a claim the
+    /// library already held.
+    ///
+    /// * The status is left to be derived (`status`), as for every claim: a new one reads *noted*. Nothing here records a validation,
+    ///   and nothing the run, a model or a page said reaches the claim's tags: `refresh_support` counts them from the anchors.
+    /// * A claim whose fingerprint an existing claim carries **gains anchors and the topic id** on that claim; no second claim is
+    ///   made. That is how the count of independent origins rises across runs. The same words as an existing claim of the same kind
+    ///   and scope are that claim too (the id is content-addressed, as `add_claim` has it).
+    /// * A claim of a run that belongs to a project is scoped to it (`scope: project`, `project: <name>`). A claim that is merged
+    ///   keeps the scope it already has: a merge never widens or narrows who may be offered it.
+    /// * **Nothing crosses a project's edge.** A claim scoped to another project is not added to and not taken over: the call is
+    ///   refused and the library is unchanged (whether one project may read another's research is `specs/115`). A run inside a
+    ///   project that finds a claim of the team adds its anchor (a page anyone may read) but not its topic id, which is made from the
+    ///   project's own question.
+    /// * An anchor is added once per source and quote. A source the library does not hold (or has purged) gives no anchor.
+    pub fn add_research_claim(&self, rc: &ResearchClaim<'_>) -> Result<(Value, bool), String> {
+        if rc.fingerprint.len() < 12 || rc.fingerprint.len() > 64 || !rc.fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("a research claim carries its fingerprint".into());
+        }
+        if let Some(t) = rc.topic {
+            if !crate::research_record::valid_topic_id(t) {
+                return Err("not a research topic id".into());
+            }
+        }
+        let project = rc.project.map(str::trim).filter(|p| !p.is_empty());
+        let other_project = || "the library holds this claim for another project; nothing is merged across projects".to_string();
+        let existing = self.claim_by_fingerprint(rc.fingerprint);
+        let merged = existing.is_some();
+        let mut claim = match existing {
+            Some(c) if !open_to(&c, project) => return Err(other_project()),
+            Some(c) => c,
+            None => {
+                let opts = ClaimOpts { scope: project.map(|_| "project".to_string()), project: project.map(String::from), ..Default::default() };
+                // The same words may already be a claim (the id is content-addressed and does not name the project): one of another
+                // project is left as it is.
+                let scope = opts.scope.clone().unwrap_or_else(|| "team".into());
+                if self.claim(&content_id("fact", &scope, &clean_text(rc.text.trim()))).is_some_and(|c| !open_to(&c, project)) {
+                    return Err(other_project());
+                }
+                self.add_claim(rc.text, &opts, &[])?
+            }
+        };
+        let id = claim["id"].as_str().ok_or("a claim has an id")?.to_string();
+        let add_to = |claim: &mut Value, list: &str, item: &str| {
+            let mut all: Vec<Value> = claim[list].as_array().cloned().unwrap_or_default();
+            if !all.iter().any(|x| x == item) {
+                all.push(json!(item));
+            }
+            claim[list] = Value::Array(all);
+        };
+        add_to(&mut claim, "fingerprints", rc.fingerprint);
+        // The topic id is made from the run's question: it goes on a claim of the run's own scope, never from a project onto a
+        // claim that others are offered.
+        let same_scope = (claim["scope"] == "project") == project.is_some();
+        if let Some(t) = rc.topic.filter(|_| same_scope) {
+            add_to(&mut claim, "topics", t);
+        }
+        let mut cited: Vec<&str> = Vec::new();
+        for spec in rc.anchors {
+            let Ok(a) = self.research_anchor(spec) else { continue };
+            let held = claim["anchors"].as_array().is_some_and(|all| all.iter().any(|x| x["source_id"] == a["source_id"] && x["quote_hash"] == a["quote_hash"]));
+            if !held {
+                match claim["anchors"].as_array_mut() {
+                    Some(all) => all.push(a),
+                    None => claim["anchors"] = json!([a]),
+                }
+                cited.push(spec.source_id.as_str());
+            }
+        }
+        self.save_claim(&claim)?;
+        for s in &cited {
+            self.cite(s, &id)?;
+        }
+        self.log("claim_research", json!({"id": id, "merged": merged, "anchors": cited.len(), "topic": rc.topic}));
+        Ok((self.refresh_support(&id).unwrap_or(claim), merged))
+    }
+
+    /// Write a claim a host reported that Delphi could not check (`specs/113` §2 items 3 and 4): its quote rests on a private source,
+    /// or on a public page where the daemon did not find it. The claim is kept, never offered beyond its own place: it is scoped to the
+    /// project (`scope: project`) or, with no project, to this install (`scope: personal`), so it is never merged into a claim of the
+    /// team and is never listed in the shared index. It carries `mark` (`host-reported`, or `host-reported, not found`) in
+    /// `host_reported`. Its anchors are into private pointers only, which never count as an origin (`cites_of`), so it reads *noted*.
+    /// `fingerprint` must be of the private domain (the caller's), so no research run merges a public page into it by accident.
+    pub fn add_host_claim(&self, rc: &ResearchClaim<'_>, mark: &str) -> Result<Value, String> {
+        if rc.fingerprint.len() < 12 || rc.fingerprint.len() > 64 || !rc.fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("a host claim carries its fingerprint".into());
+        }
+        if let Some(t) = rc.topic {
+            if !crate::research_record::valid_topic_id(t) {
+                return Err("not a research topic id".into());
+            }
+        }
+        let project = rc.project.map(str::trim).filter(|p| !p.is_empty());
+        let scope = if project.is_some() { "project" } else { "personal" };
+        let text = clean_text(rc.text.trim());
+        if self.claim(&content_id("fact", scope, &text)).is_some_and(|c| !open_to(&c, project)) {
+            return Err("the library holds this claim for another project; nothing is merged across projects".into());
+        }
+        let opts = ClaimOpts { scope: Some(scope.to_string()), project: project.map(String::from), ..Default::default() };
+        let mut claim = self.add_claim(rc.text, &opts, &[])?;
+        let id = claim["id"].as_str().ok_or("a claim has an id")?.to_string();
+        let add_to = |claim: &mut Value, list: &str, item: &str| {
+            let mut all: Vec<Value> = claim[list].as_array().cloned().unwrap_or_default();
+            if !all.iter().any(|x| x == item) {
+                all.push(json!(item));
+            }
+            claim[list] = Value::Array(all);
+        };
+        add_to(&mut claim, "fingerprints", rc.fingerprint);
+        add_to(&mut claim, "host_reported", mark);
+        if let Some(t) = rc.topic {
+            add_to(&mut claim, "topics", t);
+        }
+        let mut cited: Vec<&str> = Vec::new();
+        for spec in rc.anchors {
+            // Only a private pointer may carry a host's own quote: a public source's anchor is the daemon's to find.
+            if !self.read_meta(&spec.source_id).is_some_and(|m| is_private(&m)) {
+                continue;
+            }
+            let Ok(a) = self.research_anchor(spec) else { continue };
+            let held = claim["anchors"].as_array().is_some_and(|all| all.iter().any(|x| x["source_id"] == a["source_id"] && x["quote_hash"] == a["quote_hash"]));
+            if !held {
+                match claim["anchors"].as_array_mut() {
+                    Some(all) => all.push(a),
+                    None => claim["anchors"] = json!([a]),
+                }
+                cited.push(spec.source_id.as_str());
+            }
+        }
+        self.save_claim(&claim)?;
+        for s in &cited {
+            self.cite(s, &id)?;
+        }
+        self.log("claim_host", json!({"id": id, "anchors": cited.len(), "topic": rc.topic, "mark": mark}));
+        Ok(self.refresh_support(&id).unwrap_or(claim))
+    }
+
+    /// Whether the library holds the source's text and `quote` is in it letter for letter. A yes or a no; no text is returned.
+    pub fn holds_quote(&self, source_id: &str, quote: &str) -> bool {
+        !quote.trim().is_empty() && std::fs::read_to_string(self.source_dir(source_id).join("source.md")).is_ok_and(|t| t.contains(quote))
+    }
+
+    /// The anchor of a research claim into one of its sources (`specs/112` §3.2): the source id, the quote and the locator. The
+    /// quote is the one the daemon found in the page's text by code when the run read the page, at most [`RESEARCH_QUOTE_MAX`]
+    /// characters: what a run already keeps of a page in `host-claims.jsonl`, and nothing more of it. When the source is held whole
+    /// and the quote is in its text letter for letter, the anchor also has its range; otherwise it has the quote alone, so a
+    /// research anchor never needs more of a work to be kept than the capture level allows.
+    fn research_anchor(&self, spec: &AnchorSpec) -> Result<Value, String> {
+        let meta = self.read_meta(&spec.source_id).ok_or_else(|| format!("no source `{}`", spec.source_id))?;
+        if !meta["purged"].is_null() {
+            return Err(format!("source `{}` was purged; nothing can anchor into it", spec.source_id));
+        }
+        let quote: String = clean_text(spec.quote.trim()).chars().take(RESEARCH_QUOTE_MAX).collect();
+        let locator = spec.locator.as_deref().map(str::trim).filter(|l| !l.is_empty()).or_else(|| meta["canonical_url"].as_str()).unwrap_or("").to_string();
+        if locator.is_empty() {
+            return Err("an anchor records where it is from".into());
+        }
+        let version = meta["version"].as_str().unwrap_or("1").to_string();
+        let held = std::fs::read_to_string(self.source_dir(&spec.source_id).join("source.md")).ok();
+        let anchor = match held.as_deref().and_then(|t| Anchor::new(&spec.source_id, &version, &locator, &quote, Some(t), None, None).ok()) {
+            Some(a) => a,
+            None => Anchor::new(&spec.source_id, &version, &locator, &quote, None, None, None)?,
+        };
+        let mut v = serde_json::to_value(anchor).map_err(|e| e.to_string())?;
+        v["state"] = json!("active");
+        v["via"] = json!("research");
+        Ok(v)
     }
 
     /// An anchor into a source. A source held whole resolves the quote in its text; one that is not (excerpts, pointer)
@@ -768,6 +995,11 @@ impl Library {
             if !live_origin(&meta) {
                 continue;
             }
+            // `specs/115` §2 item 3: a private or internal source is never an origin for corroboration, in any project. The claim's
+            // other anchors still count.
+            if is_internal_source(&meta) {
+                continue;
+            }
             // An archived copy is a locator, not a source (`specs/101` §5 item 6): while the current version of a source is a copy taken
             // from a web archive it adds no origin and no trusted source, however many copies there are. A live re-check that succeeds
             // stores a version without the mark, and the source counts again.
@@ -1046,6 +1278,21 @@ impl Library {
 
     pub fn rests_on_private(&self, c: &Value) -> bool {
         anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).any(|m| is_private(&m))
+    }
+
+    /// Does the claim rest on a private or internal source ([`is_internal_source`])? The one question the guards of `specs/115`
+    /// §2 item 3 ask: such a claim is indexed apart (`research_index::INTERNAL_DIR`), labelled as from an internal source, and
+    /// marks the session that is given it.
+    ///
+    /// A claim a host reported that has no anchor at all (the daemon did not find its quote, `specs/113` §2 item 3) rests on
+    /// the host's word alone. It is treated as internal too, so it never crosses to another project as ordinary research
+    /// without the host-reported label and the mark.
+    pub fn rests_on_internal(&self, c: &Value) -> bool {
+        let anchors = anchors_of(c);
+        if anchors.is_empty() && c["host_reported"].as_array().is_some_and(|m| !m.is_empty()) {
+            return true;
+        }
+        anchors.iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).any(|m| is_internal_source(&m))
     }
 
     /// Claims for a mission, by pointer (`specs/055` §5): selected by the words of the prompt and by the mission's project,

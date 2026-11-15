@@ -12,6 +12,7 @@ const READERS: &[(&str, &str)] = &[
     ("crates/delphi-engine/src/research_run.rs", "writes lines as the run searches and attaches the log to the result; no branch reads it"),
     ("crates/delphi-engine/src/service.rs", "reads the host's declared searches and keeps the finished log beside the result"),
     ("crates/delphi-engine/src/mcp_host.rs", "declares the optional `host_searches` input of `request_research`; the daemon reads it"),
+    ("crates/delphi-engine/src/research_record.rs", "keeps the finished log in the topic's folder as `search-log.json` and puts it back into a result read from disk (specs/112 section 2.3); it copies the log and no branch reads what it says, except its `private` flag, which only makes the record private too"),
     ("crates/delphi-engine/src/lib.rs", "declares the module"),
     ("crates/delphi/src/doctor.rs", "names the removed `[research] search_log` key so an old config is told it does nothing (specs/098 section 13.2); it reads no log"),
     ("crates/delphi-engine/src/egress.rs", "names the search-log module's test among the proofs that the observed-URL fetch carries no entry text; it reads no log"),
@@ -97,14 +98,15 @@ fn a_line_that_names_the_log_never_also_names_a_permission_a_tier_or_an_approval
 
 #[test]
 fn the_runner_only_writes_to_the_log_and_never_branches_on_it() {
-    // In `research_run.rs`, every use of the `log` value is a call that records (`begin`, `withheld`, `rows`, `failed`, `kept`,
+    // In `research_run.rs`, every use of the `log` value is a call that records (`begin`, `withheld`, `withheld_identifier` (the
+    // identifier guard of spec 119, which records a line with no text), `rows`, `failed`, `kept`,
     // `duplicate`, `dropped`, `kb`, `declare`), the final read of its private flag and its two renderings. A condition on its content
     // (`log.lines()`/`log.flow()` inside an `if` or `match`) would let a result of the log change what the run does.
     let root = root();
     let src = std::fs::read_to_string(root.join("crates/delphi-engine/src/research_run.rs")).unwrap();
     let body = production(&src);
     let uses = Regex::new(r"\blog\.(\w+)").unwrap();
-    let allowed = ["begin", "withheld", "rows", "failed", "kept", "duplicate", "dropped", "kb", "declare", "private", "flow", "lines", "to_json"];
+    let allowed = ["begin", "withheld", "withheld_identifier", "rows", "failed", "kept", "duplicate", "dropped", "kb", "declare", "private", "flow", "lines", "to_json"];
     let mut other = Vec::new();
     let mut reads = Vec::new();
     for (n, line) in body.lines().enumerate() {

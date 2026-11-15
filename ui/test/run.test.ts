@@ -87,6 +87,19 @@ test('/research starts the job in this directory and /research cancel stops it',
   assert.match(r.out.at(-1)!, /usage: \/research/);
 });
 
+// specs/112 §5: a topic that has a record is continued by its id; anything else after `continue` is a topic like any other.
+test('/research continue <topic-id> asks for a new run on the record, with a note; without an id it is a topic', async () => {
+  const r = ctx(initial(0), [], (m) => (m === 'research.continue' ? { topic_id: 'raft-0123abcd', topic: 'raft\x1b[2J consensus' } : {}));
+  await runSlash('/research continue raft-0123abcd in production systems', r.c);
+  assert.deepEqual(r.calls[0], ['research.continue', { topic_id: 'raft-0123abcd', note: 'in production systems' }]);
+  assert.match(r.out.at(-1)!, /continuing research topic raft-0123abcd: raft.* consensus/);
+  assert.doesNotMatch(r.out.at(-1)!, /\x1b/);
+  await runSlash('/research continue raft-0123abcd', r.c);
+  assert.deepEqual(r.calls[1], ['research.continue', { topic_id: 'raft-0123abcd', note: undefined }]);
+  await runSlash('/research continue the story of raft', r.c);
+  assert.deepEqual(r.calls[2], ['research.start', { topic: 'continue the story of raft', cwd: undefined }]);
+});
+
 test('usage renders a table with a total', () => {
   const t = renderUsage({ mission_id: 'm1', rows: [{ key: 'builder', calls: 2, input_tokens: 10, output_tokens: 5, cost_usd: 0.5 }], budget: { cap_usd: 5, reserved_usd: 0, available_usd: 4.5 } });
   assert.match(t, /builder\s+2\s+10\s+0\s+5\s+\$0\.5000/);

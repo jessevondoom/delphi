@@ -485,7 +485,7 @@ test('the progress page keeps the box and shows one line per source: done with f
   assert.match(t, /✖ blog\.example\.org\s+skipped: answered 404/);
   assert.match(t, /● britannica\.com\s+reading…/);
   assert.match(t, /○ pubmed\.ncbi\.nlm\.nih\.gov · acm\.org/);
-  assert.match(t, /esc cancel · entries already written stay · nothing leaves the trusted list/);
+  assert.match(t, /esc cancel · sources already kept stay · trusted sources are read first/);
 });
 
 test('the results page lists the entries as a table and says what was read and not kept, and what was seen and not read', () => {
@@ -495,6 +495,17 @@ test('the results page lists the entries as a table and says what was read and n
   assert.match(t, /›\s+raft/, 'the box holds the topic');
   assert.match(t, /read, not kept: britannica\.com\/… \(not relevant to the topic\) · acm\.org\/… \(almost no text\)/);
   assert.match(t, /enter read it · esc back to the clean page · they are searchable now/);
+});
+
+// specs/112 R4: the job is the one runner's. A source kept without its text is a pointer, and the report names the run's topic.
+test('a pointer is drawn as an address with its claims, and a finished run names its topic and the claims it noted', () => {
+  const run = A.key(type(console_(), 'raft'), k('enter'), W, H).a;
+  const going = text(A.gotResearch(run, status({ topic: 'raft', sources: [line('blog.example.org', 'done', { form: 'pointer', licence: 'unknown' })] })));
+  assert.match(going, /✔ blog\.example\.org\s+address and claims\s+text not kept/);
+  const done = text(A.gotResearch(run, status({ phase: 'done' }, report({ topic_id: 'raft-0123abcd', claims: 3 }))));
+  assert.match(done, /topic raft-0123abcd · 3 claims noted, not validated · delphi research show raft-0123abcd/);
+  const hostile = text(A.gotResearch(run, status({ phase: 'done' }, report({ topic_id: 'x\x1b[2J; rm -rf', claims: 1 }))));
+  assert.doesNotMatch(hostile, /topic x|rm -rf/, 'an id that is not one is not shown');
 });
 
 test('a search with fewer than three reference documents offers research, and only a window that can run it', () => {

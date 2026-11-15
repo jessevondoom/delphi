@@ -9,7 +9,7 @@
 //! The context flush of `specs/045` T6 is not built; when it is, it gets a row here or the lint fails.
 
 /// The `learn.*` event kinds that carry memory. (`learn.dropped` removes a note and writes nothing.)
-const MEMORY_EVENTS: [&str; 4] = ["learn.staged", "learn.note", "learn.proposed", "learn.proposal_resolved"];
+const MEMORY_EVENTS: [&str; 5] = ["learn.staged", "learn.note", "learn.proposed", "learn.proposal_resolved", "learn.provisional"];
 
 /// One audited write path. `files` are repo-relative paths allowed to write `events`; `proofs` are `(file, test name)`
 /// pairs that must exist.
@@ -61,6 +61,19 @@ pub const SITES: &[Site] = &[
         ],
     },
     Site {
+        name: "the provisional tier (`specs/116` §2): a staged note kept as a file a later span may retrieve as an unreviewed passage; it carries the writing span's taint, is never retrieved automatically when tainted, is never part of a system prompt, and only the operator promotes it",
+        files: &["crates/delphi-engine/src/provisional_notes.rs"],
+        events: &["learn.provisional"],
+        proofs: &[
+            ("crates/delphi-engine/src/provisional_notes.rs", "a_kept_note_is_one_file_under_its_role_with_the_frontmatter_the_daemon_wrote"),
+            ("crates/delphi-engine/src/provisional_notes.rs", "the_sources_are_the_note_tool_hosts_and_contact_and_a_hosts_note_is_stored_untrusted"),
+            ("crates/delphi-engine/src/provisional_notes.rs", "a_project_missions_note_is_kept_in_its_own_layer_and_a_spoofed_scope_keeps_nothing"),
+            ("crates/delphi-engine/src/provisional_notes.rs", "a_provisional_note_is_retrieved_only_by_its_own_role_unless_it_is_a_fact_and_never_automatically_when_tainted"),
+            ("crates/delphi-engine/src/engine.rs", "spec_116_a_note_reaches_a_later_mission_as_a_labelled_passage_and_the_system_prompt_is_byte_identical_with_the_tier_on_and_off"),
+            ("crates/delphi-engine/src/engine.rs", "spec_116_a_note_a_web_page_told_the_agent_to_write_is_stored_tainted_and_never_retrieved_automatically"),
+        ],
+    },
+    Site {
         name: "the orchestrator's `suggest_rule` proposal",
         files: &["crates/delphi-engine/src/tools.rs"],
         events: &["learn.proposed"],
@@ -77,10 +90,12 @@ pub const SITES: &[Site] = &[
         ],
     },
     Site {
-        name: "`delphi learn keep` (`specs/108` M2): the operator's typed yes at a terminal keeps a host note as a lesson or a rule, through the pinned write and its checks",
+        name: "`delphi learn keep` (`specs/108` M2, `specs/116` §3 item 2): the operator's typed yes at a terminal keeps an agent's or a host's note as a lesson or a rule, through the pinned write and its checks, beside a running daemon for a note of the provisional tier",
         files: &["crates/delphi/src/learn_keep.rs"],
         events: &["learn.proposal_resolved"],
         proofs: &[
+            ("crates/delphi/src/learn_keep.rs", "keep_works_with_the_daemon_running_for_a_note_from_an_inside_agent"),
+            ("crates/delphi/src/learn_keep.rs", "a_note_marked_wrong_leaves_the_tier_with_the_daemon_running_and_is_not_kept_again"),
             ("crates/delphi/src/learn_keep.rs", "keep_as_lesson_writes_one_rule_with_provenance_resolves_the_note_and_the_next_pack_carries_it"),
             ("crates/delphi/src/learn_keep.rs", "a_script_an_unknown_id_a_closed_note_an_unknown_role_and_a_relaxing_text_are_refused_with_nothing_written"),
             ("crates/delphi/src/learn_keep.rs", "a_full_lessons_file_is_refused_with_the_three_ways_out_and_nothing_written"),
@@ -90,7 +105,12 @@ pub const SITES: &[Site] = &[
         name: "the digest's `promote` (the operator's act: a candidate becomes a proposal for `/retro`; nothing loads)",
         files: &["crates/delphi-engine/src/digest.rs"],
         events: &["learn.proposed"],
-        proofs: &[("crates/delphi-engine/src/digest.rs", "promote_only_proposes_for_the_retro_review_and_never_a_card_or_a_rule_and_a_low_tier_cannot_promote")],
+        proofs: &[
+            ("crates/delphi-engine/src/digest.rs", "promote_only_proposes_for_the_retro_review_and_never_a_card_or_a_rule_and_a_low_tier_cannot_promote"),
+            // `specs/116` §3: a provisional note is proposed the same way, only when untainted, and only by a console.
+            ("crates/delphi-engine/src/digest.rs", "a_provisional_note_is_left_marked_wrong_or_proposed_for_retro_and_never_written_as_a_rule_here"),
+            ("crates/delphi-engine/src/service.rs", "the_digest_offers_provisional_notes_most_used_first_and_no_console_action_writes_a_rule"),
+        ],
     },
     Site {
         name: "project-to-home promotion (`specs/058` §7): a data-only proposal, the operator's acceptance as a tainted home entry, a withdrawal that retires it",
@@ -131,6 +151,15 @@ fn writes_staged_zone(text: &str) -> bool {
     writes && production(text).lines().any(|l| !l.trim_start().starts_with("//") && l.contains(".join(\"local/staged\")") && !l.contains("md_files("))
 }
 
+/// A path that names the provisional tier's folder (`memory/provisional`) in production code that also writes files. One module
+/// owns those files; other code that wrote there could make a note that skips the taint, the role rule or the operator's review.
+/// (A reader that only counts them, as `knowledge_health.rs` does, writes nothing.)
+fn names_provisional_zone(text: &str) -> bool {
+    let code = production(text);
+    let writes = ["fs::write(", "File::create(", "fs::rename(", "write_atomic("].iter().any(|w| code.contains(w));
+    writes && code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(concat!("memory/", "provisional")))
+}
+
 /// Findings for `files` (repo-relative path, text) of the workspace's Rust sources. Empty means every write path is
 /// listed and still has its proof.
 pub fn audit(files: &[(String, String)]) -> Vec<(String, String)> {
@@ -152,6 +181,9 @@ pub fn audit(files: &[(String, String)]) -> Vec<(String, String)> {
         }
         if writes_staged_zone(text) && !SITES.iter().any(|s| s.events.contains(&"learn.staged") && s.files.contains(&path.as_str())) {
             out.push((path.clone(), "writes the `staged` zone but is not an audited memory write path (specs/050 ML-6)".into()));
+        }
+        if names_provisional_zone(text) && !SITES.iter().any(|s| s.events.contains(&"learn.provisional") && s.files.contains(&path.as_str())) {
+            out.push((path.clone(), "writes files and names the provisional tier's folder but is not its audited write path: only `provisional_notes.rs` writes those files (specs/116 §2)".into()));
         }
     }
     for s in SITES {
@@ -193,6 +225,13 @@ mod tests {
         let found = audit(&files);
         assert!(found.iter().any(|(p, m)| p.ends_with("sneaky.rs") && m.contains("learn.staged")));
         assert!(found.iter().any(|(p, _)| p.ends_with("sneakier.rs")));
+        // `specs/116` §2: a second writer of the provisional tier, by its event or by its folder, is a finding.
+        let mut more = repo_sources();
+        more.push(("crates/delphi-engine/src/sly.rs".into(), format!("fn f() {{ let e = EventEnvelope::new(m, \"learn.{}\", json!({{}})); }}\n", "provisional")));
+        more.push(("crates/delphi-engine/src/slier.rs".into(), format!("fn f() {{ std::fs::write(ws.join(\"local/memory/{}/builder/x.md\"), \"x\"); }}\n", "provisional")));
+        let found = audit(&more);
+        assert!(found.iter().any(|(p, m)| p.ends_with("sly.rs") && m.contains("learn.provisional")), "{found:#?}");
+        assert!(found.iter().any(|(p, m)| p.ends_with("slier.rs") && m.contains("provisional tier")), "{found:#?}");
         let mut gutted = repo_sources();
         gutted.iter_mut().find(|(p, _)| p.ends_with("engine/src/tools.rs")).unwrap().1 = "fn nothing() {}".into();
         assert!(audit(&gutted).iter().any(|(_, m)| m.contains("any_role_stages_a_note_that_inherits_the_spans_taint")));

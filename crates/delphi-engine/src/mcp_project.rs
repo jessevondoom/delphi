@@ -730,7 +730,10 @@ impl Project {
         if scope == "all" || scope == "core_only" {
             if let Some(ix) = self.index() {
                 ranking = RANKED_BY_INDEX;
-                let found = hl::search(&ix.home, &ix.db, &self.ws_dir, query, vec!["core", "specs", "context", "knowledge", "library", "bundles"], (limit * 2).min(MAX_LIMIT), use_, true).ok();
+                // Zone `research` (`specs/112` §3 item 5), as `search_kb` reads it (`host.search_kb`): topic records, answers and library
+                // claims under the library's rules. They are third-party text, so they come back in the `third_party` group, fenced,
+                // each with its label. No project is named, so no project's claims and nothing private is among them.
+                let found = hl::search(&ix.home, &ix.db, &self.ws_dir, query, vec!["core", "specs", "context", "knowledge", "library", "bundles", crate::research_index::ZONE], (limit * 2).min(MAX_LIMIT), use_, true).ok();
                 let kb = crate::kb::Kb::open_readonly(&ix.db).ok();
                 for (group, hits) in [(&mut core, found.as_ref().map(|f| &f.rest)), (&mut release, found.as_ref().map(|f| &f.release)), (&mut third_party, found.as_ref().map(|f| &f.third_party))] {
                     for h in hits.into_iter().flatten() {
@@ -1474,6 +1477,32 @@ mod tests {
         assert!(v.ends_with(crate::host_labels::POINTER));
     }
 
+    /// `kb_retrieve` reads zone `research` as `search_kb` does (`specs/112` §3 item 5, `specs/109` §12.1): a topic's answer comes
+    /// back in the third-party group, fenced and labelled as not checked; a private topic's is not in the index; `verify` serves none.
+    #[test]
+    fn kb_retrieve_returns_a_research_topics_answer_as_third_party_text_and_nothing_of_a_private_topic() {
+        use crate::research_record::{Asker, Begin, Topic};
+        let (_t, ws, root) = corpus_fixture(false);
+        let topic = |question: &str, answer: &str, private: bool| {
+            let t = Topic::begin(&ws, &Begin { question, asked_by: Asker::host("host:claude-code/m"), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
+            let result = json!({"answer": answer, "budget_used": {"steps": 2, "check_steps": 1}, "coverage": "thin", "coverage_report": {"thin_below": 3, "counted": 1, "rungs": []}, "search_log": {"version": 1, "private": private, "lines": [], "flow": {}}});
+            t.finish("r-t-1", "done", Some(&result), &[], None, 5).unwrap();
+            t
+        };
+        let open = topic("Where do numbatkin shelter overnight?", "The numbatkin shelter overnight in hollow logs.", false);
+        let closed = topic("What is the numbatkin gate code?", "The numbatkin gate code is 4417.", true);
+        let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).unwrap();
+        kb.sync_lexical(&crate::kb::sources(&ws), "t").unwrap();
+        let p = Project::new(&ws, &root);
+        let out = p.kb_retrieve("numbatkin", 10, "all", "all").unwrap();
+        let third = out.find("<!-- delphi:rag:group third_party -->").expect(&out);
+        let answer = out[third..].split("<!-- delphi:rag chunk_id").find(|c| c.contains(&format!("source=\"research/topics/{}/answer.md", open.id))).unwrap_or_else(|| panic!("the answer is not in the third-party group: {out}"));
+        assert!(answer.contains("author=\"third_party\" checked=\"not checked\"") && answer.contains("source_type=\"federated_verified\"") && answer.contains("hollow logs"), "{answer}");
+        assert!(!out.contains("4417") && !out.contains(&closed.id), "{out}");
+        let v = p.kb_retrieve_use("numbatkin", 10, "all", "all", crate::host_labels::Use::Verify).unwrap();
+        assert!(!v.contains("research/topics/"), "{v}");
+    }
+
     /// `specs/109` §13.3 (defects 2 and 3): a library passage carries the gloss for its fixed tier beside `source_type`, agrees with its
     /// label, and its `source` names no home directory or user, whether the source got a new id or an older one that spelled the path.
     #[test]
@@ -1525,8 +1554,15 @@ mod tests {
     }
 
     /// Two registered projects, A (`fixture`'s) and B, each with a spec, a context file and a layer, and the index built.
+    /// The isolation tests below run under `[projects] research_sharing = "project"`, the behaviour before `specs/115`; their
+    /// copy under `workspace` follows them.
     fn two_projects() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        two_projects_sharing("project")
+    }
+
+    fn two_projects_sharing(sharing: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
         let (t, ws, root) = fixture();
+        fs::write(ws.join("config.toml"), format!("[projects]\nresearch_sharing = \"{sharing}\"\n")).unwrap();
         let rootb = fs::canonicalize(t.path()).unwrap().join("projb");
         let w = |p: PathBuf, text: &str| {
             fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -1576,6 +1612,37 @@ mod tests {
         assert!(!ask(Some(ID), true).is_empty() && ask(Some(ID), true).iter().all(|p| p.starts_with(&format!("projects/{ID}/"))));
         assert!(ask(Some(ID), false).is_empty(), "untrusted project text stays out of a view that excludes untrusted text");
         assert!(ask(Some("../bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), true).is_empty() && ask(Some("%"), true).is_empty());
+    }
+
+    /// The copy of the test above under `research_sharing = "workspace"` (`specs/115` §6). The project tools are not widened: they
+    /// still serve the session's own project and nothing of B. What changes is what the index admits for a search that carries the
+    /// workspace's shared list: B's `research/**` file, named and labelled, and still not B's spec or layer.
+    #[test]
+    fn under_workspace_sharing_the_project_tools_stay_the_sessions_own_and_a_shared_search_adds_only_research() {
+        let (t, ws, root, rootb) = two_projects_sharing("workspace");
+        fs::create_dir_all(rootb.join("research")).unwrap();
+        fs::write(rootb.join("research/br.md"), "# B research\n\nquokkalayer research of project b\n").unwrap();
+        sync(&ws);
+        let a = Project::new(&ws, &root);
+        let found = parsed(&a.search_project("quokkalayer", 10).unwrap());
+        assert_eq!(layered(&found.to_string()), sorted(&["project specs/a1.md", "project context/actx.md", &format!("project:{ID} knowledge/aknow.md")]), "search_project stays the session's project only (§3 item 5)");
+        let passages_a = a.kb_retrieve("quokkalayer", 10, "all", "project_only").unwrap();
+        assert!(!passages_a.contains("b1.md") && !passages_a.contains("bctx") && !passages_a.contains("br.md"), "{passages_a}");
+        assert!(a.search_kb_project("quokkalayer", 10).iter().all(|r| !r["path"].as_str().unwrap().contains("b")));
+        assert!(!a.task_section("look at quokkalayer research of project b", "architect").contains("br.md"));
+        let outside = Project::new(&ws, t.path());
+        assert!(texts(&outside.search_project("quokkalayer", 10).unwrap()).is_empty());
+        // The index, asked as A with the workspace's shared list.
+        let kb = crate::kb::Kb::open_readonly(&ws.join("local/state.db")).unwrap();
+        let shared = crate::shared_research::view(&ws, &ProjectId::parse(ID).unwrap());
+        assert_eq!(shared.as_ref().map(|s| s.projects.clone()), Some(vec![(ID_B.to_string(), ID_B.to_string())]));
+        let hits = kb.search("quokkalayer", &crate::kb::SearchOpts { project: Some(ID.into()), include_untrusted: true, zones: Some(vec!["project"]), shared, ..Default::default() }).unwrap();
+        let of_b: Vec<(&str, Option<&str>, bool, &str)> = hits.iter().filter(|h| h.rel_path.contains(ID_B)).map(|h| (h.rel_path.as_str(), h.project.as_deref(), h.shared, h.label)).collect();
+        assert_eq!(of_b, [(format!("projects/{ID_B}/files/research/br.md").as_str(), Some(ID_B), true, crate::shared_research::SHARED_LABEL)], "B's research and nothing else of B");
+        assert!(hits.iter().any(|h| h.rel_path == format!("projects/{ID}/files/specs/a1.md") && !h.shared), "A's own layer as before");
+        // Without the list, or without a project, as before.
+        let ask = |project: Option<&str>| -> Vec<String> { kb.search("quokkalayer", &crate::kb::SearchOpts { project: project.map(String::from), include_untrusted: true, ..Default::default() }).unwrap().into_iter().map(|h| h.rel_path).collect() };
+        assert!(ask(None).is_empty() && ask(Some(ID)).iter().all(|p| p.starts_with(&format!("projects/{ID}/"))));
     }
 
     /// `specs/109` §11.1, 11.4, 11.5: exactly the scaffold folders and the layer's context and knowledge, at `external_untrusted`

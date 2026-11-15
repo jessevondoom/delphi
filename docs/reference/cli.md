@@ -67,11 +67,12 @@ Register, scaffold, and inspect directory project scopes.
   delphi project init [path] [--yes] [--workspace <name>] [--home <dir>]
   delphi project list | scope [--workspace <name>] [--home <dir>]
   delphi project index [path] [--refresh] [--workspace <name>] [--home <dir>]
+  delphi project private <name> on|off [--workspace <name>] [--home <dir>]
   delphi project relink <project-id> <new-path> [--home <dir>]
   delphi project clone [path] [--home <dir>]
 ```
 
-A project is a directory scope; Git is optional. `register` writes the identity marker and central project record. `init` lists paths first, asks for confirmation, and creates only missing project folders and `_index.md`; in non-interactive use, pass `--yes`. Existing files are preserved. `index` reports whether `_index.md` is current; `index --refresh` regenerates it (and `.delphi-index/` category indexes for large projects) from the files allowed by `.gitignore`, `.delphiignore` and the default exclusions (credentials, hidden files, caches, build and dependency trees, files over 2 MiB; symlinks are not followed). A hand-edited `_index.md` is never overwritten: a proposed replacement goes to `.delphi-index/proposed-index.md` and the command exits 3.
+A project is a directory scope; Git is optional. `register` writes the identity marker and central project record. `private <name> on` marks a project private (specs/115): it shares none of its research with the workspace's other projects, while its own sessions still read what the others share; `off` clears the flag. The name is the project's display name or its id (`project list` shows both, and `private` beside a private one). Nothing is copied or deleted; the next search follows the flag, and `delphi doctor` prints the setting and the private projects. `init` lists paths first, asks for confirmation, and creates only missing project folders and `_index.md`; in non-interactive use, pass `--yes`. Existing files are preserved. `index` reports whether `_index.md` is current; `index --refresh` regenerates it (and `.delphi-index/` category indexes for large projects) from the files allowed by `.gitignore`, `.delphiignore` and the default exclusions (credentials, hidden files, caches, build and dependency trees, files over 2 MiB; symlinks are not followed). A hand-edited `_index.md` is never overwritten: a proposed replacement goes to `.delphi-index/proposed-index.md` and the command exits 3.
 
 ### `delphi auth`
 
@@ -159,6 +160,21 @@ bundle as a plugin (--claude-plugin), an AGENTS.md fragment, or a marketplace.js
 A bundle can also travel through a xenia store (the org's shared, signed, git-hosted store you joined with `delphi xenia`). `publish` writes a `bundle` record from the signed bundle's own manifest, pointing at the git tree you name, and asks you once, showing the exact bytes. `add --from-xenia` verifies the store, fetches that tree under the same limits as a marketplace add, requires it to hash to the record and to be signed by the member who published it, and records the store's standing: `endorsed` (a steward of another person endorsed these exact bytes, under a current freshness statement) or `member-signed`. `update` follows the record's newer revisions, forward only. `store` lists the store's bundles; with --auto-update it also keeps the levels in the lock current and applies the updates that cannot lower the level or change the publisher.
 sources add copies sources from your library into <dir>/sources/ (and turns the section on in bundle.toml). It writes meta.json from the library record (citation fields and the licence record, `internal` when there is none; no status, origin, reliance count or note), source.md when the capture is whole, the excerpts without your purpose notes, and recognised assets. Licence is information, not a gate: nothing is refused for it. The one refusal is a source you flagged private, which never travels in a bundle; the command is also refused inside an agent seat. It refreshes files.json when the bundle has one (sign again if it was signed) and lists the source-licence, source-attribution and source-sharealike warnings `validate` would report. For a public bundle, `package` and `publish` print the sources that carry a licence note and ask you to confirm in a terminal (no --yes); for an internal bundle `publish` asks. The acknowledged ids are written to .delphi-bundle/report.json.
 Exit codes: 0 pass · 1 failed · 2 usage.
+
+### `delphi app`
+
+Start the desktop app and pair it; list, revoke and grant its keys.
+
+```
+  delphi app [--workspace <name>] [--home <dir>]
+  delphi app list | log
+  delphi app revoke <name>
+  delphi app grant <name> [--remove] <grant>
+```
+
+Run it in a terminal: starting the app from one is what vouches for it, and nothing is asked.
+A paired app reads, and asks only for what its grants list (read, request). `revoke` closes its
+sessions at once. The app is DELPHI_APP, else the build beside this program, else /Applications.
 
 ### `delphi hooks`
 
@@ -379,13 +395,13 @@ It reads files only and never runs the validator.
 The knowledge base: index it, search it.
 
 ```
-  delphi kb search <query> [--role <role>] [--untrusted|--all] [--staged] [--about] [--summaries|--bibs]
+  delphi kb search <query> [--role <role>] [--untrusted|--all] [--staged] [--unreviewed] [--about] [--summaries|--bibs]
   delphi kb import <file.md | dir | -> [--home <dir>] [--workspace <name>]
   delphi kb review [stats | show <ref> | keep <ref>…|--all | discard <ref>…|--all]
   delphi kb refresh [--stale [--minutes <n, at most 4>] | <id> (--still-current | <file.md | ->)]
   delphi kb quarantine [<id> [--restore]]
   delphi kb extract <page-id> (--auto | <candidates.json | ->)
-  delphi kb index | reindex | stats | attest [<page-id>]
+  delphi kb index | reindex | stats | health [--json] | attest [<page-id>]
   delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]
 ```
 
@@ -444,15 +460,24 @@ Written when a session ends (/new, or a daemon restart): the first words of what
 
 ### `delphi research`
 
-The search log of a host research job; the local retraction snapshot.
+Set up a search engine; research topics, logs, ingest; retractions.
 
 ```
-  delphi research log <research-id> [--json] [--home <dir>] [--workspace <name>]
+  delphi research topics [--due] [--json] [--home <dir>] [--workspace <name>]
+  delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]
+  delphi research continue <topic-id> [--note <text>] [--json] [--home <dir>] [--workspace <name>]
+  delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]
+  delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]
+  delphi research ingest <path>... | --all [--apply] [--fetch] [--json] [--home <dir>] [--workspace <name>]
   delphi research retractions import <file> [--home <dir>] [--workspace <name>]
   delphi research retractions status [--json] [--home <dir>] [--workspace <name>]
+  delphi research setup [--engine brave|mojeek|searxng|kagi|google|parallel] [--credential <env:NAME|keychain:name>]
+    [--url <instance>] [--cx <id>] [--no-test] [--home <dir>] [--workspace <name>]
 ```
 
-`log` prints what a research run searched, of whom, when, and how many results came back and were kept (specs/101 §3): one line per search with the query that was sent, a search withheld for a private claim without any query text, searches your host declared marked as such, and a found / duplicates / kept / not-kept flow that adds up. Written beside the result once the job has finished; a private log stays on this machine. `retractions import` reads the Retraction Watch CSV from a file you downloaded (the repository is gitlab.com/crossref/retraction-watch-data; a URL is refused, because Delphi makes no call to fetch it) into a local index; when [research] retractions is on it then checks every source that has a DOI against it, marks a retracted source (it stops counting as an origin and a claim only it supports becomes contested) and writes nothing off: the capture stays readable (specs/101 §4). `retractions status` prints the snapshot's date, size and age, and says stale after [research] retractions_stale_days (default 90). None of these calls a model or the network.
+`topics` lists the research records on disk, newest first: one per topic, in research/topics/<topic-id>/ of the workspace, or of a registered project when the run was asked from inside it (specs/112 §2). A topic's id is a slug of the question and eight hex characters of its hash, so the same question asked again is the same topic. `show` prints one record: the question, who asked, the state, each run, every query with its provider and count of results, every page read with its source id and content hash, the pages that were not read and why, the claim ids, the gaps, and the answer of the newest finished run. The record is written as the run goes, so a run that was stopped shows how far it got; a finished run's result is read from it for as long as it exists. Everything printed is data from outside and has not been checked. `continue` asks the running daemon for a new run on a topic that has a record (specs/112 §5): it asks the topic's own question, sends the queries the record's gaps call for (the sources on your lists when they found nothing, the wider web when it found nothing, all of them when coverage was thin or the budget ran out or the record has no gap), and does not read again a page the record holds whose content has not changed; `--note` is one line of at most 120 characters that narrows the search. It spends tokens and reaches the network, so it runs only at a terminal with the daemon started, and is refused inside an agent seat; an agent asks with its request_research tool, and a host passes topic_id to request_research. `topics --due` lists the topics that are due and why: the newest run is older than the topic's refresh days ([research] refresh_days, default 90), or a source it rests on has changed or been retracted. It only lists: nothing is run again until you or an agent asks. Each claim a run keeps is written to the library (library/claims/<id>.json) with an anchor per source (the source, the quote found in it, the page's address), the project when the run belongs to one, and the topic; a claim the library already holds gains the anchor and the topic instead of a second claim, and every such claim reads noted until the library's own rules say otherwise (specs/112 §3). `migrate` does the same for the claims an older research/host-claims.jsonl lists, which were kept only in that file: it prints what it would write and changes nothing, and writes only with --apply (refused inside an agent seat); running it again adds nothing, and the file itself is never changed. `ingest` (specs/113 §3) turns research that already exists as files into topics: each Markdown file named (or, with --all, every registered project's research/ folder and the workspace's imported summaries) becomes a topic record with runner ingest, the file a private source of kind file with its hash (its locator, title and date, never its text), and its body the answer by reference, not by copy; a file whose hash is already recorded is skipped and a changed file adds a run to its topic. Up to 20 sentences of each file become claims anchored to their line of the file, kept as ingested from a file, private to the project and counting for no corroboration; the URLs the file lists become source pointers, and with --fetch each one on the lists of sites research may read is read by Delphi's own fetcher and kept, and a claim whose sentence appears on that page gains a second anchor there (without it nothing is fetched). A file that lists no source is flagged `no sources listed` in its record, and an imported summary that lists none says so in search results. It prints what it would do and writes nothing without --apply (refused inside an agent seat). `log` prints what a research run searched, of whom, when, and how many results came back and were kept (specs/101 §3): one line per search with the query that was sent, a search withheld for a private claim without any query text, searches your host declared marked as such, and a found / duplicates / kept / not-kept flow that adds up. Written into the topic's folder (search-log.json) once the job has finished, for the topic's newest run; a log written before topics existed is still read from research/search-logs/. A private log stays on this machine. `retractions import` reads the Retraction Watch CSV from a file you downloaded (the repository is gitlab.com/crossref/retraction-watch-data; a URL is refused, because Delphi makes no call to fetch it) into a local index; when [research] retractions is on it then checks every source that has a DOI against it, marks a retracted source (it stops counting as an origin and a claim only it supports becomes contested) and writes nothing off: the capture stays readable (specs/101 §4). `retractions status` prints the snapshot's date, size and age, and says stale after [research] retractions_stale_days (default 90). Apart from `continue` and `ingest --fetch`, none of these calls a model or the network.
+
+`setup` (specs/119 section 2) chooses the search engine research asks. At a terminal it offers Brave first and Mojeek second (any supported engine is taken), prints one line before a key is entered (queries leave this machine for the engine chosen; check its terms and your employer's rules first), takes the key with hidden input into your keychain and never into a file, writes the `[search]` table of config.toml, runs one test query and one test fetch of a site research may read (`--no-test` skips both), prints what worked, and shows the change for you to ratify: `[search]` names who receives your queries, so it takes effect only once ratified. A key the engine rejects is not stored and nothing is written. Without a terminal it asks nothing: pass `--engine`, and for an engine with a key `--credential` with a reference (`env:NAME` or `keychain:name`, never the key itself); it then writes the table, runs the test and does not ratify. It is refused inside an agent seat. Exit codes: 0 set up · 1 a test failed or nothing was saved · 2 usage or refusal.
 
 ### `delphi tools`
 
@@ -543,13 +568,14 @@ Notes staged from denials, corrections, retries and escalations.
   delphi learn list [--mission <id>] [--json]
   delphi learn show <mission>/<id> [--json]
   delphi learn drop <mission>/<id>
+  delphi learn wrong <mission>/<id>
   delphi learn keep <mission>/<id> --as lesson --role <role> | --as rule
     [--scope workspace|operator] [--text "T: <when> D: <what to do> [F: <what would refute it>]"]
   delphi learn ingest --from claude-code --role <role> [--path <file|dir>] [--enable]
     [--workspace <name>] [--home <dir>]
 ```
 
-Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. `keep` turns a host's note into a lesson for one role (its `lessons.md`, workspace scope unless `--scope operator`) or a shared rule (`heuristics.md`), recorded as user_ratified with where it came from: it shows what it will write and writes only after you type yes at a terminal (there is no --yes), refuses text the no-relaxation test or the Rule of 25 refuses, and needs the daemon stopped, because the note is closed in its session's log. A lesson needs a trigger and a directive (`T: … D: …`); `list` marks a host note reported by two or more sessions and prints its `keep` command. Capture is set in [learning] in config.toml. `ingest` reads a coding tool's own session logs after the fact and stages what fixed rules find (your corrections, failures that were retried) as L0 notes for one role; it is off for a project until you run it once with `--enable` from inside that project, reads the current folder's logs unless `--path` says otherwise, and needs the daemon stopped.
+Staged notes are never loaded into a prompt; they wait for review. `drop` needs the daemon stopped. `list` shows the staged notes, then the notes of the provisional tier (unreviewed notes a later run of the same role may be given as data; `[memory] provisional`), the most used first and then the oldest. `keep` turns an agent's or a host's note into a lesson for one role (its `lessons.md`, workspace scope unless `--scope operator`) or a shared rule (`heuristics.md`), recorded as user_ratified with where it came from: it shows what it will write and writes only after you type yes at a terminal (there is no --yes), and refuses text the no-relaxation test or the Rule of 25 refuses. For a provisional note it works while the daemon runs (the write is a compare-and-swap on the file's pin) and the note moves to `provisional/kept/`; a note that is only staged is closed in its session's log, so that needs the daemon stopped. `wrong` marks a provisional note wrong: it moves to `provisional/rejected/`, is no longer retrieved, and the same note is not kept again for 180 days; nothing is deleted. A lesson needs a trigger and a directive (`T: … D: …`); `list` marks a host note reported by two or more sessions and prints its `keep` command. Capture is set in [learning] in config.toml. `ingest` reads a coding tool's own session logs after the fact and stages what fixed rules find (your corrections, failures that were retried) as L0 notes for one role; it is off for a project until you run it once with `--enable` from inside that project, reads the current folder's logs unless `--path` says otherwise, and needs the daemon stopped.
 
 ### `delphi capabilities`
 

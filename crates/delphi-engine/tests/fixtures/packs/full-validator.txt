@@ -2,7 +2,7 @@
 - pack_hash: f7adfcd53527dd9556c5b36d3f7f7fe4
 - delphi_version: {version}
 - locus: either
-- search_use: verify (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)
+- search_use: explore (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)
 - capabilities: read -> Read; search_code -> Grep; search_web -> WebSearch; fetch -> WebFetch
 - host_adapter: claude-code v1, hash 2817033d91b71f91 (another host maps the capability names to its own tools)
 - tuned_for: tier=workhorse, profile=deep-reasoning

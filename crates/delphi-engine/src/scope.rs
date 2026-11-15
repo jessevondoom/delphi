@@ -63,6 +63,9 @@ struct Record {
     root: PathBuf,
     #[serde(default)]
     display_name: String,
+    /// `specs/115` §2 item 2: a private project shares none of its research with the workspace's other projects.
+    #[serde(default)]
+    private: bool,
 }
 
 fn registry(ws_dir: &Path) -> Result<Vec<(ProjectId, PathBuf)>, String> {
@@ -114,6 +117,85 @@ pub fn project_list(ws_dir: &Path) -> Vec<(String, PathBuf)> {
         .collect();
     out.sort_by_key(|(n, _)| n.to_lowercase());
     out
+}
+
+/// One registered project as the workspace's list has it (`local/projects.json`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectEntry {
+    pub id: ProjectId,
+    /// The display name, else the directory's.
+    pub name: String,
+    pub root: PathBuf,
+    /// `specs/115` §2 item 2: the operator marked it private (`delphi project private <name> on`).
+    pub private: bool,
+}
+
+/// Every registered project with its flag, by name. Empty when the registry cannot be trusted, so nothing is shared from a list
+/// that cannot be read.
+pub fn project_entries(ws_dir: &Path) -> Vec<ProjectEntry> {
+    let Ok(text) = std::fs::read(ws_dir.join("local/projects.json")) else { return Vec::new() };
+    if registry(ws_dir).is_err() {
+        return Vec::new();
+    }
+    let Ok(reg) = serde_json::from_slice::<Registry>(&text) else { return Vec::new() };
+    let mut out: Vec<ProjectEntry> = reg
+        .projects
+        .into_values()
+        .filter_map(|r| {
+            let id = ProjectId::parse(&r.project_id).ok()?;
+            let name = if r.display_name.is_empty() { r.root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "project".into()) } else { r.display_name };
+            Some(ProjectEntry { id, name, root: r.root, private: r.private })
+        })
+        .collect();
+    out.sort_by_key(|e| (e.name.to_lowercase(), e.id.clone()));
+    out
+}
+
+/// `[projects] research_sharing` (`specs/115` §2 item 1): whether a session may read the research of the workspace's other projects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResearchSharing {
+    /// A project's files are visible to that project only: the behaviour before `specs/115`.
+    Project,
+    /// The research of every project that is not private is readable from the others. The default (operator, 2026-11-14).
+    Workspace,
+}
+
+impl ResearchSharing {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ResearchSharing::Project => "project",
+            ResearchSharing::Workspace => "workspace",
+        }
+    }
+}
+
+/// The workspace's setting, read from `config.toml` each time it is asked, so a change takes effect at the next search
+/// (`specs/115` §2 item 4). A missing file or a missing key is the default, `workspace`. A file that cannot be read or parsed, or
+/// a value that is neither word, is `project`: what cannot be read shares nothing.
+pub fn research_sharing(ws_dir: &Path) -> ResearchSharing {
+    let text = match std::fs::read_to_string(ws_dir.join("config.toml")) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ResearchSharing::Workspace,
+        Err(_) => return ResearchSharing::Project,
+    };
+    let Ok(root) = toml::from_str::<toml::Value>(&text) else { return ResearchSharing::Project };
+    match root.get("projects").map(|p| p.get("research_sharing")) {
+        None | Some(None) => ResearchSharing::Workspace,
+        Some(Some(v)) if v.as_str() == Some("workspace") => ResearchSharing::Workspace,
+        Some(Some(_)) => ResearchSharing::Project,
+    }
+}
+
+/// What `delphi doctor` prints (`specs/115` §4 item 3): the setting and the private projects, by name.
+pub fn research_sharing_line(ws_dir: &Path) -> String {
+    let sharing = research_sharing(ws_dir);
+    let private: Vec<String> = project_entries(ws_dir).into_iter().filter(|e| e.private).map(|e| e.name).collect();
+    let what = match sharing {
+        ResearchSharing::Workspace => "a session may read the research of the workspace's other projects, labelled, and nothing else of them",
+        ResearchSharing::Project => "a project's research is read by that project only",
+    };
+    let private = if private.is_empty() { "private projects: none".to_string() } else { format!("private projects ({}): {}", private.len(), private.join(", ")) };
+    format!("[projects] research_sharing = \"{}\": {}; {}", sharing.as_str(), what, private)
 }
 
 /// Is `id` the default project or registered in this workspace?
@@ -294,6 +376,47 @@ mod tests {
 
     fn id(s: &str) -> ProjectId {
         ProjectId::parse(s).unwrap()
+    }
+
+    /// `specs/115` §2 items 1 and 4: the default is `workspace`, the key is read at each call, and what cannot be read shares nothing.
+    #[test]
+    fn research_sharing_defaults_to_workspace_follows_the_file_and_fails_closed() {
+        let f = fx();
+        assert_eq!(research_sharing(&f.ws), ResearchSharing::Workspace, "no config file: the default");
+        let set = |text: &str| fs::write(f.ws.join("config.toml"), text).unwrap();
+        set("[workspace]\nname = \"w\"\n");
+        assert_eq!(research_sharing(&f.ws), ResearchSharing::Workspace, "no key: the default");
+        set("[projects]\nresearch_sharing = \"project\"\n");
+        assert_eq!(research_sharing(&f.ws), ResearchSharing::Project);
+        set("[projects]\nresearch_sharing = \"workspace\"\n");
+        assert_eq!(research_sharing(&f.ws), ResearchSharing::Workspace, "a change takes effect at the next read");
+        for bad in ["[projects]\nresearch_sharing = \"all\"\n", "[projects]\nresearch_sharing = true\n", "[projects]\nresearch_sharing = \"Workspace\"\n", "[projects\nresearch_sharing = \"workspace\"\n"] {
+            set(bad);
+            assert_eq!(research_sharing(&f.ws), ResearchSharing::Project, "{bad}");
+        }
+    }
+
+    /// `specs/115` §2 item 2, §4 item 3: the private flag is read from the workspace's project list, and the doctor's line names the
+    /// setting and the private projects. A list that cannot be trusted names no project at all.
+    #[test]
+    fn the_private_flag_is_read_from_the_project_list_and_the_doctor_line_names_it() {
+        let f = fx();
+        assert!(project_entries(&f.ws).iter().all(|e| !e.private), "no project is private until the operator says so");
+        assert_eq!(research_sharing_line(&f.ws), "[projects] research_sharing = \"workspace\": a session may read the research of the workspace's other projects, labelled, and nothing else of them; private projects: none");
+        fs::write(
+            f.ws.join("local/projects.json"),
+            serde_json::json!({"schema": 1, "projects": {A: {"project_id": A, "root": f.a, "display_name": "alpha"}, B: {"project_id": B, "root": f.b, "display_name": "beta", "private": true}}}).to_string(),
+        )
+        .unwrap();
+        let entries = project_entries(&f.ws);
+        assert_eq!(entries.iter().map(|e| (e.id.as_str(), e.name.as_str(), e.private)).collect::<Vec<_>>(), [(A, "alpha", false), (B, "beta", true)]);
+        fs::write(f.ws.join("config.toml"), "[projects]\nresearch_sharing = \"project\"\n").unwrap();
+        assert_eq!(research_sharing_line(&f.ws), "[projects] research_sharing = \"project\": a project's research is read by that project only; private projects (1): beta");
+        // A flag that is not a boolean, or a registry that is otherwise corrupt, lists nothing.
+        for bad in [serde_json::json!({"schema": 1, "projects": {A: {"project_id": A, "root": f.a, "private": "no"}}}).to_string(), "{not json".to_string(), serde_json::json!({"schema": 2, "projects": {}}).to_string()] {
+            fs::write(f.ws.join("local/projects.json"), &bad).unwrap();
+            assert!(project_entries(&f.ws).is_empty(), "{bad}");
+        }
     }
 
     #[test]

@@ -84,6 +84,15 @@ pub enum Finish {
     Partial(Value),
 }
 
+/// How a job ended, as [`Jobs::submit_with`] tells its `on_end`: the state, the runner's value when it produced one, the error when
+/// it failed, and how long it ran.
+pub struct Ended<'a> {
+    pub state: State,
+    pub result: Option<&'a Value>,
+    pub error: Option<&'a str>,
+    pub ms: u64,
+}
+
 /// The budget ran out; the runner should return what it has as [`Finish::Partial`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct BudgetSpent;
@@ -108,13 +117,28 @@ struct Activity {
 pub struct JobCtx {
     max_steps: u32,
     steps: AtomicU32,
+    /// The check's own budget (`specs/112` §4.4): the validator's steps are counted here and never against the search.
+    check_max: u32,
+    check_steps: AtomicU32,
     trail: Mutex<Trail>,
     activity: Mutex<Activity>,
+    /// The workspace's `[privacy] identifiers` (`specs/119` §2 item 7), set once by whoever starts the runner; unset means none.
+    identifiers: std::sync::OnceLock<Vec<String>>,
 }
 
 impl JobCtx {
     pub fn with_budget(max_steps: u32) -> JobCtx {
-        JobCtx { max_steps, steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()), activity: Mutex::new(Activity { last: Instant::now(), recent: VecDeque::new() }) }
+        JobCtx { max_steps, steps: AtomicU32::new(0), check_max: check_budget(max_steps), check_steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()), activity: Mutex::new(Activity { last: Instant::now(), recent: VecDeque::new() }), identifiers: Default::default() }
+    }
+
+    /// Give the job the workspace's privacy identifiers. The first call wins.
+    pub fn set_identifiers(&self, identifiers: Vec<String>) {
+        let _ = self.identifiers.set(identifiers);
+    }
+
+    /// The identifier guard for a query this job is about to send to an engine or hand to a host (`specs/119` §2 item 7).
+    pub fn guard(&self, query: &str) -> crate::query_guard::Guarded {
+        crate::query_guard::guard(query, self.identifiers.get().map(Vec::as_slice).unwrap_or(&[]))
     }
 
     /// Note that the job just made a call of this kind.
@@ -142,6 +166,25 @@ impl JobCtx {
         self.steps.load(Ordering::SeqCst)
     }
 
+    /// Count one step of the check. It has a budget of its own ([`check_budget`]) and takes nothing from the search (`specs/112` §4.4).
+    pub fn check_step(&self) -> Result<(), BudgetSpent> {
+        let n = self.check_steps.fetch_add(1, Ordering::SeqCst);
+        if n >= self.check_max {
+            self.check_steps.store(self.check_max, Ordering::SeqCst);
+            Err(BudgetSpent)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn check_steps(&self) -> u32 {
+        self.check_steps.load(Ordering::SeqCst)
+    }
+
+    pub fn max_check_steps(&self) -> u32 {
+        self.check_max
+    }
+
     /// Check `role`'s scope for `tool` and count the step; the query or URL is recorded, or the refusal is.
     pub fn egress(&self, role: &str, tool: Egress, what: &str) -> Result<(), String> {
         let mut t = self.trail.lock().unwrap();
@@ -152,7 +195,12 @@ impl JobCtx {
             return Err(e);
         }
         drop(t);
-        self.step().map_err(|_| "the step budget for this depth is spent".to_string())?;
+        // The validator's steps are the check's (`specs/112` §4.4); every other role spends the run's.
+        if role == "validator" {
+            self.check_step().map_err(|_| "the step budget for the check is spent".to_string())?;
+        } else {
+            self.step().map_err(|_| "the step budget for this depth is spent".to_string())?;
+        }
         let mut t = self.trail.lock().unwrap();
         push_capped(if tool == Egress::Search { &mut t.queries } else { &mut t.fetched }, what);
         drop(t);
@@ -181,6 +229,11 @@ impl JobCtx {
     }
 }
 
+/// The step budget of the check (`specs/112` §4.4): a quarter of the run's, and at least two.
+pub fn check_budget(max_steps: u32) -> u32 {
+    (max_steps / 4).max(2)
+}
+
 fn push_capped(list: &mut Vec<String>, s: &str) {
     if list.len() < LIST_CAP {
         list.push(s.chars().take(300).collect());
@@ -205,6 +258,8 @@ pub struct Jobs {
     jobs: Arc<Mutex<HashMap<String, Job>>>,
     permits: Arc<Semaphore>,
     timeout: Duration,
+    /// The step budget at each depth (`[research.limits]`, `specs/112` §4 item 6).
+    limits: Arc<crate::research_run::Limits>,
 }
 
 impl Default for Jobs {
@@ -215,7 +270,13 @@ impl Default for Jobs {
 
 impl Jobs {
     pub fn new(max_concurrent: usize, timeout: Duration) -> Jobs {
-        Jobs { jobs: Default::default(), permits: Arc::new(Semaphore::new(max_concurrent)), timeout }
+        Jobs { jobs: Default::default(), permits: Arc::new(Semaphore::new(max_concurrent)), timeout, limits: Default::default() }
+    }
+
+    /// The queue under the one limits table (`specs/112` §4 item 6): how many jobs run at once, how long one may run, and the
+    /// step budget of each depth. One queue serves every caller: a host, the console and an inside agent.
+    pub fn with_limits(limits: &crate::research_run::Limits) -> Jobs {
+        Jobs { jobs: Default::default(), permits: Arc::new(Semaphore::new(limits.concurrent.max(1))), timeout: Duration::from_secs(limits.job_secs), limits: Arc::new(limits.clone()) }
     }
 
     /// Queue a job and return at once. `run` starts when one of the running slots is free.
@@ -224,7 +285,19 @@ impl Jobs {
         F: FnOnce(Arc<JobCtx>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<Finish, String>> + Send + 'static,
     {
-        let ctx = Arc::new(JobCtx::with_budget(depth.max_steps()));
+        self.submit_with(id, session, depth, run, |_| {})
+    }
+
+    /// [`submit`](Jobs::submit), and `on_end` is called once when the job ends, however it ends (done, partial, failed, timed out,
+    /// cancelled while queued or running), just before the job reads as finished. It is how a run's record on disk learns its last
+    /// state (`specs/112` §2.4): a cancelled or timed-out run never gets back to its own code.
+    pub fn submit_with<F, Fut, E>(&self, id: &str, session: &str, depth: Depth, run: F, on_end: E)
+    where
+        F: FnOnce(Arc<JobCtx>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Finish, String>> + Send + 'static,
+        E: FnOnce(&Ended<'_>) + Send + 'static,
+    {
+        let ctx = Arc::new(JobCtx::with_budget(self.limits.steps_at(depth)));
         let cancel = Arc::new(Notify::new());
         {
             let mut jobs = self.jobs.lock().unwrap();
@@ -238,22 +311,26 @@ impl Jobs {
                 _ = cancel.notified() => None,
             };
             let Some(permit) = permit else {
+                on_end(&Ended { state: State::Cancelled, result: None, error: None, ms: 0 });
                 me.end(&id, State::Cancelled, None, None);
                 return;
             };
             me.set_state(&id, State::Running);
+            let started = Instant::now();
             let outcome = tokio::select! {
                 r = tokio::time::timeout(timeout, run(ctx)) => Some(r),
                 _ = cancel.notified() => None,
             };
             drop(permit);
-            match outcome {
-                None => me.end(&id, State::Cancelled, None, None),
-                Some(Err(_)) => me.end(&id, State::Failed, None, Some("the job ran out of time".into())),
-                Some(Ok(Ok(Finish::Done(v)))) => me.end(&id, State::Done, Some(v), None),
-                Some(Ok(Ok(Finish::Partial(v)))) => me.end(&id, State::Partial, Some(v), None),
-                Some(Ok(Err(e))) => me.end(&id, State::Failed, None, Some(e)),
-            }
+            let (state, result, error) = match outcome {
+                None => (State::Cancelled, None, None),
+                Some(Err(_)) => (State::Failed, None, Some("the job ran out of time".to_string())),
+                Some(Ok(Ok(Finish::Done(v)))) => (State::Done, Some(v), None),
+                Some(Ok(Ok(Finish::Partial(v)))) => (State::Partial, Some(v), None),
+                Some(Ok(Err(e))) => (State::Failed, None, Some(e)),
+            };
+            on_end(&Ended { state, result: result.as_ref(), error: error.as_deref(), ms: started.elapsed().as_millis() as u64 });
+            me.end(&id, state, result, error);
         });
     }
 
@@ -294,7 +371,7 @@ impl Jobs {
         let ahead = if j.state == State::Queued { jobs.values().filter(|o| o.state == State::Queued && o.queued < j.queued).count() } else { 0 };
         Some(json!({
             "research_id": id, "status": j.state.as_str(), "depth": j.depth, "queued_ahead": ahead,
-            "steps": j.ctx.steps(), "max_steps": j.depth.max_steps(),
+            "steps": j.ctx.steps(), "max_steps": j.ctx.max_steps, "check_steps": j.ctx.check_steps(), "max_check_steps": j.ctx.max_check_steps(),
             "queries": t.queries, "fetched": t.fetched, "refused": t.refused,
             "fetched_via": t.fetched_via.iter().map(|(u, v)| json!({"url": u, "via": v})).collect::<Vec<_>>(),
             "error": j.error,
@@ -404,6 +481,22 @@ mod tests {
         assert_eq!((t.queries.len(), t.fetched.len(), t.refused.len()), (1, 1, 1));
     }
 
+    /// `specs/112` §4.4: the check has a quarter of the run's steps, at least two, and neither budget takes from the other.
+    #[test]
+    fn the_check_has_a_budget_of_its_own_that_the_search_cannot_spend() {
+        assert_eq!([Depth::Quick, Depth::Survey, Depth::Deep].map(|d| check_budget(d.max_steps())), [2, 3, 7]);
+        assert_eq!((check_budget(0), check_budget(8), check_budget(9)), (2, 2, 2));
+        let ctx = JobCtx::with_budget(4);
+        while ctx.egress("scout", Egress::Fetch, "https://a.example/").is_ok() {}
+        assert_eq!((ctx.steps(), ctx.check_steps()), (4, 0), "the search spent its own budget and none of the check's");
+        assert!(ctx.egress("validator", Egress::Fetch, "https://a.example/").is_ok(), "a spent search budget leaves the check its steps");
+        assert!(ctx.check_step().is_ok());
+        let over = ctx.egress("validator", Egress::Fetch, "https://a.example/").unwrap_err();
+        assert!(over.contains("budget"), "{over}");
+        assert!(ctx.check_step().is_err());
+        assert_eq!((ctx.steps(), ctx.check_steps(), ctx.max_check_steps()), (4, 2, 2), "the check never adds to the run's steps");
+    }
+
     #[tokio::test]
     async fn only_two_jobs_run_at_once_and_the_rest_queue_in_order_and_all_finish() {
         let jobs = Jobs::default();
@@ -487,6 +580,38 @@ mod tests {
             assert_eq!(jobs.wait(id, "s", Duration::from_secs(5)).await.unwrap()["status"], "cancelled", "{id}");
         }
         assert!(!jobs.cancel("run", "s"), "already finished");
+    }
+
+    /// `specs/112` §2.4: the record learns how a job ended whichever way it ended, before the job reads as finished.
+    #[tokio::test]
+    async fn on_end_is_told_every_way_a_job_can_end() {
+        let jobs = Jobs::new(1, Duration::from_millis(300));
+        /// A job's name, the state it ended in, whether it had a result, and its error.
+        type End = (String, &'static str, bool, Option<String>);
+        let seen: Arc<Mutex<Vec<End>>> = Default::default();
+        let tell = |name: &'static str| {
+            let seen = seen.clone();
+            move |e: &Ended<'_>| seen.lock().unwrap().push((name.to_string(), e.state.as_str(), e.result.is_some(), e.error.map(String::from)))
+        };
+        jobs.submit_with("done", "s", Depth::Quick, |_| async { done(json!({"n": 1})) }, tell("done"));
+        jobs.submit_with("partial", "s", Depth::Quick, |_| async { Ok(Finish::Partial(json!({}))) }, tell("partial"));
+        jobs.submit_with("bad", "s", Depth::Quick, |_| async { Err("no provider".to_string()) }, tell("bad"));
+        for id in ["done", "partial", "bad"] {
+            jobs.wait(id, "s", Duration::from_secs(5)).await.unwrap();
+        }
+        jobs.submit_with("slow", "s", Depth::Quick, |_| async { std::future::pending::<Result<Finish, String>>().await }, tell("slow"));
+        jobs.wait("slow", "s", Duration::from_secs(5)).await.unwrap();
+        jobs.submit_with("run", "s", Depth::Quick, |_| async { std::future::pending::<Result<Finish, String>>().await }, tell("run"));
+        jobs.submit_with("queued", "s", Depth::Quick, |_| async { done(json!({})) }, tell("queued"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(jobs.cancel("queued", "s") && jobs.cancel("run", "s"));
+        for id in ["run", "queued"] {
+            jobs.wait(id, "s", Duration::from_secs(5)).await.unwrap();
+        }
+        let mut seen = seen.lock().unwrap().clone();
+        seen.sort();
+        let want = [("bad", "failed", false, Some("no provider")), ("done", "done", true, None), ("partial", "partial", true, None), ("queued", "cancelled", false, None), ("run", "cancelled", false, None), ("slow", "failed", false, Some("the job ran out of time"))];
+        assert_eq!(seen, want.map(|(n, s, r, e)| (n.to_string(), s, r, e.map(String::from))).to_vec());
     }
 
     #[tokio::test]

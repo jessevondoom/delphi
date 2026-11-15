@@ -1,8 +1,11 @@
 //! Delphi desktop (spec 111): a window that shows what the daemon knows and changes nothing. This crate is the bridge: it finds
 //! the daemon, attaches on the read-only narrator scope, and gives the window a few named reads and the daemon's notifications.
+//! When a terminal has paired it (spec 120), it attaches on the app socket instead, proving its key on every connection; the
+//! window is given the same reads either way.
 
 pub mod bridge;
 pub mod client;
+pub mod key;
 pub mod locate;
 
 use std::sync::Arc;
@@ -59,12 +62,13 @@ fn session(bridge: State<'_, Arc<Bridge>>) -> Result<Value, String> {
     bridge.call(Method::SessionSnapshot, json!({}))
 }
 
-/// One knowledge base read (`kb.get`): search, a listing or a document, and nothing else under `/v1/`.
+/// One knowledge base read (`kb.get`): search, a listing, a document or a picture beside one, and nothing else under
+/// `/v1/`. A picture's size is clamped here as well as by the daemon (`bridge::kb_target`).
 #[tauri::command(async)]
 fn kb(bridge: State<'_, Arc<Bridge>>, target: String) -> Result<Value, String> {
-    if !bridge::kb_target_ok(&target) {
+    let Some(target) = bridge::kb_target(&target) else {
         return Err("that is not a knowledge base read this app makes".into());
-    }
+    };
     bridge.call(Method::KbGet, json!({ "target": target }))
 }
 
@@ -121,10 +125,20 @@ pub fn web_address(url: &str) -> bool {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let bridge = Bridge::new(env!("CARGO_PKG_VERSION"), Box::new(|| locate::locate().map(|l| (l.info, l.narrator))));
+            let locator: bridge::Locator = Box::new(|| locate::locate().map(|l| (l.info, l.narrator)));
+            // The key is kept per Delphi home (spec 120 §2 item 4): the keychain on macOS, a file only the operator reads elsewhere.
+            let bridge = match locate::delphi_home() {
+                Some(home) => Bridge::with_keys(env!("CARGO_PKG_VERSION"), locator, key::default_store(&home)),
+                None => Bridge::new(env!("CARGO_PKG_VERSION"), locator),
+            };
             app.manage(bridge.clone());
             let sink: Arc<dyn Sink> = Arc::new(Window(app.handle().clone()));
-            std::thread::spawn(move || bridge.run(sink));
+            std::thread::spawn(move || {
+                // A terminal that started the app with `delphi app` left a pairing ticket on the standard input (a pipe); a
+                // window started any other way has none.
+                bridge.offer_ticket(key::ticket_from_stdin());
+                bridge.run(sink)
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, kb, reveal, open_file, open_url])

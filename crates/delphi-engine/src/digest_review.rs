@@ -243,33 +243,45 @@ pub fn acquire_act(mission_id: &str, i: &AcquireItem, action: &str) -> Result<Ve
     Ok(vec![EventEnvelope::new(mission_id, "learn.digested", json!({"id": i.id, "action": action}))])
 }
 
-/// What the next card shows, and how many more wait today: a library item if there is one, else a captured candidate.
+/// What the next card shows, and how many more wait today: a library item if there is one, else a captured candidate, else a
+/// provisional note.
 pub enum Pick {
     Review(ReviewItem),
     Acquire(AcquireItem),
     Note(crate::learn::LiveNote),
+    /// A note of the provisional tier (`specs/116` §3 item 1).
+    Provisional(Box<crate::provisional_notes::Note>),
 }
 
 pub fn pick(mission: &str, lib: &Library, events: &[EventEnvelope], now: &str) -> Option<(Pick, usize)> {
+    pick_within(mission, lib, events, now, DAILY, Vec::new())
+}
+
+/// [`pick`] under the operator's own daily limit (`[memory] digest_daily`), with the provisional notes that wait, already in the
+/// order of review (the most used first, then the oldest: `provisional_notes::for_digest`). They are shown after everything else.
+pub fn pick_within(mission: &str, lib: &Library, events: &[EventEnvelope], now: &str, daily: usize, mut notes: Vec<crate::provisional_notes::Note>) -> Option<(Pick, usize)> {
     let used = used_today(events, now);
-    if used >= DAILY {
+    if used >= daily {
         return None;
     }
     let mut reviews = items(lib, events, now);
-    let note = crate::digest::next(mission, events, now);
+    let note = crate::digest::next_within(mission, events, now, daily);
     let acq = acquire_item(lib, events);
-    let total = reviews.len() + usize::from(acq.is_some()) + note.as_ref().map_or(0, |(_, l)| l + 1);
+    let total = reviews.len() + usize::from(acq.is_some()) + note.as_ref().map_or(0, |(_, l)| l + 1) + notes.len();
     if total == 0 {
         return None;
     }
-    let left = total.min(DAILY - used) - 1;
+    let left = total.min(daily - used) - 1;
     if !reviews.is_empty() {
         return Some((Pick::Review(reviews.remove(0)), left));
     }
     if let Some(a) = acq {
         return Some((Pick::Acquire(a), left));
     }
-    note.map(|(n, _)| (Pick::Note(n), left))
+    if let Some((n, _)) = note {
+        return Some((Pick::Note(n), left));
+    }
+    (!notes.is_empty()).then(|| (Pick::Provisional(Box::new(notes.remove(0))), left))
 }
 
 #[cfg(test)]
@@ -289,6 +301,27 @@ mod tests {
 
     fn digested(id: &str) -> EventEnvelope {
         EventEnvelope::new("m1", "learn.digested", json!({"id": id, "action": "keep"}))
+    }
+
+    /// `specs/116` §3 items 1 and 4: provisional notes are offered after everything else, in the order given (the most used
+    /// first), inside the operator's daily limit, which counts every kind of item together.
+    #[test]
+    fn provisional_notes_come_last_in_the_order_given_inside_the_operators_daily_limit() {
+        let d = tempfile::tempdir().unwrap();
+        let empty = Library::in_home(d.path());
+        let note = |id: &str, uses: u32| crate::provisional_notes::Note { id: format!("2026-10-29-m1-{id}"), role: "builder".into(), mission: "m1".into(), note: id.into(), project: String::new(), tier: delphi_core::provenance::Tier::L3, kind: "practice".into(), created: NOW.into(), valid_until: "2026-11-28".into(), uses, trigger: "agent_note".into(), source: None, left_uses: None, text: format!("note {id}"), path: std::path::PathBuf::new() };
+        let notes = || vec![note("n2", 5), note("n1", 0), note("n3", 0)];
+        let Some((Pick::Provisional(n), left)) = pick_within("m1", &empty, &[], NOW, 10, notes()) else { panic!("a note is offered when nothing else waits") };
+        assert_eq!((n.note.as_str(), left), ("n2", 2));
+        assert_eq!(pick_within("m1", &empty, &[], NOW, 2, notes()).map(|(_, left)| left), Some(1), "two a day: this one and one more");
+        assert!(pick_within("m1", &empty, &[], NOW, 0, notes()).is_none());
+        let mut used = digested("pv:m1/n9");
+        used.timestamp = NOW.into();
+        assert!(pick_within("m1", &empty, std::slice::from_ref(&used), NOW, 1, notes()).is_none(), "an action on a note counts toward the day");
+        assert!(pick("m1", &empty, &[], NOW).is_none(), "the plain pick offers none");
+        // A library item comes first.
+        let (_d, l, _a, _b) = setup();
+        assert!(matches!(pick_within("m1", &l, &[], NOW, 10, notes()), Some((Pick::Review(_), 3))));
     }
 
     #[test]

@@ -127,6 +127,8 @@ pub struct Line {
     pub query: Option<String>,
     /// `true` when the query was not sent, or not recorded, because it would have carried private text.
     pub withheld: bool,
+    /// The withheld query named one of the workspace's privacy identifiers (`specs/119` §2 item 7), rather than resting on a private source.
+    pub identifier: bool,
     pub at: String,
     pub hits: usize,
     pub kept: usize,
@@ -142,7 +144,7 @@ pub struct Line {
 
 impl Line {
     fn new(rung: &'static str, source: Source, purpose: Purpose) -> Line {
-        Line { rung, source, purpose, query: None, withheld: false, at: delphi_core::time::now_rfc3339(), hits: 0, kept: 0, duplicates: 0, not_kept: BTreeMap::new(), via: None, failed: None, declared: false }
+        Line { rung, source, purpose, query: None, withheld: false, identifier: false, at: delphi_core::time::now_rfc3339(), hits: 0, kept: 0, duplicates: 0, not_kept: BTreeMap::new(), via: None, failed: None, declared: false }
     }
 
     /// Does the line account for every result it found? A declared line, a withheld one and the knowledge-base line are not searches the
@@ -164,7 +166,7 @@ impl Line {
             o.insert("query".into(), json!(q));
         }
         if self.withheld {
-            o.insert("withheld".into(), json!("private"));
+            o.insert("withheld".into(), json!(if self.identifier { "identifier" } else { "private" }));
         }
         o.insert("at".into(), json!(self.at));
         o.insert("hits".into(), json!(self.hits));
@@ -275,6 +277,15 @@ impl SearchLog {
         self.push(l)
     }
 
+    /// A search the daemon did not send because the query named one of the workspace's privacy identifiers and too little was left
+    /// without it (`specs/119` §2 item 7): no query text is recorded.
+    pub fn withheld_identifier(&mut self, rung: &'static str, source: Source, purpose: Purpose) -> usize {
+        let mut l = Line::new(rung, source, purpose);
+        l.withheld = true;
+        l.identifier = true;
+        self.push(l)
+    }
+
     pub fn rows(&mut self, i: usize, hits: usize) {
         if let Some(l) = self.at(i) {
             l.hits = hits;
@@ -373,12 +384,15 @@ fn id_ok(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// Where a run's log is kept: `<workspace>/research/search-logs/<research_id>.json`.
+/// Where a run's log was kept before `specs/112`: `<workspace>/research/search-logs/<research_id>.json`. A run now keeps its log in its
+/// topic's folder (`research/topics/<topic-id>/search-log.json`, written by `research_record`); nothing new is written here, and a log
+/// that is already here is still read ([`read`]).
 pub fn path(ws: &Path, research_id: &str) -> Option<PathBuf> {
     id_ok(research_id).then(|| ws.join("research").join("search-logs").join(format!("{research_id}.json")))
 }
 
-/// Keep a run's log (mode 0600 on Unix, written whole then moved into place).
+/// Keep a log at the older place (mode 0600 on Unix, written whole then moved into place). The daemon no longer calls it (`specs/112`
+/// §2.3 moved the log into the topic's folder); it is what wrote the logs [`read`] still finds there.
 pub fn persist(ws: &Path, research_id: &str, log: &Value) -> Result<(), String> {
     let p = path(ws, research_id).ok_or_else(|| "not a research id".to_string())?;
     let dir = p.parent().ok_or("no parent")?;
@@ -397,7 +411,14 @@ pub fn persist(ws: &Path, research_id: &str, log: &Value) -> Result<(), String> 
     std::fs::rename(&tmp, &p).map_err(|e| e.to_string())
 }
 
-pub fn read(ws: &Path, research_id: &str) -> Result<Value, String> {
+/// The search log for `id`, for `delphi research log <id>`. `id` is a topic id or a research id: the log is read from the topic's
+/// folder (`specs/112` §2.3), and for a job that finished before the log moved there, from the older place.
+pub fn read(ws: &Path, id: &str) -> Result<Value, String> {
+    let topic = crate::research_record::find(ws, id).or_else(|| crate::research_record::find_run_for_operator(ws, id));
+    if let Some(log) = topic.and_then(|t| t.search_log()) {
+        return Ok(log);
+    }
+    let research_id = id;
     let p = path(ws, research_id).ok_or_else(|| format!("`{research_id}` is not a research id"))?;
     let text = std::fs::read_to_string(&p).map_err(|_| format!("no search log for `{research_id}`: it is written only for a research job that has finished"))?;
     serde_json::from_str(&text).map_err(|e| format!("the search log for `{research_id}` is not readable: {e}"))
@@ -414,6 +435,7 @@ pub fn render(log: &Value, research_id: &str) -> String {
         let src = l["source"].as_str().unwrap_or("?");
         let what = match (l["query"].as_str(), l["withheld"].as_str()) {
             (Some(q), _) => format!("\"{q}\""),
+            (None, Some("identifier")) => "(withheld: it named a private identifier; nothing was sent)".to_string(),
             (None, Some(_)) => "(withheld: private; nothing was sent)".to_string(),
             (None, None) => "(no query)".to_string(),
         };
@@ -493,6 +515,20 @@ mod tests {
         assert_eq!(log.flow().not_kept.get("refused"), Some(&2));
         assert!(log.flow().balanced());
         assert!(NOT_KEPT.contains(&"page_cap") && NOT_KEPT.len() == 7);
+    }
+
+    // specs/119 §2 item 7: a query withheld for a privacy identifier is listed as withheld, says why, and carries no text.
+    #[test]
+    fn a_search_withheld_for_an_identifier_is_listed_as_withheld_without_text_and_is_not_counted_as_run() {
+        let mut log = SearchLog::new();
+        log.withheld_identifier("web", Source::Search("brave".into()), Purpose::Topic);
+        let j = log.to_json();
+        let line = &j["lines"][0];
+        assert_eq!(line["withheld"], "identifier");
+        assert!(line.get("query").is_none(), "no text: {line}");
+        assert_eq!((j["flow"]["withheld"].as_u64(), j["flow"]["searches"].as_u64()), (Some(1), Some(0)));
+        assert!(!log.private, "a withheld identifier does not make the log private: it holds none of it");
+        assert!(render(&j, "r-1").contains("(withheld: it named a private identifier; nothing was sent)"));
     }
 
     #[test]

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jessevondoom/delphi/schemas/record-research.schema.json",
+  "title": "Delphi record_research input",
+  "description": "The input of the MCP tool `record_research` (specs/113 section 2; crates/delphi-engine/src/host_research.rs `input_schema`, which the tool declares; the docs test holds the two equal). A host hands over research it did with its own tools. Everything in it is data from the host: it is stored noted and not validated, and what the host says about trust, status or privacy is not read. Delphi fetches a public web source itself and looks for each quote; a private source, or one of kind internal, file or person, is never fetched.",
+  "type": "object",
+  "properties": {
+    "question": { "type": "string", "minLength": 1, "maxLength": 2000, "description": "The question you researched." },
+    "answer": { "type": "string", "maxLength": 24576, "description": "Your answer, as Markdown, at most 24 KiB." },
+    "sources": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "properties": {
+          "locator": { "type": "string", "minLength": 1, "maxLength": 500, "description": "A URL, or a description of a source with no public address." },
+          "title": { "type": "string", "maxLength": 300 },
+          "retrieved": { "type": "string", "maxLength": 40, "description": "When you read it." },
+          "kind": { "type": "string", "enum": ["web", "internal", "file", "person"], "default": "web" },
+          "private": { "type": "boolean", "default": false, "description": "True for anything not public: Delphi then never fetches it and keeps only its locator, title and date." }
+        },
+        "required": ["locator"],
+        "additionalProperties": false
+      }
+    },
+    "claims": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "minLength": 1, "maxLength": 500, "description": "One sentence." },
+          "quote": { "type": "string", "maxLength": 400, "description": "The exact words of the source that support it." },
+          "source": { "type": "integer", "minimum": 0, "description": "The index of its source in `sources`, counting from 0." }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      }
+    },
+    "searches": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "properties": {
+          "where": { "type": "string", "maxLength": 40, "description": "Where you searched (the web, a connector, a folder)." },
+          "query": { "type": "string", "minLength": 1, "maxLength": 300, "description": "The words you used." }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    },
+    "gaps": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 300 }, "description": "What you looked for and did not find." },
+    "topic_id": { "type": "string", "maxLength": 57, "description": "A research topic id Delphi gave you, to add this as a new run of it." },
+    "model": { "type": "string", "maxLength": 64, "description": "Your model name, self-reported." }
+  },
+  "required": ["question", "answer"],
+  "additionalProperties": false
+}

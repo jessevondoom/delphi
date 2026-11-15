@@ -162,7 +162,7 @@ pub struct Provenance {
     pub ratified_from: String,
     /// The note's tier before the operator kept it.
     pub original_tier: String,
-    /// The host that staged it (`host:<tool>/<model>`).
+    /// Who staged it: the host (`host:<tool>/<model>`), or the inside agent's role (`agent:<role>`, `specs/116` §3 item 2).
     pub tool: String,
     /// `YYYY-MM-DD`.
     pub date: String,
@@ -171,7 +171,8 @@ pub struct Provenance {
 impl Provenance {
     /// The rationale line of a kept rule: the place the heuristics format already gives a rule's provenance (`- **Why:**`).
     pub fn why(&self) -> String {
-        format!("kept from {} (a {} host note from {}) on {}; source_type: user_ratified", self.ratified_from, self.original_tier, self.tool, self.date)
+        let whose = if self.tool.starts_with("agent:") { "note" } else { "host note" };
+        format!("kept from {} (a {} {} from {}) on {}; source_type: user_ratified", self.ratified_from, self.original_tier, whose, self.tool, self.date)
     }
 }
 
