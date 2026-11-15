@@ -41,7 +41,7 @@ An agent is always written the same way: its chip, its name in bold in its colou
 - It attaches to the daemon's read-only socket (the narrator scope). Once you have paired it (below), it attaches to the daemon's app socket instead, proving its key each time. It attaches to no other socket and is never given a console token.
 - It can call nine of the daemon's read methods, and six reads of the knowledge base through one of them. The list is fixed in the app and checked against the daemon's own allowlist by a test. Pairing does not add to it.
 - It opens no network port and loads nothing from the network.
-- It writes nothing under your Delphi home or your projects, with one exception: on a system with no keychain, a paired app keeps its key in `app/key.json` under your Delphi home, readable by you alone. Its theme and menu choices are kept by the window.
+- It writes nothing under your Delphi home or your projects, with one exception: a paired app keeps its key in `app/key.json` under your Delphi home, readable by you alone. Its theme and menu choices are kept by the window.
 - Outside its window it does three things, each on your click: **Show in Finder**, **Open** a deck or page, a document, a picture or a recording in your browser or viewer (never a program or a script), and open a web link in your browser. A file must be inside the workspace or one of your registered projects.
 
 ## Pairing it with a terminal
@@ -64,15 +64,14 @@ delphi app log                           # what paired, what was refused, what w
 
 Not built yet: `delphi app` does not start the app in this build (it says so; the place where it starts a process must first be added to the list of such places), and the `request` grant has no methods, so a paired app can do nothing an unpaired one cannot. The window does not yet say whether it is paired.
 
-### Where the app keeps its key, and what an unsigned app gets from the keychain
+### Where the app keeps its key
 
-The app's private key never leaves your machine and the daemon never sees it. On macOS it is one item in your login keychain (`dev.delphi.desktop.app-key`); on a system with no keychain it is the file named above.
+The app's private key never leaves your machine and the daemon never sees it. It is the file named above, `app/key.json` under your Delphi home (mode 0600, in a folder of mode 0700), on every system.
 
-The app is not signed, and that changes what the keychain does for it. This was checked on macOS 27.0.1 with two builds of one program; the details and what was not checked are in [`app/README.md`](../../app/README.md).
+The keychain is not used while the app is unsigned (spec 120 §12). macOS knows an unsigned program by its exact code, so every rebuild or update of the app would be a stranger to its own keychain item and would need you to allow it in a system dialog, or to pair it again. This was checked on macOS 27.0.1 with two builds of one program; the details are in [`app/README.md`](../../app/README.md). Once the app is signed with a stable identity, the keychain will be used again.
 
-- **Another program cannot read the key without asking you.** That includes another build of this app: macOS knows an unsigned program by its exact code, not by its name or where it is.
-- **So after you rebuild or update the app, it cannot read its own key.** macOS is expected to ask you to allow the new build (this dialog was not checked). If you allow it always, that build is not asked again. If you deny it, the app reads without its key and says so; delete the item in Keychain Access and run `delphi app` again to pair the new build. A signed app would keep its key across updates.
-- **Another program running as you can write over the key, though not read it.** The app then has no usable key and reads, until you pair it again. Nothing in this design defends against software already running as you; it can also type at your terminal.
+- **What the file costs:** any program running as you can read the key and use it with its grants, `read` and `request`. A request only asks; anything that needs your approval still asks you. The keychain would have stopped such a program; nothing in this design defends against software already running as you, which can also type at your terminal.
+- **Moving from the keychain:** a key an earlier build kept in your login keychain (`dev.delphi.desktop.app-key`) is moved to the file the first time the app starts, and the keychain item is removed. If macOS will not let the new build read it, the app reads without its key and says so; run `delphi app` again to pair it.
 
 If a key is lost or you no longer trust it, `delphi app revoke <name>` removes it on the daemon's side, which is the side that counts.
 

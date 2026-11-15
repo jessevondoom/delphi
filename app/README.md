@@ -25,8 +25,8 @@ Two programs with no code in common have to sign and check the same text, so one
 
 ### Where the private key is kept
 
-- **macOS:** one generic-password item in the login keychain, service `dev.delphi.desktop.app-key`, account the Delphi home's path (a key belongs to one home's daemons).
-- **Elsewhere** (no keychain): `app/key.json` under the Delphi home, mode 0600 in a folder of mode 0700. A key file that others can read is refused, not used. This is the one file the app writes under the home.
+- **Every system:** `app/key.json` under the Delphi home, mode 0600 in a folder of mode 0700 (spec 120 §12, 2026-11-15: the keychain is used again once the app is signed with a stable identity). A key file that others can read is refused, not used. This is the one file the app writes under the home. Any program running as the operator can read it; the key's grants (`read`, and `request`, which only asks) and `delphi app revoke` bound what that gives.
+- **A key an earlier build kept in the macOS keychain** (one generic-password item, service `dev.delphi.desktop.app-key`, account the Delphi home's path) is moved once: read, written to the file, and the item removed. When macOS will not let this build read the item, the app reads without a key and `delphi app` pairs it again; nothing is written to the keychain any more (`key::Moving`).
 
 The key store is asked for the key at most once in the app's life, and only when a daemon with an app socket is there.
 
@@ -46,7 +46,7 @@ Spec 120 §8 asks for this to be checked. Checked on 2026-11-15, macOS 27.0.1, w
 | The built `Delphi.app` is signed the same way as the probes | its program is `adhoc,linker-signed`, with the same code hash as the bare `delphi-app`, no team, `Info.plist` not bound, no sealed resources | verified (`codesign -dvvv`) |
 | So `Delphi.app` gets from the keychain what the probes got | follows from the row above | not verified (the app itself was not run against the keychain) |
 
-What follows for the app:
+What followed for the app while it kept its key in the keychain (it no longer does, spec 120 §12; kept as the record of why):
 
 1. **The key is protected from other programs' eyes, including other builds of this app.** A program running as the operator cannot read it without the operator answering a dialog. That is more than the key file gives.
 2. **Every rebuild or update of an unsigned app is a stranger to its own key.** The first time a new build needs the key, macOS refuses it, or, since the app leaves the keychain's prompts on, asks the operator to allow it (the dialog is the part not verified above). Allowed always, that build should not be asked again. Denied, the app reads on the narrator socket and says so; pairing again does not help until the old item is allowed or deleted in Keychain Access, because the app will not write over a key it could not read (and writing over it would leave an item no build can read). A signed app would be known by its developer identity and keep its key across updates.

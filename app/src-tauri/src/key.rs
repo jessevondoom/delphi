@@ -4,9 +4,10 @@
 //! * **The ticket** arrives once, on the standard input, when a terminal started the app with `delphi app`. Only a pipe is
 //!   read, only one short line of it, and only 64 hex digits count; a window started from the Finder has no pipe and no ticket.
 //!   The ticket is never written anywhere.
-//! * **The private key** is 32 random bytes. On macOS it is one item in the login keychain; elsewhere, and only there, it is
-//!   a file readable by the operator alone under the Delphi home's `app/` folder. It is never sent: the daemon is given the
-//!   public half when the app pairs, and a signature afterwards.
+//! * **The private key** is 32 random bytes, kept in a file readable by the operator alone under the Delphi home's `app/`
+//!   folder, on every system (spec 120 §12: the keychain ties an item to a build's code signature, and an unsigned app is a
+//!   new identity at every build). A key an earlier build kept in the macOS keychain is moved to the file once. It is never
+//!   sent: the daemon is given the public half when the app pairs, and a signature afterwards.
 //! * **What is signed** is one fixed shape, `delphi-app/1`, the daemon's nonce, its instance id, the protocol major and the
 //!   path of the socket this app connected to (`delphi_xenia::sig::Domain::app_handshake` on the daemon's side). The nonce and
 //!   the instance id must look like what the daemon sends, so nothing else can be put in front of the key to sign.
@@ -148,6 +149,10 @@ pub trait KeyStore: Send + Sync {
     fn save(&self, key: &AppKey) -> Result<(), String>;
     /// For the window and the log: `keychain` or `file`.
     fn kind(&self) -> &'static str;
+    /// Remove the stored key. Used only to empty an older store once its key has been moved (spec 120 §12 item 5).
+    fn delete(&self) -> Result<(), String> {
+        Err("this store cannot remove its key".into())
+    }
 }
 
 /// A file readable by the operator alone: `<Delphi home>/app/key.json`, mode 0600 in a folder of mode 0700.
@@ -243,18 +248,75 @@ impl KeyStore for Keychain {
     fn kind(&self) -> &'static str {
         "keychain"
     }
+
+    fn delete(&self) -> Result<(), String> {
+        match security_framework::passwords::delete_generic_password(Self::SERVICE, &self.account) {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == Self::NOT_FOUND => Ok(()),
+            Err(e) => Err(format!("the keychain item could not be removed ({})", e.code())),
+        }
+    }
 }
 
-/// Where this machine keeps the key: the keychain where there is one (macOS), otherwise the file.
+/// The key file, and an older store whose key is moved into it once (spec 120 §12 items 2 and 5): the file is read first; when
+/// it holds no key, the older store is read, and a key found there is written to the file and removed from the older store.
+/// A key that is in the older store but cannot be read (macOS refused this build) counts as no key, so that `delphi app` can
+/// pair again: the window then reads without a key, and nothing is ever written to the older store.
+pub struct Moving {
+    file: FileStore,
+    older: Option<Box<dyn KeyStore>>,
+}
+
+impl Moving {
+    pub fn new(file: FileStore, older: Option<Box<dyn KeyStore>>) -> Moving {
+        Moving { file, older }
+    }
+}
+
+impl KeyStore for Moving {
+    fn load(&self) -> Result<Option<AppKey>, String> {
+        if let Some(k) = self.file.load()? {
+            return Ok(Some(k));
+        }
+        let Some(older) = &self.older else { return Ok(None) };
+        match older.load() {
+            Ok(Some(k)) => {
+                // Kept in the file first; only a key that is safely in the file leaves the older store.
+                match self.file.save(&k) {
+                    Ok(()) => {
+                        if let Err(why) = older.delete() {
+                            eprintln!("delphi app: the key was moved to {} but the {} item stays: {why}", self.file.path().display(), older.kind());
+                        }
+                    }
+                    Err(why) => eprintln!("delphi app: the key in the {} could not be moved to a file: {why}", older.kind()),
+                }
+                Ok(Some(k))
+            }
+            Ok(None) => Ok(None),
+            Err(why) => {
+                eprintln!("delphi app: {why}; this build reads without its key until `delphi app` pairs it again");
+                Ok(None)
+            }
+        }
+    }
+
+    fn save(&self, key: &AppKey) -> Result<(), String> {
+        self.file.save(key)
+    }
+
+    fn kind(&self) -> &'static str {
+        "file"
+    }
+}
+
+/// Where this machine keeps the key: the file, on every system (spec 120 §12 item 2), with the macOS keychain read once for a key
+/// an earlier build kept there (item 5).
 pub fn default_store(home: &Path) -> Box<dyn KeyStore> {
     #[cfg(target_os = "macos")]
-    {
-        Box::new(Keychain::for_home(home))
-    }
+    let older: Option<Box<dyn KeyStore>> = Some(Box::new(Keychain::for_home(home)));
     #[cfg(not(target_os = "macos"))]
-    {
-        Box::new(FileStore::under(home))
-    }
+    let older: Option<Box<dyn KeyStore>> = None;
+    Box::new(Moving::new(FileStore::under(home), older))
 }
 
 #[cfg(test)]
@@ -326,5 +388,86 @@ mod tests {
         }
         // Two new keys are two keys.
         assert_ne!(new_seed().unwrap(), new_seed().unwrap());
+    }
+
+    /// An older store for the move's test: what it holds, whether it can be read, and whether it was emptied.
+    struct Older {
+        held: std::sync::Mutex<Option<AppKey>>,
+        unreadable: bool,
+        writes: std::sync::atomic::AtomicUsize,
+    }
+
+    impl KeyStore for Older {
+        fn load(&self) -> Result<Option<AppKey>, String> {
+            if self.unreadable {
+                return Err("macOS did not let this build of the app read its key".into());
+            }
+            Ok(self.held.lock().unwrap().clone())
+        }
+        fn save(&self, _: &AppKey) -> Result<(), String> {
+            self.writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn kind(&self) -> &'static str {
+            "keychain"
+        }
+        fn delete(&self) -> Result<(), String> {
+            *self.held.lock().unwrap() = None;
+            Ok(())
+        }
+    }
+
+    fn older(key: Option<AppKey>, unreadable: bool) -> std::sync::Arc<Older> {
+        std::sync::Arc::new(Older { held: std::sync::Mutex::new(key), unreadable, writes: Default::default() })
+    }
+
+    struct Shared(std::sync::Arc<Older>);
+    impl KeyStore for Shared {
+        fn load(&self) -> Result<Option<AppKey>, String> {
+            self.0.load()
+        }
+        fn save(&self, k: &AppKey) -> Result<(), String> {
+            self.0.save(k)
+        }
+        fn kind(&self) -> &'static str {
+            self.0.kind()
+        }
+        fn delete(&self) -> Result<(), String> {
+            self.0.delete()
+        }
+    }
+
+    // Spec 120 §12 items 2 and 5: the key lives in the file; a key an earlier build kept in the keychain is moved to the file
+    // once and leaves the keychain; one that cannot be read counts as none, so pairing again is possible; nothing is ever
+    // written to the older store.
+    #[test]
+    fn the_key_is_kept_in_the_file_and_a_key_in_the_keychain_is_moved_there_once() {
+        let t = tempfile::tempdir().unwrap();
+        let key = AppKey::new("app-0a1b2c", new_seed().unwrap()).unwrap();
+        let old = older(Some(key.clone()), false);
+        let store = Moving::new(FileStore::under(t.path()), Some(Box::new(Shared(old.clone()))));
+        assert_eq!(store.kind(), "file");
+        let got = store.load().unwrap().unwrap();
+        assert_eq!((got.name.as_str(), got.seed()), ("app-0a1b2c", key.seed()));
+        assert!(old.held.lock().unwrap().is_none(), "the keychain item is removed once the file holds the key");
+        assert_eq!(FileStore::under(t.path()).load().unwrap().unwrap().name, "app-0a1b2c", "the file holds it");
+        // A new pairing is written to the file, never to the older store.
+        store.save(&AppKey::new("app-ffffff", *key.seed()).unwrap()).unwrap();
+        assert_eq!(store.load().unwrap().unwrap().name, "app-ffffff");
+        assert_eq!(old.writes.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // An older key that cannot be read is no key: the window reads without one and `delphi app` may pair again.
+        let t2 = tempfile::tempdir().unwrap();
+        let stuck = Moving::new(FileStore::under(t2.path()), Some(Box::new(Shared(older(Some(key.clone()), true)))));
+        assert!(stuck.load().unwrap().is_none());
+        // Nothing older, nothing kept: no key.
+        let t3 = tempfile::tempdir().unwrap();
+        assert!(Moving::new(FileStore::under(t3.path()), None).load().unwrap().is_none());
+        // The file wins over the older store, and a loose key file is still refused.
+        let t4 = tempfile::tempdir().unwrap();
+        FileStore::under(t4.path()).save(&key).unwrap();
+        let other = AppKey::new("app-123456", new_seed().unwrap()).unwrap();
+        let both = Moving::new(FileStore::under(t4.path()), Some(Box::new(Shared(older(Some(other), false)))));
+        assert_eq!(both.load().unwrap().unwrap().name, "app-0a1b2c");
     }
 }
