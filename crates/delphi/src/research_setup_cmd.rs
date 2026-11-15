@@ -16,7 +16,10 @@
 //! After the engine and before the summary, at a terminal only, it asks one question about how much text of a page of unknown
 //! licence research keeps (§2 item 5, §3; slice B2). The answer is written as `[library] unknown_licence` only when it changes it.
 //!
-//! Not here yet (a later slice, asked after the engine is chosen and before the summary): the defaults of §4 (B3).
+//! Then, one question each, the defaults of §4 (slice B3): retraction lookup, archived copies, citation chaining and background
+//! validation, each with what it costs. Each answer defaults to what `config.toml` says now (the operator has not decided which are on,
+//! §12 item 2) and is written only when it changes it. Session summaries are not offered: no setting turns them on for host sessions
+//! yet (spec 113 H6).
 
 use crate::setup::{Env, Ui};
 use anyhow::{anyhow, bail, Result};
@@ -155,6 +158,31 @@ fn ask_kept_text(ui: &mut dyn Ui, doc: &mut DocumentMut) -> bool {
             None => ui.say("  One of: excerpts, pointer, private_text."),
         }
     }
+}
+
+/// The reviewed defaults of §4, one question each: the table and key, what it does, and what it costs.
+pub const DEFAULTS: [(&str, &str, &str); 4] = [
+    ("research", "retractions", "Check each source with a DOI against a local copy of the Retraction Watch data? A retracted work stops counting as an origin. No network call per source; you import the data file yourself (`delphi research retractions import`)."),
+    ("research", "archive_fallback", "When a page a claim rests on is gone, ask the Internet Archive for a copy? One request to archive.org per gone page, sending its public address only; the copy is labelled and adds no origin."),
+    ("research", "citation_chaining", "Ask a citation index (OpenCitations) what each run's best public works cite and what cites them? Up to 30 requests per run, sending public DOIs only; what it finds is kept as noted leads."),
+    ("validator", "background", "While Delphi is idle, check queued library claims with the validator (advisory: it never ratifies)? It spends model tokens (at most 100,000 a day and 10% of the week's) and sends claim text to your search engine to look for contradictions."),
+];
+
+/// §2 item 5 and §4: the reviewed defaults, one yes or no each, defaulting to what `config.toml` says now. Returns whether `doc` changed.
+fn ask_defaults(ui: &mut dyn Ui, doc: &mut DocumentMut) -> bool {
+    ui.say("\nA few research features are off unless you turn them on. Each makes network calls or spends tokens, said below.");
+    let mut changed = false;
+    for (table, key, about) in DEFAULTS {
+        let now = doc.get(table).and_then(|t| t.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
+        let answer = ui.yes_no(about, now);
+        if answer != now {
+            set_key(doc, table, key, answer.into());
+            ui.say(&format!("  [{}] {} = {}", table, key, answer));
+            changed = true;
+        }
+    }
+    ui.say("  Session summaries for host sessions are not offered yet (no setting turns them on).");
+    changed
 }
 
 /// What `SearchConfig::parse` says of the `[search]` table in `doc`.
@@ -328,7 +356,10 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, net: Option<&Net>, o: &Opts) -> Resul
     if !o.from_flags && ask_kept_text(ui, &mut doc) {
         std::fs::write(&cfg_path, doc.to_string())?;
     }
-    // (§2 item 5, slice B3: the reviewed defaults go here.)
+    // §2 item 5 and §4: the reviewed defaults (B3), the same way.
+    if !o.from_flags && ask_defaults(ui, &mut doc) {
+        std::fs::write(&cfg_path, doc.to_string())?;
+    }
 
     // 8. The access change, for the operator to ratify.
     out.ratified = ratify(ui, &o.home, &o.ws_dir, !o.from_flags);
@@ -533,6 +564,30 @@ mod tests {
         assert!(!ui.said.iter().any(|l| l == "? Keep"), "without a terminal nothing is asked");
     }
 
+    // specs/119 §2 item 5 and §4: one question per reviewed default, each saying what it costs; an unanswered one keeps what the file
+    // says (off on a fresh home) and writes nothing; a yes is written; without a terminal nothing is asked.
+    #[test]
+    fn setup_offers_each_reviewed_default_with_its_cost_and_writes_only_what_changes() {
+        let (_t, o) = workspace();
+        let mut ui = Script { lines: ["searxng", "https://searx.example"].map(String::from).into(), yes: [true, false, false, true].into(), ..Default::default() };
+        run(&mut ui, &Keychain::default(), None, &o).unwrap();
+        for (_, _, about) in DEFAULTS {
+            assert!(ui.said.iter().any(|l| *l == format!("? {about}")), "{about}: {:?}", ui.said);
+        }
+        let cfg = delphi_adapter::config::Config::parse(&std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap()).unwrap();
+        assert!(cfg.validator.background, "a yes is written");
+        let text = std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap();
+        let set = |k: &str| text.lines().any(|l| l.trim_start().starts_with(&format!("{k} =")));
+        assert!(set("retractions") && !set("archive_fallback") && !set("citation_chaining"), "{text}");
+        let (_t, mut o) = workspace();
+        o.from_flags = true;
+        o.engine = Some("searxng".into());
+        o.url = Some("https://searx.example".into());
+        let mut ui = Script::default();
+        run(&mut ui, &Keychain::default(), None, &o).unwrap();
+        assert!(!ui.said.iter().any(|l| DEFAULTS.iter().any(|(_, _, a)| *l == format!("? {a}"))), "without a terminal nothing is asked");
+    }
+
     // specs/119 AC-1: on a fresh home, setup with a test engine writes [search], keeps the key outside the config file, and the
     // configuration the daemon then runs on has the engine, so a following request_research is not refused.
     #[test]
@@ -578,7 +633,8 @@ mod tests {
             assert!(OFFERED.contains(&p), "{} is offered", p.name());
         }
         let (_t, o) = workspace();
-        let mut ui = Script { lines: ["mojeek".to_string()].into(), secrets: ["mojeek-key-0123456789".to_string()].into(), yes: [false].into(), ..Default::default() };
+        // Four no's to the reviewed defaults of §4 (as they stand), then no at the ratify question.
+        let mut ui = Script { lines: ["mojeek".to_string()].into(), secrets: ["mojeek-key-0123456789".to_string()].into(), yes: [false; 5].into(), ..Default::default() };
         let out = run(&mut ui, &Keychain::default(), None, &o).unwrap();
         assert_eq!(out, Outcome { engine: Some("mojeek".into()), ratified: false, search_ok: None, fetch_ok: None });
         let at = |needle: &str| ui.said.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}: {:?}", ui.said));

@@ -898,7 +898,7 @@ impl EngineService {
             let limits = &engine.settings.research_limits;
             let rules = crate::research_host::KeepRules { list: web.list.clone(), classes: crate::fact_sources::SourceList::new(engine.cfg.get().validator.sources.clone()), weak: engine.cfg.get().validator.weak_sources };
             let pics = pictures.then(|| crate::research_host::Pictures { transport: transport.clone(), per_source: limits.pictures_per_source, left: std::sync::atomic::AtomicUsize::new(limits.pictures_per_run) });
-            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()), topic: claims_topic, project: claims_project, keep: crate::research_host::KeepStep::new(rules, pics).with_unknown_licence(engine.cfg.get().library.unknown_licence, engine.cfg.get().library.private_text_max_mib) };
+            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()), topic: claims_topic, project: claims_project, keep: crate::research_host::KeepStep::new(rules, pics).with_unknown_licence(engine.cfg.get().library.unknown_licence, engine.cfg.get().library.private_text_max_mib).with_archive(engine.settings.archive.clone()) };
             let redactor = delphi_core::redact::Redactor::new();
             // Citation chaining (`specs/101` §6): the index exists only when the switch is on; off, nothing is ever sent to it.
             let cites = engine.settings.chain.enabled.then(|| crate::research_host::LiveCites::new(crate::fact_fetch::FetchPolicy::default(), engine.settings.chain.endpoint.clone()).with_doi_endpoint(engine.settings.chain.doi_endpoint.clone()));

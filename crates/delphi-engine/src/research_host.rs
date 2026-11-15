@@ -441,6 +441,9 @@ pub struct KeepStep {
     pub unknown_licence: delphi_adapter::config::UnknownLicence,
     /// `[library] private_text_max_mib`, in bytes: under `private_text`, past it the oldest privately kept text is removed first.
     pub private_text_max: Option<u64>,
+    /// `[research] archive_fallback` and `archive_endpoint` (`specs/119` §4): a page the run finds gone that a claim rests on is looked
+    /// up in the archive. Off by default.
+    pub archive: crate::library::ArchiveConfig,
     /// What the library kept of each source this run captured: `(level, outcome)` by source id.
     kept: std::sync::Mutex<BTreeMap<String, (String, String)>>,
 }
@@ -468,6 +471,12 @@ impl KeepStep {
     pub fn with_unknown_licence(mut self, setting: delphi_adapter::config::UnknownLicence, private_text_max_mib: u64) -> KeepStep {
         self.unknown_licence = setting;
         self.private_text_max = Some(private_text_max_mib.saturating_mul(1024 * 1024));
+        self
+    }
+
+    /// `[research] archive_fallback` and `archive_endpoint` (`specs/119` §4).
+    pub fn with_archive(mut self, archive: crate::library::ArchiveConfig) -> KeepStep {
+        self.archive = archive;
         self
     }
 
@@ -644,6 +653,18 @@ impl Library for LiveLibrary {
 
     fn kept(&self, source_id: &str) -> Option<(String, String)> {
         self.keep.kept.lock().unwrap().get(source_id).cloned()
+    }
+
+    /// `specs/119` §4: a page gone that a claim rests on is looked up in the archive (`Library::archive_gone_page`), through the
+    /// daemon's validation fetcher, only with `[research] archive_fallback` on.
+    fn page_gone<'a>(&'a self, url: &'a str, error: &'a str) -> BoxFut<'a, Option<String>> {
+        Box::pin(async move {
+            if !self.keep.archive.enabled {
+                return None;
+            }
+            let lib = crate::library::Library::in_home(&self.home);
+            lib.archive_gone_page(&crate::fact_fetch::FetchPolicy::default(), &self.keep.archive, url, error, &crate::library::Budgets::default()).await
+        })
     }
 
     /// The page as the library holds it, in place of a fetch (`specs/114` §3 item 4): only a public web page whose text is kept

@@ -125,6 +125,13 @@ pub trait Library: Send + Sync {
     fn anchor_known(&self, _fingerprint: &str, _x: &Extracted, _source_id: &str, _url: &str) -> Option<String> {
         None
     }
+    /// A page this run found gone (`http status 404` or `410`, the fetcher's `error`) that the library holds as a source a claim rests
+    /// on: the library asks one web archive for a copy and keeps it as a labelled version (`specs/119` §4, `[research] archive_fallback`;
+    /// `specs/101` §5). Returns the source id when a copy was kept. The copy is not read by this run and adds no origin. The default
+    /// asks nothing.
+    fn page_gone<'a>(&'a self, _url: &'a str, _error: &'a str) -> BoxFut<'a, Option<String>> {
+        Box::pin(async { None })
+    }
     /// Keep a search result the fetcher will not reach as a `noted` lead: its address, title and snippet, dated, with where it came
     /// from, and nothing more (`specs/098` §7.5 item 1). It is never validated and is not a page. The default keeps nothing.
     fn note_lead(&self, _row: &Row) -> Result<(), String> {
@@ -1039,7 +1046,15 @@ async fn read_row(ctx: &JobCtx, deps: &Deps<'_>, question: &str, st: &mut State,
                 note(deps, |r| r.refused(&row.url, "refused"));
                 return false;
             }
-            let Ok(page) = deps.web.fetch(&row.url) else {
+            let page = match deps.web.fetch(&row.url) {
+                Ok(page) => Some(page),
+                Err(e) => {
+                    // A page gone that a claim rests on: the run asks for an archived copy (`specs/119` §4), off unless `archive_fallback`.
+                    let _ = deps.library.page_gone(&row.url, &e).await;
+                    None
+                }
+            };
+            let Some(page) = page else {
                 ctx.refused(&row.url);
                 note(deps, |r| r.refused(&row.url, "fetch_failed"));
                 if main && !from_trusted_host && deps.library.note_lead(row).is_ok() {
@@ -1413,6 +1428,8 @@ mod tests {
     struct FakeWeb {
         rows: Vec<Row>,
         pages: HashMap<String, String>,
+        /// Addresses the fetcher reaches and finds gone (`http status 404`).
+        gone: BTreeSet<String>,
         trusted: Vec<&'static str>,
         searched: Mutex<Vec<String>>,
         /// URLs `fetch` was called with.
@@ -1453,10 +1470,13 @@ mod tests {
         }
         /// The fake reaches any URL it holds a page for, trusted or not; a row with no page is one the fetcher will not reach.
         fn can_fetch(&self, url: &str) -> bool {
-            self.pages.contains_key(url)
+            self.pages.contains_key(url) || self.gone.contains(url)
         }
         fn fetch(&self, url: &str) -> Result<Page, String> {
             self.fetched.lock().unwrap().push(url.to_string());
+            if self.gone.contains(url) {
+                return Err("http status 404".to_string());
+            }
             self.pages.get(url).map(|t| Page { url: url.into(), text: t.clone() }).ok_or_else(|| "off list".to_string())
         }
     }
@@ -1560,12 +1580,18 @@ mod tests {
         says_kept: bool,
         /// Pages the library already holds fresh, by address: the source's id and its kept text (`specs/114` §3 item 4).
         fresh: BTreeMap<String, (String, String)>,
+        /// Every page the run reported gone, with the fetcher's word (`specs/119` §4).
+        gone: Mutex<Vec<(String, String)>>,
         /// Hosts the validator's source lists class as primary.
         primary: BTreeSet<String>,
         /// The library's page check rejects an answer that holds this word, with this finding.
         rejects: Option<(&'static str, &'static str)>,
     }
     impl Library for FakeLib {
+        fn page_gone<'a>(&'a self, url: &'a str, error: &'a str) -> BoxFut<'a, Option<String>> {
+            self.gone.lock().unwrap().push((url.to_string(), error.to_string()));
+            Box::pin(async { None })
+        }
         /// As the live library does: a private source gives no seed, and neither does one that names no DOI.
         fn chainable_doi(&self, source_id: &str) -> Option<String> {
             let h = source_id.strip_prefix("src-")?;
@@ -1937,6 +1963,19 @@ mod tests {
     /// The rung with this name in a result's coverage report.
     fn rung_of<'a>(v: &'a Value, name: &str) -> &'a Value {
         v["coverage_report"]["rungs"].as_array().unwrap().iter().find(|r| r["rung"] == name).unwrap_or_else(|| panic!("no {name} rung in {v}"))
+    }
+
+    /// `specs/119` §4: a page the fetcher finds gone is handed to the library, which may ask the archive for a copy; a page that was
+    /// read, and one the fetcher never reaches, are not.
+    #[tokio::test]
+    async fn a_page_found_gone_is_handed_to_the_library_to_ask_for_an_archived_copy() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.web.rows = vec![row("https://who.int/a"), row("https://who.int/gone"), row("https://blog.example/z")];
+        f.web.pages = HashMap::from([("https://who.int/a".to_string(), "who text".to_string())]);
+        f.web.gone = BTreeSet::from(["https://who.int/gone".to_string()]);
+        let c = ctx(Depth::Survey);
+        run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap();
+        assert_eq!(*f.lib.gone.lock().unwrap(), [("https://who.int/gone".to_string(), "http status 404".to_string())]);
     }
 
     #[tokio::test]
