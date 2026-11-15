@@ -294,7 +294,8 @@ impl Scout for LiveScout {
         Box::pin(async move {
             let e = &self.0;
             let key = e.scout_key().ok_or_else(|| "no model is available for the scout right now".to_string())?;
-            let raw = e.one_shot_raw(&key, &scout_ipr(claim_contract(question, page)), CLAIM_OUTPUT).await.ok_or_else(|| "the scout's call failed".to_string())?;
+            let role = crate::role_call::load(e, crate::role_call::Step::JudgePage).await?;
+            let raw = e.one_shot_raw(&key, &scout_ipr(&role, claim_contract(question, page)), CLAIM_OUTPUT).await.ok_or_else(|| "the scout's call failed".to_string())?;
             Ok(parse_claims(&e.secrets.redact(&raw.text), &page.text, &page.url))
         })
     }
