@@ -102,7 +102,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md",
-    "sha256": "9269bcf054280a9733579c0b3dbd228d4ae6f4aee430e2e62e0d3f12d9b4e65c"
+    "sha256": "acfb031c425f29b6d1f152cef1dd7af3ef27fffcde811c17c4db5be8ddf91470"
   },
   "source_status_at_hash": {
     "line": {
@@ -115,7 +115,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: asked whether a spec could be written and built from on the plan, as specs 104 to 110 were, the operator answered \"your default assumptions all sounds correct. go\". The approval is to the plan this spec carries out; the operator has not read this text."
     },
-    "sha256": "9269bcf054280a9733579c0b3dbd228d4ae6f4aee430e2e62e0d3f12d9b4e65c",
+    "sha256": "acfb031c425f29b6d1f152cef1dd7af3ef27fffcde811c17c4db5be8ddf91470",
     "word": "approved"
   },
   "spec": {

@@ -173,6 +173,15 @@ button.menu-row:hover, button.menu-row.on { background: var(--sel); }
 .card.link { width: 100%; text-align: left; cursor: pointer; font: inherit; color: inherit; }
 .card.link:hover, .card.link.on { background: var(--sel); border-color: var(--line2); }
 .card.link.on { border-color: var(--text2); }
+.kind-icon { flex: none; }
+.pill:has(> .kind-icon) { display: inline-flex; align-items: center; gap: 7px; }
+.cell-btn.with-icon { display: flex; align-items: center; gap: 10px; }
+.cell-btn.with-icon .kind-icon { color: var(--text2); }
+.cell-btn.with-icon:hover { text-decoration: none; }
+.cell-btn.with-icon:hover > span { text-decoration: underline; }
+.card.out-card { padding: 0; gap: 0; overflow: hidden; }
+.out-thumb { display: flex; align-items: center; justify-content: center; height: 76px; color: var(--text2); background: color-mix(in srgb, var(--c, var(--inset)) 10%, var(--inset)); }
+.out-body { display: flex; flex-direction: column; flex: 1; gap: 8px; padding: 12px 14px 14px; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; padding: 14px 16px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; }
 .facts dt { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }

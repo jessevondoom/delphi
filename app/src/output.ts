@@ -11,7 +11,7 @@ export type Item = {
   key: string; group: Group; title: string; detail: string;
   /** When it was last written (Unix ms), 0 when the daemon did not say. */
   at_ms: number;
-  /** The role that made it, when the daemon said. */
+  /** Who made it, when the daemon said: a role, or another name a document's front matter gives (the operator, an import). */
   role?: string;
   /** A document in the workspace: its path there, which the reader and the Finder can open. */
   path?: string;
@@ -46,6 +46,37 @@ export function fileKind(path: string): string {
   return 'file';
 }
 
+/** The pictures an item can carry: one per kind of thing, so a list can be read by shape before it is read by name. */
+export type Icon = 'doc' | 'deck' | 'image' | 'video' | 'app' | 'repo' | 'research' | 'council';
+
+const fileIcon = (path: string): Icon | null => {
+  if (/\.html?$/i.test(path)) return 'app';
+  switch (fileKind(path)) {
+    case 'document': return 'doc';
+    case 'deck': return 'deck';
+    case 'image': return 'image';
+    case 'video': return 'video';
+    default: return null;
+  }
+};
+
+/**
+ * Which picture an item carries. A council's record and research say what they are; any other document is drawn by its
+ * file. A recorded change is drawn by its files when they are all one kind (three pictures are pictures), and as work on a
+ * repository otherwise, as a build is.
+ */
+export function iconOf(x: Pick<Item, 'group' | 'path' | 'files'>): Icon {
+  if (x.group === 'build') return 'repo';
+  if (x.group === 'change') {
+    const kinds = new Set(x.files.map(fileIcon));
+    const only = kinds.size === 1 ? [...kinds][0] : null;
+    return only ?? 'repo';
+  }
+  if (x.path && /^missions\/[^/]+\/councils\//.test(x.path)) return 'council';
+  if (x.group === 'research') return 'research';
+  return (x.path && fileIcon(x.path)) || 'doc';
+}
+
 /** Whether the app will open a named file outside the window: a deck or page, a document, a picture, a recording. */
 export const canOpen = (path: string): boolean => /\.(html?|pdf|png|jpe?g|gif|webp|svg|mp4|mov|m4v|webm|mp3|wav|m4a|md|txt)$/i.test(path);
 
@@ -67,7 +98,7 @@ export function items(rows: DocRow[], state: OState | null): Item[] {
     const sources = paths.has(r.rel_path.replace(/\.md$/, '.bib.md')) && !r.rel_path.endsWith('.bib.md');
     out.push({
       key: `doc:${r.rel_path}`, group, title: titleOf(r.rel_path), detail: [r.kind !== 'other' ? r.kind : '', sources ? 'with its sources' : ''].filter(Boolean).join(' · '),
-      at_ms: Date.parse(r.updated_at) || 0, path: r.rel_path, files: sources ? [r.rel_path.replace(/\.md$/, '.bib.md')] : [], status: r.status, mission: missionOf(r.rel_path),
+      at_ms: Date.parse(r.updated_at) || 0, role: r.author || undefined, path: r.rel_path, files: sources ? [r.rel_path.replace(/\.md$/, '.bib.md')] : [], status: r.status, mission: missionOf(r.rel_path),
     });
   }
   for (const [i, c] of (state?.changes ?? []).entries()) {

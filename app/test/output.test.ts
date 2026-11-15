@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { DocRow } from '../src/kb.ts';
-import { canOpen, fileKind, groupCounts, groupOf, items } from '../src/output.ts';
+import { canOpen, fileKind, groupCounts, groupOf, iconOf, items } from '../src/output.ts';
 import type { OState } from '../src/types.ts';
 
 const sim = JSON.parse(readFileSync(new URL('../src/fixture/sim.json', import.meta.url), 'utf8')) as { state: OState };
@@ -53,4 +53,29 @@ test('a file is called what its name says it is', () => {
 test('a deck, a page, a document, a picture or a recording opens outside; a program or a script does not', () => {
   for (const f of ['deck.html', 'a/b/page.HTM', 'plan.pdf', 'shot.png', 'photo.JPEG', 'demo.mp4', 'talk.m4a', 'notes.md']) assert.ok(canOpen(f), f);
   for (const f of ['run.sh', 'tool.app', 'main.rs', 'archive.zip', 'Makefile', 'deck.html.sh']) assert.ok(!canOpen(f), f);
+});
+
+test('a listed document carries who its front matter names, and none when the daemon does not say', () => {
+  const all = items([row('context/a.md', 'context', '2026-11-12T10:00:00Z', { author: 'architect' }), row('summaries/b.md', 'summaries', '2026-11-11T10:00:00Z', { author: 'operator-import' }), row('memory/c.md', 'memory', '2026-11-10T10:00:00Z', { author: null }), row('memory/d.md', 'memory', '2026-11-09T10:00:00Z')], null);
+  assert.deepEqual(all.map((x) => x.role), ['architect', 'operator-import', undefined, undefined]);
+});
+
+test('an item carries the picture of what it is', () => {
+  const doc = (path: string, group: 'mission' | 'research' | 'context' | 'memory') => iconOf({ group, path, files: [] });
+  assert.equal(doc('missions/m/report.md', 'mission'), 'doc');
+  assert.equal(doc('missions/m/councils/001-a-or-b.md', 'mission'), 'council');
+  assert.equal(doc('summaries/deep-read.md', 'research'), 'research');
+  assert.equal(doc('context/reference/board.pptx', 'context'), 'deck');
+  assert.equal(doc('context/reference/chart.png', 'context'), 'image');
+  assert.equal(doc('memory/lessons/a.md', 'memory'), 'doc');
+  assert.equal(iconOf({ group: 'build', files: [] }), 'repo');
+  // A change is drawn by its files only when they are all one kind of thing.
+  const change = (...files: string[]) => iconOf({ group: 'change', files });
+  assert.equal(change(), 'repo');
+  assert.equal(change('src/a.rs', 'src/b.rs'), 'repo');
+  assert.equal(change('out/a.png', 'out/b.jpg'), 'image');
+  assert.equal(change('talk.pptx'), 'deck');
+  assert.equal(change('demo/index.html'), 'app');
+  assert.equal(change('walk.mp4'), 'video');
+  assert.equal(change('report.md', 'chart.png'), 'repo');
 });
