@@ -3,7 +3,8 @@ id: spec-115-research-recall-across-projects
 title: "115: Research recall across projects"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: draft   # written at the operator's request on 2026-11-14 ("make specs covering all 8, show me LOE and slices"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it. It reverses a default of spec 058, which only the operator can decide.
+status: approved   # by the operator, 2026-11-14, in a host session: "115: your suggestions are approved" (the default `workspace` and the private flag of section 8). Open question 2 was not settled and stays as written: private and internal sources stay inside their project.
+approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, research, projects, retrieval, scopes, privacy]
 
 # Spec 115: Research recall across projects
 
-> **Status: draft, 2026-11-14.** Fourth of eight specs (112 to 119) from the knowledge-loop audit.
+> **Status: approved by the operator, 2026-11-14** (see the frontmatter). Fourth of eight specs (112 to 119) from the knowledge-loop audit.
 > **Amends:** [`specs/058`](058-project-scopes-scaffolding-and-promotion.md) (project scopes: a project's files are visible to that project only). **Extends:** [`specs/109`](109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md), [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md).
 
 ---
@@ -44,7 +45,7 @@ Objective: an agent working in any project of a workspace can find research done
 
 ## 2. The setting
 
-1. Workspace config: `[projects] research_sharing = "project" | "workspace"`. `project` is today's behaviour. The proposed default is `workspace`; see §8.
+1. Workspace config: `[projects] research_sharing = "project" | "workspace"`. `project` is the behaviour before this spec. The default is `workspace` (operator, 2026-11-14); see §8.
 2. A project is private when its entry in the workspace's project list has `private = true` (`delphi project private <name> on|off`). A private project shares nothing and its sessions can still read shared research from others.
 3. A source or claim already marked private (a private source, a claim resting on one, anything recorded under the private-read mark of [`specs/103`](103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md)) is not shared, whatever the setting, unless the operator settles open question 2 otherwise.
 4. Changing the setting or a project's flag takes effect at the next search; nothing is copied or deleted.
@@ -95,14 +96,14 @@ Objective: an agent working in any project of a workspace can find research done
 
 X2 and X3 need no other spec. X4's claim part needs 112 R2.
 
-## 8. Authority and trust: the decision this spec asks for
+## 8. Authority and trust: the decision the operator made
 
-- This widens what a session may **read**. It gives no session a new action. The widening is the point of the spec and is the operator's to approve; an agent cannot switch it on, and the setting is among the config keys an agent may not write.
+- This widens what a session may **read**. It gives no session a new action. The widening is the point of the spec and the operator approved it on 2026-11-14; an agent cannot change it, and the setting is among the config keys an agent may not write.
 - A project folder may hold material the operator would not want read from another project's sessions (a host session in project B can show what it reads to its own model and tools). That is why the private flag exists and why private sources stay inside.
-- The proposed default is `workspace`, because all projects of one workspace belong to one operator. The conservative choice is to ship `project` and let the operator turn sharing on. The operator chooses.
+- The default is `workspace`, because all projects of one workspace belong to one operator (decided 2026-11-14). `project` remains as a setting for an operator who wants the earlier isolation.
 
 ## 9. Open questions (the operator decides)
 
-1. Default: `workspace` (proposed) or `project`?
+1. *Decided 2026-11-14:* the default is `workspace`.
 2. Should claims from private and internal sources ([`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §2.4) be shared across the operator's own projects after all? Much of the existing research rests on internal sources, so leaving them out shares little of it.
-3. Should any project be private from the start?
+3. Should any project be private from the start? Until the operator says so, none is.

@@ -3,7 +3,8 @@ id: spec-119-research-readiness-setup-private-text-for-retrieval-health-checks-a
 title: "119: Research readiness: setup, private text for retrieval, health checks, and a live proof"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: draft   # written at the operator's request on 2026-11-14 ("make specs covering all 8, show me LOE and slices"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it. §3 asks for a policy decision that is the operator's.
+status: approved   # by the operator, 2026-11-14, in a host session: "119: let's make excerpts the default between pointers and full private text". Section 3 was changed to that default after those words.
+approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,9 +15,9 @@ tags: [spec, research, setup, library, licence, doctor, defaults]
 
 # Spec 119: Research readiness
 
-> **Status: draft, 2026-11-14.** Eighth of eight specs (112 to 119) from the knowledge-loop audit. §7 gives the build order across all eight.
+> **Status: approved by the operator, 2026-11-14** (see the frontmatter). Eighth of eight specs (112 to 119) from the knowledge-loop audit. §7 gives the build order across all eight.
 > **Extends:** [`specs/055`](055-the-central-library-sources-claims-and-pages.md) §3 (how much of a source is kept), [`specs/101`](101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md) (retractions, archives, citation chaining: built, off by default), [`specs/040`](040-validator-role-and-fact-ratification.md) (the validator), [`specs/066`](066-mcp-research-endpoint-and-role-identity.md).
-> **Not legal advice.** §3 describes a mechanism and its limits. Whether to switch it on is the operator's decision, with counsel where licence terms or an employer's policy bear on it.
+> **Not legal advice.** §3 describes a mechanism and its limits. The operator chose its default on 2026-11-14; where licence terms or an employer's policy bear on keeping text, that is a question for counsel, and the setting can be lowered to `pointer` at any time.
 
 ---
 
@@ -56,9 +57,9 @@ Objective: an operator who installs Delphi and answers one setup prompt has rese
 
 ## 3. Text kept privately, for retrieval only
 
-**This section needs the operator's decision before it is built (§9).**
+**Decided by the operator, 2026-11-14:** `excerpts` is the default, between pointers and full private text.
 
-1. A new setting: `[library] unknown_licence = "pointer" | "excerpts" | "private_text"`. `pointer` is today's behaviour and stays the default until the operator chooses otherwise.
+1. A new setting: `[library] unknown_licence = "pointer" | "excerpts" | "private_text"`. The default is `excerpts`. `pointer` is the behaviour before this spec; `private_text` is kept only when the operator sets it.
 2. With `private_text`, a source whose licence is unknown or closed is kept in full as a **private** source (the library already keeps private sources in full). Private here means:
    - its text is indexed for the operator's own agents and for the operator's console and app, on this machine;
    - an agent or a page may quote from it only a passage of at most 300 characters per citation, with the source named and linked;
@@ -67,7 +68,7 @@ Objective: an operator who installs Delphi and answers one setup prompt has rese
 3. A site whose page shows a rights notice the code already detects, or whose trusted-list entry says `reuse = none`, is kept as excerpts only (the quoted passages), not in full.
 4. `delphi library private purge [--older-than <days>]` removes the kept text of private sources and leaves their pointers and claims. `delphi library private list` shows what is held and its size.
 5. A size cap for private text (default 500 MiB), with the oldest unread removed first.
-6. With `excerpts`, only the passages the scout quoted are kept, each up to 300 characters, and the claims' anchors resolve to them.
+6. With `excerpts` (the default), only the passages the scout quoted are kept, each up to 300 characters, with up to 200 characters of the text on either side for context, and the claims' anchors resolve to them. Excerpts are indexed and can be gathered into a page as quotations. Sources already held as pointers gain excerpts the next time a run or a recheck reads them; nothing is re-fetched for this alone.
 
 ## 4. Defaults reviewed
 
@@ -99,12 +100,12 @@ Setup offers each of these and says what it costs. Each stays a config key.
 
 | Step | Slices | Why here |
 | :-- | :-- | :-- |
-| 1 | 119 B1 (setup), 112 R3 (runner fixes), 114 M1 (the role in every call), 116 G3, G4, G8 (start context, passages, the investigator's default) | Small, independent, and each removes a fault on its own |
+| 1 | 119 B1 (setup), 112 R3 (runner fixes), 114 M1 (the role in every call), 116 G3, G4, G8 (start context, passages, the investigator's defaults and budget) | Small, independent, and each removes a fault on its own |
 | 2 | 112 R1, R2, R5 (the record, claims in the library, the index zone) | The store everything else writes to |
-| 3 | 113 H1 to H5 (host-led research and ingest); 119 B2 if approved (private text) | Fills the store from the research that already exists |
-| 4 | 115 X1 to X5 (recall across projects), if approved | Lets every project use it |
+| 3 | 113 H1 to H5 (host-led research and ingest); 119 B2 (excerpts by default, private text as a setting) | Fills the store from the research that already exists |
+| 4 | 115 X1 to X5 (recall across projects) | Lets every project use it |
 | 5 | 112 R4, R6; 114 M2 to M7 (one runner, the method) | The scout becomes methodical |
-| 6 | 116 G1, G2, G5, G6, G7 (the provisional tier, findings, consolidation, feedback) | Memory grows |
+| 6 | 116 G1, G2, G5, G6, G7, G9 to G11 (the provisional tier, findings, consolidation, feedback, the investigator's shell, source check and host worker) | Memory grows, and the investigator can investigate |
 | 7 | 117 E1 to E9; 118 P1 to P6 (the encyclopedia and its pictures) | The operator's view, once there is material to show |
 | 8 | 119 B3 to B6 (defaults, health, small faults, the live proof) | B4 can come earlier; B6 closes the program |
 
@@ -116,11 +117,11 @@ Hours by spec, from each spec's slice table:
 | 113 | host-led research | 36-47 |
 | 114 | a methodical scout | 39-52 |
 | 115 | recall across projects | 23-32 |
-| 116 | memory that grows | 55-71 |
-| 117 | the encyclopedia in the app | 74-94 |
+| 116 | memory that grows | 70-91 |
+| 117 | the encyclopedia in the app | 71-90 |
 | 118 | pictures and figures | 33-46 |
 | 119 | readiness | 27-37 |
-| | **Total** | **334-441** |
+| | **Total** | **346-457** |
 
 Hours are build hours for one builder with tests, as in earlier specs' slice tables. They leave out review, the operator's reading and the red-team passes named in each spec.
 
@@ -128,7 +129,7 @@ Hours are build hours for one builder with tests, as in earlier specs' slice tab
 
 1. **AC-1:** on a fresh home, `delphi research setup` with a test engine writes `[search]`, stores the key outside the config file, and a following `request_research` runs.
 2. **AC-2:** a `request_research` with no engine is refused with the setup command named, and the next brief mentions it once.
-3. **AC-3:** with `unknown_licence = "pointer"`, a source of unknown licence keeps no text (today's behaviour, pinned).
+3. **AC-3:** with no setting, a source of unknown licence keeps the quoted passages and no other text, and a search finds them; with `unknown_licence = "pointer"` it keeps no text.
 4. **AC-4:** with `private_text`, the same source is searchable by an inside agent; a generated page citing it contains no run of its text longer than 300 characters; an export and a bundle contain none of its text.
 5. **AC-5:** a page showing a rights notice is kept as excerpts under `private_text`.
 6. **AC-6:** `delphi library private purge` removes the text and leaves the pointer and its claims' anchors marked `text removed`.
@@ -148,7 +149,7 @@ Hours are build hours for one builder with tests, as in earlier specs' slice tab
 | :-- | :-- | --: |
 | B0 | this spec | 1-2 |
 | B1 | `delphi research setup`; the lines in init, connect, doctor, the refusal and the brief | 4-6 |
-| B2 | `unknown_licence`: excerpts and private text, the 300-character rule and its scan test, the rights-notice rule, purge, list, the size cap | 10-12 |
+| B2 | `unknown_licence`: excerpts by default and private text as a setting, the 300-character rule and its scan test, the rights-notice rule, purge, list, the size cap | 10-12 |
 | B3 | the defaults of §4 offered by setup; a run asks for an archived copy | 3-4 |
 | B4 | `delphi kb health`, the doctor section, the daily file | 4-6 |
 | B5 | the small faults of §6 | 2-3 |
@@ -158,11 +159,11 @@ Hours are build hours for one builder with tests, as in earlier specs' slice tab
 ## 11. Authority and trust
 
 - Setup writes config and a keychain entry at a terminal, as model setup does. No agent can run it.
-- §3 keeps text on the operator's machine that today is not kept. It sends nothing anywhere and widens no agent's actions; it widens what the operator's own agents can read back. The 300-character rule, the scan test and purge are its limits.
+- §3 keeps text on the operator's machine that was not kept before: quoted passages by default, full text only when the operator sets `private_text`. It sends nothing anywhere and widens no agent's actions; it widens what the operator's own agents can read back. The 300-character rule, the scan test and purge are its limits.
 - The defaults of §4 make network calls and spend tokens that are not made today; each is named and asked about at setup.
 
 ## 12. Open questions (the operator decides)
 
-1. `unknown_licence`: stay at `pointer`, or `excerpts`, or `private_text`? This spec builds the mechanism and does not choose.
+1. *Decided 2026-11-14:* `unknown_licence` defaults to `excerpts`.
 2. Which defaults of §4 are on?
 3. Which search engine is set up on the operator's own workspace for the live proof?

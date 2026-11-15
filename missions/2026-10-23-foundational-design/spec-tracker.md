@@ -1030,17 +1030,25 @@ The operator asked on 2026-11-14 whether a desktop app should replace the termin
 | 005g | all | epic threads in the narrator | superseded by spec 111 §10 (2026-11-14) |
 | 034 | all | narrator monitoring panes | superseded by spec 111 §10 (2026-11-14) |
 
-## The knowledge loop: specs 112 to 119 (2026-11-14, drafts)
+## The knowledge loop: specs 112 to 119 (2026-11-14, approved)
 
-The operator asked on 2026-11-14 for an audit of the scout, the investigator and the knowledge base against one goal: structured research that builds a store of knowledge for agents and operators alike. The audit read the code on `main` and one live workspace (read-only) and made eight recommendations. The operator then asked for specs covering all eight, with slices and hours ("make specs covering all 8, show me LOE and slices"). The eight are drafts. None is approved and nothing is built. Build order and hours by spec are in spec 119 §7.
+The operator asked on 2026-11-14 for an audit of the scout, the investigator and the knowledge base against one goal: structured research that builds a store of knowledge for agents and operators alike. The audit read the code on `main` and one live workspace (read-only) and made eight recommendations. The operator asked for specs covering all eight, with slices and hours ("make specs covering all 8, show me LOE and slices"), was shown the drafts' slice tables and open decisions, and answered the same day: "115: your suggestions are approved. 119: let's make excerpts the default between pointers and full private text. otherwise. 116: on by default, and empower the investigator however you can. 117: for the desktop app drawings are better than descriptions but should not be required as descriptions are adequate", then "all other specs are approved". The operator saw the slice tables and the decisions, not every line of the texts; 116 §8 was rewritten after their word and has not been read. Nothing is built. Build order and hours by spec are in spec 119 §7 (346 to 457 hours).
 
 | Spec | Slice | Content | State |
 | :-- | :-- | :-- | :-- |
-| 112 | R0 to R6 | one research record: the record on disk, run claims as library claims, the runner fixes, one runner, the `research` index zone, continue and due topics (47-62 h) | draft 2026-11-14, not approved, not built |
-| 113 | H0 to H6 | host-led research: `record_research`, private sources, `delphi research ingest`, claim extraction, worker files that can capture (36-47 h) | draft 2026-11-14, not approved, not built |
-| 114 | M0 to M7 | a methodical scout: the role in every call, known first, a plan from the gaps, stopping rules, a written and checked answer, the run note (39-52 h) | draft 2026-11-14, not approved, not built |
-| 115 | X0 to X5 | research recall across projects: the setting, the private flag, the filter and labels (23-32 h) | draft 2026-11-14, not approved, not built: amends a default of spec 058 and needs the operator's decision |
-| 116 | G0 to G8 | memory that grows: the provisional tier, review that promotes, a larger start context, findings, consolidation, use feeding back (55-71 h) | draft 2026-11-14, not approved, not built |
-| 117 | E0 to E9 | the encyclopedia in the desktop app: topic pages with versions, gather over the whole corpus, read methods, the screens, agent memory, the operator's marks (74-94 h) | draft 2026-11-14, not approved, not built: screens not yet drawn |
-| 118 | P0 to P6 | pictures and figures: a licence record on every asset, capture in research, full size, SVG and WebP, figures agents make (33-46 h) | draft 2026-11-14, not approved, not built |
-| 119 | B0 to B6 | research readiness: setup, text kept privately for retrieval, defaults, knowledge health, small faults, the live proof (27-37 h) | draft 2026-11-14, not approved, not built: §3 needs the operator's policy decision |
+| 112 | R0 | the spec | approved 2026-11-14 |
+| 112 | R1 to R6 | one research record: the record on disk, run claims as library claims, the runner fixes, one runner, the `research` index zone, continue and due topics (47-62 h) | approved, not built |
+| 113 | H0 | the spec | approved 2026-11-14 |
+| 113 | H1 to H6 | host-led research: `record_research`, private sources, `delphi research ingest`, claim extraction, worker files that can capture (36-47 h) | approved, not built |
+| 114 | M0 | the spec | approved 2026-11-14 |
+| 114 | M1 to M7 | a methodical scout: the role in every call, known first, a plan from the gaps, stopping rules, a written and checked answer, the run note (39-52 h) | approved, not built |
+| 115 | X0 | the spec | approved 2026-11-14: research is shared across a workspace's projects by default, with a private flag per project; amends a default of spec 058. Whether claims from private and internal sources are shared was not settled and they stay inside their project |
+| 115 | X1 to X5 | the setting, the private flag, the filter and labels (23-32 h) | approved, not built |
+| 116 | G0 | the spec | approved 2026-11-14: the provisional tier is on by default; the investigator is empowered as §8 sets out (text written after the operator's word, not read) |
+| 116 | G1 to G11 | memory that grows: the provisional tier, review that promotes, a larger start context, findings, consolidation, use feeding back, the investigator's budget, shell in a throwaway worktree, `verify_source` and host worker (70-91 h) | approved, not built |
+| 117 | E0 | the spec | approved 2026-11-14: descriptions are enough to build from; drawings are optional |
+| 117 | E1 to E9 | the encyclopedia in the desktop app: topic pages with versions, gather over the whole corpus, read methods, the screens, agent memory, the operator's marks (71-90 h) | approved, not built |
+| 118 | P0 | the spec | approved 2026-11-14 |
+| 118 | P1 to P6 | pictures and figures: a licence record on every asset, capture in research, full size, SVG and WebP, figures agents make (33-46 h) | approved, not built |
+| 119 | B0 | the spec | approved 2026-11-14: a source of unknown licence is kept as excerpts by default |
+| 119 | B1 to B6 | research readiness: setup, excerpts and private text, defaults, knowledge health, small faults, the live proof (27-37 h) | approved, not built |

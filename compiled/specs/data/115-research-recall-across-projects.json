@@ -4,73 +4,73 @@
   "outline": [
     {
       "level": 1,
-      "line": 15,
+      "line": 16,
       "number": null,
       "title": "Spec 115: Research recall across projects"
     },
     {
       "level": 2,
-      "line": 22,
+      "line": 23,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 33,
+      "line": 34,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 39,
+      "line": 40,
       "number": "1.2",
       "title": "Simpler alternative considered"
     },
     {
       "level": 2,
-      "line": 45,
+      "line": 46,
       "number": "2",
       "title": "The setting"
     },
     {
       "level": 2,
-      "line": 52,
+      "line": 53,
       "number": "3",
       "title": "What a search returns"
     },
     {
       "level": 2,
-      "line": 62,
+      "line": 63,
       "number": "4",
       "title": "What the operator sees"
     },
     {
       "level": 2,
-      "line": 68,
+      "line": 69,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 77,
+      "line": 78,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 84,
+      "line": 85,
       "number": "7",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 98,
+      "line": 99,
       "number": "8",
-      "title": "Authority and trust: the decision this spec asks for"
+      "title": "Authority and trust: the decision the operator made"
     },
     {
       "level": 2,
-      "line": 104,
+      "line": 105,
       "number": "9",
       "title": "Open questions (the operator decides)"
     }
@@ -78,21 +78,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/115-research-recall-across-projects.md",
-    "sha256": "b29ccfa731b28f0011edc4bef2b2b026dc002a32485dd62faf177834f6597e7e"
+    "sha256": "5d90ed86548ee1d8f201bb5f9da36ed5f6073940073ff892ea4c7b6affdc9404"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 477,
+        "end": 421,
         "end_line": 6,
         "line": 6,
         "start": 145
       },
-      "text": "status: draft   # written at the operator's request on 2026-11-14 (\"make specs covering all 8, show me LOE and slices\"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it. It reverses a default of spec 058, which only the operator can decide."
+      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"115: your suggestions are approved\" (the default `workspace` and the private flag of section 8). Open question 2 was not settled and stays as written: private and internal sources stay inside their project."
     },
-    "sha256": "b29ccfa731b28f0011edc4bef2b2b026dc002a32485dd62faf177834f6597e7e",
-    "word": "draft"
+    "sha256": "5d90ed86548ee1d8f201bb5f9da36ed5f6073940073ff892ea4c7b6affdc9404",
+    "word": "approved"
   },
   "spec": {
     "group": "knowledge-and-memory",
@@ -106,10 +106,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 1904,
-      "end_line": 29,
-      "line": 24,
-      "start": 1289
+      "end": 1924,
+      "end_line": 30,
+      "line": 25,
+      "start": 1309
     },
     "text": "| # | Observation (2026-11-14) |\n| :-- | :-- |\n| E-1 | The index shows a project's files only to a session with that project's id (`kb.rs`, the project filter). Tests assert that another project gets nothing. |\n| E-2 | A research run inside a project writes to that project and never to the shared index (`research.rs`, the destination rule). |\n| E-3 | Project knowledge reaches the rest of the workspace only by promotion, one item at a time, on the operator's accept. |\n| E-4 | On a live workspace with eight projects, a search from one project for subjects researched in two others returned nothing about them. |"
   }

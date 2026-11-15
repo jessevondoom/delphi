@@ -220,9 +220,9 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library
 
-**112: One research record: a single runner, topics that persist, and claims that reach the library** · draft (per source at `ce10b448d35d`) · tier 0 · [source](../../specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md)
+**112: One research record: a single runner, topics that persist, and claims that reach the library** · approved (per source at `f4bf5b0c241b`) · tier 0 · [source](../../specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md)
 
-**source excerpt, untrusted** · `specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md` lines 24-32
+**source excerpt, untrusted** · `specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md` lines 25-33
 
 ```text
 | # | Observation (code on `main`, 2026-11-14) |
@@ -238,9 +238,9 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture
 
-**113: Host-led research: ingest, a record tool, and workers that can capture** · draft (per source at `e30d09cd1f80`) · tier 0 · [source](../../specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md)
+**113: Host-led research: ingest, a record tool, and workers that can capture** · approved (per source at `8ecffa84e909`) · tier 0 · [source](../../specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md)
 
-**source excerpt, untrusted** · `specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md` lines 24-29
+**source excerpt, untrusted** · `specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md` lines 25-30
 
 ```text
 | # | Observation (2026-11-14) |
@@ -253,9 +253,9 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis
 
-**114: A methodical scout: known first, a plan from the gaps, the role in every call, and a written synthesis** · draft (per source at `ebe1f1eddadd`) · tier 0 · [source](../../specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md)
+**114: A methodical scout: known first, a plan from the gaps, the role in every call, and a written synthesis** · approved (per source at `79d56f43b7ca`) · tier 0 · [source](../../specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md)
 
-**source excerpt, untrusted** · `specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md` lines 24-32
+**source excerpt, untrusted** · `specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md` lines 25-33
 
 ```text
 | # | Observation (code on `main`, 2026-11-14) |
@@ -271,9 +271,9 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 115-research-recall-across-projects
 
-**115: Research recall across projects** · draft (per source at `b29ccfa731b2`) · tier 0 · [source](../../specs/115-research-recall-across-projects.md)
+**115: Research recall across projects** · approved (per source at `5d90ed86548e`) · tier 0 · [source](../../specs/115-research-recall-across-projects.md)
 
-**source excerpt, untrusted** · `specs/115-research-recall-across-projects.md` lines 24-29
+**source excerpt, untrusted** · `specs/115-research-recall-across-projects.md` lines 25-30
 
 ```text
 | # | Observation (2026-11-14) |
@@ -286,9 +286,9 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context
 
-**116: Memory that grows: a provisional tier, findings, consolidation, and a larger start context** · draft (per source at `ad37b784afa7`) · tier 0 · [source](../../specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md)
+**116: Memory that grows: a provisional tier, findings, consolidation, and a larger start context** · approved (per source at `799c56a9fe67`) · tier 0 · [source](../../specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md)
 
-**source excerpt, untrusted** · `specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md` lines 24-34
+**source excerpt, untrusted** · `specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md` lines 25-35
 
 ```text
 | # | Observation (2026-11-14) |
@@ -306,9 +306,9 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory
 
-**117: The encyclopedia in the desktop app: topic pages, navigation, and a view of agent memory** · draft (per source at `0ab035ba6cfe`) · tier 0 · [source](../../specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md)
+**117: The encyclopedia in the desktop app: topic pages, navigation, and a view of agent memory** · approved (per source at `30f2a4f39c29`) · tier 0 · [source](../../specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md)
 
-**source excerpt, untrusted** · `specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md` lines 24-32
+**source excerpt, untrusted** · `specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md` lines 25-33
 
 ```text
 | # | Observation (code on `main`, 2026-11-14) |
@@ -324,9 +324,9 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures
 
-**118: Pictures and figures: a stored licence, capture in research, full size, and figures agents make** · draft (per source at `d24a1a032bfb`) · tier 0 · [source](../../specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md)
+**118: Pictures and figures: a stored licence, capture in research, full size, and figures agents make** · approved (per source at `d8e18322923f`) · tier 0 · [source](../../specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md)
 
-**source excerpt, untrusted** · `specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md` lines 25-33
+**source excerpt, untrusted** · `specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md` lines 26-34
 
 ```text
 | # | Observation (code on `main`, 2026-11-14) |
@@ -342,9 +342,9 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof
 
-**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · draft (per source at `da1eb52214fa`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
+**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `06b3f0ad58c9`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
 
-**source excerpt, untrusted** · `specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md` lines 25-33
+**source excerpt, untrusted** · `specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md` lines 26-34
 
 ```text
 | # | Observation (2026-11-14) |

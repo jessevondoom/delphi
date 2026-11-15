@@ -3,7 +3,8 @@ id: spec-118-pictures-and-figures-stored-licence-capture-in-research-full-size-a
 title: "118: Pictures and figures: a stored licence, capture in research, full size, and figures agents make"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: draft   # written at the operator's request on 2026-11-14 ("make specs covering all 8, show me LOE and slices"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it.
+status: approved   # by the operator, 2026-11-14, in a host session: "all other specs are approved", after the drafts and their slice tables were shown.
+approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, images, licence, attribution, pages, app, charts, diagrams]
 
 # Spec 118: Pictures and figures
 
-> **Status: draft, 2026-11-14.** Seventh of eight specs (112 to 119) from the knowledge-loop audit.
+> **Status: approved by the operator, 2026-11-14** (see the frontmatter). Seventh of eight specs (112 to 119) from the knowledge-loop audit.
 > **Extends:** [`specs/097`](097-encyclopedia-search-pages.md) §4.5.2 (page assets with their licence), [`specs/095`](095-documents-and-dataviz.md) (charts and diagrams agents write), [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md), [`specs/117`](117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md).
 > **Not legal advice.** This spec keeps the existing rule for which licences are accepted and changes no judgement about them. Any widening of that rule is for the operator, with counsel where it matters.
 

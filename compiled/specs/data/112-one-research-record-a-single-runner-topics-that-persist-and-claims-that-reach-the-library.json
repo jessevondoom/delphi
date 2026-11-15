@@ -4,79 +4,79 @@
   "outline": [
     {
       "level": 1,
-      "line": 15,
+      "line": 16,
       "number": null,
       "title": "Spec 112: One research record"
     },
     {
       "level": 2,
-      "line": 22,
+      "line": 23,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 36,
+      "line": 37,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 43,
+      "line": 44,
       "number": "1.2",
       "title": "Simpler alternative considered"
     },
     {
       "level": 2,
-      "line": 49,
+      "line": 50,
       "number": "2",
       "title": "The research record"
     },
     {
       "level": 2,
-      "line": 58,
+      "line": 59,
       "number": "3",
       "title": "Claims reach the library"
     },
     {
       "level": 2,
-      "line": 66,
+      "line": 67,
       "number": "4",
       "title": "One runner"
     },
     {
       "level": 2,
-      "line": 75,
+      "line": 76,
       "number": "5",
       "title": "Continue and refresh"
     },
     {
       "level": 2,
-      "line": 81,
+      "line": 82,
       "number": "6",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 92,
+      "line": 93,
       "number": "7",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 99,
+      "line": 100,
       "number": "8",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 114,
+      "line": 115,
       "number": "9",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 120,
+      "line": 121,
       "number": "10",
       "title": "Open questions (the operator decides)"
     }
@@ -84,21 +84,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md",
-    "sha256": "ce10b448d35d68f443ed0d49d0af67e1d84eb5fffc2233679e14358cb339286f"
+    "sha256": "f4bf5b0c241b7ac9435da7e02ed2b7a3409dffc85794a81217cef4797305aa99"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 525,
+        "end": 416,
         "end_line": 6,
         "line": 6,
         "start": 264
       },
-      "text": "status: draft   # written at the operator's request on 2026-11-14 (\"make specs covering all 8, show me LOE and slices\"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it."
+      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"all other specs are approved\", after the drafts and their slice tables were shown."
     },
-    "sha256": "ce10b448d35d68f443ed0d49d0af67e1d84eb5fffc2233679e14358cb339286f",
-    "word": "draft"
+    "sha256": "f4bf5b0c241b7ac9435da7e02ed2b7a3409dffc85794a81217cef4797305aa99",
+    "word": "approved"
   },
   "spec": {
     "group": "knowledge-and-memory",
@@ -112,10 +112,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 3328,
-      "end_line": 32,
-      "line": 24,
-      "start": 1605
+      "end": 3295,
+      "end_line": 33,
+      "line": 25,
+      "start": 1572
     },
     "text": "| # | Observation (code on `main`, 2026-11-14) |\n| :-- | :-- |\n| E-1 | There are two research runners. The console and Delphi's own agents use `research.rs`, which writes one Markdown page per web page under `local/knowledge/web/`. A host's `request_research` uses `research_run.rs`, which writes library sources and a claims file. They share the trusted list and the search providers and nothing else. |\n| E-2 | The host runner's claims go to `research/host-claims.jsonl`. The only reader of that file is the duplicate check. The claims are not in the search index and not in `library/claims/`, so pages ([`specs/097`](097-encyclopedia-search-pages.md)) and the confidence ladder ([`specs/100`](100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back.md)) never see them. |\n| E-3 | A host run's result (answer, coverage report) is held in memory for one hour and then gone. The console run keeps no search log and no record of its queries. |\n| E-4 | No research can be resumed, extended or refreshed. Running the same topic again starts from nothing. |\n| E-5 | The host runner calls `search_via`, which does not record what the search returned; only `search` does. So no address off the trusted list is ever allowed to be fetched, and every such result becomes a lead (`research_host.rs`, `LiveWeb`). Read in code, not run. |\n| E-6 | A page is fetched three times in a host run (to read, to capture, to check), so the stored hash may not be of the text the scout read. The check re-finds the scout's own quote on the same address and can never contradict it, and it spends the same step budget as the search. |\n| E-7 | In the audited workspace the central library held 38 sources, no claims and no pages. |"
   }

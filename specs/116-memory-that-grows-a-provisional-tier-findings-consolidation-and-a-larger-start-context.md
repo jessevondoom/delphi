@@ -3,7 +3,8 @@ id: spec-116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-l
 title: "116: Memory that grows: a provisional tier, findings, consolidation, and a larger start context"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: draft   # written at the operator's request on 2026-11-14 ("make specs covering all 8, show me LOE and slices"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it.
+status: approved   # by the operator, 2026-11-14, in a host session: "116: on by default, and empower the investigator however you can". Section 8 was rewritten after those words; the operator has not read the new text.
+approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, memory, lessons, investigator, retrieval, learning]
 
 # Spec 116: Memory that grows
 
-> **Status: draft, 2026-11-14.** Fifth of eight specs (112 to 119) from the knowledge-loop audit.
+> **Status: approved by the operator, 2026-11-14** (see the frontmatter). Fifth of eight specs (112 to 119) from the knowledge-loop audit.
 > **Extends:** [`specs/004`](004-memory-and-coaching.md) (memory and the Rule of 25), [`specs/050`](050-memory-lifecycle-types-supersession-and-trace-mining.md) (lifecycle and supersession), [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) (retrieval for agents; R1 partly built), [`specs/065`](065-episodic-traces-and-agent-long-term-memory.md) (episodes), [`specs/108`](108-closing-the-learning-loop-for-host-sessions.md) (the loop for host sessions), [`specs/080`](080-kb-read-count-report.md) (read counts, not built).
 
 ---
@@ -55,7 +56,7 @@ Objective: what agents learn is kept without waiting for the operator, clearly m
 4. A note written by a span that had read untrusted content is stored with that taint and is not retrieved automatically. It is found only by an explicit search, and then with the label `from untrusted content`.
 5. A role retrieves its own provisional notes and those of kind `fact`. It never retrieves another role's `practice`, `pitfall` or `preference` notes, as with lessons today.
 6. Each time a note is retrieved and the span ends without an error or a failed gate, `uses` rises by one. A note with three uses lives another 90 days. A note never used expires at `valid_until` and moves to `provisional/expired/`, which is not indexed. Nothing is deleted.
-7. `[memory] provisional = true|false` turns the tier off; with it off, notes stage as today.
+7. The tier is on by default (operator, 2026-11-14). `[memory] provisional = false` turns it off; with it off, notes stage as before this spec.
 
 ## 3. Review promotes
 
@@ -99,8 +100,37 @@ Objective: what agents learn is kept without waiting for the operator, clearly m
 
 ## 8. The investigator can investigate
 
-1. Host search while the investigator or the validator is adopted returns unvalidated text for the first rung of its ladder (`explore`), clearly labelled, and validated text only when it asks to verify.
-2. Whether the investigator's manifest gains the read-only shell scope its three skills declare is the operator's decision (§12). Without it the skills are marked in the catalog as host-only.
+The operator's word on 2026-11-14 was to empower the investigator as far as the rules allow. The rules that bound it are unchanged: no code path acts outside the sandbox, approves its own action or lets outside content raise its own trust; Red actions ask the operator; the investigator never changes the project's source. Inside those rules it gains the following.
+
+### 8.1 A shell, in a worktree it can throw away
+
+1. The investigator's manifest gains `shell-worktree-scoped` and `git-worktree`, so the three skills that declare a shell (`git-bisect-hunt`, `benchmark-profiling`, `ast-code-search`) can run.
+2. An investigator span that uses the shell is given a worktree of its own, detached at the mission's head, under the workspace's worktree folder. The shell of [`specs/061`](061-shell-tool.md) runs there, in the OS sandbox, under the operator's shell permission mode and deny rules, exactly as the builder's does. There is no network in that sandbox.
+3. It may check out any commit, build, run tests and benchmarks, and write scratch files there. `git bisect` runs there.
+4. Nothing leaves that worktree: it has no branch, its commits are never pushed or merged, and the engine removes it when the span ends. The investigator's write scope outside it stays `missions/**/research/**` and the findings folder. A test asserts that after an investigator span the project's working tree, index and refs are byte-identical.
+5. Commands the builder would be asked about, the investigator is asked about. Commands that push, fetch from a remote or touch a path outside the worktree are refused by the same rules that refuse them to the builder.
+
+### 8.2 Checking a source itself
+
+1. A tool `verify_source {url, quote}` for the investigator: the daemon fetches the page with the validator's fetcher (the address guard and the two-fetch cloaking check of [`specs/040`](040-validator-role-and-fact-ratification.md)) and answers whether the quoted words are on the page, with the sentence around them and the page's hash. The page text is returned as untrusted data.
+2. A host on the trusted list needs no card. Any other address raises the card an inside agent's research request raises. Limits: 10 calls a task.
+3. `validate_claims` is opened to the investigator, so it can ask the daemon to check a specific upstream claim against independent sources. It cannot ratify.
+
+### 8.3 Room to work
+
+1. Tier `workhorse` and 40 turns, as the builder has, in place of `fast` and 25.
+2. The retry when an investigator gives up fires once per task for real: the flag that records it is kept, where today it is always false.
+3. It holds `record_finding` (§5) and `flag_wrong` (§7), and its charter's first rung searches findings, research topics and its own provisional notes.
+
+### 8.4 What it may read
+
+1. While the investigator or the validator is adopted, host search returns unvalidated text for the first rung of its ladder (`explore`), clearly labelled, and validated text only when it asks to verify.
+
+### 8.5 On a host
+
+1. The investigator's worker inherits the session's tools, as the builder's and the writer's do; the table of [`specs/106`](106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md) gains that entry and its rule gains a second case: a role whose manifest holds a shell scope.
+2. The worker's instruction changes from "do not change files or run commands" to: run what the investigation needs (searches, builds, tests, bisects, benchmarks); do it in a git worktree or a scratch folder; do not change the project's source; end with `record_finding`. The host's own permissions decide what actually runs, as the worker file's first line already says.
+3. The worker's tool list gains `record_finding`, `flag_wrong`, `request_research` and the research result tools ([`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §4).
 
 ## 9. Acceptance criteria
 
@@ -113,11 +143,16 @@ Objective: what agents learn is kept without waiting for the operator, clearly m
 7. **AC-7:** `delphi learn keep` succeeds with the daemon running, for a note from an inside agent.
 8. **AC-8:** the consolidation pass changes no file outside its proposals.
 9. **AC-9:** an item flagged three times is absent from start passages and present in an explicit search with its label.
+10. **AC-10:** an investigator span runs `git bisect` over a fixture repository and names the commit; afterwards the project's working tree, index and refs are unchanged and the span's worktree is gone.
+11. **AC-11:** from the investigator's shell, a push, a network request and a write outside its worktree are each refused.
+12. **AC-12:** `verify_source` on a trusted host returns found or not found with the sentence; on an unlisted host it raises a card and fetches nothing until it is answered.
+13. **AC-13:** an investigator that gives up twice in one task is retried once.
 
 ## 10. Verification plan
 
 - Engine tests on the snapshot and the retrieved slice (AC-1 to AC-5), with a check that the lessons block is byte-identical with the tier on and off.
-- Tool tests (AC-6, AC-9); CLI tests (AC-7); a file-watch test for AC-8.
+- Tool tests (AC-6, AC-9, AC-12); CLI tests (AC-7); a file-watch test for AC-8.
+- Sandbox tests for the investigator's shell on a fixture repository (AC-10, AC-11), reviewed by the red-team before merge; an engine test for AC-13.
 - Red-team review of §2 and §4: a prompt-injection fixture in which a web page tells the agent to write a note, and the note must not be retrieved automatically (AC-2).
 - An evaluation, not a gate: the retention probes of 050 ML6 on five tasks, before and after.
 
@@ -133,19 +168,24 @@ Objective: what agents learn is kept without waiting for the operator, clearly m
 | G5 | `record_finding`, the findings zone, supersession, the charters | 8-10 |
 | G6 | consolidation: the mechanical pass, then the model pass as proposals; episode expiry | 10-12 |
 | G7 | read counts (080), `flag_wrong`, the ranking terms, misses logged | 8-10 |
-| G8 | the investigator's search default; the catalog mark | 2-3 |
-| | **Total** | **55-71** |
+| G8 | the investigator's search default, tier and turns, `validate_claims`, the retry flag | 3-4 |
+| G9 | the investigator's shell in a throwaway worktree: the manifest, the worktree's life, the unchanged-project test, the refusals | 8-10 |
+| G10 | `verify_source` | 4-6 |
+| G11 | the host worker inherits tools; its instruction and tool list | 2-3 |
+| | **Total** | **70-91** |
 
-G3, G4 and G8 stand alone. G5 stands alone. G1 comes before G2, G6 and G7.
+G3, G4 and G8 stand alone. G5 stands alone. G1 comes before G2, G6 and G7. G9 and G10 stand alone; G11 follows G5.
 
 ## 12. Authority and trust
 
 - The tier lets agent-written text reach a later agent without review. The guards are: it is never instruction (§2.3), tainted notes are not retrieved automatically (§2.4), it is capped at two passages (§4.3), it expires, and one config key turns it off. The red-team reviews G1 and G3.
 - No agent writes lessons, heuristics or governance. `flag_wrong` and consolidation change labels and make proposals; they delete and edit nothing.
-- A shell scope for the investigator would widen what a role can do. This spec does not grant it.
+- The investigator gains a shell (§8.1), by the operator's word of 2026-11-14. It is the builder's shell with less reach: the same sandbox, permission mode and deny rules, no network, and a worktree that is discarded, so nothing it does can reach the project's source, a branch or a remote. The red-team reviews G9.
+- `verify_source` reaches the network through the validator's fetcher and its guards; an address off the trusted list asks the operator each time.
+- On a host, Delphi grants nothing: the worker file asks for the session's tools and the host's permissions decide.
 
 ## 13. Open questions (the operator decides)
 
-1. Is the provisional tier on by default?
-2. Should the investigator have a read-only shell scope inside the daemon, or stay read-only and investigate through hosts?
+1. *Decided 2026-11-14:* the provisional tier is on by default.
+2. *Decided 2026-11-14:* the investigator is empowered as §8 sets out.
 3. Start budget: six passages and 4,000 characters, or more?

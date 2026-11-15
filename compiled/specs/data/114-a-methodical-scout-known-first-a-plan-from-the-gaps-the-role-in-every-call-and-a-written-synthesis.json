@@ -4,85 +4,85 @@
   "outline": [
     {
       "level": 1,
-      "line": 15,
+      "line": 16,
       "number": null,
       "title": "Spec 114: A methodical scout"
     },
     {
       "level": 2,
-      "line": 22,
+      "line": 23,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 36,
+      "line": 37,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 42,
+      "line": 43,
       "number": "1.2",
       "title": "Simpler alternative considered"
     },
     {
       "level": 2,
-      "line": 48,
+      "line": 49,
       "number": "2",
       "title": "The role in every call"
     },
     {
       "level": 2,
-      "line": 55,
+      "line": 56,
       "number": "3",
       "title": "Known first"
     },
     {
       "level": 2,
-      "line": 63,
+      "line": 64,
       "number": "4",
       "title": "A plan from the gaps"
     },
     {
       "level": 2,
-      "line": 73,
+      "line": 74,
       "number": "5",
       "title": "A written answer"
     },
     {
       "level": 2,
-      "line": 80,
+      "line": 81,
       "number": "6",
       "title": "What a run teaches"
     },
     {
       "level": 2,
-      "line": 85,
+      "line": 86,
       "number": "7",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 95,
+      "line": 96,
       "number": "8",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 101,
+      "line": 102,
       "number": "9",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 117,
+      "line": 118,
       "number": "10",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 123,
+      "line": 124,
       "number": "11",
       "title": "Open questions (the operator decides)"
     }
@@ -90,21 +90,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md",
-    "sha256": "ebe1f1eddadda9399991e49ad41c8b2b4641f9655e72eebc3424712b1e3b00bf"
+    "sha256": "79d56f43b7ca0579dcbf9c116620f14de27bfaed7d5765b1be10ed192039581c"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 544,
+        "end": 435,
         "end_line": 6,
         "line": 6,
         "start": 283
       },
-      "text": "status: draft   # written at the operator's request on 2026-11-14 (\"make specs covering all 8, show me LOE and slices\"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it."
+      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"all other specs are approved\", after the drafts and their slice tables were shown."
     },
-    "sha256": "ebe1f1eddadda9399991e49ad41c8b2b4641f9655e72eebc3424712b1e3b00bf",
-    "word": "draft"
+    "sha256": "79d56f43b7ca0579dcbf9c116620f14de27bfaed7d5765b1be10ed192039581c",
+    "word": "approved"
   },
   "spec": {
     "group": "knowledge-and-memory",
@@ -118,10 +118,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2806,
-      "end_line": 32,
-      "line": 24,
-      "start": 1395
+      "end": 2773,
+      "end_line": 33,
+      "line": 25,
+      "start": 1362
     },
     "text": "| # | Observation (code on `main`, 2026-11-14) |\n| :-- | :-- |\n| E-1 | The model call the runner makes as the scout is built by `scout_ipr` (`research.rs`): role \"You are the scout.\", no persona, no skill text, heuristics \"None.\", lessons \"None.\". The scout's charter, its five skills and its lessons file reach no research run. The page writer's call (`page_run.rs`) is built the same way. |\n| E-2 | Neither runner looks at what Delphi already holds before it searches. The only use of prior knowledge is an exact-hash match on a claim after it has been extracted. |\n| E-3 | The plan is at most three fixed queries: the topic, the topic restricted to a trusted site, and the topic with \"limitations OR criticism OR disputed\". \"Three to five questions\" is prose in the literature-survey skill. |\n| E-4 | A run stops on a budget (pages, steps, time, tokens). Nothing stops it because the question is answered or keeps it going because a part is not. |\n| E-5 | The host run's `answer` is a list of the first eight claims built by code, and is labelled \"model synthesis\". The console run has no synthesis across pages. |\n| E-6 | Results within one search are read in the order the provider gave them, trusted hosts first. |\n| E-7 | The one-note-per-run learning loop of 066 §5 has no code. A search of the knowledge base that finds nothing is logged from the console and the CLI only, and nothing reads the log. |"
   }

@@ -3,7 +3,8 @@ id: spec-113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture
 title: "113: Host-led research: ingest, a record tool, and workers that can capture"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: draft   # written at the operator's request on 2026-11-14 ("make specs covering all 8, show me LOE and slices"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it.
+status: approved   # by the operator, 2026-11-14, in a host session: "all other specs are approved", after the drafts and their slice tables were shown.
+approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, research, hosts, mcp, scout, investigator, library]
 
 # Spec 113: Host-led research
 
-> **Status: draft, 2026-11-14.** Second of eight specs (112 to 119) from the knowledge-loop audit.
+> **Status: approved by the operator, 2026-11-14** (see the frontmatter). Second of eight specs (112 to 119) from the knowledge-loop audit.
 > **Extends:** [`specs/098`](098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) (agents run in the host first), [`specs/068`](068-research-capture-and-summary-pages.md) (capture and summary pages), [`specs/106`](106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md) (worker files), [`specs/112`](112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md) (the research record).
 
 ---

@@ -4,73 +4,73 @@
   "outline": [
     {
       "level": 1,
-      "line": 15,
+      "line": 16,
       "number": null,
       "title": "Spec 113: Host-led research"
     },
     {
       "level": 2,
-      "line": 22,
+      "line": 23,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 33,
+      "line": 34,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 39,
+      "line": 40,
       "number": "1.2",
       "title": "Simpler alternative considered"
     },
     {
       "level": 2,
-      "line": 45,
+      "line": 46,
       "number": "2",
       "title": "`record_research`: a host hands over a piece of research"
     },
     {
       "level": 2,
-      "line": 55,
+      "line": 56,
       "number": "3",
       "title": "Ingest: files that already exist"
     },
     {
       "level": 2,
-      "line": 64,
+      "line": 65,
       "number": "4",
       "title": "Workers that can capture"
     },
     {
       "level": 2,
-      "line": 71,
+      "line": 72,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 80,
+      "line": 81,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 87,
+      "line": 88,
       "number": "7",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 102,
+      "line": 103,
       "number": "8",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 108,
+      "line": 109,
       "number": "9",
       "title": "Open questions (the operator decides)"
     }
@@ -78,21 +78,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md",
-    "sha256": "e30d09cd1f80124b4434d21a91669a73e7d09f3c05f9df8853b151df87f0e3df"
+    "sha256": "8ecffa84e909e638d77a6f30690dcd74faec9c4139a40b97ba3f61a45758c8ff"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 481,
+        "end": 372,
         "end_line": 6,
         "line": 6,
         "start": 220
       },
-      "text": "status: draft   # written at the operator's request on 2026-11-14 (\"make specs covering all 8, show me LOE and slices\"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it."
+      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"all other specs are approved\", after the drafts and their slice tables were shown."
     },
-    "sha256": "e30d09cd1f80124b4434d21a91669a73e7d09f3c05f9df8853b151df87f0e3df",
-    "word": "draft"
+    "sha256": "8ecffa84e909e638d77a6f30690dcd74faec9c4139a40b97ba3f61a45758c8ff",
+    "word": "approved"
   },
   "spec": {
     "group": "knowledge-and-memory",
@@ -106,10 +106,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2576,
-      "end_line": 29,
-      "line": 24,
-      "start": 1452
+      "end": 2543,
+      "end_line": 30,
+      "line": 25,
+      "start": 1419
     },
     "text": "| # | Observation (2026-11-14) |\n| :-- | :-- |\n| E-1 | In the audited workspace, the research that exists was done by host sessions acting as the scout with the host's own tools (web, and connectors to internal systems). It was saved as Markdown in project `research/` folders (about fifty files across eight projects) and as 58 imported summaries. Delphi's own runner had produced no claim. |\n| E-2 | Those files are indexed as untrusted project text. They are not sources, they yield no claims, and a page cannot gather them. 48 of the 58 summaries list no source. |\n| E-3 | The scout's and the investigator's charters tell a host agent to use `propose_kb_entry` and `record_session_summary`, and the scout's source ladder includes Delphi's research endpoint. The worker files (`ecosystem/claude-code/delphi/agents/scout-worker.md`, `investigator-worker.md`) list neither those tools nor `request_research`. A worker can read and cannot record. |\n| E-4 | `propose_kb_entry` takes single claims. There is no call by which a host hands over a finished piece of research with its question, its sources and what it searched. |"
   }

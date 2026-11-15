@@ -3,7 +3,8 @@ id: spec-117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-vi
 title: "117: The encyclopedia in the desktop app: topic pages, navigation, and a view of agent memory"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: draft   # written at the operator's request on 2026-11-14 ("make specs covering all 8, show me LOE and slices"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it. Screens are described, not drawn; the operator has decided earlier screens from drawings.
+status: approved   # by the operator, 2026-11-14, in a host session: "117: for the desktop app drawings are better than descriptions but should not be required as descriptions are adequate". Drawings are optional.
+approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, app, encyclopedia, pages, navigation, memory, operator]
 
 # Spec 117: The encyclopedia in the desktop app
 
-> **Status: draft, 2026-11-14.** Sixth of eight specs (112 to 119) from the knowledge-loop audit.
+> **Status: approved by the operator, 2026-11-14** (see the frontmatter). Sixth of eight specs (112 to 119) from the knowledge-loop audit.
 > **Extends:** [`specs/097`](097-encyclopedia-search-pages.md) (generated pages), [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) (the app; §5 keeps the page methods off its allowlist), [`specs/055`](055-the-central-library-sources-claims-and-pages.md), [`specs/043`](043-knowledge-window-search-page-and-growing-corpus.md).
 
 ---
@@ -65,7 +66,7 @@ Objective: the operator opens the app and finds an encyclopedia of what the work
 
 ## 4. Screens
 
-Each is read on a page of its own, as 111 §5 decided. To be drawn and shown to the operator before E4 is built.
+Each is read on a page of its own, as 111 §5 decided. The descriptions below are enough to build from (operator, 2026-11-14: drawings are better than descriptions and are not required). A builder may draw a screen first when a description leaves a choice open, and shows the drawing; no slice waits for one.
 
 1. **Encyclopedia home.** Search; topics by project and by letter; "new and changed since you were last here"; topics due for rebuild; topics with open questions.
 2. **Topic page.** Title, what changed, lead, key terms, contents, sections. A citation marker opens a side panel with the claim, its status and its anchors; choosing an anchor opens the source at the quoted passage, highlighted. Under the page: bibliography with status marks, start here, see also, what links here, open questions, versions.
@@ -116,7 +117,7 @@ Following up needs an act: a rebuild, a research run. The app holds a read-only 
 
 | Slice | Content | Hours |
 | :-- | :-- | --: |
-| E0 | this spec; the screens drawn and shown | 4-6 |
+| E0 | this spec | 1-2 |
 | E1 | topic pages: slug ids, rebuild in place, versions listed, the change line, due and idle rebuild | 10-12 |
 | E2 | gather through retrieval over the whole corpus; `s-kb` and finding records | 8-10 |
 | E3 | key terms, start here, see also, open questions, the link table, their checks | 6-8 |
@@ -126,7 +127,7 @@ Following up needs an act: a rebuild, a research run. The app holds a read-only 
 | E7 | app: agent memory | 8-10 |
 | E8 | app: read state, annotations, pins, export | 8-10 |
 | E9 | app: asking from a page by clipboard; console link following | 4-6 |
-| | **Total** | **74-94** |
+| | **Total** | **71-90** |
 
 E1 to E3 need 112 R2 to have material. E7 needs 116 G1 and G5 for the provisional notes and findings; without them it shows lessons and episodes.
 

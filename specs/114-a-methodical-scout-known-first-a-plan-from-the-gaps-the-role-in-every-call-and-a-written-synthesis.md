@@ -3,7 +3,8 @@ id: spec-114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-eve
 title: "114: A methodical scout: known first, a plan from the gaps, the role in every call, and a written synthesis"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: draft   # written at the operator's request on 2026-11-14 ("make specs covering all 8, show me LOE and slices"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it.
+status: approved   # by the operator, 2026-11-14, in a host session: "all other specs are approved", after the drafts and their slice tables were shown.
+approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, research, scout, method, retrieval, lessons]
 
 # Spec 114: A methodical scout
 
-> **Status: draft, 2026-11-14.** Third of eight specs (112 to 119) from the knowledge-loop audit.
+> **Status: approved by the operator, 2026-11-14** (see the frontmatter). Third of eight specs (112 to 119) from the knowledge-loop audit.
 > **Extends:** [`specs/066`](066-mcp-research-endpoint-and-role-identity.md) §5 (the search order and the learning loop, specified and not built), [`specs/101`](101-library-practice-for-research-a-search-log-retraction-lookup-archived-copies-and-citation-chaining.md), [`specs/112`](112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md) (the record and the one runner).
 
 ---
