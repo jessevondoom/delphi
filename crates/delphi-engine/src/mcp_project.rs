@@ -680,13 +680,16 @@ impl Project {
                 valid_filters.join(", ")
             ));
         }
-        let valid_scopes = ["all", "project_only", "core_only"];
+        let valid_scopes = ["all", "project_only", "core_only", "project", "workspace"];
         if !valid_scopes.contains(&scope) {
             return Err(format!(
                 "invalid arguments: `scope` must be one of: {}",
                 valid_scopes.join(", ")
             ));
         }
+        // `specs/115` §3 item 5: `project` and `workspace` say how far the project research group reaches (the daemon serves that group,
+        // `mcp_host`); this process reads the core and the session's own project files for both, as `all` does.
+        let scope = if matches!(scope, "project" | "workspace") { "all" } else { scope };
         let limit = limit.clamp(1, MAX_LIMIT);
         let ws = words(query);
         if ws.is_empty() {

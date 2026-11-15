@@ -3055,11 +3055,28 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 let query: Vec<&str> = args[1..].iter().filter(|a| !a.starts_with("--")).map(String::as_str).collect();
                 let role = args.iter().position(|a| a == "--role").and_then(|i| args.get(i + 1)).cloned();
                 let bundle = args.iter().position(|a| a == "--bundle" || a == "--org").and_then(|i| args.get(i + 1)).cloned();
-                let query: Vec<&str> = query.into_iter().filter(|a| Some(*a) != role.as_deref() && Some(*a) != bundle.as_deref()).collect();
+                // `specs/115` §4 item 2: one project's research (`--project <name>`), or every project's beside the rest (`--all-projects`).
+                let project = args.iter().position(|a| a == "--project").and_then(|i| args.get(i + 1)).cloned();
+                let query: Vec<&str> = query.into_iter().filter(|a| Some(*a) != role.as_deref() && Some(*a) != bundle.as_deref() && Some(*a) != project.as_deref()).collect();
                 if query.is_empty() {
-                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--about] [--staged [--kind fact|episode]] [--unreviewed] [--bundle <org/name> | --org <org> | --no-bundles] [--summaries|--bibs]");
+                    eprintln!("usage: delphi kb search <query> [--role <role>] [--untrusted] [--lexical] [--no-rerank] [--about] [--staged [--kind fact|episode]] [--unreviewed] [--bundle <org/name> | --org <org> | --no-bundles] [--summaries|--bibs] [--project <name> | --all-projects]");
                     return Ok(2);
                 }
+                let projects = match (&project, args.iter().any(|a| a == "--all-projects")) {
+                    (Some(_), true) => {
+                        eprintln!("delphi kb search: --project and --all-projects ask different things; give one");
+                        return Ok(2);
+                    }
+                    (Some(name), false) => match crate::shared_research::Projects::named(ws, name) {
+                        Some(p) => Some(p),
+                        None => {
+                            eprintln!("delphi kb search: no registered project is named `{name}` (`delphi project list` lists them)");
+                            return Ok(2);
+                        }
+                    },
+                    (None, true) => Some(crate::shared_research::Projects::All),
+                    (None, false) => None,
+                };
                 let mut kb = open()?;
                 let model = attach_default(home, &mut kb)?;
                 // The index is brought up to date first (words, and the release's preloaded vectors); the model is not
@@ -3088,13 +3105,24 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 if args.iter().any(|a| a == "--unreviewed") {
                     opts.provisional = ProvisionalView::All;
                 }
-                let hits = kb.search(&query.join(" "), &opts)?;
+                let hits = match &projects {
+                    // One project: its research and nothing else. Its research files are untrusted by nature, so they are asked for.
+                    Some(which @ crate::shared_research::Projects::One(_)) => crate::shared_research::operator_hits(ws, &kb, &query.join(" "), which, &SearchOpts { include_untrusted: true, ..opts.clone() }),
+                    Some(which) => {
+                        let mut all = kb.search(&query.join(" "), &opts)?;
+                        all.extend(crate::shared_research::operator_hits(ws, &kb, &query.join(" "), which, &SearchOpts { include_untrusted: true, ..opts.clone() }));
+                        all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                        all.truncate(opts.limit.max(1));
+                        all
+                    }
+                    None => kb.search(&query.join(" "), &opts)?,
+                };
                 log_search(ws, &query.join(" "), opts.role.as_deref(), hits.len());
                 if hits.is_empty() {
                     println!("no results");
                 }
                 for (i, h) in hits.iter().enumerate() {
-                    println!("{}. {}  [{}]  ({}){}", i + 1, h.pointer, if h.heading_path.is_empty() { "(top)" } else { &h.heading_path }, h.shown_label(), h.note.as_ref().map(|n| format!("  {}", n)).unwrap_or_default());
+                    println!("{}. {}  [{}]  ({}){}{}", i + 1, h.pointer, if h.heading_path.is_empty() { "(top)" } else { &h.heading_path }, h.shown_label(), h.project.as_ref().map(|p| format!("  project: {p}")).unwrap_or_default(), h.note.as_ref().map(|n| format!("  {}", n)).unwrap_or_default());
                     for l in h.preview.lines() {
                         println!("     {}", l);
                     }

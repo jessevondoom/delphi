@@ -1303,32 +1303,53 @@ impl Library {
         let now_days = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0) / 86_400;
         let mut out: Vec<Pulled> = Vec::new();
         for c in self.claims() {
-            let st = status(&c);
-            if matches!(st, Status::Disproved | Status::Retired) {
-                continue;
-            }
             let own_project = c["project"].as_str().filter(|p| project.is_some_and(|m| m.eq_ignore_ascii_case(p)));
             if c["scope"] == "project" && own_project.is_none() {
                 continue;
             }
-            let overlap = words(c["text"].as_str().unwrap_or("")).intersection(&q).count() as f64;
-            if overlap == 0.0 && own_project.is_none() {
-                continue;
+            if let Some(p) = self.pulled(&c, &q, own_project.is_some(), now_days) {
+                out.push(p);
             }
-            let weight = match st {
-                Status::Validated => 3.0,
-                Status::Contested => 0.5,
-                _ => 1.0,
-            };
-            let confirmed = c["last_confirmed"].as_str().and_then(delphi_core::time::parse_rfc3339).map(|t| t / 86_400).unwrap_or(now_days);
-            let recency = 1.0 / (1.0 + (now_days - confirmed).max(0) as f64 / 30.0);
-            let relied = (1.0 + c["cited_by"].as_array().map_or(0, Vec::len) as f64).ln();
-            let score = (overlap.max(0.5) + if own_project.is_some() { 2.0 } else { 0.0 }) * (weight + recency + 0.5 * relied);
-            out.push(Pulled { id: c["id"].as_str().unwrap_or("").into(), status: st, kind: c["kind"].as_str().unwrap_or("fact").into(), origin: self.origin_of(&c), score: (score * 100.0).round() / 100.0 });
         }
         out.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.id.cmp(&b.id)));
         out.truncate(limit);
         out
+    }
+
+    /// [`Library::pull`] over the claims named in `ids` only, none of them the mission's own project's: the claims of the workspace's
+    /// other projects that `shared_research::pull` found listed under a shared project (`specs/115`). The same ranking, never the
+    /// own-project bonus, and a claim must share a word with the query.
+    pub fn pull_among(&self, query: &str, ids: &[String], limit: usize) -> Vec<Pulled> {
+        let q = words(query);
+        let now_days = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0) / 86_400;
+        let mut out: Vec<Pulled> = ids.iter().filter_map(|id| self.claim(id)).filter_map(|c| self.pulled(&c, &q, false, now_days)).collect();
+        out.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.id.cmp(&b.id)));
+        out.dedup_by(|a, b| a.id == b.id);
+        out.truncate(limit);
+        out
+    }
+
+    /// One claim as the pull ranks it, or `None` when it is not offered: disproved or retired, or sharing no word with the query
+    /// and not of the mission's own project.
+    fn pulled(&self, c: &Value, q: &HashSet<String>, own_project: bool, now_days: i64) -> Option<Pulled> {
+        let st = status(c);
+        if matches!(st, Status::Disproved | Status::Retired) {
+            return None;
+        }
+        let overlap = words(c["text"].as_str().unwrap_or("")).intersection(q).count() as f64;
+        if overlap == 0.0 && !own_project {
+            return None;
+        }
+        let weight = match st {
+            Status::Validated => 3.0,
+            Status::Contested => 0.5,
+            _ => 1.0,
+        };
+        let confirmed = c["last_confirmed"].as_str().and_then(delphi_core::time::parse_rfc3339).map(|t| t / 86_400).unwrap_or(now_days);
+        let recency = 1.0 / (1.0 + (now_days - confirmed).max(0) as f64 / 30.0);
+        let relied = (1.0 + c["cited_by"].as_array().map_or(0, Vec::len) as f64).ln();
+        let score = (overlap.max(0.5) + if own_project { 2.0 } else { 0.0 }) * (weight + recency + 0.5 * relied);
+        Some(Pulled { id: c["id"].as_str().unwrap_or("").into(), status: st, kind: c["kind"].as_str().unwrap_or("fact").into(), origin: self.origin_of(c), score: (score * 100.0).round() / 100.0 })
     }
 
     /// The library records who relied on what: each mission that was handed these claims is added to their `cited_by`,

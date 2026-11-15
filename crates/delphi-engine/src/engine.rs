@@ -756,8 +756,23 @@ impl Engine {
         if operator_task && announce && target != "builder" {
             let project = handoff.context_pointers.iter().find_map(|p| p.uri.trim_start_matches("./").strip_prefix("@project/").and_then(|r| r.split('/').next()).map(String::from));
             let before = handoff.context_pointers.len();
-            let pulled = crate::library::Library::in_home(&self.ws.home).pull_for_mission(prompt, project.as_deref(), &m.id);
+            let lib = crate::library::Library::in_home(&self.ws.home);
+            let pulled = lib.pull_for_mission(prompt, project.as_deref(), &m.id);
+            let room = crate::library::claims::PULL_MAX.saturating_sub(pulled.len()).max(crate::shared_research::PULL_SHARED_MIN);
             handoff.context_pointers.extend(pulled);
+            // `specs/115` slice X4: the other projects' claims the operator shares with this mission's project, by pointer as well. One
+            // that rests on an internal source marks the session now, before any span is given its pointer.
+            let shared = crate::shared_research::pull(&self.ws.dir, &self.ws.home, &m.id, prompt, room);
+            if handoff.validate().is_ok() {
+                let at = handoff.context_pointers.len();
+                handoff.context_pointers.extend(shared.pointers);
+                if handoff.validate().is_err() {
+                    handoff.context_pointers.truncate(at);
+                } else {
+                    lib.record_reliance(&shared.ids, &m.id);
+                    self.mark_shared(m, &shared.internal, "claim_pull").await?;
+                }
+            }
             if handoff.validate().is_err() {
                 handoff.context_pointers.truncate(before);
             }
@@ -990,6 +1005,8 @@ impl Engine {
                 let (budget, root) = (crate::retrieval::StartBudget { passages: start_cfg.start_passages, chars: start_cfg.start_chars, provisional: crate::provisional_notes::enabled(&self.ws.dir) }, handoff.parent_span_id == "operator");
                 let got = tokio::task::spawn_blocking(move || crate::retrieval::span_start(&home, &db, &mid, &obj, &role, budget, root)).await.ok().flatten();
                 if let Some(start) = got {
+                    // `specs/115` §2 item 3: a claim from an internal source among the passages marks this session as it is handed over.
+                    self.mark_shared(m, &start.internal, "span_start").await?;
                     sc.span.observe_input(start.tier);
                     slices.push(ContextSlice { label: "@runtime/retrieved".into(), tier: start.tier.as_str().into(), text: start.text });
                     m.append(sc.ev("retrieval.done", start.stats)).await?;
@@ -1241,6 +1258,23 @@ impl Engine {
             self.name_release(&m.id, &sc.span_id);
             Ok(SpanOutcome { status, text, turns, ceiling: sc.span.ceiling() })
         })
+    }
+
+    /// `specs/115` §2 item 3 for a Delphi session: it was just handed project claims that rest on an internal source (`entries`, from
+    /// `shared_research::mark_entry`), by its start passages, the claim pull or an agent's `kb_search` (`reader`). The mission's own
+    /// key takes the private-read mark, which holds the sends of every task in it (`specs/103` §7.1 OD-5); each first read is logged.
+    /// It changes nothing about what was handed over.
+    pub(crate) async fn mark_shared(&self, m: &Arc<MissionState>, entries: &[String], reader: &str) -> Result<(), EngineError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let now = (self.clock_unix)();
+        for entry in crate::shared_research::mark_session(&self.ws.dir, &m.id, entries, now) {
+            let mut ev = EventEnvelope::new(&m.id, crate::shared_research::MARK_EVENT, json!({"key": m.id, "entry": entry, "reader": reader, "at": now}));
+            ev.agent = None;
+            m.append(ev).await?;
+        }
+        Ok(())
     }
 
     /// The operator stopped a task (`task.cancel`): close what it left open, then record the end. The in-flight
@@ -2175,6 +2209,13 @@ impl Engine {
         };
         // A raised decision gets its id and meets the mission's limit here, against the log (`decision_raised::admit`).
         let (mut result, mut asked) = (result, asked);
+        // `specs/115` §2 item 3: the agent's `kb_search` handed this session project claims from an internal source; it is marked now.
+        // The entries are the tool's own reading of the index's paths, never the model's arguments.
+        while let Some(i) = asked.iter().position(|(k, _)| k == crate::shared_research::GIVEN) {
+            let (_, given) = asked.remove(i);
+            let entries: Vec<String> = given["entries"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
+            self.mark_shared(&sc.m, &entries, name).await?;
+        }
         if let Some(i) = asked.iter().position(|(k, _)| k == "decision.raised") {
             let (_, args) = asked.remove(i);
             let admitted = crate::decision_raised::parse(&args).and_then(|r| sc.m.replay().map_err(|e| e.to_string()).and_then(|log| crate::decision_raised::admit(&log, &r)));

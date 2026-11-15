@@ -1,7 +1,7 @@
 //! Research recall across projects (`specs/115`): what a session working in one project of a workspace may read of the others.
 //!
 //! **This widens what a session may read, on the operator's decision (`specs/115` §8), and nothing else.** It adds no action, raises
-//! no tier and writes nothing. The whole of the widening is here and in the one filter of the index (`kb::allowed_sql`):
+//! no tier and writes nothing but the private-read mark of a session it hands an internal-source claim to. The whole of the widening is here and in the one filter of the index (`kb::allowed_sql`):
 //!
 //! * [`view`] decides whether anything is shared and from whom: only when `[projects] research_sharing` is `workspace`
 //!   (`scope::research_sharing`, read from the file at each call), only for a session inside a registered project, and only from the
@@ -17,11 +17,21 @@
 //! * A shared result that names one of the workspace's `[privacy] identifiers` is withheld and counted.
 //!
 //!
-//! [`host_search`] is the one reader built so far: the `project_research` group of `host.search_kb`, which also returns the
-//! session's own project's claims (a project reads its own on the same listing). An agent's `kb_search`, the passages a span
-//! starts with, `kb_retrieve`, `get_agent`'s task section and the claim pull do not ask for shared research: they set no
-//! `SearchOpts::shared`, so they are as isolated as before (`specs/115` slice X4 adds the `scope` parameter and the claim pull).
-//! Only a session inside a registered project is given another project's research; a home-layer or default-project session is not.
+//! The readers, and where each marks (slice X4; every one is bounded by a test of this module):
+//!
+//! * a host's `search_kb` ([`host_search`], the `project_research` group of `host.search_kb`), which also returns the session's own
+//!   project's claims; its `scope: "project"` ([`Reach`]) keeps to those. The daemon marks the host session.
+//! * a host's `kb_retrieve`: the MCP server asks the daemon's `host.search_kb` for that group alone (`only: "project_research"`,
+//!   [`with_research_group`]), so the daemon marks it; without the daemon the group is not searched at all.
+//! * an inside agent's `kb_search` and the passages a span starts with ([`session_view`]): the mission's own project's claims and,
+//!   where shared, the other projects' claims and findings. Both search with nothing untrusted, so no project file arrives this
+//!   way. The engine marks the mission's key (`Engine::mark_shared`), the session scope every task in it is held by.
+//! * the claim pull at mission start ([`pull`]): pointers to the other projects' claims, each naming its project; the engine marks
+//!   the mission for an internal-source one before any span is given the pointer.
+//!
+//! `get_agent`'s task section, `search_project` and `search_memory` do not read shared research. A session in no registered project
+//! (a host's folder outside every project, a mission with no scope) is given every non-private project's research ([`view_all`]),
+//! under the same guards, labels and mark: the operator, 2026-11-15, "a session with no project should get full shared research".
 
 use crate::kb::{FindingsView, Hit, SearchOpts, SharedResearch};
 use crate::scope::{self, ProjectId, ResearchSharing};
@@ -74,6 +84,20 @@ pub fn view(ws_dir: &Path, own: &ProjectId) -> Option<SharedResearch> {
     Some(SharedResearch { projects, only: false, own_boost: own_boost(ws_dir), identifiers: crate::query_guard::identifiers(ws_dir) })
 }
 
+/// What a session in NO registered project may read (the operator, 2026-11-15: "a session with no project should get full shared
+/// research"): the research of every project of the workspace that is not private, under the same guards, labels and mark as a
+/// project session. `None` when the setting is `project`, the list cannot be read, or every project is private.
+pub fn view_all(ws_dir: &Path) -> Option<SharedResearch> {
+    if scope::research_sharing(ws_dir) != ResearchSharing::Workspace {
+        return None;
+    }
+    let projects: Vec<(String, String)> = scope::project_entries(ws_dir).into_iter().filter(|e| !e.private).map(|e| (e.id.as_str().to_string(), shown_name(&e.name))).collect();
+    if projects.is_empty() {
+        return None;
+    }
+    Some(SharedResearch { projects, only: false, own_boost: own_boost(ws_dir), identifiers: crate::query_guard::identifiers(ws_dir) })
+}
+
 /// [`view`] for the project the folder `cwd` belongs to, with that project's id.
 pub fn view_at(ws_dir: &Path, cwd: &Path) -> Option<(ProjectId, SharedResearch)> {
     let own = scope::resolve(ws_dir, cwd).project?;
@@ -85,6 +109,166 @@ pub fn view_at(ws_dir: &Path, cwd: &Path) -> Option<(ProjectId, SharedResearch)>
 pub fn mark_entry(rel_path: &str) -> Option<String> {
     let id = rel_path.strip_prefix("research/projects/")?.split('/').nth(2)?.strip_suffix(".json")?;
     (rel_path.split('/').nth(3) == Some(crate::research_index::INTERNAL_DIR) && !id.is_empty()).then(|| format!("shared-claim/{id}"))
+}
+
+/// The private-read entries of the internal-source claims among `hits` ([`mark_entry`]), once each, in order. Whoever hands these
+/// hits to a session marks that session on exactly these entries.
+pub fn marks_of<'a>(hits: impl IntoIterator<Item = &'a Hit>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for h in hits {
+        if let Some(entry) = mark_entry(&h.rel_path).filter(|_| h.internal) {
+            if !out.contains(&entry) {
+                out.push(entry);
+            }
+        }
+    }
+    out
+}
+
+/// The event a tool hands the engine (`ToolCtx::events`) when it gave the session internal-source claims: `{"entries": [...]}`,
+/// from [`marks_of`]. The engine marks the session on them ([`mark_session`]) and does not log the event itself.
+pub const GIVEN: &str = "research.shared_given";
+
+/// The fewest shared claims the pull at mission start may add, however many of the mission's own it found.
+pub const PULL_SHARED_MIN: usize = 2;
+
+/// The log event a session takes when it is first marked on an entry (`specs/103`): the same word the host's search writes.
+pub const MARK_EVENT: &str = crate::private_read::MARK_EVENT;
+
+/// Mark the session `key` (a Delphi mission's own id, the session scope of every task in it, `specs/103` §7.1 OD-5) on each of
+/// `entries`, which must come from [`mark_entry`]. Returns the entries this session had not read before, for its log. A failure
+/// marks nothing more and is dropped, as the host's marker drops it: the mark never changes what was returned.
+pub fn mark_session(ws_dir: &Path, key: &str, entries: &[String], now: i64) -> Vec<String> {
+    entries.iter().filter(|e| e.starts_with("shared-claim/")).filter(|e| crate::private_read::mark(ws_dir, key, e, now).unwrap_or(false)).cloned().collect()
+}
+
+/// What a Delphi session (a mission) may read of project research, for its start passages, its agents' `kb_search` and the claim
+/// pull: the registered project the mission is scoped to (`<mission>/scope`, written by the daemon), if any, and what is shared
+/// with it: [`view`] for a project session, [`view_all`] for a mission in no registered project (the operator, 2026-11-15). `None`
+/// when the mission has no project and nothing is shared.
+pub fn session_view(ws_dir: &Path, mission: &str) -> Option<(Option<ProjectId>, Option<SharedResearch>)> {
+    let word = crate::finding_record::scope_of_dir(&delphi_core::sessions::dir(ws_dir, mission));
+    match ProjectId::parse(&word).ok().filter(|p| p.as_str() != scope::DEFAULT_PROJECT && scope::project_root(ws_dir, p).is_some()) {
+        Some(own) => {
+            let shared = view(ws_dir, &own);
+            Some((Some(own), shared))
+        }
+        None => view_all(ws_dir).map(|shared| (None, Some(shared))),
+    }
+}
+
+/// What the claim pull at mission start adds from the workspace's other projects (`specs/115` §3, slice X4).
+#[derive(Debug, Default)]
+pub struct Pulled {
+    /// The pointers, as `Library::pull` gives them: an id, a status, an origin and a score, never the text.
+    pub pointers: Vec<crate::handoff::ContextPointer>,
+    /// The claims pulled, for the reliance the library records.
+    pub ids: Vec<String>,
+    /// The private-read entries of the internal-source claims among them: the caller marks the session on these.
+    pub internal: Vec<String>,
+    /// Claims left out because their text names one of the workspace's privacy identifiers.
+    pub withheld: usize,
+}
+
+/// The claims of the workspace's other projects that match `prompt`, for the pull at the start of mission `mission`: only where
+/// the operator shares research with the mission's project ([`session_view`]), only claims the index lists under a shared project
+/// (`research_index::files` decides the project, never a display name), ranked as `Library::pull` ranks, at most `limit`. A claim
+/// whose text names a privacy identifier is left out and counted. Nothing for a mission in no project, under the setting `project`,
+/// or when only private projects remain.
+pub fn pull(ws_dir: &Path, home: &Path, mission: &str, prompt: &str, limit: usize) -> Pulled {
+    let Some((_, Some(shared))) = session_view(ws_dir, mission) else { return Pulled::default() };
+    let mut listed: Vec<crate::kb::SourceFile> = Vec::new();
+    crate::research_index::files(ws_dir, &mut listed);
+    // `research/projects/<id>/<claims|internal>/<claim>.json`, for a project of the shared list.
+    let mut among: Vec<(String, bool, String)> = Vec::new();
+    for f in &listed {
+        let Some(rest) = f.rel_path.strip_prefix("research/projects/") else { continue };
+        let parts: Vec<&str> = rest.split('/').collect();
+        let [project, dir, file] = parts[..] else { continue };
+        let Some((_, name)) = shared.projects.iter().find(|(id, _)| id == project) else { continue };
+        let Some(id) = file.strip_suffix(".json").filter(|id| !id.is_empty()) else { continue };
+        let internal = dir == crate::research_index::INTERNAL_DIR;
+        if internal || dir == crate::research_index::CLAIMS_DIR {
+            among.push((id.to_string(), internal, name.clone()));
+        }
+    }
+    let lib = crate::library::Library::in_home(home);
+    let mut out = Pulled::default();
+    let ids: Vec<String> = among.iter().map(|(id, ..)| id.clone()).collect();
+    for p in lib.pull_among(prompt, &ids, limit * 2) {
+        if out.ids.len() >= limit {
+            break;
+        }
+        let text = lib.claim(&p.id).and_then(|c| c["text"].as_str().map(str::to_string)).unwrap_or_default();
+        if crate::query_guard::names_identifier(&text, &shared.identifiers) {
+            out.withheld += 1;
+            continue;
+        }
+        let Some((_, internal, name)) = among.iter().find(|(id, ..)| *id == p.id) else { continue };
+        if *internal {
+            out.internal.push(format!("shared-claim/{}", p.id));
+        }
+        // §3 item 4: the pointer says which project the claim came from, and that it is another project's.
+        let mut pointer = p.pointer();
+        pointer.reason = format!("{}; another project's research, from project {}{}", pointer.reason, name, if *internal { ", from an internal source, host-reported" } else { "" });
+        out.ids.push(p.id.clone());
+        out.pointers.push(pointer);
+    }
+    out
+}
+
+/// Which projects' research the operator's own search adds (`specs/115` §4, slice X5): `delphi kb search --project <name>` and
+/// `--all-projects`, and the console's and the app's knowledge deck. The operator owns every project of the workspace, so a private
+/// project is among them (the flag governs what other projects' sessions read); no session, agent or host is served this view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Projects {
+    One(ProjectId),
+    All,
+}
+
+impl Projects {
+    /// `--project <name>`: a registered project by display name (any case) or id; `None` when the workspace lists no such project.
+    pub fn named(ws_dir: &Path, name: &str) -> Option<Projects> {
+        let name = name.trim();
+        scope::project_entries(ws_dir).into_iter().find(|e| e.id.as_str() == name || e.name.eq_ignore_ascii_case(name)).map(|e| Projects::One(e.id))
+    }
+}
+
+/// The project a row of the index belongs to, by its path: `projects/<id>/…` or `research/projects/<id>/…`. `None` for any other.
+pub fn project_of_path(rel_path: &str) -> Option<&str> {
+    let rest = rel_path.strip_prefix("research/projects/").or_else(|| rel_path.strip_prefix("projects/"))?;
+    rest.split('/').next().filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+
+/// Is `rel_path` a row of a project's research: a file under its `research/` folder, or a claim its research kept?
+pub fn is_research_path(rel_path: &str) -> bool {
+    match project_of_path(rel_path) {
+        Some(id) => rel_path.starts_with(&format!("projects/{id}/files/research/")) || rel_path.starts_with(&format!("research/projects/{id}/")),
+        None => false,
+    }
+}
+
+/// The operator's search of the projects' research: for each project `which` names, its `research/**` files and its claims, and
+/// nothing else of it (no spec, plan, context, layer or memory), each hit carrying the project's display name in `project`. The
+/// trust, legs and ranking of `base` apply; untrusted text is admitted only when `base` admits it, except a project's research files,
+/// which are always untrusted and so need `include_untrusted` to appear at all. Best first, at most `base.limit`.
+pub fn operator_hits(ws_dir: &Path, kb: &crate::kb::Kb, query: &str, which: &Projects, base: &SearchOpts) -> Vec<Hit> {
+    let entries = scope::project_entries(ws_dir);
+    let mut out: Vec<Hit> = Vec::new();
+    for e in entries.iter().filter(|e| match which {
+        Projects::All => true,
+        Projects::One(id) => e.id == *id,
+    }) {
+        let opts = SearchOpts { project: Some(e.id.as_str().to_string()), zones: Some(vec!["project", crate::research_index::ZONE]), shared: None, role: None, include_staged: false, include_episodes: false, ..base.clone() };
+        let Ok(hits) = kb.search(query, &opts) else { continue };
+        for mut h in hits.into_iter().filter(|h| is_research_path(&h.rel_path) && project_of_path(&h.rel_path) == Some(e.id.as_str())) {
+            h.project = Some(shown_name(&e.name));
+            out.push(h);
+        }
+    }
+    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(base.limit.max(1));
+    out
 }
 
 /// What `host.search_kb` adds for a host working in a project (`specs/115` §3).
@@ -104,8 +288,8 @@ pub struct HostFound {
 /// `research/**` files, claims and findings. Nothing else of any project. Empty for a folder in no registered project, or when
 /// the index cannot be read. The preview is the index's own three lines, fenced under the result's label: this is data, never
 /// instructions.
-pub fn host_search(ws_dir: &Path, home: &Path, db: &Path, cwd: &Path, query: &str, limit: usize) -> HostFound {
-    let (hits, withheld) = host_hits(ws_dir, home, db, cwd, query, limit);
+pub fn host_search(ws_dir: &Path, home: &Path, db: &Path, cwd: &Path, query: &str, limit: usize, reach: Reach) -> HostFound {
+    let (hits, withheld) = host_hits_in(ws_dir, home, db, cwd, query, limit, reach);
     let mut out = HostFound { withheld, ..Default::default() };
     for h in &hits {
         out.results.push(host_result(ws_dir, h));
@@ -122,15 +306,108 @@ pub fn host_search(ws_dir: &Path, home: &Path, db: &Path, cwd: &Path, query: &st
 /// host's project research is read through. Another reader of it (`research_known`, `specs/114` §3) is given the same rows and
 /// no others, and whoever hands a row that is `internal` to a session marks that session.
 pub fn host_hits(ws_dir: &Path, home: &Path, db: &Path, cwd: &Path, query: &str, limit: usize) -> (Vec<Hit>, usize) {
-    let Some(own) = scope::resolve(ws_dir, cwd).project.filter(|p| p.as_str() != scope::DEFAULT_PROJECT && scope::project_root(ws_dir, p).is_some()) else { return Default::default() };
-    let shared = SharedResearch { only: true, ..view(ws_dir, &own).unwrap_or_default() };
+    host_hits_in(ws_dir, home, db, cwd, query, limit, Reach::Workspace)
+}
+
+/// How far a host's search of project research reaches (`specs/115` slice X4, the `scope` of `search_kb` and `kb_retrieve`):
+/// `project`, the session's own project's claims only; `workspace` (the default), those and what the operator shares from the
+/// other projects. It only narrows: `workspace` reads no more than [`view`] allows, and under the setting `project` it is `project`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reach {
+    Project,
+    #[default]
+    Workspace,
+}
+
+impl Reach {
+    /// The `scope` argument of a host's tool: absent is `workspace`; any word but the two is refused.
+    pub fn parse(v: Option<&Value>) -> Result<Reach, String> {
+        match v.filter(|v| !v.is_null()).map(|v| v.as_str()) {
+            None => Ok(Reach::Workspace),
+            Some(Some("project")) => Ok(Reach::Project),
+            Some(Some("workspace")) => Ok(Reach::Workspace),
+            _ => Err("`scope` must be \"project\" or \"workspace\"".into()),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Reach::Project => "project",
+            Reach::Workspace => "workspace",
+        }
+    }
+}
+
+/// The reach of `kb_retrieve`'s project research group for its `scope` argument (`specs/115` §3 item 5), or `None` when that scope
+/// asks for no project research (`project_only`, `core_only`, or a word the tool refuses anyway). `all` and absent follow the setting.
+pub fn kb_retrieve_reach(scope: &str) -> Option<Reach> {
+    match scope {
+        "project" => Some(Reach::Project),
+        "all" | "workspace" => Some(Reach::Workspace),
+        _ => None,
+    }
+}
+
+/// `kb_retrieve`'s answer with the daemon's project research group (`host.search_kb` with `only: "project_research"`) added before
+/// its closing `pointer` line, each result in the tool's own fence with its project, `shared` and label. `answer` is the daemon's
+/// reply, `None` when the daemon could not be asked: then one line says the group was not searched. Values are cut to one line
+/// and stripped of quotes, so nothing in a result can close the marker it sits in.
+pub fn with_research_group(text: &str, answer: Option<&str>, pointer: &str) -> String {
+    let tail = format!("\n\n{pointer}");
+    let head = text.strip_suffix(tail.as_str()).unwrap_or(text);
+    let attr = |v: &Value| -> String { v.as_str().unwrap_or("").chars().filter(|c| !c.is_control() && *c != '"' && *c != '<' && *c != '>').take(200).collect() };
+    let mut group = String::new();
+    match answer.and_then(|a| serde_json::from_str::<Value>(a).ok()) {
+        None => group.push_str("\n\n<!-- delphi:rag:group project_research -->\nProject research was not searched: it is served by Delphi's daemon, which did not answer."),
+        Some(v) => {
+            let results = v["project_research"].as_array().cloned().unwrap_or_default();
+            if !results.is_empty() {
+                group.push_str("\n\n<!-- delphi:rag:group project_research -->");
+            }
+            for r in &results {
+                let project = if r["shared"] == true { format!(" project=\"{}\" shared=\"true\"", attr(&r["project"])) } else { String::new() };
+                group.push_str(&format!(
+                    "\n\n<!-- delphi:rag chunk_id=\"{p}\" status=\"{}\" source=\"{p}\" source_type=\"{}\" origin=\"{}\" author=\"{}\" checked=\"{}\" label=\"{}\"{project}{} -->\n{}\n<!-- delphi:rag:end -->",
+                    attr(&r["status"]),
+                    attr(&r["source_type"]),
+                    attr(&r["origin"]),
+                    attr(&r["author"]),
+                    attr(&r["checked"]),
+                    attr(&r["label"]),
+                    if r["internal_source"] == true { " internal_source=\"true\"" } else { "" },
+                    r["preview"].as_str().unwrap_or(""),
+                    p = attr(&r["pointer"]),
+                ));
+            }
+            if v["shared_withheld"].as_u64().is_some_and(|n| n > 0) {
+                group.push_str(&format!("\n\n{} shared result(s) withheld: they name one of the workspace's privacy identifiers.", v["shared_withheld"]));
+            }
+        }
+    }
+    format!("{head}{group}{tail}")
+}
+
+/// [`host_hits`] at a reach: with [`Reach::Project`] no other project is named, so only the session's own claims can be returned.
+/// A folder in no registered project reads every non-private project's research ([`view_all`], the operator, 2026-11-15), and
+/// with [`Reach::Project`] nothing.
+pub fn host_hits_in(ws_dir: &Path, home: &Path, db: &Path, cwd: &Path, query: &str, limit: usize, reach: Reach) -> (Vec<Hit>, usize) {
+    let own = scope::resolve(ws_dir, cwd).project.filter(|p| p.as_str() != scope::DEFAULT_PROJECT && scope::project_root(ws_dir, p).is_some());
+    let others = match (&own, reach) {
+        (_, Reach::Project) => None,
+        (Some(own), Reach::Workspace) => view(ws_dir, own),
+        (None, Reach::Workspace) => view_all(ws_dir),
+    };
+    if own.is_none() && others.is_none() {
+        return Default::default();
+    }
+    let shared = SharedResearch { only: true, ..others.unwrap_or_default() };
     let opts = SearchOpts {
         role: None,
         limit: (limit * 2).min(10),
         include_untrusted: true,
         zones: Some(vec!["project", crate::research_index::ZONE]),
-        project: Some(own.as_str().to_string()),
-        findings: FindingsView::Scope(crate::finding_record::scope_word(Some(own.as_str()))),
+        project: own.as_ref().map(|p| p.as_str().to_string()),
+        findings: FindingsView::Scope(crate::finding_record::scope_word(own.as_ref().map(|p| p.as_str()))),
         shared: Some(shared),
         ..Default::default()
     };
@@ -145,9 +422,9 @@ pub fn host_hits(ws_dir: &Path, home: &Path, db: &Path, cwd: &Path, query: &str,
     }
     // Kept here as well as in the filter, so a change to the filter cannot widen this answer by itself: a row of another project
     // only when the index says it is shared, and of this project only its own claims. A superseded or draft document is not offered.
-    let own_claims = format!("research/projects/{}/", own.as_str());
+    let own_claims = own.as_ref().map(|p| format!("research/projects/{}/", p.as_str()));
     let mut out: Vec<Hit> = Vec::new();
-    for h in found.hits.into_iter().filter(|h| (h.shared || h.rel_path.starts_with(&own_claims)) && h.doc_status == "active") {
+    for h in found.hits.into_iter().filter(|h| (h.shared || own_claims.as_ref().is_some_and(|c| h.rel_path.starts_with(c.as_str()))) && h.doc_status == "active") {
         // One result a document: its best passage.
         if out.len() >= limit || out.iter().any(|seen| seen.rel_path == h.rel_path) {
             continue;
@@ -370,7 +647,7 @@ mod tests {
         assert!(kb.search("quokkatide", &SearchOpts { include_untrusted: true, rerank_weight: 0.0, zones: Some(vec!["project", "research"]), ..Default::default() }).unwrap().is_empty(), "no project, no project rows");
     }
 
-    /// Only a session inside a registered project is given another project's research, and never its own project twice.
+    /// `view` is for a registered project (a session in none reads `view_all`), and never names its own project twice.
     #[test]
     fn the_view_is_for_a_registered_project_only_and_leaves_out_private_projects_and_itself() {
         let f = fx();
@@ -544,7 +821,7 @@ mod tests {
         let own = search_as(&f, A, "bandicootledger");
         assert_eq!((own.withheld, own.hits.len()), (0, 2), "its own project reads it: {:?}", paths(&own));
         // The reply of the host's search carries the count.
-        let host = host_search(&f.ws, &f.home, &f.ws.join("local/state.db"), &f.b, "bandicootledger", 5);
+        let host = host_search(&f.ws, &f.home, &f.ws.join("local/state.db"), &f.b, "bandicootledger", 5, Reach::Workspace);
         assert_eq!((host.withheld, host.results.len()), (1, 1), "{:?}", host.results);
     }
 
@@ -582,7 +859,7 @@ mod tests {
         put(f.b.join("specs/s2.md"), "# B spec\n\nbilbyvault spec of beta.\n");
         sync(&f);
         let db = f.ws.join("local/state.db");
-        let host = host_search(&f.ws, &f.home, &db, &f.b, "bilbyvault code rotates north wing", 10);
+        let host = host_search(&f.ws, &f.home, &db, &f.b, "bilbyvault code rotates north wing", 10, Reach::Workspace);
         let shown = serde_json::to_string(&host.results).unwrap();
         assert!(host.results.iter().all(|r| r["layer"] == "project_research"), "{shown}");
         let of = |id: &str| host.results.iter().find(|r| r["pointer"].as_str().is_some_and(|p| p.contains(id))).unwrap_or_else(|| panic!("{id} is not in {shown}"));
@@ -594,42 +871,300 @@ mod tests {
         assert_eq!(host.internal, [format!("shared-claim/{theirs}")], "the caller marks the session on exactly the internal-source claim");
         assert!(!shown.contains("home-layer note") && !shown.contains("spec of beta") && !shown.contains("internal memo"), "nothing of the home layer, of B's own files or of the source's text: {shown}");
         // From A, the internal claim is A's own: found, flagged for the mark, not shared.
-        let from_a = host_search(&f.ws, &f.home, &db, &f.a, "bilbyvault code rotates north wing", 10);
+        let from_a = host_search(&f.ws, &f.home, &db, &f.a, "bilbyvault code rotates north wing", 10, Reach::Workspace);
         assert_eq!(from_a.internal, [format!("shared-claim/{theirs}")]);
         assert!(from_a.results.iter().any(|r| r["label"] == OWN_INTERNAL_LABEL && r["shared"] == false), "{:?}", from_a.results);
         // With the setting `project`, B still finds its own claim and nothing of A's.
         set_sharing(&f, "project");
-        let alone = host_search(&f.ws, &f.home, &db, &f.b, "bilbyvault code rotates north wing", 10);
+        let alone = host_search(&f.ws, &f.home, &db, &f.b, "bilbyvault code rotates north wing", 10, Reach::Workspace);
         assert!(alone.internal.is_empty() && alone.results.len() == 1 && alone.results[0]["pointer"].as_str().unwrap().contains(&mine), "{:?}", alone.results);
         set_sharing(&f, "workspace");
-        // A folder in no registered project is given no project's research.
-        let outside = host_search(&f.ws, &f.home, &db, &f.home, "bilbyvault code rotates north wing", 10);
-        assert!(outside.results.is_empty() && outside.internal.is_empty());
+        // A folder in no registered project is given every non-private project's research, shared, labelled and flagged for the
+        // mark (the operator, 2026-11-15: "a session with no project should get full shared research"); with `scope: "project"`
+        // or the setting `project`, nothing.
+        let outside = host_search(&f.ws, &f.home, &db, &f.home, "bilbyvault code rotates north wing", 10, Reach::Workspace);
+        let shown = serde_json::to_string(&outside.results).unwrap();
+        assert!(shown.contains(&theirs) && shown.contains(&mine) && outside.results.iter().all(|r| r["shared"] == true), "{shown}");
+        assert_eq!(outside.internal, [format!("shared-claim/{theirs}")]);
+        assert!(host_search(&f.ws, &f.home, &db, &f.home, "bilbyvault code rotates north wing", 10, Reach::Project).results.is_empty());
+        set_sharing(&f, "project");
+        assert!(host_search(&f.ws, &f.home, &db, &f.home, "bilbyvault code rotates north wing", 10, Reach::Workspace).results.is_empty());
     }
 
-    /// The other two ways a session could be GIVEN an internal-source claim do not exist yet, and this bounds them: the passages
-    /// a span starts with and an agent's search name no shared list, so they return no project claim at all; and the claim pull at
-    /// mission start offers a project-scoped claim to its own project only (`specs/115` slice X4 changes both, and must mark).
-    #[test]
-    fn start_passages_and_the_claim_pull_give_no_session_another_projects_claim_yet() {
-        let f = fx();
-        let secret = source(&f, "secret", "The dunnartkey is under the third stone, the internal note says.", true);
+    /// The fixture of the X4 tests: A's research kept one claim on a private source (`theirs`, internal) and one on a public
+    /// source (`public`); B's research kept one (`mine`). Missions `m-beta` (scoped to B), `m-alpha` (scoped to A) and `m-none`
+    /// (no project) exist. Returns `(theirs, public, mine)`.
+    fn x4(f: &Fx) -> (String, String, String) {
+        let secret = source(f, "secret", "The dunnartkey is under the third stone, the internal note says.", true);
+        let open = source(f, "open", "The dunnartgate opens at dawn, the public notice says.", false);
         let ta = topic(&f.a, "alpha", "Where is the dunnartkey?", "Under the third stone.", false);
-        let theirs = claim(&f, "the dunnartkey is under the third stone", "ccccccccccccccccccccccccccccccc1", Some("alpha"), Some(&ta.id), &secret, "under the third stone");
-        sync(&f);
-        let db = f.ws.join("local/state.db");
-        // A mission of project B: its span's start passages.
+        let tb = topic(&f.b, "beta", "When does the dunnartgate close?", "At dusk.", false);
+        let theirs = claim(f, "the dunnartkey is under the third stone", "ccccccccccccccccccccccccccccccc1", Some("alpha"), Some(&ta.id), &secret, "under the third stone");
+        let public = claim(f, "the dunnartgate opens at dawn", "ccccccccccccccccccccccccccccccc2", Some("alpha"), Some(&ta.id), &open, "opens at dawn");
+        let mine = claim(f, "the dunnartgate closes at dusk", "ccccccccccccccccccccccccccccccc3", Some("beta"), Some(&tb.id), &open, "opens at dawn");
         put(delphi_core::sessions::dir(&f.ws, "m-beta").join("scope"), B);
-        let start = crate::retrieval::span_start(&f.home, &db, "m-beta", "Where is the dunnartkey kept under the third stone?", "builder", crate::retrieval::StartBudget { passages: 6, chars: 4000, ..Default::default() }, false);
-        assert!(start.is_none_or(|s| !s.text.contains("dunnartkey")), "a span of B starts with nothing of A's");
-        // The same question as an agent's `kb_search` asks it (a role, nothing untrusted, findings scoped to B).
-        let kb = Kb::open_readonly(&db).unwrap();
-        let hits = kb.search("dunnartkey third stone", &SearchOpts { role: Some("builder".into()), rerank_weight: 0.0, findings: FindingsView::Scope(B.into()), ..Default::default() }).unwrap();
-        assert!(hits.is_empty(), "{:?}", hits.iter().map(|h| &h.rel_path).collect::<Vec<_>>());
-        // The claim pull.
+        put(delphi_core::sessions::dir(&f.ws, "m-alpha").join("scope"), A);
+        std::fs::create_dir_all(delphi_core::sessions::dir(&f.ws, "m-none")).unwrap();
+        sync(f);
+        (theirs, public, mine)
+    }
+
+    const ASK: &str = "Where is the dunnartkey kept, under the third stone, and when does the dunnartgate open at dawn or close at dusk?";
+
+    fn start_of(f: &Fx, mission: &str) -> Option<crate::retrieval::Start> {
+        crate::retrieval::span_start(&f.home, &f.ws.join("local/state.db"), mission, ASK, "builder", crate::retrieval::StartBudget { passages: 8, chars: 6000, ..Default::default() }, false)
+    }
+
+    /// `specs/115` slice X4, the start passages: a span of a mission in project B starts from A's shared claims, each naming its
+    /// project, and from B's own; the internal-source one is labelled and named for the mark (`Start::internal`). A's spec and
+    /// files never arrive this way. A mission in no project is given no project's claims; A private, or the setting `project`,
+    /// gives B nothing of A's. A mission of A is given its own internal-source claim, flagged for the mark too.
+    #[test]
+    fn start_passages_give_a_project_session_the_shared_claims_named_and_flagged_for_the_mark() {
+        let f = fx();
+        let (theirs, public, mine) = x4(&f);
+        let start = start_of(&f, "m-beta").expect("start passages");
+        for id in [&theirs, &public, &mine] {
+            assert!(start.text.contains(id.as_str()), "{id} is not in:\n{}", start.text);
+        }
+        assert!(start.text.contains(&format!("[{INTERNAL_LABEL}, project alpha]")), "{}", start.text);
+        assert!(start.text.contains(&format!("[{SHARED_LABEL}, project alpha]")), "{}", start.text);
+        assert_eq!(start.internal, [format!("shared-claim/{theirs}")], "exactly the internal-source claim is named for the mark");
+        assert!(!start.text.contains("quokkatide") && !start.text.contains(&format!("projects/{A}/files")), "no project file: {}", start.text);
+        // No project: every non-private project's claims, named and labelled, and the internal one named for the mark (the
+        // operator, 2026-11-15: "a session with no project should get full shared research").
+        let none = start_of(&f, "m-none").expect("shared passages for a mission in no project");
+        for id in [&theirs, &public, &mine] {
+            assert!(none.text.contains(id.as_str()), "{id} is not in:\n{}", none.text);
+        }
+        assert!(none.text.contains(&format!("[{INTERNAL_LABEL}, project alpha]")) && none.text.contains("project beta"), "{}", none.text);
+        assert_eq!(none.internal, [format!("shared-claim/{theirs}")]);
+        assert!(!none.text.contains("hidden") && !none.text.contains("quokkatide"), "nothing of the private project, no project file: {}", none.text);
+        // A's own session: its own internal-source claim, labelled as its own and flagged.
+        let own = start_of(&f, "m-alpha").expect("A's start passages");
+        assert_eq!(own.internal, [format!("shared-claim/{theirs}")]);
+        assert!(own.text.contains(&format!("[{OWN_INTERNAL_LABEL}]")), "{}", own.text);
+        // A private: B is given nothing of A's and nothing to mark, and still its own claim.
+        register(&f, &[P, A]);
+        let closed = start_of(&f, "m-beta").expect("B's own claim");
+        assert!(closed.internal.is_empty() && !closed.text.contains(&theirs) && !closed.text.contains(&public) && closed.text.contains(&mine), "{}", closed.text);
+        register(&f, &[P]);
+        set_sharing(&f, "project");
+        let alone = start_of(&f, "m-beta").expect("B's own claim");
+        assert!(alone.internal.is_empty() && !alone.text.contains(&theirs) && alone.text.contains(&mine), "{}", alone.text);
+    }
+
+    /// `specs/115` slice X4, an inside agent's `kb_search`: the same reach as the start passages, each shared result naming its
+    /// project; the internal-source claim is handed to the engine to mark (`GIVEN`), and nothing is for a mission in no project.
+    #[test]
+    fn an_agents_kb_search_returns_the_shared_claims_and_asks_the_engine_to_mark_the_session() {
+        use delphi_core::pathguard::{Guard, Zones};
+        use delphi_core::provenance::{Index, OriginRules, Span};
+        let f = fx();
+        let (theirs, public, mine) = x4(&f);
+        let guard = Guard { zones: Zones { local: f.ws.join("local"), team: f.ws.join("team"), base: f.ws.join("base"), ratified: f.ws.join("ratified"), worktree: None, projects: vec![], bundles: vec![], payload: None }, role: "builder".into(), read_globs: vec!["*".into()], write_globs: vec![], protected: Default::default() };
+        let (mut span, mut index, rules) = (Span::root("sp1"), Index::new(), OriginRules::with_defaults());
+        let mut search = |mission: &str, q: &str| -> (String, Vec<(String, Value)>) {
+            let mut ctx = crate::tools::ToolCtx { guard: &guard, span: &mut span, index: &mut index, rules: &rules, probe: &crate::probe::AssumeClean, role: "builder", mission_id: mission, now_rfc3339: "t", stamps: vec![], events: vec![] };
+            let r = crate::tools::run(&mut ctx, "kb_search", &json!({"query": q, "limit": 10}));
+            (r.content, ctx.events)
+        };
+        let (found, events) = search("m-beta", "dunnartkey third stone dunnartgate dawn dusk");
+        for id in [&theirs, &public, &mine] {
+            assert!(found.contains(id.as_str()), "{id} is not in:\n{found}");
+        }
+        assert!(found.contains(&format!("[{INTERNAL_LABEL}]")) && found.contains("(project: alpha)"), "{found}");
+        let given: Vec<&Value> = events.iter().filter(|(k, _)| k == GIVEN).map(|(_, p)| p).collect();
+        assert_eq!(given, [&json!({"entries": [format!("shared-claim/{theirs}")]})]);
+        // Nothing of A's own files, whatever the words.
+        let (files, _) = search("m-beta", "quokkatide spec plan context work survey");
+        assert!(!files.contains(&format!("projects/{A}/")), "{files}");
+        // A mission in no project: every non-private project's claims, and the internal one handed to the engine to mark.
+        let (none, events) = search("m-none", "dunnartkey third stone dunnartgate dawn dusk");
+        assert!(none.contains(&theirs) && none.contains(&mine) && none.contains("(project: beta)"), "{none}");
+        let given: Vec<&Value> = events.iter().filter(|(k, _)| k == GIVEN).map(|(_, p)| p).collect();
+        assert_eq!(given, [&json!({"entries": [format!("shared-claim/{theirs}")]})]);
+        // A private: nothing of A's, nothing to mark.
+        register(&f, &[P, A]);
+        let (closed, events) = search("m-beta", "dunnartkey third stone dunnartgate dawn dusk");
+        assert!(!closed.contains(&theirs) && !closed.contains(&public) && closed.contains(&mine) && events.iter().all(|(k, _)| k != GIVEN), "{closed}");
+    }
+
+    /// `specs/115` §3 item 4 and slice X4, the claim pull at mission start: pointers to A's claims for a mission of B, each saying
+    /// it is another project's and from which; the internal-source one is named for the mark. Nothing for a mission in no project,
+    /// with A private or under the setting `project`; a claim naming a privacy identifier is withheld and counted. The library's
+    /// own pull still offers a project's claim to its own project only.
+    #[test]
+    fn the_claim_pull_offers_shared_claims_by_pointer_naming_their_project_and_the_internal_one_for_the_mark() {
+        let f = fx();
+        let (theirs, public, mine) = x4(&f);
+        let got = pull(&f.ws, &f.home, "m-beta", ASK, 5);
+        let mut ids = got.ids.clone();
+        ids.sort();
+        let mut want = vec![theirs.clone(), public.clone()];
+        want.sort();
+        assert_eq!(ids, want, "A's two claims, never B's own (the library's pull serves those)");
+        assert_eq!(got.internal, [format!("shared-claim/{theirs}")]);
+        for p in &got.pointers {
+            assert!(p.uri.starts_with("@library/claim/"), "{}", p.uri);
+            assert!(p.reason.contains("another project's research, from project alpha"), "{}", p.reason);
+            assert!(!p.reason.contains("dunnart"), "a pointer carries no text: {}", p.reason);
+        }
+        let int = got.pointers.iter().find(|p| p.uri.ends_with(&theirs)).unwrap();
+        assert!(int.reason.contains("from an internal source, host-reported"), "{}", int.reason);
+        // A mission in no project: every non-private project's claims, the internal one named for the mark.
+        let none = pull(&f.ws, &f.home, "m-none", ASK, 5);
+        let mut ids = none.ids.clone();
+        ids.sort();
+        let mut want = vec![theirs.clone(), public.clone(), mine.clone()];
+        want.sort();
+        assert_eq!((ids, none.internal.clone()), (want, vec![format!("shared-claim/{theirs}")]));
+        assert!(pull(&f.ws, &f.home, "m-beta", "nothing about it at all", 5).ids.is_empty(), "a claim must share a word with the prompt");
         let lib = Library::in_home(&f.home);
-        assert!(lib.pull("dunnartkey third stone", Some("beta"), 5).iter().all(|p| p.id != theirs));
-        assert!(lib.pull("dunnartkey third stone", None, 5).iter().all(|p| p.id != theirs));
-        assert!(lib.claim_slice(&format!("@library/claim/{theirs}")).unwrap().contains("text withheld"), "and opening the pointer withholds the text, as before");
+        assert!(lib.pull(ASK, Some("beta"), 5).iter().all(|p| p.id != theirs && p.id != public), "the library's own pull is unchanged");
+        assert!(lib.pull(ASK, Some("beta"), 5).iter().any(|p| p.id == mine));
+        // Identifiers withhold.
+        put(f.ws.join("config.toml"), "[privacy]\nidentifiers = [\"third stone\"]\n");
+        let guarded = pull(&f.ws, &f.home, "m-beta", ASK, 5);
+        assert_eq!((guarded.ids.clone(), guarded.withheld, guarded.internal.len()), (vec![public.clone()], 1, 0));
+        std::fs::remove_file(f.ws.join("config.toml")).unwrap();
+        register(&f, &[P, A]);
+        assert!(pull(&f.ws, &f.home, "m-beta", ASK, 5).ids.is_empty(), "A private");
+        register(&f, &[P]);
+        set_sharing(&f, "project");
+        assert!(pull(&f.ws, &f.home, "m-beta", ASK, 5).ids.is_empty(), "the setting `project`");
+    }
+
+    /// The marker of a Delphi session: it marks the mission's key on a shared claim's entry and on nothing else, once; the
+    /// mission is then held on its sends (`specs/103`).
+    #[test]
+    fn a_session_is_marked_on_a_shared_claims_entry_once_and_on_nothing_else() {
+        let f = fx();
+        let entry = "shared-claim/r-abc".to_string();
+        assert_eq!(crate::private_read::send_record(&f.ws, "m-beta"), json!({"private": false}));
+        assert_eq!(mark_session(&f.ws, "m-beta", &[entry.clone(), "host-abcd1234/n1".into(), "../x".into()], 7), std::slice::from_ref(&entry));
+        assert!(mark_session(&f.ws, "m-beta", std::slice::from_ref(&entry), 8).is_empty(), "a second read is not a first");
+        assert_eq!(crate::private_read::send_record(&f.ws, "m-beta"), json!({"private": true}));
+        assert_eq!(crate::private_read::send_record(&f.ws, "m-alpha"), json!({"private": false}), "another session is not marked");
+    }
+
+    /// `scope` on a host's tools: `project` keeps the group to the session's own claims, `workspace` and absent reach as far as the
+    /// setting shares; any other word is refused. `kb_retrieve`'s group comes from the daemon, fenced, its project named, and says
+    /// so when the daemon did not answer.
+    #[test]
+    fn scope_project_keeps_a_hosts_group_to_its_own_claims_and_kb_retrieve_frames_the_daemons_group() {
+        let f = fx();
+        let (theirs, public, mine) = x4(&f);
+        let db = f.ws.join("local/state.db");
+        let q = "dunnartkey third stone dunnartgate dawn dusk";
+        let wide = host_search(&f.ws, &f.home, &db, &f.b, q, 10, Reach::Workspace);
+        let shown = serde_json::to_string(&wide.results).unwrap();
+        assert!(shown.contains(&theirs) && shown.contains(&public) && shown.contains(&mine) && wide.internal == [format!("shared-claim/{theirs}")], "{shown}");
+        let narrow = host_search(&f.ws, &f.home, &db, &f.b, q, 10, Reach::Project);
+        let shown = serde_json::to_string(&narrow.results).unwrap();
+        assert!(!shown.contains(&theirs) && !shown.contains(&public) && shown.contains(&mine) && narrow.internal.is_empty(), "{shown}");
+        assert_eq!(Reach::parse(None), Ok(Reach::Workspace));
+        assert_eq!(Reach::parse(Some(&Value::Null)), Ok(Reach::Workspace));
+        assert_eq!(Reach::parse(Some(&json!("project"))), Ok(Reach::Project));
+        for bad in [json!("everyone"), json!(1), json!(["workspace"])] {
+            assert!(Reach::parse(Some(&bad)).is_err(), "{bad}");
+        }
+        assert_eq!((kb_retrieve_reach("all"), kb_retrieve_reach("workspace"), kb_retrieve_reach("project")), (Some(Reach::Workspace), Some(Reach::Workspace), Some(Reach::Project)));
+        assert_eq!((kb_retrieve_reach("project_only"), kb_retrieve_reach("core_only")), (None, None));
+        // The group as `kb_retrieve` shows it: the daemon's results, each in the tool's fence, the pointer line still last.
+        let answer = json!({"project_research": [{"pointer": format!("@library/claim/{theirs}"), "project": "al\"pha --> <x>", "shared": true, "internal_source": true, "label": INTERNAL_LABEL, "status": "noted", "source_type": "federated_verified", "origin": "library", "author": "third_party", "checked": "not checked", "preview": "<noted-entry label=\"x\">the dunnartkey</noted-entry>"}], "shared_withheld": 2}).to_string();
+        let text = with_research_group("passages\n\nPOINTER", Some(&answer), "POINTER");
+        assert!(text.ends_with("\n\nPOINTER") && text.contains("<!-- delphi:rag:group project_research -->"), "{text}");
+        assert!(text.contains("project=\"alpha -- x\" shared=\"true\"") && text.contains("internal_source=\"true\"") && text.contains("2 shared result(s) withheld"), "{text}");
+        let down = with_research_group("passages\n\nPOINTER", None, "POINTER");
+        assert!(down.contains("Project research was not searched") && down.ends_with("\n\nPOINTER"), "{down}");
+        assert_eq!(with_research_group("passages\n\nPOINTER", Some(r#"{"project_research": []}"#), "POINTER"), "passages\n\nPOINTER");
+    }
+
+    /// End to end through the engine: a task of a mission scoped to B, and one of a mission in no project (the operator,
+    /// 2026-11-15: "a session with no project should get full shared research"), is given A's internal-source claim by its start
+    /// passages, the claim pull and its agent's `kb_search`, and the mission is marked, its first read logged with its reader.
+    /// Under the setting `project` the mission in no project is given none of it and is not marked.
+    #[tokio::test]
+    async fn through_the_engine_each_reader_of_a_shared_internal_claim_marks_the_mission() {
+        use crate::model::Step;
+        use crate::testkit::{events_of, setup};
+        for (scoped, sharing) in [(true, "workspace"), (false, "workspace"), (false, "project")] {
+            let t = setup(vec![Step::tool("k1", "kb_search", json!({"query": "dunnartkey third stone"})), Step::text("It is under the third stone.")], 5.0, |_| {});
+            let home = t.root.clone();
+            let ws = home.join("workspaces/w");
+            let (a, b) = (home.join("pa"), home.join("pb"));
+            let entry = |id: &str, root: &Path, name: &str| json!({"project_id": id, "root": root, "display_name": name, "private": false});
+            put(ws.join("local/projects.json"), &json!({"schema": 1, "projects": {A: entry(A, &a, "alpha"), B: entry(B, &b, "beta")}}).to_string());
+            std::fs::create_dir_all(&b).unwrap();
+            let f = Fx { _root: tempfile::tempdir().unwrap(), home: home.clone(), ws: ws.clone(), a: a.clone(), b: b.clone(), p: home.join("pp") };
+            let secret = source(&f, "secret", "The dunnartkey is under the third stone, the internal note says.", true);
+            let ta = topic(&a, "alpha", "Where is the dunnartkey?", "Under the third stone.", false);
+            let theirs = claim(&f, "the dunnartkey is under the third stone", "ccccccccccccccccccccccccccccccc1", Some("alpha"), Some(&ta.id), &secret, "under the third stone");
+            if scoped {
+                put(delphi_core::sessions::dir(&ws, &t.m.id).join("scope"), B);
+            }
+            if sharing == "project" {
+                let cfg = std::fs::read_to_string(ws.join("config.toml")).unwrap_or_default();
+                put(ws.join("config.toml"), &format!("{cfg}\n[projects]\nresearch_sharing = \"project\"\n"));
+            }
+            sync(&f);
+            let out = t.engine.run_task(&t.m, "architect", "Where is the dunnartkey kept under the third stone?").await.unwrap();
+            assert_eq!(out.status, crate::engine::Status::Done);
+            let marks = events_of(&t, MARK_EVENT);
+            let told: String = t.model.requests().iter().map(|r| r.body["messages"].to_string()).collect();
+            if sharing == "workspace" {
+                assert_eq!(marks.len(), 1, "one entry, one first read ({scoped}): {marks:?}");
+                assert_eq!((marks[0].payload["key"].as_str(), marks[0].payload["entry"].as_str()), (Some(t.m.id.as_str()), Some(format!("shared-claim/{theirs}").as_str())));
+                assert!(["span_start", "claim_pull"].contains(&marks[0].payload["reader"].as_str().unwrap()), "marked before the first turn: {:?}", marks[0].payload);
+                assert!(crate::private_read::live(&ws).iter().any(|(k, e, _)| *k == t.m.id && e.contains(&format!("shared-claim/{theirs}"))));
+                assert!(told.contains(&theirs) && told.contains("alpha"), "the task was given A's claim: {told}");
+            } else {
+                assert!(marks.is_empty(), "{marks:?}");
+                assert!(crate::private_read::live(&ws).is_empty());
+                assert!(!told.contains(&theirs), "under the setting `project` a mission in no project is given no project's claim: {told}");
+            }
+        }
+    }
+
+    /// `specs/115` §4, slice X5: the operator's knowledge deck (`kb.get`, the console and the app) adds every project's research with
+    /// `projects=all`, each result naming its project, or one project's alone with `project=<name>`; a research result opens, while a
+    /// project's spec does not. Over HTTP (not the operator) neither parameter is read. The CLI's two options take the same path.
+    #[test]
+    fn the_operators_deck_names_the_project_of_each_research_result_and_narrows_to_one() {
+        let f = fx();
+        let (theirs, _, _) = x4(&f);
+        let kb = Kb::open_readonly(&f.ws.join("local/state.db")).unwrap();
+        let reader = |operator: bool| crate::kbserve::Reader { kb: &kb, ws: &f.ws, operator, home: Some(&f.home) };
+        let results = |r: &crate::kbserve::Reply| -> Vec<(String, Option<String>)> { r.body["results"].as_array().unwrap().iter().map(|x| (x["path"].as_str().unwrap().to_string(), x["project"].as_str().map(String::from))).collect() };
+        let all = reader(true).get("/v1/search?q=quokkatide+survey+spring+range&rerank=0&facets=1&projects=all&limit=30");
+        assert_eq!(all.status, 200, "{}", all.body);
+        let got = results(&all);
+        for (id, name) in [(A, "alpha"), (B, "beta"), (P, "hidden")] {
+            assert!(got.contains(&(format!("projects/{id}/files/research/notes.md"), Some(name.to_string()))), "{name}: {got:?}");
+        }
+        assert!(got.iter().all(|(p, _)| !p.contains("/files/specs/") && !p.contains("/files/plans/") && !p.contains("/layer/")), "research only: {got:?}");
+        let names: Vec<&String> = all.body["projects"].as_object().unwrap().keys().collect();
+        assert_eq!(names, ["alpha", "beta", "hidden"], "counted by project; the private project is the operator's too");
+        assert!(all.body["results"].as_array().unwrap().iter().filter(|x| x["project"].is_string()).all(|x| x["kind"] == "research"), "{}", all.body);
+        let one = reader(true).get("/v1/search?q=quokkatide+survey+spring+range&rerank=0&project=ALPHA");
+        assert_eq!(results(&one), [(format!("projects/{A}/files/research/notes.md"), Some("alpha".to_string()))]);
+        assert_eq!(reader(true).get("/v1/search?q=quokkatide&project=nobody").status, 404);
+        // The internal-source claim is the operator's to see, labelled.
+        let claims = reader(true).get("/v1/search?q=dunnartkey+third+stone&rerank=0&projects=all");
+        assert!(claims.body["results"].as_array().unwrap().iter().any(|x| x["path"].as_str().is_some_and(|p| p.contains(&theirs)) && x["label"] == OWN_INTERNAL_LABEL && x["project"] == "alpha"), "{}", claims.body);
+        // Without the parameter, and over HTTP, no project rows, as before.
+        assert!(results(&reader(true).get("/v1/search?q=quokkatide+survey&rerank=0")).iter().all(|(p, pr)| !p.starts_with("projects/") && pr.is_none()));
+        assert!(results(&reader(false).get("/v1/search?q=quokkatide+survey&rerank=0&projects=all")).iter().all(|(p, pr)| !p.starts_with("projects/") && pr.is_none()));
+        // Opening: a research file opens for the operator; a project's spec does not, and nothing of a project opens over HTTP.
+        assert_eq!(reader(true).get(&format!("/v1/doc?path=projects/{A}/files/research/notes.md")).status, 200);
+        assert_eq!(reader(true).get(&format!("/v1/doc?path=projects/{A}/files/specs/s1.md")).status, 404);
+        assert_eq!(reader(false).get(&format!("/v1/doc?path=projects/{A}/files/research/notes.md")).status, 404);
+        // The CLI's names: by display name in any case, or by id; an unknown name is no project.
+        assert_eq!(Projects::named(&f.ws, "Beta"), Some(Projects::One(ProjectId::parse(B).unwrap())));
+        assert_eq!(Projects::named(&f.ws, A), Some(Projects::One(ProjectId::parse(A).unwrap())));
+        assert_eq!(Projects::named(&f.ws, "nobody"), None);
+        assert!(is_research_path(&format!("research/projects/{A}/internal/x.json")) && is_research_path(&format!("projects/{A}/files/research/a.md")));
+        assert!(!is_research_path(&format!("projects/{A}/files/specs/a.md")) && !is_research_path("research/claims/x.json") && !is_research_path("projects/../files/research/a.md"));
     }
 }

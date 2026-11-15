@@ -30,7 +30,8 @@ const FACET_CANDIDATES: usize = 200;
 /// `docs` takes the rest of it.
 pub fn kind_of(rel_path: &str, zone: &str) -> &'static str {
     let p = rel_path.trim_start_matches('/');
-    if p.starts_with("knowledge/web/") {
+    // A project's research (`specs/115` §4 item 1): its `research/` files and the claims it kept, as the operator's deck shows them.
+    if p.starts_with("knowledge/web/") || crate::shared_research::is_research_path(p) {
         "research"
     } else if p.starts_with("context/lessons/") {
         "lesson"
@@ -129,6 +130,29 @@ impl Reader<'_> {
         }
     }
 
+    /// The view a request may read the document at `path` with: [`Reader::view`], and for the operator a project's research row
+    /// (`specs/115` §4 item 1) is read as that project reads it, so a research result of any project opens. Only the research
+    /// rows: a project's specs, plans and layer stay out of the operator's knowledge deck as before.
+    fn view_of(&self, q: &HashMap<String, String>, path: &str) -> SearchOpts {
+        let mut v = self.view(q);
+        if self.operator && crate::shared_research::is_research_path(path) {
+            v.project = crate::shared_research::project_of_path(path).map(String::from);
+        }
+        v
+    }
+
+    /// Which projects' research a search adds (`specs/115` §4 item 1): `projects=all`, or `project=<name>` for one project's research
+    /// alone. The operator's view only; over HTTP neither is read. `Err` is the reply for a name the workspace does not list.
+    fn projects(&self, q: &HashMap<String, String>) -> Result<Option<crate::shared_research::Projects>, Reply> {
+        if !self.operator {
+            return Ok(None);
+        }
+        if let Some(name) = q.get("project").filter(|n| !n.trim().is_empty()) {
+            return crate::shared_research::Projects::named(self.ws, name).map(Some).ok_or_else(|| fail(404, "no registered project has that name"));
+        }
+        Ok((q.get("projects").map(String::as_str) == Some("all")).then_some(crate::shared_research::Projects::All))
+    }
+
     /// `GET target` (a path and query such as `/v1/search?q=retry`). Never writes anything.
     pub fn get(&self, target: &str) -> Reply {
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
@@ -207,15 +231,29 @@ impl Reader<'_> {
         if q.get("rerank").map(String::as_str) == Some("0") {
             opts.rerank_weight = 0.0;
         }
+        let projects = match self.projects(q) {
+            Ok(p) => p,
+            Err(reply) => return Ok(reply),
+        };
         let started = Instant::now();
-        let hits = self.kb.search(query, &opts).map_err(|e| e.to_string())?;
+        let hits = match &projects {
+            Some(which @ crate::shared_research::Projects::One(_)) => crate::shared_research::operator_hits(self.ws, self.kb, query, which, &opts),
+            Some(which) => {
+                let mut all = self.kb.search(query, &opts).map_err(|e| e.to_string())?;
+                all.extend(crate::shared_research::operator_hits(self.ws, self.kb, query, which, &opts));
+                all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                all.truncate(opts.limit.max(1));
+                all
+            }
+            None => self.kb.search(query, &opts).map_err(|e| e.to_string())?,
+        };
         let mut out = Vec::new();
         for h in hits {
-            let Some(d) = self.kb.document(&h.rel_path, &self.view(q)).map_err(|e| e.to_string())? else { continue };
+            let Some(d) = self.kb.document(&h.rel_path, &self.view_of(q, &h.rel_path)).map_err(|e| e.to_string())? else { continue };
             if collection.map(|c| c != &d.zone).unwrap_or(false) {
                 continue;
             }
-            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "kind": kind_of(&d.rel_path, &d.zone), "updated": d.updated_at, "trust": d.source_type, "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score, "note": h.note, "knowledge_status": h.status, "label": h.shown_label(), "vouched_by": h.vouched_by}));
+            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "kind": kind_of(&d.rel_path, &d.zone), "updated": d.updated_at, "trust": d.source_type, "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score, "note": h.note, "knowledge_status": h.status, "label": h.shown_label(), "vouched_by": h.vouched_by, "project": h.project}));
             if !facets && kind.is_none() && out.len() >= limit {
                 break;
             }
@@ -229,11 +267,24 @@ impl Reader<'_> {
             }
             n
         });
+        // The projects among the candidates, for narrowing to one (`specs/115` §4 item 1).
+        let by_project = facets.then(|| {
+            let mut n: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+            for r in &out {
+                if let Some(p) = r["project"].as_str() {
+                    *n.entry(p.to_string()).or_insert(0) += 1;
+                }
+            }
+            n
+        });
         if let Some(k) = kind {
             out.retain(|r| r["kind"].as_str() == Some(k.as_str()));
         }
         out.truncate(limit);
         let mut body = json!({"query": query, "took_ms": started.elapsed().as_millis() as u64, "mode": if self.kb.embedder().is_some() { "hybrid" } else { "lexical" }, "results": out});
+        if let Some(n) = by_project.filter(|n| !n.is_empty()) {
+            body["projects"] = json!(n);
+        }
         if let Some(n) = counts {
             body["facets"] = json!(n);
             body["candidates"] = json!(candidates);
@@ -244,7 +295,7 @@ impl Reader<'_> {
 
     fn doc(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
         let Some(path) = q.get("path").filter(|p| !p.is_empty() && !p.contains('\0')) else { return Ok(fail(400, "`path` is required")) };
-        let Some(info) = self.kb.document(path, &self.view(q)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
+        let Some(info) = self.kb.document(path, &self.view_of(q, path)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
         // The file comes from the indexer's own list, so the logical path cannot name anything else.
         let Some(src) = kb::sources(self.ws).into_iter().find(|s| s.rel_path == info.rel_path) else { return Ok(fail(404, "no longer on disk")) };
         let binary = crate::kb_docs::is_binary_doc(&src.rel_path);
@@ -254,7 +305,7 @@ impl Reader<'_> {
         // A PDF, DOCX or EPUB is served as the text the index holds for it (`specs/043` §6.2).
         let text = if binary { crate::kb_docs::text_of(&src.path).ok_or("no longer on disk")? } else { std::fs::read_to_string(&src.path).map_err(|e| e.to_string())? };
         let live = blake3::hash(text.as_bytes()).to_hex().to_string();
-        let mut links = extract_links(&info.rel_path, &text, &|p| self.kb.document(p, &self.view(q)).ok().flatten().is_some());
+        let mut links = extract_links(&info.rel_path, &text, &|p| self.kb.document(p, &self.view_of(q, p)).ok().flatten().is_some());
         // An outside address is followed only if its host is on the operator's lists (`specs/043` §3.4); the console says so.
         let home = self.ws.parent().and_then(Path::parent).unwrap_or(self.ws);
         let lists = crate::research_setup::lists(self.ws, home).ok();
@@ -303,7 +354,7 @@ impl Reader<'_> {
         if !named_ok {
             return Ok(fail(400, "`src` must be a relative path to a .png, .jpg, .jpeg or .gif file below the document's directory"));
         }
-        let Some(info) = self.kb.document(&path, &self.view(q)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
+        let Some(info) = self.kb.document(&path, &self.view_of(q, &path)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
         let Some(src) = kb::sources(self.ws).into_iter().find(|s| s.rel_path == info.rel_path) else { return Ok(fail(404, "no longer on disk")) };
         let Some(dir) = src.path.parent().and_then(|d| d.canonicalize().ok()) else { return Ok(fail(404, "no longer on disk")) };
         let Ok(file) = dir.join(href).canonicalize() else { return Ok(fail(404, "no such image next to the document")) };

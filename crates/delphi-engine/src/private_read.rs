@@ -82,8 +82,8 @@ pub struct Read {
 /// Every file of this crate that returns, or can return, the text of a private entry. The inventory test below checks the table against
 /// the accessors it scans for; a reader of private text that is not here fails it.
 pub const READS: [Read; 27] = [
-    Read { file: "shared_research.rs", what: "`host_search` (`specs/115` §2 item 3): the `project_research` group of `host.search_kb` returns a project's claim that rests on a private or internal source (its sentence, its quote and a pointer; the session's own project's or, where the operator shares research, another's), never the source's own record or text", how: How::Marks },
-    Read { file: "retrieval.rs", what: "`passages` (`specs/116` §4): reads, with `chunk_content`, the text of the chunks a search just returned, for a span's start context (`span_start`) and the agent's `kb_search`", how: How::NoReturn { why: "it reads only what the search returned, and neither caller sets `include_staged`, so no staged or host-noted entry is among the hits; the index lists no private library source (`Library::indexable`). It returns no private entry's text" } },
+    Read { file: "shared_research.rs", what: "`host_search` (`specs/115` §2 item 3): the `project_research` group of `host.search_kb` (and of `kb_retrieve`, which asks the daemon for it) returns a project's claim that rests on a private or internal source (its sentence, its quote and a pointer; the session's own project's or, where the operator shares research, another's), never the source's own record or text. `pull` (slice X4) hands the claim pull pointers to such claims, and `mark_session` marks a Delphi session for every reader of this row and of `retrieval.rs`", how: How::Marks },
+    Read { file: "retrieval.rs", what: "`passages` (`specs/116` §4): reads, with `chunk_content`, the text of the chunks a search just returned, for a span's start context (`span_start`) and the agent's `kb_search`; since `specs/115` slice X4 both searches return the mission's project's claims and the claims the other projects share, an internal-source one among them (`Start::internal`, the `shared_research::GIVEN` event), and the engine marks the session", how: How::Marks },
     Read { file: "service.rs", what: "`host.search_kb`: the `noted` layer returns entries a host left, with the preview; one the daemon stored private is private text handed to the host. (The same file's `kb.search` and `kb.get` serve the console and the narrator pane with `include_staged`: the operator's own view, not a seat; the per-method tables `HOST_SURFACE` and `MCP_SURFACE` name every method a host can call)", how: How::Marks },
     Read { file: "library_claims.rs", what: "`claim_slice`: opening `@library/claim/<id>`; also reads `source.md` and `excerpts` to check an anchor or a support count, which return counts and verdicts and no text", how: How::Withholds { proof_file: "delphi-engine/src/private_read.rs", proof_test: "a_claim_that_rests_on_a_private_source_is_withheld_from_the_seat_that_opens_it" } },
     Read { file: "engine.rs", what: "block 5 of a span: opens a claim pointer through `claim_slice` (above)", how: How::Withholds { proof_file: "delphi-engine/src/private_read.rs", proof_test: "a_claim_that_rests_on_a_private_source_is_withheld_from_the_seat_that_opens_it" } },
@@ -184,7 +184,8 @@ pub const MCP_SURFACE: [Surface; 44] = [
     no_return("search_project", MCP_OWN),
     no_return("search_memory", MCP_OWN),
     no_return("query_memory", MCP_OWN),
-    no_return("kb_retrieve", MCP_OWN),
+    // `specs/115` slice X4: its project research group is the daemon's `host.search_kb` (`only: "project_research"`), which marks.
+    Surface { name: "kb_retrieve", how: How::Marks },
     no_return("consult_orchestrator", "advice from the role packs and the rankers of `route`, `search_project` and `search_memory`, which run in the MCP server's own process; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`)"),
     no_return("spawn_agent_pack", PROJECT_FILES),
     no_return("route", "ranks roles by words only"),
@@ -1479,7 +1480,8 @@ mod tests {
         assert_eq!(names, surface_names(&MCP_SURFACE), "an MCP tool is missing from MCP_SURFACE, or a row names a tool the server does not offer");
         for table in [&HOST_SURFACE[..], &MCP_SURFACE[..]] {
             let marking: Vec<&str> = table.iter().filter(|s| s.how == How::Marks).map(|s| s.name).collect();
-            assert!(marking == ["host.search_kb"] || marking == ["search_kb"], "only the host's search marks today: {marking:?}");
+            // `specs/115` slice X4: `kb_retrieve`'s project research group is served by the host method, which marks (checked below).
+            assert!(marking == ["host.search_kb"] || marking == ["search_kb", "kb_retrieve"], "only the host's search marks, and the MCP tools that ask it: {marking:?}");
             for s in table {
                 match s.how {
                     How::NoReturn { why } | How::OperatorOnly { why } | How::NotYetMarked { why } => assert!(why.len() > 8, "{}: say why", s.name),
@@ -1493,6 +1495,8 @@ mod tests {
         let prod = production(&mcp);
         let arm = prod.find("\"search_kb\" => query().and_then(|q| {").and_then(|at| prod[at..].find("\"propose_note\" =>").map(|end| &prod[at..at + end])).unwrap_or("");
         assert!(arm.contains("self.daemon(\"host.search_kb\"") && arm.matches("self.daemon(").count() == 1, "the MCP search_kb is the host method that marks");
+        let retrieve = prod.find("\"kb_retrieve\" => {").and_then(|at| prod[at..].find("\"consult_orchestrator\" =>").map(|end| &prod[at..at + end])).unwrap_or("");
+        assert!(retrieve.contains("self.daemon(\"host.search_kb\"") && retrieve.matches("self.daemon(").count() == 1 && retrieve.contains("\"only\": \"project_research\""), "kb_retrieve's project research is the host method that marks");
         // the findings, counted: the two names of the one handoff reader
         assert_eq!(HOST_SURFACE.iter().chain(MCP_SURFACE.iter()).filter(|s| matches!(s.how, How::Skips { .. })).count(), 2);
         assert_eq!(readers_skipping_the_mark(), 1, "READS has the one file-level finding (the handoff reader)");

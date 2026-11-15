@@ -12,7 +12,7 @@ import * as P from './pages.ts';
 import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 
-export type Hit = { path: string; collection: string; /** Where it lives, as a label (specs/043 §4): research, docs, spec, lesson, mission, skill, memory, other. */ kind: string; /** When the document last changed (ISO), or ''. */ updated: string; trust: string; status?: string; /** The derived knowledge status (specs/052): noted, checking, validated, contested, disproved or retired. */ knowledge?: string; /** The org whose bundle lock entry vouches for it. */ vouched?: string; heading: string; preview: string; start_line?: number; end_line?: number };
+export type Hit = { path: string; collection: string; /** Where it lives, as a label (specs/043 §4): research, docs, spec, lesson, mission, skill, memory, other. */ kind: string; /** When the document last changed (ISO), or ''. */ updated: string; trust: string; status?: string; /** The derived knowledge status (specs/052): noted, checking, validated, contested, disproved or retired. */ knowledge?: string; /** The org whose bundle lock entry vouches for it. */ vouched?: string; heading: string; preview: string; start_line?: number; end_line?: number; /** The project whose research this is (specs/115 §4 item 1), by its display name; absent for anything else. */ project?: string };
 export type Shelf = {
   /** The store counted by kind (`/v1/kinds`). */
   kinds: { kind: string; documents: number; updated: string }[];
@@ -50,6 +50,10 @@ export type Arch = {
   kind: string | null;
   /** The number of results of each kind among the candidates of the last search (the chips), or null. */
   facets: Record<string, number> | null;
+  /** Show only this project's research (ctrl+p walks the projects of the last search; specs/115 §4 item 1); null is every project's. */
+  project: string | null;
+  /** The number of results of each project among the candidates of the last search, or null. */
+  projects: Record<string, number> | null;
   /** Hide documents whose provenance is outside or inactive (ctrl+t). They show, tagged, by default: this is a person reading. */
   trustedOnly: boolean;
   /** The queries searched in this window, oldest first, and which one up and down have recalled (null: none). */
@@ -72,10 +76,13 @@ export type Arch = {
 /** How many results one search asks for. */
 export const RESULTS = 30;
 
-export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, kind: null, facets: null, trustedOnly: false, history: [], hist: null, pins, mode: 'search', rawChosen: false, lib: L.emptyLib(), pg: P.emptyPages(), research: null });
+export const emptyArch = (pins = false): Arch => ({ q: '', focus: 'box', sel: 0, searched: null, hits: [], took: null, engine: null, browse: null, note: '', shelf: null, trail: [], at: -1, kind: null, facets: null, project: null, projects: null, trustedOnly: false, history: [], hist: null, pins, mode: 'search', rawChosen: false, lib: L.emptyLib(), pg: P.emptyPages(), research: null });
 
 /** What every request to the daemon adds: the trust filter. */
 export const trustParam = (a: Arch): string => (a.trustedOnly ? '&trusted_only=1' : '');
+
+/** Which projects' research a search adds (specs/115 §4 item 1): every project's, or the one the operator narrowed to. */
+export const projectParam = (a: Arch): string => (a.project ? `&project=${encodeURIComponent(a.project)}` : '&projects=all');
 
 export type Action =
   | { t: 'none' }
@@ -173,11 +180,11 @@ function startRow(e: Entry, w: number, target: Target | null): number {
 
 // ── results from the daemon ─────────────────────────────────────────────────
 
-const asHit = (r: any): Hit => ({ path: String(r.path), collection: String(r.collection ?? ''), kind: String(r.kind ?? 'other'), updated: String(r.updated ?? ''), trust: String(r.trust ?? ''), status: r.status ? String(r.status) : undefined, knowledge: r.knowledge_status ? String(r.knowledge_status) : undefined, vouched: r.vouched_by ? sanitize(String(r.vouched_by)) : undefined, heading: String(r.heading ?? ''), preview: sanitize(String(r.preview ?? '')), start_line: r.start_line, end_line: r.end_line });
+const asHit = (r: any): Hit => ({ path: String(r.path), collection: String(r.collection ?? ''), kind: String(r.kind ?? 'other'), updated: String(r.updated ?? ''), trust: String(r.trust ?? ''), status: r.status ? String(r.status) : undefined, knowledge: r.knowledge_status ? String(r.knowledge_status) : undefined, vouched: r.vouched_by ? sanitize(String(r.vouched_by)) : undefined, heading: String(r.heading ?? ''), preview: sanitize(String(r.preview ?? '')), start_line: r.start_line, end_line: r.end_line, ...(r.project ? { project: sanitize(String(r.project)).replace(/\s+/g, ' ').slice(0, 80) } : {}) });
 
 export function gotHits(a: Arch, q: string, body: any): Arch {
   if (a.q.trim() !== q) return a; // the box has moved on
-  return { ...a, searched: q, hits: (body.results ?? []).map(asHit), sel: 0, focus: (body.results ?? []).length ? 'list' : 'box', took: body.took_ms ?? null, engine: body.mode ?? null, browse: null, note: '', facets: body.facets && typeof body.facets === 'object' ? Object.fromEntries(Object.entries(body.facets).map(([k, n]) => [String(k), Number(n)])) : a.facets };
+  return { ...a, searched: q, hits: (body.results ?? []).map(asHit), sel: 0, focus: (body.results ?? []).length ? 'list' : 'box', took: body.took_ms ?? null, engine: body.mode ?? null, browse: null, note: '', facets: body.facets && typeof body.facets === 'object' ? Object.fromEntries(Object.entries(body.facets).map(([k, n]) => [String(k), Number(n)])) : a.facets, projects: a.project ? a.projects : body.projects && typeof body.projects === 'object' ? Object.fromEntries(Object.entries(body.projects).map(([k, n]) => [sanitize(String(k)).replace(/\s+/g, ' ').slice(0, 80), Number(n)])) : null };
 }
 
 export function gotBrowse(a: Arch, name: string, docs: any[]): Arch {
@@ -253,6 +260,15 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
     return used({ ...a, focus: 'box', q: (a.q + s).slice(0, 200), note: '', hist: null });
   }
   if (e.t === 'ctrl' && e.c === 'u') return used({ ...a, q: '', focus: 'box', hist: null });
+  if (e.t === 'ctrl' && e.c === 'p') {
+    // The projects of the last search, in turn, then every project again (specs/115 §4 item 1).
+    const names: (string | null)[] = [null, ...Object.keys(a.projects ?? {}).sort()];
+    if (names.length < 2) return used({ ...a, note: 'no project research among these results' });
+    const project = names[(Math.max(0, names.indexOf(a.project)) + 1) % names.length] ?? null;
+    const q = a.q.trim();
+    const next = { ...a, project, note: project ? `project ${project} only` : 'every project' };
+    return !a.browse && q ? used({ ...next, sel: 0 }, { t: 'search', q }) : used(next);
+  }
   if (e.t === 'ctrl' && e.c === 't') return used({ ...a, trustedOnly: !a.trustedOnly, note: a.trustedOnly ? 'showing every document, tagged by provenance' : 'trusted documents only' }, { t: 'reload' });
   if (e.t === 'wheel') return used({ ...a, sel: Math.max(0, Math.min(list.length - 1, a.sel + (e.dir === 'up' ? -1 : 1))), focus: list.length ? 'list' : 'box' });
   if (e.t !== 'key' || e.alt || e.ctrl) return NOT_USED(a);
@@ -619,7 +635,7 @@ function listRow(a: Arch, x: Hit, i: number, w: number, now: number): string[] {
   const room = Math.max(10, w - 8 - 10 - (full ? 13 : 2) - (mid ? 7 : 0) - 1);
   const title = T.clip(titleOf(x), Math.min(64, room));
   const body1 = sanitize(x.preview).split('\n').filter((l) => !/^#+\s/.test(l)).map((l) => l.trim()).filter(Boolean)[0] ?? '';
-  const first = (opensInBrowser(x.path) && OUTSIDE.has(x.trust) ? 'untrusted: opens in your browser, read-only · ' : '') + body1;
+  const first = (x.project ? `project ${x.project} · ` : '') + (opensInBrowser(x.path) && OUTSIDE.has(x.trust) ? 'untrusted: opens in your browser, read-only · ' : '') + body1;
   const q = a.browse ? '' : a.searched ?? '';
   return [
     T.spread(` ${mark(i === a.sel, a)} ${String(i + 1).padStart(2)}  ${a.browse ? (on ? chalk.bold(title) : title) : emphasize(title, q, on ? chalk.bold : (z) => z)}`, tail + ' ', w),
@@ -637,7 +653,7 @@ function bestCard(a: Arch, x: Hit, w: number, h: number, now: number, pal: T.Pal
   const compact = h < 30;
   const sum = wrapText(bestSummary(x.preview, a.searched ?? ''), w - 11).slice(0, compact ? 2 : 4);
   const L = [
-    T.spread(chalk.bold(T.dim('BEST MATCH')), kindStyle(x.kind)(x.kind + (opensInBrowser(x.path) ? ' ↗' : '')) + T.dim([...(statusOf(x) ? [`${statusGlyph(x)}${T.dim(' ' + statusLabel(x))}`] : []), edited ? `edited ${edited}` : ''].filter(Boolean).map((t) => ` · ${t}`).join('')), w - 7),
+    T.spread(chalk.bold(T.dim('BEST MATCH')), kindStyle(x.kind)(x.kind + (opensInBrowser(x.path) ? ' ↗' : '')) + T.dim([...(x.project ? [`project ${x.project}`] : []), ...(statusOf(x) ? [`${statusGlyph(x)}${T.dim(' ' + statusLabel(x))}`] : []), edited ? `edited ${edited}` : ''].filter(Boolean).map((t) => ` · ${t}`).join('')), w - 7),
     (on ? T.accent('❯ ') : '') + chalk.bold(T.accent(T.clip(titleOf(x), w - 11))),
     ...sum.map((l) => emphasize(l, a.searched ?? '')),
   ];
@@ -655,7 +671,7 @@ export function thinOnReference(a: Arch): boolean {
 
 function results(a: Arch, w: number, h: number, now: number, pal: T.Pal, still = false): string[] {
   const out: string[] = [...box(a, w).slice(w < 40 ? 0 : 1, w < 40 ? 2 : 2)];
-  const where = `${a.kind ? ` · ${KIND_LABEL[a.kind] ?? a.kind}` : ''}${a.trustedOnly ? ' · trusted only' : ''}`;
+  const where = `${a.kind ? ` · ${KIND_LABEL[a.kind] ?? a.kind}` : ''}${a.project ? ` · project ${a.project}` : ''}${a.trustedOnly ? ' · trusted only' : ''}`;
   const head = a.browse
     ? `${a.hits.length} documents · ${KIND_LABEL[a.browse] ?? a.browse}, newest first${a.trustedOnly ? ' · trusted only' : ''}`
     : a.hits.length ? `${a.hits.length >= RESULTS ? 'top ' : ''}${a.hits.length} result${a.hits.length === 1 ? '' : 's'}${a.took !== null ? ` · ${(a.took / 1000).toFixed(2)} s` : ''} · 0 tokens${where}`
@@ -665,6 +681,10 @@ function results(a: Arch, w: number, h: number, now: number, pal: T.Pal, still =
     const total = Object.values(a.facets).reduce((s, n) => s + n, 0);
     const chip = (k: string | null, label: string, n: number) => { const on = a.kind === k; const t = `${on ? '●' : '○'} ${label} ${n}`; return k === null ? (on ? chalk.bold(t) : T.dim(t)) : on ? chalk.bold(kindStyle(k)(t)) : kindStyle(k)(t); };
     out.push('  ' + T.dim('show  ') + [chip(null, 'all', total), ...chipKinds(a).map((k) => chip(k, KIND_LABEL[k] ?? k, a.facets![k]!))].join('   '));
+  }
+  if (!a.browse && a.projects && Object.keys(a.projects).length) {
+    const pchip = (p: string | null, label: string, n?: number) => { const on = a.project === p; const t = `${on ? '●' : '○'} ${label}${n === undefined ? '' : ` ${n}`}`; return on ? chalk.bold(t) : T.dim(t); };
+    out.push(T.clip('  ' + T.dim('project  ') + [pchip(null, 'every'), ...Object.keys(a.projects).sort().map((p) => pchip(p, p, a.projects![p]))].join('   ') + T.dim('   ctrl+p'), w));
   }
   out.push('');
   const useCard = !a.browse && a.hits.length > 0;

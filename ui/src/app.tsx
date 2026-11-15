@@ -388,7 +388,7 @@ export function App({ cmd, ev, term, info, mission, dark, bg, themeForced, histo
     const a0 = on === 'arch' ? archRef.current : rdrRef.current, tp = A.trustParam(a0);
     if (act.t === 'reload') { void loadShelf(); if (a0.searched && a0.q.trim() && !a0.browse) runKb({ t: 'search', q: a0.q.trim() }, on); else if (a0.browse) runKb({ t: 'browse', name: a0.browse }, on); }
     else if (act.t === 'search') {
-      kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}&facets=1${a0.kind ? `&kind=${enc(a0.kind)}` : ''}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
+      kb(`/v1/search?q=${enc(act.q)}&limit=${A.RESULTS}&facets=1${a0.kind ? `&kind=${enc(a0.kind)}` : ''}${A.projectParam(a0)}${tp}`).then((r) => setArch((a) => (r.status === 200 ? A.gotHits(a, act.q, r.body) : A.withNote(a, r.body?.error ?? 'the search failed')))).catch(() => fail('the search failed'));
       cmd.call('pages.results', { query: act.q, external: a0.pg.ext }).then((r: any) => setArch((a) => A.gotPages(a, (p) => PG.gotResults(p, act.q, r)))).catch(() => {});
       cmd.call('pages.search', { query: act.q, external: a0.pg.ext }).then((r: any) => {
         setArch((a) => A.gotPages(a, (p) => PG.gotPage(p, act.q, r)));
