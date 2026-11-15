@@ -292,9 +292,11 @@ impl Engine {
         Ok(PageRun { page, notes })
     }
 
-    /// The material for a topic's page (`specs/117` §2 item 4): what the library holds for it.
-    pub fn topic_material(&self, lib: &Library, side: &serde_json::Value) -> crate::library::page_search::Gathered {
-        lib.topic_gather_library(side, Some(&self.ws.dir))
+    /// The material for a topic's page (`specs/117` §2 item 4): the library's, and what the retrieval service finds for it over the whole
+    /// corpus (`topic_gather`). The search is read-only and runs on a blocking thread.
+    pub async fn topic_material(&self, side: &serde_json::Value) -> crate::library::page_search::Gathered {
+        let (home, ws, side) = (self.ws.home.clone(), self.ws.dir.clone(), side.clone());
+        tokio::task::spawn_blocking(move || crate::topic_gather::gather(&Library::in_home(&home), &home, &ws, &side)).await.unwrap_or_default()
     }
 
     /// Rebuild one topic's page now (`specs/117` §2 item 2): the operator's `delphi pages rebuild`, or the idle rebuild. The writer and the
@@ -307,7 +309,9 @@ impl Engine {
         let lib = Library::in_home(&self.ws.home);
         let side = lib.topic_side(slug).ok_or_else(|| format!("no topic `{}`", slug))?;
         let now = (self.clock_unix)();
-        let gathered = self.topic_material(&lib, &side);
+        let gathered = self.topic_material(&side).await;
+        // The page check resolves `[s-kb-...]` and `[f-...]` against these records and nothing else.
+        let lib = lib.with_records(gathered.records.clone());
         let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
@@ -339,7 +343,7 @@ impl Engine {
             return None;
         }
         lib.topics_from_research(&self.ws.dir, now);
-        let ctx = crate::library::topics::DueCtx { ws: Some(&self.ws.dir), now };
+        let ctx = crate::library::topics::DueCtx { ws: Some(&self.ws.dir), now, index: true };
         let mut due: Vec<_> = lib.topic_pages(&ctx).into_iter().filter(|t| t.due.is_some()).collect();
         due.sort_by_key(|t| (t.built.is_some(), t.built.unwrap_or(0)));
         let slug = due.first()?.slug.clone();

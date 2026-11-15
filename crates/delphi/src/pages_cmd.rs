@@ -272,7 +272,7 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
             }
         }
         Some("topics") => {
-            let ctx = delphi_engine::library::topics::DueCtx { ws: ws_dir, now: now_unix() };
+            let ctx = delphi_engine::library::topics::DueCtx { ws: ws_dir, now: now_unix(), index: true };
             let topics = lib.topic_pages(&ctx);
             if rest.iter().any(|a| a == "--json") {
                 println!("{}", json!(topics.iter().map(|t| t.to_json()).collect::<Vec<_>>()));
@@ -295,7 +295,7 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
                     return 2;
                 }
             };
-            let ctx = delphi_engine::library::topics::DueCtx { ws: ws_dir, now: now_unix() };
+            let ctx = delphi_engine::library::topics::DueCtx { ws: ws_dir, now: now_unix(), index: true };
             let Some((e, md)) = lib.topic_get(pos[0], version.as_deref(), &ctx) else {
                 eprintln!("delphi pages topic: no topic `{}`{}", pos[0], version.map(|v| format!(" with a version `{}`", v)).unwrap_or_default());
                 return 1;

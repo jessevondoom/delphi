@@ -103,10 +103,65 @@ impl Cite {
     }
 }
 
+/// A record a topic page may cite besides the library's own (`specs/117` §2 item 4, slice E2): a knowledge-base passage
+/// (`[s-kb-<16 hex>]`, a research answer included) or a finding (`[f-<16 hex>]`), as the retrieval service returned it when the page's
+/// material was gathered. The daemon makes it from the index; nothing in it is the writer's. It is resolved only on a library
+/// given it ([`Library::with_records`]); on any other a marker naming one is an unknown record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KbRecord {
+    /// `s-kb-<16 hex>` or `f-<16 hex>`: a hash of where the passage is, so the same passage keeps its label from one build to the next.
+    pub label: String,
+    /// `passage`, `research answer` or `finding`.
+    pub kind: String,
+    pub title: String,
+    /// The index's pointer (`<path>#L<a>-L<b>`).
+    pub locator: String,
+    /// The zone and the tier the index holds for it.
+    pub origin: String,
+    /// One of the shown statuses, derived from the index's status, never from the passage's own words.
+    pub status: String,
+    pub text: String,
+    /// A hash of the passage's whole text when it was gathered: a later build or due check compares it.
+    pub hash: String,
+    pub rel_path: String,
+    pub start_line: usize,
+}
+
+impl KbRecord {
+    pub fn to_json(&self) -> Value {
+        json!({"id": self.label, "kind": self.kind, "title": self.title, "locator": self.locator, "origin": self.origin, "status": self.status, "text": self.text, "hash": self.hash, "rel_path": self.rel_path, "start_line": self.start_line})
+    }
+
+    pub fn from_json(v: &Value) -> Option<KbRecord> {
+        let s = |k: &str| v[k].as_str().map(String::from);
+        let label = s("id")?;
+        is_record_label(&label).then_some(())?;
+        Some(KbRecord { label, kind: s("kind")?, title: s("title").unwrap_or_default(), locator: s("locator").unwrap_or_default(), origin: s("origin").unwrap_or_default(), status: s("status").filter(|st| SHOWN.contains(&st.as_str())).unwrap_or_else(|| "○ not validated".into()), text: s("text").unwrap_or_default(), hash: s("hash").unwrap_or_default(), rel_path: s("rel_path").unwrap_or_default(), start_line: v["start_line"].as_u64().unwrap_or(0) as usize })
+    }
+}
+
+/// Whether `label` has the shape of a knowledge-base or finding record's label. No library source id has it: a source id ends in a
+/// hyphen and eight hex characters.
+pub fn is_record_label(label: &str) -> bool {
+    let tail = label.strip_prefix("s-kb-").or_else(|| label.strip_prefix("f-"));
+    tail.is_some_and(|t| t.len() == 16 && t.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()))
+}
+
+/// The status a record is shown with, from the index's word.
+pub fn record_status(index_status: &str) -> String {
+    match index_status {
+        "validated" => "● validated".into(),
+        "disproved" => "✕ disproved".into(),
+        _ => "○ not validated".into(),
+    }
+}
+
 /// The record a marker resolved to.
 pub enum Rec {
     Claim(Value),
     Source(String, Value),
+    /// A knowledge-base passage or a finding the page's material held.
+    Record(KbRecord),
 }
 
 /// What reading one source's stored text cost (`specs/057` §5.1).
@@ -148,7 +203,7 @@ fn marker(tok: &str) -> Option<Vec<Cite>> {
         let (id, rest) = seg.split_once(' ').map_or((seg, ""), |(a, b)| (a, b.trim()));
         let (source, bare) = match id.strip_prefix("s-") {
             Some(b) => (true, b),
-            None if id.starts_with("c-") => (false, id),
+            None if id.starts_with("c-") || id.starts_with("f-") => (false, id),
             None => return None,
         };
         if bare.is_empty() || !bare.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') || !(rest.is_empty() || SHOWN.contains(&rest)) {
@@ -444,6 +499,17 @@ fn unverified(body: &str, material: &str) -> Vec<String> {
 impl Library {
     pub(super) fn resolve(&self, c: &Cite, scope: Scope) -> Result<Rec, Finding> {
         let external = scope == Scope::External;
+        // A knowledge-base passage or a finding resolves only against the records this library was given, never against a file.
+        if is_record_label(&c.label()) || c.id.starts_with("f-") {
+            let r = self.records.iter().find(|r| r.label == c.label()).ok_or_else(|| Finding::UnknownRecord(c.label()))?;
+            if r.status == "✕ disproved" {
+                return Err(Finding::NotCitable { id: c.label(), why: "the record is disproved" });
+            }
+            if let Some(shown) = c.shown.as_ref().filter(|s| **s != r.status) {
+                return Err(Finding::StatusMisstated { id: c.label(), shown: shown.clone() });
+            }
+            return Ok(Rec::Record(r.clone()));
+        }
         if c.source {
             let meta = self.read_meta(&c.id).ok_or_else(|| Finding::UnknownRecord(c.label()))?;
             let why = if !meta["purged"].is_null() {
@@ -484,6 +550,15 @@ impl Library {
         match rec {
             Rec::Source(id, _) => vec![id.clone()],
             Rec::Claim(c) => c["anchors"].as_array().into_iter().flatten().filter_map(|a| a["source_id"].as_str().map(String::from)).collect(),
+            Rec::Record(_) => Vec::new(),
+        }
+    }
+
+    /// The texts a marker's quotation may be checked against: a library source's id, or a record's own label.
+    fn text_keys(rec: &Rec) -> Vec<String> {
+        match rec {
+            Rec::Record(r) => vec![r.label.clone()],
+            _ => Self::rec_sources(rec),
         }
     }
 
@@ -541,7 +616,7 @@ impl Library {
             }
         }
         let sources_of = |text: &str| -> BTreeSet<String> {
-            markers(text).iter().filter_map(|c| recs.get(&c.label())).flat_map(Self::rec_sources).collect()
+            markers(text).iter().filter_map(|c| recs.get(&c.label())).flat_map(Self::text_keys).collect()
         };
         let cited_sources: BTreeSet<String> = recs.values().flat_map(Self::rec_sources).collect();
         let direct: BTreeSet<String> = recs.values().filter_map(|r| if let Rec::Source(id, _) = r { Some(id.clone()) } else { None }).collect();
@@ -553,6 +628,11 @@ impl Library {
                     texts.insert(id.clone(), t);
                 }
                 Err(f) => push(f, &mut out.findings),
+            }
+        }
+        for r in recs.values() {
+            if let Rec::Record(r) = r {
+                texts.insert(r.label.clone(), r.text.clone());
             }
         }
 
@@ -715,6 +795,7 @@ impl Library {
                     let st = format!("○ {}", m["status"].as_str().unwrap_or("not validated"));
                     format!("| {} | {} | {} | {} | {} | — | {} |", c.label(), cell(&st), cell(m["title"].as_str().unwrap_or("—")), cell(&author_of(m)), date_of(m), cell(&citation(std::slice::from_ref(id))))
                 }
+                Rec::Record(r) => format!("| {} | {} | {} | {} | — | {} | {} in this workspace's knowledge base |", c.label(), cell(&r.status), cell(&short(&r.title)), cell(&r.origin), cell(&r.locator), cell(&r.kind)),
             };
             rows.push((c.label(), row));
         }

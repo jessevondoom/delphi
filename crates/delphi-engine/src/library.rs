@@ -212,6 +212,9 @@ pub struct Library {
     /// which is the library as spec 098 left it. The caller that has the operator's `[research] retractions` sets it with
     /// [`Library::with_retractions`].
     retractions: crate::retractions::Policy,
+    /// The knowledge-base passages and findings a topic page's material holds (`specs/117` §2 item 4): the only ones a page check
+    /// on this library resolves. Empty unless the caller sets them with [`Library::with_records`].
+    records: Vec<page_check::KbRecord>,
 }
 
 /// A short stable id from the canonical URL or identifier, not from content (`specs/055` §3.2).
@@ -340,7 +343,13 @@ struct Prepared {
 
 impl Library {
     pub fn in_home(home: &Path) -> Library {
-        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off() }
+        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new() }
+    }
+
+    /// The same library, whose page check resolves `[s-kb-...]` and `[f-...]` markers against `records` (and nothing else).
+    pub fn with_records(mut self, records: Vec<page_check::KbRecord>) -> Library {
+        self.records = records;
+        self
     }
 
     /// The same library counting corroboration with the operator's numbers.

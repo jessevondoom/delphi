@@ -122,6 +122,9 @@ impl TopicEntry {
 pub struct DueCtx<'a> {
     pub ws: Option<&'a Path>,
     pub now: u64,
+    /// Whether a cited knowledge-base passage or finding is looked up in the workspace's index to see whether it changed. A read for
+    /// a reader leaves it off: opening an index can make its side files, and a read writes nothing.
+    pub index: bool,
 }
 
 /// What a rebuild is given. The caller gathers (`Library::gather` and the retrieval service, `topic_gather`): the library does
@@ -325,6 +328,17 @@ impl Library {
         for m in side["material"].as_array().into_iter().flatten() {
             let (id, was) = (m["id"].as_str().unwrap_or(""), m["hash"].as_str().unwrap_or(""));
             held.insert(id.to_string());
+            // A knowledge-base passage or a finding: its text as the index holds it now (`specs/117` §2 item 4). Checked when the
+            // workspace is known.
+            if super::page_check::is_record_label(id) {
+                let (Some(ws), true) = (ctx.ws, ctx.index) else { continue };
+                let Some(r) = side["records"].as_array().into_iter().flatten().filter_map(super::page_check::KbRecord::from_json).find(|r| r.label == id) else { continue };
+                match crate::topic_gather::record_hash_now(ws, &r.rel_path, r.start_line) {
+                    None => return Some(format!("`{}` is gone from the knowledge base", id)),
+                    Some(h) if h != was => return Some(format!("`{}` changed", id)),
+                    _ => continue,
+                }
+            }
             let now_print = match id.strip_prefix("s-") {
                 Some(sid) => self.read_meta(sid).map(|meta| source_print(sid, &meta)),
                 None => self.claim(id).map(|c| claim_print(&c)),
@@ -386,7 +400,8 @@ impl Library {
     }
 
     /// Rebuild a topic's page (§2 item 2): the writer writes from `r.gathered`, the page passes the same check and validator as a
-    /// search page, the page it replaces becomes a version, and the record says what changed. `gate` is asked before any model is
+    /// search page, the page it replaces becomes a version, and the record says what changed. The knowledge-base records of
+    /// `r.gathered` are cited only if this library was given the same ones ([`Library::with_records`]). `gate` is asked before any model is
     /// called; a page counts against `[library.pages] per_day`.
     pub async fn topic_rebuild(&self, r: TopicRequest<'_>, writer: &dyn PageWriter, validator: &dyn PageValidator, ledger: &TokenLedger, gate: super::page_search::Gate<'_>) -> Result<TopicEntry, String> {
         if !r.settings.enabled {
@@ -452,7 +467,9 @@ impl Library {
         let _ = std::fs::remove_file(self.pages_dir().join(format!("{}.json", temp)));
         let mut material: Vec<Value> = g.claims.iter().map(|cl| json!({"id": cl["id"], "hash": claim_print(cl)})).collect();
         material.extend(g.sources.iter().map(|(id, m, _)| json!({"id": format!("s-{}", id), "hash": source_print(id, m)})));
+        material.extend(g.records.iter().map(|r| json!({"id": r.label, "hash": r.hash})));
         let mut side = old.clone();
+        side["records"] = json!(g.records.iter().map(|r| r.to_json()).collect::<Vec<_>>());
         side["built"] = json!(now);
         side["version"] = json!(old["version"].as_u64().unwrap_or(0) + 1);
         side["material"] = json!(material);
@@ -623,7 +640,7 @@ mod rebuild_tests {
         assert_eq!(made, vec!["when-do-ocean-tides-come".to_string()]);
         assert!(l.topics_from_research(&ws, 1_001).is_empty(), "a research topic makes one topic page, once");
         let slug = &made[0];
-        let ctx = DueCtx { ws: Some(&ws), now: 1_000 };
+        let ctx = DueCtx { ws: Some(&ws), now: 1_000, index: false };
         assert_eq!(l.topic_pages(&ctx)[0].due.as_deref(), Some("not built yet"));
 
         let w = EchoWriter(AtomicUsize::new(0));
@@ -632,13 +649,13 @@ mod rebuild_tests {
         let page = l.pages_dir().join(format!("{slug}.md"));
         let v1 = std::fs::read_to_string(&page).unwrap();
         assert!(v1.contains("Ocean tides come twice a day") && v1.contains("Generated page. Not authoritative."));
-        assert_eq!(l.topic_pages(&DueCtx { ws: Some(&ws), now: 2_001 })[0].due, None, "just built: not due");
+        assert_eq!(l.topic_pages(&DueCtx { ws: Some(&ws), now: 2_001, index: false })[0].due, None, "just built: not due");
 
         // A later research run adds a claim to the topic.
         let c2 = l.add_claim("Spring tides follow the full moon.", &ClaimOpts::default(), &[anchor("Spring tides follow the full moon")]).unwrap()["id"].as_str().unwrap().to_string();
         let b2 = crate::research_record::Begin { run_id: "r2", ..b };
         crate::research_record::Topic::begin(&ws, &b2).unwrap().finish("r2", "done", Some(&json!({"claims": [&c2]})), &[c1.clone(), c2.clone()], None, 0).unwrap();
-        let due = l.topic_pages(&DueCtx { ws: Some(&ws), now: 2_002 }).remove(0).due.unwrap();
+        let due = l.topic_pages(&DueCtx { ws: Some(&ws), now: 2_002, index: false }).remove(0).due.unwrap();
         assert!(due.contains(&c2) && due.contains("new claim"), "{due}");
 
         let second = rebuild(&l, slug, &ws, 3_000, &w);
@@ -649,18 +666,18 @@ mod rebuild_tests {
         assert_eq!(versions.len(), 1);
         let stamp = versions[0]["version"].as_str().unwrap().to_string();
         assert_eq!(versions[0]["change"], "first version");
-        let (_, old) = l.topic_get(slug, Some(&stamp), &DueCtx { ws: Some(&ws), now: 3_001 }).unwrap();
+        let (_, old) = l.topic_get(slug, Some(&stamp), &DueCtx { ws: Some(&ws), now: 3_001, index: false }).unwrap();
         assert!(old.contains("Ocean tides come twice a day") && !old.contains("Spring tides"), "the earlier text is readable as a version");
-        assert!(l.topic_get(slug, Some("../../x"), &DueCtx { ws: None, now: 0 }).is_none());
+        assert!(l.topic_get(slug, Some("../../x"), &DueCtx { ws: None, now: 0, index: false }).is_none());
         // A cited claim that changes makes the page due again.
         l.dispute_claim(&c2, "the moon is not the only cause").unwrap();
-        assert!(l.topic_pages(&DueCtx { ws: Some(&ws), now: 3_002 })[0].due.as_deref().unwrap().contains("changed"));
+        assert!(l.topic_pages(&DueCtx { ws: Some(&ws), now: 3_002, index: false })[0].due.as_deref().unwrap().contains("changed"));
         // Its lifetime passing does too.
         let late = second.valid_until.unwrap() + 1;
         let mut fresh = l.topic_side(slug).unwrap();
         fresh["material"] = json!([]);
         fresh["research_topics"] = json!([]);
-        assert!(l.topic_due(&fresh, &DueCtx { ws: None, now: late }).unwrap().contains("lifetime"));
+        assert!(l.topic_due(&fresh, &DueCtx { ws: None, now: late, index: false }).unwrap().contains("lifetime"));
     }
 
     #[test]
@@ -672,6 +689,6 @@ mod rebuild_tests {
         assert_eq!(l.topic_create("web bot auth", Origin::Operator, 6).unwrap().created, 5, "the same slug is the same topic");
         assert!(l.topic_create("  ", Origin::Operator, 7).is_err());
         assert!(l.pages(10, 100).is_empty(), "a topic's record is not a search page's");
-        assert!(l.topic_get("web-bot-auth", None, &DueCtx { ws: None, now: 10 }).unwrap().1.is_empty(), "not built yet: no page");
+        assert!(l.topic_get("web-bot-auth", None, &DueCtx { ws: None, now: 10, index: false }).unwrap().1.is_empty(), "not built yet: no page");
     }
 }
