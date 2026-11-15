@@ -89,7 +89,7 @@ Following up needs an act: a rebuild, a research run. The app holds a read-only 
 
 1. "Ask a follow-up", "Research this section further" and "Rebuild now" compose the request and put the matching command on the clipboard (`delphi research continue <topic> --note "…"`, `delphi pages rebuild <slug>`), and say so. The operator runs it in a terminal or a host.
 2. "Dispute this statement" does the same with `delphi pages dispute`.
-3. When a paired scope exists, these become buttons. That change belongs to that spec.
+3. The paired scope is [`specs/120`](120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md) (a draft on 2026-11-14). When it is built and the app holds its `request` grant, these become buttons, as that spec's §6 says.
 
 ## 7. The console
 
@@ -140,5 +140,5 @@ E1 to E3 need 112 R2 to have material. E7 needs 116 G1 and G5 for the provisiona
 ## 12. Open questions (the operator decides)
 
 1. Idle rebuild on by default?
-2. Should the paired desktop scope (for real buttons in §6) be specified next, or is the clipboard enough for now?
+2. *Answered 2026-11-14:* the operator asked for the paired scope, started narrow and widened explicitly; it is drafted as [`specs/120`](120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md).
 3. Does the console's knowledge deck stay as it is, or freeze with the rest of the terminal console?

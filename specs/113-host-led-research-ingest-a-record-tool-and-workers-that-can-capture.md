@@ -109,4 +109,4 @@ Depends on 112 R1 and R2.
 ## 9. Open questions (the operator decides)
 
 1. Should `delphi research ingest --all --apply` be run once over the existing projects as part of this work?
-2. Should a private claim's text be searchable from other projects ([`specs/115`](115-research-recall-across-projects.md)), or stay inside its project even when research is shared?
+2. *Decided 2026-11-14:* a private claim is searchable from the operator's other projects under the guards of [`specs/115`](115-research-recall-across-projects.md) §2.3; its source's record and text stay inside its project.

@@ -2,7 +2,7 @@
 
 # Console
 
-21 specs. [All groups](./index.md).
+22 specs. [All groups](./index.md).
 
 ## 005-console-and-narrator-tui
 
@@ -185,6 +185,20 @@ _No standard scope section; open the spec._
 | D-2 | What no host shows is what an operator of a team needs: activity across sessions, a council's deliberation, the knowledge base, and what the team produced. These are documents, lists and graphs, which a character grid draws badly. |
 | D-3 | The console costs about 9,400 lines of TypeScript, 7,700 lines of tests and 114 golden screens, its own CI job on a pinned runtime, and a compile on four release targets. Its real-terminal checklist is blank for all nine terminals. |
 | D-4 | The daemon already serves a read-only client. The narrator socket issues its token to a client with no terminal, offers twelve read methods and refuses everything else, and `observe.state` is the folded state every client shows. |
+```
+
+## 120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time
+
+**120: The app scope: a key paired from a terminal, and grants that widen one at a time** · draft (per source at `b23b27e27207`) · tier 0 · [source](../../specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md)
+
+**source excerpt, untrusted** · `specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md` lines 24-28
+
+```text
+| # | Observation (2026-11-14) |
+| :-- | :-- |
+| E-1 | The app attaches on the narrator socket and can only read. Anything the operator wants to do from a page (ask a follow-up, have a section researched further, rebuild a page, dispute a statement) is a command copied to the clipboard (117 §6). |
+| E-2 | The daemon gives a scope by the socket a client connects to, checks the peer's user id, and issues an acting token only to a client at a terminal. A window has no terminal, so the app cannot be given one. |
+| E-3 | The operator wants the app to carry a wide set of features over time, each added on purpose, without loosening what keeps the daemon safe. |
 ```
 
 ## ui-wireframes-and-blueprints

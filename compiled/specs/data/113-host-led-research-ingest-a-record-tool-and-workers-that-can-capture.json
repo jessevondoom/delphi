@@ -78,7 +78,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md",
-    "sha256": "8ecffa84e909e638d77a6f30690dcd74faec9c4139a40b97ba3f61a45758c8ff"
+    "sha256": "a3aa91a67fe66491c8df5ea93edca42ece0513bc786535f47e0be91d8f3ded68"
   },
   "source_status_at_hash": {
     "line": {
@@ -91,7 +91,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"all other specs are approved\", after the drafts and their slice tables were shown."
     },
-    "sha256": "8ecffa84e909e638d77a6f30690dcd74faec9c4139a40b97ba3f61a45758c8ff",
+    "sha256": "a3aa91a67fe66491c8df5ea93edca42ece0513bc786535f47e0be91d8f3ded68",
     "word": "approved"
   },
   "spec": {

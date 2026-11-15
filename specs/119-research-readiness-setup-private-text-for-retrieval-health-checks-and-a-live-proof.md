@@ -3,7 +3,7 @@ id: spec-119-research-readiness-setup-private-text-for-retrieval-health-checks-a
 title: "119: Research readiness: setup, private text for retrieval, health checks, and a live proof"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "119: let's make excerpts the default between pointers and full private text". Section 3 was changed to that default after those words.
+status: approved   # by the operator, 2026-11-14, in a host session: "119: let's make excerpts the default between pointers and full private text". Section 3 was changed to that default after those words. Later the same day, on search engines: "your choices sound good, but also add the host default tools as well, like claud's ewb search in a claude environment, etc." (the operator's words as typed: Claude's web search); section 2.1 was written after those words and has not been read.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -54,6 +54,24 @@ Objective: an operator who installs Delphi and answers one setup prompt has rese
 3. `delphi doctor` reports a missing engine as a warning when any session has asked for research in the last 30 days.
 4. A `request_research` call with no engine is refused with a message that names the command, and the refusal is counted; the session-start brief says once: "research was asked for N times and no search engine is set up".
 5. The setup also asks, one question each, about §3 and §4.
+6. Setup suggests Brave first and Mojeek second (operator, 2026-11-14), and takes any of the engines the code supports. Before a key is entered it prints one line: queries leave this machine for the engine chosen; check its terms and your employer's rules first.
+7. **Identifier guard.** A query that contains one of the workspace's privacy identifiers is not sent, to an engine or to a host: the identifier is removed when the query still has three content words without it, and otherwise the query is withheld and listed as withheld in the search log. This is in addition to the redaction of secrets, paths and private addresses that [`specs/066`](066-mcp-research-endpoint-and-role-identity.md) §3 already requires.
+
+### 2.1 Search sources, in order: the host's own tools first
+
+A host such as Claude Code has web search and page fetch of its own, under its own permissions and with no key to set up. Today the runner notes that "the host's own tools can take over" the outer rungs and records a search a host declares as counting for nothing. This section makes the host's tools a real source.
+
+1. The order of sources for a research run raised in a host session is: what Delphi holds ([`specs/114`](114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md) §3); the host's own search and fetch tools, when the host has them; the engines of `[search]`, in the operator's order. For a run raised in the console or by an inside agent there is no host, and the engines are the only web source.
+2. Which hosts have which tools is a table beside the host adapters of [`specs/110`](110-other-hosts-adapters-instruction-files-and-install-paths.md): for each host, the names of its search tool and its fetch tool, or none. For Claude Code these are its web search and web fetch tools. A host absent from the table is treated as having none.
+3. `request_research` in such a host answers at once with the plan and `host_search: "asked"`: the queries the scout planned (after the identifier guard), and one instruction: run these with your own search tool and hand back what you find.
+4. The host hands back with `research_feed {research_id, query, results[]}` (title, address, snippet per result; at most 10 results a query and 12 queries a run). Each fed search is a line in the search log marked `run by the host`.
+5. What the daemon does with a fed result depends on the address, and the rule that keeps a host from steering the daemon's fetcher is unchanged:
+   - an address on the trusted list is fetched and read by the daemon's runner, as if its own search had found it;
+   - any other address is never fetched by the daemon on a host's word. It is a lead. The host may read it with its own fetch tool and hand over what it found with `record_research` ([`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §2) under the same topic id, where its claims are stored as host-reported.
+6. With no engine configured, a run in a host that has a search tool is no longer refused: it runs on what Delphi holds and what the host feeds, and its record says `engines: none`. It is refused, with the setup command named, only when there is neither an engine nor a host search tool.
+7. With both, the daemon's engines run for the sub-questions the host's results left uncovered, so the two are not asked the same thing twice.
+8. The scout's and the investigator's worker files gain the host's own search and fetch tools from the table (for Claude Code, web search and web fetch), beside the Delphi tools of 113 §4. The host's permission rules decide whether each call runs; Delphi grants nothing.
+9. Search tools that a model family offers on its own service, called by the daemon through a model endpoint, are not part of this spec. They would be new engines under `[search]` and belong in an amendment once an endpoint that offers one is configured.
 
 ## 3. Text kept privately, for retrieval only
 
@@ -102,7 +120,7 @@ Setup offers each of these and says what it costs. Each stays a config key.
 | :-- | :-- | :-- |
 | 1 | 119 B1 (setup), 112 R3 (runner fixes), 114 M1 (the role in every call), 116 G3, G4, G8 (start context, passages, the investigator's defaults and budget) | Small, independent, and each removes a fault on its own |
 | 2 | 112 R1, R2, R5 (the record, claims in the library, the index zone) | The store everything else writes to |
-| 3 | 113 H1 to H5 (host-led research and ingest); 119 B2 (excerpts by default, private text as a setting) | Fills the store from the research that already exists |
+| 3 | 113 H1 to H5 (host-led research and ingest); 119 B2 (excerpts by default, private text as a setting); 119 B7, B8 (the host's own search tools) | Fills the store from the research that already exists |
 | 4 | 115 X1 to X5 (recall across projects) | Lets every project use it |
 | 5 | 112 R4, R6; 114 M2 to M7 (one runner, the method) | The scout becomes methodical |
 | 6 | 116 G1, G2, G5, G6, G7, G9 to G11 (the provisional tier, findings, consolidation, feedback, the investigator's shell, source check and host worker) | Memory grows, and the investigator can investigate |
@@ -116,12 +134,14 @@ Hours by spec, from each spec's slice table:
 | 112 | one research record | 47-62 |
 | 113 | host-led research | 36-47 |
 | 114 | a methodical scout | 39-52 |
-| 115 | recall across projects | 23-32 |
+| 115 | recall across projects | 24-34 |
 | 116 | memory that grows | 70-91 |
 | 117 | the encyclopedia in the app | 71-90 |
 | 118 | pictures and figures | 33-46 |
-| 119 | readiness | 27-37 |
-| | **Total** | **346-457** |
+| 119 | readiness | 39-52 |
+| | **Total** | **359-474** |
+
+The app scope of [`specs/120`](120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md) (a draft, 35-46 hours) is outside this table; its first three slices can be built at any step and its fourth after step 7.
 
 Hours are build hours for one builder with tests, as in earlier specs' slice tables. They leave out review, the operator's reading and the red-team passes named in each spec.
 
@@ -129,16 +149,20 @@ Hours are build hours for one builder with tests, as in earlier specs' slice tab
 
 1. **AC-1:** on a fresh home, `delphi research setup` with a test engine writes `[search]`, stores the key outside the config file, and a following `request_research` runs.
 2. **AC-2:** a `request_research` with no engine is refused with the setup command named, and the next brief mentions it once.
-3. **AC-3:** with no setting, a source of unknown licence keeps the quoted passages and no other text, and a search finds them; with `unknown_licence = "pointer"` it keeps no text.
-4. **AC-4:** with `private_text`, the same source is searchable by an inside agent; a generated page citing it contains no run of its text longer than 300 characters; an export and a bundle contain none of its text.
-5. **AC-5:** a page showing a rights notice is kept as excerpts under `private_text`.
-6. **AC-6:** `delphi library private purge` removes the text and leaves the pointer and its claims' anchors marked `text removed`.
-7. **AC-7:** `delphi kb health` on a workspace with sources and no claims prints the stalled-loop line.
-8. **AC-8:** a host result names a real licence for a source whose licence the code knows.
+3. **AC-2a:** in a host with a search tool and no engine configured, `request_research` returns planned queries with `host_search: "asked"`; results fed back on the trusted list are fetched and read by the daemon; a fed address off the list is not fetched (the test transport sees no request) and is listed as a lead.
+4. **AC-2b:** a planned query containing a privacy identifier is sent neither to an engine nor to the host, and the search log lists it as withheld.
+5. **AC-2c:** the scout's worker file for Claude Code lists the host's web search and web fetch tools; for a host with none in the table it lists neither.
+6. **AC-3:** with no setting, a source of unknown licence keeps the quoted passages and no other text, and a search finds them; with `unknown_licence = "pointer"` it keeps no text.
+7. **AC-4:** with `private_text`, the same source is searchable by an inside agent; a generated page citing it contains no run of its text longer than 300 characters; an export and a bundle contain none of its text.
+8. **AC-5:** a page showing a rights notice is kept as excerpts under `private_text`.
+9. **AC-6:** `delphi library private purge` removes the text and leaves the pointer and its claims' anchors marked `text removed`.
+10. **AC-7:** `delphi kb health` on a workspace with sources and no claims prints the stalled-loop line.
+11. **AC-8:** a host result names a real licence for a source whose licence the code knows.
 
 ## 9. Verification plan
 
 - CLI tests on a temporary home with a fake engine (AC-1, AC-2); the doctor's tests extended.
+- Runner tests with a scripted host feeding results (AC-2a), a guard test (AC-2b), and the worker-file test extended over the host table (AC-2c). The test that a host-declared search never opens the daemon's fetcher to an unlisted address stays and is extended to `research_feed`.
 - Library tests for each setting of `unknown_licence` (AC-3 to AC-6), including a test that scans a generated page, an export and a bundle for any 301-character run of a private source's text.
 - Health tests on fixture workspaces (AC-7); result-shape tests (AC-8).
 - **The live proof (B6):** on a real workspace, with a real engine and model: one `quick`, one `survey` and one `deep` run on public subjects; the claims appear in the library; a topic page is built and read by a person against its sources; a second session in another project finds the topic. What happened is written in the tracker, including what failed.
@@ -148,22 +172,25 @@ Hours are build hours for one builder with tests, as in earlier specs' slice tab
 | Slice | Content | Hours |
 | :-- | :-- | --: |
 | B0 | this spec | 1-2 |
-| B1 | `delphi research setup`; the lines in init, connect, doctor, the refusal and the brief | 4-6 |
+| B1 | `delphi research setup` with Brave and Mojeek suggested; the lines in init, connect, doctor, the refusal and the brief; the identifier guard | 5-7 |
 | B2 | `unknown_licence`: excerpts by default and private text as a setting, the 300-character rule and its scan test, the rights-notice rule, purge, list, the size cap | 10-12 |
 | B3 | the defaults of §4 offered by setup; a run asks for an archived copy | 3-4 |
 | B4 | `delphi kb health`, the doctor section, the daily file | 4-6 |
 | B5 | the small faults of §6 | 2-3 |
 | B6 | the live proof, written up | 3-4 |
-| | **Total** | **27-37** |
+| B7 | the host as a search source: the plan handed to the host, `research_feed`, trusted results read by the daemon, unlisted ones as leads, the run with no engine, the search-log lines | 8-10 |
+| B8 | the host tool table; search and fetch tools in the scout's and investigator's worker files | 3-4 |
+| | **Total** | **39-52** |
 
 ## 11. Authority and trust
 
 - Setup writes config and a keychain entry at a terminal, as model setup does. No agent can run it.
 - §3 keeps text on the operator's machine that was not kept before: quoted passages by default, full text only when the operator sets `private_text`. It sends nothing anywhere and widens no agent's actions; it widens what the operator's own agents can read back. The 300-character rule, the scan test and purge are its limits.
+- §2.1 lets a host hand the daemon search results. It cannot make the daemon fetch an address off the trusted list: such a result is a lead, as a host-declared search is today. What the host reads with its own tools it reads under its own permissions.
 - The defaults of §4 make network calls and spend tokens that are not made today; each is named and asked about at setup.
 
 ## 12. Open questions (the operator decides)
 
 1. *Decided 2026-11-14:* `unknown_licence` defaults to `excerpts`.
 2. Which defaults of §4 are on?
-3. Which search engine is set up on the operator's own workspace for the live proof?
+3. *Decided 2026-11-14:* Brave first, Mojeek second, and the host's own search tools ahead of both in a host session. Still to check before a key is entered: each engine's current price and data-retention terms, and whether the operator's employer names an approved vendor.

@@ -3,7 +3,7 @@ id: spec-115-research-recall-across-projects
 title: "115: Research recall across projects"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "115: your suggestions are approved" (the default `workspace` and the private flag of section 8). Open question 2 was not settled and stays as written: private and internal sources stay inside their project.
+status: approved   # by the operator, 2026-11-14, in a host session: "115: your suggestions are approved" (the default `workspace` and the private flag of section 8). Open question 2 was settled later the same day ("1. follow your direction"): claims from private and internal sources are shared under the three guards of section 2.3.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -47,7 +47,11 @@ Objective: an agent working in any project of a workspace can find research done
 
 1. Workspace config: `[projects] research_sharing = "project" | "workspace"`. `project` is the behaviour before this spec. The default is `workspace` (operator, 2026-11-14); see §8.
 2. A project is private when its entry in the workspace's project list has `private = true` (`delphi project private <name> on|off`). A private project shares nothing and its sessions can still read shared research from others.
-3. A source or claim already marked private (a private source, a claim resting on one, anything recorded under the private-read mark of [`specs/103`](103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md)) is not shared, whatever the setting, unless the operator settles open question 2 otherwise.
+3. Claims that rest on private or internal sources are shared too (operator, 2026-11-14), under three guards:
+   - **Label and weight.** The result reads `another project's research, from an internal source, host-reported`. Such a claim never counts as an origin for corroboration, in any project.
+   - **The reader is marked.** A session that is given such a claim, by a search or at mission start, takes the private-read mark of [`specs/103`](103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md) from that moment, as it would on reading a private source itself.
+   - **The exits stay.** A private project shares none of them, and the workspace's privacy identifiers withhold any that contain one (§3.6).
+   What crosses is the claim: its sentence, its quote and a pointer. The private source's own record and any kept text stay readable only inside its project.
 4. Changing the setting or a project's flag takes effect at the next search; nothing is copied or deleted.
 
 ## 3. What a search returns
@@ -71,7 +75,7 @@ Objective: an agent working in any project of a workspace can find research done
 1. **AC-1:** with `research_sharing = "workspace"`, a search from project B returns a research file of project A, with A's name and the shared label.
 2. **AC-2:** with A private, the same search returns nothing of A's. With the setting `project`, likewise.
 3. **AC-3:** a spec, a plan, a memory file and a staged note of project A are not returned to project B under any setting.
-4. **AC-4:** a claim resting on a private source in A is not returned to B.
+4. **AC-4:** a claim resting on a private source in A is returned to B with the internal-source label; B's session then carries the private-read mark; the claim adds nothing to any origin count; and the source's record and text are not readable from B.
 5. **AC-5:** a result containing a privacy identifier is withheld from B and counted in the reply.
 6. **AC-6:** with ten thousand passages in A and ten in B, a question answered only in B's research returns B's passage from the vector leg.
 
@@ -88,22 +92,22 @@ Objective: an agent working in any project of a workspace can find research done
 | :-- | :-- | --: |
 | X0 | this spec | 1-2 |
 | X1 | the setting, the private flag, `delphi project private`, the doctor line | 3-4 |
-| X2 | the retrieval filter and labels; private sources and identifiers withheld; own-project boost | 8-10 |
+| X2 | the retrieval filter and labels; internal-source claims labelled and the reader marked; identifiers withheld; own-project boost | 9-12 |
 | X3 | the vector leg filters before it cuts | 4-6 |
 | X4 | `scope` on `search_kb` and `kb_retrieve`; shared claims in the claim pull | 4-6 |
 | X5 | the project on results in the console and the app; the CLI options | 3-4 |
-| | **Total** | **23-32** |
+| | **Total** | **24-34** |
 
 X2 and X3 need no other spec. X4's claim part needs 112 R2.
 
 ## 8. Authority and trust: the decision the operator made
 
 - This widens what a session may **read**. It gives no session a new action. The widening is the point of the spec and the operator approved it on 2026-11-14; an agent cannot change it, and the setting is among the config keys an agent may not write.
-- A project folder may hold material the operator would not want read from another project's sessions (a host session in project B can show what it reads to its own model and tools). That is why the private flag exists and why private sources stay inside.
+- A project folder may hold material the operator would not want read from another project's sessions (a host session in project B can show what it reads to its own model and tools). That is why the private flag exists, why a private source's record and text stay inside, and why a session that is given an internal-source claim is marked.
 - The default is `workspace`, because all projects of one workspace belong to one operator (decided 2026-11-14). `project` remains as a setting for an operator who wants the earlier isolation.
 
 ## 9. Open questions (the operator decides)
 
 1. *Decided 2026-11-14:* the default is `workspace`.
-2. Should claims from private and internal sources ([`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §2.4) be shared across the operator's own projects after all? Much of the existing research rests on internal sources, so leaving them out shares little of it.
+2. *Decided 2026-11-14:* claims from private and internal sources ([`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §2.4) are shared, under the guards of §2.3.
 3. Should any project be private from the start? Until the operator says so, none is.

@@ -33,62 +33,68 @@
       "title": "Setup that is hard to miss"
     },
     {
+      "level": 3,
+      "line": 60,
+      "number": "2.1",
+      "title": "Search sources, in order: the host's own tools first"
+    },
+    {
       "level": 2,
-      "line": 58,
+      "line": 76,
       "number": "3",
       "title": "Text kept privately, for retrieval only"
     },
     {
       "level": 2,
-      "line": 73,
+      "line": 91,
       "number": "4",
       "title": "Defaults reviewed"
     },
     {
       "level": 2,
-      "line": 85,
+      "line": 103,
       "number": "5",
       "title": "Knowledge health"
     },
     {
       "level": 2,
-      "line": 92,
+      "line": 110,
       "number": "6",
       "title": "Small faults"
     },
     {
       "level": 2,
-      "line": 99,
+      "line": 117,
       "number": "7",
       "title": "Build order across specs 112 to 119"
     },
     {
       "level": 2,
-      "line": 128,
+      "line": 148,
       "number": "8",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 139,
+      "line": 162,
       "number": "9",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 146,
+      "line": 170,
       "number": "10",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 159,
+      "line": 185,
       "number": "11",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 165,
+      "line": 192,
       "number": "12",
       "title": "Open questions (the operator decides)"
     }
@@ -96,20 +102,20 @@
   "schema_version": 1,
   "source": {
     "path": "specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md",
-    "sha256": "06b3f0ad58c90fa3f033fedf93b612dfe380c104aeee9b15c735495a5a02c000"
+    "sha256": "20400076c303fcc9e50e23f7358e1561273aad5cab2e8b51c747ea939731059e"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 455,
+        "end": 739,
         "end_line": 6,
         "line": 6,
         "start": 251
       },
-      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"119: let's make excerpts the default between pointers and full private text\". Section 3 was changed to that default after those words."
+      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"119: let's make excerpts the default between pointers and full private text\". Section 3 was changed to that default after those words. Later the same day, on search engines: \"your choices sound good, but also add the host default tools as well, like claud's ewb search in a claude environment, etc.\" (the operator's words as typed: Claude's web search); section 2.1 was written after those words and has not been read."
     },
-    "sha256": "06b3f0ad58c90fa3f033fedf93b612dfe380c104aeee9b15c735495a5a02c000",
+    "sha256": "20400076c303fcc9e50e23f7358e1561273aad5cab2e8b51c747ea939731059e",
     "word": "approved"
   },
   "spec": {
@@ -124,10 +130,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 3423,
+      "end": 3707,
       "end_line": 34,
       "line": 26,
-      "start": 1775
+      "start": 2059
     },
     "text": "| # | Observation (2026-11-14) |\n| :-- | :-- |\n| E-1 | The audited workspace has no `[search]` table, so Delphi's research cannot search the web. Sessions asked for research 17 times. `delphi doctor` reports the missing engine as an ordinary line, not a warning, and nothing in a session says what to do. |\n| E-2 | A source whose licence is not known is kept as a pointer: address, title, hash, no text (`library.rs`, the capture level). The licence is worked out by code for a few kinds of site only. All 38 sources on the workspace are pointers, so none can be searched, quoted or gathered into a page. |\n| E-3 | Retraction lookup, archived copies, citation chaining, background validation and session summaries are built and off by default. A research run never asks for an archived copy. |\n| E-4 | The validator's contradiction search has no searcher without `[search]`, so every check ends in \"escalate\" and no claim can reach \"vetted\". |\n| E-5 | Nothing shows the state of the knowledge loop in one place: how many sources have text, how many claims, how many notes wait, whose memory is empty. |\n| E-6 | Small faults found by the audit: the host result's licence is always \"unknown\"; `budget_used` lacks time; `freshness.last_checked` repeats `retrieved`; `want` and `context_pointers` of 066 §3 are read nowhere; the default depth is `survey` in code and `quick` in the spec; the validator's charter says the fetcher is not built, and it is; spec 052's frontmatter says nothing is built, and four slices are. |\n| E-7 | By the tracker's own notes, the research job has never been run against the live web with a real key and a real model. |"
   }

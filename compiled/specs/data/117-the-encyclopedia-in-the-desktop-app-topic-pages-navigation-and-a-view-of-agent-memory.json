@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md",
-    "sha256": "30f2a4f39c294285de84d4a87ac5bd6a411ae07203407cc8a9a3b3a83022aa17"
+    "sha256": "8576d301e9b4cec3137700e42105cb58ba6772e44bcd7f88eb920f5ee7cd11a9"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"117: for the desktop app drawings are better than descriptions but should not be required as descriptions are adequate\". Drawings are optional."
     },
-    "sha256": "30f2a4f39c294285de84d4a87ac5bd6a411ae07203407cc8a9a3b3a83022aa17",
+    "sha256": "8576d301e9b4cec3137700e42105cb58ba6772e44bcd7f88eb920f5ee7cd11a9",
     "word": "approved"
   },
   "spec": {

@@ -238,7 +238,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture
 
-**113: Host-led research: ingest, a record tool, and workers that can capture** · approved (per source at `8ecffa84e909`) · tier 0 · [source](../../specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md)
+**113: Host-led research: ingest, a record tool, and workers that can capture** · approved (per source at `a3aa91a67fe6`) · tier 0 · [source](../../specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md)
 
 **source excerpt, untrusted** · `specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md` lines 25-30
 
@@ -271,7 +271,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 115-research-recall-across-projects
 
-**115: Research recall across projects** · approved (per source at `5d90ed86548e`) · tier 0 · [source](../../specs/115-research-recall-across-projects.md)
+**115: Research recall across projects** · approved (per source at `993f86377516`) · tier 0 · [source](../../specs/115-research-recall-across-projects.md)
 
 **source excerpt, untrusted** · `specs/115-research-recall-across-projects.md` lines 25-30
 
@@ -306,7 +306,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory
 
-**117: The encyclopedia in the desktop app: topic pages, navigation, and a view of agent memory** · approved (per source at `30f2a4f39c29`) · tier 0 · [source](../../specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md)
+**117: The encyclopedia in the desktop app: topic pages, navigation, and a view of agent memory** · approved (per source at `8576d301e9b4`) · tier 0 · [source](../../specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md)
 
 **source excerpt, untrusted** · `specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md` lines 25-33
 
@@ -342,7 +342,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof
 
-**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `06b3f0ad58c9`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
+**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `20400076c303`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
 
 **source excerpt, untrusted** · `specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md` lines 26-34
 
