@@ -314,3 +314,48 @@ fn kb_health_prints_the_stalled_loop_lines_writes_one_line_a_day_and_never_creat
     let o = delphi(&["kb", "health", "--nonsense", "--workspace", "w"], &home);
     assert_eq!(o.status.code(), Some(2));
 }
+
+// specs/115 §4 item 2: `delphi kb search --project <name>` returns that project's research and names it; `--all-projects` adds every
+// project's research to the ordinary results; without either, as before, no project row. A name the workspace does not list, and both
+// flags at once, are refused; inside an agent seat both flags are refused, since the projects' research is the operator's view.
+#[test]
+fn kb_search_names_the_project_of_its_research_results_and_the_project_flags_are_the_operators() {
+    let (t, home) = workspace();
+    let proj = t.path().join("proj");
+    std::fs::create_dir_all(proj.join("research")).unwrap();
+    std::fs::write(proj.join("research/tides.md"), "# Tides\n\nThe wallabytide spring range is four metres.\n").unwrap();
+    std::fs::write(proj.join("NOTES.md"), "# Notes\n\nwallabytide notes outside research.\n").unwrap();
+    let run = |args: &[&str], seat: bool| {
+        let mut c = Command::new(DELPHI);
+        c.args(args).arg("--home").arg(&home).env_remove("DELPHI_WORKSPACE").env_remove("DELPHI_BRIDGE_SOCKET").env_remove("DELPHI_BRIDGE_TOKEN").stdin(Stdio::null()).current_dir(t.path());
+        if seat {
+            c.env("DELPHI_BRIDGE_SOCKET", "/tmp/none.sock");
+        }
+        c.output().unwrap()
+    };
+    let o = run(&["project", "register", proj.to_str().unwrap(), "--workspace", "w"], false);
+    assert!(o.status.success(), "{}{}", text(&o.stdout), text(&o.stderr));
+    let registry: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(home.join("workspaces/w/local/projects.json")).unwrap()).unwrap();
+    let name = registry["projects"].as_object().unwrap().values().next().unwrap()["display_name"].as_str().unwrap().to_string();
+    let o = run(&["kb", "index", "--workspace", "w"], false);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let o = run(&["kb", "search", "wallabytide", "--project", &name, "--lexical", "--workspace", "w"], false);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains("research/tides.md") && out.contains(&format!("project: {name}")) && !out.contains("NOTES.md"), "{out}");
+    let o = run(&["kb", "search", "wallabytide", "--all-projects", "--lexical", "--workspace", "w"], false);
+    assert!(text(&o.stdout).contains(&format!("project: {name}")), "{}", text(&o.stdout));
+    let o = run(&["kb", "search", "wallabytide", "--lexical", "--untrusted", "--workspace", "w"], false);
+    assert!(!text(&o.stdout).contains("project: ") && !text(&o.stdout).contains("tides.md"), "{}", text(&o.stdout));
+    let o = run(&["kb", "search", "wallabytide", "--project", "nobody", "--workspace", "w"], false);
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+    let o = run(&["kb", "search", "wallabytide", "--project", &name, "--all-projects", "--workspace", "w"], false);
+    assert_eq!(o.status.code(), Some(2));
+    for flag in [vec!["--project", name.as_str()], vec!["--all-projects"]] {
+        let mut args = vec!["kb", "search", "wallabytide", "--workspace", "w"];
+        args.extend(flag.iter().copied());
+        let o = run(&args, true);
+        assert_eq!(o.status.code(), Some(2), "{flag:?}");
+        assert!(text(&o.stderr).contains("are the operator's") && !text(&o.stdout).contains("wallabytide"), "{}", text(&o.stderr));
+    }
+}

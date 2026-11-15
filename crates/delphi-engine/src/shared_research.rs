@@ -217,6 +217,60 @@ pub fn pull(ws_dir: &Path, home: &Path, mission: &str, prompt: &str, limit: usiz
     out
 }
 
+/// Which projects' research the operator's own search adds (`specs/115` §4, slice X5): `delphi kb search --project <name>` and
+/// `--all-projects`, and the console's and the app's knowledge deck. The operator owns every project of the workspace, so a private
+/// project is among them (the flag governs what other projects' sessions read); no session, agent or host is served this view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Projects {
+    One(ProjectId),
+    All,
+}
+
+impl Projects {
+    /// `--project <name>`: a registered project by display name (any case) or id; `None` when the workspace lists no such project.
+    pub fn named(ws_dir: &Path, name: &str) -> Option<Projects> {
+        let name = name.trim();
+        scope::project_entries(ws_dir).into_iter().find(|e| e.id.as_str() == name || e.name.eq_ignore_ascii_case(name)).map(|e| Projects::One(e.id))
+    }
+}
+
+/// The project a row of the index belongs to, by its path: `projects/<id>/…` or `research/projects/<id>/…`. `None` for any other.
+pub fn project_of_path(rel_path: &str) -> Option<&str> {
+    let rest = rel_path.strip_prefix("research/projects/").or_else(|| rel_path.strip_prefix("projects/"))?;
+    rest.split('/').next().filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+
+/// Is `rel_path` a row of a project's research: a file under its `research/` folder, or a claim its research kept?
+pub fn is_research_path(rel_path: &str) -> bool {
+    match project_of_path(rel_path) {
+        Some(id) => rel_path.starts_with(&format!("projects/{id}/files/research/")) || rel_path.starts_with(&format!("research/projects/{id}/")),
+        None => false,
+    }
+}
+
+/// The operator's search of the projects' research: for each project `which` names, its `research/**` files and its claims, and
+/// nothing else of it (no spec, plan, context, layer or memory), each hit carrying the project's display name in `project`. The
+/// trust, legs and ranking of `base` apply; untrusted text is admitted only when `base` admits it, except a project's research files,
+/// which are always untrusted and so need `include_untrusted` to appear at all. Best first, at most `base.limit`.
+pub fn operator_hits(ws_dir: &Path, kb: &crate::kb::Kb, query: &str, which: &Projects, base: &SearchOpts) -> Vec<Hit> {
+    let entries = scope::project_entries(ws_dir);
+    let mut out: Vec<Hit> = Vec::new();
+    for e in entries.iter().filter(|e| match which {
+        Projects::All => true,
+        Projects::One(id) => e.id == *id,
+    }) {
+        let opts = SearchOpts { project: Some(e.id.as_str().to_string()), zones: Some(vec!["project", crate::research_index::ZONE]), shared: None, role: None, include_staged: false, include_episodes: false, ..base.clone() };
+        let Ok(hits) = kb.search(query, &opts) else { continue };
+        for mut h in hits.into_iter().filter(|h| is_research_path(&h.rel_path) && project_of_path(&h.rel_path) == Some(e.id.as_str())) {
+            h.project = Some(shown_name(&e.name));
+            out.push(h);
+        }
+    }
+    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(base.limit.max(1));
+    out
+}
+
 /// What `host.search_kb` adds for a host working in a project (`specs/115` §3).
 #[derive(Debug, Default)]
 pub struct HostFound {
@@ -1071,5 +1125,46 @@ mod tests {
                 assert!(!told.contains(&theirs), "under the setting `project` a mission in no project is given no project's claim: {told}");
             }
         }
+    }
+
+    /// `specs/115` §4, slice X5: the operator's knowledge deck (`kb.get`, the console and the app) adds every project's research with
+    /// `projects=all`, each result naming its project, or one project's alone with `project=<name>`; a research result opens, while a
+    /// project's spec does not. Over HTTP (not the operator) neither parameter is read. The CLI's two options take the same path.
+    #[test]
+    fn the_operators_deck_names_the_project_of_each_research_result_and_narrows_to_one() {
+        let f = fx();
+        let (theirs, _, _) = x4(&f);
+        let kb = Kb::open_readonly(&f.ws.join("local/state.db")).unwrap();
+        let reader = |operator: bool| crate::kbserve::Reader { kb: &kb, ws: &f.ws, operator, home: Some(&f.home) };
+        let results = |r: &crate::kbserve::Reply| -> Vec<(String, Option<String>)> { r.body["results"].as_array().unwrap().iter().map(|x| (x["path"].as_str().unwrap().to_string(), x["project"].as_str().map(String::from))).collect() };
+        let all = reader(true).get("/v1/search?q=quokkatide+survey+spring+range&rerank=0&facets=1&projects=all&limit=30");
+        assert_eq!(all.status, 200, "{}", all.body);
+        let got = results(&all);
+        for (id, name) in [(A, "alpha"), (B, "beta"), (P, "hidden")] {
+            assert!(got.contains(&(format!("projects/{id}/files/research/notes.md"), Some(name.to_string()))), "{name}: {got:?}");
+        }
+        assert!(got.iter().all(|(p, _)| !p.contains("/files/specs/") && !p.contains("/files/plans/") && !p.contains("/layer/")), "research only: {got:?}");
+        let names: Vec<&String> = all.body["projects"].as_object().unwrap().keys().collect();
+        assert_eq!(names, ["alpha", "beta", "hidden"], "counted by project; the private project is the operator's too");
+        assert!(all.body["results"].as_array().unwrap().iter().filter(|x| x["project"].is_string()).all(|x| x["kind"] == "research"), "{}", all.body);
+        let one = reader(true).get("/v1/search?q=quokkatide+survey+spring+range&rerank=0&project=ALPHA");
+        assert_eq!(results(&one), [(format!("projects/{A}/files/research/notes.md"), Some("alpha".to_string()))]);
+        assert_eq!(reader(true).get("/v1/search?q=quokkatide&project=nobody").status, 404);
+        // The internal-source claim is the operator's to see, labelled.
+        let claims = reader(true).get("/v1/search?q=dunnartkey+third+stone&rerank=0&projects=all");
+        assert!(claims.body["results"].as_array().unwrap().iter().any(|x| x["path"].as_str().is_some_and(|p| p.contains(&theirs)) && x["label"] == OWN_INTERNAL_LABEL && x["project"] == "alpha"), "{}", claims.body);
+        // Without the parameter, and over HTTP, no project rows, as before.
+        assert!(results(&reader(true).get("/v1/search?q=quokkatide+survey&rerank=0")).iter().all(|(p, pr)| !p.starts_with("projects/") && pr.is_none()));
+        assert!(results(&reader(false).get("/v1/search?q=quokkatide+survey&rerank=0&projects=all")).iter().all(|(p, pr)| !p.starts_with("projects/") && pr.is_none()));
+        // Opening: a research file opens for the operator; a project's spec does not, and nothing of a project opens over HTTP.
+        assert_eq!(reader(true).get(&format!("/v1/doc?path=projects/{A}/files/research/notes.md")).status, 200);
+        assert_eq!(reader(true).get(&format!("/v1/doc?path=projects/{A}/files/specs/s1.md")).status, 404);
+        assert_eq!(reader(false).get(&format!("/v1/doc?path=projects/{A}/files/research/notes.md")).status, 404);
+        // The CLI's names: by display name in any case, or by id; an unknown name is no project.
+        assert_eq!(Projects::named(&f.ws, "Beta"), Some(Projects::One(ProjectId::parse(B).unwrap())));
+        assert_eq!(Projects::named(&f.ws, A), Some(Projects::One(ProjectId::parse(A).unwrap())));
+        assert_eq!(Projects::named(&f.ws, "nobody"), None);
+        assert!(is_research_path(&format!("research/projects/{A}/internal/x.json")) && is_research_path(&format!("projects/{A}/files/research/a.md")));
+        assert!(!is_research_path(&format!("projects/{A}/files/specs/a.md")) && !is_research_path("research/claims/x.json") && !is_research_path("projects/../files/research/a.md"));
     }
 }

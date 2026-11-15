@@ -23,6 +23,8 @@ export function Knowledge({ bridge, info, state, light }: Props) {
   const [text, setText] = useState(asked);
   const [query, setQuery] = useState(asked);
   const [kind, setKind] = useState('');
+  // Spec 115 §4 item 1: every project's research, or the one project the operator narrowed to.
+  const [project, setProject] = useState('');
   const [found, setFound] = useState<SearchBody | null>(null);
   const [open, setOpen] = useState<{ path: string; hit?: Hit } | null>(() => { const p = typeof location !== 'undefined' ? docInAddress(location.search) : ''; return p ? { path: p } : null; });
   const [shelf, setShelf] = useState<Collection[]>([]);
@@ -41,14 +43,14 @@ export function Knowledge({ bridge, info, state, light }: Props) {
     if (!bridge || !query) return;
     let gone = false;
     setProblem('');
-    read<SearchBody>(bridge, searchTarget(query, kind || undefined))
+    read<SearchBody>(bridge, searchTarget(query, kind || undefined, 20, project || undefined))
       .then((b) => { if (!gone) setFound(b); })
       .catch((e: unknown) => { if (!gone) { setFound(null); setProblem(e instanceof Error ? e.message : String(e)); } });
     return () => { gone = true; };
-  }, [bridge, query, kind]);
+  }, [bridge, query, kind, project]);
 
-  const submit = (e: FormEvent) => { e.preventDefault(); const q = text.trim(); if (q) { setOpen(null); setKind(''); setQuery(q); } };
-  const home = () => { setQuery(''); setFound(null); setOpen(null); setText(''); setProblem(''); };
+  const submit = (e: FormEvent) => { e.preventDefault(); const q = text.trim(); if (q) { setOpen(null); setKind(''); setProject(''); setQuery(q); } };
+  const home = () => { setQuery(''); setFound(null); setOpen(null); setText(''); setProblem(''); setProject(''); };
   const search = (large: boolean) => (
     <form onSubmit={submit} className="stack" style={{ gap: 6 }} role="search">
       <label htmlFor="kbq" className="muted" style={{ fontSize: 12 }}>Search entries, specs and lessons</label>
@@ -103,6 +105,8 @@ export function Knowledge({ bridge, info, state, light }: Props) {
   }
 
   const facets = Object.entries(found?.facets ?? {}).sort((a, b) => b[1] - a[1]);
+  // The projects whose research is among the results; while narrowed, the one chosen stays offered so it can be cleared.
+  const projects = Object.entries(found?.projects ?? {}).sort((a, b) => a[0].localeCompare(b[0]));
   return (
     <main className="main" style={{ alignItems: 'center' }}>
       <div className="stack" style={{ width: '100%', maxWidth: 920, gap: 16 }}>
@@ -115,13 +119,19 @@ export function Knowledge({ bridge, info, state, light }: Props) {
             {facets.map(([k, n]) => <button key={k} type="button" className="pill" aria-pressed={kind === k} onClick={() => setKind(k)}>{k} {n}</button>)}
           </div>
         )}
+        {(projects.length > 0 || project) && (
+          <div className="pills" role="group" aria-label="Project">
+            <button type="button" className="pill" aria-pressed={project === ''} onClick={() => setProject('')}>Every project</button>
+            {projects.map(([p, n]) => <button key={p} type="button" className="pill" aria-pressed={project === p} onClick={() => setProject(p)}>{p} {n}</button>)}
+          </div>
+        )}
         <div className="stack" style={{ gap: 8 }}>
           {found?.results.length === 0 && <div className="empty">Nothing matched. Agents who come up short ask the scout to research it; nothing here does that for you.</div>}
           {found?.results.map((h) => {
             const { title, above } = headingOf(h.heading);
             return (
               <button key={h.pointer} type="button" className="card link" onClick={() => setOpen({ path: h.path, hit: h })}>
-                <span className="row" style={{ fontSize: 11 }}><span className="chip line">{h.collection}</span><span className={h.label === 'validated' ? 'chip ok' : 'chip warn'}>{h.label}</span>{h.status !== 'active' && <span className="chip">{h.status}</span>}<span className="time push" style={{ overflowWrap: 'anywhere' }}>{h.pointer}</span></span>
+                <span className="row" style={{ fontSize: 11 }}><span className="chip line">{h.collection}</span>{h.project && <span className="chip line" title="the project whose research this is">project {h.project}</span>}<span className={h.label === 'validated' ? 'chip ok' : 'chip warn'}>{h.label}</span>{h.status !== 'active' && <span className="chip">{h.status}</span>}<span className="time push" style={{ overflowWrap: 'anywhere' }}>{h.pointer}</span></span>
                 <span style={{ fontWeight: 600, fontSize: 15, lineHeight: 1.35 }}>{title}</span>
                 {above && <span className="muted" style={{ fontSize: 12 }}>{above}</span>}
                 <span style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>{h.preview.replace(/[#*`]/g, '').slice(0, 320)}</span>

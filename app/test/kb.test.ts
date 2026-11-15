@@ -4,8 +4,10 @@ import { fixtureBridge } from '../src/bridge.ts';
 import { dayOf, docInAddress, docTarget, frontmatter, headingOf, LIST_PAGE, listAll, listTarget, searchTarget, sourceWords, titleOf, type Doc, type SearchBody } from '../src/kb.ts';
 
 test('a read is addressed the way the daemon expects, with the query encoded', () => {
-  assert.equal(searchTarget('  narrator socket & more  '), '/v1/search?q=narrator%20socket%20%26%20more&limit=20&facets=1');
-  assert.equal(searchTarget('x', 'skill', 5), '/v1/search?q=x&limit=5&facets=1&kind=skill');
+  assert.equal(searchTarget('  narrator socket & more  '), '/v1/search?q=narrator%20socket%20%26%20more&limit=20&facets=1&projects=all');
+  assert.equal(searchTarget('x', 'skill', 5), '/v1/search?q=x&limit=5&facets=1&kind=skill&projects=all');
+  // spec 115 §4 item 1: narrowed to one project's research, by its name.
+  assert.equal(searchTarget('x', undefined, 5, 'Harbour & Co'), '/v1/search?q=x&limit=5&facets=1&project=Harbour%20%26%20Co');
   assert.equal(docTarget('missions/a b/status.md'), '/v1/doc?path=missions%2Fa%20b%2Fstatus.md');
   assert.equal(listTarget(8), '/v1/documents?limit=8');
 });

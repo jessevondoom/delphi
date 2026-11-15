@@ -564,3 +564,27 @@ test('the reader says where a page came from, and that outside content is untrus
   assert.equal(A.provenance(own.trail[0]!), null);
   assert.match(A.view(r, 100, 30, { dark: true }).join('\n').replace(/\x1b\[[0-9;]*m/g, ''), /Wikipedia · licence CC-BY-SA-4\.0/);
 });
+
+test('each research result names its project, and ctrl+p narrows the search to one project and back (specs/115 §4 item 1)', () => {
+  let a = type(shelf(), 'tides');
+  assert.equal(A.projectParam(a), '&projects=all', 'every project by default');
+  const hits = [
+    { path: 'projects/aaaa/files/research/notes.md', collection: 'project', kind: 'research', trust: 'external_untrusted', heading: 'Tides', preview: 'spring range', project: 'harbour\x1b[31m' },
+    { path: 'specs/003.md', collection: 'specs', kind: 'spec', trust: 'x', heading: 'Retry', preview: 'p' },
+  ];
+  a = A.gotHits(a, 'tides', { results: hits, took_ms: 3, mode: 'hybrid', facets: { research: 1, spec: 1 }, projects: { harbour: 1, reef: 2 } });
+  assert.deepEqual([a.hits[0]!.project, a.hits[1]!.project], ['harbour', undefined], 'the name is cleaned; a result of no project has none');
+  const screen = A.view(a, W, H, { dark: true }).map(plain).join('\n');
+  assert.match(screen, /project harbour/);
+  assert.match(screen, /project {2}● every {3}○ harbour 1 {3}○ reef 2/);
+  const one = A.key(a, { t: 'ctrl', c: 'p' }, W, H);
+  assert.deepEqual([one.a.project, one.action], ['harbour', { t: 'search', q: 'tides' }]);
+  assert.equal(A.projectParam(one.a), '&project=harbour');
+  const two = A.key(one.a, { t: 'ctrl', c: 'p' }, W, H).a;
+  assert.equal(two.project, 'reef');
+  assert.equal(A.key(two, { t: 'ctrl', c: 'p' }, W, H).a.project, null, 'and back to every project');
+  // The chips stay those of the wider search while narrowed, so the walk can go on.
+  assert.deepEqual(A.gotHits(one.a, 'tides', { results: hits.slice(0, 1), projects: { harbour: 1 } }).projects, { harbour: 1, reef: 2 });
+  const none = A.gotHits(type(shelf(), 'retry'), 'retry', { results: hits.slice(1) });
+  assert.equal(A.key(none, { t: 'ctrl', c: 'p' }, W, H).a.note, 'no project research among these results');
+});

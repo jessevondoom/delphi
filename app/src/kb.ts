@@ -5,16 +5,20 @@ export type Hit = {
   path: string; pointer: string; heading: string; preview: string; kind: string; collection: string;
   /** `validated` or `not validated`: the daemon's own word for whether someone vouched for it. */
   label: string; status: string; note: string | null; vouched_by: string | null; updated?: string; start_line?: number; end_line?: number;
+  /** The project whose research this is, by its display name (spec 115 §4 item 1); absent or null for anything else. */
+  project?: string | null;
 };
-export type SearchBody = { query: string; mode?: string; candidates?: number; capped?: boolean; facets?: Record<string, number>; results: Hit[] };
+/** `projects`: how many results each project's research gave, for narrowing to one. */
+export type SearchBody = { query: string; mode?: string; candidates?: number; capped?: boolean; facets?: Record<string, number>; projects?: Record<string, number>; results: Hit[] };
 /** One row of a listing (`/v1/documents`). `author` is who its front matter names; an older daemon does not send it. */
 export type DocRow = { rel_path: string; kind: string; zone: string; status: string; source_type: string; updated_at: string; author?: string | null };
 export type Collection = { name: string; documents: number; updated: string };
 /** One document (`/v1/doc`). */
 export type Doc = { path: string; collection: string; status: string; stale: boolean; text: string };
 
-export const searchTarget = (q: string, kind?: string, limit = 20): string =>
-  `/v1/search?q=${encodeURIComponent(q.trim())}&limit=${limit}&facets=1${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`;
+/** A search, with every project's research (`projects=all`) or only the `project` named (spec 115 §4 item 1). */
+export const searchTarget = (q: string, kind?: string, limit = 20, project?: string): string =>
+  `/v1/search?q=${encodeURIComponent(q.trim())}&limit=${limit}&facets=1${kind ? `&kind=${encodeURIComponent(kind)}` : ''}${project ? `&project=${encodeURIComponent(project)}` : '&projects=all'}`;
 export const docTarget = (path: string): string => `/v1/doc?path=${encodeURIComponent(path)}`;
 /** A listing of the newest documents; `where` narrows it to one kind or one collection and `offset` asks for a later page. */
 export const listTarget = (limit = 50, kind?: string, where: { collection?: string; offset?: number } = {}): string =>
