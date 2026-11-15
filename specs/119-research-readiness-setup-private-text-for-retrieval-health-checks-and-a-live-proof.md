@@ -3,7 +3,7 @@ id: spec-119-research-readiness-setup-private-text-for-retrieval-health-checks-a
 title: "119: Research readiness: setup, private text for retrieval, health checks, and a live proof"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "119: let's make excerpts the default between pointers and full private text". Section 3 was changed to that default after those words. Later the same day, on search engines: "your choices sound good, but also add the host default tools as well, like claud's ewb search in a claude environment, etc." (the operator's words as typed: Claude's web search); section 2.1 was written after those words and has not been read. Section 13 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
+status: approved   # by the operator, 2026-11-14, in a host session: "119: let's make excerpts the default between pointers and full private text". Section 3 was changed to that default after those words. Later the same day, on search engines: "your choices sound good, but also add the host default tools as well, like claud's ewb search in a claude environment, etc." (the operator's words as typed: Claude's web search); section 2.1 was written after those words and has not been read. Section 13 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request. Section 14 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -226,3 +226,13 @@ Found before writing this: Parallel's hosted search server answered a keyless ca
 ### 13.4 Slices
 
 14. **B9**, never refused and Parallel then Brave (13.2 and 13.3), 4 to 6 hours, built before B7. B7 and B8 build 13.1 with §2.1. B6 closes the program as before.
+
+## 14. Amendment (operator, 2026-11-15): answers on private text, the 10% bound and the defaults
+
+The operator's words, in a host session on 2026-11-15, answering the four questions the B2, B3 and B5 builder raised: "119 questions: 1. no for now and revist later. 2. yes that's okay. better to have useful knowledge than small files. maybe that rule should only apply when the source is over 10KB or so of text. 3. citation chaining should be on by default with no question. archived copies and retraction lookup too. just leave the question for background validation and default it to off. 4. yes." The operator approves this section by merging the pull request that adds it.
+
+1. **Agents and private text.** An inside agent does not search sources kept as `private_text` (the first half of AC-4 is not built). To revisit later; until then such sources stay out of the index agents search and out of every prompt, as built in B2.
+2. **The 10% bound.** The library's bound on how much of a source is kept as excerpts (at most a tenth of its text) applies only to a source whose text is longer than 10 KB (10,240 bytes). A shorter source is bounded by the per-passage limit of §3 (300 characters, with up to 200 of context on either side) and the 16 KiB cap per source. The rule is the same for passages a research run keeps and for excerpts kept any other way. Useful knowledge comes before small files.
+3. **The defaults of §4.** This settles §12 item 2. Retraction lookup, an archived copy when a page is gone, and citation chaining are on by default, for every run and every workspace where the operator has not set them, with no question at setup; each stays a config key the operator can turn off. Background validation stays a question at setup and is off by default. Session summaries are unchanged (no setting exists for them).
+4. **The command.** `delphi sources private list | purge` stands; there is no `library` command.
+5. Slice: **B10**, the defaults and the 10 KB rule (2 to 3 hours), built with B9.
