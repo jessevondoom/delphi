@@ -28,6 +28,9 @@ pub enum QueryKind {
     Topic,
     Trusted,
     Gap,
+    /// A query for one sub-question of the scout's plan (`specs/114` §4): the scout's own, or one built from the sub-question's
+    /// words. It is cleaned and guarded by the runner like the question before it is sent.
+    Sub,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

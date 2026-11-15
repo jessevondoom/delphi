@@ -24,7 +24,26 @@
       "items": {
         "type": "object",
         "required": ["kind", "query"],
-        "properties": { "kind": { "enum": ["trusted", "topic", "gap"] }, "query": { "type": "string", "maxLength": 300 } },
+        "properties": { "kind": { "enum": ["trusted", "topic", "gap", "sub"], "description": "`sub` is a query for one sub-question of the scout's plan (specs/114 section 4)." }, "query": { "type": "string", "maxLength": 300 } },
+        "additionalProperties": false
+      }
+    },
+    "plan_kind": { "enum": ["scout", "fixed", "continued"], "description": "Who made the newest run's plan (specs/114 section 4): `scout` for the scout's plan call, `fixed` when that call failed or returned nothing usable and the fixed plan was used, `continued` for a run that took its sub-questions from this record." },
+    "sub_questions": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "The sub-questions of the newest run's plan (specs/114 section 4); empty under the fixed plan. The scout's words: data, like the question.",
+      "items": {
+        "type": "object",
+        "required": ["n", "text", "status"],
+        "properties": {
+          "n": { "type": "integer", "minimum": 1, "maximum": 99, "description": "Its number in the plan: what a claim is tagged with." },
+          "text": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "status": { "enum": ["known", "partly", "open"], "description": "Whether what Delphi already held answered it, as the plan call judged from the `known` list." },
+          "covered": { "type": "boolean", "description": "Set when the run ends: covered when the claims tagged to it come from at least two origins, or when the plan marked it known." },
+          "claims": { "type": "integer", "minimum": 0, "description": "Kept claims tagged to it." },
+          "origins": { "type": "integer", "minimum": 0, "description": "Distinct origins those claims' sources are on." }
+        },
         "additionalProperties": false
       }
     },

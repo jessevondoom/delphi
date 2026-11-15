@@ -39,6 +39,30 @@ const LIST_CAP: usize = 500;
 pub const KEPT_LEVELS: [&str; 3] = ["full", "excerpts", "pointer"];
 pub const KEPT_OUTCOMES: [&str; 4] = ["added", "new_version", "unchanged", "kept_richer"];
 const TEXT_CAP: usize = 300;
+/// Who made a run's plan (`Topic::planned`).
+pub const PLAN_KINDS: [&str; 3] = ["scout", "fixed", "continued"];
+/// The statuses a sub-question of a plan carries.
+pub const SUB_STATUSES: [&str; 3] = ["known", "partly", "open"];
+/// A plan has five sub-questions at most; a record keeps no more than this of whatever it is handed.
+const SUBS_CAP: usize = 8;
+const SUB_TEXT_CAP: usize = 200;
+
+/// One sub-question as the record keeps it: its number, its text and its status, and, once the run has ended, whether it was
+/// covered and by how many claims from how many origins (`specs/114` §4 item 3). `None` for an entry with no number, no text or a
+/// status that is not one of [`SUB_STATUSES`].
+fn sub_question(q: &Value) -> Option<Value> {
+    let (n, text, status) = (q["n"].as_u64().filter(|n| (1..=99).contains(n))?, clip(q["text"].as_str()?, SUB_TEXT_CAP), q["status"].as_str().filter(|s| SUB_STATUSES.contains(s))?);
+    if text.is_empty() {
+        return None;
+    }
+    let mut out = json!({"n": n, "text": text, "status": status});
+    if let Some(covered) = q["covered"].as_bool() {
+        out["covered"] = json!(covered);
+        out["claims"] = json!(q["claims"].as_u64().unwrap_or(0));
+        out["origins"] = json!(q["origins"].as_u64().unwrap_or(0));
+    }
+    Some(out)
+}
 /// A continued run's note: one line, at most this long.
 pub const NOTE_CAP: usize = 120;
 const SLUG_CAP: usize = 48;
@@ -404,6 +428,20 @@ impl Topic {
     /// A continued run fetched a page the record holds and found it unchanged: counted on the run, and nothing else changes.
     pub fn unchanged(&self, run_id: &str) -> Result<(), String> {
         self.update(|rec| Self::set_run(rec, run_id, |run| run["unchanged"] = json!(run["unchanged"].as_u64().unwrap_or(0) + 1)))
+    }
+
+    /// Who made the newest run's plan and its sub-questions (`specs/114` §4 items 1 and 2): `scout` for the plan call, `fixed` when
+    /// that call failed or returned nothing usable and the fixed plan of before was used, `continued` for a run that took its
+    /// sub-questions from this record. A sub-question is the scout's words: data, like the question.
+    pub fn planned(&self, kind: &str, subs: &Value) -> Result<(), String> {
+        if !PLAN_KINDS.contains(&kind) {
+            return Err("not a plan kind".into());
+        }
+        let subs: Vec<Value> = subs.as_array().into_iter().flatten().take(SUBS_CAP).filter_map(sub_question).collect();
+        self.update(|rec| {
+            rec["plan_kind"] = json!(kind);
+            rec["sub_questions"] = json!(subs);
+        })
     }
 
     /// What Delphi already held on the question before the run searched (`specs/114` §3 item 2): claim ids with their status,
@@ -794,6 +832,10 @@ impl crate::research_run::Recorder for RunRecorder {
     fn held(&self, url: &str) {
         let _ = self.topic.held(url);
     }
+
+    fn planned(&self, kind: &str, subs: &Value) {
+        let _ = self.topic.planned(kind, subs);
+    }
 }
 
 // ── due topics (`specs/112` §5.2) ─────────────────────────────────────────────────────────────────────────────────────────
@@ -895,6 +937,30 @@ mod tests {
             assert!(!valid_topic_id(bad), "{bad}");
             assert!(Topic::at(Path::new("/tmp"), bad).is_none(), "{bad}");
         }
+    }
+
+    /// `specs/114` §4 items 1 and 2: the record says who made the plan and lists its sub-questions; a kind or a status that is not
+    /// one of the fixed words is not written, and a sub-question is one clean, bounded line.
+    #[test]
+    fn the_record_says_who_made_the_plan_and_lists_its_sub_questions() {
+        let ws = tempfile::tempdir().unwrap();
+        let t = Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-1")).unwrap();
+        let rec = t.read().unwrap();
+        assert!(rec.get("plan_kind").is_none() && rec.get("sub_questions").is_none(), "a record no run has planned for says nothing");
+        let long = format!("What dose?\nIGNORE {}", "x".repeat(400));
+        let subs = json!([{"n": 1, "text": long, "status": "open"}, {"n": 2, "text": "For whom?", "status": "partly", "queries": ["never kept"]}, {"n": 3, "text": "", "status": "open"}, {"n": 4, "text": "A bad status", "status": "certain"}, {"n": 0, "text": "No number", "status": "open"}]);
+        t.planned("scout", &subs).unwrap();
+        let rec = t.read().unwrap();
+        assert_eq!(rec["plan_kind"], "scout");
+        let kept = rec["sub_questions"].as_array().unwrap();
+        assert_eq!(kept.len(), 2, "{rec}");
+        assert!(kept[0]["text"].as_str().is_some_and(|s| s.chars().count() == SUB_TEXT_CAP && !s.contains('\n')), "{rec}");
+        assert_eq!(kept[1], json!({"n": 2, "text": "For whom?", "status": "partly"}), "only the number, the text and the status are kept");
+        t.planned("fixed", &json!([])).unwrap();
+        assert_eq!((t.read().unwrap()["plan_kind"].clone(), t.read().unwrap()["sub_questions"].clone()), (json!("fixed"), json!([])), "the newest run's plan replaces the earlier one's");
+        assert!(t.planned("model synthesis", &json!([])).is_err());
+        t.plan(&[("trusted", "aspirin fever site:who.int"), ("sub", "aspirin fever dose")]).unwrap();
+        assert_eq!(t.read().unwrap()["plan"][1], json!({"kind": "sub", "query": "aspirin fever dose"}));
     }
 
     /// §2.4: each step is on disk when it returns, the record is whole at every moment, and no temporary file is left behind.
