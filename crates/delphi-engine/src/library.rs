@@ -215,6 +215,9 @@ pub struct Library {
     /// The knowledge-base passages and findings a topic page's material holds (`specs/117` §2 item 4): the only ones a page check
     /// on this library resolves. Empty unless the caller sets them with [`Library::with_records`].
     records: Vec<page_check::KbRecord>,
+    /// The topic slugs a topic page's `## See also` may name (`specs/117` §2 item 5). `None`: the page is not a topic's, and its
+    /// sections are not checked as one.
+    topic_slugs: Option<std::collections::BTreeSet<String>>,
 }
 
 /// A short stable id from the canonical URL or identifier, not from content (`specs/055` §3.2).
@@ -343,12 +346,18 @@ struct Prepared {
 
 impl Library {
     pub fn in_home(home: &Path) -> Library {
-        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new() }
+        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new(), topic_slugs: None }
     }
 
     /// The same library, whose page check resolves `[s-kb-...]` and `[f-...]` markers against `records` (and nothing else).
     pub fn with_records(mut self, records: Vec<page_check::KbRecord>) -> Library {
         self.records = records;
+        self
+    }
+
+    /// The same library, whose page check also checks a topic page's key terms, start here and see also against `slugs`.
+    pub fn with_topic_slugs(mut self, slugs: std::collections::BTreeSet<String>) -> Library {
+        self.topic_slugs = Some(slugs);
         self
     }
 

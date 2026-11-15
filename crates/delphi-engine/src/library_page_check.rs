@@ -56,6 +56,12 @@ pub enum Finding {
     /// A `page:` link whose slug is not a plain lowercase-hyphen slug.
     BadPageLink(String),
     TableUncited,
+    /// A topic page's `## Key terms` (`specs/117` §2 item 5): more than twelve, or a line that is not a term with a cited definition.
+    KeyTerm(String),
+    /// A topic page's `## Start here`: not three to five items, or an item that names no record.
+    StartHere(String),
+    /// A topic page's `## See also` names a slug that is no topic, or a line that is not a `page:` link.
+    UnknownSeeAlso(String),
 }
 
 impl std::fmt::Display for Finding {
@@ -79,6 +85,9 @@ impl std::fmt::Display for Finding {
             Finding::UnknownAnchor(a) => write!(f, "the link `#{}` names no heading on the page", short(a)),
             Finding::BadPageLink(l) => write!(f, "a `page:` link must name a slug of lowercase letters, digits and hyphens: {}", short(l)),
             Finding::TableUncited => write!(f, "a table has no citation in or beside it"),
+            Finding::KeyTerm(why) => write!(f, "key terms: {}", short(why)),
+            Finding::StartHere(why) => write!(f, "start here: {}", short(why)),
+            Finding::UnknownSeeAlso(s) => write!(f, "see also: `{}` is not a topic page of this library", short(s)),
         }
     }
 }
@@ -725,6 +734,12 @@ impl Library {
             material.push('\n');
         }
         out.flags = unverified(body, &norm(&material).to_lowercase());
+        // A topic page's own sections (`specs/117` §2 item 5): checked on a library that knows the topics.
+        if let Some(slugs) = &self.topic_slugs {
+            for f in super::topics::section_findings(body, slugs) {
+                push(f, &mut out.findings);
+            }
+        }
         out
     }
 

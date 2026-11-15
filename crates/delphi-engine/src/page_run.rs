@@ -311,7 +311,9 @@ impl Engine {
         let now = (self.clock_unix)();
         let gathered = self.topic_material(&side).await;
         // The page check resolves `[s-kb-...]` and `[f-...]` against these records and nothing else.
-        let lib = lib.with_records(gathered.records.clone());
+        let gaps = lib.topic_gaps(&side, &self.ws.dir);
+        let slugs = lib.topic_slugs();
+        let lib = lib.with_records(gathered.records.clone()).with_topic_slugs(slugs);
         let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
@@ -320,7 +322,7 @@ impl Engine {
         let week = crate::fact_serve::shares_of(&self.ws.dir, "pages").install_week;
         let gate = move || share_allows(&state, week, now);
         let before = ledger.spent();
-        let req = crate::library::topics::TopicRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, gathered };
+        let req = crate::library::topics::TopicRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, gathered, gaps };
         let built = lib.topic_rebuild(req, &writer, &validator, &ledger, &gate).await?;
         let used = ledger.spent().saturating_sub(before);
         if used > 0 {

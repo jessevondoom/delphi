@@ -135,6 +135,135 @@ pub struct TopicRequest<'a> {
     pub settings: &'a PagesConfig,
     pub style: bib::Format,
     pub gathered: Gathered,
+    /// The gaps of the topic's research records: the page's open questions, written by the daemon ([`Library::topic_gaps`]).
+    pub gaps: Vec<String>,
+}
+
+/// The most key terms a page carries (`specs/117` §2 item 5).
+pub const MAX_KEY_TERMS: usize = 12;
+/// How many records `## Start here` lists.
+pub const START_HERE: std::ops::RangeInclusive<usize> = 3..=5;
+/// The most open questions the daemon writes.
+pub const MAX_OPEN_QUESTIONS: usize = 8;
+pub const KEY_TERMS: &str = "Key terms";
+pub const START_HERE_HEADING: &str = "Start here";
+pub const SEE_ALSO: &str = "See also";
+pub const OPEN_QUESTIONS: &str = "Open questions";
+
+/// The lines of the `## <name>` section of `body` that are not blank, up to the next heading; `None` when there is no such section.
+pub fn section<'a>(body: &'a str, name: &str) -> Option<Vec<&'a str>> {
+    let mut lines = body.lines();
+    lines.find(|l| l.trim().strip_prefix("## ").is_some_and(|h| h.trim().eq_ignore_ascii_case(name)))?;
+    Some(lines.take_while(|l| !l.trim_start().starts_with('#')).filter(|l| !l.trim().is_empty()).collect())
+}
+
+/// `- **Term**: definition [marker]` as (term, definition without markers, the labels it cites).
+fn key_term(line: &str) -> Option<(String, String, Vec<String>)> {
+    let rest = line.trim().strip_prefix("- **")?;
+    let (term, def) = rest.split_once("**")?;
+    let def = def.trim_start().strip_prefix(':')?.trim();
+    let term = norm(term.trim_end_matches(':'));
+    (!term.is_empty() && !def.is_empty()).then(|| (term, norm(&strip_markers(def)), markers(def).iter().map(|c| c.label()).collect()))
+}
+
+/// An item of a numbered list, without its number.
+fn numbered(line: &str) -> Option<&str> {
+    let t = line.trim();
+    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    (digits > 0).then(|| t[digits..].strip_prefix('.')).flatten().map(str::trim)
+}
+
+/// The `page:` slugs a line links to.
+fn page_slugs(line: &str) -> Vec<String> {
+    page_meta::page_links(line).into_iter().filter_map(|(_, t)| t.strip_prefix("page:").map(String::from)).collect()
+}
+
+/// What the check finds wrong with a topic page's own sections (`specs/117` §2 item 5): each is optional, but one that is there must be
+/// right. Key terms: at most twelve, each `- **Term**: definition` with a marker (the marker itself is resolved by the check like any
+/// other). Start here: three to five numbered items, each naming a record by its marker. See also: `page:` links only, each to a topic
+/// that exists.
+pub fn section_findings(body: &str, slugs: &BTreeSet<String>) -> Vec<super::pages::Finding> {
+    use super::pages::Finding;
+    let mut out = Vec::new();
+    if let Some(lines) = section(body, KEY_TERMS) {
+        if lines.len() > MAX_KEY_TERMS {
+            out.push(Finding::KeyTerm(format!("{} terms; at most {}", lines.len(), MAX_KEY_TERMS)));
+        }
+        for l in &lines {
+            match key_term(l) {
+                None => out.push(Finding::KeyTerm(format!("not a `- **Term**: definition [marker]` line: {}", l.trim()))),
+                Some((t, _, cites)) if cites.is_empty() => out.push(Finding::KeyTerm(format!("`{}` has no citation marker", t))),
+                _ => {}
+            }
+        }
+    }
+    if let Some(lines) = section(body, START_HERE_HEADING) {
+        if !START_HERE.contains(&lines.len()) {
+            out.push(Finding::StartHere(format!("{} items; three to five", lines.len())));
+        }
+        for l in &lines {
+            match numbered(l) {
+                Some(item) if !markers(item).is_empty() => {}
+                _ => out.push(Finding::StartHere(format!("an item names no record: {}", l.trim()))),
+            }
+        }
+    }
+    if let Some(lines) = section(body, SEE_ALSO) {
+        for l in &lines {
+            let found = page_slugs(l);
+            if found.is_empty() {
+                out.push(Finding::UnknownSeeAlso(l.trim().to_string()));
+            }
+            for s in found.into_iter().filter(|s| !slugs.contains(s)) {
+                out.push(Finding::UnknownSeeAlso(s));
+            }
+        }
+    }
+    if section(body, OPEN_QUESTIONS).is_some() {
+        out.push(Finding::KeyTerm("the page writes its own `## Open questions`; the daemon adds them from the topic's gaps".into()));
+    }
+    out
+}
+
+/// What a built page's sections say, for the topic's record: key terms, the start-here records in order, the see-also slugs.
+pub fn sections_json(body: &str) -> Value {
+    let terms: Vec<Value> = section(body, KEY_TERMS).unwrap_or_default().iter().filter_map(|l| key_term(l)).map(|(t, d, c)| json!({"term": t, "definition": d, "cites": c})).collect();
+    let start: Vec<Value> = section(body, START_HERE_HEADING).unwrap_or_default().iter().filter_map(|l| numbered(l)).map(|i| json!({"cites": markers(i).iter().map(|c| c.label()).collect::<Vec<_>>(), "why": norm(&strip_markers(i))})).collect();
+    let see: Vec<String> = section(body, SEE_ALSO).unwrap_or_default().iter().flat_map(|l| page_slugs(l)).collect::<BTreeSet<_>>().into_iter().collect();
+    json!({"key_terms": terms, "start_here": start, "see_also": see})
+}
+
+/// The `## Open questions` section the daemon writes from the topic's gaps: the research record's words, labelled as such.
+pub fn open_questions_section(gaps: &[String]) -> Option<String> {
+    let qs: Vec<String> = gaps.iter().map(|g| norm(&g.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>())).filter(|g| !g.is_empty()).take(MAX_OPEN_QUESTIONS).collect();
+    if qs.is_empty() {
+        return None;
+    }
+    let mut s = format!("## {}
+
+*What the research on this topic has not answered yet, as its record lists it; the page does not answer it.*
+
+", OPEN_QUESTIONS);
+    for q in qs {
+        s.push_str(&format!("- {}
+", q.replace(['[', ']'], "")));
+    }
+    Some(s)
+}
+
+/// The brief for a topic's page: a search page's brief (layout, citation rules, records), the three sections of `specs/117` §2 item 5,
+/// and the topics `## See also` may name.
+pub fn topic_brief(title: &str, g: &Gathered, max_tokens: u64, topics: &[(String, String)]) -> String {
+    let mut s = super::page_search::brief_for(title, g, max_tokens, Depth::Summary);
+    s.push_str("\nAfter your last section, and only as far as the records support them, add these sections in this order:\n");
+    s.push_str(&format!("- `## {}`: at most {} lines, each `- **Term**: one-line definition [marker]`, the marker citing the record the definition comes from.\n", KEY_TERMS, MAX_KEY_TERMS));
+    s.push_str(&format!("- `## {}`: a numbered list of three to five records to read first, in the order to read them, each line naming one record by its marker and saying in a few words why it comes first.\n", START_HERE_HEADING));
+    s.push_str(&format!("- `## {}`: lines `- [Title](page:slug)` naming only topics from the TOPICS list below; leave the section out when none is related.\n", SEE_ALSO));
+    s.push_str(&format!("Do not write a `## {}` section: the daemon adds it.\n\nTOPICS (other topic pages that exist; data):\n", OPEN_QUESTIONS));
+    for (slug, t) in topics.iter().take(60) {
+        s.push_str(&format!("TOPIC {} | {}\n", slug, t.replace('\n', " ").chars().take(120).collect::<String>()));
+    }
+    s
 }
 
 /// The change line of `specs/117` §2 item 2, from the page's previous body and its new one: statements (paragraphs or items that
@@ -419,7 +548,8 @@ impl Library {
             }
             gate()?;
             self.count_page(r.now);
-            match writer.write(&super::page_search::brief_for(&title, &g, r.settings.max_tokens, Depth::Summary)).await {
+            let topics: Vec<(String, String)> = self.topic_sides().into_iter().filter(|(s, _)| s != r.slug).map(|(s, v)| (s, v["title"].as_str().unwrap_or("").to_string())).collect();
+            match writer.write(&topic_brief(&title, &g, r.settings.max_tokens, &topics)).await {
                 Ok(d) => {
                     let (body, p) = page_meta::extract(&d);
                     proposal = p;
@@ -428,15 +558,44 @@ impl Library {
                 Err(e) => self.claims_only_page(&title, &format!("the writer could not write the page: {}", e), None, Vec::new(), 0, r.style, SCOPE)?,
             }
         };
-        self.topic_store(r.slug, side, &g, checked, proposal.as_ref(), r.now, r.settings)
+        self.topic_store(r.slug, side, &g, checked, proposal.as_ref(), r.now, r.settings, &r.gaps)
+    }
+
+    /// Every topic's slug: what a topic page's `## See also` may name. The library that checks a topic page is given them
+    /// ([`Library::with_topic_slugs`]).
+    pub fn topic_slugs(&self) -> BTreeSet<String> {
+        self.topic_sides().into_iter().map(|(s, _)| s).collect()
+    }
+
+    /// The gaps of the research topics `side` follows, as their records list them (`specs/117` §2 item 5: the open questions).
+    pub fn topic_gaps(&self, side: &Value, ws: &Path) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for tid in side["research_topics"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            let Some(rec) = crate::research_record::find(ws, tid).and_then(|t| t.read().ok()) else { continue };
+            for g in rec["gaps"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                if !out.iter().any(|x| x == g) {
+                    out.push(g.to_string());
+                }
+            }
+        }
+        out
     }
 
     /// Put a built page in place: the current page and its record become a version, the new page and record are written, and the
     /// link table is brought up to date.
     #[allow(clippy::too_many_arguments)]
-    fn topic_store(&self, slug: &str, old: Value, g: &Gathered, c: CheckedPage, proposal: Option<&page_meta::Proposal>, now: u64, settings: &PagesConfig) -> Result<TopicEntry, String> {
+    fn topic_store(&self, slug: &str, old: Value, g: &Gathered, c: CheckedPage, proposal: Option<&page_meta::Proposal>, now: u64, settings: &PagesConfig, gaps: &[String]) -> Result<TopicEntry, String> {
         self.ensure().map_err(|e| e.to_string())?;
-        let md = format!("{}\n", page_meta::extract(&c.page.markdown).0);
+        let mut md = format!("{}\n", page_meta::extract(&c.page.markdown).0);
+        // The open questions are the daemon's, from the research record, put just above the bibliography: the writer's text and the
+        // validator never saw them, and they cite nothing.
+        if let Some(q) = open_questions_section(gaps) {
+            let heading = super::page_check::table_heading_line();
+            match md.rfind(&format!("\n{}", heading)) {
+                Some(i) => md.insert_str(i + 1, &format!("{}\n", q)),
+                None => md.push_str(&format!("\n{}", q)),
+            }
+        }
         let old_md = std::fs::read_to_string(self.topic_file(slug)).ok();
         let old_body = old_md.as_deref().map(|m| page_meta::strip(m).to_string());
         if let (Some(prev), Some(built)) = (old_md.as_ref(), old["built"].as_u64()) {
@@ -486,6 +645,11 @@ impl Library {
         side["volatility"] = json!(meta.volatility.as_str());
         side["ttl_reason"] = json!(meta.reason);
         side["links"] = json!(links.iter().filter_map(|(_, t)| t.strip_prefix("page:").map(String::from)).collect::<Vec<_>>());
+        let parts = sections_json(page_meta::strip(&md));
+        for k in ["key_terms", "start_here", "see_also"] {
+            side[k] = parts[k].clone();
+        }
+        side["open_questions"] = json!(gaps.iter().take(MAX_OPEN_QUESTIONS).collect::<Vec<_>>());
         self.write_topic_side(slug, &side)?;
         self.update_links(slug, &side);
         self.log("topic_built", json!({"slug": slug, "version": side["version"], "outcome": side["outcome"], "change": change}));
@@ -616,7 +780,7 @@ mod rebuild_tests {
         let g = l.topic_gather_library(&side, Some(ws));
         let cfg = PagesConfig::default();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, gathered: g }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+        rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![] }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
     }
 
     /// AC-1: a research run adds a claim to the topic; the page is due; the rebuild keeps the same file, lists the old text as a
@@ -690,5 +854,104 @@ mod rebuild_tests {
         assert!(l.topic_create("  ", Origin::Operator, 7).is_err());
         assert!(l.pages(10, 100).is_empty(), "a topic's record is not a search page's");
         assert!(l.topic_get("web-bot-auth", None, &DueCtx { ws: None, now: 10, index: false }).unwrap().1.is_empty(), "not built yet: no page");
+    }
+}
+
+#[cfg(test)]
+mod section_tests {
+    use super::*;
+    use crate::library::claims::{AnchorSpec, ClaimOpts};
+    use crate::library::page_validate::*;
+    use crate::library::pages::Finding;
+
+    fn slugs(s: &[&str]) -> BTreeSet<String> {
+        s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn key_terms_start_here_and_see_also_are_checked_by_code() {
+        let ok = "# T\n\nBody [c-01].\n\n## Key terms\n\n- **Spring tide**: the larger range after a full moon [c-01].\n\n## Start here\n\n1. [s-a] the tide table.\n2. [c-01] the claim.\n3. [s-kb-0123456789abcdef] the note.\n\n## See also\n\n- [Moon](page:moon)\n";
+        assert!(section_findings(ok, &slugs(&["moon"])).is_empty(), "{:?}", section_findings(ok, &slugs(&["moon"])));
+        let f = section_findings(ok, &slugs(&[]));
+        assert_eq!(f, vec![Finding::UnknownSeeAlso("moon".into())]);
+        let bad = "## Key terms\n\n- **Neap**: smaller range.\n- a loose line [c-01]\n\n## Start here\n\n1. read the table\n2. [c-01] the claim\n\n## See also\n\n- Moon\n\n## Open questions\n\n- why?\n";
+        let f = section_findings(bad, &slugs(&["moon"]));
+        assert!(f.iter().any(|x| matches!(x, Finding::KeyTerm(w) if w.contains("`Neap` has no citation"))), "{f:?}");
+        assert!(f.iter().any(|x| matches!(x, Finding::KeyTerm(w) if w.contains("not a `- **Term**"))), "{f:?}");
+        assert!(f.iter().any(|x| matches!(x, Finding::StartHere(w) if w.contains("2 items"))), "{f:?}");
+        assert!(f.iter().any(|x| matches!(x, Finding::StartHere(w) if w.contains("names no record"))), "{f:?}");
+        assert!(f.iter().any(|x| matches!(x, Finding::UnknownSeeAlso(w) if w == "- Moon")), "{f:?}");
+        assert!(f.iter().any(|x| matches!(x, Finding::KeyTerm(w) if w.contains("Open questions"))), "the daemon writes the open questions");
+        let many: String = (0..13).map(|i| format!("- **T{i}**: d [c-01].\n")).collect();
+        assert!(section_findings(&format!("## Key terms\n\n{many}"), &slugs(&[])).iter().any(|x| matches!(x, Finding::KeyTerm(w) if w.contains("13 terms"))));
+        let parts = sections_json(ok);
+        assert_eq!(parts["key_terms"][0]["term"], "Spring tide");
+        assert_eq!(parts["key_terms"][0]["cites"], json!(["c-01"]));
+        assert_eq!(parts["start_here"].as_array().unwrap().len(), 3);
+        assert_eq!(parts["see_also"], json!(["moon"]));
+        assert!(open_questions_section(&[]).is_none());
+        let q = open_questions_section(&["Why [do] neap tides lag?".to_string()]).unwrap();
+        assert!(q.starts_with("## Open questions") && q.contains("- Why do neap tides lag?"));
+    }
+
+    /// Writes a page with the three sections, citing the first claim of the brief and linking to `moon`.
+    struct Sections(&'static str);
+    impl PageWriter for Sections {
+        fn write<'a>(&'a self, b: &'a str) -> WriterFuture<'a> {
+            let id = b.lines().find_map(|l| l.strip_prefix("RECORD c-").map(|r| format!("c-{}", r.split(' ').next().unwrap_or("")))).unwrap_or_default();
+            let topics_listed = b.contains("TOPIC moon | Moon");
+            let d = format!("# Tides\n\nTides come twice a day [{id}].\n\n## Key terms\n\n- **Tide**: the rise and fall of the sea [{id}].\n\n## Start here\n\n1. [{id}] the main claim.\n2. [{id}] again, for its source.\n3. [{id}] once more.\n\n## See also\n\n- [Moon](page:{})\n", if topics_listed { self.0 } else { "no-topics-listed" });
+            Box::pin(async move { Ok(d) })
+        }
+        fn rewrite<'a>(&'a self, d: &'a str, _f: &'a [String]) -> WriterFuture<'a> {
+            let d = d.to_string();
+            Box::pin(async move { Ok(d) })
+        }
+    }
+    struct Pass;
+    impl PageValidator for Pass {
+        fn validate<'a>(&'a self, _q: &'a PageQuery) -> ValidatorFuture<'a> {
+            Box::pin(async move { Ok(ValidatorReply { assertions: vec![Assertion { text: "x".into(), judgement: Judgement::Supported, record: None }], model: "m".into(), family: "f".into(), tokens: 10 }) })
+        }
+    }
+
+    /// `specs/117` §2 items 5 and 6: the sections a topic page carries are checked, stored on its record, the open questions are the
+    /// daemon's from the gaps, and the link table answers what links here (AC-5).
+    #[test]
+    fn a_topic_page_keeps_its_sections_open_questions_and_links() {
+        let home = tempfile::tempdir().unwrap();
+        let l = Library::in_home(home.path());
+        let doc = home.path().join("t.md");
+        std::fs::write(&doc, "# Tides\n\nThe tide comes in twice a day.\n").unwrap();
+        let s = l.add_file(&doc, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
+        l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() }]).unwrap();
+        l.topic_create("Moon", Origin::Operator, 1).unwrap();
+        let e = l.topic_create("Tides", Origin::Operator, 1).unwrap();
+        let cfg = PagesConfig::default();
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let build = |w: &Sections, gaps: Vec<String>| {
+            let side = l.topic_side(&e.slug).unwrap();
+            let g = l.topic_gather_library(&side, None);
+            let lib = Library::in_home(home.path()).with_topic_slugs(l.topic_slugs());
+            rt.block_on(lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+        };
+        // A see-also slug that is no topic fails the check twice: the page falls back to the claims alone.
+        let wrong = build(&Sections("sun"), vec![]);
+        assert_eq!(wrong.outcome.as_deref(), Some("claims_only"), "{wrong:?}");
+        let built = build(&Sections("moon"), vec!["Why do spring tides follow the moon?".into()]);
+        assert_eq!(built.outcome.as_deref(), Some("pass"), "{built:?}");
+        let side = l.topic_side(&e.slug).unwrap();
+        assert_eq!(side["key_terms"][0]["term"], "Tide");
+        assert_eq!(side["start_here"].as_array().unwrap().len(), 3);
+        assert_eq!(side["see_also"], json!(["moon"]));
+        assert_eq!(side["open_questions"], json!(["Why do spring tides follow the moon?"]));
+        let md = std::fs::read_to_string(l.root().join(format!("pages/{}.md", e.slug))).unwrap();
+        let (q, table) = (md.find("## Open questions").unwrap(), md.find("## Bibliography and citations").unwrap());
+        assert!(q < table, "the open questions sit just above the bibliography");
+        assert!(l.check_page_text(&md, Scope::External).findings.is_empty(), "the stored page still checks clean");
+        // AC-5: `moon` is linked from `tides`.
+        let links = l.topic_links("moon").unwrap();
+        assert_eq!((links["links_here"].clone(), links["exists"].clone()), (json!(["tides"]), json!(true)));
+        assert_eq!(l.topic_links("tides").unwrap()["links_out"], json!(["moon"]));
     }
 }

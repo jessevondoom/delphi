@@ -209,7 +209,7 @@ mod tests {
         let topic_lib = Library::in_home(home.path()).with_records(g.records.clone());
         let cfg = delphi_adapter::config::PagesConfig::default();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        let built = rt.block_on(topic_lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: crate::library::bib::Format::Plain, gathered: g }, &CiteAll, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap();
+        let built = rt.block_on(topic_lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: crate::library::bib::Format::Plain, gathered: g, gaps: vec![] }, &CiteAll, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap();
         assert_eq!(built.outcome.as_deref(), Some("pass"), "{built:?}");
         assert!(built.cited.contains(&passage.label) && built.cited.contains(&finding.label), "{:?}", built.cited);
         let md = std::fs::read_to_string(lib.root().join(format!("pages/{}.md", e.slug))).unwrap();
