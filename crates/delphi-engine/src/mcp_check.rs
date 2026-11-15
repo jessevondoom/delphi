@@ -156,8 +156,10 @@ fn launchable_in(home: &Path, install_dir: Option<&Path>, machine_dirs: &[std::p
 }
 
 /// The install command for a host whose plugin is missing, naming this build's marketplace repository (spec 074 §11).
+/// It names the release channel too (§10.4): `#stable` for Claude Code and Copilot CLI, `@stable` in Codex's own form.
 fn fix_install(host_cli: &str, install: &str) -> String {
-    format!("{host_cli} plugin marketplace add {} && {host_cli} plugin {install} delphi@delphi", crate::mcp_hosts::MARKETPLACE_REPO)
+    let at = if host_cli == "codex" { '@' } else { '#' };
+    format!("{host_cli} plugin marketplace add {}{at}{} && {host_cli} plugin {install} delphi@delphi", crate::mcp_hosts::MARKETPLACE_REPO, crate::mcp_hosts::CHANNEL)
 }
 
 /// Read a small regular file the user owns, without following a symlink or blocking on a FIFO.

@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use delphi_engine::mcp_check::{self, State};
 use serde_json::{json, Value};
 
-use crate::connect_cmd::{self, sanitize, HostExe, Source, Template};
+use crate::connect_cmd::{self, sanitize, HostExe, Source, Template, CHANNEL, SOURCE};
 
 const MAX_RECORD: u64 = 64 * 1024;
 const SAFE_PATH: &str = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -121,6 +121,34 @@ pub fn marketplace_source(host: &str, home: &Path) -> Option<Option<String>> {
         }
         _ => None,
     }
+}
+
+/// The ref a host's own state records for its marketplace named `delphi` (`source.ref`); `None` when there is no marketplace,
+/// it is not a GitHub source, or it was added without a ref and so follows the default branch.
+pub fn marketplace_ref(host: &str, home: &Path) -> Option<String> {
+    let path = match host {
+        "claude-code" => home.join(".claude/plugins/known_marketplaces.json"),
+        "copilot" => home.join(".copilot/settings.json"),
+        _ => return None,
+    };
+    let v = read_json(&path)?;
+    let m = if host == "copilot" { v.get("extraKnownMarketplaces")?.get("delphi")? } else { v.get("delphi")? };
+    m["source"]["ref"].as_str().map(str::to_string)
+}
+
+/// Spec 074 §10.4 item 3: which branch the host's `delphi` marketplace follows, for `--status`. `None` when there is none.
+pub fn channel_line(t: &Template, home: &Path) -> Option<String> {
+    Some(match marketplace_source(t.host, home)? {
+        Some(repo) if repo == SOURCE => match marketplace_ref(t.host, home).as_deref() {
+            Some(r) if r == CHANNEL => format!("{CHANNEL} (the branch the release workflow moves to each release)"),
+            Some(other) => format!("`{other}`, not the release channel `{CHANNEL}`. To follow releases: {} && {}", t.manual_remove, t.manual_add(&Source::default())),
+            None => format!(
+                "the default branch, which moves between releases (this marketplace was added before the release channel `{CHANNEL}`). To follow releases only: `delphi connect {} --remove` then `delphi connect {}`, or by hand: {} && {}",
+                t.host, t.host, t.manual_remove, t.manual_add(&Source::default())
+            ),
+        },
+        _ => format!("a `delphi` marketplace that is not {SOURCE}"),
+    })
 }
 
 /// The plugin's release as the host's own state records it (`unrecorded` where the host keeps none); `None` when it is not installed.
@@ -421,13 +449,14 @@ pub fn connect_from(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Pa
         return Err(Refusal::Partial(format!("the commands ran, but the host's `delphi` marketplace names another repository than the plan did; no record was written. Manual commands to undo: {}", t.manual_remove)));
     }
     let source = recorded;
+    let channel = marketplace_ref(t.host, home);
     let content = copilot_installed(home).filter(|_| t.host == "copilot").map(|(_, d)| d);
     update_record(delphi_home, |d| {
-        d.insert(t.host.into(), json!({"template": t.id, "at": now(), "plugin": "delphi@delphi", "plugin_release": plugin_release, "content_sha256": content, "binary_release": release, "marketplace": {"name": "delphi", "source": source}}));
+        d.insert(t.host.into(), json!({"template": t.id, "at": now(), "plugin": "delphi@delphi", "plugin_release": plugin_release, "content_sha256": content, "binary_release": release, "marketplace": {"name": "delphi", "source": source, "ref": channel}}));
         Ok(())
     })
     .map_err(|e| Refusal::Partial(format!("connected, but the record could not be written ({e}); `--remove` will not be available")))?;
-    Ok(format!("connected: plugin {} installed from {}; this binary is {release}", sanitize(&plugin_release), sanitize(&source)))
+    Ok(format!("connected: plugin {} installed from {} ({}); this binary is {release}", sanitize(&plugin_release), sanitize(&source), channel.as_deref().map_or_else(|| "the default branch".to_string(), |c| format!("branch {}", sanitize(c)))))
 }
 
 /// Whether removal may proceed: the record, the plugin and the marketplace identity all still match.
@@ -438,6 +467,10 @@ pub fn removable(t: &Template, home: &Path, delphi_home: &Path) -> Result<(), St
         // The record was written after the operator confirmed a plan naming this source, so the record is the identity.
         Some(Some(s)) if !recorded.is_empty() && s == recorded => {}
         _ => return Err(format!("the host's `delphi` marketplace no longer matches the record. Manual commands: {}", t.manual_remove)),
+    }
+    // Spec 074 §10.4: the channel is part of what connect added. A record from before the channel has no ref and matches none.
+    if rec["marketplace"]["ref"].as_str() != marketplace_ref(t.host, home).as_deref() {
+        return Err(format!("the host's `delphi` marketplace follows another branch than the one connect recorded. Manual commands: {}", t.manual_remove));
     }
     if t.host == "copilot" {
         let recorded = rec["content_sha256"].as_str().unwrap_or_default();
@@ -509,9 +542,18 @@ pub fn update_plan_from(t: &Template, exe: &HostExe, pre: &mcp_check::Check, lin
     }
     o.push_str("working directory: a private temporary directory made at run time\n");
     o.push_str("environment: only a fixed safe PATH, HOME, LANG and LC_*, TERM and a private TMPDIR; proxy, token, loader, Git, npm, Python, Ruby and XDG variables are dropped\n");
-    o.push_str(&format!("source: the host's own `delphi` marketplace ({}, a GitHub repository), fetched by {} now; the release it publishes is what gets installed (no commit or version is pinned: spec 071 D-5(B))\n", sanitize(&source.repo), t.exe));
+    let follows = match marketplace_ref(t.host, home) {
+        Some(r) => format!("its branch `{}`", sanitize(&r)),
+        None => "its default branch, which moves between releases".to_string(),
+    };
+    o.push_str(&format!("source: the host's own `delphi` marketplace ({}, a GitHub repository, following {follows}), fetched by {} now; what that branch publishes is what gets installed (no commit or version is pinned: spec 071 D-5(B))\n", sanitize(&source.repo), t.exe));
     if !source.is_builtin() {
         o.push_str(&format!("WARNING: {} is not the repository this build of Delphi installs from ({}). The skill text, hooks and server declaration that steer {} come from it. Go on only if you trust everyone who can push there\n", sanitize(&source.repo), connect_cmd::SOURCE, t.exe));
+    }
+    // Panel t_0001: an update on this build's own repository off the release channel is allowed, and the plan warns. A
+    // repository the operator named follows whatever branch they chose.
+    if source.is_builtin() && marketplace_ref(t.host, home).as_deref() != Some(CHANNEL) {
+        o.push_str(&format!("WARNING: this marketplace does not follow the release channel `{CHANNEL}`, so this update installs whatever that other branch holds now, which may be newer than any release. To follow releases: {} && {}\n", t.manual_remove, t.manual_add(&Source::default())));
     }
     o.push_str(&format!("expected writes: {}\n", t.writes));
     o.push_str(&link_line(link, home));
@@ -650,14 +692,14 @@ mod tests {
         let rel = env!("CARGO_PKG_VERSION");
         let (on_add, on_install, on_uninstall, on_remove) = if tm.host == "copilot" {
             (
-                r#"mkdir -p "$HOME/.copilot"; echo '{"theme":"keep","extraKnownMarketplaces":{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}}}' > "$HOME/.copilot/settings.json""#.to_string(),
-                format!(r#"d="$HOME/.copilot/installed-plugins/delphi/delphi"; mkdir -p "$d/.claude-plugin"; echo '{{"version":"{rel}"}}' > "$d/.claude-plugin/plugin.json"; echo '{{}}' > "$d/.mcp.json"; echo '{{"theme":"keep","extraKnownMarketplaces":{{"delphi":{{"source":{{"source":"github","repo":"jessevondoom/delphi"}}}}}},"enabledPlugins":{{"delphi@delphi":true}}}}' > "$HOME/.copilot/settings.json""#),
-                r#"rm -rf "$HOME/.copilot/installed-plugins/delphi"; echo '{"theme":"keep","extraKnownMarketplaces":{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}},"enabledPlugins":{}}' > "$HOME/.copilot/settings.json""#.to_string(),
+                r#"mkdir -p "$HOME/.copilot"; echo '{"theme":"keep","extraKnownMarketplaces":{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi","ref":"stable"}}}}' > "$HOME/.copilot/settings.json""#.to_string(),
+                format!(r#"d="$HOME/.copilot/installed-plugins/delphi/delphi"; mkdir -p "$d/.claude-plugin"; echo '{{"version":"{rel}"}}' > "$d/.claude-plugin/plugin.json"; echo '{{}}' > "$d/.mcp.json"; echo '{{"theme":"keep","extraKnownMarketplaces":{{"delphi":{{"source":{{"source":"github","repo":"jessevondoom/delphi","ref":"stable"}}}}}},"enabledPlugins":{{"delphi@delphi":true}}}}' > "$HOME/.copilot/settings.json""#),
+                r#"rm -rf "$HOME/.copilot/installed-plugins/delphi"; echo '{"theme":"keep","extraKnownMarketplaces":{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi","ref":"stable"}}},"enabledPlugins":{}}' > "$HOME/.copilot/settings.json""#.to_string(),
                 r#"echo '{"theme":"keep","extraKnownMarketplaces":{},"enabledPlugins":{}}' > "$HOME/.copilot/settings.json""#.to_string(),
             )
         } else {
             (
-                r#"mkdir -p "$HOME/.claude/plugins"; echo '{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}}' > "$HOME/.claude/plugins/known_marketplaces.json""#.to_string(),
+                r#"mkdir -p "$HOME/.claude/plugins"; echo '{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi","ref":"stable"}}}' > "$HOME/.claude/plugins/known_marketplaces.json""#.to_string(),
                 format!(r#"echo '{{"version":2,"plugins":{{"delphi@delphi":[{{"scope":"user","version":"{rel}"}}]}}}}' > "$HOME/.claude/plugins/installed_plugins.json"; echo '{{"enabledPlugins":{{"delphi@delphi":true}}}}' > "$HOME/.claude/settings.json""#),
                 r#"echo '{"version":2,"plugins":{}}' > "$HOME/.claude/plugins/installed_plugins.json""#.to_string(),
                 r#"echo '{}' > "$HOME/.claude/plugins/known_marketplaces.json""#.to_string(),
@@ -666,7 +708,7 @@ mod tests {
         // An update installs this release again; Copilot's copy also changes, so its content digest moves.
         let on_update = if tm.host == "copilot" { format!(r#"{on_install}; echo '{{"updated":true}}' > "$HOME/.copilot/installed-plugins/delphi/delphi/.mcp.json""#) } else { on_install.clone() };
         let script = format!(
-            "#!/bin/sh\necho \"$@\" >> \"$HOME/argv.log\"\nenv | sort > \"$HOME/env.log\"\ncase \"$*\" in *\"{fail_on}\"*) exit 3;; esac\ncase \"$*\" in\n  \"plugin marketplace add jessevondoom/delphi\") {on_add};;\n  \"plugin install delphi@delphi\") {on_install};;\n  \"plugin update delphi@delphi\") {on_update};;\n  \"plugin marketplace update delphi\") :;;\n  \"plugin uninstall delphi@delphi\") {on_uninstall};;\n  \"plugin marketplace remove delphi\") {on_remove};;\nesac\n"
+            "#!/bin/sh\necho \"$@\" >> \"$HOME/argv.log\"\nenv | sort > \"$HOME/env.log\"\ncase \"$*\" in *\"{fail_on}\"*) exit 3;; esac\ncase \"$*\" in\n  \"plugin marketplace add jessevondoom/delphi#stable\") {on_add};;\n  \"plugin install delphi@delphi\") {on_install};;\n  \"plugin update delphi@delphi\") {on_update};;\n  \"plugin marketplace update delphi\") :;;\n  \"plugin uninstall delphi@delphi\") {on_uninstall};;\n  \"plugin marketplace remove delphi\") {on_remove};;\nesac\n"
         );
         let p = dir.join(tm.exe);
         std::fs::write(&p, script).unwrap();
@@ -698,12 +740,15 @@ mod tests {
             let exe = fake_host(&t, tm, "never-matches");
             let out = connect(tm, &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION"), &Link::Present(String::new())).unwrap();
             assert!(out.starts_with("connected"), "{out}");
-            assert_eq!(std::fs::read_to_string(home.join("argv.log")).unwrap(), "plugin marketplace add jessevondoom/delphi\nplugin install delphi@delphi\n");
+            assert_eq!(std::fs::read_to_string(home.join("argv.log")).unwrap(), "plugin marketplace add jessevondoom/delphi#stable\nplugin install delphi@delphi\n");
             let env = std::fs::read_to_string(home.join("env.log")).unwrap();
             assert!(!env.contains("GITHUB_TOKEN"), "an unlisted variable is dropped");
             assert!(env.contains(&format!("PATH={SAFE_PATH}")) && env.contains("TMPDIR="));
             let rec = read_record(&dh, tm.host).unwrap().unwrap();
             assert_eq!(rec["marketplace"]["source"], "jessevondoom/delphi");
+            assert_eq!(rec["marketplace"]["ref"], "stable", "the channel is recorded");
+            assert!(out.contains("(branch stable)"), "{out}");
+            assert!(channel_line(tm, &home).unwrap().starts_with("stable "));
             assert_eq!(std::fs::metadata(dh.join("operator/connections.json")).unwrap().mode() & 0o777, 0o600);
             assert_eq!(std::fs::metadata(dh.join("operator")).unwrap().mode() & 0o777, 0o700);
             assert!(std::fs::read_to_string(dh.join("operator/connect-audit.jsonl")).unwrap().contains("\"result\":\"configured\""));
@@ -752,6 +797,8 @@ mod tests {
         std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"someone/else"}}}"#).unwrap();
         assert!(removable(claude(), &home, &dh).unwrap_err().contains("no longer matches"));
         std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}}"#).unwrap();
+        assert!(removable(claude(), &home, &dh).unwrap_err().contains("another branch"), "our repository on a branch connect did not add is not what connect added");
+        std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi","ref":"stable"}}}"#).unwrap();
         assert!(removable(claude(), &home, &dh).is_ok());
         std::fs::set_permissions(dh.join("operator/connections.json"), std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(removable(claude(), &home, &dh).is_err(), "a group-readable record fails closed");
@@ -844,6 +891,11 @@ mod tests {
         let plan = update_plan(claude(), &exe, &pre, &Link::Present("yes (x)".into()), &home);
         assert!(plan.contains("--update: plan") && plan.contains("plugin update delphi@delphi") && plan.contains("nothing is removed") && plan.contains("launch path:"), "{plan}");
         assert!(plan.contains("proven on Claude Code 2.1.325") && !plan.contains("2.1.314"), "the plan names the proof that was made for this row: {plan}");
+        assert!(plan.contains("its default branch") && plan.contains("WARNING: this marketplace does not follow the release channel `stable`") && plan.contains("jessevondoom/delphi#stable"), "a marketplace from before the channel: {plan}");
+        std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi","ref":"stable"}}}"#).unwrap();
+        let on_channel = update_plan(claude(), &exe, &pre, &Link::Present("yes (x)".into()), &home);
+        assert!(on_channel.contains("its branch `stable`") && !on_channel.contains("WARNING"), "{on_channel}");
+        std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}}"#).unwrap();
         assert!(update_confirmation("claude-code", &plan).starts_with("UPDATE claude-code "));
 
         let out = update(claude(), &consent::for_test(), &exe, &home, &dh, release, &Link::Present(String::new())).unwrap();
@@ -918,6 +970,35 @@ mod tests {
         assert_eq!(read_record(&dh2, "copilot").unwrap(), rec_before);
         let audit = std::fs::read_to_string(dh2.join("operator/connect-audit.jsonl")).unwrap();
         assert!(audit.lines().any(|l| l.contains("\"action\":\"update\"") && l.contains("\"result\":\"failed\"")), "{audit}");
+    }
+
+    /// Spec 074 §10.4 item 3: a marketplace added before the channel follows the default branch; status says so and how to switch,
+    /// and a record from that time (no ref) still authorises its removal.
+    #[test]
+    fn a_marketplace_from_before_the_channel_is_named_and_its_old_record_still_removes_it() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, dh) = homes(&t);
+        assert_eq!(channel_line(claude(), &home), None, "no marketplace, no line");
+        std::fs::create_dir_all(home.join(".claude/plugins")).unwrap();
+        std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}}"#).unwrap();
+        let line = channel_line(claude(), &home).unwrap();
+        assert!(line.starts_with("the default branch") && line.contains("delphi connect claude-code --remove") && line.contains("jessevondoom/delphi#stable"), "{line}");
+        assert_eq!(marketplace_ref("claude-code", &home), None);
+        std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi","ref":"main"}}}"#).unwrap();
+        assert!(channel_line(claude(), &home).unwrap().starts_with("`main`, not the release channel"));
+        std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"someone/else","ref":"stable"}}}"#).unwrap();
+        assert!(channel_line(claude(), &home).unwrap().contains("is not jessevondoom/delphi"));
+
+        // A record written before this amendment: a source and no ref.
+        std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}}"#).unwrap();
+        std::fs::write(home.join(".claude/plugins/installed_plugins.json"), r#"{"version":2,"plugins":{"delphi@delphi":[{"scope":"user","version":"0.5.4"}]}}"#).unwrap();
+        update_record(&dh, |d| {
+            d.insert("claude-code".into(), json!({"template": "claude-v1", "plugin": "delphi@delphi", "plugin_release": "0.5.4", "marketplace": {"name": "delphi", "source": "jessevondoom/delphi"}}));
+            Ok(())
+        })
+        .unwrap();
+        assert!(removable(claude(), &home, &dh).is_ok(), "no ref recorded and none on the marketplace: they match");
+        assert_eq!(marketplace_ref("vim", &home), None);
     }
 
     /// Spec 074 §11: a connect from a source the operator named runs that one source, records it, and the record then

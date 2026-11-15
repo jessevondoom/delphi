@@ -120,7 +120,7 @@ Finding: on this machine Homebrew's `/usr/local/Caskroom` is group-writable (gro
 
 ## 10. Amendment (2026-11-14): a durable install
 
-**Approval.** The operator approved these four items on 2026-11-14 from a four-line summary ("do all 4. make any needed spec adjustments."), not from this text. No Council was convened. Two things the earlier text asked for were therefore not done and are the operator's to waive or order: the short Council re-review that §4 asks of a new argv row (§10.2 adds two), and a recorded proof for Codex (§10.5).
+**Approval.** The operator approved these four items on 2026-11-14 from a four-line summary ("do all 4. make any needed spec adjustments."), not from this text. No Council was convened. Two things the earlier text asked for were therefore not done and are the operator's to waive or order: the short Council re-review that §4 asks of a new argv row (§10.2 adds two), and a recorded proof that Codex expands `${HOME}` in a plugin's command (§10.5).
 
 **Why.** On the operator's machine the plugin installed on 2026-11-04 was still at 0.5.4 ten days later, with the binary at 0.6.1 and release 0.6.2 published: Claude Code turns marketplace auto-update off for a third-party marketplace, and nothing in Delphi said so at the moment the binary was updated. The installed copy therefore had no session hooks, no worker subagents and no `delphi-council` skill. Separately, the plugin's bare `delphi` fails in a host that does not have the operator's shell `PATH` (reproduced, §10.5).
 
@@ -170,16 +170,17 @@ Slices, one commit each, in this order:
 
 ### 10.5 Recorded proofs (2026-11-14)
 
-All host commands ran against throwaway configuration (`CLAUDE_CONFIG_DIR`, or a scratch `HOME` for Copilot's plugin commands); the operator's own host state was not touched. Claude Code 2.1.325, Copilot CLI 1.0.111, Codex 0.169.0.
+The plugin commands ran against throwaway configuration (`CLAUDE_CONFIG_DIR`, a scratch `HOME` for Copilot, a scratch `CODEX_HOME`), so the operator's installed plugins and marketplaces were not touched. The two checks that needed a signed-in session (Copilot's `--plugin-dir` run and Claude Code's hook run) each sent one short prompt on the operator's account and loaded the plugin for that session only. Claude Code 2.1.325, Copilot CLI 1.0.111, Codex 0.169.0.
 
 - **The PATH gap is real.** With `PATH=/usr/bin:/bin`, `claude mcp list` reported the plugin's server as `Failed to connect — ENOENT: Executable not found in $PATH`.
 - **Claude Code expands `${HOME}` in a plugin's command.** The same listing, with the command changed to `${HOME}/.local/bin/delphi`, reported the expanded path and `✔ Connected`.
 - **Copilot CLI does too.** A plugin loaded for one session with `--plugin-dir`, its one server declared as `${HOME}/.local/bin/delphi`, started (the debug log has the server's own first stderr line) and its tools were listed to the model. `copilot mcp get` prints the command unexpanded, which proves nothing either way.
-- **Codex: not proven.** The account's usage limit ends on 2026-11-27 and a session is needed to start a server.
-- **Hooks** were not run live under a reduced `PATH`: the expansion there is the shell's.
+- **Codex: `${HOME}` in a command is not proven.** The account's usage limit ends on 2026-11-27 and a session is needed to start a server. Its branch form is proven: `codex plugin marketplace add 'jessevondoom/delphi@main'` recorded `ref = "main"` under `[marketplaces.delphi]` and `codex plugin add delphi@delphi` installed 0.6.2, in a throwaway `CODEX_HOME`.
+- **Hooks run from the stable path.** One `claude -p` session with the generated plugin loaded by `--plugin-dir` and `PATH=/usr/bin:/bin`: the debug log shows `SessionStart`, `UserPromptSubmit` and `SessionEnd` each running `"$HOME/.local/bin/delphi" mcp --hook …` and finishing with status 0. The binary at that path was 0.6.1, which has no `--hook`, so what it printed was the server's own JSON-RPC error: a plugin newer than the binary (`incompatible`, 071 §7), not a launch failure.
 - **`claude plugin update delphi@delphi` refreshes the marketplace.** With the marketplace clone rewound to `v0.6.1` and the install marked 0.6.1, that one command answered `updated from 0.6.1 to 0.6.2` and left the clone at 0.6.2. (`claude plugin install` refreshes it as well.)
 - **Copilot:** `copilot plugin marketplace update delphi` and `copilot plugin update delphi@delphi` both succeeded (`already at latest`).
 - **A branch ref.** `claude plugin marketplace add 'jessevondoom/delphi#main'` recorded `{"source": "github", "repo": "jessevondoom/delphi", "ref": "main"}` in `known_marketplaces.json` and in `extraKnownMarketplaces`; Copilot recorded the same shape in `~/.copilot/settings.json`. Install and update then worked on both. A ref that does not exist is refused by the host at `add`.
+- **The channel itself (2026-11-15, after the operator created and protected `stable` at the v0.6.2 commit).** In throwaway configuration, Claude Code 2.1.325 and Copilot CLI 1.0.111 each ran `plugin marketplace add 'jessevondoom/delphi#stable'`, recorded `"ref": "stable"`, installed plugin 0.6.2 and ran their update (`already at latest`). The branch's protection reads: force-pushes off, deletion off, no review or push restrictions, so the release workflow's plain push can still move it. Not run: the workflow moving the branch, which happens only at a release.
 
 ### 10.6 Tests
 
@@ -193,15 +194,15 @@ This Panel is the review §4 asks of a new argv row, for the two update rows of 
 
 | Finding (severity as the seats gave it) | Disposition |
 | :-- | :-- |
-| P0, all seats: R1 names `#stable` before the branch exists or any workflow moves it | R1 is held: it is its own commit on its own branch, on top of S1, U1 and U2, and does not merge until the workflow change is merged and the branch exists (§10.4 item 4) |
+| P0, all seats: R1 names `#stable` before the branch exists or any workflow moves it | R1 was held on its own branch until both were true. On 2026-11-15 the operator created and protected `stable` at the v0.6.2 commit and merged the workflow change (#715); R1 merged after that. The seats also asked for one release to have moved the branch first: that has not happened, so the workflow job's first run is at the next release |
 | P0 red-team, P1 architect and strategist: `update()` rewrote the record without checking the copy installed before, and before the post-state check | fixed (§10.2 item 4): rewritten only when the record was true before the update and the host settled |
 | P1, all seats: the link was not audited, and a failed step said nothing was added | fixed (§10.1 item 2): audited, the plans say it stays, the failure text is correct. Not recorded and not removed, as the strategist argued: the link serves every host |
-| P1, all seats: the plans printed proof versions that were not made for the new rows | fixed: each template carries the version its update rows were run on, and the ids are `claude-v2` and `copilot-v2` |
+| P1, all seats: the plans printed proof versions that were not made for the new rows | fixed: each template carries the version its update rows were run on, and the ids are `claude-v2` and `copilot-v2`. With R1 the add row changes again: the ids are `claude-v3` and `copilot-v3`, and the add row names the versions `#stable` itself was run on once the branch existed (§10.5) |
 | P1, all seats: the path caution was not shown before consent | fixed by disclosure (§10.1 item 2). The red-team asked for a refusal; the operator proceeded on the host's stated choice to disclose |
 | P1 red-team: `DELPHI_INSTALL_DIR` chooses the link's directory | kept, and disclosed: the plan says when the variable named the directory |
 | P1 architect, P2 others: U1 never fires for Copilot | the claim is corrected (§10.2 item 1); a real comparison needs a release Copilot does not record, a separate slice |
 | P2: `delphi update` was silent about a second install | fixed (§10.2 item 1) |
-| P2: `--update` on a marketplace that is not on `stable` | a warning line in the update plan, with how to switch; it belongs to R1, where the ref is read |
+| P2: `--update` on a marketplace that is not on `stable` | fixed in R1, where the ref is read: the update plan carries a warning line with how to switch. The red-team asked for a refusal or a warning; a refusal would block an install from before the channel |
 | P2: the auto-update tip printed more than "once" | the text is corrected (§10.3 item 2): it prints at the end of each successful run |
 | Not done: a mode enum, a shared plan header, one path walker | deferred as refactors with no change in behaviour (strategist) |
 | Open: Homebrew and custom-directory installs that never run `delphi connect` or `delphi update` | unchanged; §10.1 item 5 names it |
@@ -221,6 +222,7 @@ Slice **F1**, one commit.
 5. **A fork's own build.** `DELPHI_MARKETPLACE_REPO=owner/repo`, set when the program is compiled, changes the default: the constant, every printed install command, the generated `ecosystem/README.md` and the owner in `.claude-plugin/marketplace.json`. This is a build input, read by the compiler, not by the running program.
 6. **The read-only checks.** `delphi mcp --check <host>` and `connect --status` print the install command for the source a record names, and `--status` adds a `source:` line: the repository the host's `delphi` marketplace names against the one expected.
 7. **The installer (amends spec 006).** `install.sh` takes `DELPHI_REPO=owner/repo` to install a fork's releases. It is validated as `owner/repo`, announced on stderr, and the checksum and build attestation that are verified are then that repository's. `delphi update` already takes `DELPHI_RELEASES_URL` for one run; it has no persistent setting, so a binary installed from a fork still looks for updates in the project's repository unless that variable is set or the fork changed the constant. That gap is named, not closed.
+   *With R1 (§10.4):* the default source is this build's repository at its branch `stable`. A source the operator names carries the branch they wrote, or none, in which case the host follows that repository's default branch; the plan says which, and calls a branch the release channel only when it is `stable`. The off-channel warning of §10.7 applies to this build's own repository only.
 8. **Not in this slice.** Codex and Gemini CLI (their connect writes Delphi's own files, with no marketplace). A setting that makes a source the default without a rebuild: rejected for item 2's reason. The marketplace's name stays `delphi`, so one host holds one Delphi marketplace at a time.
 
 **Tests.** The parser accepts `owner/repo` and `owner/repo#branch` and refuses URLs, paths, flags, whitespace and control characters, and never echoes a control character. A named source is the one argv element, carries the warning and changes the confirmation. A connect from it records it; the record then serves `--update` and `--remove`; a host that records another repository than the plan named gets no record. `--source` without a value, with a flag as its value, or for Codex is a usage error, and its value is never taken for a host name. The generated files are unchanged for the default repository (the drift test).

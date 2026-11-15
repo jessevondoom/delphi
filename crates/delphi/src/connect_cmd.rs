@@ -16,6 +16,8 @@ use crate::connect_run;
 pub const SOURCE: &str = delphi_engine::mcp_hosts::MARKETPLACE_REPO;
 /// Where a template's add row takes the source the operator consented to.
 const SOURCE_SLOT: &str = "{source}";
+/// Spec 074 §10.4: the branch a host follows by default.
+pub const CHANNEL: &str = delphi_engine::mcp_hosts::CHANNEL;
 
 /// The marketplace a connect installs from, or expects the host to have: a GitHub repository and, optionally, a branch.
 /// It comes from this build's default, from `--source` typed on the command line, or from the record of an earlier connect.
@@ -28,7 +30,8 @@ pub struct Source {
 
 impl Default for Source {
     fn default() -> Self {
-        Source { repo: SOURCE.to_string(), reference: None }
+        // This build's repository at the release channel.
+        Source { repo: SOURCE.to_string(), reference: Some(CHANNEL.to_string()) }
     }
 }
 
@@ -75,9 +78,10 @@ pub const TEMPLATES: [Template; 2] = [
     Template {
         host: "claude-code",
         exe: "claude",
-        // v2: the update row was added (spec 074 §10.2), so an audit line tells the two sets of rows apart.
-        id: "claude-v2",
-        proven_on: "Claude Code 2.1.314",
+        // v2: the update row was added (spec 074 §10.2). v3: the add row names the release channel (§10.4). An audit line
+        // tells the sets of rows apart.
+        id: "claude-v3",
+        proven_on: "Claude Code 2.1.325",
         proven_update: "Claude Code 2.1.325",
         dirs: &[".local/bin", ".claude/local", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
         add: [&["plugin", "marketplace", "add", SOURCE_SLOT], &["plugin", "install", "delphi@delphi"]],
@@ -91,8 +95,8 @@ pub const TEMPLATES: [Template; 2] = [
     Template {
         host: "copilot",
         exe: "copilot",
-        id: "copilot-v2",
-        proven_on: "Copilot CLI 1.0.105",
+        id: "copilot-v3",
+        proven_on: "Copilot CLI 1.0.111",
         proven_update: "Copilot CLI 1.0.111",
         dirs: &[".local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
         add: [&["plugin", "marketplace", "add", SOURCE_SLOT], &["plugin", "install", "delphi@delphi"]],
@@ -240,7 +244,8 @@ pub fn render_plan_from(t: &Template, exe: &HostExe, pre: &mcp_check::Check, add
     o.push_str("working directory: a private temporary directory made at run time\n");
     o.push_str("environment: only a fixed safe PATH, HOME, LANG and LC_*, TERM and a private TMPDIR; proxy, token, loader, Git, npm, Python, Ruby and XDG variables are dropped\n");
     let follows = source.reference.as_deref().map_or_else(|| "its default branch".to_string(), |r| format!("its branch `{}`", sanitize(r)));
-    o.push_str(&format!("source: {}, a GitHub repository ({follows}), fetched by {} at connect time; the host then tracks it (no commit or version is pinned: spec 071 D-5(B))\n", sanitize(&source.repo), t.exe));
+    let channel = if source.reference.as_deref() == Some(CHANNEL) { format!(" `{CHANNEL}` is the release channel: the release workflow moves it to each release, so the host follows releases and not `main`.") } else { String::new() };
+    o.push_str(&format!("source: {}, a GitHub repository ({follows}), fetched by {} at connect time; the host then tracks it (no commit or version is pinned: spec 071 D-5(B)).{channel}\n", sanitize(&source.repo), t.exe));
     if !source.is_builtin() {
         o.push_str(&format!("WARNING: {} is not the repository this build of Delphi installs from ({SOURCE}). The skill text, hooks and server declaration that steer {} will come from it, now and at every update. Go on only if you trust everyone who can push there\n", sanitize(&source.repo), t.exe));
     }
@@ -301,10 +306,10 @@ pub const AUTO_UPDATE_TIP: &str = "tip: Claude Code does not auto-update a marke
 
 /// A fix the read-only check printed names this build's repository; for a host connected to another source, name that one.
 pub fn localize(fix: &str, source: &Source) -> String {
-    if source.is_builtin() && source.reference.is_none() {
+    if *source == Source::default() {
         fix.to_string()
     } else {
-        fix.replace(&format!("marketplace add {SOURCE}"), &format!("marketplace add {}", source.arg()))
+        fix.replace(&format!("marketplace add {SOURCE}#{CHANNEL}"), &format!("marketplace add {}", source.arg()))
     }
 }
 
@@ -401,6 +406,9 @@ pub fn cmd(args: &[String]) -> i32 {
         println!("{}: launchable: {}", t.host, sanitize(&crate::launchable_now(home).line()));
         println!("{}: launch path: {}", t.host, crate::launch_path_line(home));
         println!("{}: source: {}", t.host, sanitize(&connect_run::source_line(t, home, &source)));
+        if let Some(c) = connect_run::channel_line(t, home) {
+            println!("{}: channel: {}", t.host, sanitize(&c));
+        }
         println!("next: {}", pre.fix.as_deref().map(|f| sanitize(&localize(f, &source))).unwrap_or_else(|| "nothing to do".into()));
         if let Some(p) = update_pointer(t.host, pre.state) {
             println!("or:   {p} (the same update, run for you after you confirm its plan)");
@@ -569,7 +577,12 @@ mod tests {
         let pre = mcp_check::Check { state: mcp_check::State::Missing, detail: "not installed\nFORGED: yes".into(), fix: None };
         let none = connect_run::Link::Unavailable;
         let plan = render_plan(template("copilot").unwrap(), &h, &pre, true, &none, t.path());
-        assert!(plan.contains(&format!("plugin marketplace add {SOURCE}\n")) && plan.contains("plugin install delphi@delphi"));
+        assert!(plan.contains(&format!("plugin marketplace add {SOURCE}#{CHANNEL}\n")) && plan.contains("plugin install delphi@delphi"));
+        assert!(plan.contains("(its branch `stable`)") && plan.contains("`stable` is the release channel"), "the plan names the channel: {plan}");
+        assert_eq!(Source::default().arg(), format!("{SOURCE}#{CHANNEL}"));
+        for tm in &TEMPLATES {
+            assert!(tm.manual_add(&Source::default()).contains(&format!("{SOURCE}#{CHANNEL}")), "{}", tm.host);
+        }
         assert!(!plan.contains("WARNING: "), "this build's own repository needs no warning: {plan}");
 
         // Spec 074 §11: a source the operator named is the one argv element, is warned about, and changes the confirmation.
@@ -579,9 +592,12 @@ mod tests {
         assert!(forked.contains("source: fastly/delphi, a GitHub repository (its branch `stable`)") && forked.contains("WARNING: fastly/delphi is not the repository this build"), "{forked}");
         assert_ne!(confirmation("copilot", &forked), confirmation("copilot", &plan), "another source is another plan");
         assert_eq!(add_argv(Path::new("/x/copilot"), template("copilot").unwrap(), &fork)[0], ["/x/copilot", "plugin", "marketplace", "add", "fastly/delphi#stable"]);
-        assert_eq!(add_argv(Path::new("/x/claude"), template("claude-code").unwrap(), &Source::default())[0][4], SOURCE);
+        assert_eq!(add_argv(Path::new("/x/claude"), template("claude-code").unwrap(), &Source::default())[0][4], format!("{SOURCE}#{CHANNEL}"));
+        // A source named without a branch follows that repository's default branch, and the plan does not call it the channel.
+        let plain = render_plan_from(template("copilot").unwrap(), &h, &pre, true, &none, t.path(), &Source::parse("fastly/delphi").unwrap());
+        assert!(plain.contains("plugin marketplace add fastly/delphi\n") && plain.contains("(its default branch)") && !plain.contains("is the release channel"), "{plain}");
         assert_eq!(template("claude-code").unwrap().manual_add(&fork), "claude plugin marketplace add fastly/delphi#stable && claude plugin install delphi@delphi");
-        assert_eq!(localize("claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi".replace("jessevondoom/delphi", SOURCE).as_str(), &fork), "claude plugin marketplace add fastly/delphi#stable && claude plugin install delphi@delphi");
+        assert_eq!(localize(&format!("claude plugin marketplace add {SOURCE}#{CHANNEL} && claude plugin install delphi@delphi"), &fork), "claude plugin marketplace add fastly/delphi#stable && claude plugin install delphi@delphi");
         assert_eq!(localize("claude plugin update delphi@delphi", &fork), "claude plugin update delphi@delphi");
         assert!(plan.contains("launch path: the plugin runs") && plan.contains("no link is made"), "the plan says what happens to the launch path: {plan}");
         let made = render_plan(template("copilot").unwrap(), &h, &pre, true, &connect_run::Link::Make("/opt/homebrew/bin/delphi".into()), t.path());
@@ -620,7 +636,8 @@ mod tests {
         let skew = host_plugin_notes(home, "0.5.4", &other);
         assert!(skew.len() == 1 && skew[0].contains("launchable: yes (a different `delphi`)"), "{skew:?}");
         for tm in &TEMPLATES {
-            assert!(tm.id.ends_with("-v2") && tm.proven_update != tm.proven_on, "{}: the update rows carry their own proof", tm.host);
+            assert!(tm.id.ends_with("-v3") && !tm.proven_update.is_empty(), "{}: the update rows carry their own proof", tm.host);
+            assert!(tm.proven_on.ends_with(if tm.host == "copilot" { "1.0.111" } else { "2.1.325" }), "{}: the add row names the version `#stable` was run on", tm.host);
         }
         assert_eq!(host_plugin_notes(home, "0.5.4", &no).len(), 1);
         // Codex has no update row: its own fix is printed.

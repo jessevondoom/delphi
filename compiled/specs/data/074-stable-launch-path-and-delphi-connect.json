@@ -106,19 +106,19 @@
     },
     {
       "level": 3,
-      "line": 184,
+      "line": 185,
       "number": "10.6",
       "title": "Tests"
     },
     {
       "level": 3,
-      "line": 188,
+      "line": 189,
       "number": "10.7",
       "title": "Panel review and what changed (2026-11-14)"
     },
     {
       "level": 2,
-      "line": 209,
+      "line": 210,
       "number": "11",
       "title": "Amendment (2026-11-15): the source is the installer's to name"
     }
@@ -126,7 +126,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/074-stable-launch-path-and-delphi-connect.md",
-    "sha256": "82d7197e7bcb79d3d0e585b5f8c7da544c179c2ac3d90843fd3a97bd381c58b2"
+    "sha256": "871853a89c13003b483bb1686dc0f40983a2d0a319896e6aa7ff6f6dcae1ed87"
   },
   "source_status_at_hash": {
     "line": {
@@ -139,7 +139,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-04 (\"approve 074\"), after a Council (3 seats, 2 rounds, all APPROVE-WITH-AMENDMENTS, amendments folded in): approves L0, L1 and C1. C2 was gated on the recorded GitHub-source proof (requirement 7), recorded in §8 on 2026-11-04, and is built; C3 stays gated on its own proof and a Council re-review. Amended 2026-11-14 (§10, \"do all 4. make any needed spec adjustments.\"): approves S1, U1, U2 and R1, on a summary and without a Council. Amended 2026-11-15 (§11, \"plesse do make it configurable. on the install side too not the repo side. we want to support forks.\"): approves F1, unreviewed."
     },
-    "sha256": "82d7197e7bcb79d3d0e585b5f8c7da544c179c2ac3d90843fd3a97bd381c58b2",
+    "sha256": "871853a89c13003b483bb1686dc0f40983a2d0a319896e6aa7ff6f6dcae1ed87",
     "word": "approved"
   },
   "spec": {
