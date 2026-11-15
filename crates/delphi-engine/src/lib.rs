@@ -165,6 +165,7 @@ pub mod provisional_run;
 pub mod hostmap;
 pub mod recovery;
 pub mod research;
+pub mod role_call;
 pub mod research_images;
 pub mod research_index;
 pub mod research_chain;

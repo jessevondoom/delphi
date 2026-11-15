@@ -1045,7 +1045,8 @@ The operator asked on 2026-11-14 for an audit of the scout, the investigator and
 | 113 | H0 | the spec | approved 2026-11-14 |
 | 113 | H1 to H6 | host-led research: `record_research`, private sources, `delphi research ingest`, claim extraction, worker files that can capture (36-47 h) | approved, not built |
 | 114 | M0 | the spec | approved 2026-11-14 |
-| 114 | M1 to M7 | a methodical scout: the role in every call, known first, a plan from the gaps, stopping rules, a written and checked answer, the run note (39-52 h) | approved, not built |
+| 114 | M1 | the role, its skill, heuristics and lessons in the scout's and the page writer's calls | built (pull request open): a step table (plan, judge a page, write the answer, write a page) names the skill; only lock-checked ratified text is loaded, on a blocking thread; a ratified file that fails its lock refuses the call. The charter excerpt measures about 2,585 tokens against the 2,000-token budget, so at the default it is always dropped and counted; the budget is a constant, not a config key |
+| 114 | M2 to M7 | known first, the plan call, coverage and stopping, the written answer, the run note, the ten-question evaluation | approved, not built |
 | 115 | X0 | the spec | approved 2026-11-14: research is shared across a workspace's projects by default, with a private flag per project; amends a default of spec 058. Claims from private and internal sources are shared under the guards of §2 item 3 (decided later the same day) |
 | 115 | X1 to X5 | the setting, the private flag, the filter and labels, internal-source claims shared with a label and the reader marked (24-34 h) | approved, not built |
 | 116 | G0 | the spec | approved 2026-11-14: the provisional tier is on by default; the investigator is empowered as §8 sets out (text written after the operator's word, not read) |
