@@ -22,7 +22,7 @@ Delphi keeps all runtime state in `$DELPHI_HOME` (default `~/.delphi`). A projec
 │   ├── base/             # zone 1, the release snapshot: GOVERNANCE.md, SPEC.md, agents/, skills/, themes/; refreshed by `delphi update`
 │   ├── team/             # zone 2, shareable with a team: REVIEW.md, context/
 │   ├── local/            # zone 3, private: missions/<id>/ (segmented event log), state.db, memory/agents/<role>/,
-│   │                     #   proposals/, ratified/ and ratified.lock, kb-misses.jsonl, research-asks.jsonl, agy-gate.json
+│   │                     #   proposals/, ratified/ and ratified.lock, kb-misses.jsonl, research-asks.jsonl, health.jsonl, agy-gate.json
 │   ├── locks/  worktrees/   # daemon locks; Builder worktrees
 ├── run/                  # the daemons' sockets
 ├── logs/                 # delphi.log.jsonl

@@ -63,6 +63,10 @@ A research request answers "no search engine is set up" when `providers` under `
 
 A question that names one of the workspace's `[privacy] identifiers` is searched without that word, or, when fewer than three content words are left, not sent at all; `delphi research log <id>` lists such a search as withheld.
 
+## Is the knowledge loop turning?
+
+`delphi kb health` counts what the install holds: sources by how they are kept, claims by status, pages, imported summaries with no source listed, staged notes waiting and the oldest, lessons per role, research requests in 30 days and how many ran, and searches of the knowledge base that found nothing. A line that marks a stalled loop starts with `!`, says so in words and names the command that helps, for example `0 claims: research has kept no claim. See delphi research setup.` `--json` prints the figures; the same figures are added once a day to the workspace's `local/health.jsonl`, and `delphi doctor` shows the lines as check 21. It reads files only and calls no model.
+
 ## Updates
 
 ```sh

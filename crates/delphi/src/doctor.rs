@@ -145,6 +145,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // 19. Background validation (specs/040 §18.3): a fact when it is on and has stopped for a reason the operator should know.
     check_background_validation(ws, home, &cfg, &mut r);
     check_history(ws, &cfg, &mut r);
+    // 21. Knowledge health (specs/119 §5): the same lines as `delphi kb health`, as facts.
+    check_knowledge_health(home, ws, &mut r);
     // 18. Settings that were removed because their features are always on (specs/098 §13.2): one line per key an old config still carries.
     check_removed_settings(&cfg, &mut r);
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);
@@ -256,6 +258,16 @@ fn check_history(ws: &Workspace, cfg_text: &str, r: &mut Report) {
         r.warn("20 history", "local/history", line);
     } else {
         r.push(Level::Ok, "20 history", "", line);
+    }
+}
+
+/// `21 knowledge-health` (`specs/119` §5 item 1): the figures of `delphi kb health`, read from the files and written nowhere. Each is a
+/// fact, never a warning: an empty library is a property of a young install (as check 17 treats it), and a line that marks a
+/// stalled loop already says so in words and names the command that helps.
+fn check_knowledge_health(home: &Path, ws: &Workspace, r: &mut Report) {
+    let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0);
+    for line in delphi_engine::knowledge_health::gather(home, &ws.dir, now).lines(now) {
+        r.push(Level::Ok, "21 knowledge-health", "", line.text);
     }
 }
 

@@ -2115,6 +2115,7 @@ impl EngineService {
                 svc.acquire_tick().await;
                 svc.background_validate_tick().await;
                 svc.merge_ledger_tick().await;
+                svc.health_tick().await;
             }
         });
     }
@@ -2154,6 +2155,19 @@ impl EngineService {
         for row in &batch.rows {
             m.history_merge_row(row);
         }
+    }
+
+    /// Knowledge health (`specs/119` §5 item 3): once a day the figures of `delphi kb health` are appended to `local/health.jsonl`. The
+    /// look is hourly and reads files, so it runs on a blocking thread and the timer loop does not wait for it.
+    async fn health_tick(&self) {
+        let now = (self.engine.clock_unix)();
+        if !crate::knowledge_health::tick_due(now) {
+            return;
+        }
+        let (home, ws) = (self.engine.ws.home.clone(), self.engine.ws.dir.clone());
+        tokio::task::spawn_blocking(move || {
+            let _ = crate::knowledge_health::write_daily(&ws, &crate::knowledge_health::gather(&home, &ws, now));
+        });
     }
 
     /// Once an hour, and only when the operator turned it on: a daily acquisition run if one is due (`specs/055` §8).

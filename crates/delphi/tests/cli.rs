@@ -267,3 +267,50 @@ fn research_setup_needs_a_terminal_or_flags_writes_the_search_table_and_init_poi
     let after = std::fs::read_to_string(&cfg).unwrap();
     assert!(after.contains("[search]") && after.contains("providers = [\"brave\"]") && after.contains("credential = \"env:BRAVE_API_KEY\""), "{after}");
 }
+
+// specs/119 §5 and AC-7: `delphi kb health` on a workspace with sources and no claims prints the stalled-loop line, the doctor
+// carries the same lines, one line a day goes to `local/health.jsonl`, and a home that does not exist is never created.
+#[test]
+fn kb_health_prints_the_stalled_loop_lines_writes_one_line_a_day_and_never_creates_a_home() {
+    let (t, home) = workspace();
+    let delphi = |args: &[&str], home: &std::path::Path| Command::new(DELPHI).args(args).arg("--home").arg(home).env_remove("DELPHI_WORKSPACE").stdin(Stdio::null()).current_dir(t.path()).output().unwrap();
+    let source = home.join("library/sources/s-0123456789ab");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("meta.json"), r#"{"capture_level": "pointer", "licence": "unknown"}"#).unwrap();
+
+    let o = delphi(&["kb", "health", "--workspace", "w"], &home);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.starts_with("knowledge health, 20"), "{out}");
+    assert!(out.contains("0 claims: research has kept no claim. See delphi research setup."), "{out}");
+    assert!(out.contains("1 sources (pointer 1, excerpts 0, full 0, private 0): none has text kept"), "{out}");
+    for needle in ["pages", "imported summaries", "staged notes waiting", "lessons", "research requests in 30 days", "searches of the knowledge base found nothing in 30 days"] {
+        assert!(out.contains(needle), "{needle}: {out}");
+    }
+    assert!(!out.contains("topics") && !out.contains("provisional"), "stores that are not there are left out: {out}");
+
+    // One line a day, however often it is asked.
+    let series = home.join("workspaces/w/local/health.jsonl");
+    assert_eq!(std::fs::read_to_string(&series).unwrap().lines().count(), 1);
+    let o = delphi(&["kb", "health", "--json", "--workspace", "w"], &home);
+    assert_eq!(o.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!((v["sources"]["total"].as_u64(), v["claims"]["total"].as_u64(), v["sources"]["kept"]["pointer"].as_u64()), (Some(1), Some(0), Some(1)), "{v}");
+    let line: serde_json::Value = serde_json::from_str(std::fs::read_to_string(&series).unwrap().lines().next().unwrap()).unwrap();
+    assert_eq!(std::fs::read_to_string(&series).unwrap().lines().count(), 1, "today's line is written once");
+    assert_eq!(line, v, "the daily line holds the same figures");
+
+    // The doctor has the same lines as a section, as facts.
+    let o = delphi(&["doctor", "--workspace", "w"], &home);
+    let out = text(&o.stdout);
+    assert!(out.contains("[ok] 21 knowledge-health: 0 claims: research has kept no claim. See delphi research setup."), "{out}");
+    assert_eq!(std::fs::read_to_string(&series).unwrap().lines().count(), 1, "the doctor reads; it writes no line");
+
+    // A home that does not exist: an error, and nothing is created.
+    let nowhere = t.path().join("nowhere");
+    let o = delphi(&["kb", "health", "--workspace", "w"], &nowhere);
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o.stdout));
+    assert!(!nowhere.exists(), "the home was not created");
+    let o = delphi(&["kb", "health", "--nonsense", "--workspace", "w"], &home);
+    assert_eq!(o.status.code(), Some(2));
+}

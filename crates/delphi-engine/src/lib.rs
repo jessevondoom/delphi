@@ -164,6 +164,7 @@ pub mod research_report;
 pub mod provisional_run;
 pub mod hostmap;
 pub mod recovery;
+pub mod knowledge_health;
 pub mod query_guard;
 pub mod research;
 pub mod research_asks;
