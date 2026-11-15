@@ -3,7 +3,7 @@ id: spec-120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-on
 title: "120: The app scope: a key paired from a terminal, and grants that widen one at a time"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "approve 120. add to the build plan". The spec was written from the operator's direction earlier that day ("shouldn't we be able to launch in a secure scope even without user involvement by spawning the app from a terminal with a signed key exchange or similar? i agree to narrowing scope but i think we start narrow and expand explicitly in order to maintain secure operations and support a wide feature set in the app."). The operator was shown a summary of the design and its open questions, not every line. It amends an operator decision (2026-10-25, spec 005 section 2.1).
+status: approved   # by the operator, 2026-11-14, in a host session: "approve 120. add to the build plan". The spec was written from the operator's direction earlier that day ("shouldn't we be able to launch in a secure scope even without user involvement by spawning the app from a terminal with a signed key exchange or similar? i agree to narrowing scope but i think we start narrow and expand explicitly in order to maintain secure operations and support a wide feature set in the app."). The operator was shown a summary of the design and its open questions, not every line. It amends an operator decision (2026-10-25, spec 005 section 2.1). Section 12 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -161,3 +161,14 @@ K1 to K3 need nothing from specs 112 to 119. K4 needs 112 R6 (continue) and 117 
 1. Are `read` and `request` the right grants to give at pairing, or should pairing give `read` only and `request` be granted by a second command?
 2. Should a key expire after 180 days unused, sooner, or never?
 3. Which grant of §5.3 should be specified next, once `request` has been used for a while?
+
+## 12. Amendment (operator, 2026-11-15): the unsigned app keeps its key in a file
+
+The operator's words, in a host session on 2026-11-15, after the trade-offs of the keychain and the key file were set out: "follow your recommendation for key file now." The recommendation was the key file while the app is unsigned, and the keychain once release signing ([`specs/036`](036-signed-releases-and-start-time-refresh.md)) gives the app a stable signature. The operator approves this section by merging the pull request that adds it.
+
+1. Found while building K3 (checked on macOS 27.0.1): the keychain ties an item to the code signature of the build that wrote it. An unsigned or ad-hoc-signed app has a new identity at every build, so after each rebuild or update it cannot read its own key until the operator allows it in a system dialog, or pairs again. A dialog that comes with every update teaches the operator to allow without reading.
+2. §2 item 4 is replaced: the app keeps its private key in `<home>/app/key.json`, readable and writable only by the operator (mode 0600, in a directory of mode 0700), on every system, while the app is not signed with a stable identity. The key never leaves the machine and the daemon never sees it, as before.
+3. The limit, stated: any process running as the operator can read the file and present the key, and so act with the key's grants (`read` and `request`). A `request` asks and never approves (§4.2), Red actions still ask the operator, `delphi app revoke` removes the key at once, and an unused key is removed after 180 days. The keychain, where it works, would stop such a process; that protection waits for item 4.
+4. When the app is signed with a stable identity, the keychain becomes the store on macOS again, by a later amendment that also moves an existing key from the file into the keychain and deletes the file.
+5. A key already in the keychain from a build before this amendment is read once, written to the file and removed from the keychain; when it cannot be read (the system's dialog was refused), the app falls back to read-only and the terminal's `delphi app` pairs it again.
+6. Slice: **K3b**, the key file on every system and the one-time move (2 to 3 hours), built before K5.

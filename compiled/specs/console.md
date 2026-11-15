@@ -189,7 +189,7 @@ _No standard scope section; open the spec._
 
 ## 120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time
 
-**120: The app scope: a key paired from a terminal, and grants that widen one at a time** · approved (per source at `740ebf7cd5d6`) · tier 0 · [source](../../specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md)
+**120: The app scope: a key paired from a terminal, and grants that widen one at a time** · approved (per source at `1af5830af5dc`) · tier 0 · [source](../../specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md)
 
 **source excerpt, untrusted** · `specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md` lines 25-29
 
