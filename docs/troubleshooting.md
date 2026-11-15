@@ -57,6 +57,16 @@ delphi daemon stop
 
 Release builds compile the embedding and reranking models in. A plain `cargo build` searches by keyword only unless you install the models under `$DELPHI_HOME/models/` (`dev/fetch-model.sh`). `delphi kb stats` shows what is indexed and whether results are reranked. `DELPHI_EMBED_MODEL=off`, `DELPHI_RERANK_MODEL=off` or `DELPHI_SEED_VECTORS=off` turn parts off on purpose. After adding an org bundle, results from it say `(lexical only: vectors N% ready)` until its vectors finish; `delphi bundle list` shows progress.
 
+## Research cannot search the web
+
+A research request answers "no search engine is set up" when `providers` under `[search]` is empty. Run `delphi research setup` at a terminal: it asks which engine (Brave and Mojeek are suggested first), takes the key into your keychain, writes `[search]`, runs one test query and one test fetch, and shows the change for you to ratify. `[search]` names who receives your queries, so it takes effect only once ratified. With no `[search]` table at all, research asks the keyless default engine (`parallel`), which is rate limited; `delphi init` and `delphi connect` end with a line that says so. `delphi doctor` warns about a missing engine once research has been asked for in the last 30 days, and the next session brief of a connected tool says once how often it was refused.
+
+A question that names one of the workspace's `[privacy] identifiers` is searched without that word, or, when fewer than three content words are left, not sent at all; `delphi research log <id>` lists such a search as withheld.
+
+## Is the knowledge loop turning?
+
+`delphi kb health` counts what the install holds: sources by how they are kept, claims by status, pages, imported summaries with no source listed, staged notes waiting and the oldest, lessons per role, research requests in 30 days and how many ran, and searches of the knowledge base that found nothing. A line that marks a stalled loop starts with `!`, says so in words and names the command that helps, for example `0 claims: research has kept no claim. See delphi research setup.` `--json` prints the figures; the same figures are added once a day to the workspace's `local/health.jsonl`, and `delphi doctor` shows the lines as check 21. It reads files only and calls no model.
+
 ## Updates
 
 ```sh

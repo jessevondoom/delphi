@@ -145,6 +145,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // 19. Background validation (specs/040 §18.3): a fact when it is on and has stopped for a reason the operator should know.
     check_background_validation(ws, home, &cfg, &mut r);
     check_history(ws, &cfg, &mut r);
+    // 21. Knowledge health (specs/119 §5): the same lines as `delphi kb health`, as facts.
+    check_knowledge_health(home, ws, &mut r);
     // 18. Settings that were removed because their features are always on (specs/098 §13.2): one line per key an old config still carries.
     check_removed_settings(&cfg, &mut r);
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);
@@ -259,6 +261,16 @@ fn check_history(ws: &Workspace, cfg_text: &str, r: &mut Report) {
     }
 }
 
+/// `21 knowledge-health` (`specs/119` §5 item 1): the figures of `delphi kb health`, read from the files and written nowhere. Each is a
+/// fact, never a warning: an empty library is a property of a young install (as check 17 treats it), and a line that marks a
+/// stalled loop already says so in words and names the command that helps.
+fn check_knowledge_health(home: &Path, ws: &Workspace, r: &mut Report) {
+    let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0);
+    for line in delphi_engine::knowledge_health::gather(home, &ws.dir, now).lines(now) {
+        r.push(Level::Ok, "21 knowledge-health", "", line.text);
+    }
+}
+
 /// Background validation says something only when it is switched on: whether it is running, or why it stopped (a cap, a backlog, a rolled-back tier).
 fn check_background_validation(ws: &Workspace, home: &Path, cfg_text: &str, r: &mut Report) {
     let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0);
@@ -280,7 +292,18 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
     };
     match search {
         Err(errs) => r.warn(CHECK, "config.toml", format!("[search] cannot be read, so research cannot run: {}", errs.join("; "))),
-        Ok(s) if s.providers.is_empty() => r.push(Level::Ok, CHECK, "", "search: no engine is configured (`providers = []` under [search]), so research cannot search the web"),
+        // spec 119 §2 item 3: a missing engine is a fact on a quiet install and a warning once a session has asked for research and been
+        // refused or served nothing: the count is of requests in the last 30 days, read from the daemon's own tally.
+        Ok(s) if s.providers.is_empty() => {
+            let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0);
+            let asked = delphi_engine::research_asks::counts_since(&ws.dir, now - delphi_engine::research_asks::THIRTY_DAYS).asked;
+            let fact = "search: no engine is configured (`providers = []` under [search]), so research cannot search the web";
+            if asked > 0 {
+                r.warn(CHECK, "config.toml", format!("{fact}; research was asked for {asked} time(s) in the last 30 days; run `{}`", delphi_engine::research_setup::SETUP_COMMAND));
+            } else {
+                r.push(Level::Ok, CHECK, "", format!("{fact}; `{}` sets one up", delphi_engine::research_setup::SETUP_COMMAND));
+            }
+        }
         Ok(s) => {
             let names: Vec<&str> = s.providers.iter().map(|p| p.name()).collect();
             r.push(Level::Ok, CHECK, "", format!("search: {}{}", names.join(", "), if s.explicit { "" } else { " (the default, keyless)" }));
@@ -1355,6 +1378,21 @@ mod tests {
         assert!(!f.iter().map(|x| x.message.as_str()).collect::<String>().contains("delphi-kagi"), "no credential reference is echoed");
         // No engine at all, a custom threshold, and an unreadable table.
         assert!(findings("[search]\nproviders = []\n")[0].message.contains("research cannot search the web"));
+        // Spec 119 §2 item 3: a missing engine is a fact while nobody asked for research, and a warning once a session did in the last 30
+        // days; a request older than that does not count, and an engine that is there is never warned about.
+        let none = "[search]\nproviders = []\n";
+        let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap();
+        let quiet = &findings(none)[0];
+        assert!(quiet.level == Level::Ok && quiet.message.contains("`delphi research setup` sets one up"), "{quiet:?}");
+        std::fs::create_dir_all(ws.dir.join("local")).unwrap();
+        delphi_engine::research_asks::record(&ws.dir, delphi_engine::research_asks::Outcome::NoEngine, now - 45 * 86_400);
+        assert_eq!(findings(none)[0].level, Level::Ok, "asked 45 days ago");
+        delphi_engine::research_asks::record(&ws.dir, delphi_engine::research_asks::Outcome::NoEngine, now - 3 * 86_400);
+        delphi_engine::research_asks::record(&ws.dir, delphi_engine::research_asks::Outcome::NoEngine, now - 60);
+        let warned = &findings(none)[0];
+        assert_eq!((warned.level, warned.location.as_str()), (Level::Warn, "config.toml"), "{warned:?}");
+        assert!(warned.message.contains("research was asked for 2 time(s) in the last 30 days; run `delphi research setup`") && warned.message.contains("research cannot search the web"), "{}", warned.message);
+        assert!(findings("").iter().all(|x| x.level == Level::Ok), "the keyless default is an engine: no warning");
         assert!(findings("[research]\nthin_below = 5\n").last().unwrap().message.contains("fewer than 5 kept claims"));
         let f = findings("[search]\nproviders = [\"nonesuch\"]\n");
         assert_eq!((f[0].level, f[0].location.as_str()), (Level::Warn, "config.toml"), "{f:?}");

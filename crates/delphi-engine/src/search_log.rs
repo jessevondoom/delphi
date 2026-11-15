@@ -127,6 +127,8 @@ pub struct Line {
     pub query: Option<String>,
     /// `true` when the query was not sent, or not recorded, because it would have carried private text.
     pub withheld: bool,
+    /// The withheld query named one of the workspace's privacy identifiers (`specs/119` §2 item 7), rather than resting on a private source.
+    pub identifier: bool,
     pub at: String,
     pub hits: usize,
     pub kept: usize,
@@ -142,7 +144,7 @@ pub struct Line {
 
 impl Line {
     fn new(rung: &'static str, source: Source, purpose: Purpose) -> Line {
-        Line { rung, source, purpose, query: None, withheld: false, at: delphi_core::time::now_rfc3339(), hits: 0, kept: 0, duplicates: 0, not_kept: BTreeMap::new(), via: None, failed: None, declared: false }
+        Line { rung, source, purpose, query: None, withheld: false, identifier: false, at: delphi_core::time::now_rfc3339(), hits: 0, kept: 0, duplicates: 0, not_kept: BTreeMap::new(), via: None, failed: None, declared: false }
     }
 
     /// Does the line account for every result it found? A declared line, a withheld one and the knowledge-base line are not searches the
@@ -164,7 +166,7 @@ impl Line {
             o.insert("query".into(), json!(q));
         }
         if self.withheld {
-            o.insert("withheld".into(), json!("private"));
+            o.insert("withheld".into(), json!(if self.identifier { "identifier" } else { "private" }));
         }
         o.insert("at".into(), json!(self.at));
         o.insert("hits".into(), json!(self.hits));
@@ -272,6 +274,15 @@ impl SearchLog {
     pub fn withheld(&mut self, source: Source, purpose: Purpose) -> usize {
         let mut l = Line::new("web", source, purpose);
         l.withheld = true;
+        self.push(l)
+    }
+
+    /// A search the daemon did not send because the query named one of the workspace's privacy identifiers and too little was left
+    /// without it (`specs/119` §2 item 7): no query text is recorded.
+    pub fn withheld_identifier(&mut self, rung: &'static str, source: Source, purpose: Purpose) -> usize {
+        let mut l = Line::new(rung, source, purpose);
+        l.withheld = true;
+        l.identifier = true;
         self.push(l)
     }
 
@@ -424,6 +435,7 @@ pub fn render(log: &Value, research_id: &str) -> String {
         let src = l["source"].as_str().unwrap_or("?");
         let what = match (l["query"].as_str(), l["withheld"].as_str()) {
             (Some(q), _) => format!("\"{q}\""),
+            (None, Some("identifier")) => "(withheld: it named a private identifier; nothing was sent)".to_string(),
             (None, Some(_)) => "(withheld: private; nothing was sent)".to_string(),
             (None, None) => "(no query)".to_string(),
         };
@@ -503,6 +515,20 @@ mod tests {
         assert_eq!(log.flow().not_kept.get("refused"), Some(&2));
         assert!(log.flow().balanced());
         assert!(NOT_KEPT.contains(&"page_cap") && NOT_KEPT.len() == 7);
+    }
+
+    // specs/119 §2 item 7: a query withheld for a privacy identifier is listed as withheld, says why, and carries no text.
+    #[test]
+    fn a_search_withheld_for_an_identifier_is_listed_as_withheld_without_text_and_is_not_counted_as_run() {
+        let mut log = SearchLog::new();
+        log.withheld_identifier("web", Source::Search("brave".into()), Purpose::Topic);
+        let j = log.to_json();
+        let line = &j["lines"][0];
+        assert_eq!(line["withheld"], "identifier");
+        assert!(line.get("query").is_none(), "no text: {line}");
+        assert_eq!((j["flow"]["withheld"].as_u64(), j["flow"]["searches"].as_u64()), (Some(1), Some(0)));
+        assert!(!log.private, "a withheld identifier does not make the log private: it holds none of it");
+        assert!(render(&j, "r-1").contains("(withheld: it named a private identifier; nothing was sent)"));
     }
 
     #[test]

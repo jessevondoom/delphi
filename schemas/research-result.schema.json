@@ -89,14 +89,14 @@
     },
     "search_line": {
       "type": "object",
-      "description": "One search. `query` is the same redacted string that was sent; a search withheld because its claim rests on a private source has `withheld: private` and no `query`. Every line the daemon ran balances: hits = duplicates + kept + the sum of not_kept.",
+      "description": "One search. `query` is the same redacted string that was sent; a search withheld because its claim rests on a private source has `withheld: private` and no `query`, and one withheld because it named one of the workspace's privacy identifiers and too little was left without it (spec 119 section 2.7) has `withheld: identifier` and no `query`. Every line the daemon ran balances: hits = duplicates + kept + the sum of not_kept.",
       "required": ["rung", "source", "purpose", "at", "hits", "kept", "duplicates", "not_kept"],
       "properties": {
         "rung": { "enum": ["kb", "trusted", "close", "web"] },
         "source": { "type": "string", "pattern": "^(kb|trusted|(host|search|doi|archive|citation):[a-z0-9._-]{1,40})$", "description": "Of whom: the knowledge base, the operator's trusted list, a host tool the host declared, or a provider. doi, archive and citation are reserved for later slices of spec 101." },
         "purpose": { "enum": ["kb", "topic", "trusted", "gap", "support", "contradiction", "corroboration", "declared", "chain"] },
         "query": { "type": "string", "maxLength": 200 },
-        "withheld": { "const": "private" },
+        "withheld": { "enum": ["private", "identifier"] },
         "at": { "type": "string" },
         "hits": { "type": "integer", "minimum": 0 },
         "kept": { "type": "integer", "minimum": 0 },
