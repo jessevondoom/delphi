@@ -56,6 +56,8 @@ pub struct Gathered {
     pub stats: GatherStats,
     /// Pictures that belong to the gathered sources: the writer may place these and no others.
     pub assets: Vec<GatheredAsset>,
+    /// Knowledge-base passages and findings, for a topic page (`specs/117` §2 item 4); a search page gathers none.
+    pub records: Vec<super::page_check::KbRecord>,
 }
 
 /// One picture the writer may place on a page: a captured asset of a gathered library source (`specs/097` §4.2).
@@ -91,13 +93,14 @@ impl GatherStats {
 
 impl Gathered {
     pub fn is_empty(&self) -> bool {
-        self.claims.is_empty() && self.sources.is_empty()
+        self.claims.is_empty() && self.sources.is_empty() && self.records.is_empty()
     }
 
     pub fn hits(&self) -> Vec<Hit> {
         let claims = self.claims.iter().map(|c| Hit { kind: "claim", id: c["id"].as_str().unwrap_or("").into(), title: clip(c["text"].as_str().unwrap_or(""), 200), status: shown_status(status(c)), private: false });
         let sources = self.sources.iter().map(|(id, m, _)| Hit { kind: "source", id: id.clone(), title: clip(m["title"].as_str().unwrap_or(id), 200), status: source_standing(m), private: is_private(m) });
-        claims.chain(sources).collect()
+        let records = self.records.iter().map(|r| Hit { kind: if r.label.starts_with("f-") { "finding" } else { "passage" }, id: r.label.clone(), title: clip(&r.title, 200), status: r.status.clone(), private: false });
+        claims.chain(sources).chain(records).collect()
     }
 }
 
@@ -120,15 +123,15 @@ fn print(parts: &[&str]) -> String {
 }
 
 /// What a claim looks like to a page: its status, text and whether it is still live.
-fn claim_print(c: &Value) -> String {
+pub(super) fn claim_print(c: &Value) -> String {
     print(&["claim", c["id"].as_str().unwrap_or(""), status(c).as_str(), c["text"].as_str().unwrap_or(""), &c["superseded_by"].to_string()])
 }
 
-fn source_print(id: &str, m: &Value) -> String {
+pub(super) fn source_print(id: &str, m: &Value) -> String {
     print(&["source", id, m["content_hash"].as_str().unwrap_or(""), &m["version"].to_string(), m["status"].as_str().unwrap_or(""), &m["retired"].to_string(), &m["purged"].to_string()])
 }
 
-fn norm_ws(s: &str) -> String {
+pub(super) fn norm_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -448,7 +451,7 @@ impl Library {
         if v["day"].as_u64() == Some(Self::today(now)) { v["count"].as_u64().unwrap_or(0) as u32 } else { 0 }
     }
 
-    fn count_page(&self, now: u64) {
+    pub(super) fn count_page(&self, now: u64) {
         let n = self.pages_today(now) + 1;
         if self.ensure().is_ok() {
             let _ = std::fs::write(self.pages_dir().join("budget.json"), json!({"day": Self::today(now), "count": n}).to_string());
@@ -563,7 +566,7 @@ impl Library {
         SearchedPage { entry: self.entry_of(key, &v, r.now, r.settings.external_ttl_secs, false), path: self.page_file(key), markdown: md, cached: false }
     }
 
-    fn cited_labels(&self, md: &str) -> Vec<String> {
+    pub(super) fn cited_labels(&self, md: &str) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for c in super::page_check::markers(md) {
             if !out.contains(&c.label()) {
@@ -579,7 +582,7 @@ fn span(secs: u64) -> String {
 }
 
 /// The writer's draft made fit for the check: no code fence around it, and no longer than the page cap, cut at a paragraph.
-fn clean_draft(d: &str, max_tokens: u64) -> String {
+pub(super) fn clean_draft(d: &str, max_tokens: u64) -> String {
     let mut t = d.trim();
     if let Some(rest) = t.strip_prefix("```") {
         t = rest.split_once('\n').map_or("", |(_, b)| b).trim_end().strip_suffix("```").unwrap_or(rest).trim();
@@ -620,7 +623,7 @@ Layout, in this order (leave out what the records do not support):\n\
 6. If the records split evenly across unrelated meanings, write a disambiguation page instead: `**Query** may refer to:` and a bullet list of `[Meaning](page:slug)` with a cited one-line description each.\n\n\
 Rules:\n\
 - Markdown only. {}\n\
-- Cite with markers placed after the sentence or paragraph they support: `[c-...]` for a claim, `[s-...]` for a source, using only the ids listed below. One marker supports the sentences back to the previous marker.\n\
+- Cite with markers placed after the sentence or paragraph they support: `[c-...]` for a claim, `[s-...]` for a source or a knowledge-base passage, `[f-...]` for a finding, using only the ids listed below. One marker supports the sentences back to the previous marker.\n\
 - State validated claims as fact; attribute noted ones (\"According to ...\"); show a contested pair side by side. Nothing you write may contradict a record, and you never cite a record for something it does not say.\n\
 - The only links are `#section` links to your own headings, `page:slug` links, and the images from ASSETS. No other links or images. A quotation must be verbatim from the record you cite and at most 1 KiB.\n\
 - Do not write a banner, a References section or a citations table: the daemon adds them.\n\
@@ -633,6 +636,9 @@ Rules:\n\
     }
     for (id, m, text) in &g.sources {
         s.push_str(&format!("RECORD s-{} | {} | source: {}\n{}\nEND RECORD\n", id, source_standing(m), record_text(m["title"].as_str().unwrap_or(id)), record_text(text)));
+    }
+    for r in &g.records {
+        s.push_str(&format!("RECORD {} | {} | {}: {} ({})\n{}\nEND RECORD\n", r.label, r.status, record_text(&r.kind), record_text(&r.title), record_text(&r.locator), record_text(&r.text)));
     }
     if !g.assets.is_empty() {
         s.push_str("\nASSETS (pictures you may place; each belongs to the source named):\n");

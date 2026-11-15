@@ -890,11 +890,14 @@ pub struct PagesConfig {
     /// The bounds, in days, on the cache lifetime the `writer` proposes for a page (`specs/097` §4.4).
     pub min_ttl_days: u32,
     pub max_ttl_days: u32,
+    /// Topic pages that are due are rebuilt by the daemon while it is idle, within `per_day` (`specs/117` §2 item 3). `false` leaves
+    /// rebuilding to the operator (`delphi pages rebuild`). Idle rebuilds spend model tokens nobody asked for at that moment.
+    pub auto_rebuild: bool,
 }
 
 impl Default for PagesConfig {
     fn default() -> Self {
-        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, external_ttl_secs: 7 * 86_400, per_day: 20, min_ttl_days: 1, max_ttl_days: 365 }
+        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, external_ttl_secs: 7 * 86_400, per_day: 20, min_ttl_days: 1, max_ttl_days: 365, auto_rebuild: true }
     }
 }
 
