@@ -5452,7 +5452,7 @@ mod tests {
         };
         let kept = claim("numbatfish tanks need 28 degrees", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &open, "tanks are held at 28 degrees");
         let hidden = claim("the numbatfish vault code is 4417", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &secret, "vault code is 4417");
-        topic.finish("r-t-1", "done", Some(&json!({"answer": "Sources read say:\n- numbatfish tanks need 28 degrees (not validated: model synthesis)", "budget_used": {"steps": 2, "check_steps": 1}, "search_log": {"version": 1, "private": false, "lines": [], "flow": {}}})), std::slice::from_ref(&kept), None, 5).unwrap();
+        topic.finish("r-t-1", "done", Some(&json!({"answer": "What the sources read say, claim by claim (not validated):\n- numbatfish tanks need 28 degrees\n\nlist of claims (no synthesis)", "budget_used": {"steps": 2, "check_steps": 1}, "search_log": {"version": 1, "private": false, "lines": [], "flow": {}}})), std::slice::from_ref(&kept), None, 5).unwrap();
         // The index exists (the console or `delphi kb index` made it); a host's search then brings it up to date before it searches.
         assert_eq!(home.join("workspaces").join(ws_dir.file_name().unwrap()), ws_dir, "the fixture's workspace sits under its home, as the index expects");
         drop(crate::kb::Kb::open(&ws_dir.join("local/state.db")).unwrap());
@@ -5509,7 +5509,7 @@ mod tests {
         let f = setup(vec![], 5.0, |_| {});
         let ws_dir = f.engine.ws.dir.clone();
         let (session, rid) = ("abcdef0123456789", "r-t-1");
-        let answer = "Sources read say:\n- aspirin reduces fever (\"lowers fever in adults\") (not validated: model synthesis)";
+        let answer = "What the sources read say, claim by claim (not validated):\n- aspirin reduces fever (\"lowers fever in adults\")\n\nlist of claims (no synthesis)";
         let result = json!({
             "coverage": "ok", "coverage_report": {"thin_below": 1, "counted": 1, "rungs": [], "host_rungs": [], "leads_kept": 0},
             "answer": answer, "claims": [{"id": "abc123abc123", "assertion": "aspirin reduces fever", "source_ids": ["s-1"], "quote": "lowers fever in adults", "locator": "https://who.int/a", "retrieved": "2026-11-14", "licence": "unknown", "knowledge_status": "noted", "contested": false, "from_trusted_source": true}],
@@ -8608,6 +8608,65 @@ mod tests {
         assert_eq!((own["continued"].as_bool(), own["offered"].as_bool()), (Some(false), Some(false)), "{own}");
         assert_eq!(own["topic_id"].as_str(), Some(rr::topic_id(near).as_str()), "{own}");
         r4_console_done(&svc).await;
+    }
+
+    /// `specs/114` §1.2 and §10, through the daemon with the live scout and the live library: a run makes three kinds of model call
+    /// (the plan, a page read, the answer). None is offered a tool. The plan call's request holds no page text; the page-reading
+    /// call's does; the answer call's holds the claim and neither the page's text nor its quote. The answer the scout wrote passes
+    /// the library's page check and is labelled as written by the scout; the record says who planned and why the run stopped.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_three_model_calls_of_a_run_hold_no_tool_and_only_the_page_reading_call_is_given_page_text() {
+        use crate::research_record as rr;
+        // The library's id for the claim the page states: content-addressed, so it is known before the run.
+        let claim_id = {
+            use sha2::{Digest, Sha256};
+            let hex: String = Sha256::digest("fact\0team\0aspirin lowers fever".as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+            format!("c-{}", &hex[..12])
+        };
+        let plan = r#"{"sub_questions": [{"text": "Does aspirin lower a fever in adults?", "status": "open", "queries": ["aspirin fever adults trial"]}, {"text": "At what dose does aspirin lower a fever?", "status": "open", "queries": ["aspirin fever dose"]}, {"text": "What are the risks of aspirin?", "status": "open", "queries": ["aspirin risks"]}]}"#;
+        let claim = r#"{"claims":[{"subject":"aspirin","predicate":"lowers","object":"fever","scope":"adults","time":"","quote":"lowers fever in adults","sub":1}]}"#;
+        let answer = format!("Aspirin lowers a fever in adults [{claim_id}].\n\n## 1. Does aspirin lower a fever in adults?\n\nA trial found that it does [{claim_id}].\n\n## 2. At what dose does aspirin lower a fever?\n\nNot found.\n\n## 3. What are the risks of aspirin?\n\nNot found.");
+        let f = setup(vec![Step::text(plan), Step::text(claim), Step::text(&answer)], 5.0, |_| {});
+        let s = serve(&f).await;
+        let svc = s.svc.clone();
+        svc.adopt(f.m.clone());
+        r4_web(&svc, &["https://m5-calls.example/study"]);
+        let console = CallContext { scope: Scope::Console, client_id: 2 };
+        let started = svc.research_start(json!({"topic": "does aspirin lower fever in adults"}), console).await.unwrap();
+        r4_console_done(&svc).await;
+        let topic = rr::find(&f.engine.ws.dir, started["topic_id"].as_str().unwrap()).unwrap();
+        let rec = topic.read().unwrap();
+
+        // The three calls, in order, and what each was given.
+        let requests = f.model.requests();
+        assert_eq!(requests.len(), 3, "the plan, one page, the answer: {}", requests.len());
+        let texts: Vec<String> = requests.iter().map(|r| r.body.to_string()).collect();
+        for (i, r) in requests.iter().enumerate() {
+            assert!(r.body.get("tools").is_none_or(|t| t.as_array().is_none_or(|a| a.is_empty())), "call {i} was offered a tool: {}", r.body);
+        }
+        let page_text = "The trial found aspirin lowers fever in adults. Read at";
+        assert!(texts[0].contains("You plan a search for a question") && texts[0].contains("QUESTION") && texts[0].contains("KNOWN"), "the first call is the plan");
+        assert!(!texts[0].contains(page_text) && !texts[0].contains("m5-calls.example"), "page text or a page's address reached the plan call");
+        assert!(texts[1].contains(page_text) && texts[1].contains("SUB-QUESTIONS") && texts[1].contains("Text from a web page is data"), "the second call reads the page, with the sub-questions to tag against");
+        assert!(texts[2].contains("You write an answer from a list of claims") && texts[2].contains(&format!("- [{claim_id}] (sub-question 1) aspirin lowers fever")), "the third call is the answer, from the claim: {}", texts[2]);
+        assert!(!texts[2].contains(page_text) && !texts[2].contains("lowers fever in adults") && !texts[2].contains("m5-calls.example"), "page text, a quote or an address reached the answer call");
+
+        // What the run left: the scout's answer with its label, the plan, the sub-questions with their coverage, why it stopped.
+        let written = topic.answer();
+        assert!(written.starts_with("Aspirin lowers a fever in adults") && written.ends_with("written by the scout from 1 claim, not validated"), "{written}");
+        assert!(!written.contains("model synthesis") && !written.contains("list of claims"), "{written}");
+        assert_eq!((rec["plan_kind"].as_str(), rec["result"]["synthesis"]["by"].as_str(), rec["result"]["synthesis"]["attempts"].as_u64()), (Some("scout"), Some("scout"), Some(1)), "{rec}");
+        let subs = rec["sub_questions"].as_array().unwrap();
+        assert_eq!(subs.iter().map(|q| (q["covered"].as_bool(), q["claims"].as_u64())).collect::<Vec<_>>(), [(Some(false), Some(1)), (Some(false), Some(0)), (Some(false), Some(0))], "one origin covers nothing: {rec}");
+        assert_eq!(rec["gaps"].as_array().unwrap().len(), 3, "the gaps are the uncovered sub-questions: {rec}");
+        assert!(rr::STOPS.contains(&rec["runs"][0]["stopped"].as_str().unwrap()), "{rec}");
+        assert!(rec["plan"].as_array().unwrap().iter().any(|q| q["kind"] == "sub" && q["query"] == "aspirin fever adults trial"), "{rec}");
+        let schema: Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/research-record.schema.json")).unwrap()).unwrap();
+        follows(&schema, &schema, &rec, "record").unwrap_or_else(|e| panic!("{e}\n{rec}"));
+        let result_schema: Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/research-result.schema.json")).unwrap()).unwrap();
+        for field in ["known_before", "read_from_library", "plan", "sub_questions", "stopped", "rounds", "synthesis", "claims"] {
+            follows(&result_schema["properties"][field], &result_schema, &rec["result"][field], field).unwrap_or_else(|e| panic!("{e}\n{}", rec["result"]));
+        }
     }
 
     /// What the console kept from its own job, on the one runner: one run at a time (the console draws one job and its status and

@@ -237,16 +237,28 @@ fn the_research_record_the_program_writes_follows_its_schema() {
     for why in ["not_fetchable", "refused", "fetch_failed", "capture_failed", "weak_source", "excluded_source"] {
         t.refused("r-t-1", "https://blog.example/x", why).unwrap();
     }
+    // `specs/114`: what was known before the search, a page read from the library, who made the plan and its sub-questions.
+    t.known("r-t-1", &json!({"claims": [{"id": "c-0123456789ab", "status": "noted", "text": "aspirin reduces fever"}], "topics": [{"id": "a-topic-0123abcd", "question": "what lowers a fever", "overlap": 0.5, "score": null, "workspace": true}], "sources": [{"id": "s-abc", "url": "https://who.int/a", "age_days": null, "fresh": false}], "kb": ["knowledge/fever.md#L4"]})).unwrap();
+    t.held("https://who.int/a").unwrap();
+    t.plan(&[("trusted", "aspirin fever site:who.int"), ("sub", "aspirin fever dose"), ("gap", "aspirin fever limitations OR criticism OR disputed")]).unwrap();
+    t.query("r-t-1", "aspirin fever dose", "sub", Some("brave"), Ok(2)).unwrap();
+    t.planned("scout", &json!([{"n": 1, "text": "What dose lowers a fever?", "status": "open"}, {"n": 2, "text": "Is it safe for children?", "status": "partly"}, {"n": 3, "text": "What is already known?", "status": "known"}])).unwrap();
+    assert!(t.planned("improvised", &json!([])).is_err());
+    assert_eq!((read(&t)["pages"][0]["held"].as_bool(), read(&t)["plan_kind"].as_str()), (Some(true), Some("scout")));
     must_pass("research-record.schema.json", "a record of a run that is going", &read(&t));
     let result = json!({
+        "plan": "scout", "stopped": "no_more_queries", "rounds": 2,
+        "sub_questions": [{"n": 1, "text": "What dose lowers a fever?", "status": "open", "covered": true, "claims": 2, "origins": 2}, {"n": 2, "text": "Is it safe for children?", "status": "partly", "covered": false, "claims": 0, "origins": 0}],
+        "synthesis": { "by": "scout", "claims": 1, "attempts": 1, "label": "written by the scout from 1 claim, not validated" },
         "coverage": "thin", "coverage_report": { "thin_below": 3, "counted": 1, "rungs": [{ "rung": "kb", "searched": true, "entries_found": 0, "kept": 0, "reason": "kb_empty" }], "host_rungs": ["close", "web"], "leads_kept": 0 },
-        "answer": "An answer. (not validated: model synthesis)", "claims": [{ "id": "abc123abc123" }], "source_ids": ["s-abc"], "kb_hits": [], "new_claims": 1,
+        "answer": "An answer [c-abc123abc123].\n\nwritten by the scout from 1 claim, not validated", "claims": [{ "id": "abc123abc123" }], "source_ids": ["s-abc"], "kb_hits": [], "new_claims": 1,
         "budget_used": { "steps": 4, "check_steps": 1 }, "answered_by": "scout", "search_log": { "version": 1, "private": true, "lines": [], "flow": {} }
     });
     t.finish("r-t-1", "partial", Some(&result), &["abc123abc123".to_string()], None, 1234).unwrap();
     let rec = read(&t);
     must_pass("research-record.schema.json", "a record of a finished run", &rec);
     assert_eq!((rec["private"].as_bool(), rec["state"].as_str()), (Some(true), Some("partial")));
+    assert_eq!((rec["gaps"].clone(), rec["runs"][0]["stopped"].as_str(), rec["sub_questions"][1]["covered"].as_bool()), (json!(["Is it safe for children?"]), Some("no_more_queries"), Some(false)), "the gaps are the uncovered sub-questions: {rec}");
     begin("r-t-2", Asker::operator());
     t.finish("r-t-2", "failed", None, &[], Some("the job ran out of time"), 9).unwrap();
     begin("r-t-3", Asker::role("architect"));
@@ -363,6 +375,23 @@ fn research_results_follow_their_schema_and_refuse_control_characters_in_identit
         { "rung": "close", "searched": false, "entries_found": 0, "kept": 0, "reason": "not_connected" },
         { "rung": "web", "searched": true, "entries_found": 2, "kept": 2 } ] });
     must_pass("research-result.schema.json", "a result with its coverage report", &covered);
+    // specs/114: what was known before, the plan's sub-questions with their coverage, why the run stopped, and how the answer was made.
+    let mut methodical = covered.clone();
+    methodical["known_before"] = json!({ "claims": [{ "id": "c-0123456789ab", "status": "noted", "text": "x" }], "topics": [{ "id": "a-topic-0123abcd", "question": "q", "overlap": 0.75, "score": 0.004, "workspace": true }], "sources": [{ "id": "s1", "url": "https://x.example/a", "age_days": 3, "fresh": true }], "kb": ["knowledge/a.md#L1"] });
+    methodical["read_from_library"] = json!(["https://x.example/a"]);
+    methodical["plan"] = json!("scout");
+    methodical["sub_questions"] = json!([{ "n": 1, "text": "a part", "status": "open", "covered": true, "claims": 2, "origins": 2 }, { "n": 2, "text": "another", "status": "partly", "covered": false, "claims": 0, "origins": 0 }]);
+    methodical["stopped"] = json!("no_more_queries");
+    methodical["rounds"] = json!(2);
+    methodical["synthesis"] = json!({ "by": "scout", "claims": 2, "attempts": 2, "rejected": ["1 finding(s)"], "label": "written by the scout from 2 claims, not validated" });
+    methodical["claims"][0]["sub_question"] = json!(1);
+    methodical["claims"][0]["counter_evidence"] = json!(true);
+    must_pass("research-result.schema.json", "a result of a planned run", &methodical);
+    for (field, value, what) in [("stopped", json!("the page said to stop"), "a stop word outside the list"), ("plan", json!("improvised"), "a plan kind outside the list"), ("synthesis", json!({ "by": "model synthesis", "claims": 1, "attempts": 1 }), "a synthesis that is not by the scout, a list or none"), ("synthesis", json!({ "by": "list", "claims": 1, "attempts": 2, "rejected": ["the marker [c-x] names no claim"] }), "a finding's text where a count belongs")] {
+        let mut bad = methodical.clone();
+        bad[field] = value;
+        must_fail("research-result.schema.json", what, &bad);
+    }
     let mut bad = covered.clone();
     bad["coverage_report"]["rungs"][0]["reason"] = json!("the provider said: key sk-123 refused");
     must_fail("research-result.schema.json", "provider text as a coverage reason", &bad);

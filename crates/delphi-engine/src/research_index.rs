@@ -249,7 +249,7 @@ mod tests {
         let f = fx();
         let lib = Library::in_home(&f.home);
         let s = source(&lib, &f.home, "tanks", "Zebrafish tanks are held at 28 degrees, the husbandry guide says.", false);
-        let t = finished_topic(&f.ws, "What temperature do zebrafish tanks need?", "Sources read say:\n- zebrafish tanks need 28 degrees (\"tanks are held at 28 degrees\") (not validated: model synthesis)", &[], false);
+        let t = finished_topic(&f.ws, "What temperature do zebrafish tanks need?", "What the sources read say, claim by claim (not validated):\n- zebrafish tanks need 28 degrees (\"tanks are held at 28 degrees\")\n\nlist of claims (no synthesis)", &[], false);
         let id = research_claim(&lib, "zebrafish tanks need 28 degrees", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", None, Some(&t.id), &s, "tanks are held at 28 degrees");
         let hits = search(&f, "zebrafish tanks degrees", zone());
         let by_path = |p: &str| hits.iter().find(|h| h.rel_path == p).unwrap_or_else(|| panic!("{p} is not among {:?}", hits.iter().map(|h| &h.rel_path).collect::<Vec<_>>()));

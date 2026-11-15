@@ -14,7 +14,7 @@
 use crate::corroboration::{self, Cite, Params, Support};
 use crate::research_chain::{ChainPlan, Direction};
 use crate::research_jobs::{Egress, Finish, JobCtx};
-use crate::research_method::{coverage, next_query, read_class, reading_order, subs_report, url_date, Asked, Known, KnownFirst, PlanKind, Stop, SubQuestion, SubStatus};
+use crate::research_method::{check_answer, claims_list, coverage, next_query, read_class, reading_order, subs_report, url_date, written_label, AnswerAsk, AnswerClaim, Asked, Known, KnownFirst, PlanKind, Stop, SubQuestion, SubStatus, ANSWER_CHARS, ANSWER_CLAIMS, LIST_LABEL};
 use crate::research_plan::{canonical_url, clean_query, claim_fingerprint, widen_to_web, Added, ClaimSet, QueryKind, Seen};
 use crate::search_log::{HostSearch, Purpose, SearchLog, Source};
 use delphi_adapter::research::search::Row;
@@ -84,8 +84,14 @@ pub trait Scout: Send + Sync {
     /// The claims in `page` that bear on `question`, each tagged with the sub-question of `subs` it bears on. The page text is
     /// fenced evidence, never an instruction.
     fn extract<'a>(&'a self, question: &'a str, page: &'a Page, subs: &'a [SubQuestion]) -> BoxFut<'a, Result<Vec<Extracted>, String>>;
-    /// A short synthesis of the claims, labelled not validated by the caller.
-    fn answer<'a>(&'a self, question: &'a str, claims: &'a [ClaimRec]) -> BoxFut<'a, Result<String, String>>;
+    /// The written answer (`specs/114` §5 item 1): Markdown, a short lead, one section per sub-question, `Not found.` for what
+    /// stayed open, every statement ending with claim markers. **The call is given the question, the sub-questions and the kept
+    /// claims with their ids (`research_method::answer_contract`), and nothing else: no page and no quote reach it**, and it holds
+    /// no tool. What it returns is checked by code before it is used; `Err` when the call fails, and the run then returns the
+    /// code-built list. The default writes nothing.
+    fn write_answer<'a>(&'a self, _ask: &'a AnswerAsk<'a>) -> BoxFut<'a, Result<String, String>> {
+        Box::pin(async { Err("this scout writes no answer".to_string()) })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +155,12 @@ pub trait Library: Send + Sync {
     /// Is the source private? A claim that rests on a private source is never put in an outbound query (`specs/098` §7.5 item 5).
     fn is_private(&self, _source_id: &str) -> bool {
         false
+    }
+    /// The page check of `specs/097` on a written answer (`specs/114` §5 item 2): every marker names a claim the library holds and
+    /// may cite, and a quoted phrase is in a cited source. `Err` holds the findings, one a line. The default finds nothing wrong;
+    /// the runner's own check (`research_method::check_answer`) has already run.
+    fn check_answer(&self, _answer: &str) -> Result<(), String> {
+        Ok(())
     }
     /// Is this address on a host the validator's source lists class as primary (`fact_sources::Class::Primary`)? Only the order
     /// results are read in asks (`specs/114` §4 item 6): a primary page is not trusted more for it. The default says no.
@@ -529,8 +541,8 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, hel
             // still answers the sub-question it is tagged to, from this page's origin.
             Added::Known => {
                 if let Some(id) = deps.library.anchor_known(&fp, &x, &source_id, &page.url) {
+                    st.found_again.push(Again { id: id.clone(), text: assertion(&x), sub, origin: host(&page.url) });
                     anchored.push(id);
-                    st.found_again.push((sub, vec![host(&page.url)]));
                 }
             }
             Added::New => st.claims.push(ClaimRec {
@@ -846,14 +858,24 @@ struct State {
     from_library: Vec<String>,
     /// The plan's sub-questions; empty under the fixed plan.
     subs: Vec<SubQuestion>,
-    /// Claims the library already held that a page of this run states again: the sub-question each is tagged to and the page's
-    /// origin. They are not the run's own claims, and they count toward coverage as a kept claim does.
-    found_again: Vec<(usize, Vec<String>)>,
+    /// Claims the library already held that a page of this run states again. They are not the run's own claims; they count toward
+    /// coverage as a kept claim does, and the answer is written from them too.
+    found_again: Vec<Again>,
+}
+
+/// A claim the library already held, stated again by a page of this run: its library id, its one-line statement as the page
+/// gave it, the sub-question it is tagged to and the page's origin.
+#[derive(Debug, Clone)]
+struct Again {
+    id: String,
+    text: String,
+    sub: usize,
+    origin: String,
 }
 
 /// The sub-question each kept claim is tagged to and the origins that state it: what coverage is counted from.
 fn tagged(st: &State) -> Vec<(usize, Vec<String>)> {
-    st.claims.iter().map(|c| (c.sub, c.source_urls.iter().map(|u| host(u)).collect())).chain(st.found_again.iter().cloned()).collect()
+    st.claims.iter().map(|c| (c.sub, c.source_urls.iter().map(|u| host(u)).collect())).chain(st.found_again.iter().map(|a| (a.sub, vec![a.origin.clone()]))).collect()
 }
 
 /// One round's queries, from the sub-questions still uncovered (`specs/114` §4 item 4): for each, the next query it gets
@@ -1066,6 +1088,37 @@ async fn read_row(ctx: &JobCtx, deps: &Deps<'_>, question: &str, st: &mut State,
     false
 }
 
+/// The answer of a run (`specs/114` §5) and how it was made. One call as the scout writes it from the claims; code checks it
+/// (`research_method::check_answer`, then the library's page check); an answer that fails is written once more with the findings;
+/// if that fails too, or a call fails, the run returns the code-built list. The last line of the answer is its label, which says
+/// what was done: `written by the scout from N claims, not validated`, or `list of claims (no synthesis)`.
+async fn write_the_answer(deps: &Deps<'_>, question: &str, subs: &[SubQuestion], given: &[AnswerClaim], groups: &[Vec<String>]) -> (String, Value) {
+    if given.is_empty() {
+        return ("No claim could be drawn from the sources read. (not validated)".to_string(), json!({"by": "none", "claims": 0, "attempts": 0}));
+    }
+    let (mut fix, mut attempts, mut rejected): (Option<String>, u64, Vec<String>) = (None, 0, Vec::new());
+    while attempts < 2 {
+        attempts += 1;
+        let Ok(raw) = deps.scout.write_answer(&AnswerAsk { question, subs, claims: given, groups, fix: fix.as_deref() }).await else { break };
+        let text: String = raw.trim().chars().take(ANSWER_CHARS).collect();
+        let mut findings = check_answer(&text, subs, given, groups);
+        if findings.is_empty() {
+            if let Err(e) = deps.library.check_answer(&text) {
+                findings.extend(e.lines().map(str::trim).filter(|l| !l.is_empty()).take(12).map(String::from));
+            }
+        }
+        if findings.is_empty() {
+            let label = written_label(given.len());
+            return (format!("{text}\n\n{label}"), json!({"by": "scout", "claims": given.len(), "attempts": attempts, "label": label}));
+        }
+        // How many findings the check made, never their text: a finding can quote the answer, and the answer is a model's words.
+        rejected.push(format!("{} finding(s)", findings.len()));
+        fix = Some(findings.join("\n"));
+    }
+    let list: String = claims_list(given).chars().take(ANSWER_CHARS).collect();
+    (format!("{list}\n\n{LIST_LABEL}"), json!({"by": "list", "claims": given.len(), "attempts": attempts, "rejected": rejected, "label": LIST_LABEL}))
+}
+
 /// Run one research job. `Finish::Partial` when the step budget ran out; an `Err` only when nothing could be done at all.
 pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Deps<'_>) -> Result<Finish, String> {
     // The identifier guard (`specs/119` §2 item 7): a question naming one of the workspace's privacy identifiers is planned without it,
@@ -1256,7 +1309,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     }
     // Coverage as the run ends, the pass's claims included: what the result and the record report, and what a later run continues from.
     let sub_report = subs_report(&st.subs, &coverage(&st.subs, &tagged(&st)));
-    let State { set, mut seen, mut claims, read, mut library_claims, mut cov, mut log, mut spent, retrieved, from_library, .. } = st;
+    let State { set, mut seen, mut claims, read, mut library_claims, mut cov, mut log, mut spent, retrieved, from_library, subs, found_again, .. } = st;
 
     // Citation chaining (`specs/101` §6): off unless the run was given an index. After the pass and before the validator, inside the same
     // step budget; it keeps leads and moves no claim.
@@ -1295,10 +1348,24 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     let mut once = BTreeSet::new();
     library_claims.retain(|id| once.insert(id.clone()));
     let claim_values: Vec<Value> = claims.iter().zip(&staged).map(|(c, id)| claim_json(c, c.contested, id.as_deref())).collect();
-    let answer = match deps.scout.answer(question, &claims).await {
-        Ok(a) => a.chars().take(7900).collect::<String>(),
-        Err(_) => String::new(),
-    };
+    // The written answer (`specs/114` §5). What it is written from: the run's kept claims by their library ids, the claims the
+    // library held that a page of the run stated again, and the claims known before the run. A claim the library kept no record
+    // of has no id to cite and is left out.
+    let mut given: Vec<AnswerClaim> = claims.iter().zip(&staged).filter_map(|(c, id)| Some(AnswerClaim { id: id.clone()?, text: assertion(&c.x), sub: c.sub, contested: c.contested, counter: c.counter, held: false, quote: Some(c.x.quote.clone()) })).collect();
+    for a in &found_again {
+        if !given.iter().any(|g| g.id == a.id) {
+            given.push(AnswerClaim { id: a.id.clone(), text: a.text.clone(), sub: a.sub, contested: false, counter: false, held: true, quote: None });
+        }
+    }
+    for k in &known.claims {
+        if !given.iter().any(|g| g.id == k.id) {
+            given.push(AnswerClaim { id: k.id.clone(), text: k.text.clone(), sub: 0, contested: k.status == "contested", counter: false, held: true, quote: None });
+        }
+    }
+    given.truncate(ANSWER_CLAIMS);
+    // The claims that disagree with each other, by the ids the answer cites them with.
+    let groups: Vec<Vec<String>> = conflicts.iter().map(|g| g.iter().filter_map(|id| claims.iter().position(|c| c.id == *id).and_then(|i| staged[i].clone())).filter(|id| given.iter().any(|c| c.id == *id)).collect::<Vec<_>>()).filter(|g: &Vec<String>| g.len() > 1).collect();
+    let (answer, synthesis) = write_the_answer(deps, question, &subs, &given, &groups).await;
     let mut source_ids: Vec<&String> = claims.iter().flat_map(|c| c.source_ids.iter()).collect();
     source_ids.sort();
     source_ids.dedup();
@@ -1319,7 +1386,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     let mut result = json!({
         "coverage": if thin { "thin" } else { "ok" }, "coverage_report": report,
         "corroboration_pass": {"claims": pass.0, "queries": pass.1},
-        "answer": if answer.is_empty() { "No claim could be drawn from the sources read. (not validated)".to_string() } else { format!("{} (not validated: model synthesis)", answer) },
+        "answer": answer, "synthesis": synthesis,
         "claims": claim_values, "citations": claims.iter().flat_map(|c| c.source_urls.iter().cloned()).collect::<BTreeSet<_>>(),
         "source_ids": source_ids, "kb_hits": set.kb_hits(), "new_claims": set.new_claims(), "contradictions": conflicts,
         "library_claims": library_claims,
@@ -1337,6 +1404,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
 mod tests {
     use super::*;
     use crate::research_jobs::{Jobs, State};
+    use crate::research_method::answer_contract;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -1405,6 +1473,11 @@ mod tests {
         plan_calls: Mutex<Vec<(String, Known)>>,
         /// The sub-questions each page-reading call was handed, by page address.
         tagging: Mutex<Vec<(String, Vec<usize>)>>,
+        /// What each answer call returns, in order; with none left the call fails. A text may name the claims it was given with
+        /// `{0}`, `{1}`, …, which are replaced by the ids of the claims handed to the call, in order.
+        answers: Mutex<std::collections::VecDeque<Result<String, String>>>,
+        /// Every answer call's input, as the contract the live scout would build from it, and whether it was the rewrite.
+        asks: Mutex<Vec<(String, bool)>>,
     }
 
     impl FakeScout {
@@ -1426,8 +1499,15 @@ mod tests {
                 Ok(self.0.get(&page.url).cloned().unwrap_or_default())
             })
         }
-        fn answer<'a>(&'a self, _q: &'a str, claims: &'a [ClaimRec]) -> BoxFut<'a, Result<String, String>> {
-            Box::pin(async move { Ok(format!("{} claims", claims.len())) })
+        fn write_answer<'a>(&'a self, ask: &'a AnswerAsk<'a>) -> BoxFut<'a, Result<String, String>> {
+            Box::pin(async move {
+                self.1.asks.lock().unwrap().push((answer_contract(ask), ask.fix.is_some()));
+                let mut text = self.1.answers.lock().unwrap().pop_front().unwrap_or_else(|| Err("the answer call failed".to_string()))?;
+                for (i, c) in ask.claims.iter().enumerate() {
+                    text = text.replace(&format!("{{{i}}}"), &c.id);
+                }
+                Ok(text)
+            })
         }
     }
 
@@ -1482,6 +1562,8 @@ mod tests {
         fresh: BTreeMap<String, (String, String)>,
         /// Hosts the validator's source lists class as primary.
         primary: BTreeSet<String>,
+        /// The library's page check rejects an answer that holds this word, with this finding.
+        rejects: Option<(&'static str, &'static str)>,
     }
     impl Library for FakeLib {
         /// As the live library does: a private source gives no seed, and neither does one that names no DOI.
@@ -1557,6 +1639,12 @@ mod tests {
         }
         fn is_primary(&self, url: &str) -> bool {
             self.primary.contains(&host(url))
+        }
+        fn check_answer(&self, answer: &str) -> Result<(), String> {
+            match self.rejects {
+                Some((word, finding)) if answer.contains(word) => Err(finding.to_string()),
+                _ => Ok(()),
+            }
         }
         fn kept(&self, source_id: &str) -> Option<(String, String)> {
             self.says_kept.then(|| (if source_id.ends_with("who.int") { "full" } else { "pointer" }.to_string(), "added".to_string()))
@@ -3251,6 +3339,173 @@ mod tests {
         let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
         assert!(told.contains(&"planned continued 3".to_string()), "{told:?}");
         assert_balanced(&v);
+    }
+
+    // ---- `specs/114` M5: the written answer ----
+
+    /// A claim with its own subject, so that it disagrees with no other, tagged to a sub-question, with words of its page.
+    fn about(subject: &str, object: &str, sub: usize) -> Extracted {
+        Extracted { subject: subject.into(), quote: format!("the page's own words about {subject}"), sub, ..x(object) }
+    }
+
+    /// `two_answerable_one_not`, with claims that do not disagree: two about the dose (sub-question 1, two origins), one about
+    /// children (sub-question 2, two origins), none for the third. The run hands the answer call three claims, in this order.
+    fn answerable() -> Fixture {
+        let mut f = two_answerable_one_not();
+        f.scout.0 = HashMap::from([
+            ("https://dose.example/a".to_string(), vec![about("a 500 mg dose of aspirin", "fever", 1)]),
+            ("https://dose-two.example/a".to_string(), vec![about("a 1000 mg dose of aspirin", "fever", 1)]),
+            ("https://kids.example/b".to_string(), vec![about("aspirin for children", "fever in children", 2)]),
+            ("https://kids-two.example/b".to_string(), vec![about("aspirin for children", "fever in children", 2)]),
+        ]);
+        f
+    }
+
+    /// An answer that passes the check for `answerable`: `{n}` is the id of the n-th claim the call was handed.
+    const ANSWER: &str = "Aspirin lowers a fever at ordinary doses, in adults and in children [{0}][{2}].\n\n## 1. What dose of aspirin lowers a fever?\n\nA dose of 500 mg lowers it [{0}], and so does a dose of 1000 mg [{1}].\n\n## 2. Is aspirin safe for children with a fever?\n\nIt lowers a fever in children [{2}].\n\n## 3. What are the risks of aspirin for a fever?\n\nNot found.";
+
+    fn answers(f: &Fixture, texts: &[Result<&str, &str>]) {
+        f.scout.1.answers.lock().unwrap().extend(texts.iter().map(|t| t.map(String::from).map_err(String::from)));
+    }
+
+    async fn run_deep_for_answer(f: &Fixture) -> Value {
+        value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap()).1
+    }
+
+    /// `specs/114` §5 items 1 and 3, §10: one call as the scout writes the answer from the sub-questions and the kept claims with
+    /// their ids. It is handed claims, not pages: no page text and no quote. The answer has a section per sub-question, `Not
+    /// found.` for the open one, a marker of a kept claim on every statement, and a last line that says what was done.
+    #[tokio::test]
+    async fn the_scout_writes_the_answer_from_the_claims_and_the_label_says_so() {
+        let f = answerable();
+        answers(&f, &[Ok(ANSWER)]);
+        let v = run_deep_for_answer(&f).await;
+        let answer = v["answer"].as_str().unwrap();
+        assert!(answer.ends_with("\n\nwritten by the scout from 3 claims, not validated"), "{answer}");
+        assert!(answer.contains("## 3. What are the risks of aspirin for a fever?\n\nNot found."), "{answer}");
+        assert_eq!(v["synthesis"], json!({"by": "scout", "claims": 3, "attempts": 1, "label": "written by the scout from 3 claims, not validated"}));
+        assert!(!answer.contains("model synthesis") && !answer.contains("list of claims"), "{answer}");
+        // Every marker in the answer names a claim the run kept.
+        let kept_ids: Vec<&str> = v["claims"].as_array().unwrap().iter().filter_map(|c| c["claim_id"].as_str()).collect();
+        let cited = crate::library::pages::markers(answer);
+        assert_eq!(cited.len(), 3, "{answer}");
+        assert!(cited.iter().all(|m| !m.source && kept_ids.contains(&m.id.as_str())), "{cited:?} against {kept_ids:?}");
+        // What the call was handed: the sub-questions and the claims with their ids, and nothing a page said in its own words.
+        let asks = f.scout.1.asks.lock().unwrap().clone();
+        assert_eq!(asks.len(), 1, "one answer call");
+        let (contract, rewrite) = &asks[0];
+        assert!(!rewrite);
+        for id in &kept_ids {
+            assert!(contract.contains(&format!("- [{id}] (sub-question ")), "{contract}");
+        }
+        assert!(contract.contains("3. What are the risks of aspirin for a fever? (no claim is tagged to it)"), "{contract}");
+        for text in f.web.pages.values() {
+            assert!(!contract.contains(text.as_str()), "page text reached the answer call: {text}");
+        }
+        assert!(!contract.contains("the page's own words"), "a quote reached the answer call: {contract}");
+        assert!(!contract.contains("https://"), "an address reached the answer call: {contract}");
+    }
+
+    /// AC-5: an answer with a marker for a claim the run does not hold is rejected by the check. It is written once more, with the
+    /// finding; an answer that passes then is used. One that fails again is not: the run returns the code-built list.
+    #[tokio::test]
+    async fn an_answer_with_a_marker_for_a_claim_the_run_does_not_hold_is_rejected_and_rewritten_once() {
+        let foreign = ANSWER.replace("lowers it [{0}]", "lowers it [c-ffffffffffff]");
+        let f = answerable();
+        answers(&f, &[Ok(&foreign), Ok(ANSWER)]);
+        let v = run_deep_for_answer(&f).await;
+        assert_eq!(v["synthesis"], json!({"by": "scout", "claims": 3, "attempts": 2, "label": "written by the scout from 3 claims, not validated"}), "{v}");
+        assert!(!v["answer"].as_str().unwrap().contains("c-ffffffffffff"), "the rejected answer is not what is returned");
+        let asks = f.scout.1.asks.lock().unwrap().clone();
+        assert_eq!(asks.iter().map(|a| a.1).collect::<Vec<_>>(), [false, true], "the second call is the rewrite");
+        assert!(asks[1].0.contains("the marker `[c-ffffffffffff]` names a claim this run does not hold"), "the rewrite is told why: {}", asks[1].0);
+
+        // Rejected twice: the list, with its own label. No third call is made, and nothing calls the list a synthesis.
+        let g = answerable();
+        answers(&g, &[Ok(&foreign), Ok(&foreign), Ok(ANSWER)]);
+        let w = run_deep_for_answer(&g).await;
+        let answer = w["answer"].as_str().unwrap();
+        assert!(answer.starts_with("What the sources read say, claim by claim (not validated):\n- a 500 mg dose of aspirin reduces fever (\"the page's own words about a 500 mg dose of aspirin\") [c-"), "{answer}");
+        assert!(answer.ends_with("\n\nlist of claims (no synthesis)"), "{answer}");
+        assert!(!answer.contains("model synthesis") && !answer.contains("written by the scout") && !answer.contains("c-ffffffffffff"), "{answer}");
+        assert_eq!(w["synthesis"], json!({"by": "list", "claims": 3, "attempts": 2, "rejected": ["1 finding(s)", "1 finding(s)"], "label": "list of claims (no synthesis)"}));
+        assert_eq!(g.scout.1.asks.lock().unwrap().len(), 2, "rewritten once, not twice");
+    }
+
+    /// AC-6: a run whose answer call fails returns the list labelled `list of claims (no synthesis)`.
+    #[tokio::test]
+    async fn a_run_whose_answer_call_fails_returns_the_list_labelled_as_a_list() {
+        let f = answerable();
+        answers(&f, &[Err("the model did not answer")]);
+        let v = run_deep_for_answer(&f).await;
+        let answer = v["answer"].as_str().unwrap();
+        assert!(answer.ends_with("\n\nlist of claims (no synthesis)") && answer.starts_with("What the sources read say, claim by claim (not validated):"), "{answer}");
+        assert_eq!(answer.lines().filter(|l| l.starts_with("- ")).count(), 3, "each kept claim is one line: {answer}");
+        assert_eq!(v["synthesis"], json!({"by": "list", "claims": 3, "attempts": 1, "rejected": [], "label": "list of claims (no synthesis)"}));
+        assert!(!answer.contains("model synthesis"));
+        // A scout that writes no answer at all (the default) gives the same list.
+        let g = Fixture::new(Verdict::Inconclusive);
+        let w = run_deep_for_answer(&g).await;
+        assert!(w["answer"].as_str().unwrap().ends_with("list of claims (no synthesis)") && w["synthesis"]["by"] == "list", "{w}");
+        // A run that kept no claim has nothing to write from: no call is made, and it says so.
+        let mut none = Fixture::new(Verdict::Inconclusive);
+        none.scout = FakeScout::of(HashMap::new());
+        answers(&none, &[Ok(ANSWER)]);
+        let n = run_deep_for_answer(&none).await;
+        assert_eq!((n["answer"].as_str(), n["synthesis"].clone()), (Some("No claim could be drawn from the sources read. (not validated)"), json!({"by": "none", "claims": 0, "attempts": 0})));
+        assert!(none.scout.1.asks.lock().unwrap().is_empty());
+    }
+
+    /// `specs/114` §5 item 2: the library's page check runs on an answer that passed the runner's own: a finding there (a quoted
+    /// phrase that is not in the cited source) sends the answer back once, as any other finding does.
+    #[tokio::test]
+    async fn the_librarys_page_check_runs_on_the_answer_and_a_finding_sends_it_back_once() {
+        let quoting = ANSWER.replace("It lowers a fever in children [{2}].", "The page says \"aspirin cures every fever overnight\" [{2}].");
+        let mut f = answerable();
+        f.lib.rejects = Some(("cures every fever overnight", "quotation not verbatim in any cited source: aspirin cures every fever overnight"));
+        answers(&f, &[Ok(&quoting), Ok(ANSWER)]);
+        let v = run_deep_for_answer(&f).await;
+        assert_eq!((v["synthesis"]["by"].as_str(), v["synthesis"]["attempts"].as_u64()), (Some("scout"), Some(2)), "{v}");
+        assert!(f.scout.1.asks.lock().unwrap()[1].0.contains("quotation not verbatim in any cited source"));
+        assert!(!v["answer"].as_str().unwrap().contains("cures every fever"));
+    }
+
+    /// `specs/114` §5 item 4: contested claims are stated as contested, with both sides. An answer that states one side as
+    /// settled is rejected; the call is told which claims disagree.
+    #[tokio::test]
+    async fn contested_claims_are_stated_as_contested_with_both_sides() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.scout.0.insert("https://blog.example/a".into(), vec![x("chills")]);
+        answers(&f, &[Ok("Aspirin reduces fever [{0}]."), Ok("Whether aspirin reduces fever is contested: two sources say it reduces fever [{0}], and one says it reduces chills instead [{1}].")]);
+        let v = run_deep_for_answer(&f).await;
+        assert_eq!(v["contradictions"].as_array().unwrap().len(), 1, "{v}");
+        assert_eq!((v["synthesis"]["by"].as_str(), v["synthesis"]["attempts"].as_u64(), v["synthesis"]["rejected"].clone()), (Some("scout"), Some(2), Value::Null), "{v}");
+        let answer = v["answer"].as_str().unwrap();
+        assert!(answer.contains("is contested") && crate::library::pages::markers(answer).len() == 2, "{answer}");
+        let asks = f.scout.1.asks.lock().unwrap().clone();
+        assert!(asks[0].0.contains("contested: disagrees with c-"), "the call is told which claims disagree: {}", asks[0].0);
+        assert!(asks[1].0.contains("without the other side") && asks[1].0.contains("not stated as contested"), "{}", asks[1].0);
+    }
+
+    /// `specs/114` §3 and §5: a run that kept no claim of its own still writes from what was known before it and from a claim the
+    /// library held that a page stated again; each is marked as held, and is cited by its library id.
+    #[tokio::test]
+    async fn the_answer_is_written_from_what_was_held_as_well() {
+        use crate::research_method::KnownClaim;
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.web.rows = vec![row("https://who.int/a")];
+        let held = claim_fingerprint("aspirin", "reduces", "fever", "adults", "");
+        f.lib.known.insert(held.clone());
+        f.known = Some(FakeKnown { found: Known { claims: vec![KnownClaim { id: "c-00000000aaaa".into(), status: "contested".into(), text: "ibuprofen reduces fever".into() }], ..Default::default() }, asked: Default::default() });
+        answers(&f, &[Ok("Aspirin reduces fever [{0}], and what is held on ibuprofen is contested [{1}].")]);
+        let v = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap()).1;
+        assert!(v["claims"].as_array().unwrap().is_empty(), "the run kept no claim of its own: {v}");
+        assert_eq!(v["synthesis"]["by"], "scout", "{v}");
+        let answer = v["answer"].as_str().unwrap();
+        assert!(answer.contains(&format!("[c-{}]", &held[..12])) && answer.contains("[c-00000000aaaa]") && answer.ends_with("written by the scout from 2 claims, not validated"), "{answer}");
+        let contract = f.scout.1.asks.lock().unwrap()[0].0.clone();
+        assert!(contract.contains(&format!("- [c-{}] (held before this run) aspirin reduces fever", &held[..12])), "{contract}");
+        assert!(contract.contains("- [c-00000000aaaa] (contested; held before this run) ibuprofen reduces fever"), "{contract}");
     }
 
     // ---- `specs/112` R6: a run that continues a topic ----

@@ -56,7 +56,7 @@
         "properties": {
           "run": { "$ref": "#/$defs/run_id" },
           "query": { "type": "string", "maxLength": 300, "description": "The text exactly as it was sent." },
-          "purpose": { "enum": ["trusted", "topic", "gap", "support", "contradiction", "chain", "host"], "description": "`host`: a search the host says it ran with its own tools (specs/113 section 2); `provider` is where, and `results` is null." },
+          "purpose": { "enum": ["trusted", "topic", "gap", "sub", "support", "contradiction", "chain", "host"], "description": "`sub`: a query for one sub-question of the plan (specs/114 section 4), in any round. `host`: a search the host says it ran with its own tools (specs/113 section 2); `provider` is where, and `results` is null." },
           "provider": { "type": ["string", "null"], "maxLength": 40, "description": "The provider that answered, when the transport said." },
           "results": { "type": ["integer", "null"], "minimum": 0, "description": "How many results came back; null when the query failed." },
           "failed": { "type": "string", "maxLength": 40, "description": "Present only on a query that failed: a fixed word, never provider text." }

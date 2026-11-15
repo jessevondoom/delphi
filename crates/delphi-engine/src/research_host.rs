@@ -10,7 +10,7 @@ use crate::engine::Engine;
 use crate::research::{clip, scout_ipr, words};
 use crate::research_jobs::JobCtx;
 use crate::research_observed::{Allowance, Observed, WiderFetch};
-use crate::research_method::{Known, SubQuestion};
+use crate::research_method::{AnswerAsk, Known, SubQuestion};
 use crate::research_run::{BoxFut, ClaimRec, Extracted, Library, Page, Scout, Validator, Verdict, Web};
 use delphi_adapter::research::search::{search, ProviderSpec, Row, SearchError};
 use delphi_adapter::research::transport::Transport;
@@ -26,6 +26,8 @@ use std::sync::Arc;
 const CLAIM_OUTPUT: u64 = 1500;
 /// The most the plan call may write: five sub-questions with two queries each (`specs/114` §4 item 1).
 const PLAN_OUTPUT: u64 = 900;
+/// The most the answer call may write (`specs/114` §5 item 1): the answer is cut to `research_method::ANSWER_CHARS` whatever comes back.
+const ANSWER_OUTPUT: u64 = 2600;
 
 /// Run a blocking call without stalling the daemon's other work.
 fn blocking<T>(f: impl FnOnce() -> T) -> T {
@@ -326,14 +328,18 @@ impl Scout for LiveScout {
         })
     }
 
-    /// The answer is built from the claims by code, so nothing a page said reaches the host except as a quoted, labelled claim.
-    fn answer<'a>(&'a self, _question: &'a str, claims: &'a [ClaimRec]) -> BoxFut<'a, Result<String, String>> {
+    /// The answer call (`specs/114` §5 item 1): one capped call as the scout with no tools, whose whole input is the role's ratified
+    /// text and `research_method::answer_contract`: the question, the sub-questions and the kept claims with their ids. It is given
+    /// claims, not pages: no page text and no quote is in an `AnswerAsk`'s contract. What it writes is a model's words made from
+    /// claims that came off the web; the runner checks it by code before it is used, and labels it not validated.
+    fn write_answer<'a>(&'a self, ask: &'a AnswerAsk<'a>) -> BoxFut<'a, Result<String, String>> {
         Box::pin(async move {
-            if claims.is_empty() {
-                return Ok(String::new());
-            }
-            let lines: Vec<String> = claims.iter().take(8).map(|c| format!("- {} {} {} (\"{}\")", c.x.subject, c.x.predicate, c.x.object, c.x.quote)).collect();
-            Ok(format!("Sources read say:\n{}", lines.join("\n")))
+            let e = &self.0;
+            let key = e.scout_key().ok_or_else(|| "no model is available for the scout right now".to_string())?;
+            let role = crate::role_call::load(e, crate::role_call::Step::WriteAnswer).await?;
+            let ipr = crate::research::scout_call(crate::research::WRITE_LINE, &role, crate::research_method::answer_contract(ask));
+            let raw = e.one_shot_raw(&key, &ipr, ANSWER_OUTPUT).await.ok_or_else(|| "the scout's answer call failed".to_string())?;
+            Ok(e.secrets.redact(&raw.text))
         })
     }
 }
@@ -606,6 +612,18 @@ impl Library for LiveLibrary {
         let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339())?;
         let (source_id, text) = crate::library::Library::in_home(&self.home).fresh_text_of_url(url, now)?;
         Some(crate::research_run::HeldPage { source_id, text })
+    }
+
+    /// The page check of `specs/097` on a written answer (`specs/114` §5 item 2), in the external scope, so a private record is
+    /// never citable: a marker that names no claim of the library, or one that may not be cited (disproved, retired, resting on a
+    /// private source), and a quoted phrase that is not in a cited source's kept text, each fail it. The unverified-figure flags
+    /// are flags, not failures, as they are for a page. The findings are the check's own fixed sentences.
+    fn check_answer(&self, answer: &str) -> Result<(), String> {
+        let checked = crate::library::Library::in_home(&self.home).check_body(answer, crate::library::pages::Scope::External);
+        if checked.findings.is_empty() {
+            return Ok(());
+        }
+        Err(checked.findings.iter().take(8).map(|f| f.to_string()).collect::<Vec<_>>().join("\n"))
     }
 
     /// A host the validator's source lists class as primary (`[validator.sources]`), for the order results are read in
@@ -1390,6 +1408,32 @@ mod tests {
         }
         let rec = ClaimRec { id: fp[..12].to_string(), group: "g".into(), fingerprint: fp, x: x.clone(), source_ids: vec![source_id], source_urls: vec![page.url.clone()], quotes: vec![x.quote.clone()], from_trusted: false, state, retrieved: "2026-11-14".into(), support: crate::corroboration::Support { origins: 7, trusted_sources: 7, ..Default::default() }, contested: false, sub: 0, counter: false };
         lib.stage_claim(&rec).unwrap()
+    }
+
+    /// `specs/114` §5 item 2 and AC-5, on the live library: the page check of `specs/097` is run on a written answer. A marker for
+    /// a claim the library holds passes; a marker that names no claim, a claim that rests on a private source, and a quoted phrase
+    /// that is not in the cited source each fail it, with the check's own sentence.
+    #[tokio::test]
+    async fn the_page_check_rejects_an_answer_that_cites_a_claim_the_library_does_not_hold_or_quotes_what_no_source_says() {
+        use delphi_core::research::ClaimState;
+        let home = tempfile::tempdir().unwrap();
+        let topic = crate::research_record::topic_id("does aspirin lower fever");
+        let id = run_keeps(home.path(), &topic, None, "https://m5-check.example/study", "The trial found aspirin lowers fever in adults.", &fever_claim(), ClaimState::Captured).await.expect("the run writes the claim");
+        let lib = LiveLibrary { home: home.path().to_path_buf(), ledger: home.path().join("ws/research/host-claims.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: None, topic: Some(topic), project: None, keep: Default::default() };
+        assert_eq!(lib.check_answer(&format!("Aspirin lowers a fever in adults [{id}].\n\n## 1. Does it?\n\nIt does [{id}].\n\n## 2. For children?\n\nNot found.")), Ok(()));
+        let unknown = lib.check_answer("Aspirin lowers a fever in adults [c-0123456789ab].").unwrap_err();
+        assert!(unknown.contains("`c-0123456789ab` names no source or claim in the library"), "{unknown}");
+        let quoted = lib.check_answer(&format!("The trial says \"aspirin cures every fever overnight\" [{id}].")).unwrap_err();
+        assert!(quoted.contains("quotation not verbatim in any cited source"), "{quoted}");
+        // A claim on a private source is never citable in an answer: the check runs in the external scope.
+        let l = crate::library::Library::in_home(home.path());
+        let source = l.claim(&id).unwrap()["anchors"][0]["source_id"].as_str().unwrap().to_string();
+        let meta_path = l.source_dir(&source).join("meta.json");
+        let mut meta: Value = serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+        meta["private"] = json!(true);
+        std::fs::write(&meta_path, meta.to_string()).unwrap();
+        let private = lib.check_answer(&format!("Aspirin lowers a fever in adults [{id}].")).unwrap_err();
+        assert!(private.contains("may not be cited") && private.contains("private source"), "{private}");
     }
 
     /// AC-4: two runs find the same claim on two origins. The library holds one claim with two anchors and both topics, not two.

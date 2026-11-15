@@ -795,7 +795,7 @@ pub fn tools() -> Value {
         {
             "name": "research_result",
             "title": "Read a research result",
-            "description": "The result of a research job this session raised: an answer (not validated), claims each with its knowledge_status, quote and source, contradictions, citations, what was already known and what is new, and who answered (signature). Pass wait: true to wait up to 25 seconds. When you use the result, say it came from Delphi research and carry the knowledge_status with it.",
+            "description": "The result of a research job this session raised: an answer (not validated), claims each with its knowledge_status, quote and source, contradictions, citations, what was already known and what is new, and who answered (signature). The answer's last line says what it is: `written by the scout from N claims, not validated` (Markdown with a [c-…] claim marker on every statement and `Not found.` where nothing answered a part), or `list of claims (no synthesis)`. known_before is what Delphi held before the run; sub_questions are the parts the scout broke the question into, each covered or not; stopped says why the run ended. Pass wait: true to wait up to 25 seconds. When you use the result, say it came from Delphi research and carry the knowledge_status with it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"research_id": {"type": "string", "minLength": 1, "maxLength": 64}, "wait": {"type": "boolean", "default": false}, "lines": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8, "description": "How many lines of the tail to return while it runs."}},

@@ -1094,7 +1094,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let t = Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-1")).unwrap();
         t.running("r-t-1").unwrap();
-        let answer = "Sources read say:\n- aspirin reduces fever (\"lowers fever in adults\")\n\n# not a heading of ours (not validated: model synthesis)";
+        let answer = "What the sources read say, claim by claim (not validated):\n- aspirin reduces fever (\"lowers fever in adults\")\n\n# not a heading of ours\n\nlist of claims (no synthesis)";
         let mut r = result(answer);
         t.finish("r-t-1", "partial", Some(&r), &["abc123abc123".to_string()], None, 1234).unwrap();
         let file = std::fs::read_to_string(t.answer_path()).unwrap();
