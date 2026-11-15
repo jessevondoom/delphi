@@ -79,9 +79,10 @@ pub fn absolute_command(exe: &Path, home: Option<&str>) -> Result<String, String
 /// The host's own documented command that installs the Delphi plugin, for hosts whose slice is built (spec 071 §5.4). Printed, never run.
 pub fn install_hint(host: &str) -> Option<&'static str> {
     match host {
-        "claude-code" => Some("# Or install the Delphi plugin (it runs `delphi` from your PATH):\n#   claude plugin marketplace add jessevondoom/delphi\n#   claude plugin install delphi@delphi\n# Remove it again: claude plugin uninstall delphi@delphi\n"),
-        "copilot" => Some("# Or install the Delphi plugin (it runs `delphi` from your PATH):\n#   copilot plugin marketplace add jessevondoom/delphi\n#   copilot plugin install delphi@delphi\n# Remove it again: copilot plugin uninstall delphi@delphi\n"),
-        "codex" => Some("# Or install the Delphi plugin (it runs `delphi` from your PATH):\n#   codex plugin marketplace add jessevondoom/delphi\n#   codex plugin add delphi@delphi\n# Remove it again: codex plugin remove delphi@delphi\n"),
+        "claude-code" => Some("# Or install the Delphi plugin (it runs ~/.local/bin/delphi; `delphi mcp --check claude-code` says whether that path is ready):\n#   claude plugin marketplace add jessevondoom/delphi\n#   claude plugin install delphi@delphi\n# Remove it again: claude plugin uninstall delphi@delphi\n"),
+        "copilot" => Some("# Or install the Delphi plugin (it runs ~/.local/bin/delphi; `delphi mcp --check copilot` says whether that path is ready):\n#   copilot plugin marketplace add jessevondoom/delphi\n#   copilot plugin install delphi@delphi\n# Remove it again: copilot plugin uninstall delphi@delphi\n"),
+        // Spec 074 §10.1 item 5(c): `${HOME}` in a plugin's command is not proven on Codex, so `delphi connect codex` comes first.
+        "codex" => Some("# Or run `delphi connect codex`, which writes an absolute path. The Delphi plugin also installs, but it runs\n# ${HOME}/.local/bin/delphi and Codex has not been shown to expand that:\n#   codex plugin marketplace add jessevondoom/delphi\n#   codex plugin add delphi@delphi\n# Remove it again: codex plugin remove delphi@delphi\n"),
         _ => None,
     }
 }
@@ -191,8 +192,12 @@ fn plugin_json(version: &str) -> String {
     format!("{{\n  \"name\": \"delphi\",\n  \"description\": \"Delphi's roles, skills, project specs and memory, over MCP\",\n  \"version\": \"{version}\"\n}}\n")
 }
 
+/// The command a host plugin launches (spec 074 §10.1): the stable path under the user's home, which the host expands. Proven on
+/// Claude Code and Copilot CLI; a pasted snippet (`--print-config`) keeps the bare `delphi` or, with `--absolute`, this binary's path.
+pub const PLUGIN_COMMAND: &str = "${HOME}/.local/bin/delphi";
+
 fn plugin_mcp_json() -> String {
-    format!("{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"command\": \"delphi\", \"args\": [\"mcp\"] }}\n  }}\n}}\n")
+    format!("{{\n  \"mcpServers\": {{\n    \"{SERVER}\": {{ \"command\": \"{PLUGIN_COMMAND}\", \"args\": [\"mcp\"] }}\n  }}\n}}\n")
 }
 
 // ---- Native role subagents (spec 086 §5.2, §6) ----
@@ -778,7 +783,9 @@ claude plugin install delphi@delphi
 ```
 
 The plugin declares the MCP server (`delphi mcp`), two skills (one that says when to consult Delphi, and `delphi-council`, which runs a Panel of your own subagents or a formal Council, spec 086) and four seat subagents (`delphi:architect`, `delphi:red-team`, `delphi:strategist`, `delphi:builder`; each a short wrapper that fetches its brief from Delphi), and a worker subagent for every role served to hosts (`delphi:<role>-worker`, spec 106: a wrapper that adopts the role with `get_agent` in its own context; only the builder's and the writer's inherit the session's tools, the others are read-only). It carries no binary: install `delphi` with
-`install.sh` or Homebrew first. The declaration runs `delphi` from the host's `PATH`; for an absolute path use `delphi mcp --print-config claude-code --absolute`.
+`install.sh` or Homebrew first. The declaration and the hooks run `~/.local/bin/delphi` (written `${HOME}/.local/bin/delphi`), not a `delphi` from the host's `PATH`
+(spec 074 §10.1). An `install.sh` install is that file. A Homebrew or custom-directory install needs a link there: `delphi connect claude-code` offers to make it,
+and `delphi mcp --check claude-code` prints the command (`launchable:`).
 Installing the plugin grants Delphi nothing: it is not an approval.
 
 It also declares four session hooks (`hooks/hooks.json`, spec 105 and spec 106 §11): at session start, at each prompt, at session end and when a subagent starts Claude Code runs

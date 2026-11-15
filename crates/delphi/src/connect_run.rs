@@ -173,6 +173,54 @@ pub fn addable(t: &Template, pre: &mcp_check::Check, home: &Path) -> bool {
     clean && marketplace_source(t.host, home).is_none() && installed_release(t.host, home).is_none() && !leftover(t.host, home)
 }
 
+/// Spec 074 §10.1 item 2: what a connect does about `~/.local/bin/delphi`, the path the plugin launches. Decided before the plan
+/// is shown, so the plan the operator confirms says it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Link {
+    /// Something is already there (the text is the `launchable` line); it is never replaced.
+    Present(String),
+    /// Nothing is there, and this binary sits at this stable install path: connect links it.
+    Make(PathBuf),
+    /// Nothing is there, and no stable install path holds this binary (a build tree, or an unusual location).
+    Unavailable,
+}
+
+pub fn link_for(home: &Path, install_dir: Option<&Path>, exe: &Path) -> Link {
+    if std::fs::symlink_metadata(home.join(mcp_check::STABLE_REL)).is_ok() {
+        return Link::Present(mcp_check::launchable(home, install_dir, exe).line());
+    }
+    mcp_check::stable_target(home, install_dir, exe).map_or(Link::Unavailable, Link::Make)
+}
+
+/// [`link_for`] for the running binary and `$DELPHI_INSTALL_DIR`.
+pub fn link_now(home: &Path) -> Link {
+    let install = std::env::var_os("DELPHI_INSTALL_DIR").map(PathBuf::from);
+    match std::env::current_exe() {
+        Ok(exe) => link_for(home, install.as_deref(), &exe),
+        Err(_) => Link::Unavailable,
+    }
+}
+
+/// The plan's line about the launch path.
+pub fn link_line(link: &Link, home: &Path) -> String {
+    let stable = sanitize(&home.join(mcp_check::STABLE_REL).display().to_string());
+    match link {
+        Link::Present(line) => format!("launch path: the plugin runs {stable}; launchable: {}; nothing there is changed\n", sanitize(line)),
+        Link::Make(t) => format!("launch path: the plugin runs {stable}, and nothing is there now; this would make it a link to {}\n", sanitize(&t.display().to_string())),
+        Link::Unavailable => format!("launch path: the plugin runs {stable}, and nothing is there now; no link is made, because this binary is not in a stable install location. The plugin will not start Delphi until that path exists (install with install.sh, or link your installed `delphi` there)\n"),
+    }
+}
+
+/// Make the link a confirmed plan named. Never replaces anything: if something appeared there since the plan, it fails.
+fn make_link(_proof: &ConsentProof, link: &Link, home: &Path) -> Result<(), String> {
+    use std::os::unix::fs::DirBuilderExt;
+    let Link::Make(target) = link else { return Ok(()) };
+    let stable = home.join(mcp_check::STABLE_REL);
+    let dir = stable.parent().ok_or_else(|| "the launch path has no parent".to_string())?;
+    std::fs::DirBuilder::new().recursive(true).mode(0o755).create(dir).map_err(|e| format!("{} could not be made: {e}", sanitize(&dir.display().to_string())))?;
+    std::os::unix::fs::symlink(target, &stable).map_err(|e| format!("the link at {} could not be made ({e}); nothing was run", sanitize(&stable.display().to_string())))
+}
+
 struct Run<'a> {
     exe: &'a HostExe,
     home: &'a Path,
@@ -271,11 +319,13 @@ pub fn read_record(delphi_home: &Path, host: &str) -> Result<Option<Value>, Stri
 }
 
 /// Add the marketplace and the plugin. The caller has already shown the plan and obtained `proof`.
-pub fn connect(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Path, release: &str) -> Result<String, Refusal> {
+pub fn connect(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, delphi_home: &Path, release: &str, link: &Link) -> Result<String, Refusal> {
     let pre = mcp_check::check_host(t.host, home, release).map_err(Refusal::Failed)?;
     if !addable(t, &pre, home) {
         return Err(Refusal::NotAllowed("something of Delphi's is already present, and connect only adds what is absent; see `delphi connect claude-code --status`".into()));
     }
+    // The link first: the plugin about to be installed launches it, and a failure here leaves the host untouched.
+    make_link(proof, link, home).map_err(Refusal::Failed)?;
     let tmp = run_dir(delphi_home).map_err(Refusal::Failed)?;
     let r = Run { exe, home, tmp: &tmp };
     let steps = connect_cmd::argv(&exe.canonical, &t.add);
@@ -445,7 +495,7 @@ mod tests {
             let t = tempfile::tempdir().unwrap();
             let (home, dh) = homes(&t);
             let exe = fake_host(&t, tm, "never-matches");
-            let out = connect(tm, &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap();
+            let out = connect(tm, &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION"), &Link::Present(String::new())).unwrap();
             assert!(out.starts_with("connected"), "{out}");
             assert_eq!(std::fs::read_to_string(home.join("argv.log")).unwrap(), "plugin marketplace add jessevondoom/delphi\nplugin install delphi@delphi\n");
             let env = std::fs::read_to_string(home.join("env.log")).unwrap();
@@ -456,7 +506,7 @@ mod tests {
             assert_eq!(std::fs::metadata(dh.join("operator/connections.json")).unwrap().mode() & 0o777, 0o600);
             assert_eq!(std::fs::metadata(dh.join("operator")).unwrap().mode() & 0o777, 0o700);
             assert!(std::fs::read_to_string(dh.join("operator/connect-audit.jsonl")).unwrap().contains("\"result\":\"configured\""));
-            assert!(connect(tm, &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap_err().message().contains("already present"));
+            assert!(connect(tm, &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION"), &Link::Present(String::new())).unwrap_err().message().contains("already present"));
 
             let out = remove(tm, &consent::for_test(), &exe, &home, &dh).unwrap();
             assert!(out.starts_with("removed"), "{out}");
@@ -474,7 +524,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let (home, dh) = homes(&t);
         let exe = fake_host(&t, claude(), "plugin install");
-        let e = connect(claude(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap_err();
+        let e = connect(claude(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION"), &Link::Present(String::new())).unwrap_err();
         assert!(matches!(e, Refusal::Partial(_)) && e.message().contains("marketplace remove delphi"));
         assert!(read_record(&dh, "claude-code").unwrap().is_none());
         assert!(removable(claude(), &home, &dh).is_err());
@@ -487,7 +537,7 @@ mod tests {
         let (home, dh) = homes(&t);
         let exe = fake_host(&t, claude(), "never-matches");
         std::fs::write(&exe.canonical, "#!/bin/sh\necho swapped > \"$HOME/swapped\"\n").unwrap();
-        let e = connect(claude(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap_err();
+        let e = connect(claude(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION"), &Link::Present(String::new())).unwrap_err();
         assert!(e.message().contains("changed after the plan"));
         assert!(!home.join("swapped").exists() && read_record(&dh, "claude-code").unwrap().is_none());
     }
@@ -497,7 +547,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let (home, dh) = homes(&t);
         let exe = fake_host(&t, claude(), "never-matches");
-        connect(claude(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap();
+        connect(claude(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION"), &Link::Present(String::new())).unwrap();
         std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"someone/else"}}}"#).unwrap();
         assert!(removable(claude(), &home, &dh).unwrap_err().contains("no longer matches"));
         std::fs::write(home.join(".claude/plugins/known_marketplaces.json"), r#"{"delphi":{"source":{"source":"github","repo":"jessevondoom/delphi"}}}"#).unwrap();
@@ -511,7 +561,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let (home, dh) = homes(&t);
         let exe = fake_host(&t, copilot(), "never-matches");
-        connect(copilot(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION")).unwrap();
+        connect(copilot(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION"), &Link::Present(String::new())).unwrap();
         assert!(removable(copilot(), &home, &dh).is_ok());
         std::fs::write(home.join(".copilot/installed-plugins/delphi/delphi/.mcp.json"), r#"{"edited":true}"#).unwrap();
         assert!(removable(copilot(), &home, &dh).unwrap_err().contains("not the copy connect recorded"));
@@ -521,8 +571,37 @@ mod tests {
         let exe2 = fake_host(&t2, copilot(), "never-matches");
         std::fs::create_dir_all(home2.join(".copilot/installed-plugins/delphi")).unwrap();
         std::fs::write(home2.join(".copilot/settings.json"), r#"{"enabledPlugins":{"delphi@delphi":false}}"#).unwrap();
-        let e = connect(copilot(), &consent::for_test(), &exe2, &home2, &dh2, env!("CARGO_PKG_VERSION")).unwrap_err();
+        let e = connect(copilot(), &consent::for_test(), &exe2, &home2, &dh2, env!("CARGO_PKG_VERSION"), &Link::Present(String::new())).unwrap_err();
         assert!(e.message().contains("already present") && !home2.join("argv.log").exists(), "a disabled or leftover install is not absent");
+    }
+
+    /// Spec 074 §10.1 item 2: the link is made before the host runs, only where nothing is, and a failure runs nothing.
+    #[test]
+    fn a_connect_makes_the_planned_link_first_and_never_replaces_what_is_there() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, dh) = homes(&t);
+        let exe = fake_host(&t, claude(), "never-matches");
+        let target = t.path().join("brew/bin/delphi");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "x").unwrap();
+        let stable = home.join(mcp_check::STABLE_REL);
+        connect(claude(), &consent::for_test(), &exe, &home, &dh, env!("CARGO_PKG_VERSION"), &Link::Make(target.clone())).unwrap();
+        assert_eq!(std::fs::read_link(&stable).unwrap(), target, "the link the plan named");
+        assert!(link_line(&Link::Make(target.clone()), &home).contains("this would make it a link to"));
+        assert!(matches!(link_for(&home, None, &target), Link::Present(_)), "once something is there, a later plan changes nothing");
+
+        // Something appeared there after the plan was shown: the link fails and the host is never run.
+        let t2 = tempfile::tempdir().unwrap();
+        let (home2, dh2) = homes(&t2);
+        let exe2 = fake_host(&t2, claude(), "never-matches");
+        std::fs::create_dir_all(home2.join(".local/bin")).unwrap();
+        std::fs::write(home2.join(mcp_check::STABLE_REL), "mine").unwrap();
+        let e = connect(claude(), &consent::for_test(), &exe2, &home2, &dh2, env!("CARGO_PKG_VERSION"), &Link::Make(target)).unwrap_err();
+        assert!(matches!(e, Refusal::Failed(_)) && e.message().contains("could not be made"), "{}", e.message());
+        assert_eq!(std::fs::read_to_string(home2.join(mcp_check::STABLE_REL)).unwrap(), "mine", "never replaced");
+        assert!(!home2.join("argv.log").exists(), "the host CLI was not run");
+        // With no stable install path there is nothing to link, and the plan says the plugin will not start.
+        assert!(link_line(&Link::Unavailable, &home2).contains("no link is made"));
     }
 
     #[test]

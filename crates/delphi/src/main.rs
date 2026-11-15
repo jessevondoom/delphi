@@ -796,6 +796,15 @@ pub(crate) fn launch_path_line(home: &std::path::Path) -> String {
     }
 }
 
+/// Spec 074 §10.1: whether a host plugin can launch Delphi, from `stat` only (the plugin launches `~/.local/bin/delphi`).
+pub(crate) fn launchable_now(home: &std::path::Path) -> delphi_engine::mcp_check::Launchable {
+    let install = std::env::var_os("DELPHI_INSTALL_DIR").map(std::path::PathBuf::from);
+    match std::env::current_exe() {
+        Ok(exe) => delphi_engine::mcp_check::launchable(home, install.as_deref(), &exe),
+        Err(_) => delphi_engine::mcp_check::Launchable { ok: false, detail: "this binary's path cannot be read".into() },
+    }
+}
+
 /// `delphi mcp`: Delphi for host agents on stdio (`specs/062`). A folder with no workspace still starts, with the defaults.
 fn cmd_mcp(args: &[String]) -> i32 {
     // Spec 105: a host's session hook. Exits 0 and prints nothing on any error (no message: stderr is the host's too).
@@ -828,7 +837,7 @@ fn cmd_mcp(args: &[String]) -> i32 {
         return match delphi_engine::mcp_check::check_host(host, std::path::Path::new(&home), env!("CARGO_PKG_VERSION")) {
             Ok(c) => {
                 println!("{host}: {}: {}", c.state.name(), c.detail);
-                println!("{host}: launchable: {}", delphi_engine::mcp_check::LAUNCHABLE);
+                println!("{host}: launchable: {}", connect_cmd::sanitize(&launchable_now(std::path::Path::new(&home)).line()));
                 println!("{host}: launch path: {}", launch_path_line(std::path::Path::new(&home)));
                 // Spec 110 §3 item 4: server, instruction section, role files and hooks, as `delphi connect` writes them.
                 if connect_files::handles(host) {

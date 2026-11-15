@@ -8,6 +8,10 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 
 ## Unreleased
 
+A durable install for host plugins (spec 074 §10, approved by the operator on 2026-11-14 on a summary, with no Council). What was run for real is in §10.5 of the spec.
+
+- **Changed: the plugin launches `~/.local/bin/delphi`, not a `delphi` from the host's `PATH`** (S1). The plugin's server and its four hooks name that path, so a host started without your shell environment finds Delphi; with `PATH=/usr/bin:/bin` the old declaration failed in Claude Code and this one connects (also run in Copilot CLI; not provable in Codex until its usage limit resets, so the Codex hint points at `delphi connect codex`). An `install.sh` install is that file. **A Homebrew or custom-directory install needs a link there**: `delphi connect <host>` shows the link in its plan and makes it when you confirm, and `delphi mcp --check <host>` prints the `ln -s` command. If you installed with Homebrew and already have the plugin, it stops starting Delphi after the host updates it until that link exists. `launchable:` in `--check`, `connect --status` and `doctor` is now `yes` or `no` with the reason, read from the filesystem, where it used to be a fixed `unknown`.
+
 ## 0.6.2 — 2026-11-14
 
 A summary by spec; the pull requests are listed on the releases page. What has and has not been run for real is said per item: most of the host work was checked live in Claude Code, Copilot CLI and Codex; Gemini CLI could not be signed in to, and Codex role files were not checked.

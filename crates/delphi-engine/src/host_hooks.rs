@@ -894,14 +894,24 @@ pub fn count_prompt(ws_dir: &Path, input: &Input, host: &str, cwd: &Path, root: 
 /// Claude Code's hook events and the `delphi mcp --hook` event each runs.
 pub const CLAUDE_EVENTS: [(&str, &str); 4] = [("SessionStart", "session-start"), ("UserPromptSubmit", "prompt"), ("SessionEnd", "session-end"), ("SubagentStart", "subagent-start")];
 
-/// `hooks/hooks.json` of the Claude Code plugin: each event runs `delphi mcp --hook <event> --host claude-code`, with the launch
-/// command the plugin's `.mcp.json` uses (bare `delphi`, from the host's PATH) until 071 E1s gives a stable path (A6). Generated
-/// and drift-tested with the rest of the plugin (`specs/071` §8).
+/// The program a hook runs: the stable path the plugin's `.mcp.json` launches (`specs/074` §10.1), written for the host's shell
+/// and quoted so a home directory with a space in it stays one word.
+pub const HOOK_PROGRAM: &str = "\"$HOME/.local/bin/delphi\"";
+
+/// The command line of one hook, as the shell sees it.
+pub fn claude_hook_command(ours: &str) -> String {
+    format!("{HOOK_PROGRAM} mcp --hook {ours} --host claude-code")
+}
+
+/// `hooks/hooks.json` of the Claude Code plugin: each event runs `delphi mcp --hook <event> --host claude-code` from the stable
+/// path, not from the host's PATH (A6; 071 E1s, built by `specs/074` §10.1). Generated and drift-tested with the rest of the
+/// plugin (`specs/071` §8).
 pub fn claude_hooks_json() -> String {
     let mut s = String::from("{\n  \"hooks\": {\n");
     for (i, (host_event, ours)) in CLAUDE_EVENTS.iter().enumerate() {
         let comma = if i + 1 < CLAUDE_EVENTS.len() { "," } else { "" };
-        s.push_str(&format!("    \"{host_event}\": [\n      {{ \"hooks\": [ {{ \"type\": \"command\", \"command\": \"delphi mcp --hook {ours} --host claude-code\" }} ] }}\n    ]{comma}\n"));
+        let command = serde_json::Value::String(claude_hook_command(ours));
+        s.push_str(&format!("    \"{host_event}\": [\n      {{ \"hooks\": [ {{ \"type\": \"command\", \"command\": {command} }} ] }}\n    ]{comma}\n"));
     }
     s.push_str("  }\n}\n");
     s
@@ -1401,7 +1411,7 @@ mod tests {
         let v: Value = serde_json::from_str(&claude_hooks_json()).unwrap();
         for (host_event, ours) in CLAUDE_EVENTS {
             let h = &v["hooks"][host_event][0]["hooks"][0];
-            assert_eq!((h["type"].as_str(), h["command"].as_str()), (Some("command"), Some(format!("delphi mcp --hook {ours} --host claude-code").as_str())));
+            assert_eq!((h["type"].as_str(), h["command"].as_str()), (Some("command"), Some(format!("\"$HOME/.local/bin/delphi\" mcp --hook {ours} --host claude-code").as_str())));
         }
         assert_eq!(v["hooks"].as_object().unwrap().len(), 4);
         assert!(v["hooks"]["SubagentStart"].is_array(), "spec 106 §11 G2");

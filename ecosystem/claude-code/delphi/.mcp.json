@@ -1,5 +1,5 @@
 {
   "mcpServers": {
-    "delphi": { "command": "delphi", "args": ["mcp"] }
+    "delphi": { "command": "${HOME}/.local/bin/delphi", "args": ["mcp"] }
   }
 }

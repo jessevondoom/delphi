@@ -48,8 +48,102 @@ pub struct Check {
     pub fix: Option<String>,
 }
 
-/// Launchability is never established here: it needs the stable executable path of spec 071 E1s, and is never read from this process's `PATH`.
-pub const LAUNCHABLE: &str = "unknown (the binary is not executed and the host's own PATH cannot be observed)";
+/// The one path a host plugin launches, under the user's home (spec 074 §10.1).
+pub const STABLE_REL: &str = ".local/bin/delphi";
+
+/// The machine-wide directories an install puts a stable `delphi` in (Homebrew on Apple silicon and on Intel).
+pub const MACHINE_DIRS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
+
+/// Whether a host plugin can launch Delphi (spec 074 §10.1 item 3): read from the filesystem, never by running the binary and
+/// never from a `PATH`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launchable {
+    pub ok: bool,
+    pub detail: String,
+}
+
+impl Launchable {
+    pub fn line(&self) -> String {
+        format!("{} ({})", if self.ok { "yes" } else { "no" }, self.detail)
+    }
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
+/// The stable install path that holds `exe`, for the link at `~/.local/bin/delphi` to point at: `install_dir`
+/// (`$DELPHI_INSTALL_DIR`) or a machine-wide directory, matched by identity. Never a build tree or a versioned Cellar path.
+pub fn stable_target(home: &Path, install_dir: Option<&Path>, exe: &Path) -> Option<std::path::PathBuf> {
+    stable_target_in(home, install_dir, &MACHINE_DIRS.map(std::path::PathBuf::from), exe)
+}
+
+fn stable_target_in(home: &Path, install_dir: Option<&Path>, machine_dirs: &[std::path::PathBuf], exe: &Path) -> Option<std::path::PathBuf> {
+    let dirs = install_dir.filter(|d| d.is_absolute()).map(Path::to_path_buf).into_iter().chain(machine_dirs.iter().cloned());
+    dirs.map(|d| d.join("delphi")).find(|cand| cand != &home.join(STABLE_REL) && same_file(cand, exe) && crate::mcp_hosts::absolute_command(cand, home.to_str()).is_ok())
+}
+
+/// A component of the resolved launch path that someone else could replace: owned by another user, or writable by group or
+/// others (a sticky directory such as `/tmp` is not counted: its entries cannot be replaced by others).
+fn caution(resolved: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid has no preconditions.
+    let me = unsafe { libc::geteuid() };
+    let mut cur = Some(resolved);
+    while let Some(p) = cur {
+        let m = std::fs::symlink_metadata(p).ok()?;
+        if m.uid() != me && m.uid() != 0 {
+            return Some(format!("{} is owned by another user", p.display()));
+        }
+        if m.mode() & 0o022 != 0 && m.mode() & 0o1000 == 0 {
+            return Some(format!("{} is writable by group or others", p.display()));
+        }
+        cur = p.parent().filter(|q| !q.as_os_str().is_empty());
+    }
+    None
+}
+
+/// [`Launchable`] for the plugin of this release, which launches `~/.local/bin/delphi`. `exe` is this binary, `install_dir` is
+/// `$DELPHI_INSTALL_DIR` if set.
+pub fn launchable(home: &Path, install_dir: Option<&Path>, exe: &Path) -> Launchable {
+    launchable_in(home, install_dir, &MACHINE_DIRS.map(std::path::PathBuf::from), exe)
+}
+
+fn launchable_in(home: &Path, install_dir: Option<&Path>, machine_dirs: &[std::path::PathBuf], exe: &Path) -> Launchable {
+    use std::os::unix::fs::MetadataExt;
+    let stable = home.join(STABLE_REL);
+    let no = |detail: String| Launchable { ok: false, detail };
+    let cure = || match stable_target_in(home, install_dir, machine_dirs, exe) {
+        Some(t) => format!(
+            "link it: `mkdir -p {} && ln -s {} {}` (or `delphi connect <host>`, which shows the link in its plan and asks first)",
+            stable.parent().unwrap_or(home).display(),
+            t.display(),
+            stable.display()
+        ),
+        None => "install Delphi with install.sh, or link your installed `delphi` there".to_string(),
+    };
+    let m = match std::fs::metadata(&stable) {
+        Ok(m) => m,
+        Err(_) if std::fs::symlink_metadata(&stable).is_ok() => return no(format!("{} is a link that does not resolve; remove it, then {}", stable.display(), cure())),
+        Err(_) => return no(format!("{} does not exist, and the plugin launches that path; {}", stable.display(), cure())),
+    };
+    if !m.is_file() || m.mode() & 0o111 == 0 {
+        return no(format!("{} is not an executable file", stable.display()));
+    }
+    let mut detail = if same_file(&stable, exe) {
+        format!("{} is this binary", stable.display())
+    } else {
+        format!("{} is a different `delphi` from the one running this check; the plugin runs that one", stable.display())
+    };
+    if let Some(c) = std::fs::canonicalize(&stable).ok().and_then(|r| caution(&r)) {
+        detail.push_str(&format!("; caution: {c}"));
+    }
+    Launchable { ok: true, detail }
+}
 
 const FIX_INSTALL: &str = "claude plugin marketplace add jessevondoom/delphi && claude plugin install delphi@delphi";
 
@@ -208,7 +302,7 @@ pub fn check_claude_adapter(home: &Path, expected_json: &str) -> Option<(bool, S
 /// Spec 074 L1: whether a stable install location holds this binary, from `stat` alone (nothing is executed). The directories are
 /// `install_dir` (`$DELPHI_INSTALL_DIR`, if set), `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. It says nothing about a host's own `PATH`.
 pub fn launch_path(home: &Path, install_dir: Option<&Path>, exe: &Path) -> String {
-    launch_path_in(home, install_dir, &["/opt/homebrew/bin".into(), "/usr/local/bin".into()], exe)
+    launch_path_in(home, install_dir, &MACHINE_DIRS.map(std::path::PathBuf::from), exe)
 }
 
 /// [`launch_path`] with the machine-wide install directories given, so a test can look only where it says: the real
@@ -224,7 +318,7 @@ fn launch_path_in(home: &Path, install_dir: Option<&Path>, machine_dirs: &[std::
         let cand = d.join("delphi");
         match std::fs::metadata(&cand) {
             Ok(m) if m.dev() == me.dev() && m.ino() == me.ino() => {
-                return format!("stable path {} is this binary; a host that cannot see your shell PATH can use `delphi mcp --print-config <host> --absolute`", cand.display());
+                return format!("stable path {} is this binary; a config you place by hand can name it with `delphi mcp --print-config <host> --absolute`", cand.display());
             }
             Ok(_) => other = true,
             Err(_) => {}
@@ -359,7 +453,81 @@ mod tests {
         let off = check_claude_code(fixture("0.5.3", r#"{"delphi@delphi":false}"#).path(), "0.5.3");
         assert_eq!((off.state, off.fix.as_deref()), (State::Missing, Some("claude plugin enable delphi@delphi")));
         assert_eq!(check_claude_code(fixture("0.5.3", "{}").path(), "0.5.3").state, State::Missing);
-        assert!(LAUNCHABLE.starts_with("unknown"));
+    }
+
+    /// Spec 074 §10.1 item 3: launchability is what `~/.local/bin/delphi` is, from `stat` alone.
+    #[test]
+    fn launchable_is_read_from_the_stable_path_and_names_the_cure() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(t.path()).unwrap();
+        let brew = home.join("brew/bin");
+        std::fs::create_dir_all(&brew).unwrap();
+        let exe = brew.join("delphi");
+        std::fs::write(&exe, "x").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let look = |exe: &Path| launchable_in(&home, None, std::slice::from_ref(&brew), exe);
+        let stable = home.join(STABLE_REL);
+
+        // Nothing there: no, and the cure links the stable install path that holds this binary.
+        let l = look(&exe);
+        assert!(!l.ok && l.detail.contains("does not exist") && l.detail.contains(&format!("ln -s {} {}", exe.display(), stable.display())), "{}", l.line());
+        assert!(l.line().starts_with("no ("));
+        // A binary that is in no stable location has no link to offer.
+        let stray = home.join("elsewhere");
+        std::fs::write(&stray, "y").unwrap();
+        assert!(look(&stray).detail.contains("install Delphi with install.sh"));
+
+        // A link to this binary: yes.
+        std::fs::create_dir_all(stable.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&exe, &stable).unwrap();
+        let l = look(&exe);
+        assert!(l.ok && l.detail.contains("is this binary"), "{}", l.line());
+        // The same path seen from another binary: yes, and it says which one a plugin runs.
+        assert!(look(&stray).detail.contains("a different `delphi`"));
+        // A parent that group or others can write earns a caution, not a refusal.
+        std::fs::set_permissions(&brew, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let l = look(&exe);
+        assert!(l.ok && l.detail.contains("caution") && l.detail.contains("writable by group or others"), "{}", l.line());
+        std::fs::set_permissions(&brew, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // A dangling link and a file that is not executable: no.
+        std::fs::remove_file(&stable).unwrap();
+        std::os::unix::fs::symlink(home.join("gone"), &stable).unwrap();
+        assert!(look(&exe).detail.contains("does not resolve"));
+        std::fs::remove_file(&stable).unwrap();
+        std::fs::write(&stable, "z").unwrap();
+        std::fs::set_permissions(&stable, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let l = look(&exe);
+        assert!(!l.ok && l.detail.contains("not an executable file"), "{}", l.line());
+        // The real file, as install.sh leaves it: yes.
+        std::fs::set_permissions(&stable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(look(&stable).ok);
+    }
+
+    /// The link's target is a stable install path only: never a build tree, a versioned Cellar path or the stable path itself.
+    #[test]
+    fn the_stable_target_is_an_install_path_that_holds_this_binary() {
+        let t = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(t.path()).unwrap();
+        let real = home.join("Cellar/delphi/1.0/bin/delphi");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "x").unwrap();
+        let brew = home.join("brew/bin");
+        std::fs::create_dir_all(&brew).unwrap();
+        assert_eq!(stable_target_in(&home, None, std::slice::from_ref(&brew), &real), None, "no stable location holds it");
+        std::os::unix::fs::symlink(&real, brew.join("delphi")).unwrap();
+        assert_eq!(stable_target_in(&home, None, std::slice::from_ref(&brew), &real), Some(brew.join("delphi")), "the unversioned link, not the Cellar file");
+        let cellar_dir = real.parent().unwrap().to_path_buf();
+        assert_eq!(stable_target_in(&home, None, &[cellar_dir], &real), None, "a versioned Cellar path is never a target");
+        let build = home.join("target/debug");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::hard_link(&real, build.join("delphi")).unwrap();
+        assert_eq!(stable_target_in(&home, Some(&build), &[], &real), None, "a build tree is never a target");
+        let custom = home.join("custom");
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::hard_link(&real, custom.join("delphi")).unwrap();
+        assert_eq!(stable_target_in(&home, Some(&custom), std::slice::from_ref(&brew), &real), Some(custom.join("delphi")), "$DELPHI_INSTALL_DIR comes first");
     }
 
     #[test]

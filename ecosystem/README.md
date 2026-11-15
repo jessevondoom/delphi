@@ -11,7 +11,9 @@ claude plugin install delphi@delphi
 ```
 
 The plugin declares the MCP server (`delphi mcp`), two skills (one that says when to consult Delphi, and `delphi-council`, which runs a Panel of your own subagents or a formal Council, spec 086) and four seat subagents (`delphi:architect`, `delphi:red-team`, `delphi:strategist`, `delphi:builder`; each a short wrapper that fetches its brief from Delphi), and a worker subagent for every role served to hosts (`delphi:<role>-worker`, spec 106: a wrapper that adopts the role with `get_agent` in its own context; only the builder's and the writer's inherit the session's tools, the others are read-only). It carries no binary: install `delphi` with
-`install.sh` or Homebrew first. The declaration runs `delphi` from the host's `PATH`; for an absolute path use `delphi mcp --print-config claude-code --absolute`.
+`install.sh` or Homebrew first. The declaration and the hooks run `~/.local/bin/delphi` (written `${HOME}/.local/bin/delphi`), not a `delphi` from the host's `PATH`
+(spec 074 §10.1). An `install.sh` install is that file. A Homebrew or custom-directory install needs a link there: `delphi connect claude-code` offers to make it,
+and `delphi mcp --check claude-code` prints the command (`launchable:`).
 Installing the plugin grants Delphi nothing: it is not an approval.
 
 It also declares four session hooks (`hooks/hooks.json`, spec 105 and spec 106 §11): at session start, at each prompt, at session end and when a subagent starts Claude Code runs

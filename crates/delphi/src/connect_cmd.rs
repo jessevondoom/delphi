@@ -153,7 +153,7 @@ pub fn argv(exe: &Path, steps: &[&[&str]; 2]) -> Vec<Vec<String>> {
 }
 
 /// The plan text: everything the operator would consent to. Dynamic values are sanitised.
-pub fn render_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, addable: bool) -> String {
+pub fn render_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, addable: bool, link: &connect_run::Link, home: &Path) -> String {
     let mut o = String::new();
     o.push_str(&format!("delphi connect {}: plan (nothing has been run or written)\n", t.host));
     o.push_str(&format!("host CLI: {} (resolves to {})\n", sanitize(&exe.listed.display().to_string()), sanitize(&exe.canonical.display().to_string())));
@@ -166,6 +166,7 @@ pub fn render_plan(t: &Template, exe: &HostExe, pre: &mcp_check::Check, addable:
     o.push_str("environment: only a fixed safe PATH, HOME, LANG and LC_*, TERM and a private TMPDIR; proxy, token, loader, Git, npm, Python, Ruby and XDG variables are dropped\n");
     o.push_str(&format!("source: {SOURCE}, a GitHub repository, fetched by {} at connect time; it then tracks Delphi's releases (no commit or version is pinned: spec 071 D-5(B))\n", t.exe));
     o.push_str(&format!("expected writes: {}\n", t.writes));
+    o.push_str(&connect_run::link_line(link, home));
     o.push_str("network: github.com, as the host decides\n");
     o.push_str(&format!("state found now: {}: {}\n", pre.state.name(), sanitize(&pre.detail)));
     if addable {
@@ -241,7 +242,7 @@ pub fn cmd(args: &[String]) -> i32 {
     };
     if status {
         println!("{}: {}: {}", t.host, pre.state.name(), sanitize(&pre.detail));
-        println!("{}: launchable: {}", t.host, mcp_check::LAUNCHABLE);
+        println!("{}: launchable: {}", t.host, sanitize(&crate::launchable_now(home).line()));
         println!("{}: launch path: {}", t.host, crate::launch_path_line(home));
         println!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| "nothing to do".into()));
         return 0;
@@ -253,6 +254,7 @@ pub fn cmd(args: &[String]) -> i32 {
         }
     }
     let addable = connect_run::addable(t, &pre, home);
+    let link = connect_run::link_now(home);
     let exe = match find_host(&search_dirs(t, home), t.exe) {
         Ok(exe) => exe,
         Err(e) => {
@@ -261,7 +263,7 @@ pub fn cmd(args: &[String]) -> i32 {
         }
     };
     if dry {
-        let plan = render_plan(t, &exe, &pre, addable);
+        let plan = render_plan(t, &exe, &pre, addable, &link, home);
         print!("{plan}");
         println!("confirmation that `delphi connect {}` will require for exactly this plan: {}", t.host, confirmation(t.host, &plan));
         return 0;
@@ -281,7 +283,7 @@ pub fn cmd(args: &[String]) -> i32 {
             eprintln!("next: {}", pre.fix.as_deref().map(sanitize).unwrap_or_else(|| format!("see `delphi connect {} --status`", t.host)));
             return 2;
         }
-        let plan = render_plan(t, &exe, &pre, true);
+        let plan = render_plan(t, &exe, &pre, true, &link, home);
         let expect = confirmation(t.host, &plan);
         (plan, expect)
     };
@@ -292,7 +294,7 @@ pub fn cmd(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let result = if remove { connect_run::remove(t, &proof, &exe, home, &delphi_home) } else { connect_run::connect(t, &proof, &exe, home, &delphi_home, release) };
+    let result = if remove { connect_run::remove(t, &proof, &exe, home, &delphi_home) } else { connect_run::connect(t, &proof, &exe, home, &delphi_home, release, &link) };
     match result {
         Ok(m) => {
             println!("{m}");
@@ -378,16 +380,21 @@ mod tests {
         exe_in(&t.path().join("x"), 0o755);
         let mut h = find_host_above(&[t.path().join("x")], "claude", Some(&root(&t))).unwrap();
         let pre = mcp_check::Check { state: mcp_check::State::Missing, detail: "not installed\nFORGED: yes".into(), fix: None };
-        let plan = render_plan(template("copilot").unwrap(), &h, &pre, true);
+        let none = connect_run::Link::Unavailable;
+        let plan = render_plan(template("copilot").unwrap(), &h, &pre, true, &none, t.path());
         assert!(plan.contains("plugin marketplace add jessevondoom/delphi") && plan.contains("plugin install delphi@delphi"));
+        assert!(plan.contains("launch path: the plugin runs") && plan.contains("no link is made"), "the plan says what happens to the launch path: {plan}");
+        let made = render_plan(template("copilot").unwrap(), &h, &pre, true, &connect_run::Link::Make("/opt/homebrew/bin/delphi".into()), t.path());
+        assert!(made.contains("this would make it a link to /opt/homebrew/bin/delphi"));
+        assert_ne!(confirmation("copilot", &made), confirmation("copilot", &plan), "the link is part of what is confirmed");
         assert!(plan.contains("not probed") && plan.contains("this would add"));
         assert!(!plan.contains("\nFORGED"), "a control character cannot start a new line");
         let c = confirmation("copilot", &plan);
         assert!(c.starts_with("CONNECT copilot ") && c.len() == "CONNECT copilot ".len() + 12);
         h.sha256 = "0".repeat(64);
-        assert_ne!(confirmation("copilot", &render_plan(template("copilot").unwrap(), &h, &pre, true)), c, "another plan needs another confirmation");
+        assert_ne!(confirmation("copilot", &render_plan(template("copilot").unwrap(), &h, &pre, true, &none, t.path())), c, "another plan needs another confirmation");
         let present = mcp_check::Check { state: mcp_check::State::Configured, detail: "x".into(), fix: None };
-        assert!(render_plan(template("copilot").unwrap(), &h, &present, false).contains("connect would refuse"));
+        assert!(render_plan(template("copilot").unwrap(), &h, &present, false, &none, t.path()).contains("connect would refuse"));
     }
 
     #[test]

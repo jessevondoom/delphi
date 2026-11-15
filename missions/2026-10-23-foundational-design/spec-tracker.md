@@ -591,7 +591,7 @@ Approved by the operator 2026-11-04 after three Council rounds (all three seats 
 | E1a | `delphi mcp --print-config <host> --absolute`, the Claude Code install hint, guide text | built (one branch with E1 and E1b; recorded host proofs Q-1/Q-3 not yet run) |
 | E1 | `delphi docs ecosystem --check/--write`, `ecosystem/claude-code/`, root marketplace manifest, release-tag update channel with protected tags (D-5B), drift tests, CODEOWNERS | built: generator, `ecosystem/claude-code/`, root marketplace, drift test, CODEOWNERS; no live `claude plugin install` proof yet |
 | E1b | `install.sh` and `delphi init` next-step hint (text only) | built |
-| E1s | stable executable path (spec-006 amendment first) | not started |
+| E1s | stable executable path (spec-006 amendment first) | built as spec 074 §10.1 (slice S1, 2026-11-14) |
 | E2 | `delphi mcp --check claude-code`, one `delphi doctor` line (check 15) | built; Q-8 answered and live-proven on Claude Code 2.1.314 (local-directory marketplace) |
 | E3 | installer and `delphi connect` | deferred to a Red-tier successor spec |
 | E4a | Copilot: proven live (Q-1); the Claude plugin installs unchanged, so hints and guide only | built (hint, guide and `--check`) |
@@ -612,7 +612,7 @@ Approved by the operator on 2026-11-04 after a three-seat Copilot Council, two r
 | C2 | exec path, Claude Code only, with `--remove` | built (this PR); GitHub-source proof recorded in spec 074 §8 |
 | C3 | Copilot | built (this PR); Council re-review and proof recorded in spec 074 §9 |
 | C3b | Codex | next; needs bound release identity (Council amendment) |
-| S1 | §10.1: the plugin launches `~/.local/bin/delphi`; `launchable` from the filesystem; the stable link (071 E1s) | approved 2026-11-14 (amendment §10, on a summary, no Council) |
+| S1 | §10.1: the plugin launches `~/.local/bin/delphi`; `launchable` from the filesystem; the stable link (071 E1s) | built; proven live on Claude Code 2.1.325 and Copilot CLI 1.0.111 (spec 074 §10.5); Codex unproven until its usage limit resets; hooks not run live under a reduced PATH |
 | U1 | §10.2: `delphi update` names a stale host plugin; `delphi connect <host> --update` | approved 2026-11-14 |
 | U2 | §10.3: the stale hint recorded as proven; the auto-update tip | approved 2026-11-14 |
 | R1 | §10.4: the `stable` release channel | approved 2026-11-14 |
