@@ -42,6 +42,20 @@ pub fn narrator_socket(home: &Path, workspace: &Path) -> Option<PathBuf> {
     Some(home.join("run").join(format!("{}.narrator.sock", &hash[..12])))
 }
 
+/// The app socket of a workspace (spec 120 §3 item 1), named as the daemon names it: `<home>/run/<h>.app.sock`, beside the
+/// narrator's and with the same `h`.
+pub fn app_socket(home: &Path, workspace: &Path) -> Option<PathBuf> {
+    let narrator = narrator_socket(home, workspace)?;
+    let name = narrator.file_name()?.to_str()?.strip_suffix(".narrator.sock")?.to_string();
+    Some(narrator.with_file_name(format!("{name}.app.sock")))
+}
+
+/// The app socket `delphi daemon where` named (`app_socket`), when it is an absolute path. A `delphi` from before spec 120
+/// names none, and the app then stays on the narrator socket.
+pub fn app_socket_in(info: &Value) -> Option<PathBuf> {
+    info["app_socket"].as_str().map(PathBuf::from).filter(|p| p.is_absolute())
+}
+
 /// What `delphi daemon where` printed, when it is a JSON object naming a narrator socket. The output is data: nothing in it is run.
 pub fn parse_where(stdout: &[u8]) -> Option<(Value, PathBuf)> {
     let v: Value = serde_json::from_slice(stdout).ok()?;
@@ -75,7 +89,8 @@ pub fn locate() -> Option<Located> {
     }
     let ws_dir = home.join("workspaces").join(&workspace);
     let narrator = narrator_socket(&home, &ws_dir)?;
-    Some(Located { info: json!({ "narrator_socket": narrator, "workspace": ws_dir, "workspace_name": workspace, "home": home, "roles": {} }), narrator })
+    let app = app_socket(&home, &ws_dir);
+    Some(Located { info: json!({ "narrator_socket": narrator, "app_socket": app, "workspace": ws_dir, "workspace_name": workspace, "home": home, "roles": {} }), narrator })
 }
 
 /// A document's place on disk: `rel` (a path the daemon gave, relative to the workspace) under `root`, only when it names a
@@ -165,6 +180,13 @@ mod tests {
         assert_eq!(sock.parent().unwrap(), t.path().join("run"));
         // A workspace that does not exist has no canonical path, so there is nothing to compute.
         assert!(narrator_socket(t.path(), &t.path().join("nope")).is_none());
+        // The app socket is beside it, with the same hash (spec 120 §3 item 1).
+        assert_eq!(app_socket(t.path(), &ws).unwrap(), t.path().join("run").join(format!("{}.app.sock", &hash[..12])));
+        assert!(app_socket(t.path(), &t.path().join("nope")).is_none());
+        // What `delphi daemon where` names is used only when it is an absolute path; an older `delphi` names none.
+        assert_eq!(app_socket_in(&json!({"app_socket": "/h/run/abc.app.sock"})), Some(PathBuf::from("/h/run/abc.app.sock")));
+        assert_eq!(app_socket_in(&json!({"app_socket": "run/abc.app.sock"})), None);
+        assert_eq!(app_socket_in(&json!({"narrator_socket": "/h/run/abc.narrator.sock"})), None);
     }
 
     #[test]

@@ -1,6 +1,13 @@
-//! The app's own client of the daemon's narrator socket (spec 111 §2, §3.2): newline-delimited JSON-RPC 2.0 over a Unix socket.
-//! It attaches with scope `narrator` and nothing else, and can send only the methods of [`Method`], so a method that acts cannot
-//! be named from here, let alone from the window.
+//! The app's own client of the daemon (spec 111 §2, §3.2): newline-delimited JSON-RPC 2.0 over a Unix socket. It can send
+//! only the methods of [`Method`], so a method that acts cannot be named from here, let alone from the window.
+//!
+//! It attaches in one of two ways, and each fixes what it attached as:
+//! * on the **narrator** socket, with the token that socket issues ([`Client::attach`]): scope `narrator` and nothing else;
+//! * on the **app** socket (spec 120 §3), with no token: the daemon sends a challenge and the app answers with a signature by
+//!   its paired key ([`Client::attach_app`]); or, once, with the ticket a terminal handed it ([`Client::pair`]).
+//!
+//! `auth.issue`, `hello`, `app.pair` and `app.hello` are sent by those functions only. They are how a connection begins, not
+//! methods the app can call, and [`Method`] does not grow by them.
 
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
@@ -76,6 +83,13 @@ impl Error {
     }
 }
 
+/// What the daemon sends first on its app socket: a nonce made for this connection, and the id of this daemon process.
+#[derive(Debug, Clone)]
+pub struct Challenge {
+    pub nonce: String,
+    pub instance: String,
+}
+
 pub struct Client {
     reader: BufReader<UnixStream>,
     writer: UnixStream,
@@ -106,6 +120,52 @@ impl Client {
             return Err(Error::Protocol("attached with a scope other than narrator; closing".into()));
         }
         Ok(c)
+    }
+
+    /// Connect to the app socket and read what the daemon sends first: its challenge (spec 120 §3 item 2). A daemon that
+    /// closes the connection instead (it does for a minute after five refusals) is `Error::Closed`.
+    pub fn knock(path: &Path) -> Result<(Client, Challenge), Error> {
+        let mut c = Client::connect(path).map_err(Error::Io)?;
+        c.set_read_timeout(Some(Duration::from_secs(10)));
+        let first = c.next_notification()?.ok_or_else(|| Error::Protocol("the daemon sent no challenge".into()))?;
+        if first["method"].as_str() != Some("app.challenge") {
+            return Err(Error::Protocol("the daemon's first word was not a challenge".into()));
+        }
+        let p = &first["params"];
+        if p["protocol_version"].as_u64() != Some(PROTOCOL_MAJOR) {
+            return Err(Error::Protocol("the daemon speaks another protocol version; update the app or Delphi".into()));
+        }
+        let text = |k: &str| p[k].as_str().map(String::from).ok_or_else(|| Error::Protocol("the daemon's challenge is incomplete".into()));
+        Ok((c, Challenge { nonce: text("nonce")?, instance: text("instance")? }))
+    }
+
+    /// `app.pair` (spec 120 §2 item 5): hand the daemon the ticket a terminal gave this app, and the public half of its key.
+    /// Returns the key's short name, which the terminal printed. The ticket is spent whatever the answer.
+    pub fn pair(&mut self, ticket: &str, public_key: &str, version: &str) -> Result<String, Error> {
+        let r = self.raw("app.pair", json!({ "ticket": ticket, "public_key": public_key, "app_version": version }))?;
+        let name = r["name"].as_str().unwrap_or("");
+        if !crate::key::is_name(name) {
+            return Err(Error::Protocol("the daemon did not name the key".into()));
+        }
+        Ok(name.to_string())
+    }
+
+    /// `app.hello` (spec 120 §3 item 2): answer the challenge with the key's name and its signature over this connection.
+    /// Returns the grants the key holds now. There is no token: the session lasts as long as the connection.
+    pub fn prove(&mut self, key: &crate::key::AppKey, challenge: &Challenge, socket: &Path, version: &str) -> Result<Vec<String>, Error> {
+        let signature = socket.to_str().and_then(|s| crate::key::sign_challenge(key.seed(), &challenge.nonce, &challenge.instance, PROTOCOL_MAJOR, s)).ok_or_else(|| Error::Protocol("what the daemon sent is not a challenge this app signs".into()))?;
+        let hello = self.raw("app.hello", json!({ "name": key.name, "signature": signature, "protocol_version": PROTOCOL_MAJOR, "binary_version": format!("delphi-app {version}") }))?;
+        if hello["scope"].as_str() != Some("app") || hello["name"].as_str() != Some(key.name.as_str()) {
+            return Err(Error::Protocol("attached as something other than this app's key; closing".into()));
+        }
+        Ok(hello["grants"].as_array().map(|g| g.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default())
+    }
+
+    /// Connect to the app socket and open a session with a paired key: the challenge, then the signature.
+    pub fn attach_app(path: &Path, version: &str, key: &crate::key::AppKey) -> Result<(Client, Vec<String>), Error> {
+        let (mut c, challenge) = Client::knock(path)?;
+        let grants = c.prove(key, &challenge, path, version)?;
+        Ok((c, grants))
     }
 
     pub fn set_read_timeout(&self, t: Option<Duration>) {
