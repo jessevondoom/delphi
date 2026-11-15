@@ -34,15 +34,15 @@ It is not signed. An app you build yourself opens normally. One copied from anot
 | Agents and skills | Each role's manifest and each skill |
 | Settings | The window's theme and menu; the daemon's approval mode and budget, to read |
 
-Role names and colours are the ones your `delphi` sends, so they follow your theme. A `delphi` older than this app's first release sends role ids as names.
+An agent is always written the same way: its chip, its name in bold in its colour, then its role in grey. Names and colours are the ones your `delphi` sends, so they follow your theme; a `delphi` older than this app sends role ids as names, and the role is then written once. Documents and replies are drawn as Markdown, with tables, task lists and pictures; a picture or a link to a deck opens outside the window.
 
 ## What it can and cannot reach
 
 - It attaches to the daemon's read-only socket (the narrator scope) and to no other.
-- It can call nine of the daemon's read methods, and five reads of the knowledge base through one of them. The list is fixed in the app and checked against the daemon's own allowlist by a test.
+- It can call nine of the daemon's read methods, and six reads of the knowledge base through one of them. The list is fixed in the app and checked against the daemon's own allowlist by a test.
 - It opens no network port and loads nothing from the network.
 - It writes nothing under your Delphi home or your projects. Its theme and menu choices are kept by the window.
-- Outside its window it does one thing: **Show in Finder** on a document, and only for a file inside the workspace.
+- Outside its window it does three things, each on your click: **Show in Finder**, **Open** a deck or page, a document, a picture or a recording in your browser or viewer (never a program or a script), and open a web link in your browser. A file must be inside the workspace or one of your registered projects.
 
 ## Looking at it without the app
 

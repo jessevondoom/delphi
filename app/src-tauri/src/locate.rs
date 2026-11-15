@@ -90,9 +90,53 @@ pub fn inside(root: &Path, rel: &str) -> Option<PathBuf> {
     (full.starts_with(&root) && full.is_file()).then_some(full)
 }
 
+/// The kinds of file the app will hand to the system to open (spec 111 §2.6): a page or a deck, a document to read, a picture,
+/// a recording. Never a program, a script or an archive.
+pub const OPENABLE: [&str; 18] = ["html", "htm", "pdf", "png", "jpg", "jpeg", "gif", "webp", "svg", "mp4", "mov", "m4v", "webm", "mp3", "wav", "m4a", "md", "txt"];
+
+pub fn openable(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).is_some_and(|e| OPENABLE.contains(&e.as_str()))
+}
+
+/// The folders a path the daemon or an agent named may be looked for in: the workspace, then each registered project's root
+/// (`projects` in what `delphi daemon where` printed). Only absolute folders that exist.
+pub fn roots(info: &Value) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = info["workspace"].as_str().map(PathBuf::from).into_iter().collect();
+    out.extend(info["projects"].as_array().into_iter().flatten().filter_map(|p| p["root"].as_str().map(PathBuf::from)));
+    out.retain(|p| p.is_absolute() && p.is_dir());
+    out.dedup();
+    out
+}
+
+/// The first of `roots` that holds `rel` as a file inside it.
+pub fn find(roots: &[PathBuf], rel: &str) -> Option<PathBuf> {
+    roots.iter().find_map(|r| inside(r, rel))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_file_is_looked_for_in_the_workspace_then_in_registered_projects_and_only_some_kinds_open() {
+        let t = tempfile::tempdir().unwrap();
+        let (ws, proj) = (t.path().join("ws"), t.path().join("proj"));
+        std::fs::create_dir_all(ws.join("missions")).unwrap();
+        std::fs::create_dir_all(proj.join("decks")).unwrap();
+        std::fs::write(ws.join("missions/report.md"), "x").unwrap();
+        std::fs::write(proj.join("decks/pitch.html"), "x").unwrap();
+        std::fs::write(proj.join("run.sh"), "x").unwrap();
+        let info = json!({"workspace": ws, "projects": [{"name": "default", "root": ws, "home": true}, {"name": "p", "root": proj, "home": false}, {"name": "gone", "root": t.path().join("nope")}, {"name": "rel", "root": "relative"}]});
+        let roots = roots(&info);
+        assert_eq!(roots.len(), 2, "{roots:?}");
+        assert!(find(&roots, "missions/report.md").unwrap().starts_with(std::fs::canonicalize(&ws).unwrap()));
+        assert!(find(&roots, "decks/pitch.html").unwrap().ends_with("decks/pitch.html"));
+        assert!(find(&roots, "../proj/run.sh").is_none());
+        assert!(find(&roots, "decks/none.html").is_none());
+        for (name, yes) in [("a.html", true), ("a.HTM", true), ("a.pdf", true), ("a.PNG", true), ("a.mp4", true), ("a.m4a", true), ("a.md", true), ("a.sh", false), ("a.app", false), ("a.command", false), ("a.zip", false), ("a.py", false), ("a", false), ("a.html.sh", false)] {
+            assert_eq!(openable(Path::new(name)), yes, "{name}");
+        }
+    }
 
     #[test]
     fn only_a_file_inside_the_workspace_can_be_shown() {

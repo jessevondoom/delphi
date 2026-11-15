@@ -13,6 +13,8 @@ export function appBridge(): Bridge {
     session: () => invoke<Record<string, unknown>>('session'),
     kb: (target: string) => invoke<KbReply>('kb', { target }),
     reveal: (path: string) => invoke<void>('reveal', { path }),
+    open: (path: string) => invoke<void>('open_file', { path }),
+    openUrl: (url: string) => invoke<void>('open_url', { url }),
     subscribe(l: Listener) {
       const offs = [
         listen<Envelope[]>('delphi://events', (m) => m.payload.forEach((e) => l.event(e))),

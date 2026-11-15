@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MARK_ROLES, colorOf } from './avatar.ts';
+import { MARK_ROLES, fillOf } from './avatar.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { load, save, type Prefs, type Screen } from './prefs.ts';
 import { Activity } from './screens/Activity.tsx';
@@ -97,7 +97,7 @@ export function App() {
           <svg aria-hidden="true" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3 5h14M3 10h14M3 15h14" /></svg>
         </button>
         <span className="brand">
-          <span className="mark" role="img" aria-label="Delphi">{MARK_ROLES.map((r) => <span key={r} style={{ background: colorOf(info, r, light) }} />)}</span>
+          <span className="mark" role="img" aria-label="Delphi">{MARK_ROLES.map((r) => <span key={r} style={{ background: fillOf(info, r, light) }} />)}</span>
           delphi
         </span>
         <span className="where">{[info?.workspace_name && `${info.workspace_name} workspace`, info?.version && `delphi ${info.version}`].filter(Boolean).join(' · ')}</span>
@@ -135,7 +135,7 @@ export function App() {
             <div className="empty">{conn.detail}. Start Delphi in a terminal with <span className="mono">delphi chat</span>, and this window attaches by itself. It only reads; it never starts or stops anything.</div>
           </main>
         ) : prefs.screen === 'activity' ? (
-          <Activity info={info} state={state} events={events} light={light} />
+          <Activity bridge={bridge} info={info} state={state} events={events} light={light} />
         ) : prefs.screen === 'council' ? (
           <Council key={council} info={info} state={state} events={events} light={light} pick={council} />
         ) : prefs.screen === 'knowledge' ? (

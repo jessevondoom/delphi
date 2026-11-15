@@ -34,61 +34,61 @@
     },
     {
       "level": 2,
-      "line": 59,
+      "line": 63,
       "number": "3",
       "title": "How it is put together"
     },
     {
       "level": 3,
-      "line": 61,
+      "line": 65,
       "number": "3.1",
       "title": "Where it lives"
     },
     {
       "level": 3,
-      "line": 65,
+      "line": 69,
       "number": "3.2",
       "title": "The bridge"
     },
     {
       "level": 3,
-      "line": 74,
+      "line": 78,
       "number": "3.3",
       "title": "The window"
     },
     {
       "level": 2,
-      "line": 80,
+      "line": 84,
       "number": "4",
       "title": "What it looks like"
     },
     {
       "level": 2,
-      "line": 91,
+      "line": 95,
       "number": "5",
       "title": "Screens"
     },
     {
       "level": 2,
-      "line": 101,
+      "line": 105,
       "number": "6",
       "title": "Slices (one per commit, built locally)"
     },
     {
       "level": 2,
-      "line": 122,
+      "line": 126,
       "number": "7",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 129,
+      "line": 133,
       "number": "8",
       "title": "Found while building"
     },
     {
       "level": 2,
-      "line": 141,
+      "line": 145,
       "number": "9",
       "title": "Not verified"
     }
@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md",
-    "sha256": "ca266a6c5cecaf27fb09fe10abce12a68281036c034f26b73909d48add290032"
+    "sha256": "6d17c31fd37b8ad4d8b3acaf5d6ec1504fb699bf7b5316cbe4620c9c5c18ed4d"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: asked whether a spec could be written and built from on the plan, as specs 104 to 110 were, the operator answered \"your default assumptions all sounds correct. go\". The approval is to the plan this spec carries out; the operator has not read this text."
     },
-    "sha256": "ca266a6c5cecaf27fb09fe10abce12a68281036c034f26b73909d48add290032",
+    "sha256": "6d17c31fd37b8ad4d8b3acaf5d6ec1504fb699bf7b5316cbe4620c9c5c18ed4d",
     "word": "approved"
   },
   "spec": {

@@ -29,9 +29,9 @@ pub trait Sink: Send + Sync + 'static {
     fn resync(&self);
 }
 
-/// The knowledge base reads the window may ask for through `kb.get` (spec 111 §2.2): search, listings and one document.
-/// Everything else the daemon's retrieval service offers under `/v1/` is left out, images included.
-pub const KB_READS: [&str; 5] = ["/v1/search", "/v1/documents", "/v1/doc", "/v1/kinds", "/v1/collections"];
+/// The knowledge base reads the window may ask for through `kb.get` (spec 111 §2.2): search, listings, one document, and a
+/// picture beside a document (the daemon decodes it and sends pixels, never the file). Everything else under `/v1/` is left out.
+pub const KB_READS: [&str; 6] = ["/v1/search", "/v1/documents", "/v1/doc", "/v1/image", "/v1/kinds", "/v1/collections"];
 
 /// Whether `target` is one of [`KB_READS`], with or without a query, and short enough for the daemon to take.
 pub fn kb_target_ok(target: &str) -> bool {
@@ -366,10 +366,10 @@ mod tests {
 
     #[test]
     fn only_the_listed_knowledge_base_reads_pass() {
-        for ok in ["/v1/search?q=narrator+socket&limit=20&facets=1", "/v1/documents?limit=50", "/v1/doc?path=SPEC.md", "/v1/kinds", "/v1/collections"] {
+        for ok in ["/v1/search?q=narrator+socket&limit=20&facets=1", "/v1/documents?limit=50", "/v1/doc?path=SPEC.md", "/v1/image?path=a.md&src=img/x.png", "/v1/kinds", "/v1/collections"] {
             assert!(kb_target_ok(ok), "{ok}");
         }
-        for bad in ["/v1/image?path=x.png", "/v1/health", "/v2/search?q=x", "/v1/searching", "/v1/doc/../x", "v1/doc?path=x", "/v1/doc?path=x\n/v1/health", "/v1/doc?path=x#frag", ""] {
+        for bad in ["/v1/images?path=x.png", "/v1/health", "/v2/search?q=x", "/v1/searching", "/v1/doc/../x", "v1/doc?path=x", "/v1/doc?path=x\n/v1/health", "/v1/doc?path=x#frag", ""] {
             assert!(!kb_target_ok(bad), "{bad}");
         }
         assert!(!kb_target_ok(&format!("/v1/search?q={}", "x".repeat(2100))));

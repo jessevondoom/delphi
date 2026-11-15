@@ -14,10 +14,14 @@ export interface Bridge {
   snapshot(): Promise<Envelope[]>;
   /** `session.snapshot`: the daemon's mode, budget and which agents are on. */
   session(): Promise<Record<string, unknown>>;
-  /** One knowledge base read: `/v1/search`, `/v1/documents`, `/v1/doc`, `/v1/kinds` or `/v1/collections`, with its query. */
+  /** One knowledge base read: `/v1/search`, `/v1/documents`, `/v1/doc`, `/v1/image`, `/v1/kinds` or `/v1/collections`, with its query. */
   kb(target: string): Promise<KbReply>;
   /** Show a workspace document in the Finder. Only the app has it; a browser has no Finder to show. */
   reveal?(path: string): Promise<void>;
+  /** Open a deck, a page, a picture or a recording of the workspace or a registered project in the system's browser or viewer. */
+  open?(path: string): Promise<void>;
+  /** Open an `http` or `https` address in the system's browser. */
+  openUrl?(url: string): Promise<void>;
   subscribe(l: Listener): () => void;
 }
 /** What the daemon's retrieval service answered: its status and its body. */
@@ -40,6 +44,7 @@ async function fixtureKb(target: string): Promise<KbReply> {
   if (path === '/v1/documents') return { status: 200, body: kb.documents };
   if (path === '/v1/kinds') return { status: 200, body: kb.kinds };
   if (path === '/v1/collections') return { status: 200, body: kb.collections };
+  if (path === '/v1/image') return { status: 404, body: { error: 'the fixture holds no pictures' } };
   if (path === '/v1/doc') { const doc = kb.docs[new URLSearchParams(query).get('path') ?? '']; return doc ? { status: 200, body: doc } : { status: 404, body: { error: 'no such document' } }; }
   return { status: 404, body: { error: 'not a read the fixture knows' } };
 }
@@ -63,6 +68,8 @@ export async function fixtureBridge(): Promise<Bridge> {
     snapshot: async () => sim.events,
     session: async () => ({ mission_id: sim.state.mission_id, mode: 'default', budget: { cap_usd: 25, spent_usd: 3.4, reserved_usd: 0.5, available_usd: 21.1 }, solo_mode: false, running_tasks: [{}], pending_approvals: [{}], interactive_agents: ['orchestrator'], forbidden_agents: [] }),
     kb: fixtureKb,
+    // A browser has no Finder; an address opens in a tab of its own.
+    openUrl: async (url: string) => { if (/^https?:\/\//i.test(url)) globalThis.open?.(url, '_blank', 'noopener'); },
     subscribe(l) {
       l.conn({ connected: true, detail: 'sample data, no daemon' });
       return () => {};

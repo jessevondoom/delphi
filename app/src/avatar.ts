@@ -10,11 +10,28 @@ const FALLBACK = { dark: '#94a3b8', light: '#475569' };
 
 export const spec = (info: Info | null): AvatarSpec => info?.avatar ?? BUILT_IN;
 
-/** A role's colour on a dark or light window. A role the library does not know (a bundle's own) gets the neutral pair. */
+/**
+ * A role's two light colours (spec 111 §4). A `delphi` that predates the fill sends an older, darker light colour and no fill;
+ * for a role the built-in table knows, its pair is used then, so a name and a chip are never drawn from two different sets.
+ */
+function lightPair(info: Info | null, role: string): { text: string; fill: string } | null {
+  const sent = spec(info).roles[role];
+  const r = sent?.chassis_light_fill ? sent : BUILT_IN.roles[role] ?? sent;
+  if (!r) return null;
+  const text = r.chassis_light ?? r.chassis;
+  return { text, fill: r.chassis_light_fill ?? text };
+}
+
+/** The colour a role's name is written in. A role the library does not know (a bundle's own) gets the neutral pair. */
 export function colorOf(info: Info | null, role: string, light: boolean): string {
-  const r = spec(info).roles[role];
-  if (!r) return light ? FALLBACK.light : info?.roles[role]?.chassis ?? FALLBACK.dark;
-  return light ? r.chassis_light ?? r.chassis : r.chassis;
+  if (light) return lightPair(info, role)?.text ?? FALLBACK.light;
+  return spec(info).roles[role]?.chassis ?? info?.roles[role]?.chassis ?? FALLBACK.dark;
+}
+
+/** The colour of a role's chip, bar or tint: its colour on dark, its brighter fill on light. */
+export function fillOf(info: Info | null, role: string, light: boolean): string {
+  if (light) return lightPair(info, role)?.fill ?? FALLBACK.light;
+  return colorOf(info, role, false);
 }
 
 /** The name to show: what the CLI sent, else the role's id. */

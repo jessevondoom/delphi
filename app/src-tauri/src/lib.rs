@@ -68,22 +68,54 @@ fn kb(bridge: State<'_, Arc<Bridge>>, target: String) -> Result<Value, String> {
     bridge.call(Method::KbGet, json!({ "target": target }))
 }
 
-/// Show a workspace document in the Finder (spec 111 §2.6). The path is one the daemon listed, relative to the workspace; it is
-/// shown only when it is a file inside the workspace, and it is revealed, never opened or run.
+fn handed_over(done: std::io::Result<std::process::ExitStatus>, what: &str) -> Result<(), String> {
+    match done {
+        Ok(s) if s.success() => Ok(()),
+        _ => Err(format!("{what} could not be opened")),
+    }
+}
+
+fn system_open(target: &std::ffi::OsStr) -> std::io::Result<std::process::ExitStatus> {
+    std::process::Command::new(if cfg!(target_os = "macos") { "/usr/bin/open" } else { "xdg-open" }).arg(target).status()
+}
+
+/// Show a file in the Finder (spec 111 §2.6). The path is one the daemon listed or an agent named; it is shown only when it
+/// is a file inside the workspace or a registered project once links are followed, and it is revealed, never opened or run.
 #[tauri::command(async)]
 fn reveal(bridge: State<'_, Arc<Bridge>>, path: String) -> Result<(), String> {
-    let workspace = bridge.info()["workspace"].as_str().map(std::path::PathBuf::from).ok_or("the workspace is not known yet")?;
-    let file = locate::inside(&workspace, &path).ok_or("that is not a file in the workspace")?;
-    let shown = if cfg!(target_os = "macos") {
-        std::process::Command::new("/usr/bin/open").arg("-R").arg(&file).status()
+    let file = locate::find(&locate::roots(&bridge.info()), &path).ok_or("that is not a file in the workspace or a registered project")?;
+    if cfg!(target_os = "macos") {
+        handed_over(std::process::Command::new("/usr/bin/open").arg("-R").arg(&file).status(), "the file")
     } else {
         // Elsewhere: the folder that holds it.
-        std::process::Command::new("xdg-open").arg(file.parent().unwrap_or(&file)).status()
-    };
-    match shown {
-        Ok(s) if s.success() => Ok(()),
-        _ => Err("the file could not be shown".into()),
+        handed_over(system_open(file.parent().unwrap_or(&file).as_os_str()), "the folder")
     }
+}
+
+/// Open a deck, a page, a document, a picture or a recording in the system's browser or viewer (spec 111 §2.6). The same
+/// confinement as `reveal`, and only for the kinds in `locate::OPENABLE`: never a program, a script or an archive.
+#[tauri::command(async)]
+fn open_file(bridge: State<'_, Arc<Bridge>>, path: String) -> Result<(), String> {
+    let file = locate::find(&locate::roots(&bridge.info()), &path).ok_or("that is not a file in the workspace or a registered project")?;
+    if !locate::openable(&file) {
+        return Err("the app does not open that kind of file; show it in the Finder instead".into());
+    }
+    handed_over(system_open(file.as_os_str()), "the file")
+}
+
+/// Open a web address in the system's browser. Only `http` and `https`, and nothing that could be read as an option or a path.
+#[tauri::command(async)]
+fn open_url(url: String) -> Result<(), String> {
+    if !web_address(&url) {
+        return Err("only http and https addresses are opened".into());
+    }
+    handed_over(system_open(std::ffi::OsStr::new(&url)), "the address")
+}
+
+/// `http://` or `https://` followed by a host, with no space, control character or quote anywhere.
+pub fn web_address(url: &str) -> bool {
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"));
+    url.len() <= 2048 && rest.is_some_and(|r| r.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())) && !url.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '`' | '\\' | '<' | '>'))
 }
 
 pub fn run() {
@@ -95,7 +127,22 @@ pub fn run() {
             std::thread::spawn(move || bridge.run(sink));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, kb, reveal])
+        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, kb, reveal, open_file, open_url])
         .run(tauri::generate_context!())
         .expect("the Delphi window could not start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::web_address;
+
+    #[test]
+    fn only_a_plain_web_address_is_handed_to_the_browser() {
+        for ok in ["https://example.com", "http://example.com/a/b?c=d#e", "https://127.0.0.1:8080/x"] {
+            assert!(web_address(ok), "{ok}");
+        }
+        for bad in ["file:///etc/hosts", "javascript:alert(1)", "https://", "https:// example.com", "-a https://example.com", "https://-flag", "ftp://example.com", "https://example.com/\n", "https://exa\"mple.com", "/Applications/Calculator.app", ""] {
+            assert!(!web_address(bad), "{bad}");
+        }
+    }
 }

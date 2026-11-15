@@ -40,11 +40,14 @@ export function fileKind(path: string): string {
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic', 'tif', 'tiff'].includes(ext)) return 'image';
   if (['mp4', 'mov', 'webm', 'mkv', 'avi'].includes(ext)) return 'video';
   if (['mp3', 'wav', 'm4a', 'flac', 'ogg'].includes(ext)) return 'audio';
-  if (['html', 'htm'].includes(ext)) return 'page';
+  if (['html', 'htm'].includes(ext)) return 'deck';
   if (['json', 'toml', 'yaml', 'yml', 'xml', 'ini', 'lock'].includes(ext)) return 'config';
   if (ext) return 'code';
   return 'file';
 }
+
+/** Whether the app will open a named file outside the window: a deck or page, a document, a picture, a recording. */
+export const canOpen = (path: string): boolean => /\.(html?|pdf|png|jpe?g|gif|webp|svg|mp4|mov|m4v|webm|mp3|wav|m4a|md|txt)$/i.test(path);
 
 const missionOf = (path: string): string | undefined => /^missions\/([^/]+)\//.exec(path)?.[1];
 

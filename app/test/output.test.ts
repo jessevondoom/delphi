@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { DocRow } from '../src/kb.ts';
-import { fileKind, groupCounts, groupOf, items } from '../src/output.ts';
+import { canOpen, fileKind, groupCounts, groupOf, items } from '../src/output.ts';
 import type { OState } from '../src/types.ts';
 
 const sim = JSON.parse(readFileSync(new URL('../src/fixture/sim.json', import.meta.url), 'utf8')) as { state: OState };
@@ -47,5 +47,10 @@ test('what agents recorded is output too, with who recorded it, and groups with 
 
 test('a file is called what its name says it is', () => {
   const kinds = Object.fromEntries(['report.md', 'plan.pdf', 'deck.pptx', 'numbers.csv', 'shot.PNG', 'demo.mp4', 'talk.m4a', 'index.html', 'conf.toml', 'main.rs', 'Makefile'].map((f) => [f, fileKind(f)]));
-  assert.deepEqual(kinds, { 'report.md': 'document', 'plan.pdf': 'document', 'deck.pptx': 'deck', 'numbers.csv': 'data', 'shot.PNG': 'image', 'demo.mp4': 'video', 'talk.m4a': 'audio', 'index.html': 'page', 'conf.toml': 'config', 'main.rs': 'code', Makefile: 'file' });
+  assert.deepEqual(kinds, { 'report.md': 'document', 'plan.pdf': 'document', 'deck.pptx': 'deck', 'numbers.csv': 'data', 'shot.PNG': 'image', 'demo.mp4': 'video', 'talk.m4a': 'audio', 'index.html': 'deck', 'conf.toml': 'config', 'main.rs': 'code', Makefile: 'file' });
+});
+
+test('a deck, a page, a document, a picture or a recording opens outside; a program or a script does not', () => {
+  for (const f of ['deck.html', 'a/b/page.HTM', 'plan.pdf', 'shot.png', 'photo.JPEG', 'demo.mp4', 'talk.m4a', 'notes.md']) assert.ok(canOpen(f), f);
+  for (const f of ['run.sh', 'tool.app', 'main.rs', 'archive.zip', 'Makefile', 'deck.html.sh']) assert.ok(!canOpen(f), f);
 });

@@ -4,6 +4,8 @@
 export type AvatarRole = {
   chassis: string;
   chassis_light?: string;
+  /** The fill on a light surface: chips, bars. Absent from a `delphi` that predates it. */
+  chassis_light_fill?: string;
   /** Per activity: the three cells between the brackets, and which of them is the mouth (the rest are eyes). */
   badge: Record<string, { cells: string; mouth: number | null }>;
   blink_steps?: string[];

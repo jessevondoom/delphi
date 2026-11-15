@@ -1,7 +1,7 @@
 import { useState, type CSSProperties } from 'react';
-import { Badge, Who } from '../Badge.tsx';
+import { Agent } from '../Badge.tsx';
 import { Rich } from '../Rich.tsx';
-import { colorOf } from '../avatar.ts';
+import { colorOf, fillOf } from '../avatar.ts';
 import type { Envelope, Info, OState } from '../types.ts';
 import { STAGES, clock, councilEntries, isBlind, isDecided, seatsOf, stageOf } from '../view.ts';
 
@@ -31,7 +31,7 @@ export function Council({ info, state, events, light, pick }: Props) {
   const all = councilEntries(events, c);
   const matching = all.filter((e) => who === 'all' || e.role === who);
   const shown = more ? matching : matching.slice(0, SHOWN);
-  const tint = (role: string) => ({ '--c': colorOf(info, role, light) }) as CSSProperties;
+  const tint = (role: string) => ({ '--c': fillOf(info, role, light) }) as CSSProperties;
   const showStream = !decided || open;
 
   return (
@@ -46,11 +46,10 @@ export function Council({ info, state, events, light, pick }: Props) {
       </ol>
 
       <div className="seats">
-        {seats.map((s, i) => (
+        {seats.map((s) => (
           <section key={s.role} className="seat" style={tint(s.role)}>
             <div className="row">
-              <Badge info={info} role={s.role} light={light} size={17} activity={s.position.state === 'writing' ? 'thinking_left' : 'idle'} delay={i * 1.3} />
-              <Who info={info} role={s.role} light={light} />
+              <Agent info={info} role={s.role} light={light} />
               {s.family && <span className="src push">{s.family}</span>}
             </div>
             {s.lens && <div style={{ fontSize: 12, color: 'var(--text2)' }}>Lens: {s.lens}</div>}
@@ -84,8 +83,8 @@ export function Council({ info, state, events, light, pick }: Props) {
         <section className="verdicts">
           <div className="verdict card tint" style={tint('orchestrator')}>
             <div className="row">
-              <Badge info={info} role="orchestrator" light={light} size={16} />
               <strong>{c.phase === 'escalated' ? 'The seats did not settle it' : 'Verdict'}</strong>
+              <Agent info={info} role="orchestrator" light={light} />
               <span className={c.phase === 'escalated' ? 'chip warn push' : 'chip ok push'}>{c.phase === 'escalated' ? 'needs your decision' : 'verdict in'}</span>
             </div>
             {c.synthesis && <div className="said" style={{ fontSize: 15 }}><Rich text={c.synthesis} /></div>}
@@ -103,7 +102,7 @@ export function Council({ info, state, events, light, pick }: Props) {
             {c.unresolved.length === 0 && <div style={{ fontSize: 13, color: 'var(--text2)' }}>Nothing was left unresolved.</div>}
             {c.unresolved.map(([severity, seat, title], k) => (
               <div key={k} style={{ fontSize: 13, lineHeight: 1.55 }}>
-                <Badge info={info} role={seat} light={light} size={13} activity="idle" /> <Who info={info} role={seat} light={light} /> <span className="chip">{severity}</span> {title}
+                <div className="row"><Agent info={info} role={seat} light={light} /><span className="chip">{severity}</span></div>{title}
               </div>
             ))}
           </div>
@@ -133,11 +132,10 @@ export function Council({ info, state, events, light, pick }: Props) {
         {showStream && (
           <div className="stack" style={{ gap: 8 }}>
             {shown.length === 0 && <div className="empty">Nothing from this council has reached the window yet.</div>}
-            {shown.map((e, i) => (
+            {shown.map((e) => (
               <article key={e.key} className="card tint" style={{ ...tint(e.role), padding: '10px 14px', gap: 6 }}>
                 <div className="row">
-                  <Badge info={info} role={e.role} light={light} size={14} delay={(i * 1.37) % 5} />
-                  <Who info={info} role={e.role} light={light} />
+                  <Agent info={info} role={e.role} light={light} />
                   <span className={e.kind === 'said' ? 'chip strong' : e.kind === 'read' ? 'chip line' : 'chip'}>{KIND[e.kind] ?? e.kind}</span>
                   <span className="time push">{clock(e.at_ms)}</span>
                 </div>

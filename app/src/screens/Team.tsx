@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Badge, Who } from '../Badge.tsx';
+import { Agent } from '../Badge.tsx';
 import { DocView } from '../DocView.tsx';
 import { spec } from '../avatar.ts';
 import type { Bridge } from '../bridge.ts';
@@ -47,7 +47,7 @@ export function Team({ bridge, info, light }: Props) {
           {agents.map((a) => (
             <button key={a.path} type="button" className={path === a.path ? 'card link on' : 'card link'} aria-pressed={path === a.path} onClick={() => setOpen(a.path)} style={{ padding: '10px 12px' }}>
               <span className="row">
-                {a.role in known ? <><Badge info={info} role={a.role} light={light} size={14} /><Who info={info} role={a.role} light={light} /></> : <strong>{a.role}</strong>}
+                {a.role in known ? <Agent info={info} role={a.role} light={light} /> : <strong>{a.role}</strong>}
                 {a.flag && <span className={a.flag === 'not allowed' ? 'chip warn push' : 'chip push'}>{a.flag}</span>}
               </span>
               <span className="time" style={{ overflowWrap: 'anywhere' }}>{a.path}</span>
