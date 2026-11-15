@@ -804,6 +804,70 @@ impl EngineService {
         Ok(json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."}))
     }
 
+    /// `host.record_research` (`specs/113` §2): a host hands over research it did with its own tools. The daemon writes a topic record
+    /// with `runner: "host"`, fetches each public source itself under its own runner's rules (the trusted lists and the addresses this
+    /// session's research searches returned) and checks each quote against what it read. Everything stored is `noted` and not validated.
+    /// The logic is `host_research::record`; this checks the caller and the limits and hands it the daemon's fetcher.
+    async fn host_record_research(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_research as hr;
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let secrets = self.engine.secrets.clone();
+        let parsed = hr::parse(&p, &|s| secrets.redact(s)).map_err(host_err)?;
+        let label = c.label(p["model"].as_str());
+        // The per-session limit is checked and the call counted in one step, before anything is fetched or written.
+        let (run_id, observed) = {
+            let _gate = self.host_gate.lock().await;
+            let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+            let events = m.replay().map_err(engine_err)?;
+            if hr::calls_in_last_hour(&events, (self.engine.clock_unix)()) >= hr::MAX_CALLS_PER_HOUR {
+                return Err(err(code::INVALID_PARAMS, hr::rate_refusal()));
+            }
+            let run_id = format!("h-{}", m.next_task_id());
+            m.append(EventEnvelope::new(&m.id, hr::EVENT, json!({"research_id": run_id, "source": label, "claims": parsed.claims.len(), "sources": parsed.sources.len()}))).await.map_err(engine_err)?;
+            (run_id, crate::research_observed::from_events(&events))
+        };
+        let project = self.host_project(&c.cwd);
+        let (e, wsd, home, wider) = (self.engine.clone(), ws.dir.clone(), ws.home.clone(), self.engine.settings.wider_fetch.clone());
+        let (rid, lab) = (run_id.clone(), label.clone());
+        let any_public = parsed.sources.iter().any(|s| hr::public_url(s).is_some());
+        let (reply, topic_id) = tokio::task::spawn_blocking(move || -> Result<(Value, String), String> {
+            let root = project.as_ref().map(|(_, r)| r.clone()).unwrap_or_else(|| wsd.clone());
+            let ctx = hr::Ctx { home: &home, root: &root, project: project.as_ref().map(|(n, _)| n.as_str()), label: &lab, run_id: &rid };
+            let reply = if any_public {
+                let web = crate::research_host::LiveWeb::new(Arc::new(delphi_adapter::research::transport::HttpTransport::new()?), Arc::new(crate::research_setup::lists(&wsd, &home)?), crate::research_setup::engines(&e), wider);
+                web.observed.restore(observed);
+                let fetch = |u: &str| -> Result<hr::Fetched, String> {
+                    use crate::research_run::Web;
+                    let page = web.fetch(u)?;
+                    let snap = web.held.read_as(&page.url, &page.text).ok_or_else(|| "fetch_failed".to_string())?;
+                    Ok((page.url, snap))
+                };
+                hr::record(&ctx, &parsed, &fetch)?
+            } else {
+                hr::record(&ctx, &parsed, &|_| Err("not fetched".to_string()))?
+            };
+            let topic_id = reply["topic_id"].as_str().unwrap_or("").to_string();
+            Ok((reply, topic_id))
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|m| err(code::INVALID_PARAMS, m))?;
+        // `research_status` and `research_result` read the run from its record, found again by the session that recorded it.
+        let project = self.host_project(&c.cwd);
+        let root = project.as_ref().map(|(_, r)| r.clone()).unwrap_or_else(|| ws.dir.clone());
+        if let Some(t) = crate::research_record::Topic::at(&root, &topic_id) {
+            let _ = crate::research_record::point_run(&ws.dir, &c.session, &run_id, &t, project.as_ref().map(|(n, _)| n.as_str()));
+        }
+        // The pages kept are indexed now, so the next `search_kb` finds them, as after a research run. A failure is not the call's.
+        let (w, hm) = (ws.dir.clone(), ws.home.clone());
+        let _ = tokio::task::spawn_blocking(move || refresh_kb(&w, &hm)).await;
+        Ok(reply)
+    }
+
     /// The registered project a host's folder belongs to, as `(name, root)`; `None` for a folder outside every registered project
     /// and when the registry cannot be trusted. A research run asked from inside a project belongs to it (`specs/112` §2.1).
     fn host_project(&self, cwd: &std::path::Path) -> Option<(String, std::path::PathBuf)> {
@@ -4241,7 +4305,7 @@ impl Extension for ServiceExt {
             // structural labels; the methods that store a record body (a note, a KB entry, a summary, a handoff) are also scanned for
             // front-matter lines. The fixed answer echoes nothing of the payload.
             if method.starts_with("host.") {
-                let scan_text = matches!(method.as_str(), "host.propose_note" | "host.propose_kb_entry" | "host.record_finding" | "host.record_session_summary" | "host.handoff_put");
+                let scan_text = matches!(method.as_str(), "host.propose_note" | "host.propose_kb_entry" | "host.record_finding" | "host.record_research" | "host.record_session_summary" | "host.handoff_put");
                 if let Err(why) = crate::host_rpc::reject_council_labels(&params, scan_text) {
                     return Some(Err(err(code::INVALID_PARAMS, why)));
                 }
@@ -4284,6 +4348,7 @@ impl Extension for ServiceExt {
                 "host.council_status" => svc.host_council_read(params, ctx, false).await,
                 "host.council_result" => svc.host_council_read(params, ctx, true).await,
                 "host.request_research" => svc.host_request_research(params, ctx).await,
+                "host.record_research" => svc.host_record_research(params, ctx).await,
                 "host.research_status" => svc.host_research_read(params, ctx, false).await,
                 "host.research_result" => svc.host_research_read(params, ctx, true).await,
                 "host.cancel_job" => svc.host_cancel_job(params, ctx).await,
@@ -5376,6 +5441,37 @@ mod tests {
         assert_eq!(got[0], (false, "verified".to_string()), "a URL the session's search returned is refetched and found: {got:?}");
         assert_eq!(got[1], (true, "unfetchable".to_string()), "a URL the host made up is not in the observed set and is never fetched: {got:?}");
         assert_eq!(s1d_cards(&f), vec![("source".to_string(), "s1d-svc-on.example".to_string())], "one source card, for the off-list host that supplied public evidence");
+    }
+
+    // specs/113 §2 items 2, 6, 7: `record_research` over the host socket leaves a topic the session reads back with research_result, says
+    // "not validated", and the eleventh call of the hour is refused with the limit named and records nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn record_research_leaves_a_topic_the_session_reads_back_and_the_eleventh_call_an_hour_is_refused() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let cwd = f.root.to_string_lossy().to_string();
+        let ws_dir = f.engine.ws.dir.clone();
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let ask = |n: usize| json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "model": "opus", "question": format!("How warm is a zebrafish tank, take {n}?"), "answer": "About 28 degrees.",
+                "claims": [{"text": "Zebrafish tanks are kept near 28 degrees", "quote": "kept near 28 degrees"}], "searches": [{"where": "web", "query": "zebrafish tank temperature"}]});
+            let r = c.call("host.record_research", ask(0)).unwrap();
+            assert_eq!((r["recorded"].as_bool(), r["status"].as_str(), r["quotes_found"].as_u64(), r["quotes_not_found"].as_u64()), (Some(true), Some("not validated"), Some(0), Some(1)), "{r}");
+            let topic = r["topic_id"].as_str().unwrap().to_string();
+            let back = c.call("host.research_result", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "research_id": r["research_id"]})).unwrap();
+            assert_eq!((back["status"].as_str(), back["topic_id"].as_str(), back["runner"].as_str(), back["answer"].as_str()), (Some("done"), Some(topic.as_str()), Some("host"), Some("About 28 degrees.")), "{back}");
+            for n in 1..10 {
+                c.call("host.record_research", ask(n)).unwrap();
+            }
+            let (code, msg) = rpc_error(c.call("host.record_research", ask(10)));
+            assert_eq!(code, Some(code::INVALID_PARAMS));
+            assert!(msg.unwrap().contains("at most 10 record_research calls per session per hour"));
+        })
+        .await;
+        assert_eq!(crate::research_record::list(&ws_dir).len(), 10, "the refused call wrote no topic");
     }
 
     // specs/092 TA-0: a host's request is staged inert at a fixed federated_peer taint, under the same limits, and only on the host socket.

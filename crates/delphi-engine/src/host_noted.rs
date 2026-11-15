@@ -92,7 +92,7 @@ pub fn https_host(url: &str) -> Option<String> {
     (host.contains('.') && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')).then_some(host)
 }
 
-fn folded(s: &str) -> String {
+pub(crate) fn folded(s: &str) -> String {
     s.chars().map(|c| if c.is_alphanumeric() { c.to_lowercase().next().unwrap_or(c) } else { ' ' }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

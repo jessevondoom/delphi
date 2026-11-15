@@ -276,6 +276,42 @@ fn the_research_record_the_program_writes_follows_its_schema() {
     must_fail("research-record.schema.json", "a field the record does not have", &bad);
 }
 
+/// `specs/113` §2: a host's run of a topic (runner, its declared searches) follows the record's schema; an unknown runner does not.
+#[test]
+fn a_host_run_of_a_research_topic_follows_the_record_schema() {
+    use delphi_engine::research_record::{Asker, Begin, Topic};
+    let ws = tempfile::tempdir().unwrap();
+    let t = Topic::begin(ws.path(), &Begin { question: "How warm is a zebrafish tank?", asked_by: Asker::host("host:claude-code/opus"), project: None, depth: delphi_core::research::Depth::Survey, run_id: "h-t-1" }).unwrap();
+    t.runner("h-t-1", "host").unwrap();
+    t.host_search("h-t-1", "web", "zebrafish tank temperature").unwrap();
+    t.private_source("h-t-1", "private-0123456789abcdef", "internal").unwrap();
+    t.finish("h-t-1", "done", Some(&json!({"runner": "host", "answer": "About 28 degrees."})), &[], None, 3).unwrap();
+    let rec = t.read().unwrap();
+    must_pass("research-record.schema.json", "a host's run", &rec);
+    let mut bad = rec.clone();
+    bad["runner"] = json!("validator");
+    must_fail("research-record.schema.json", "a runner outside the three", &bad);
+}
+
+/// `specs/113` §6: the tool `record_research` declares the schema that `schemas/record-research.schema.json` holds, and a call shaped as
+/// the spec says satisfies it while the 41st claim does not.
+#[test]
+fn the_record_research_tool_declares_the_schema_in_schemas() {
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(root().join("schemas/record-research.schema.json")).unwrap()).unwrap();
+    let tools = delphi_engine::mcp_host::tools();
+    let declared = tools.as_array().unwrap().iter().find(|t| t["name"] == "record_research").expect("the tool is declared")["inputSchema"].clone();
+    let mut bare = file.clone();
+    for k in ["$schema", "$id", "title", "description"] {
+        bare.as_object_mut().unwrap().remove(k);
+    }
+    assert_eq!(bare, declared, "schemas/record-research.schema.json and host_research::input_schema drifted apart");
+    let call = json!({"question": "q", "answer": "a", "sources": [{"locator": "https://x.example/a", "kind": "web", "private": false}], "claims": [{"text": "t", "quote": "q q q", "source": 0}], "searches": [{"where": "web", "query": "w"}], "gaps": ["g"]});
+    must_pass("record-research.schema.json", "a call as the spec shapes it", &call);
+    let mut over = call.clone();
+    over["claims"] = json!((0..41).map(|i| json!({"text": format!("c{i}")})).collect::<Vec<_>>());
+    must_fail("record-research.schema.json", "41 claims", &over);
+}
+
 #[test]
 fn research_results_follow_their_schema_and_refuse_control_characters_in_identity() {
     let ok = json!({

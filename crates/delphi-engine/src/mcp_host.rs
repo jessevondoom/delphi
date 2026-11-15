@@ -41,7 +41,7 @@ const SLOW_WAIT: Duration = Duration::from_secs(80);
 fn socket_wait(method: &str) -> Duration {
     match method {
         // Spec 104 §2, §12 A1: `host.ask_family` hands back its id at once (the quick wait); `host.ask_result` may hold 25 s.
-        "host.ask_result" | "host.request_help" | "host.help_result" | "host.council_result" | "host.research_result" | "host.council_brief" | "host.council_status" => SLOW_WAIT,
+        "host.ask_result" | "host.request_help" | "host.help_result" | "host.council_result" | "host.research_result" | "host.council_brief" | "host.council_status" | "host.record_research" => SLOW_WAIT,
         _ => QUICK_WAIT,
     }
 }
@@ -803,6 +803,13 @@ pub fn tools() -> Value {
             "annotations": annotations("Read a research result")
         },
         {
+            "name": "record_research",
+            "title": "Hand Delphi research you did",
+            "description": "Hand Delphi a finished piece of research you did with your own tools, before you answer: the question, your answer (Markdown, at most 24 KiB), the sources (a URL, or a description for one with no public address, with its title, the date you read it, its kind and whether it is private), the claims (each a sentence with the exact quote and the index of its source), the searches you ran (where, and the words) and the gaps. Delphi keeps it as a research topic. For a public web source it fetches the page itself, under its own rules, and looks for each quote: a quote it finds is an anchor; one it does not is kept as host-reported, not found. A source that is private, or internal, a file or a person, is never fetched: Delphi keeps only its locator, title and date, and its claims stay private. Everything is stored noted and not validated; anything you say about trust or status is ignored. At most 40 claims and 40 sources per call, 10 calls per session per hour. Pass topic_id to add to a topic Delphi gave you. Changes no file in your project.",
+            "inputSchema": crate::host_research::input_schema(),
+            "annotations": {"title": "Hand Delphi research you did", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
+        },
+        {
             "name": "cancel_job",
             "title": "Cancel a job you raised",
             "description": "Stop a Council, Panel, help request, ask_family question or research job that this session raised and that is still running, so nothing more is spent on it, and say why. Give its id (the council_id, help_id, ask_id or research_id) and a short reason. It refuses any job another session raised, one that has already ended, and an id that is nothing, all with the same words. It can only reduce what runs; it asks for no permission and grants none. Do not convene a second Council while the first still shows activity: a duplicate is not a retry. Cancel the first, or wait for it.",
@@ -1081,6 +1088,7 @@ impl Server {
             "request_research" => self.daemon("host.request_research", args),
             "research_status" => self.daemon("host.research_status", args),
             "research_result" => self.daemon("host.research_result", args),
+            "record_research" => self.daemon("host.record_research", args),
             "cancel_job" => self.daemon("host.cancel_job", args),
             "ask_family" => self.ask_family(args, job),
             "ask_result" => self.daemon("host.ask_result", args),
@@ -1834,7 +1842,7 @@ mod tests {
     /// back its id at once (`specs/104` §12 A1), so it takes the quick wait.
     #[test]
     fn the_socket_outlasts_the_daemons_own_wait_for_every_method_that_waits() {
-        for m in ["host.ask_result", "host.request_help", "host.help_result", "host.council_result", "host.research_result", "host.council_brief", "host.council_status"] {
+        for m in ["host.ask_result", "host.request_help", "host.help_result", "host.council_result", "host.research_result", "host.council_brief", "host.council_status", "host.record_research"] {
             assert!(socket_wait(m) > Duration::from_secs(45), "{m}");
         }
         for m in ["host.ask_family", "host.propose_note", "host.council_open", "host.council_submit", "host.request_council", "host.cancel_job"] {
@@ -1907,13 +1915,14 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "session_brief", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "recall_sessions", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "cancel_job", "ask_family", "ask_result"]);
+        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "session_brief", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "recall_sessions", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "record_research", "cancel_job", "ask_family", "ask_result"]);
         assert_eq!(socket_wait("host.recall_sessions"), QUICK_WAIT, "recall is a quick read");
         for t in tools {
-            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "record_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
-            assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research", "{}", t["name"]);
+            // `record_research` makes the daemon fetch the public pages the host names, under its runner's rules (`specs/113` §2 item 3).
+            assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research" || t["name"] == "record_research", "{}", t["name"]);
             assert_eq!(t["inputSchema"]["additionalProperties"], false, "{}", t["name"]);
         }
         assert_eq!(call(&mut s, json!({"jsonrpc": "2.0", "id": 4, "method": "completion/complete"}))["error"]["code"], -32601);

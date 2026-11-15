@@ -29,6 +29,8 @@ use std::sync::Mutex;
 pub const VERSION: u64 = 1;
 /// The states of a record and of each of its runs (§2.2).
 pub const STATES: [&str; 6] = ["queued", "running", "done", "partial", "failed", "cancelled"];
+/// Who did a run's research: Delphi's own runner, a host with its own tools (`specs/113` §2), or a file already on disk (§3).
+pub const RUNNERS: [&str; 3] = ["daemon", "host", "ingest"];
 /// The tier every record and answer carries: text from outside, never validated by being written down.
 pub const TAINT: &str = "external_untrusted";
 /// What a list in the record holds at most. Past it nothing more is added; the counts in `runs` still say how much there was.
@@ -270,6 +272,43 @@ impl Topic {
         if let Some(run) = rec["runs"].as_array_mut().and_then(|runs| runs.iter_mut().find(|r| r["run_id"].as_str() == Some(run_id))) {
             f(run);
         }
+    }
+
+    /// Who did the research of a run (`specs/113` §2 item 2, §3 item 1): one of [`RUNNERS`]. A record without the field was written by
+    /// Delphi's own runner. The newest run's runner is also the record's.
+    pub fn runner(&self, run_id: &str, runner: &str) -> Result<(), String> {
+        if !RUNNERS.contains(&runner) {
+            return Err("not a runner".into());
+        }
+        self.update(|rec| {
+            rec["runner"] = json!(runner);
+            Self::set_run(rec, run_id, |r| r["runner"] = json!(runner));
+        })
+    }
+
+    /// One search a host says it ran with its own tools (`specs/113` §2 item 1): where, and the words. Logged as the host declared it,
+    /// with no count: nothing here ran it.
+    pub fn host_search(&self, run_id: &str, place: &str, words: &str) -> Result<(), String> {
+        self.update(|rec| Self::push(rec, "queries", json!({"run": run_id, "query": clip(words, TEXT_CAP), "purpose": "host", "provider": clip(place, 40), "results": null})))
+    }
+
+    /// A source the run rests on that Delphi did not read (`specs/113` §2 item 4): its library id and kind. Its locator and title are in
+    /// the library's private record, not here. The record is then private: it stays on this machine and is not indexed.
+    pub fn private_source(&self, run_id: &str, source_id: &str, kind: &str) -> Result<(), String> {
+        self.update(|rec| {
+            rec["private"] = json!(true);
+            let item = json!({"run": run_id, "source_id": clip(source_id, 80), "kind": clip(kind, 20)});
+            match rec["private_sources"].as_array_mut() {
+                Some(v) if v.len() < LIST_CAP && !v.contains(&item) => v.push(item),
+                Some(_) => {}
+                None => rec["private_sources"] = json!([item]),
+            }
+        })
+    }
+
+    /// Change the record by code inside this crate, as one whole write (a host's or an ingest's own fields).
+    pub(crate) fn amend(&self, f: impl FnOnce(&mut Value)) -> Result<(), String> {
+        self.update(f)
     }
 
     /// The run left the queue and is working.
@@ -561,6 +600,9 @@ pub fn render(topic: &Topic, rec: &Value) -> String {
     let mut out = format!("research topic {}{}\n", topic.id, if rec["private"] == true { "  (private: it stays on this machine)" } else { "" });
     out.push_str(&format!("  question   {}\n", s("question")));
     out.push_str(&format!("  asked by   {} ({})\n", clip(rec["asked_by"]["label"].as_str().unwrap_or("?"), 120), clip(rec["asked_by"]["kind"].as_str().unwrap_or("?"), 20)));
+    if let Some(r) = rec["runner"].as_str() {
+        out.push_str(&format!("  runner     {}\n", clip(r, 20)));
+    }
     if let Some(p) = rec["project"].as_str() {
         out.push_str(&format!("  project    {}\n", clip(p, 80)));
     }

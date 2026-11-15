@@ -465,6 +465,66 @@ impl Library {
         Ok((self.refresh_support(&id).unwrap_or(claim), merged))
     }
 
+    /// Write a claim a host reported that Delphi could not check (`specs/113` §2 items 3 and 4): its quote rests on a private source,
+    /// or on a public page where the daemon did not find it. The claim is kept, never offered beyond its own place: it is scoped to the
+    /// project (`scope: project`) or, with no project, to this install (`scope: personal`), so it is never merged into a claim of the
+    /// team and is never listed in the shared index. It carries `mark` (`host-reported`, or `host-reported, not found`) in
+    /// `host_reported`. Its anchors are into private pointers only, which never count as an origin (`cites_of`), so it reads *noted*.
+    /// `fingerprint` must be of the private domain (the caller's), so no research run merges a public page into it by accident.
+    pub fn add_host_claim(&self, rc: &ResearchClaim<'_>, mark: &str) -> Result<Value, String> {
+        if rc.fingerprint.len() < 12 || rc.fingerprint.len() > 64 || !rc.fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("a host claim carries its fingerprint".into());
+        }
+        if let Some(t) = rc.topic {
+            if !crate::research_record::valid_topic_id(t) {
+                return Err("not a research topic id".into());
+            }
+        }
+        let project = rc.project.map(str::trim).filter(|p| !p.is_empty());
+        let scope = if project.is_some() { "project" } else { "personal" };
+        let text = clean_text(rc.text.trim());
+        if self.claim(&content_id("fact", scope, &text)).is_some_and(|c| !open_to(&c, project)) {
+            return Err("the library holds this claim for another project; nothing is merged across projects".into());
+        }
+        let opts = ClaimOpts { scope: Some(scope.to_string()), project: project.map(String::from), ..Default::default() };
+        let mut claim = self.add_claim(rc.text, &opts, &[])?;
+        let id = claim["id"].as_str().ok_or("a claim has an id")?.to_string();
+        let add_to = |claim: &mut Value, list: &str, item: &str| {
+            let mut all: Vec<Value> = claim[list].as_array().cloned().unwrap_or_default();
+            if !all.iter().any(|x| x == item) {
+                all.push(json!(item));
+            }
+            claim[list] = Value::Array(all);
+        };
+        add_to(&mut claim, "fingerprints", rc.fingerprint);
+        add_to(&mut claim, "host_reported", mark);
+        if let Some(t) = rc.topic {
+            add_to(&mut claim, "topics", t);
+        }
+        let mut cited: Vec<&str> = Vec::new();
+        for spec in rc.anchors {
+            // Only a private pointer may carry a host's own quote: a public source's anchor is the daemon's to find.
+            if !self.read_meta(&spec.source_id).is_some_and(|m| is_private(&m)) {
+                continue;
+            }
+            let Ok(a) = self.research_anchor(spec) else { continue };
+            let held = claim["anchors"].as_array().is_some_and(|all| all.iter().any(|x| x["source_id"] == a["source_id"] && x["quote_hash"] == a["quote_hash"]));
+            if !held {
+                match claim["anchors"].as_array_mut() {
+                    Some(all) => all.push(a),
+                    None => claim["anchors"] = json!([a]),
+                }
+                cited.push(spec.source_id.as_str());
+            }
+        }
+        self.save_claim(&claim)?;
+        for s in &cited {
+            self.cite(s, &id)?;
+        }
+        self.log("claim_host", json!({"id": id, "anchors": cited.len(), "topic": rc.topic, "mark": mark}));
+        Ok(self.refresh_support(&id).unwrap_or(claim))
+    }
+
     /// Whether the library holds the source's text and `quote` is in it letter for letter. A yes or a no; no text is returned.
     pub fn holds_quote(&self, source_id: &str, quote: &str) -> bool {
         !quote.trim().is_empty() && std::fs::read_to_string(self.source_dir(source_id).join("source.md")).is_ok_and(|t| t.contains(quote))

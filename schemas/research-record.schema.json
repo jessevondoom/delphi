@@ -12,6 +12,7 @@
     "asked_by": { "$ref": "#/$defs/asker" },
     "project": { "type": ["string", "null"], "description": "The registered project the topic belongs to, by name; null for a topic of the workspace." },
     "depth": { "enum": ["quick", "survey", "deep"], "description": "The depth of the newest run." },
+    "runner": { "$ref": "#/$defs/runner", "description": "Who did the newest run's research (specs/113): absent or `daemon` for Delphi's own runner, `host` for a host that handed over its own research with `record_research`, `ingest` for a file already on disk." },
     "state": { "$ref": "#/$defs/state", "description": "The state of the newest run." },
     "taint": { "const": "external_untrusted" },
     "private": { "type": "boolean", "description": "True when a claim of a run rests on a private source; the record then stays on this machine." },
@@ -36,7 +37,7 @@
         "properties": {
           "run": { "$ref": "#/$defs/run_id" },
           "query": { "type": "string", "maxLength": 300, "description": "The text exactly as it was sent." },
-          "purpose": { "enum": ["trusted", "topic", "gap", "support", "contradiction", "chain"] },
+          "purpose": { "enum": ["trusted", "topic", "gap", "support", "contradiction", "chain", "host"], "description": "`host`: a search the host says it ran with its own tools (specs/113 section 2); `provider` is where, and `results` is null." },
           "provider": { "type": ["string", "null"], "maxLength": 40, "description": "The provider that answered, when the transport said." },
           "results": { "type": ["integer", "null"], "minimum": 0, "description": "How many results came back; null when the query failed." },
           "failed": { "type": "string", "maxLength": 40, "description": "Present only on a query that failed: a fixed word, never provider text." }
@@ -73,6 +74,20 @@
         "additionalProperties": false
       }
     },
+    "private_sources": {
+      "type": "array",
+      "description": "Sources a run rests on that Delphi did not read (specs/113 section 2 item 4, section 3): a host's private or internal source, a file, a person. Each is a private pointer in the library (locator, title, date); the record names only its id and kind, and is then private.",
+      "items": {
+        "type": "object",
+        "required": ["run", "source_id", "kind"],
+        "properties": {
+          "run": { "$ref": "#/$defs/run_id" },
+          "source_id": { "type": "string", "maxLength": 80 },
+          "kind": { "enum": ["web", "internal", "file", "person"] }
+        },
+        "additionalProperties": false
+      }
+    },
     "claims": { "type": "array", "items": { "type": "string", "maxLength": 80 }, "description": "The ids of the claims the topic's runs produced, once each." },
     "gaps": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "description": "What the newest finished run reports it did not find: fixed phrases read from its coverage report." },
     "usage": {
@@ -104,6 +119,7 @@
           "steps": { "type": "integer", "minimum": 0 },
           "check_steps": { "type": "integer", "minimum": 0 },
           "ms": { "type": "integer", "minimum": 0 },
+          "runner": { "$ref": "#/$defs/runner" },
           "error": { "type": "string", "maxLength": 300 }
         },
         "additionalProperties": false
@@ -117,6 +133,7 @@
     "topic_id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$", "maxLength": 57, "description": "A slug of the question and eight hex characters of its hash." },
     "run_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
     "state": { "enum": ["queued", "running", "done", "partial", "failed", "cancelled"] },
+    "runner": { "enum": ["daemon", "host", "ingest"] },
     "asker": {
       "type": "object",
       "required": ["kind", "label"],

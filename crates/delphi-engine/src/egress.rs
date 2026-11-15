@@ -269,8 +269,9 @@ mod tests {
         let want: std::collections::BTreeMap<String, (usize, usize, usize, usize)> = [
             // the provider search: one `observe` in `remember`, which is called once, in `provider_search`, after the provider answered; one set per `LiveWeb`
             ("delphi-engine/src/research_host.rs".to_string(), (1, 0, 1, 1)),
-            // the daemon restores the set for a host's claim from the `research.observed` events its own research job wrote
-            ("delphi-engine/src/service.rs".to_string(), (0, 1, 0, 0)),
+            // the daemon restores the set for a host's claim (`propose_kb_entry`) and a host's recorded research (`record_research`, specs/113
+            // §2 item 3) from the `research.observed` events its own research job wrote
+            ("delphi-engine/src/service.rs".to_string(), (0, 2, 0, 0)),
         ]
         .into_iter()
         .collect();
