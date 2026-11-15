@@ -486,6 +486,13 @@ pub fn tools() -> Value {
             "annotations": writes("Propose a research entry to Delphi")
         },
         {
+            "name": crate::finding_record::TOOL,
+            "title": "Record what an investigation concluded",
+            "description": crate::finding_record::host_description(),
+            "inputSchema": crate::finding_record::host_input_schema(),
+            "annotations": writes("Record an investigation's finding in Delphi")
+        },
+        {
             "name": "propose_council_record",
             "title": "Stage an unaudited agenda (import)",
             "description": "Stage the outcome of an agenda you ran yourself as an import: barrier none, source host-reported. It is not a Council record, and anything you send that is labelled one (council_format, venue: daemon, a Council kind) is refused.",
@@ -1050,6 +1057,7 @@ impl Server {
             }),
             "propose_note" => self.daemon("host.propose_note", args),
             "propose_kb_entry" => self.daemon("host.propose_kb_entry", args),
+            "record_finding" => self.daemon("host.record_finding", args),
             "request_test_authorization" => self.daemon("host.request_test_authorization", args),
             "propose_council_record" => self.propose_council_record(args),
             "record_session_summary" => self.daemon("host.record_session_summary", args),
@@ -1899,10 +1907,10 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "session_brief", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "recall_sessions", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "cancel_job", "ask_family", "ask_result"]);
+        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "session_brief", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "recall_sessions", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "cancel_job", "ask_family", "ask_result"]);
         assert_eq!(socket_wait("host.recall_sessions"), QUICK_WAIT, "recall is a quick read");
         for t in tools {
-            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
             assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research", "{}", t["name"]);

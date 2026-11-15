@@ -115,7 +115,7 @@ pub const MAX_START_CHARS: usize = delphi_adapter::config::MAX_START_CHARS;
 
 /// The zones a span starts from (`specs/116` §4.3). Adding a zone is one entry here; what a role may see of it is still the
 /// index's own rule (`kb::allowed_sql`), so a zone named here can never show another role's memory or untrusted text.
-pub const START_ZONES: [&str; 6] = ["core", "context", "specs", "knowledge", "library", "bundles"];
+pub const START_ZONES: [&str; 7] = ["core", "context", "specs", "knowledge", "library", "bundles", crate::finding_record::ZONE];
 
 /// How much a span starts with: `[retrieval] start_passages` and `start_chars`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,14 +179,16 @@ pub fn passages(db: &Path, hits: &[Hit]) -> Vec<String> {
 /// memory), at most `budget.passages` passages and `budget.chars` characters in all, at most [`START_PER_DOC`] from one document.
 /// Each passage keeps its pointer and its label. `once` is for a root span: the same query is made once per mission, since the
 /// conversation carries what the first one found; a child span starts with nothing of its parent's, so it always asks. `None`
-/// when nothing applies: no query, a zero budget, a repeated root query, no index, or nothing found.
+/// when nothing applies: no query, a zero budget, a repeated root query, no index, or nothing found. Findings are those of the
+/// mission's own project and of the home layer (`<ws>/local/state.db` gives the workspace; any other index has no missions).
 pub fn span_start(home: &Path, db: &Path, mission: &str, objective: &str, role: &str, budget: StartBudget, once: bool) -> Option<Start> {
+    let scope = db.parent().and_then(Path::parent).map(|ws| crate::finding_record::scope_of_dir(&delphi_core::sessions::dir(ws, mission))).unwrap_or_default();
     let query = auto_query(objective)?;
     let (most, chars) = (budget.passages.min(MAX_START_PASSAGES), budget.chars.min(MAX_START_CHARS));
     if most == 0 || chars == 0 || !db.is_file() || (once && !seen().lock().unwrap().insert((mission.to_string(), query.clone()))) {
         return None;
     }
-    let opts = SearchOpts { role: Some(role.to_string()), limit: 10, zones: Some(START_ZONES.to_vec()), ..Default::default() };
+    let opts = SearchOpts { role: Some(role.to_string()), limit: 10, zones: Some(START_ZONES.to_vec()), findings: crate::kb::FindingsView::Scope(scope), ..Default::default() };
     let r = search(home, db, &query, opts).ok()?;
     let texts = passages(db, &r.hits);
     // One passage's share of the budget, so the first hit cannot crowd out the rest.

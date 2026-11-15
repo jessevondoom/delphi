@@ -149,6 +149,8 @@ pub fn author(origin: &str, zone: &str, source_type: &str, doc_author: Option<&s
         "kept" | "session" => "host_session",
         _ if matches!(zone, "library" | "bundles" | "xenia") || matches!(source_type, "federated_peer" | "federated_verified") => "third_party",
         _ if rel_path.starts_with("staged/host-") => "host_session",
+        // A finding a host session recorded (`specs/116` §5): its mission is the session's own, `host-<session>`.
+        _ if zone == crate::finding_record::ZONE && rel_path.starts_with("missions/host-") => "host_session",
         _ if by_role => "agent",
         _ => "operator",
     }
@@ -287,6 +289,10 @@ pub fn of_hit_with(ws_dir: &Path, h: &Hit, hashes: Option<&HashMap<String, Strin
     let checked = checked(status, &h.source_type);
     let shipped = if author == "release" { shipped(hashes, &h.rel_path, &h.blake3) } else { Shipped::Unknown };
     let mut label = label_of(author, checked, status, shipped);
+    // A finding says what it is (`specs/116` §5.2), with who recorded it; a retired one keeps the table's words.
+    if h.zone == crate::finding_record::ZONE && status == "noted" {
+        label = format!("{}{}", crate::finding_record::label_for(&h.source_type), if author == "host_session" { ", recorded by a host session" } else { "" });
+    }
     if let (Some(org), "validated") = (&h.vouched_by, status) {
         label.push_str(&format!(" · vouched by {org}"));
     }

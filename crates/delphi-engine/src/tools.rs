@@ -296,6 +296,10 @@ impl Registry {
         for spec in crate::artifacts::specs() {
             r.register(spec);
         }
+        // `record_finding` (`specs/116` §5): offered to every role like the other built-ins, and refused to all but the two that investigate.
+        for spec in crate::finding_record::specs() {
+            r.register(spec);
+        }
         r
     }
 
@@ -614,7 +618,9 @@ fn kb_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
         (Some(ws), Some(home)) => crate::service::refresh_within(ws, home, crate::service::SEARCH_REFRESH_BOUND).and_then(stale_line),
         _ => None,
     };
-    let opts = crate::kb::SearchOpts { role: Some(ctx.role.to_string()), limit, about: args.get("about").and_then(|v| v.as_bool()).unwrap_or(false), summary_target: crate::kb::SummaryTarget::Bibliography, ..Default::default() };
+    // Findings (`specs/116` §5.3) are every role's to read, for the mission's own project and the home layer.
+    let findings = crate::kb::FindingsView::Scope(ctx.guard.zones.local.parent().map(|ws| crate::finding_record::scope_of_dir(&delphi_core::sessions::dir(ws, ctx.mission_id))).unwrap_or_default());
+    let opts = crate::kb::SearchOpts { role: Some(ctx.role.to_string()), limit, about: args.get("about").and_then(|v| v.as_bool()).unwrap_or(false), summary_target: crate::kb::SummaryTarget::Bibliography, findings, ..Default::default() };
     let hits = match crate::retrieval::search(&home.unwrap_or_default(), &db, query, opts) {
         Ok(r) => r.hits,
         Err(e) => return ToolResult::err(format!("could not search the knowledge base: {e}")),
@@ -1746,8 +1752,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "record_finding"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram", "record_finding"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -2155,6 +2161,120 @@ mod tests {
         assert!(found.contains("context/second.md") && found.contains("The bilbysecond procedure is written here.") && !found.contains("index: stale"), "{found}");
         fs::remove_file(ws.join("team/context/first.md")).unwrap();
         assert_eq!(search("bilbyfirst"), "nothing found", "a removed page leaves the index too");
+    }
+
+    /// A real workspace (`<home>/workspaces/w`) with one trusted page, an index, and a guard with the investigator's scope.
+    fn finding_ws(missions: &[(&str, &str)]) -> (tempfile::TempDir, std::path::PathBuf, Guard) {
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path().join("home/workspaces/w");
+        for d in ["local", "team/context", "base", "ratified"] {
+            fs::create_dir_all(ws.join(d)).unwrap();
+        }
+        for (m, scope) in missions {
+            fs::create_dir_all(ws.join("local/sessions").join(m)).unwrap();
+            if !scope.is_empty() {
+                fs::write(ws.join("local/sessions").join(m).join("scope"), scope).unwrap();
+            }
+        }
+        fs::write(ws.join("team/context/ladder.md"), "---\nsource_type: internal_generated\nstatus: active\n---\n# Ladder\n\nThe backoff timer is reset on every 429.\nRung three waits ninety seconds.\n").unwrap();
+        crate::kb::Kb::open(&ws.join("local/state.db")).unwrap().refresh(&ws, "t").unwrap();
+        let guard = Guard { zones: Zones { local: ws.join("local"), team: ws.join("team"), base: ws.join("base"), ratified: ws.join("ratified"), worktree: None, projects: vec![], bundles: vec![], payload: None }, role: "investigator".into(), read_globs: vec!["*".into()], write_globs: vec!["missions/**/research/**".into()], protected: HashSet::new() };
+        (t, ws, guard)
+    }
+
+    /// One tool call as `role` in `mission`: the result and the events it asked for.
+    fn call_in(guard: &Guard, span: &mut Span, role: &str, mission: &str, tool: &str, args: Value) -> (ToolResult, Vec<(String, Value)>) {
+        let (mut index, rules) = (Index::new(), OriginRules::with_defaults());
+        let mut ctx = ToolCtx { guard, span, index: &mut index, rules: &rules, probe: &AssumeClean, role, mission_id: mission, now_rfc3339: "2026-11-14T00:00:00Z", stamps: vec![], events: vec![] };
+        let r = run(&mut ctx, tool, &args);
+        (r, ctx.events)
+    }
+
+    fn ladder_finding() -> Value {
+        json!({"question": "Why does the retry ladder stall at rung three?", "conclusion": "The backoff timer is reset on every 429, so rung three never elapses.", "status": "confirmed",
+            "evidence": [{"pointer": "context/ladder.md#L7-L8", "shows": "the reset and the ninety second wait"}], "ruled_out": [{"hypothesis": "clock skew", "evidence": "the same on a fixed clock"}], "how_verified": "Read the ladder page."})
+    }
+
+    /// `specs/116` AC-6: `record_finding` writes an active, indexed file; a second investigation's `kb_search` on the same question
+    /// returns it with its text; a pointer to a missing file is refused, by name. Only the investigator and the scout record, and no
+    /// file tool can write the findings folder.
+    #[test]
+    fn spec_116_a_recorded_finding_is_found_with_its_text_by_a_later_investigation() {
+        let (_t, ws, guard) = finding_ws(&[("m1", ""), ("m2", "")]);
+        let mut span = Span::root("sp1");
+        let question = "why does the retry ladder stall at rung three";
+        for bad in ["context/gone.md#L1", "context/ladder.md#L7-L99"] {
+            let mut f = ladder_finding();
+            f["evidence"][0]["pointer"] = json!(bad);
+            let (r, ev) = call_in(&guard, &mut span, "investigator", "m1", "record_finding", f);
+            assert!(r.is_error && r.content.contains(&format!("`{bad}`")) && r.content.contains("does not resolve") && ev.is_empty(), "{}", r.content);
+        }
+        assert!(!ws.join("local/sessions/m1/findings").exists(), "a refused finding writes nothing");
+        let builder = call_in(&guard, &mut span, "builder", "m1", "record_finding", ladder_finding()).0;
+        assert!(builder.is_error && builder.content.contains("only the investigator and the scout"), "{}", builder.content);
+        assert!(matches!(guard.check_policy("missions/m1/findings/forged.md", delphi_core::pathguard::Access::Write), Err(Denied::NeverWritable(_))), "the file tools cannot write a finding");
+
+        let (r, ev) = call_in(&guard, &mut span, "investigator", "m1", "record_finding", ladder_finding());
+        assert!(!r.is_error, "{}", r.content);
+        let receipt: Value = serde_json::from_str(&r.content).unwrap();
+        assert_eq!((receipt["finding"].as_str(), receipt["path"].as_str(), receipt["label"].as_str(), receipt["status"].as_str()), (Some("m1/why-does-the-retry-ladder-stall-at-rung-three"), Some("missions/m1/findings/why-does-the-retry-ladder-stall-at-rung-three.md"), Some("agent finding, not validated"), Some("active")));
+        assert_eq!((ev.len(), ev[0].0.as_str(), &ev[0].1["by"]), (1, "finding.recorded", &json!("investigator")));
+        let file = fs::read_to_string(ws.join("local/sessions/m1/findings/why-does-the-retry-ladder-stall-at-rung-three.md")).unwrap();
+        assert!(file.contains("status: active") && file.contains("source_type: internal_generated") && file.contains("kind: finding") && file.contains("label: agent finding, not validated") && file.contains("author: investigator"), "{file}");
+
+        // A second investigation, in another mission and another role: the search returns the finding, labelled, with its text.
+        let found = call_in(&guard, &mut span, "scout", "m2", "kb_search", json!({"query": question})).0.content;
+        assert!(found.contains("missions/m1/findings/why-does-the-retry-ladder-stall-at-rung-three.md#L") && found.contains("[agent finding, not validated]"), "{found}");
+        assert!(found.contains("Conclusion (confirmed): The backoff timer is reset on every 429, so rung three never elapses."), "with its text: {found}");
+        // And a span that starts on the same subject is handed it.
+        let home = ws.parent().unwrap().parent().unwrap().to_path_buf();
+        let start = crate::retrieval::span_start(&home, &ws.join("local/state.db"), "m2", "Explain why the retry ladder stalls at rung three", "architect", Default::default(), false).expect("start passages");
+        assert!(start.text.contains("missions/m1/findings/") && start.text.contains("[agent finding, not validated]"), "{}", start.text);
+    }
+
+    /// `specs/116` §5.4: a finding that names `supersedes` retires the earlier one from the default search; the earlier file stays
+    /// and links forward. §5.3: a finding is its project's; the home layer's are everyone's. A span that read untrusted content
+    /// records an untrusted finding, which the default search does not return.
+    #[test]
+    fn spec_116_superseding_retires_a_finding_and_a_finding_stays_in_its_project() {
+        let (pa, pb) = ("a".repeat(32), "b".repeat(32));
+        let (_t, ws, guard) = finding_ws(&[("m1", ""), ("m2", ""), ("m3", &pa), ("m4", &pa), ("m5", &pb)]);
+        let mut span = Span::root("sp1");
+        let question = "why does the retry ladder stall at rung three";
+        let search = |span: &mut Span, mission: &str, q: &str| call_in(&guard, span, "investigator", mission, "kb_search", json!({"query": q})).0.content;
+        let first: Value = serde_json::from_str(&call_in(&guard, &mut span, "investigator", "m1", "record_finding", ladder_finding()).0.content).unwrap();
+        assert!(search(&mut span, "m2", question).contains("missions/m1/findings/"));
+        let mut newer = ladder_finding();
+        newer["conclusion"] = json!("The reset is in the quollpool, not the ladder: the pool clears the timer.");
+        newer["supersedes"] = first["finding"].clone();
+        let second = call_in(&guard, &mut span, "scout", "m2", "record_finding", newer).0;
+        assert!(!second.is_error && second.content.contains("\"superseded\":\"m1/why-does-the-retry-ladder-stall-at-rung-three\""), "{}", second.content);
+        let after = search(&mut span, "m1", question);
+        assert!(after.contains("missions/m2/findings/") && after.contains("quollpool") && !after.contains("missions/m1/findings/"), "the earlier finding left the default search: {after}");
+        let old = fs::read_to_string(ws.join("local/sessions/m1/findings/why-does-the-retry-ladder-stall-at-rung-three.md")).unwrap();
+        assert!(old.contains("status: superseded") && old.contains("superseded_by: m2/why-does-the-retry-ladder-stall-at-rung-three") && old.contains("The backoff timer is reset on every 429"), "the file stays and links forward: {old}");
+
+        // A project's finding is found by that project's missions only; the home layer's finding is found from a project.
+        let mut numbat = ladder_finding();
+        numbat["question"] = json!("Where does the numbatqueue drop messages?");
+        numbat["conclusion"] = json!("The numbatqueue drops a message when the ack arrives after the lease ends.");
+        assert!(!call_in(&guard, &mut span, "investigator", "m3", "record_finding", numbat).0.is_error);
+        assert!(search(&mut span, "m4", "numbatqueue drop messages").contains("missions/m3/findings/"), "the same project");
+        for other in ["m5", "m1"] {
+            assert!(!search(&mut span, other, "numbatqueue drop messages").contains("missions/m3/findings/"), "{other} is not in the finding's project");
+        }
+        assert!(search(&mut span, "m5", question).contains("missions/m2/findings/"), "a home finding is every project's");
+
+        // Untrusted in, untrusted out: stored and labelled, told so, and not returned by the default search.
+        let mut tainted = Span::root("sp2");
+        tainted.observe_input(Tier::L0);
+        let mut wombat = ladder_finding();
+        wombat["question"] = json!("Is the wombatcache stale after a deploy?");
+        wombat["conclusion"] = json!("The wombatcache is stale for one minute after a deploy.");
+        let r = call_in(&guard, &mut tainted, "scout", "m1", "record_finding", wombat).0;
+        assert!(!r.is_error && r.content.contains("from untrusted content") && r.content.contains("does not return it"), "{}", r.content);
+        assert!(fs::read_to_string(ws.join("local/sessions/m1/findings/is-the-wombatcache-stale-after-a-deploy.md")).unwrap().contains("source_type: external_untrusted"));
+        assert_eq!(search(&mut span, "m2", "wombatcache stale deploy"), "nothing found");
     }
 
     /// `specs/098` §12 item 13: an entry a host left (`noted`, `external_untrusted`, indexed under `staged/host-*`) is never returned by a
@@ -2639,8 +2759,8 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "record_finding"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram", "record_finding"]);
     }
 
     #[test]

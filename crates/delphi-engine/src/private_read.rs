@@ -131,11 +131,12 @@ const SEATS_CANNOT_READ: &str = "an answer written by seats that cannot read a n
 const MCP_OWN: &str = "runs in the MCP server's own process over files and the index; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`) and the index lists no private source";
 
 /// The methods of the host socket (`delphi_core::server::HOST_METHODS`).
-pub const HOST_SURFACE: [Surface; 28] = [
+pub const HOST_SURFACE: [Surface; 29] = [
     no_return("session.ping", "answers `pong`"),
     Surface { name: "host.search_kb", how: How::Marks },
     no_return("host.propose_note", WRITES),
     no_return("host.propose_kb_entry", "a write: it returns a status, a ref, a `private` flag and a reason slug per claim, never the claim text"),
+    no_return("host.record_finding", "a write (`specs/116` §5): it returns the finding's id, path and label, or a refusal that names the caller's own pointer, never a finding's text"),
     no_return("host.request_test_authorization", WRITES),
     no_return("host.record_session_summary", WRITES),
     no_return("host.handoff_put", WRITES),
@@ -163,7 +164,7 @@ pub const HOST_SURFACE: [Surface; 28] = [
 ];
 
 /// The tools of the MCP server (`mcp_host::tools()`).
-pub const MCP_SURFACE: [Surface; 42] = [
+pub const MCP_SURFACE: [Surface; 43] = [
     Surface { name: "search_kb", how: How::Marks },
     no_return("list_roles", PROJECT_FILES),
     no_return("delphi_roster", PROJECT_FILES),
@@ -185,6 +186,7 @@ pub const MCP_SURFACE: [Surface; 42] = [
     no_return("propose_note", WRITES),
     no_return("request_test_authorization", WRITES),
     no_return("propose_kb_entry", WRITES),
+    no_return("record_finding", WRITES),
     no_return("propose_council_record", WRITES),
     no_return("record_session_summary", WRITES),
     no_return("handoff_put", WRITES),

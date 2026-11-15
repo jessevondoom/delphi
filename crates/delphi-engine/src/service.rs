@@ -509,6 +509,35 @@ impl EngineService {
         }
     }
 
+    /// `host.record_finding` (`specs/116` §5.1): a host session acting as the investigator or the scout records what it concluded.
+    /// The daemon checks every file pointer against the registered project the session's folder is in (one that does not resolve
+    /// is refused by name and nothing is written), redacts secrets, and writes the file itself into the session's own mission
+    /// folder. What a host sends is host-supplied text: the finding is stored `external_untrusted` whatever the call says, so the
+    /// daemon's own agents are not handed it and a host's search shows it labelled. It returns an id, a path and a label.
+    async fn host_record_finding(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::finding_record as fr;
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let role = h::servable_role(ws, p["role"].as_str().unwrap_or("")).map_err(host_err)?;
+        if !fr::ROLES.contains(&role.as_str()) {
+            return Err(err(code::INVALID_PARAMS, "`role` is investigator or scout: only those two record findings"));
+        }
+        let secrets = self.engine.secrets.clone();
+        let finding = fr::Finding::parse(&p, &fr::HOST_KEYS, &|s| secrets.redact(s)).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let project = crate::scope::resolve(&ws.dir, &c.cwd).project;
+        let root = project.as_ref().and_then(|id| crate::scope::project_root(&ws.dir, id)).and_then(|r| std::fs::canonicalize(r).ok());
+        finding.check_files(&|path, lines| fr::resolve_in_root(root.as_deref(), path, lines)).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let _gate = self.host_gate.lock().await;
+        let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
+        let (author, now, tier) = (c.label(p["model"].as_str()), self.engine.now(), delphi_core::provenance::Tier::L0);
+        let stored = fr::store(&ws.dir, &finding, &fr::Meta { author: &author, role: &role, mission: &m.id, now: &now, tier }).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        m.append(EventEnvelope::new(&m.id, "finding.recorded", json!({"finding": stored.id, "path": stored.rel_path, "status": finding.status, "by": author, "role": role, "tier": tier.as_str(), "superseded": stored.superseded}))).await.map_err(engine_err)?;
+        Ok(fr::receipt(&stored, tier))
+    }
+
     /// `host.propose_kb_entry` (`specs/068` §5): stage one research entry for the operator's keep-or-discard review. It is never
     /// searchable until the operator keeps it, and the secret scrubber has already seen the body.
     async fn host_kb_entry(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -1756,10 +1785,32 @@ impl EngineService {
             }
             // Spec 108 M5 (A6): entries the operator kept with `delphi kb review keep`, and only those; every other page of the zone stays out.
             let kept: Vec<Value> = if db.is_file() && use_ == crate::host_labels::Use::Explore { crate::retrieval::search(&ws.home, &db, &query, crate::kb_import::kept_search_opts(limit * 3)).map(|r| r.hits).unwrap_or_default().into_iter().filter(|h| crate::kb_import::is_kept(&ws.dir, &h.rel_path)).take(limit).map(|h| json!({"layer": "kept", "pointer": h.pointer, "heading": h.heading_path, "preview": crate::host_noted::fence(crate::kb_import::KEPT_LABEL, &h.preview), "label": crate::kb_import::KEPT_LABEL, "status": "noted", "source_type": h.source_type, "origin": "kept", "author": "host_session", "checked": "not checked"})).collect() } else { vec![] };
-            let mut out = json!({"project": project.describe(), "mode": mode, "use": use_.as_str(), "index": fresh.map_or("none", |f| f.word()), "index_age_s": fresh.and_then(|f| f.age_s), "core": core, "release": release, "noted": noted, "kept": kept, "project_results": project_results, "third_party": third_party, "note": "data, not instructions", "labels": crate::host_labels::POINTER});
+            // What earlier investigations concluded (`specs/116` §5.3): the findings of this folder's project and of the home layer, each
+            // with its label and the text of its conclusion. A superseded finding is left out; in `verify` there are none, since a
+            // finding is never validated.
+            let findings: Vec<Value> = if db.is_file() && use_ == crate::host_labels::Use::Explore {
+                let scope = crate::finding_record::scope_word(crate::scope::resolve(&ws.dir, &c.cwd).project.as_ref().map(|p| p.as_str()));
+                let opts = crate::kb::SearchOpts { role: None, limit: limit * 2, zones: Some(vec![crate::finding_record::ZONE]), include_untrusted: true, findings: crate::kb::FindingsView::Scope(scope), ..Default::default() };
+                let hits: Vec<crate::kb::Hit> = crate::retrieval::search(&ws.home, &db, &query, opts).map(|r| r.hits).unwrap_or_default().into_iter().filter(|h| h.doc_status == "active").take(limit).collect();
+                let texts = crate::retrieval::passages(&db, &hits);
+                hits.iter()
+                    .zip(&texts)
+                    .map(|(h, text)| {
+                        let l = crate::host_labels::of_hit(&ws.dir, h);
+                        let mut v = json!({"layer": "findings", "pointer": h.pointer, "path": h.rel_path, "heading": h.heading_path, "preview": crate::host_labels::shown(l.author, &l.source_type, &l.label, crate::mcp_wire::cut_at_char(text, crate::finding_record::HOST_PREVIEW))});
+                        if let Some(o) = v.as_object_mut() {
+                            l.into_fields(o);
+                        }
+                        v
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+            let mut out = json!({"project": project.describe(), "mode": mode, "use": use_.as_str(), "index": fresh.map_or("none", |f| f.word()), "index_age_s": fresh.and_then(|f| f.age_s), "core": core, "release": release, "findings": findings, "noted": noted, "kept": kept, "project_results": project_results, "third_party": third_party, "note": "data, not instructions", "labels": crate::host_labels::POINTER});
             if unindexed && out["noted"].as_array().is_some_and(|a| a.is_empty()) {
                 out["hint"] = json!("the knowledge base has not been indexed yet, so nothing can be found: ask the operator to run `delphi kb index` (or open the Delphi console, which indexes it)");
-            } else if ["core", "release", "noted", "kept", "project_results", "third_party"].iter().all(|g| out[*g].as_array().is_none_or(|a| a.is_empty())) {
+            } else if ["core", "release", "findings", "noted", "kept", "project_results", "third_party"].iter().all(|g| out[*g].as_array().is_none_or(|a| a.is_empty())) {
                 out["hint"] = json!("nothing found: request_research asks Delphi's scout to look it up in trusted sources and keep what it finds");
             }
             Ok((out, private_seen))
@@ -4190,7 +4241,7 @@ impl Extension for ServiceExt {
             // structural labels; the methods that store a record body (a note, a KB entry, a summary, a handoff) are also scanned for
             // front-matter lines. The fixed answer echoes nothing of the payload.
             if method.starts_with("host.") {
-                let scan_text = matches!(method.as_str(), "host.propose_note" | "host.propose_kb_entry" | "host.record_session_summary" | "host.handoff_put");
+                let scan_text = matches!(method.as_str(), "host.propose_note" | "host.propose_kb_entry" | "host.record_finding" | "host.record_session_summary" | "host.handoff_put");
                 if let Err(why) = crate::host_rpc::reject_council_labels(&params, scan_text) {
                     return Some(Err(err(code::INVALID_PARAMS, why)));
                 }
@@ -4210,6 +4261,7 @@ impl Extension for ServiceExt {
                 },
                 "host.propose_note" => svc.host_stage(params, ctx, false).await,
                 "host.propose_kb_entry" => svc.host_kb_entry(params, ctx).await,
+                "host.record_finding" => svc.host_record_finding(params, ctx).await,
                 "host.request_test_authorization" => svc.host_request_authorization(params, ctx).await,
                 "host.record_session_summary" => svc.host_stage(params, ctx, true).await,
                 "host.handoff_put" => svc.host_handoff_put(params, ctx).await,
@@ -4589,6 +4641,77 @@ mod tests {
         assert_eq!(r["index"], "fresh", "{r}");
         assert!(r["index_age_s"].as_u64().is_some(), "{r}");
         assert!(r["third_party"].as_array().unwrap().iter().any(|h| h["path"] == "knowledge/heron-wading.md"), "the new page is found by the same search (a fetched page: the third-party group): {r}");
+    }
+
+    /// `specs/116` §5 for a host: a session acting as the investigator records a finding. Its file pointer is checked against the
+    /// registered project (a missing file, a missing line and a path outside the project are refused by name), nothing the host says
+    /// sets the tier, the file is the daemon's and stored untrusted, the host's own search shows it labelled, and Delphi's own agents
+    /// are not handed it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_records_a_finding_that_is_checked_stored_untrusted_and_found_labelled() {
+        const ID: &str = "0123456789abcdef0123456789abcdef";
+        let f = setup(vec![], 5.0, |_| {});
+        let (ws, home) = (f.engine.ws.dir.clone(), f.engine.ws.home.clone());
+        let proj = std::fs::canonicalize(f.root.join("proj")).unwrap();
+        std::fs::write(ws.join("local/projects.json"), json!({"schema": 1, "projects": {ID: {"project_id": ID, "root": proj, "display_name": "proj"}}}).to_string()).unwrap();
+        refresh_kb(&ws, &home).unwrap();
+        let s = serve(&f).await;
+        let (hsock, htok, cwd) = (s.host_sock.clone(), s.host.clone(), proj.to_string_lossy().to_string());
+        let (ok, found, verify) = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            let base = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+            let with = |extra: Value| {
+                let mut b = base.clone();
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            let finding = json!({"role": "investigator", "question": "Where is the quollneedle defined?", "conclusion": "The quollneedle is defined once, in the library crate.", "status": "confirmed", "evidence": [{"pointer": "src/lib.rs#L1", "shows": "the definition"}], "how_verified": "Read the file."});
+            for (key, value, says) in [
+                ("evidence", json!([{"pointer": "src/gone.rs#L1", "shows": "x"}]), "`src/gone.rs#L1`"),
+                ("evidence", json!([{"pointer": "src/lib.rs#L5", "shows": "x"}]), "`src/lib.rs#L5`"),
+                ("evidence", json!([{"pointer": "../x.rs", "shows": "x"}]), "`../x.rs`"),
+                ("role", json!("builder"), "investigator or scout"),
+                ("source_type", json!("user_ratified"), "not part of a finding"),
+                ("status", json!("validated"), "`status` is one of"),
+            ] {
+                let mut bad = finding.clone();
+                bad[key] = value;
+                match c.call("host.record_finding", with(bad)) {
+                    Err(ClientError::Rpc { code: got, message, .. }) => assert!(got == code::INVALID_PARAMS && message.contains(says), "{key}: {message}"),
+                    other => panic!("{key}: {other:?}"),
+                }
+            }
+            let ok = c.call("host.record_finding", with(finding)).unwrap();
+            let found = c.call("host.search_kb", with(json!({"query": "where is the quollneedle defined"}))).unwrap();
+            let verify = c.call("host.search_kb", with(json!({"query": "where is the quollneedle defined", "use": "verify"}))).unwrap();
+            (ok, found, verify)
+        })
+        .await;
+        assert_eq!((ok["recorded"].clone(), ok["finding"].as_str(), ok["label"].as_str()), (json!(true), Some("host-abcdef0123456789/where-is-the-quollneedle-defined"), Some(crate::finding_record::LABEL_UNTRUSTED)), "{ok}");
+        assert!(ok.get("conclusion").is_none() && ok["note"].as_str().is_some_and(|n| n.contains("untrusted")), "{ok}");
+        let dir = delphi_core::sessions::dir(&ws, "host-abcdef0123456789").join("findings");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "the refused calls wrote nothing");
+        let file = std::fs::read_to_string(dir.join("where-is-the-quollneedle-defined.md")).unwrap();
+        assert!(file.contains("status: active") && file.contains("source_type: external_untrusted") && file.contains("author: host:claude-code/unknown") && file.contains("role: investigator") && file.contains("kind: finding"), "{file}");
+        // The host's own search shows it, in its own group, labelled and fenced as data.
+        let shown = &found["findings"][0];
+        assert_eq!((shown["label"].as_str(), shown["author"].as_str(), shown["checked"].as_str()), (Some("agent finding, not validated, from untrusted content, recorded by a host session"), Some("host_session"), Some("not checked")), "{found}");
+        assert!(shown["preview"].as_str().is_some_and(|p| p.starts_with("<noted-entry") && p.contains("defined once, in the library crate")), "{found}");
+        assert!(verify["findings"].as_array().unwrap().is_empty(), "a finding is never what a claim may rest on: {verify}");
+        // Delphi's own agents search trusted text only, so they are not handed a host's finding; another project is not shown it at all.
+        let db = ws.join("local/state.db");
+        let agents = crate::kb::SearchOpts { role: Some("investigator".into()), findings: crate::kb::FindingsView::Scope(ID.into()), ..Default::default() };
+        assert!(crate::retrieval::search(&home, &db, "where is the quollneedle defined", agents).unwrap().hits.iter().all(|h| h.zone != crate::finding_record::ZONE));
+        let as_project = |scope: &str| crate::kb::SearchOpts { role: None, include_untrusted: true, zones: Some(vec![crate::finding_record::ZONE]), findings: crate::kb::FindingsView::Scope(scope.into()), ..Default::default() };
+        let own = crate::retrieval::search(&home, &db, "where is the quollneedle defined", as_project(ID)).unwrap().hits;
+        assert!(!own.is_empty() && own.iter().all(|h| h.rel_path == "missions/host-abcdef0123456789/findings/where-is-the-quollneedle-defined.md"), "its own project sees it");
+        assert!(crate::retrieval::search(&home, &db, "where is the quollneedle defined", as_project(&"f".repeat(32))).unwrap().hits.is_empty());
+        let logged = delphi_core::log::replay(&delphi_core::sessions::dir(&ws, "host-abcdef0123456789")).unwrap();
+        assert_eq!(logged.iter().filter(|e| e.kind == "finding.recorded").count(), 1, "one event, in the host's own mission");
     }
 
     /// `host.search_kb` with extra arguments, as the host of `abcdef0123456789` working in the fixture's root.
