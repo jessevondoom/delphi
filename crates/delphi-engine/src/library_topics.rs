@@ -688,6 +688,17 @@ impl Library {
         let _ = self.write_json(&self.links_path(), &json!(t));
     }
 
+    /// One source as the operator's views show it (`specs/117` §3 item 3, `library.source`): its record, whether it is private, its kept
+    /// text or excerpts up to `max` characters, and its pictures. Reached only by the console and the paired app, never by a seat or a
+    /// host. Reads only.
+    pub fn source_view(&self, id: &str, max: usize) -> Option<Value> {
+        let meta = self.read_meta(id)?;
+        let text = self.stored_text(id).unwrap_or_default();
+        let truncated = text.chars().count() > max;
+        let assets: Vec<String> = self.image_assets(id).into_iter().map(|a| a.uri).collect();
+        Some(json!({"id": id, "label": format!("s-{}", id), "meta": meta, "private": is_private(&meta), "capture_level": meta["capture_level"], "status": meta["status"], "text": text.chars().take(max).collect::<String>(), "truncated": truncated, "assets": assets}))
+    }
+
     /// What links to `slug` and what it links to (`specs/117` §2 item 6), from the link table. Reads only.
     pub fn topic_links(&self, slug: &str) -> Option<Value> {
         if !valid_slug(slug) {
