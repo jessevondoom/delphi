@@ -346,6 +346,7 @@ impl Library {
         for c in &checked.cited {
             match self.resolve(c, scope) {
                 Ok(Rec::Claim(cl)) => add(Material { id: c.label(), standing: shown_status(super::claims::status(&cl)), validated: super::claims::status(&cl) == Status::Validated, cited: true, text: cl["text"].as_str().unwrap_or("").into() }, &mut out),
+                Ok(Rec::Record(r)) => add(Material { id: c.label(), standing: r.status.clone(), validated: r.status == "● validated", cited: true, text: r.text.chars().take(EXCERPT_MAX).collect() }, &mut out),
                 Ok(Rec::Source(id, m)) => {
                     let text: String = self.stored_text(&id).unwrap_or_default().chars().take(EXCERPT_MAX).collect();
                     add(Material { id: c.label(), standing: format!("○ {}", m["status"].as_str().unwrap_or("not validated")), validated: m["status"] == "validated", cited: true, text }, &mut out)

@@ -35,8 +35,11 @@ pub struct Grant {
 /// **The grant table.** One row per method, on purpose: adding a row is a decision that an approved spec names (§5 item 1), and
 /// the gate file of §4 (`crates/delphi/tests/app_grants.toml`, slice K4) is checked against exactly this table.
 ///
-/// * `read`: what the narrator socket reads ([`crate::server::NARRATOR_METHODS`]; a test holds the two equal). Nothing here writes.
-///   The read methods of spec 117 §3 are added here as rows when they exist.
+/// * `read`: what the narrator socket reads ([`crate::server::NARRATOR_METHODS`]), and the encyclopedia's eleven reads of spec 117 §3
+///   ([`ENCYCLOPEDIA_READS`]); a test holds the grant equal to the two together. Nothing here writes: each of the eleven is proved to
+///   leave a workspace byte-identical (`delphi-engine`'s `every_encyclopedia_read_leaves_the_workspace_byte_identical_and_calls_no_model`).
+///   They are not narrator methods: the narrator socket's list is unchanged, so a private source's text reaches the app only on a key
+///   the operator paired.
 /// * `request`: the first acting grant. Its four methods are slice K4's; until then the name exists and reaches nothing.
 pub const GRANTS: [Grant; 2] = [
     Grant {
@@ -54,10 +57,25 @@ pub const GRANTS: [Grant; 2] = [
             "approval.list",
             "permissions.get",
             "ratify.list",
+            // `specs/117` §3: the encyclopedia's reads, each proved to write nothing.
+            "pages.list",
+            "pages.get",
+            "pages.versions",
+            "pages.links",
+            "topics.list",
+            "topics.get",
+            "library.source",
+            "library.claim",
+            "memory.roles",
+            "memory.role",
+            "changes.since",
         ],
     },
     Grant { name: "request", methods: &[] },
 ];
+
+/// The encyclopedia's reads (`specs/117` §3 item 1), rows of the `read` grant and of no other list.
+pub const ENCYCLOPEDIA_READS: [&str; 11] = ["pages.list", "pages.get", "pages.versions", "pages.links", "topics.list", "topics.get", "library.source", "library.claim", "memory.roles", "memory.role", "changes.since"];
 
 /// Is `name` a grant the table defines?
 pub fn is_grant(name: &str) -> bool {
@@ -219,13 +237,16 @@ mod tests {
         AppKey { name: name.into(), public_key, paired_at: "2026-11-01T00:00:00.000Z".into(), last_used: last_used.into(), app_version: "0.1.0".into(), grants: grants.iter().map(|g| g.to_string()).collect() }
     }
 
-    /// §4.1: `read` is what the narrator socket reads, no more and no less, and nothing else is reachable in this slice.
+    /// §4.1: `read` is what the narrator socket reads and the encyclopedia's eleven reads (spec 117 §3), no more and no less, and
+    /// nothing else is reachable in this slice.
     #[test]
     fn the_read_grant_is_the_narrator_list_and_request_reaches_nothing_yet() {
         let mut read: Vec<&str> = GRANTS[0].methods.to_vec();
-        let mut narrator: Vec<&str> = crate::server::NARRATOR_METHODS.to_vec();
+        let mut narrator: Vec<&str> = crate::server::NARRATOR_METHODS.iter().chain(ENCYCLOPEDIA_READS.iter()).copied().collect();
         read.sort();
         narrator.sort();
+        assert!(ENCYCLOPEDIA_READS.iter().all(|m| !crate::server::NARRATOR_METHODS.contains(m)), "the encyclopedia's reads are not narrator methods");
+        assert_eq!(read.len(), 23);
         assert_eq!((GRANTS[0].name, read), ("read", narrator));
         assert_eq!((GRANTS[1].name, GRANTS[1].methods.len()), ("request", 0));
         assert_eq!(GRANTS.len(), 2, "a third grant needs an approved spec (specs/120 §5 item 1)");
