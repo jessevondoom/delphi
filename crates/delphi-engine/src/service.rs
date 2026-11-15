@@ -547,6 +547,28 @@ impl EngineService {
         Ok(fr::receipt(&stored, tier))
     }
 
+    /// `host.flag_wrong` (`specs/116` §7 item 2): a host session says an item the knowledge base gave it is wrong. The dispute is
+    /// recorded and shown with the item (`disputed by host`) and never counts toward taking it out of automatic retrieval: what a host
+    /// sends is host-supplied text. Nothing is deleted or edited; one dispute per session and item.
+    async fn host_flag_wrong(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let (pointer, why) = (p["pointer"].as_str().unwrap_or("").to_string(), self.engine.secrets.redact(p["why"].as_str().unwrap_or("")));
+        let (wsd, mission, now) = (ws.dir.clone(), c.mission(), self.engine.now());
+        let db = wsd.join("local/state.db");
+        let r = tokio::task::spawn_blocking(move || crate::use_signals::flag(&wsd, &db, &pointer, &why, crate::use_signals::Flagger::Host { mission: &mission }, &now))
+            .await
+            .map_err(|e| err(-32000, e.to_string()))?
+            .map_err(|e| err(code::INVALID_PARAMS, e))?;
+        if let Ok(m) = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await {
+            let _ = m.append(EventEnvelope::new(&m.id, crate::use_signals::EVENT, json!({"target": r["flagged"], "by": "host", "counted": false}))).await;
+        }
+        Ok(r)
+    }
+
     /// `host.propose_kb_entry` (`specs/068` §5): stage one research entry for the operator's keep-or-discard review. It is never
     /// searchable until the operator keeps it, and the secret scrubber has already seen the body.
     async fn host_kb_entry(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -1950,6 +1972,10 @@ impl EngineService {
                 let mut v = json!({"layer": layer, "pointer": crate::library::host_pointer(&h.pointer), "path": crate::library::host_pointer(&h.rel_path), "heading": h.heading_path, "preview": crate::host_labels::shown(l.author, &l.source_type, &l.label, &h.preview)});
                 if let Some(o) = v.as_object_mut() {
                     l.into_fields(o);
+                    // `specs/116` §7 item 2: who disputed it since the operator last reviewed it; the item is still returned.
+                    if !h.disputed.is_empty() {
+                        o.insert("disputed".into(), json!(format!("disputed by {}", h.disputed.join(", "))));
+                    }
                 }
                 // `specs/113` §3 item 6: an imported summary that lists no source says so.
                 if let Some(flag) = crate::research_ingest::search_flag(&ws.dir, &h.rel_path) {
@@ -2051,6 +2077,15 @@ impl EngineService {
         // Spec 103 M1 (observe only): mark the host session for each private entry its answer carried. A failure here never fails the search.
         if !private_seen.is_empty() {
             self.private_read_mark(&mark_key, &mark_cwd, &private_seen, "host.search_kb").await;
+        }
+        // `specs/080` W1.2 (`specs/116` §7 item 1): the facts this answer carried, for the read-count report, by id with the answer's
+        // hit count and never the query. A search that carried no fact has nothing to count and opens no mission for it.
+        let facts = crate::use_signals::fact_ids(["core", "release", "third_party"].iter().flat_map(|g| out[*g].as_array().into_iter().flatten()).filter_map(|r| r["path"].as_str()));
+        if !facts.is_empty() {
+            let hits: usize = ["core", "release", "findings", "noted", "kept", "project_results", "project_research", "third_party"].iter().map(|g| out[*g].as_array().map_or(0, |a| a.len())).sum();
+            if let Ok(m) = self.mission_at(Some(&mark_key), Some(&mark_cwd)).await {
+                let _ = m.append(EventEnvelope::new(&m.id, crate::use_signals::HOST_READ, json!({"facts": facts, "hits": hits}))).await;
+            }
         }
         // `specs/109` §13.1 item 2: what this answer showed the session counts toward the stamp on what it stages next.
         let reads = crate::host_shown::reads_of_search(&out);
@@ -4606,7 +4641,7 @@ impl Extension for ServiceExt {
             // structural labels; the methods that store a record body (a note, a KB entry, a summary, a handoff) are also scanned for
             // front-matter lines. The fixed answer echoes nothing of the payload.
             if method.starts_with("host.") {
-                let scan_text = matches!(method.as_str(), "host.propose_note" | "host.propose_kb_entry" | "host.record_finding" | "host.record_research" | "host.record_session_summary" | "host.handoff_put");
+                let scan_text = matches!(method.as_str(), "host.propose_note" | "host.propose_kb_entry" | "host.record_finding" | "host.flag_wrong" | "host.record_research" | "host.record_session_summary" | "host.handoff_put");
                 if let Err(why) = crate::host_rpc::reject_council_labels(&params, scan_text) {
                     return Some(Err(err(code::INVALID_PARAMS, why)));
                 }
@@ -4627,6 +4662,7 @@ impl Extension for ServiceExt {
                 "host.propose_note" => svc.host_stage(params, ctx, false).await,
                 "host.propose_kb_entry" => svc.host_kb_entry(params, ctx).await,
                 "host.record_finding" => svc.host_record_finding(params, ctx).await,
+                "host.flag_wrong" => svc.host_flag_wrong(params, ctx).await,
                 "host.request_test_authorization" => svc.host_request_authorization(params, ctx).await,
                 "host.record_session_summary" => svc.host_stage(params, ctx, true).await,
                 "host.handoff_put" => svc.host_handoff_put(params, ctx).await,

@@ -206,6 +206,7 @@ pub mod tier_audit;
 pub mod accept_all;
 pub mod timers;
 pub mod tools;
+pub mod use_signals;
 pub mod workspace;
 pub mod worktree;
 

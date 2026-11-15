@@ -785,6 +785,10 @@ impl Kb {
         // A provisional note past its `valid_until` moves to `expired/`, which is not indexed (`specs/116` §2 item 6).
         crate::provisional_notes::sweep(ws, &delphi_core::bundles::today());
         let rep = self.sync_lexical(&sources(ws), now)?;
+        // `specs/116` §7: the disputes and ended-well counts every search reads, from the daemon's ledgers.
+        if let Err(e) = crate::use_signals::publish(ws, self) {
+            delphi_core::elog::warn("engine", "use_signals_publish", &e, serde_json::json!({}));
+        }
         if self.embedder.is_some() {
             self.apply_seed_vectors()?;
         }
@@ -936,6 +940,22 @@ impl Kb {
         let mut st = self.conn.prepare(&format!("SELECT rel_path, zone FROM kb_documents WHERE zone IN ({})", list.join(",")))?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         Ok(rows.flatten().collect())
+    }
+
+    /// Does the index hold a document at this logical path?
+    pub fn has_document(&self, rel_path: &str) -> bool {
+        self.conn.query_row("SELECT 1 FROM kb_documents WHERE rel_path = ?1", [rel_path], |_| Ok(())).is_ok()
+    }
+
+    /// One value of `kb_meta`, if it is there.
+    pub fn meta(&self, key: &str) -> Option<String> {
+        self.conn.query_row("SELECT value FROM kb_meta WHERE key = ?1", [key], |r| r.get::<_, String>(0)).ok()
+    }
+
+    /// Set one value of `kb_meta`. It does not change the index's generation: a cached reader reads it at its next search.
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<(), KbError> {
+        self.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES (?1, ?2)", [key, value])?;
+        Ok(())
     }
 
     /// When the index was last brought in line with the files, in seconds since the epoch (`synced_unix`, written by every sync), or
@@ -1687,6 +1707,43 @@ pub struct SearchOpts {
     /// Whether the search may return provisional notes (zone `provisional`, `specs/116` §2), and whose. Off by default, so no
     /// search returns an unreviewed note unless it was built to.
     pub provisional: ProvisionalView,
+    /// The search hands its results to an agent without the agent asking (the passages a span starts with, `specs/116` §7 item 2):
+    /// an item out of automatic retrieval by its disputes is left out. Narrows, never widens.
+    pub automatic: bool,
+    /// The small ranking terms of `specs/116` §7 item 3, all off at zero (the default).
+    pub ranking: Ranking,
+}
+
+/// The ranking terms of `specs/116` §7 item 3 (`[retrieval] use_boost`, `dispute_penalty`, `confidence_weight`): each a share of a
+/// result's score, off at zero and clamped to `[0, 0.5]`; each saturates at three (ended-well tasks, counted disputes).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Ranking {
+    pub use_boost: f64,
+    pub dispute_penalty: f64,
+    pub confidence_weight: f64,
+}
+
+impl Ranking {
+    fn clamp(t: f64) -> f64 {
+        if t.is_finite() { t.clamp(0.0, delphi_adapter::config::MAX_RANK_TERM) } else { 0.0 }
+    }
+
+    pub fn on(&self) -> bool {
+        Ranking::clamp(self.use_boost) > 0.0 || Ranking::clamp(self.dispute_penalty) > 0.0 || Ranking::clamp(self.confidence_weight) > 0.0
+    }
+
+    /// The factor on one result's score. `ended_well`: the tasks that ended well after the daemon handed it to them (a provisional
+    /// note has none: its uses are its own count); `dispute`: [`crate::use_signals::Disputed::weight`]; `confidence`: the stored word
+    /// of a validated fact (only the fact store writes `context/facts/`, so a file anywhere else that claims one is read as `low`).
+    pub fn factor(&self, ended_well: usize, dispute: f64, confidence: &str) -> f64 {
+        let used = ended_well.min(3) as f64 / 3.0;
+        let conf = match confidence {
+            "high" => 1.0,
+            "medium" => 0.5,
+            _ => 0.0,
+        };
+        (1.0 + Ranking::clamp(self.use_boost) * used) * (1.0 - Ranking::clamp(self.dispute_penalty) * dispute.clamp(0.0, 1.0)) * (1.0 + Ranking::clamp(self.confidence_weight) * conf)
+    }
 }
 
 /// Which other projects' research a search may return, and how (`specs/115` §3). Built by `shared_research::view` from the
@@ -1788,7 +1845,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None, provisional: ProvisionalView::Off }
+        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None, provisional: ProvisionalView::Off, automatic: false, ranking: Ranking::default() }
     }
 }
 
@@ -1825,11 +1882,20 @@ pub struct Hit {
     /// A project's claim that rests on a private or internal source (`specs/115` §2 item 3), the session's own project's or
     /// another's. **Whoever hands this hit to a session marks that session** (`private_read::mark`).
     pub internal: bool,
+    /// Who disputed the item since the operator last reviewed it (`specs/116` §7 item 2): role ids, `host`, `operator`. Empty for
+    /// most. Shown with the label; it never hides the item from an explicit search.
+    pub disputed: Vec<String>,
 }
 
 impl Hit {
     /// What to print for the status: `validated · vouched by <org>` for vouched bundle content, else the three words.
     pub fn shown_label(&self) -> String {
+        let base = self.base_label();
+        // `specs/116` §7 item 2: a disputed item says so, whatever else its label is.
+        if self.disputed.is_empty() { base } else { format!("{} · disputed by {}", base, self.disputed.join(", ")) }
+    }
+
+    fn base_label(&self) -> String {
         // A provisional note says whose it is, when it was written and whether it came after untrusted content (`specs/116` §2
         // items 3 and 4), from where the index filed it and the tier it holds.
         if self.zone == crate::provisional_notes::ZONE {
@@ -1982,6 +2048,28 @@ impl Kb {
                     *s *= EPISODE_FACTOR;
                 }
             }
+        }
+        // `specs/116` §7: disputes and the ranking terms. The maps are the daemon's (`use_signals::publish`); an index without them has
+        // none. An automatic search leaves out an item its disputes took out of automatic retrieval; an explicit one keeps it, labelled.
+        let disputes = self.meta(crate::use_signals::META_DISPUTES).map(|m| crate::use_signals::parse_disputes(&m)).unwrap_or_default();
+        let ended_well = if opts.ranking.use_boost > 0.0 { self.meta(crate::use_signals::META_ENDED_WELL).map(|m| crate::use_signals::parse_ended_well(&m)).unwrap_or_default() } else { Default::default() };
+        if opts.ranking.on() || (opts.automatic && !disputes.is_empty()) {
+            let mut kept = Vec::with_capacity(order.len());
+            for (id, s) in order.into_iter() {
+                let row: Option<(String, String, String)> = self.conn.query_row("SELECT c.rel_path, d.zone, d.confidence FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).ok();
+                let Some((rel, zone, confidence)) = row else {
+                    kept.push((id, s));
+                    continue;
+                };
+                let d = disputes.get(&rel);
+                if opts.automatic && d.is_some_and(|d| d.dropped()) {
+                    continue;
+                }
+                let used = if zone == crate::provisional_notes::ZONE { 0 } else { ended_well.get(&rel).copied().unwrap_or(0) };
+                let confidence = if rel.starts_with("context/facts/") { confidence.as_str() } else { "low" };
+                kept.push((id, s * opts.ranking.factor(used, d.map_or(0.0, |d| d.weight()), confidence)));
+            }
+            order = kept;
         }
         order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
         let mut best_rerank = None;
@@ -2171,7 +2259,8 @@ impl Kb {
             } else {
                 ks.label()
             };
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author, shared: shared_from.is_some(), project: shared_from, internal });
+            let disputed = disputes.get(&rel_path).map(|d| d.by.clone()).unwrap_or_default();
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author, shared: shared_from.is_some(), project: shared_from, internal, disputed });
         }
         Ok(Found { hits, best_rerank, withheld })
     }
@@ -2371,6 +2460,18 @@ fn append_line(path: &Path, v: &serde_json::Value) {
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{}", v);
     }
+}
+
+/// Set values of `kb_meta` in the index file at `db` without opening the index for indexing (no schema work): what the daemon writes
+/// between syncs (`use_signals::publish_to`). Refused for a file that is not an index.
+pub fn write_meta(db: &Path, values: &[(&str, &str)]) -> Result<(), KbError> {
+    let conn = Connection::open(db)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.query_row("SELECT value FROM kb_meta WHERE key = 'schema_version'", [], |r| r.get::<_, String>(0))?;
+    for (k, v) in values {
+        conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES (?1, ?2)", [k, v])?;
+    }
+    Ok(())
 }
 
 /// A search that found nothing is a candidate miss; it is written down so that "vectors would have helped" can

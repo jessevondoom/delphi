@@ -612,13 +612,20 @@ impl Tap {
             .collect()
     }
 
-    /// A task ended: count the uses it earned. Reads the mission's log and writes only the notes' own files.
+    /// A task ended: count the uses it earned, and (`specs/116` §7 item 3) what the daemon handed its spans at their start, for the
+    /// ranking's ended-well term. Reads the mission's log and writes only the notes' own files and the ended-well ledger.
     pub fn task_ended(&self, mission_dir: &Path, task: &str) {
-        if !self.on() {
-            return;
-        }
         let Ok(events) = delphi_core::log::replay(mission_dir) else { return };
-        record_uses(&self.ws_dir, &earned(&events, task), &delphi_core::bundles::today());
+        let given = crate::use_signals::earned(&events, task);
+        if let (false, Some(mission)) = (given.is_empty(), mission_dir.file_name().and_then(|n| n.to_str())) {
+            let done = crate::use_signals::record_ended_well(&self.ws_dir, mission, task, &given, &delphi_core::time::now_rfc3339()).and_then(|_| crate::use_signals::publish_to(&self.ws_dir, &self.ws_dir.join("local/state.db")));
+            if let Err(e) = done {
+                delphi_core::elog::warn("engine", "ended_well", &e, serde_json::json!({"mission": mission, "task": task}));
+            }
+        }
+        if self.on() {
+            record_uses(&self.ws_dir, &earned(&events, task), &delphi_core::bundles::today());
+        }
     }
 }
 

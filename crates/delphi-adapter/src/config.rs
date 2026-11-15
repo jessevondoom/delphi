@@ -687,22 +687,47 @@ impl AgentsConfig {
 
 /// `[retrieval]` (`specs/064` §4.2, `specs/116` §4 item 2). `auto`: a span starts with passages from the knowledge base. `start_passages`
 /// and `start_chars`: how many, and how many characters in all (six and 4,000 by default; at most ten and 16,000; zero in either
-/// gives a span none).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+/// gives a span none). The three ranking terms of `specs/116` §7 item 3 are each a share of a result's score, off at zero (the
+/// default) and at most [`MAX_RANK_TERM`]: `use_boost` raises an item the daemon handed to spans that then ended well, `dispute_penalty`
+/// lowers an item flagged wrong, and `confidence_weight` raises a validated fact by its stored `confidence`.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RetrievalConfig {
     pub auto: bool,
     pub start_passages: usize,
     pub start_chars: usize,
+    pub use_boost: f64,
+    pub dispute_penalty: f64,
+    pub confidence_weight: f64,
 }
 
 /// The most `[retrieval] start_passages` and `start_chars` may be.
 pub const MAX_START_PASSAGES: usize = 10;
 pub const MAX_START_CHARS: usize = 16_000;
+/// The most each ranking term of `[retrieval]` may be: a share of a result's score, so no term can more than move a result a little.
+pub const MAX_RANK_TERM: f64 = 0.5;
 
 impl Default for RetrievalConfig {
     fn default() -> RetrievalConfig {
-        RetrievalConfig { auto: true, start_passages: 6, start_chars: 4000 }
+        RetrievalConfig { auto: true, start_passages: 6, start_chars: 4000, use_boost: 0.0, dispute_penalty: 0.0, confidence_weight: 0.0 }
+    }
+}
+
+impl RetrievalConfig {
+    /// Are the three ranking terms each a number from 0 to [`MAX_RANK_TERM`]?
+    pub fn terms_ok(&self) -> bool {
+        [self.use_boost, self.dispute_penalty, self.confidence_weight].iter().all(|t| t.is_finite() && (0.0..=MAX_RANK_TERM).contains(t))
+    }
+
+    /// The `[retrieval]` settings in a `config.toml`'s text; `None` when they cannot be read as written or are out of range. The
+    /// daemon reads the ranking terms from the file at each search, so a change needs no restart; `None` is read as all terms off.
+    pub fn read(text: &str) -> Option<RetrievalConfig> {
+        let root = toml::from_str::<toml::Value>(text).ok()?;
+        let c = match root.get("retrieval") {
+            None => RetrievalConfig::default(),
+            Some(v) => v.clone().try_into::<RetrievalConfig>().ok()?,
+        };
+        c.terms_ok().then_some(c)
     }
 }
 
@@ -1170,6 +1195,7 @@ impl Config {
         if let Some(v) = root.get("retrieval") {
             match v.clone().try_into::<RetrievalConfig>() {
                 Ok(v) if v.start_passages > MAX_START_PASSAGES || v.start_chars > MAX_START_CHARS => errs.push(format!("[retrieval]: start_passages is at most {} and start_chars at most {} (specs/116 §4 item 2)", MAX_START_PASSAGES, MAX_START_CHARS)),
+                Ok(v) if !v.terms_ok() => errs.push(format!("[retrieval]: use_boost, dispute_penalty and confidence_weight are each a number from 0 to {} (specs/116 §7 item 3)", MAX_RANK_TERM)),
                 Ok(v) => cfg.retrieval = v,
                 Err(e) => errs.push(format!("[retrieval]: {}", e)),
             }
@@ -1812,6 +1838,20 @@ pub(crate) mod tests {
         assert!(MemoryConfig::read("").unwrap().provisional && MemoryConfig::read("[mcp]\nenabled = true\n").unwrap().provisional);
         assert!(!MemoryConfig::read("[memory]\nprovisional = false\n").unwrap().provisional);
         assert!(MemoryConfig::read("not toml [").is_none());
+    }
+
+    /// `specs/116` §7 item 3: the three ranking terms are off at zero and bounded.
+    #[test]
+    fn the_ranking_terms_are_zero_by_default_and_bounded() {
+        let d = Config::parse("").unwrap().retrieval;
+        assert_eq!((d.use_boost, d.dispute_penalty, d.confidence_weight), (0.0, 0.0, 0.0));
+        let set = Config::parse("[retrieval]\nuse_boost = 0.2\ndispute_penalty = 0.5\nconfidence_weight = 0.1\n").unwrap().retrieval;
+        assert_eq!((set.use_boost, set.dispute_penalty, set.confidence_weight), (0.2, 0.5, 0.1));
+        for bad in ["use_boost = 0.6", "dispute_penalty = -0.1", "confidence_weight = \"high\"", "use_boost = nan"] {
+            assert!(Config::parse(&format!("[retrieval]\n{bad}\n")).is_err(), "{bad}");
+            assert!(RetrievalConfig::read(&format!("[retrieval]\n{bad}\n")).is_none(), "{bad}");
+        }
+        assert_eq!(RetrievalConfig::read("").unwrap().use_boost, 0.0);
     }
 
     #[test]
