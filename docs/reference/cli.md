@@ -160,6 +160,21 @@ A bundle can also travel through a xenia store (the org's shared, signed, git-ho
 sources add copies sources from your library into <dir>/sources/ (and turns the section on in bundle.toml). It writes meta.json from the library record (citation fields and the licence record, `internal` when there is none; no status, origin, reliance count or note), source.md when the capture is whole, the excerpts without your purpose notes, and recognised assets. Licence is information, not a gate: nothing is refused for it. The one refusal is a source you flagged private, which never travels in a bundle; the command is also refused inside an agent seat. It refreshes files.json when the bundle has one (sign again if it was signed) and lists the source-licence, source-attribution and source-sharealike warnings `validate` would report. For a public bundle, `package` and `publish` print the sources that carry a licence note and ask you to confirm in a terminal (no --yes); for an internal bundle `publish` asks. The acknowledged ids are written to .delphi-bundle/report.json.
 Exit codes: 0 pass · 1 failed · 2 usage.
 
+### `delphi app`
+
+Start the desktop app and pair it; list, revoke and grant its keys.
+
+```
+  delphi app [--workspace <name>] [--home <dir>]
+  delphi app list | log
+  delphi app revoke <name>
+  delphi app grant <name> [--remove] <grant>
+```
+
+Run it in a terminal: starting the app from one is what vouches for it, and nothing is asked.
+A paired app reads, and asks only for what its grants list (read, request). `revoke` closes its
+sessions at once. The app is DELPHI_APP, else the build beside this program, else /Applications.
+
 ### `delphi hooks`
 
 Run your observe hooks on events.

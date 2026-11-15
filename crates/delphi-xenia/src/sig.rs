@@ -113,6 +113,26 @@ impl Domain {
     }
 }
 
+impl Domain {
+    /// `delphi-app/1\n<nonce>\n<daemon instance>\n<protocol major>\n<socket path>` (specs/120 §3 item 2): what the desktop app signs on
+    /// every connection. The nonce is the daemon's, new for each connection; the instance id, the protocol major and the socket path are
+    /// the VERIFIER's own (this daemon, the socket it bound), so a signature made for another daemon, another socket or an earlier
+    /// connection does not verify. The path comes last and may hold anything but a control character, so no field before it can shift.
+    pub fn app_handshake(nonce: &str, instance: &str, protocol: u32, socket: &str) -> Result<Domain> {
+        let hex = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        if !hex(nonce, 64) {
+            return Err(Error::BadField("nonce"));
+        }
+        if !hex(instance, 32) {
+            return Err(Error::BadField("instance"));
+        }
+        if socket.is_empty() || socket.len() > 1024 || socket.bytes().any(|b| b < 0x20 || b == 0x7f) {
+            return Err(Error::BadField("socket"));
+        }
+        Ok(Domain(format!("delphi-app/1\n{nonce}\n{instance}\n{protocol}\n{socket}")))
+    }
+}
+
 fn check_scope(org: &str, store: &str) -> Result<()> {
     if !is_slug(org, 32) {
         return Err(Error::BadField("org"));
@@ -138,6 +158,20 @@ pub(crate) fn verify_strict_raw(public: &[u8; 32], message: &[u8], signature: &[
     }
     let sig = Signature::from_bytes(signature);
     key.verify_strict(message, &sig).map_err(|_| Error::BadSignature)
+}
+
+/// Verify a raw signature by a raw public key over exactly this domain, strictly (as every other check here). For a key that is not a
+/// `did:key`: the desktop app's (specs/120), which the daemon holds as 32 bytes in `operator/app-keys.json`.
+pub fn verify_key(public: &[u8; 32], domain: &Domain, signature: &[u8; 64]) -> Result<()> {
+    verify_strict_raw(public, domain.0.as_bytes(), signature)
+}
+
+/// Tests only: the public key of `seed` and its signature over `domain`. Nothing outside a test signs with a bare seed.
+#[cfg(any(test, feature = "test-support"))]
+pub fn sign_seed(seed: &[u8; 32], domain: &Domain) -> ([u8; 32], [u8; 64]) {
+    use ed25519_dalek::Signer;
+    let key = SigningKey::from_bytes(seed);
+    (key.verifying_key().to_bytes(), key.sign(domain.0.as_bytes()).to_bytes())
 }
 
 pub fn decode_signature(sig_b64: &str) -> Result<[u8; 64]> {
@@ -169,6 +203,26 @@ mod tests {
     const L: [u8; 32] = [
         0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
     ];
+
+    #[test]
+    fn an_app_handshake_names_one_connection_to_one_daemon_socket() {
+        let (nonce, inst) = ("ab".repeat(32), "cd".repeat(16));
+        let d = Domain::app_handshake(&nonce, &inst, 1, "/h/run/x.app.sock").unwrap();
+        assert_eq!(d.as_str(), format!("delphi-app/1\n{nonce}\n{inst}\n1\n/h/run/x.app.sock"));
+        let (public, sig) = sign_seed(&[7u8; 32], &d);
+        verify_key(&public, &d, &sig).unwrap();
+        // Another nonce, daemon, protocol or socket is another message; another key does not verify.
+        for other in [Domain::app_handshake(&"ac".repeat(32), &inst, 1, "/h/run/x.app.sock"), Domain::app_handshake(&nonce, &"ce".repeat(16), 1, "/h/run/x.app.sock"), Domain::app_handshake(&nonce, &inst, 2, "/h/run/x.app.sock"), Domain::app_handshake(&nonce, &inst, 1, "/h/run/x.narrator.sock")] {
+            assert!(verify_key(&public, &other.unwrap(), &sig).is_err());
+        }
+        assert!(verify_key(&sign_seed(&[8u8; 32], &d).0, &d, &sig).is_err());
+        // Fields that could shift the signed string are refused.
+        assert!(Domain::app_handshake(&nonce[..62], &inst, 1, "/s").is_err());
+        assert!(Domain::app_handshake(&nonce.to_uppercase(), &inst, 1, "/s").is_err());
+        assert!(Domain::app_handshake(&nonce, "short", 1, "/s").is_err());
+        assert!(Domain::app_handshake(&nonce, &inst, 1, "/s\n1\n/t").is_err());
+        assert!(Domain::app_handshake(&nonce, &inst, 1, "").is_err());
+    }
 
     #[test]
     fn rfc8032_vectors_pass() {

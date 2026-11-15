@@ -20,6 +20,9 @@ pub enum Scope {
     /// A coding tool on this machine that uses Delphi through `delphi mcp` (`specs/062`). It can stage lessons and
     /// summaries as untrusted content and keep one handoff, nothing else: [`crate::server::HOST_METHODS`].
     Host,
+    /// The desktop app (`specs/120`): a key a terminal paired, proved on every connection. It calls only the methods of the grants its
+    /// key holds: [`crate::app_keys::GRANTS`]. It is never issued a token.
+    App,
 }
 
 impl Scope {
@@ -29,6 +32,7 @@ impl Scope {
             Scope::Narrator => "narrator",
             Scope::Relay => "relay",
             Scope::Host => "host",
+            Scope::App => "app",
         }
     }
 }
@@ -77,6 +81,7 @@ pub mod code {
     pub const NOT_FOUND: i64 = -32004;
     pub const TTY_REQUIRED: i64 = -32005;
     pub const CONFIRMATION_REQUIRED: i64 = -32006;
+    pub const INTERNAL: i64 = -32603;
 }
 
 impl Response {
