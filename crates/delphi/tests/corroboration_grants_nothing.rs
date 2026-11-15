@@ -862,6 +862,9 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
         // spec 116 G1: the provisional tier reads a session's or a task's mark only to keep none of its notes where a later span could
         // be given them (they stay staged); it only withholds
         "crates/delphi-engine/src/provisional_notes.rs",
+        // spec 115 X4: the marker for a Delphi session (its start passages, the claim pull, an agent's `kb_search`) that is handed a
+        // project claim from an internal source; it only ever sets a mark, which holds sends and grants nothing
+        "crates/delphi-engine/src/shared_research.rs",
         "crates/delphi/src/doctor.rs",
         "crates/delphi/src/private_read_cmd.rs",
         "crates/delphi/src/main.rs",
@@ -908,7 +911,9 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
     assert_eq!(timer_note_callers, vec!["crates/delphi-engine/src/engine.rs".to_string()], "the setter of a timer is noted only where the engine sets a role's timer (its own context, never a tool argument)");
     assert_eq!(woken_link_callers, vec!["crates/delphi-engine/src/service.rs".to_string()], "a woken task is linked to its setter only where the daemon starts it");
     assert!(stray.is_empty(), "the private-read mark is named outside the files that set, observe, clear and show it; read the new file and add it on purpose: {stray:?}");
-    assert_eq!(mark_callers, vec!["crates/delphi-engine/src/service.rs".to_string()], "a mark is set only by the daemon's marker for a reader in READS");
+    mark_callers.sort();
+    // spec 115 X4: `shared_research::mark_session` is the second marker, for a Delphi session's own readers of shared research (READS row)
+    assert_eq!(mark_callers, vec!["crates/delphi-engine/src/service.rs".to_string(), "crates/delphi-engine/src/shared_research.rs".to_string()], "a mark is set only by the daemon's markers for a reader in READS");
     // `merge_class.rs` is the one approval-side file that names the mark, by a string, in one place, and only to refuse: the line returns `Some(..)`
     // (a reason a relay may not approve), never a decision to allow.
     let mc = std::fs::read_to_string(root.join("crates/delphi-engine/src/merge_class.rs")).unwrap();

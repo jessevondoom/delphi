@@ -634,7 +634,14 @@ fn kb_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
         Some(ws) => crate::kb::ProvisionalView::Search(crate::provisional_notes::scope_of(ws, &delphi_core::sessions::dir(ws, ctx.mission_id))),
         None => crate::kb::ProvisionalView::Off,
     };
-    let opts = crate::kb::SearchOpts { role: Some(ctx.role.to_string()), limit, about: args.get("about").and_then(|v| v.as_bool()).unwrap_or(false), summary_target: crate::kb::SummaryTarget::Bibliography, findings, ..Default::default() };
+    // `specs/115` slice X4: a mission scoped to a registered project reads that project's own claims and, where the operator shares
+    // research, the other projects' claims and findings, each named and labelled. Nothing untrusted is asked for, so no project file
+    // arrives this way; a mission in no project is given every non-private project's (the operator, 2026-11-15).
+    let (project, shared) = match ctx.guard.zones.local.parent().and_then(|ws| crate::shared_research::session_view(ws, ctx.mission_id)) {
+        Some((own, shared)) => (own.map(|p| p.as_str().to_string()), shared),
+        None => (None, None),
+    };
+    let opts = crate::kb::SearchOpts { role: Some(ctx.role.to_string()), limit, about: args.get("about").and_then(|v| v.as_bool()).unwrap_or(false), summary_target: crate::kb::SummaryTarget::Bibliography, findings, project, shared, ..Default::default() };
     let home = home.unwrap_or_default();
     let mut hits = match crate::retrieval::search(&home, &db, query, opts) {
         Ok(r) => r.hits,
@@ -654,6 +661,11 @@ fn kb_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     }
     let paths: Vec<String> = hits.iter().map(|h| h.rel_path.clone()).collect();
     ctx.events.extend(crate::fact_audit::fact_read_events(&ctx.span.id, ctx.role, &paths));
+    // `specs/115` §2 item 3: a claim from an internal source among the results marks this session; the engine sets the mark.
+    let given = crate::shared_research::marks_of(&hits);
+    if !given.is_empty() {
+        ctx.events.push((crate::shared_research::GIVEN.into(), json!({"entries": given})));
+    }
     // Which provisional notes this search returned, so a use can be counted when the span and its task end well (§2 item 6).
     let notes: Vec<&str> = hits.iter().filter(|h| h.zone == crate::provisional_notes::ZONE).map(|h| h.rel_path.as_str()).collect();
     if !notes.is_empty() {
@@ -665,7 +677,7 @@ fn kb_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     let share = (KB_SEARCH_CHARS / hits.iter().filter(|h| !is_fact(h)).count().max(1)).min(KB_PASSAGE_CHARS);
     let mut out = String::new();
     for (h, full) in hits.iter().zip(&texts) {
-        let line = format!("{} [{}] {} (score {:.2})", h.pointer, h.shown_label(), h.rel_path, h.score);
+        let line = format!("{} [{}] {}{} (score {:.2})", h.pointer, h.shown_label(), h.rel_path, h.project.as_deref().map(|p| format!(" (project: {p})")).unwrap_or_default(), h.score);
         if is_fact(h) {
             let text: String = h.preview.chars().filter(|c| *c != '<' && *c != '>').take(400).collect();
             out.push_str(&format!("{line}\n<fact>{}</fact>\n", text.trim()));
