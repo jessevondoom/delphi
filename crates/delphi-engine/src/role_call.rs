@@ -21,7 +21,7 @@ use crate::agent_registry::est_tokens;
 use crate::workspace::{hash, read_lock, rule_ids, split_frontmatter, LoadError, WorkspacePaths};
 use delphi_adapter::ipr::Ipr;
 
-/// The budget of §2.3, in tokens (four characters to a token, the measure `est_tokens` uses).
+/// The budget of §2 item 3, in tokens (four characters to a token, the measure `est_tokens` uses).
 pub const DEFAULT_BUDGET_TOKENS: usize = 2000;
 
 /// A step of the daemon's work that is one model call as a role.
@@ -37,7 +37,7 @@ pub enum Step {
     WritePage,
 }
 
-/// Which role makes each step's call and which skill it carries (§2.1). Later slices add their calls by using a row.
+/// Which role makes each step's call and which skill it carries (§2 item 1). Later slices add their calls by using a row.
 pub const STEPS: &[(Step, &str, &str)] = &[
     (Step::Plan, "scout", "literature-survey"),
     (Step::JudgePage, "scout", "dual-horizon-search"),
@@ -363,7 +363,7 @@ pub(crate) mod tests {
         vec![Reply::text(r#"{"relevant": false, "summary": "", "facts": []}"#), Reply::text(r#"{"claims": []}"#), Reply::text("# Tokio\n\nA runtime.")]
     }
 
-    // specs/114 AC-1 and §2.2: the call carries the role's ratified lesson, its skill and the heuristics, after the call's own
+    // specs/114 AC-1 and §2 item 2: the call carries the role's ratified lesson, its skill and the heuristics, after the call's own
     // governance line, which is still there word for word.
     #[tokio::test]
     async fn a_ratified_lesson_the_steps_skill_and_the_heuristics_are_in_the_text_of_each_roles_call() {
@@ -391,7 +391,7 @@ pub(crate) mod tests {
         assert!(f.model.requests().iter().all(|r| r.body.get("tools").is_none_or(|t| t.as_array().is_none_or(|a| a.is_empty()))));
     }
 
-    // specs/114 §2.4: a daemon-built call for a role must not say "None." for lessons while that role's ratified lessons file has
+    // specs/114 §2 item 4: a daemon-built call for a role must not say "None." for lessons while that role's ratified lessons file has
     // a rule. A new daemon-built call as a role belongs in `make_every_daemon_built_call`.
     #[tokio::test]
     async fn no_daemon_built_call_says_none_for_lessons_while_the_roles_ratified_lessons_file_has_a_rule() {
