@@ -5,7 +5,6 @@ import type { Rpc } from './rpc.ts';
 import { decisions } from './decisions.ts';
 import { standingLines } from './screen.ts';
 import { listMissions, renderMissions } from './missions.ts';
-import { openNarrator } from './narrator.ts';
 import type { Approval, State } from './fold.ts';
 import { roleName, sanitize, type Info } from './theme.ts';
 
@@ -14,8 +13,6 @@ export type Ctx = {
   post: (text: string, tone?: 'info' | 'error' | 'ok') => void;
   /** Called after a call that starts work, so the UI can show it as running. */
   started?: () => void;
-  /** Opens a command in a new terminal window; null when it opened, else why not. Defaults to the real thing. */
-  open?: (argv: string[]) => Promise<string | null>;
   /** Opens the decisions pane (the right deck). `/decisions` with no argument uses it; without it (a script, a test) the text list is posted. */
   openDecisions?: () => void;
 };
@@ -290,7 +287,6 @@ export async function runSlash(line: string, ctx: Ctx, now = Date.now()): Promis
       if (v) { ctx.post(`(${v.task_id ?? rest[0]} is being checked again; if the gates are green you will be asked to merge)`); ctx.started?.(); }
       return;
     }
-    case 'observe': case 'narrator': case 'visualize': ctx.post(await openNarrator(rest[0], ctx.info, process.env, undefined, ctx.open)); return;
     case 'y': case 'yes': case 'a': case 'always': case 's': case 'session': case 'n': case 'no': case 'd': case 'diff': case 'approve': {
       const key = name === 'approve' ? rest[0] : name;
       const d = key === 'y' || key === 'yes' ? 'allow' : key === 'a' || key === 'always' ? 'allow_similar' : key === 's' || key === 'session' ? 'allow_session' : key === 'n' || key === 'no' ? 'deny' : key === 'd' || key === 'diff' ? 'view' : null;

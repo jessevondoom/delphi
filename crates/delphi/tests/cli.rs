@@ -38,15 +38,14 @@ fn help_is_stdout_exit_zero_and_touches_nothing() {
 
 #[test]
 fn every_command_answers_help_with_only_its_own_usage() {
-    for cmd in ["update", "setup", "init", "doctor", "lint", "check", "decisions", "timers", "relay", "run", "chat", "models", "auth", "connectors", "needs", "kb", "observe", "narrator", "daemon", "xenia", "endpoints", "status", "missions", "changelog", "tools", "skills", "hooks", "capabilities"] {
+    for cmd in ["update", "setup", "init", "doctor", "lint", "check", "decisions", "timers", "relay", "run", "chat", "models", "auth", "connectors", "needs", "kb", "daemon", "xenia", "endpoints", "status", "missions", "changelog", "tools", "skills", "hooks", "capabilities"] {
         for flag in ["--help", "-h"] {
             let (o, touched) = run(&[cmd, flag]);
             assert_eq!(o.status.code(), Some(0), "{} {}", cmd, flag);
             let out = text(&o.stdout);
             let lines: Vec<&str> = out.lines().collect();
             assert_eq!(lines[0], "usage:", "{} {}: {}", cmd, flag, out);
-            let name = if cmd == "narrator" { "observe" } else { cmd };
-            assert!(lines[1].starts_with(&format!("  delphi {}", name)), "{} {}: {}", cmd, flag, out);
+            assert!(lines[1].starts_with(&format!("  delphi {}", cmd)), "{} {}: {}", cmd, flag, out);
             assert!(lines.iter().take_while(|l| !l.is_empty()).skip(1).all(|l| l.starts_with("  delphi ") || l.starts_with("    ")), "{} {}: option lines only before the sentence: {}", cmd, flag, out);
             assert!(lines.len() < 12, "{} {} printed more than its own page", cmd, flag);
             assert!(lines.iter().all(|l| l.chars().count() < 120), "{} {}: a line is too long:\n{}", cmd, flag, out);
@@ -63,7 +62,7 @@ fn the_command_list_is_grouped_one_sentence_each_and_names_the_environment() {
     for section in ["\nStart\n", "\nSet up\n", "\nWork\n", "\nInspect\n", "\nMaintain\n", "\nEnvironment\n"] {
         assert!(out.contains(section), "section {:?} in\n{}", section, out);
     }
-    for cmd in ["chat", "run", "status", "missions", "doctor", "update", "observe"] {
+    for cmd in ["chat", "run", "status", "missions", "doctor", "update"] {
         let line = out.lines().find(|l| l.starts_with(&format!("  delphi {} ", cmd))).unwrap_or_else(|| panic!("{} is listed:\n{}", cmd, out));
         assert!(line.len() > 26, "{} has a sentence: {}", cmd, line);
     }
@@ -166,17 +165,17 @@ fn lint_outside_a_repository_is_an_error() {
 }
 
 #[test]
-fn the_classic_observer_is_gone_and_the_retired_spend_view_is_refused() {
-    for args in [&["observe", "--classic"][..], &["narrator", "--classic"]] {
+fn the_terminal_narrator_is_retired_and_says_where_to_look() {
+    // `specs/111` §10: `delphi observe` and its alias answer with the reason and the app's guide, and touch nothing.
+    for args in [&["observe"][..], &["narrator"], &["observe", "council", "--once"], &["observe", "--help"]] {
         let (o, touched) = run(args);
         assert_eq!(o.status.code(), Some(2), "{:?}", args);
-        assert!(text(&o.stderr).contains("unknown option `--classic`"), "{}", text(&o.stderr));
+        let err = text(&o.stderr);
+        assert!(err.contains("retired") && err.contains("desktop app") && err.contains("docs/guides/desktop-app.md"), "{}", err);
         assert!(!touched);
     }
-    let (o, touched) = run(&["observe", "spend", "--workspace", "none"]);
-    assert_eq!(o.status.code(), Some(2));
-    assert!(text(&o.stderr).contains("unknown view `spend`") || text(&o.stderr).contains("no workspace"), "{}", text(&o.stderr));
-    assert!(!touched);
+    let (o, _) = run(&["--help"]);
+    assert!(!text(&o.stdout).contains("delphi observe"), "the help no longer lists it");
 }
 
 #[test]

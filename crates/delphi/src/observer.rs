@@ -1,8 +1,7 @@
-//! What the Rust consoles share with the narrator: the view names `delphi observe [view]` takes, the palette and the
-//! badge, and the helpers for OSC 8 links.
+//! What the Rust consoles draw with: the palette, the badge, and the helpers for OSC 8 links.
 //!
-//! The narrator itself is the full-screen `delphi-ui --observe` window (`specs/005e` §9); the classic Rust Observer
-//! that used to live here is retired. `delphi observe --once` prints one frame of the same window.
+//! The module keeps its name from the narrator window that once lived here. That window and `delphi observe` are retired
+//! (`specs/111` §10): the desktop app shows what it showed.
 
 use crate::avatar;
 use delphi_engine::observe::{sanitize, ObserverState};
@@ -10,43 +9,6 @@ use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
-
-/// The narrator's views, in order (`specs/005e` §9.2). There is no spend view: the narrator shows no money.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum View {
-    Dashboard,
-    Council,
-    Epic,
-    Agents,
-    Timeline,
-    Changes,
-}
-
-impl View {
-    /// The name `delphi-ui --observe` and `delphi observe` take.
-    pub fn name(self) -> &'static str {
-        match self {
-            View::Dashboard => "dashboard",
-            View::Council => "council",
-            View::Epic => "epic",
-            View::Agents => "agents",
-            View::Timeline => "timeline",
-            View::Changes => "changes",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<View> {
-        match s.to_lowercase().as_str() {
-            "dashboard" | "now" | "ops" | "monitor" => Some(View::Dashboard),
-            "council" | "chamber" => Some(View::Council),
-            "epic" | "forge" | "diffs" => Some(View::Epic), // the forge view folded into the epic pane (`005g`)
-            "agents" | "roster" => Some(View::Agents),
-            "timeline" | "lanes" | "pulse" | "meters" | "tools" => Some(View::Timeline), // pulse is gone and tools sits under the timeline
-            "changes" | "changelog" | "log" | "thinking" | "reasoning" => Some(View::Changes), // the reasoning pane was dropped for the change log
-            _ => None,
-        }
-    }
-}
 
 /// A piece of text on screen that should be a clickable link once the frame is drawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,16 +169,6 @@ pub fn buffer_text(buf: &ratatui::buffer::Buffer) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn views_parse_by_name_and_the_retired_ones_do_not() {
-        assert_eq!(View::parse("Council"), Some(View::Council));
-        assert_eq!(View::parse("roster"), Some(View::Agents));
-        for gone in ["spend", "telemetry", "dag", "1", "5"] {
-            assert_eq!(View::parse(gone), None, "{}", gone);
-        }
-        assert_eq!(View::parse("forge"), Some(View::Epic), "the forge view became part of the epic pane");
-    }
 
     #[test]
     fn badges_follow_the_eye_contrast_rule_in_dark_and_light() {

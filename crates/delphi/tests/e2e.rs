@@ -311,16 +311,6 @@ fn an_operator_ratifies_endpoints_runs_a_task_and_reads_the_cost() {
     s.wait_for("total $");
     s.send("/budget");
     s.wait_for("ceiling $5.00");
-    // A second window attaches read-only and draws what just happened, without a console token.
-    // (`--once` is drawn by the full-screen window's own renderer, so it needs the UI program; skipped without it.)
-    if let Some(launcher) = ui_launcher(e._t.path()) {
-        let (ncode, screen, nerr) = narrator_once(&e.home, "e2e", "agents", Some(&launcher));
-        assert_eq!(ncode, 0, "{}\n{}", screen, nerr);
-        for want in ["delphi v", "· agents", "Athena", "sonnet-t", "nothing needs you", "running  ·"] {
-            assert!(screen.contains(want), "missing `{}` in\n{}", want, screen);
-        }
-        assert!(!screen.contains('$') && !screen.contains("mission 2"), "the narrator shows no money and no mission id:\n{}", screen);
-    }
     let (code, out) = s.finish();
     assert_eq!(code, 0, "{}", out);
     let pid = pid_in(&out);
@@ -343,36 +333,6 @@ fn an_operator_ratifies_endpoints_runs_a_task_and_reads_the_cost() {
         assert!(!std::fs::read(&entry).unwrap().windows(KEY.len()).any(|w| w == KEY.as_bytes()), "{} contains the key", entry.display());
     }
     kill_daemon(pid);
-}
-
-/// Run `delphi narrator <view> --once` with a controlling terminal (the daemon only hands a Narrator token to
-/// a peer that has one) and return the screen it drew.
-fn narrator_once(home: &Path, workspace: &str, view: &str, ui: Option<&Path>) -> (i32, String, String) {
-    use std::os::fd::{FromRawFd, OwnedFd};
-    use std::os::unix::process::CommandExt;
-    let (mut master, mut slave) = (0, 0);
-    unsafe {
-        assert_eq!(libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()), 0);
-    }
-    let mut cmd = Command::new(DELPHI);
-    cmd.args(["narrator", view, "--once", "--workspace", workspace, "--home"]).arg(home);
-    if let Some(ui) = ui {
-        cmd.env("DELPHI_UI", ui);
-    }
-    cmd.stdin(unsafe { Stdio::from(OwnedFd::from_raw_fd(libc::dup(slave))) }).stdout(Stdio::piped()).stderr(Stdio::piped());
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            libc::ioctl(0, libc::TIOCSCTTY as _, 0);
-            Ok(())
-        });
-    }
-    let out = cmd.output().unwrap();
-    unsafe {
-        libc::close(slave);
-        libc::close(master);
-    }
-    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
 fn walkdir_files(root: &Path) -> Vec<PathBuf> {
@@ -1363,85 +1323,6 @@ fn the_decision_inbox_approves_one_card_bound_to_its_payload_and_shift_tab_chang
     assert!(std::fs::read_to_string(e.ws.join("team/specs/009-e2e.md")).unwrap().contains("# E2E spec"));
     // The reply can appear a frame before the status line settles, so wait for it rather than assert on one snapshot.
     c.wait_for("delphi v");
-    assert_eq!(c.ctrl_c_out(), 0);
-    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
-}
-
-#[test]
-fn the_full_screen_observer_shows_a_running_mission_through_the_narrator_socket() {
-    let m = mock(vec![reply_text("Observed answer.")]);
-    let e = setup(m.port);
-    let Some(launcher) = ui_launcher(e._t.path()) else { return };
-    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
-    let mut c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
-    c.wait_for("← / ? →");
-    for line in ["/ratify", "/ratify apply 1"] {
-        c.type_keys(line);
-        std::thread::sleep(Duration::from_millis(150));
-        c.type_keys("\r");
-        c.wait_for(if line == "/ratify" { "pending proposal" } else { "ratified ws:config.toml#access" });
-    }
-    c.type_keys("Say something");
-    std::thread::sleep(Duration::from_millis(150));
-    c.type_keys("\r");
-    c.wait_for("Observed answer.");
-    c.wait_for("Athena · ");
-    // The left deck shows the stream; the console stays attached while the Observer opens in its own window.
-    let mut o = PtyConsole::start_env(&e.home, &["observe", "agents", "--workspace", "e2e"], 34, 110, &envs);
-    o.wait_for("· agents");
-    o.wait_for("sonnet-t"); // the model the orchestrator is on
-    // The observer can open while the task is still finishing (a loaded runner showed it `● running`); wait for the roster to say idle.
-    o.expect_visible("the system is idle");
-    let roster = o.visible();
-    assert!(roster.contains("delphi v") && roster.contains("orchestrator") && roster.contains("the system is idle"), "{}", roster);
-    assert!(roster.contains("← →  ·  ○ ○ ○ ● ○ ○") && !roster.contains('$'), "{}", roster);
-    // Only the arrows change the view: digits, Tab and q do nothing. Left goes back to epic.
-    o.type_keys("\x1b[D");
-    std::thread::sleep(Duration::from_millis(120));
-    o.wait_for("· epic");
-    o.wait_for("settled"); // the threads view: the finished task is one settled line
-    for _ in 0..9 {
-        o.type_keys("\x1b[C"); // it stops at the last view, so more presses than views is fine
-        std::thread::sleep(Duration::from_millis(120));
-    }
-    o.wait_for("· changes");
-    o.wait_for("no changes recorded yet");
-    assert_eq!(o.ctrl_c_out(), 0);
-    // The dashboard (`specs/030`): the operational view, with the sessions, what runs now and the pace, from the same socket.
-    let d = PtyConsole::start_env(&e.home, &["observe", "dashboard", "--workspace", "e2e"], 34, 110, &envs);
-    d.wait_for("· dashboard");
-    d.wait_for("running now");
-    d.wait_for("nothing is running: the system is idle");
-    d.wait_for("tokens/min");
-    assert_eq!(d.ctrl_c_out(), 0);
-    assert_eq!(c.ctrl_c_out(), 0);
-    let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
-}
-
-/// `delphi observe --once` from a process with no controlling terminal (a script, cron): the narrator scope is
-/// read-only, so the daemon issues it without one; the same process asking for a console token is refused.
-#[test]
-fn observe_once_prints_a_frame_without_any_terminal() {
-    use std::os::unix::process::CommandExt;
-    let m = mock(vec![]);
-    let e = setup(m.port);
-    let Some(launcher) = ui_launcher(e._t.path()) else { return };
-    let envs = [("DELPHI_UI", launcher.to_str().unwrap())];
-    let c = PtyConsole::start_env(&e.home, &["chat", "--workspace", "e2e"], 30, 100, &envs);
-    c.wait_for("← / ? →");
-    let mut cmd = Command::new(DELPHI);
-    cmd.args(["observe", "council", "--once", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_UI", &launcher).stdin(Stdio::null());
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid(); // a session of its own: no controlling terminal
-            Ok(())
-        });
-    }
-    let out = cmd.output().unwrap();
-    let (code, frame) = (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned());
-    assert_eq!(code, 0, "{}\n{}", frame, String::from_utf8_lossy(&out.stderr));
-    assert!(frame.contains("delphi v") && frame.contains("· council") && frame.contains("needs you"), "{}", frame);
-    assert_eq!(frame.lines().count(), 24, "no terminal means 80x24:\n{}", frame);
     assert_eq!(c.ctrl_c_out(), 0);
     let _ = Command::new(DELPHI).args(["daemon", "stop", "--workspace", "e2e", "--home"]).arg(&e.home).env("DELPHI_E2E_KEY", KEY).output();
 }

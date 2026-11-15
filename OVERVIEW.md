@@ -9,13 +9,13 @@ Delphi is a terminal-first, multi-agent work environment for software engineerin
 ```
  console ──┐        delphi-core daemon (from Step 2, D-05)
  (input, approvals)├─ UDS ─┤  ├── Claude driver ─┐
- narrator window ──┘        │  ├── Gemini driver ─┴─ Adapter IPR compiler (dialects, signatures)
+ desktop app ─────┘        │  ├── Gemini driver ─┴─ Adapter IPR compiler (dialects, signatures)
  (live narration)        │  ├── isolated worktrees (sandbox optional, D-24)
                          │  ├── events.jsonl   ← single source of truth (agents can't read it)
                          │  └── state.db       ← derived index: FTS5 + vector search, cost ledger (D-01)
  $DELPHI_HOME/workspaces/<name>/  ← all Delphi state; project repos stay clean (D-03)
 ```
-- **One runtime owns everything.** `delphi-core` is the only writer of the event log and index. It runs the task DAG and the Council, and it enforces every security invariant in code ([enforcement map](context/invariant-enforcement.md)). It is a small local daemon from Step 2, so the operator and Narrator can both attach and Narrator streams live (D-05).
+- **One runtime owns everything.** `delphi-core` is the only writer of the event log and index. It runs the task DAG and the Council, and it enforces every security invariant in code ([enforcement map](context/invariant-enforcement.md)). It is a small local daemon from Step 2, so the console and the desktop app can both attach and the app follows live (D-05).
 - **The Adapter (the provider layer)** compiles portable agent and skill Markdown into each provider's native format. It keeps cryptographic reasoning signatures intact across tool loops and backs off on rate limits before failing over. Model *tiers* (`fast` / `workhorse` / `frontier`) map to concrete models in config.
 - **Roles are canonical; names are a theme (D-17).** Specs, config and files refer to `orchestrator`, `builder`, `architect`, `red-team` and so on. A per-install theme pack (Greek by default, defined in [`themes/greek/theme.md`](themes/greek/theme.md)) sets display names and a short voice line. You approve a theme before it loads, and it can't change behavior.
 - **Agents are data.** Each agent is an `agents/<id>/AGENT.md` with write globs and allowed tools; each skill is a `SKILL.md` that loads only when used. The v1 roster is Orchestrator, Architect, Builder, Red-Team and Strategist (D-07).
@@ -53,10 +53,10 @@ Delphi is a terminal-first, multi-agent work environment for software engineerin
 ## How you operate it
 | You want to… | You do | Delphi does |
 | :--- | :--- | :--- |
-| Ask or fix something small | Type in the operator, or `@builder …` | Direct or short DAG; diffs appear in Narrator |
+| Ask or fix something small | Type in the operator, or `@builder …` | Direct or short DAG; recorded changes appear in the desktop app |
 | Build a feature | Describe it | Architect drafts a spec, Red-Team/Strategist review it, **you approve**; then a sandboxed TDD build and the 5 merge gates, ending with **your** merge |
 | Settle a hard trade-off | `/council "<question>"` | Two rounds, then a verdict with Minority Report, or a structured decision for you |
-| See who's working, on which model, at what cost | Narrator agents pane, or `/usage` | Shows per-agent status, the resolved model, and tokens (input, cache, output, thinking) against budget, from the usage ledger |
+| See who's working, on which model, at what cost | The desktop app's Activity screen, or `/usage` | Shows per-agent status, the resolved model, and tokens (input, cache, output, thinking) against budget, from the usage ledger |
 | Control cost or risk | `/budget`, `/permissions`, `/scale` | Changes ceilings, Amber handling, or model tiers. Red-tier always asks |
 | Undo agent work | `/rewind <seq>` *(Step 6)* | Forks the history and restores the worktree; refuses if external side effects would remain |
 | Improve the team | `/retro` | Shows the staged lessons for one batch ratification |

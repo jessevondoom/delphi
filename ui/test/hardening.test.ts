@@ -9,7 +9,6 @@ import * as C from '../src/composer.ts';
 import { completions } from '../src/complete.ts';
 import { addBlock, fold, initial } from '../src/fold.ts';
 import { newInbox } from '../src/inbox.ts';
-import { emptyState, observeFrame, VIEWS, type OModel } from '../src/observe-screen.ts';
 import { frame, transcript, WINDOW, type Model } from '../src/screen.ts';
 import { ON, OFF } from '../src/terminal.ts';
 import { graphemes } from '../src/text.ts';
@@ -131,13 +130,3 @@ test('the console is exactly w by h and no wider, in every deck, down to a termi
   }
 });
 
-test('the Observer window is exactly w by h and no wider, in every view', () => {
-  const st = emptyState();
-  st.agents.architect = { role: 'architect', state: 'running', task_id: 't1', endpoint: 'direct', tier: 'fast', model: 'haiku', upscaled: false, tokens: { input: 1, cache_read: 0, cache_write: 0, output: 1, thinking: 0 }, cost_usd: 0.01, calls: 1 };
-  for (const [w, h] of SIZES) for (const view of VIEWS) {
-    const m: OModel = { info, pal: { dark: true }, st, view, pick: 0, scroll: 0, selNode: 0, live: {}, connected: true };
-    const lines = observeFrame(m, w, h);
-    assert.equal(lines.length, h, `${view} ${w}x${h}`);
-    for (const l of lines) assert.ok(stringWidth(l) <= w, `${view} ${w}x${h}: ${plain(l)}`);
-  }
-});

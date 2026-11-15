@@ -17,7 +17,7 @@ Defaults are those of the template; "—" means no default.
 | `[privacy] identifiers` | `[]` | repo names, hosts and terms that must never appear in operator-scope rules |
 | `[privacy] default_mode` | `orchestrator` | `orchestrator` or `council` |
 | `[theme] name` | `greek` | display names, window labels and voice only; behavior never depends on it |
-| `[tui] auto_spawn_narrator` | `false` | open the second window on launch |
+| `[tui] auto_spawn_narrator` | `false` | ignored: the terminal's second window is retired ([the desktop app](../guides/desktop-app.md)) |
 | `[tui] frame_rate_hz` | `60` | |
 | `[tui] hide_bibliographies` | `true` | KB searches resolve to summary markdown pages instead of bibliography sidecars (spec 075) |
 | `[agents] interactive` | `["orchestrator"]` | roles the operator can directly @ on session start (spec 063) |

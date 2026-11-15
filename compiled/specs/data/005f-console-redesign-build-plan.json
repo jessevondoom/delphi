@@ -76,37 +76,37 @@
     },
     {
       "level": 2,
-      "line": 134,
+      "line": 136,
       "number": "8",
       "title": "Slice 8: narrator chrome, six views, arrows only (8 h)"
     },
     {
       "level": 2,
-      "line": 149,
+      "line": 153,
       "number": "9",
       "title": "Slice 9: the epic rail and the council weave (12 h)"
     },
     {
       "level": 2,
-      "line": 162,
+      "line": 168,
       "number": "10",
       "title": "Slice 10: restyle the remaining narrator views (6 h)"
     },
     {
       "level": 2,
-      "line": 166,
+      "line": 174,
       "number": "11",
       "title": "Slice 11: real-terminal pass (3 h, a person)"
     },
     {
       "level": 2,
-      "line": 170,
+      "line": 178,
       "number": "12",
       "title": "Definition of done (whole plan)"
     },
     {
       "level": 2,
-      "line": 179,
+      "line": 187,
       "number": "13",
       "title": "Handoff"
     }
@@ -114,7 +114,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/005f-console-redesign-build-plan.md",
-    "sha256": "1fd6349384590ab2f2d80d03aeda782bc5dc57e6b2efe4fd1d8a70f00b360a58"
+    "sha256": "8d0f80a80b427569a8dc51181b2b92f6443e8e6af02a85f0aed137aed00ee8c8"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +127,7 @@
       },
       "text": "status: approved   # by the operator, 2026-10-25, with 005e; the amendments it lists (005a-A1, 005b-A3, 005d-A1, tui-design) ratified the same day"
     },
-    "sha256": "1fd6349384590ab2f2d80d03aeda782bc5dc57e6b2efe4fd1d8a70f00b360a58",
+    "sha256": "8d0f80a80b427569a8dc51181b2b92f6443e8e6af02a85f0aed137aed00ee8c8",
     "word": "approved"
   },
   "spec": {

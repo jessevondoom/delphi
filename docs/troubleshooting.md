@@ -20,7 +20,7 @@ Errors are also written, redacted, to a central log while you work: `delphi logs
 | "`claude` is installed but not signed in" | run `claude auth login` |
 | "the `agy` program was not found on PATH" | install the Antigravity CLI |
 | every model shows exhausted or cooling down in `delphi models` | wait, or add an endpoint; a task waits for a model rather than failing. `delphi models --probe` re-checks now |
-| `emergency.saved` or `emergency.blocked` in /observe or the log | `[routing] emergency_*` is set, every ratified seat ran out of quota, and a local model wrote a mission record under `<mission>/handoffs/` labeled `unverified, generated`. Nothing resumes until the first seat that meets the role's floor comes back and re-checks it against the repository and the journal (`emergency.recovered`). `emergency.blocked` means that check failed or no such seat is up: the label stays on; run the task again once a capable seat answers |
+| `emergency.saved` or `emergency.blocked` in the desktop app's Activity screen or the log | `[routing] emergency_*` is set, every ratified seat ran out of quota, and a local model wrote a mission record under `<mission>/handoffs/` labeled `unverified, generated`. Nothing resumes until the first seat that meets the role's floor comes back and re-checks it against the repository and the journal (`emergency.recovered`). `emergency.blocked` means that check failed or no such seat is up: the label stays on; run the task again once a capable seat answers |
 | an endpoint fails `delphi endpoints test` | `delphi auth status`; for OAuth endpoints `delphi auth login <name>`; `--probe` tests a real call |
 | a subscription seat cannot use Delphi's tools | your organization's MCP policy may block the bridge; `delphi doctor` and `delphi endpoints test --probe` say so. Narrow the seat with `[harness.claude] claudeai_connectors = false` |
 | the `agy` seat never acts as a Builder | it needs `delphi endpoints test --probe` to watch its gate hold on the installed version |
@@ -41,7 +41,7 @@ The paths, credentials and failover rules are in [Model access](guides/model-acc
 | garbled colours or animation | `NO_COLOR=1`, `TERM=dumb` (drops styling), `DELPHI_REDUCE_MOTION=1`, `DELPHI_THEME=dark` or `light` when the terminal cannot say |
 | `Shift+Enter` does not add a newline | the terminal may not send it; use `Alt+Enter` or `Ctrl+J` |
 | the full-screen console will not start | `delphi chat --inline` uses the Rust console; `delphi` falls back to it by itself if `delphi-ui` is missing (check `DELPHI_UI`) |
-| plain output for a script | `delphi chat --plain`; `delphi observe --once` prints one frame as text without a terminal |
+| plain output for a script | `delphi chat --plain` |
 
 ## The daemon
 

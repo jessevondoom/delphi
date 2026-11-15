@@ -88,7 +88,7 @@ A **mission** is one piece of work: its own budget, notebook, knowledge and log,
 
 | To | Run |
 | :-- | :-- |
-| see the live team in a second window | `/observe` in the console, or `delphi observe` |
+| see the live team in a window | the desktop app ([guide](guides/desktop-app.md)) |
 | see the workspace, daemon, models and mission at a glance | `delphi status` |
 | check the workspace and fix what is fixable | `delphi doctor --fix` |
 | see which models are usable, exhausted or cooling down | `delphi models` |

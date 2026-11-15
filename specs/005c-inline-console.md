@@ -48,6 +48,8 @@ tags: [spec, ui, tui, console, interim]
 | Recommendation plus numbered options on a card | One approval per option | If cards need richer structure |
 
 ## 3. Reasoning in the Observer
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 `delphi observe thinking` is a seventh Observer view: a tail of live reasoning and tool calls per active span, newest at the bottom, labelled with the agent's badge, tier and model. It reads the `thinking` text the daemon already coalesces into frames. It is **context only**: it exists in the Observer's memory while the window is open, is never written to `events.jsonl` or anywhere else, and is not included in the snapshot a reopened window receives. Control sequences are stripped like all model text.
 
 ## 4. A native viewer window, no browser (later work)

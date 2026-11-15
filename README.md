@@ -77,7 +77,7 @@ More: [Features](docs/features.md#memory-that-carries-over) · the designs in [`
 
 ### 3. One team, many environments
 
-- **The console.** `delphi` opens a full-screen terminal console. `/observe` opens a read-only second window with the live Council, the threads of work, the agents, token use and a change log of what they finished.
+- **The console and the app.** `delphi` opens a full-screen terminal console, where you work. The desktop app is a read-only window where you watch: what agents said and recorded, a live Council, the knowledge base and what the team produced ([guide](docs/guides/desktop-app.md)).
 - **Inside the agent tools you already use.** Claude Code, Copilot CLI and Codex install Delphi as a plugin. Mention `@delphi` or a role such as `@strategist` there and the host gets that role's full pack: its instructions, its lessons and the project's context. The host can search the knowledge base, ask for sourced research, ask the orchestrator for help and convene a Council. Outside the console the default is a **Panel**: the seats are the host's own subagents, and Delphi holds the blind round, the cross-examination rules and the dissent. What the host learns comes back as staged notes, and work can be handed over in either direction.
 - **On the models you have.** A seat is a model reached over one path: an API, a cloud, a gateway, a local model, or your own `claude`, `agy`, `codex` or `copilot` program on its subscription. Roles ask for a tier, never a named model. When one model runs out of quota the next takes over, and the daemon records which model actually served each seat where the carrier reports it.
 - **Without you at the desk.** `delphi run "<task>"` does one task headless for a script or CI. `delphi relay` sends approval cards to your email or Telegram and takes your answers. Timers wake a role later.
@@ -130,7 +130,7 @@ Then try, at the `›` prompt:
 | Give a project its own context | `delphi project register`, then `/projects` to switch |
 | Get a design or spec drafted | `@architect draft a spec for …` |
 | Have a change built and reviewed | `/build <request>` ends with a merge card |
-| Watch the team live | `/observe` opens a read-only second window |
+| Watch the team live | The desktop app, a read-only window ([guide](docs/guides/desktop-app.md)) |
 | Review what the team learned | `/decisions` for the digest, `/retro` for proposed rules |
 | Answer approvals away from your desk | `delphi relay` |
 | Run a task from a script or CI | `delphi run "<task>"` |

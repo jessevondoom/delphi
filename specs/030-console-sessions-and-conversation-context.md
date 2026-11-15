@@ -70,6 +70,8 @@ The digest is deterministic and says what was asked in the first words; a summar
 - **`/export`** writes the session on the screen (which is the current session, since the screen is a fold of it). **`/export all`** writes the mission from the daemon's log, one `##` section per session (`began <time> (new|restart)`), with the log from before sessions under its own heading; replies are attributed to the top agent of their task; builds and councils are not conversation and are left out; model text is sanitised.
 
 ### 6.5 The narrator's dashboard view
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 The narrator is the operational dashboard, and its first view and default is now `dashboard` (`delphi observe dashboard`, also `now`, `ops`, `monitor`); a council in round 1 or 2 still takes the view. It uses the whole window for what an operator watching a mission needs, in this order, each section dropping out before a more important one is cut:
 1. **sessions**: a chip per session, `session 3 · 4 asks · 2 running`, the current one marked; earlier sessions appear while something of theirs runs, plus the last three.
 2. **running now**: everything running, **grouped by the session that asked for it**, current first, earlier ones labelled `(earlier, still running)`. A row is the task's top agent (and `+n` sub-agents), the task id, how long it has run, its state (`working`, or what it waits for: `waiting for a model: …`, `waiting on you`), and what it was asked. Nothing disappears when the operator starts a new session.

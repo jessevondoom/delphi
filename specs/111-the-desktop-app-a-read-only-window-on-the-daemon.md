@@ -17,7 +17,8 @@ tags: [spec, app, desktop, narrator, read-only, ui]
 
 > **Status: approved in advance, 2026-11-14** (see the frontmatter).
 > **Builds on:** [`specs/005`](005-console-and-narrator-tui.md) §2.1 (the sockets and their scopes), [`specs/087`](087-agent-identity-badges-and-name-pool.md) (badges and the name pool), [`specs/106`](106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md) §12 (a role's colour outside the console).
-> **Leaves alone:** the full-screen console of [`specs/005e`](005e-console-ux-review-and-redesign.md). It is frozen as it is (its open slices 10 and 11 are not continued) and keeps working; `delphi chat --inline` and `delphi observe --once` remain the terminal's way in.
+> **Leaves alone:** the full-screen console of [`specs/005e`](005e-console-ux-review-and-redesign.md), where the operator works. It is frozen as it is (its open slices 10 and 11 are not continued) and keeps working, as does `delphi chat --inline`.
+> **Retires:** the terminal's narrator window and its commands (§10).
 
 ---
 
@@ -127,7 +128,7 @@ The operator asked on 2026-11-14 that this be built locally, as specs 104 to 110
 
 ## 7. Authority and trust
 
-- The app can do what `delphi observe` can do, and no more. Every rule that keeps the narrator socket read-only is the daemon's and is unchanged.
+- The app can do what the terminal narrator could do, and no more: it holds the same narrator token. Every rule that keeps the narrator socket read-only is the daemon's and is unchanged.
 - The rule that a token for a scope that acts goes only to a client at a terminal ([`specs/005`](005-console-and-narrator-tui.md) §2.1; operator decision 2026-10-25) stands. A window has no terminal. If the app is ever to act, it gets a scope of its own that a terminal vouches for once and that can be revoked, designed in its own spec. It is never given a console token, and the rule is never relaxed for it.
 - The app runs `delphi daemon where` and nothing else. It reads that command's output as data.
 - Merges stay as [`specs/094`](094-core-repo-merge-flow.md) says.
@@ -143,6 +144,26 @@ The operator asked on 2026-11-14 that this be built locally, as specs 104 to 110
 - **A8, the last two screens.** Agents and skills lists each role with a manifest under `agents/` and each skill, from the document listing, and opens a manifest in the reader; a role the daemon says is not allowed or switched off is marked. Settings has two halves: this window's own preferences (theme, menu), which it keeps in local storage, and the daemon's (approval mode, budget, solo mode, what is running and waiting), read from `session.snapshot` and shown with where to change them. The bridge gains one command, `session`.
 - **A7, the app.** Tauri 2.12.5 builds an unsigned `Delphi.app` here (13.8 MiB), and one built on the machine opens without a prompt. `app/dev/build.sh` runs every check, builds it, and runs the smoke test: the built app is started with a stand-in `delphi` and a stand-in daemon in a temporary folder, and the test passes only when that daemon has seen two `auth.issue` for scope `narrator`, two `hello`, `events.subscribe`, and the `observe.state` and `observe.snapshot` that the page inside the window asks for. It fails if any other scope or any method outside §2.2 is sent. The guide is `docs/guides/desktop-app.md`.
 - **Seen on the operator's daemon (2026-11-14).** The built app held two connections to the live daemon's narrator socket. Its window could not be photographed from the build session (no screen-recording permission), so each screen was checked as a web page in a headless browser instead, on the fixture and, for Activity, on a dump of the live daemon's state.
+
+## 10. The terminal narrator is retired (operator, 2026-11-14)
+
+With the app built, the operator decided on 2026-11-14 to remove the narrator from the terminal: its window and all of its views, the commands that opened it, and their tests. The sections of earlier specs that define it carry a note pointing here; `005g` and `034`, which are about nothing else, are superseded as a whole.
+
+**Removed.**
+- `delphi observe` and its alias `delphi narrator`, with `--once`. Each now answers with one line saying the narrator is retired and where the app's guide is, and exits 2.
+- `/observe`, `/narrator` and `/visualize` in every console: the same line.
+- In `delphi-ui`: the `--observe` mode and the narrator's views (council, epic, agents, timeline, changes, dashboard), their simulator and preview scripts, their tests and golden screens.
+- From CI: the narrator's end-to-end test.
+
+**Kept, because something else uses it.**
+- The daemon's narrator socket, its scope and its read methods, `observe.state` and `observe.snapshot`: the app attaches to them, and the console's history uses `observe.snapshot`.
+- `delphi daemon where`, and the start-up info it prints.
+- The avatar library and its mascot rows: the app draws them.
+- The console's knowledge deck (`archives.ts`), which the narrator shared.
+- `[[hooks.observe]]`: a different feature with a similar name.
+- The theme pack's `labels.narrator` and the config key `[tui] auto_spawn_narrator`: both are still read without error, so an existing theme or config keeps loading; the key does nothing.
+
+**What is lost.** A read-only view over ssh or in tmux. The console and `delphi status` remain there; the app needs a desktop.
 
 ## 9. Not verified
 

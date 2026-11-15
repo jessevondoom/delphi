@@ -82,25 +82,25 @@
     },
     {
       "level": 3,
-      "line": 259,
+      "line": 261,
       "number": "4.1",
       "title": "Agents Pane (always visible; D-18)"
     },
     {
       "level": 3,
-      "line": 274,
+      "line": 276,
       "number": "4.2",
       "title": "Views"
     },
     {
       "level": 2,
-      "line": 295,
+      "line": 297,
       "number": "5",
       "title": "Dual-Window Spawning & Single-Screen Fallback"
     },
     {
       "level": 2,
-      "line": 305,
+      "line": 309,
       "number": "6",
       "title": "Verification Plan"
     }
@@ -108,7 +108,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/005-console-and-narrator-tui.md",
-    "sha256": "24f1cb904d075b373a6dabbf9c357a1c20c25a15fc87b6fc195f7aee92ca1ce3"
+    "sha256": "a7e4ad229cff7a7836e071eec533c1e83187f011f22b2fa4921af378ea097a9b"
   },
   "source_status_at_hash": {
     "line": {
@@ -121,7 +121,7 @@
       },
       "text": "status: approved   # by the operator, 2026-10-24 (\"ratify all\"); whole document"
     },
-    "sha256": "24f1cb904d075b373a6dabbf9c357a1c20c25a15fc87b6fc195f7aee92ca1ce3",
+    "sha256": "a7e4ad229cff7a7836e071eec533c1e83187f011f22b2fa4921af378ea097a9b",
     "word": "approved"
   },
   "spec": {

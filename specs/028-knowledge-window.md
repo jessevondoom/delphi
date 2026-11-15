@@ -121,6 +121,8 @@ The same routes are also served to the narrator over its socket as the read-only
 Any letter types into the box · `enter` search / open · `↑ ↓` move through results, or recall earlier queries from the box · `tab` / `shift+tab` the collection searched (all, then each) · `ctrl+t` every document or trusted only · `ctrl+u` clear the box · `esc` clear the results, then the box · `← →` switch view, as in every narrator view. In the reader: `tab` link · `enter` open · `[` `]` back and forward · `y` copy · `esc` close. (`m` more like this, and `tab` for offline/online/both, are for when those exist.)
 
 ## 8. Rendering notes (Ink and the narrator)
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 - The centred box uses the console prompt's box characters; under 40 columns it drops its sides and becomes a ruled line.
 - Everything is text, so `NO_COLOR` and 16-colour terminals work: the mode choice is shown by `●`/`○`, not colour.
 - The box keeps its row from the resting state to the results (it does not jump per keystroke): the §3 shelf is replaced by results beneath it.

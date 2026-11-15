@@ -154,67 +154,67 @@
     },
     {
       "level": 3,
-      "line": 308,
+      "line": 310,
       "number": "4.1",
       "title": "Launch Commands & Hot-Targeting"
     },
     {
       "level": 3,
-      "line": 313,
+      "line": 315,
       "number": "4.2",
       "title": "Window Navigation & Footer Map"
     },
     {
       "level": 3,
-      "line": 319,
+      "line": 321,
       "number": "4.3",
       "title": "Full-Window View Wireframe (Council Chamber Example)"
     },
     {
       "level": 4,
-      "line": 321,
+      "line": 323,
       "number": null,
       "title": "Visual Mockup (Observer Council Chamber):"
     },
     {
       "level": 3,
-      "line": 350,
+      "line": 352,
       "number": "4.5",
       "title": "Alternate Agents Panel (3-Line Mascot Cards View)"
     },
     {
       "level": 4,
-      "line": 354,
+      "line": 356,
       "number": null,
       "title": "Visual Mockup:"
     },
     {
       "level": 2,
-      "line": 407,
+      "line": 409,
       "number": "5",
       "title": "Chromeless Minimalist Artifact Viewer & OSC 8 Bridge"
     },
     {
       "level": 3,
-      "line": 409,
+      "line": 411,
       "number": "5.1",
       "title": "Local HTTP Daemon & App-Mode Window Launch"
     },
     {
       "level": 3,
-      "line": 426,
+      "line": 428,
       "number": "5.2",
       "title": "Terminal OSC 8 Hyperlink Format"
     },
     {
       "level": 3,
-      "line": 434,
+      "line": 436,
       "number": "5.3",
       "title": "Live WebSocket Hot-Reload"
     },
     {
       "level": 2,
-      "line": 442,
+      "line": 444,
       "number": "6",
       "title": "Verification & Test Plan"
     }
@@ -222,7 +222,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/005b-deck-navigation-and-visual-interface.md",
-    "sha256": "789e9397c45ba7eb252008b18a2d6f0309167306502d380d51c857eaa2d0a5a5"
+    "sha256": "063580ec1a64c3b1a0e4eeee53121d6fb3eafb39fad75cb6297a771d92476fc4"
   },
   "source_status_at_hash": {
     "line": {
@@ -235,7 +235,7 @@
       },
       "text": "status: approved   # Amendments 005b-A2 (header and footer tidy) and 005b-A3 (animated badge strip, soft-fill chat, ticker, narrator) approved by the operator, 2026-10-25"
     },
-    "sha256": "789e9397c45ba7eb252008b18a2d6f0309167306502d380d51c857eaa2d0a5a5",
+    "sha256": "063580ec1a64c3b1a0e4eeee53121d6fb3eafb39fad75cb6297a771d92476fc4",
     "word": "approved"
   },
   "spec": {

@@ -3,7 +3,8 @@ id: spec-005g-epic-threads
 title: "005g: The epic pane as threads (supersedes the rail in 005e §9.2 and replaces the forge view)"
 author: architect
 timestamp: 2026-10-25T22:00:00Z
-status: approved   # by the operator, 2026-10-26; the open questions of the first draft were decided on 2026-10-25 (§7); built and merged in #168
+status: superseded   # 2026-11-14, by spec 111 §10: the terminal narrator is retired. Before that: approved (by the operator, 2026-10-26; the open questions of the first draft were decided on 2026-10-25 (§7); built and merged in #168)
+superseded_by: "111-the-desktop-app-a-read-only-window-on-the-daemon"
 approved_by: operator (2026-10-26)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -12,6 +13,8 @@ confidence: medium
 source_mission: 2026-10-23-foundational-design
 tags: [spec, ui, tui, narrator, epic, strategy, research]
 ---
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 
 # Spec 005g: The epic pane as threads
 

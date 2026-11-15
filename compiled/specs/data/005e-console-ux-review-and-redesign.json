@@ -208,127 +208,127 @@
     },
     {
       "level": 3,
-      "line": 446,
+      "line": 448,
       "number": "9.1",
       "title": "Problem"
     },
     {
       "level": 3,
-      "line": 449,
+      "line": 451,
       "number": "9.2",
       "title": "Decided design"
     },
     {
       "level": 3,
-      "line": 601,
+      "line": 603,
       "number": "9.3",
       "title": "Data the narrator needs that the daemon does not send yet"
     },
     {
       "level": 3,
-      "line": 604,
+      "line": 606,
       "number": "9.4",
       "title": "Acceptance criteria"
     },
     {
       "level": 3,
-      "line": 614,
+      "line": 616,
       "number": "9.5",
       "title": "Affected files"
     },
     {
       "level": 2,
-      "line": 617,
+      "line": 619,
       "number": "10",
       "title": "Discoverability and keyboard flow"
     },
     {
       "level": 3,
-      "line": 619,
+      "line": 621,
       "number": "10.1",
       "title": "`?` opens help (finding 4)"
     },
     {
       "level": 3,
-      "line": 649,
+      "line": 651,
       "number": "10.2",
       "title": "The header: animated badges, one blank row (finding 5)"
     },
     {
       "level": 3,
-      "line": 667,
+      "line": 669,
       "number": "10.3",
       "title": "Approval mode (finding 3, decision of 2026-10-25)"
     },
     {
       "level": 3,
-      "line": 672,
+      "line": 674,
       "number": "10.4",
       "title": "One command set (finding 7)"
     },
     {
       "level": 3,
-      "line": 675,
+      "line": 677,
       "number": "10.5",
       "title": "Consistent leave and stop (findings 7, 18)"
     },
     {
       "level": 3,
-      "line": 678,
+      "line": 680,
       "number": "10.6",
       "title": "Notes have marks (finding 15)"
     },
     {
       "level": 3,
-      "line": 681,
+      "line": 683,
       "number": "10.7",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 689,
+      "line": 691,
       "number": "11",
       "title": "Degradation: width, height, colour"
     },
     {
       "level": 2,
-      "line": 705,
+      "line": 707,
       "number": "12",
       "title": "Amendments this spec needs elsewhere (ratified by the operator, 2026-10-25)"
     },
     {
       "level": 2,
-      "line": 713,
+      "line": 715,
       "number": "13",
       "title": "Implementation plan"
     },
     {
       "level": 2,
-      "line": 733,
+      "line": 735,
       "number": "14",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 742,
+      "line": 744,
       "number": "15",
       "title": "Rendered mockups"
     },
     {
       "level": 2,
-      "line": 762,
+      "line": 764,
       "number": "16",
       "title": "Decisions and open questions"
     },
     {
       "level": 3,
-      "line": 781,
+      "line": 783,
       "number": "16.1",
       "title": "As built (slices 1-9 merged 2026-10-25; slice 10 in progress, slice 11 a person's)"
     },
     {
       "level": 2,
-      "line": 794,
+      "line": 796,
       "number": "17",
       "title": "Notes from the external seat (Gemini 3.8 Flash through `agy`, plan mode, 2026-10-25)"
     }
@@ -336,7 +336,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/005e-console-ux-review-and-redesign.md",
-    "sha256": "645d2bd365558bfa988b28bb9e657119e31b8b6f377b6b7f2931b3d3e804ae16"
+    "sha256": "e3225ffae5bd9e8f720c8629fd55c88f07e76f009b73fa6ac0d2a8f36f7e00cf"
   },
   "source_status_at_hash": {
     "line": {
@@ -349,7 +349,7 @@
       },
       "text": "status: approved   # by the operator, 2026-10-25, after reviewing the rendered mockups; amendments in §12 ratified the same day; the §16.1 change that `/observe` opens one narrator window (no tmux splits, no `tile`) ratified 2026-10-25"
     },
-    "sha256": "645d2bd365558bfa988b28bb9e657119e31b8b6f377b6b7f2931b3d3e804ae16",
+    "sha256": "e3225ffae5bd9e8f720c8629fd55c88f07e76f009b73fa6ac0d2a8f36f7e00cf",
     "word": "approved"
   },
   "spec": {

@@ -65,13 +65,13 @@ By default the architect, strategist and red-team seats, on different model fami
 | `/follow <n>` | when the Council asked you to choose, picks option `n` |
 | `/follow again` | starts steps that were already started |
 
-A Council has its own ceiling, `[budget] council_budget_usd` (default 20.0). `delphi observe council` shows one live in the second window and never spends money.
+A Council has its own ceiling, `[budget] council_budget_usd` (default 20.0). The desktop app's Councils screen shows one live, and it never spends money ([the desktop app](desktop-app.md)).
 
 ## Watching, steering, stopping
 
 | To | Do |
 | :-- | :-- |
-| watch the team | `/observe` (a second window), or `delphi observe [dashboard\|council\|epic\|agents\|timeline\|changes]` |
+| watch the team | the desktop app ([guide](desktop-app.md)) |
 | see what the agents finished | `delphi changelog` (Markdown by session, from the mission log; `--json` for one line per change) |
 | see spend | `/usage [mission\|role\|task\|model]` |
 | stop the running task | `Esc` (first clears the prompt, then stops the task) |

@@ -10,10 +10,9 @@ import chalk from 'chalk';
 import * as C from '../src/composer.ts';
 import { initial } from '../src/fold.ts';
 import { newInbox } from '../src/inbox.ts';
-import { emptyState, observeFrame, VIEWS, type OModel } from '../src/observe-screen.ts';
 import { frame, type Model } from '../src/screen.ts';
 import * as T from '../src/theme.ts';
-import { info, observerWorld, stateWorld } from './helpers.ts';
+import { info, stateWorld } from './helpers.ts';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -139,7 +138,6 @@ const model = (over: Partial<Model> = {}): Model => ({
   info, pal: { dark: true, bg: [15, 23, 42] }, state: stateWorld(), now: 5000, deck: 1, composer: C.empty(), back: 0, menu: null, expandTools: false, search: null,
   queue: [], inbox: newInbox(0), mode: 'mission-auto', panel: null, help: false, ...over,
 });
-const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, live: {}, connected: true });
 
 /** True when any SGR sequence in `s` sets a colour (foreground, background, bright or extended). */
 function hasColour(s: string): boolean {
@@ -157,7 +155,6 @@ test('with no colour, every screen writes no colour code, and still carries emph
   try {
     const screens = [
       ...frame(model(), 100, 34), ...frame(model({ deck: 0 }), 100, 24), ...frame(model({ deck: 2 }), 100, 24), ...frame(model({ state: initial(0), noModel: true }), 80, 24),
-      ...VIEWS.flatMap((v) => observeFrame(om(v), 100, 30)), ...observeFrame({ ...om('epic'), st: emptyState() }, 80, 24),
     ].join('\n');
     assert.ok(!hasColour(screens), 'no colour SGR');
     assert.match(screens, /\x1b\[1m/, 'bold survives');
@@ -170,7 +167,7 @@ test('with TERM=dumb nothing at all is written: no colour, no attributes', () =>
   const prev = T.currentCapabilities();
   T.useCapabilities(T.capabilities({ TERM: 'dumb' }));
   try {
-    const screens = [...frame(model(), 100, 34), ...observeFrame(om('council'), 100, 30)].join('\n');
+    const screens = frame(model(), 100, 34).join('\n');
     assert.ok(!/\x1b\[[0-9;]*m/.test(screens), 'no SGR sequence at all');
   } finally { T.useCapabilities(prev); }
 });

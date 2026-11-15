@@ -11,7 +11,7 @@ runs="${1:-20}"
 load="${2:-12}"
 [ $# -ge 2 ] && shift 2 || shift $#
 [ "${1:-}" = "--" ] && shift
-filter="${*:-full_screen esc_stops hands_over decision_inbox full_screen_observer research_panels terminal_is_given_back survives_a_daemon_restart}"
+filter="${*:-full_screen esc_stops hands_over decision_inbox research_panels terminal_is_given_back survives_a_daemon_restart}"
 out="${SOAK_OUT:-$(mktemp -d)}"
 mkdir -p "$out"
 

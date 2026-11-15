@@ -10,85 +10,91 @@
     },
     {
       "level": 2,
-      "line": 24,
+      "line": 25,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 35,
+      "line": 36,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 43,
+      "line": 44,
       "number": "1.2",
       "title": "Simpler alternatives considered"
     },
     {
       "level": 2,
-      "line": 50,
+      "line": 51,
       "number": "2",
       "title": "The boundary"
     },
     {
       "level": 2,
-      "line": 63,
+      "line": 64,
       "number": "3",
       "title": "How it is put together"
     },
     {
       "level": 3,
-      "line": 65,
+      "line": 66,
       "number": "3.1",
       "title": "Where it lives"
     },
     {
       "level": 3,
-      "line": 69,
+      "line": 70,
       "number": "3.2",
       "title": "The bridge"
     },
     {
       "level": 3,
-      "line": 78,
+      "line": 79,
       "number": "3.3",
       "title": "The window"
     },
     {
       "level": 2,
-      "line": 84,
+      "line": 85,
       "number": "4",
       "title": "What it looks like"
     },
     {
       "level": 2,
-      "line": 95,
+      "line": 96,
       "number": "5",
       "title": "Screens"
     },
     {
       "level": 2,
-      "line": 107,
+      "line": 108,
       "number": "6",
       "title": "Slices (one per commit, built locally)"
     },
     {
       "level": 2,
-      "line": 128,
+      "line": 129,
       "number": "7",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 135,
+      "line": 136,
       "number": "8",
       "title": "Found while building"
     },
     {
       "level": 2,
-      "line": 147,
+      "line": 148,
+      "number": "10",
+      "title": "The terminal narrator is retired (operator, 2026-11-14)"
+    },
+    {
+      "level": 2,
+      "line": 168,
       "number": "9",
       "title": "Not verified"
     }
@@ -96,7 +102,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md",
-    "sha256": "25896e11acfec13d3e397d5f6d6c83b7a60e03195743979ffbafe68ba0b5f03a"
+    "sha256": "282d549a6dada2b95b479ead157de2c18d1eb1a994d1a429aa90f75d82beedfe"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +115,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: asked whether a spec could be written and built from on the plan, as specs 104 to 110 were, the operator answered \"your default assumptions all sounds correct. go\". The approval is to the plan this spec carries out; the operator has not read this text."
     },
-    "sha256": "25896e11acfec13d3e397d5f6d6c83b7a60e03195743979ffbafe68ba0b5f03a",
+    "sha256": "282d549a6dada2b95b479ead157de2c18d1eb1a994d1a429aa90f75d82beedfe",
     "word": "approved"
   },
   "spec": {
@@ -124,10 +130,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2791,
-      "end_line": 31,
-      "line": 26,
-      "start": 1754
+      "end": 2839,
+      "end_line": 32,
+      "line": 27,
+      "start": 1802
     },
     "text": "| # | Observation (code on `host-experience`, 2026-11-14) |\n| :-- | :-- |\n| D-1 | The work moved to the hosts. The host-experience program (specs 104 to 110) put about 10,400 lines into the engine and about 110 into the console. A conversation with a role now happens in Claude Code, Codex, Gemini CLI or Copilot. |\n| D-2 | What no host shows is what an operator of a team needs: activity across sessions, a council's deliberation, the knowledge base, and what the team produced. These are documents, lists and graphs, which a character grid draws badly. |\n| D-3 | The console costs about 9,400 lines of TypeScript, 7,700 lines of tests and 114 golden screens, its own CI job on a pinned runtime, and a compile on four release targets. Its real-terminal checklist is blank for all nine terminals. |\n| D-4 | The daemon already serves a read-only client. The narrator socket issues its token to a client with no terminal, offers twelve read methods and refuses everything else, and `observe.state` is the folded state every client shows. |"
   }

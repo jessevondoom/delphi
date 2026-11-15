@@ -140,7 +140,6 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Work", name: "route", about: "which role or agent fits a task (a dry run)", synopsis: "  delphi route \"<task>\" [--domain <d>] [--role <role>] [--limit <1-5>] [--threshold <0-1>] [--json] [--workspace <name>] [--home <dir>]\n  delphi route --adopt-eval <labeled.json> [--threshold <0-1>] [--json] [--workspace <name>] [--home <dir>]\n  delphi route --eval <labeled.json> [--json] [--workspace <name>] [--home <dir>]", detail: "Ranks Delphi's canonical roles and the agents of the added bundles together for a task, by name, tags, domain and summary, plus the\nlocal embedding model when one is installed. Each candidate says which role it runs as, where that runs (`locus`: host, inside or either), what\nthe task looks like it wants (`trigger`: none, panel, council or red_team, from a fixed table of words), how sure the ranking is\n(`confidence`: the score, less what a close rival takes away) and whether that reaches `[routing] adopt_threshold` (`adopt`). Below it, adopt no role.\nThe default threshold is provisional, set on a small labeled set; `adopt` is a recommendation, never an order.\nNothing is dispatched, no model is called, nothing is created and no daemon is started. `--adopt-eval` takes a JSON list of {\"task\", \"expect\"}\n(`expect` is a role id, or `none` for a task that should adopt nothing) and prints how often `adopt` was right at the threshold. `--eval` takes a JSON list of\n{\"task\", \"target\"} (target is `bundle:<bundle>/<agent>`) and prints recall at 1, 3 and 5, latency and the tokens of the domain index against the\nuncapped flat list. Turn routing on with `[routing] registry = \"auto\"`." },
     Cmd { group: "Work", name: "needs", about: "what the roadmap is waiting on evidence for", synopsis: "  delphi needs [add <item> <why>] [--workspace <name>] [--home <dir>]", detail: "After the roadmap items it prints the fact validator's open work, once it has run here: the blind-audit\ncards waiting (and the oldest's age) and the PROMOTE line from the last `delphi validation report`.\nIt reads files only and never runs the validator." },
     Cmd { group: "Work", name: "kb", about: "the knowledge base: index it, search it", synopsis: "  delphi kb search <query> [--role <role>] [--untrusted|--all] [--staged] [--about] [--summaries|--bibs]\n  delphi kb import <file.md | dir | -> [--home <dir>] [--workspace <name>]\n  delphi kb review [stats | show <ref> | keep <ref>…|--all | discard <ref>…|--all]\n  delphi kb refresh [--stale [--minutes <n, at most 4>] | <id> (--still-current | <file.md | ->)]\n  delphi kb quarantine [<id> [--restore]]\n  delphi kb extract <page-id> (--auto | <candidates.json | ->)\n  delphi kb index | reindex | stats | attest [<page-id>]\n  delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]", detail: "" },
-    Cmd { group: "Work", name: "observe", about: "the read-only live window (also: delphi narrator)", synopsis: "  delphi observe [dashboard|council|epic|agents|timeline|changes]\n    [--once] [--workspace <name>] [--home <dir>]", detail: "--once prints one frame as text; it works without a terminal." },
     Cmd { group: "Inspect", name: "status", about: "workspace, daemon, models, health and mission at a glance", synopsis: "  delphi status [--workspace <name>] [--home <dir>]", detail: "Needs no terminal. Exits 1 only if `delphi doctor` finds a failure." },
     Cmd { group: "Inspect", name: "missions", about: "the workspace's missions, newest first", synopsis: "  delphi missions [--workspace <name>] [--home <dir>]", detail: "Reopen one with `delphi chat --mission <id>`." },
     Cmd { group: "Inspect", name: "changelog", about: "what the team recorded as finished, for a pull request", synopsis: "  delphi changelog [--mission <id>] [--session <s_0001>] [--since <date or time>] [--json]\n    [--workspace <name>] [--home <dir>]", detail: "Prints Markdown by session, from the mission's log (the latest unless --mission). --json: one line per change." },
@@ -250,6 +249,9 @@ fn help_requested(args: &[String]) -> Option<i32> {
     None
 }
 
+/// What `delphi observe` and `delphi narrator` answer now (`specs/111` §10).
+const RETIRED_NARRATOR: &str = "the terminal narrator is retired: the desktop app shows the team, a council, the knowledge base and what was produced (docs/guides/desktop-app.md)";
+
 fn print_help(cmd: Option<&str>) -> i32 {
     match cmd {
         None => {
@@ -261,8 +263,11 @@ fn print_help(cmd: Option<&str>) -> i32 {
                 println!("{}", u);
                 0
             }
-            None if c == "narrator" => print_help(Some("observe")),
             None if c == "version" => print_help(None),
+            None if c == "observe" || c == "narrator" => {
+                eprintln!("delphi: {RETIRED_NARRATOR}");
+                2
+            }
             None => {
                 eprintln!("delphi: no command `{}`; `delphi --help` lists them", c);
                 2
@@ -370,7 +375,6 @@ fn main() {
         Some("docs") => docs_cmd::docs(&args),
         Some("completions") => docs_cmd::completions(&args),
         Some("connectors") => cmd_core("connectors", &args),
-        Some("narrator") | Some("observe") => cmd_narrator(&args),
         Some("auth") => cmd_core("auth", &args),
         Some("endpoints") => cmd_core("endpoints", &args),
         Some("models") => cmd_core("models", &args),
@@ -378,9 +382,14 @@ fn main() {
             println!("delphi {}", env!("CARGO_PKG_VERSION"));
             0
         }
+        // Retired with the terminal narrator (`specs/111` §10); said plainly so an old habit or script gets an answer.
+        Some("observe") | Some("narrator") => {
+            eprintln!("delphi: {RETIRED_NARRATOR}");
+            2
+        }
         Some(other) => {
             eprintln!("delphi: unknown command `{}`; `delphi --help` lists them", other);
-            eprintln!("commands: {}", CMDS.iter().filter(|c| !c.name.is_empty()).map(|c| c.name).chain(["narrator", "version"]).collect::<Vec<_>>().join(" "));
+            eprintln!("commands: {}", CMDS.iter().filter(|c| !c.name.is_empty()).map(|c| c.name).chain(["version"]).collect::<Vec<_>>().join(" "));
             2
         }
     };
@@ -1201,45 +1210,6 @@ fn cmd_core(sub: &str, args: &[String]) -> i32 {
         "models" => delphi_engine::models_cli::run(&ws.dir, &rest),
         _ => delphi_engine::endpoints_cli::run(&ws.dir, &rest),
     }
-}
-
-fn cmd_narrator(args: &[String]) -> i32 {
-    // The classic Rust Observer is retired (`specs/005e` §9.2): the narrator is the full-screen window.
-    if let Some(bad) = args.iter().find(|a| a.starts_with("--") && !matches!(a.as_str(), "--once" | "--workspace" | "--home")) {
-        eprintln!("delphi narrator: unknown option `{}` (see `delphi observe --help`)", bad);
-        return 2;
-    }
-    let (home, ws) = match resolve_ws("narrator", args) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    let view_arg = args.iter().find(|a| !a.starts_with("--") && Some(a.as_str()) != flag(args, "--workspace").as_deref() && Some(a.as_str()) != flag(args, "--home").as_deref());
-    let view = match view_arg {
-        Some(v) => match observer::View::parse(v) {
-            Some(v) => Some(v),
-            None => {
-                eprintln!("delphi narrator: unknown view `{}` (dashboard, council, epic, agents, timeline or changes)", v);
-                return 2;
-            }
-        },
-        None => None,
-    };
-    let once = args.iter().any(|a| a == "--once");
-    let on_terminal = unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 };
-    if !once && !on_terminal {
-        eprintln!("delphi narrator: needs a terminal; `--once` prints one frame without one");
-        return 1;
-    }
-    let Some(ui) = ui_executable() else {
-        eprintln!("delphi narrator: the narrator is the delphi-ui program, which was not found next to `delphi`; run `delphi update` to get it");
-        return 1;
-    };
-    let code = chat::launch_ui_observer(&ui, &home, &ws.dir, view.map(observer::View::name), &theme_names(&ws), once);
-    if code == 3 {
-        eprintln!("delphi narrator: delphi-ui is a different release from this program; run `delphi update`");
-        return 1;
-    }
-    code
 }
 
 /// `delphi history off|purge|delete|status` (`specs/102` §7 item 6): the operator's, refused inside an agent seat.

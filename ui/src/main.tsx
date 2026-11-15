@@ -66,81 +66,11 @@ const info = readInfo();
 // The central error log (`specs/039`): the same file as the daemon's. Logging never changes how the console ends.
 initElog({ home: info.home, component: 'ui', version: VERSION });
 watchProcess();
-const observeAt = process.argv.indexOf('--observe');
 if (VERSION !== 'dev' && VERSION !== info.version) {
   // Exit code 3 tells `delphi chat` to use the inline console instead.
   console.error(`delphi-ui ${VERSION} does not match delphi ${info.version}; run \`delphi update\` (using the inline console for now)`);
   process.exit(3);
 }
-if (observeAt >= 0) {
-  const { Observer } = await import('./observer.tsx');
-  const { parseView } = await import('./observe-screen.ts');
-  const arg = process.argv[observeAt + 1];
-  const view = arg && !arg.startsWith('--') ? parseView(arg) : null;
-  if (process.argv.includes('--once')) {
-    // One frame as text, no terminal needed: the size is the terminal's when there is one, else 80x24.
-    const { observeFrame, emptyState } = await import('./observe-screen.ts');
-    try {
-      const c = await Rpc.connect(info.narrator_socket);
-      await c.attachAsNarrator();
-      const st = { ...emptyState(), ...(await c.call('observe.state', {})) };
-      const shown = view ?? (st.default_view as typeof view) ?? 'epic';
-      c.close();
-      const lines = observeFrame({ info, pal: { dark: true }, st, view: shown ?? 'epic', pick: Number.MAX_SAFE_INTEGER, scroll: 0, selNode: 0, live: {}, connected: true, still: true, now: Date.now() }, process.stdout.columns || 80, process.stdout.rows || 24);
-      console.log(lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '').trimEnd()).join('\n'));
-      process.exit(0);
-    } catch (e: any) {
-      elogError('daemon_unreachable', 'cannot read the daemon', { phase: 'observe-once' });
-      console.error('delphi observe: cannot read the daemon: ' + String(e?.message ?? JSON.stringify(e)));
-      process.exit(1);
-    }
-  }
-  let cmd: Rpc, ev: Rpc;
-  try {
-    cmd = await Rpc.connect(info.narrator_socket);
-    await cmd.attachAsNarrator();
-    ev = await Rpc.connect(info.narrator_socket);
-    await ev.attachAsNarrator();
-    await ev.call('events.subscribe', {});
-    cmd.keepAlive(async () => { await cmd.attachAsNarrator(); });
-    ev.keepAlive(async () => { await ev.attachAsNarrator(); await ev.call('events.subscribe', {}); });
-  } catch (e: any) {
-    elogError('daemon_unreachable', 'cannot attach to the daemon', { phase: 'observe' });
-    console.error('delphi observe: cannot attach to the daemon: ' + (e?.message ?? JSON.stringify(e)));
-    process.exit(1);
-  }
-  const term = new Term({ mouse: !process.argv.includes('--no-mouse') && !process.env.DELPHI_NO_MOUSE });
-  term.start();
-  const { dark, forced } = await detectDark(term);
-  const renderer = await createCliRenderer({
-    // Term owns stdin, raw mode, mouse protocols and the alternate screen. OpenTUI only paints frames.
-    stdin: new PassThrough() as any, stdout: rendererOut(), externalOutputMode: 'passthrough', screenMode: 'main-screen', useMouse: false,
-    exitOnCtrlC: false, exitSignals: [], clearOnShutdown: false,
-  });
-  const root = createRoot(renderer);
-  let resolveExit!: () => void;
-  const exitPromise = new Promise<void>((r) => { resolveExit = r; });
-  const onExit = () => resolveExit();
-
-  root.render(<ErrorBoundary><Observer cmd={cmd} ev={ev} term={term} info={info} dark={dark} themeForced={forced} view={view} onExit={onExit} /></ErrorBoundary>);
-  term.on('resume', () => { renderer.requestRender(); });
-  try {
-    await exitPromise;
-  } catch (e) { // a render error: leave the alternate screen first so the message stays readable
-    term.stop();
-    logCrash('console_stopped', e, { view: 'observer' });
-    console.error('delphi observe: the Observer stopped on an error:', e);
-    cmd.close(); ev.close();
-    process.exit(1);
-  } finally {
-    root.unmount();
-    renderer.destroy();
-  }
-  term.stop();
-  cmd.close(); ev.close();
-  process.exit(0);
-}
-
 let cmd: Rpc, ev: Rpc, mission: string, history = initial(Date.now());
 try {
   cmd = await Rpc.connect(info.console_socket);

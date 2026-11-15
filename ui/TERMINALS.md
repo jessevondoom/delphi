@@ -16,8 +16,7 @@ Source execution requires Node.js 26.4.0 or newer with `--experimental-ffi`; the
   back, so it stays readable.
 - The alternate screen is entered once, by `Term`; the OpenTUI renderer does not enter a second alternate screen or
   start its own input and mouse protocols (`the_terminal_is_given_back_and_the_mouse_can_be_left_to_the_terminal`).
-- The screen is exactly the window: `w` columns by `h` rows, no line wider, from 1x1 up to 200x60, in every deck and in
-  every narrator view.
+- The screen is exactly the window: `w` columns by `h` rows, no line wider, from 1x1 up to 200x60, in every deck.
 - A resize while running repaints to the new size, with the footer on the last row (scripted session).
 - Wide glyphs, emoji with joiners, flags and accented letters: one character to edit, counted by display columns, never
   cut in half when a line is clipped. Completion indexes count characters, so an emoji before an `@` does not shift it.
@@ -50,8 +49,7 @@ window narrow and wide, `Ctrl+C`, and confirm the shell prompt and scrollback ar
 background and look at the badge eyes. Also look at, on a dark and a light background: the message tint (visible but quiet; the caps
 `▄` `▀` join the block with no seam), the badge strip animating (blink, thinking pan) and holding still with
 `DELPHI_REDUCE_MOTION=1`, a long reply pinned at its first line with the `↓ N more lines` marker, the `?` card, the activity
-deck's green `finished` chip, and the narrator (`delphi observe council` with a running council: the blind round must show
-no text; `epic` with a running mission: the waterline `┆` and the pace row). Run it also with `NO_COLOR=1` (rail, no fill).
+deck's green `finished` chip. Run it also with `NO_COLOR=1` (rail, no fill).
 
 | Terminal | Version | Keys | Wheel | Paste | Colour | Resize | Restore | Notes |
 | :-- | :-- | :-- | :-- | :-- | :-- | :-- | :-- | :-- |

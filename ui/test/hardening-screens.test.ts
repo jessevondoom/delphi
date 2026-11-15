@@ -10,7 +10,6 @@ import { addBlock, fold, initial, type State } from '../src/fold.ts';
 import { frame, type Model } from '../src/screen.ts';
 import { newInbox } from '../src/inbox.ts';
 import * as P from '../src/panel.ts';
-import { emptyState, observeFrame, VIEWS, type OModel, type OState } from '../src/observe-screen.ts';
 import type { Info } from '../src/theme.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -61,24 +60,6 @@ test('golden screens: the chat, the menu, the inbox in both modes, the stream an
   snap('slash-menu', frame(model({ composer: C.insert(C.empty(), '/b'), menu: { items: [{ label: '/build', desc: 'A Builder task', insert: '/build' }, { label: '/budget', desc: 'Cost ceiling', insert: '/budget' }], sel: 0 } }), 100, 30));
 });
 
-function ostate(): OState {
-  const s = emptyState();
-  s.mission_id = '2026-10-24-ui'; s.spent_usd = 0.42; s.budget = { cap_usd: 5 }; s.cache_hit_ratio = 0.5; s.series = [0.01, 0.05, 0.02, 0.2, 0.14];
-  s.tokens = { input: 1000, cache_read: 2000, cache_write: 0, output: 500, thinking: 0 };
-  s.agents['orchestrator'] = { role: 'orchestrator', state: 'running', task_id: 't_1', endpoint: 'direct', tier: 'frontier', model: 'claude-x', upscaled: false, tokens: { input: 100, cache_read: 200, cache_write: 0, output: 50, thinking: 0 }, cost_usd: 0.07, calls: 2 };
-  s.agents['red-team'] = { ...s.agents['orchestrator']!, role: 'red-team', state: 'waiting on you' };
-  s.tasks['t_1'] = { id: 't_1', flow: 'build', prompt: 'Implement the deck router', status: 'running' };
-  s.nodes['n_1'] = { id: 'n_1', role: 'orchestrator', parent: null, depth: 0, task_id: 't_1', state: 'running', tokens: 1200, cost_usd: 0.1, started_ms: 0, ended_ms: null, after: [] };
-  s.narrative = ['t_1 started'];
-  return s;
-}
-
-test('golden screens: the Observer views', () => {
-  for (const view of VIEWS) {
-    const m: OModel = { info, pal: { dark: true }, st: ostate(), view, pick: 0, scroll: 0, selNode: 0, live: {}, connected: true };
-    snap('observer-' + view, observeFrame(m, 100, 30));
-  }
-});
 
 // A seeded generator so a failure can be replayed.
 function rng(seed: number) { let x = seed >>> 0; return () => ((x = (Math.imul(x, 1664525) + 1013904223) >>> 0) / 2 ** 32); }
@@ -98,7 +79,6 @@ test('fuzz: any window size and any text gives a screen of exactly h lines, none
     const lines = frame(m, w, h);
     assert.equal(lines.length, h, `seed 42 #${i} ${w}x${h}`);
     for (const l of lines) assert.ok(stringWidth(l) <= Math.max(w, 1) , `#${i} ${w}x${h}: ${JSON.stringify(plain(l)).slice(0, 80)}`);
-    for (const view of VIEWS) assert.equal(observeFrame({ info, pal: { dark: true }, st: ostate(), view, pick: 0, scroll: Math.floor(r() * 30), selNode: 0, live: {}, connected: true }, w, h).length, h);
   }
 });
 

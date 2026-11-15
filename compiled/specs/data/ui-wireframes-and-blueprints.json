@@ -82,31 +82,31 @@
     },
     {
       "level": 3,
-      "line": 114,
+      "line": 116,
       "number": "2.8",
       "title": "Observer: Live Evolving Council Debate"
     },
     {
       "level": 3,
-      "line": 123,
+      "line": 127,
       "number": "2.9",
       "title": "Observer: Token Spend Sparkline Over Time"
     },
     {
       "level": 3,
-      "line": 132,
+      "line": 138,
       "number": "2.10",
       "title": "Right Deck: Decision Inbox (List Mode / Triage Table)"
     },
     {
       "level": 3,
-      "line": 141,
+      "line": 147,
       "number": "2.11",
       "title": "Primary Console: Slash Command Menu"
     },
     {
       "level": 3,
-      "line": 150,
+      "line": 156,
       "number": "2.12",
       "title": "Observer: High-Density Agent Telemetry Matrix"
     }
@@ -114,7 +114,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/ui-wireframes-and-blueprints.md",
-    "sha256": "d0fd637c5c231216f19a0eb2ade7030215e14908c38d7fd5af9546264505c533"
+    "sha256": "514624990343f32e27c6dd2458ac73c17e657f9400184f72ac08ded968bcc7e5"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +127,7 @@
       },
       "text": "status: approved   # header and footer wording follows Amendment 005b-A2, approved by the operator, 2026-10-25"
     },
-    "sha256": "d0fd637c5c231216f19a0eb2ade7030215e14908c38d7fd5af9546264505c533",
+    "sha256": "514624990343f32e27c6dd2458ac73c17e657f9400184f72ac08ded968bcc7e5",
     "word": "approved"
   },
   "spec": {

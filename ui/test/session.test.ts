@@ -4,7 +4,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addBlock, fold, initial, replay } from '../src/fold.ts';
 import { lookup } from '../src/commands.ts';
-import { emptyState, observeFrame, VIEWS, type OModel } from '../src/observe-screen.ts';
 import { info } from './epic-fixture.ts';
 
 const ev = (type: string, payload: any, task_id?: string) => ({ method: 'event', params: { type, payload, task_id } });
@@ -60,15 +59,4 @@ test('a newer session, or one announced with no id, still empties the screen', (
 test('/clear is an alias of /new: a clear that leaves the team remembering would surprise', () => {
   assert.equal(lookup('/clear')?.name, '/new');
   assert.equal(lookup('/new')?.name, '/new');
-});
-
-test('the narrator header carries no session number and no ask count, on any page', () => {
-  const st = emptyState();
-  st.sessions = [{ id: 's_0001', reason: 'new', started_ms: 0, turns: 4 }, { id: 's_0002', reason: 'new', started_ms: 1, turns: 1 }];
-  st.tasks = { t_1: { id: 't_1', flow: 'orchestrator', prompt: 'a', status: 'running', session: 's_0001' } };
-  for (const view of VIEWS) {
-    const head = observeFrame({ info, pal: { dark: true }, st, view, pick: 0, scroll: 0, selNode: 0, live: {}, connected: true, still: true, now: 5 } as OModel, 100, 30).slice(0, 2).map((l) => l.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
-    assert.ok(!/session \d|\d+ asks?|from before/.test(head), `${view}: ${head}`);
-    assert.match(head, new RegExp(`delphi v.* · ${view}`));
-  }
 });

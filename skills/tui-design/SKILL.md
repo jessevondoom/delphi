@@ -61,6 +61,8 @@ Terminal user interfaces for AI developer tools must solve for **developer cogni
 - **One vocabulary (spec 053):** colour and glyph follow the table in `docs/console-visual-language.md`; call sites use the semantic styles in `ui/src/theme.ts` (`alert`, `ok`, `accent`, `warn`, `auto`, `link`, `mark(...)`), never a raw colour, and every meaning has a glyph or weight form for no colour.
 
 ### 1.4 Single Full-Window Observer (No Internal Panes)
+
+> **Retired (operator, 2026-11-14; `specs/111` §10):** the terminal's narrator window and `delphi observe` are gone; the desktop app shows this. What follows is history, kept for the reasoning.
 - **No window multiplexing inside the client:** Delphi never tiles or splits panes internally. Every view in `delphi observe` expands dynamically to 100% of the terminal geometry, reacting cleanly to `SIGWINCH`.
 - **Operator-owned layout:** Operators tile or position windows using their native OS window manager, `tmux`, or `zellij`.
 
@@ -126,6 +128,8 @@ Cost and budget telemetry stay out of the console footer (there is no money in t
 ---
 
 ## 4. The Narrator Window (`delphi observe`)
+
+> **Retired (operator, 2026-11-14; `specs/111` §10):** the terminal's narrator window and `delphi observe` are gone; the desktop app shows this. What follows is history, kept for the reasoning.
 
 The Observer is the **narrator**: one read-only Ink window, six views in this order: `council`, `epic`, `forge`, `agents`, `archives`, `thinking` (there is no `spend` view and no money anywhere). Chrome on every view: the badge strip, `delphi v0.5 · <view>`, a blank row, the **attention slot** (`✔ nothing needs you`, or an amber band `▼ needs you   <what>` with `answer in the console`), the body, a hairline and a footer `<N> running  ·  <tokens> tokens` / `← →  ·  ● ○ ○ ○ ○ ○`. `←` `→` change view and stop at the ends; `↑ ↓ PgUp PgDn` scroll; `Ctrl+C` leaves; nothing else is bound, and the footer shows no `/` or `?`. `delphi observe --once` prints one frame of the same renderer without a terminal. The classic Rust Observer is gone.
 1. **council (the Weave):** the question, a track `● blind ╌╌ ○ debate ╌╌ ○ verdict`, one tinted card per seat and a verdict card. **The blind round is sealed**: cards say only `sealed` and whether the seat has answered; no stance text is on screen until every seat has. Debate reveals positions and the live tail of the seat answering; the verdict shows agreement and the minority.
