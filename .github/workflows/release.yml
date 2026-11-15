@@ -2,7 +2,7 @@ name: release
 
 # Push a tag like v0.2.0 (it must match the version in crates/delphi/Cargo.toml and be a commit on main) to build,
 # publish and attest binaries for macOS (arm64, x86_64) and Linux (x86_64, arm64). A separate job then updates the
-# Homebrew formula on main. Actions are pinned to commit SHAs; the Rust toolchain is pinned by rust-toolchain.toml.
+# Homebrew formula on main, and another moves the `stable` branch, which host plugin marketplaces follow, to the tag. Actions are pinned to commit SHAs; the Rust toolchain is pinned by rust-toolchain.toml.
 #
 # Run it by hand (Actions > release > Run workflow) for a dry run: the models are fetched and packed, the preloaded
 # vectors are made and checked, all four executables are built with the models compiled in and smoke-tested where
@@ -245,6 +245,14 @@ jobs:
             echo '    bin.install "delphi", "delphi-ui"'
             echo '  end'
             echo
+            echo '  def caveats'
+            echo '    <<~EOS'
+            echo '      The Delphi plugin for Claude Code and Copilot CLI runs ~/.local/bin/delphi.'
+            echo '      Link it once (`delphi connect claude-code` offers to do this for you):'
+            echo '        mkdir -p ~/.local/bin && ln -s #{HOMEBREW_PREFIX}/bin/delphi ~/.local/bin/delphi'
+            echo '    EOS'
+            echo '  end'
+            echo
             echo '  test do'
             echo '    assert_match version.to_s, shell_output("#{bin}/delphi --version")'
             echo '  end'
@@ -256,3 +264,26 @@ jobs:
           git commit -m "brew: delphi $ver" || exit 0
           git pull --rebase origin main
           git push origin HEAD:main
+
+  channel:
+    # specs/074 section 10.4: `stable` is the branch a host's plugin marketplace follows (`jessevondoom/delphi#stable`), so
+    # hosts move once per release and not with every commit on main. Its own job, with no third-party action. The push is
+    # not forced: `stable` only ever moves forward, and a tag that is not ahead of it leaves it where it is.
+    if: github.event_name == 'push'
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Move stable to the released commit
+        run: |
+          sha="$(git rev-parse "$GITHUB_REF_NAME^{commit}")"
+          if git fetch origin '+refs/heads/stable:refs/remotes/origin/stable' 2>/dev/null; then
+            if [ "$(git rev-parse refs/remotes/origin/stable)" = "$sha" ]; then echo "stable is already at $GITHUB_REF_NAME"; exit 0; fi
+            git merge-base --is-ancestor refs/remotes/origin/stable "$sha" || { echo "stable is not behind $GITHUB_REF_NAME; leaving it where it is"; exit 0; }
+          fi
+          git push origin "$sha:refs/heads/stable"
