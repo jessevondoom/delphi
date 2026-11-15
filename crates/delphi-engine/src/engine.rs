@@ -2817,7 +2817,10 @@ impl Engine {
                 || lower.contains("could not find")
                 || lower.contains("dead end")
                 || matches!(out.status, Status::Escalated(_));
-            if crate::collaboration::should_pushback(role, exhausted, false) {
+            // Once per task (`specs/116` §8.3 item 2): the flag is the pushback event already in this task's log. A log that cannot be
+            // read counts as already pushed back, so a task is never retried more than once.
+            let already = exhausted && sc.m.replay().map(|events| crate::collaboration::already_pushed_back(&events, &sc.task_id)).unwrap_or(true);
+            if crate::collaboration::should_pushback(role, exhausted, already) {
                 sc.m.append(sc.ev(crate::collaboration::TENACITY_EVENT, json!({
                     "role": role,
                     "target": target,
@@ -5615,5 +5618,31 @@ mod tests {
         assert_eq!(pushbacks.len(), 1, "exactly one tenacity pushback emitted");
         assert_eq!(pushbacks[0].payload["role"], "investigator");
         assert!(pushbacks[0].payload["pushback"].as_str().unwrap().contains("solvable"));
+    }
+
+    /// `specs/116` AC-13: an investigator that gives up twice in one task is retried once. The second dispatch of the same task gives
+    /// up too and is not pushed back again: three investigator spans ran (the first, its retry, the second), not four.
+    #[tokio::test]
+    async fn spec_116_an_investigator_that_gives_up_twice_in_one_task_is_retried_once() {
+        let f = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "investigator", "objective": "Find root cause"})),
+                Step::text("Exhausted all avenues, could not find bug."),
+                // The one retry: it gives up as well.
+                Step::text("Still a dead end."),
+                // The orchestrator asks again in the same task; this investigator gives up and is not retried.
+                Step::tool("d2", "dispatch_agent", json!({"role": "investigator", "objective": "Find root cause another way"})),
+                Step::text("Could not find it; no solution."),
+                Step::text("Mission complete."),
+            ],
+            5.0,
+            |_| {},
+        );
+        let out = f.engine.run_task(&f.m, "orchestrator", "Triage bug").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert_eq!(out.text, "Mission complete.", "every scripted step was used, so no fourth investigator span ran");
+        assert_eq!(events_of(&f, crate::collaboration::TENACITY_EVENT).len(), 1, "one pushback for the task");
+        let investigators = events_of(&f, "dag.node.added").iter().filter(|e| e.payload["role"] == "investigator").count();
+        assert_eq!(investigators, 3, "the first, its retry and the second; the second is not retried");
     }
 }

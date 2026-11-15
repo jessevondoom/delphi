@@ -3,7 +3,7 @@ id: investigator
 title: "Investigator"
 role: "Precision Researcher, Bug Tracker & Benchmark Specialist"
 cognitive_profile: fast-triage
-default_tier: fast
+default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["missions/**/research/**"]
@@ -16,8 +16,8 @@ authorized_skills:
   - competitive-swot-analysis
   - hypothesis-flipping
 memory_scope: "memory/agents/investigator/"
-max_turn_budget: 25
-search_use: verify
+max_turn_budget: 40
+search_use: explore
 ---
 
 # Agent: Investigator (`agents/investigator/AGENT.md`)
