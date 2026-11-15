@@ -8,10 +8,15 @@
 //! * **dismiss**: the claim leaves the `staged` zone (`learn.dropped`); the log keeps the event, so nothing is deleted.
 //!
 //! The digest never resolves a card, satisfies a gate or blocks work: it is a list the operator may leave alone, at most
-//! [`DAILY`] items a day, and it asks for nothing. Pure functions of the mission's events; no model is called.
+//! [`DAILY`] items a day unless `[memory] digest_daily` says otherwise, and it asks for nothing. Pure functions of the mission's
+//! events; no model is called.
+//!
+//! A provisional note (`specs/116` §3) is shown the same way, the most used first: the operator leaves it, marks it wrong, or
+//! proposes it as a workspace heuristic for `/retro`. No action here writes a lesson, a heuristic or any rule.
 
 use crate::decision_model::{clean, TITLE_MAX};
 use crate::learn::{is_contact, live_notes, LiveNote, MAX_PROPOSAL_TEXT};
+use crate::provisional_notes::Note;
 use delphi_core::event::EventEnvelope;
 use delphi_core::provenance::Tier;
 use serde_json::{json, Value};
@@ -59,17 +64,103 @@ pub fn used_today(events: &[EventEnvelope], now: &str) -> usize {
 /// The candidate to show now, and how many more wait today: the oldest live captured note nobody has acted on, unless
 /// today's quota is used. `now` is an RFC 3339 timestamp.
 pub fn next(mission: &str, events: &[EventEnvelope], now: &str) -> Option<(LiveNote, usize)> {
+    next_within(mission, events, now, DAILY)
+}
+
+/// [`next`] under the operator's own daily limit (`[memory] digest_daily`, `specs/116` §3 item 4).
+pub fn next_within(mission: &str, events: &[EventEnvelope], now: &str, daily: usize) -> Option<(LiveNote, usize)> {
     let acted = acted(events);
     let today = used_today(events, now);
-    if today >= DAILY {
+    if today >= daily {
         return None;
     }
     let mut pending: Vec<LiveNote> = live_notes(mission, events).into_iter().filter(|n| is_contact(&n.trigger) && !acted.contains(&n.id.as_str())).collect();
     if pending.is_empty() {
         return None;
     }
-    let left = pending.len().min(DAILY - today) - 1;
+    let left = pending.len().min(daily - today) - 1;
     Some((pending.remove(0), left))
+}
+
+// ── provisional notes in the digest (`specs/116` §3) ────────────────────────────────────────────────────────────
+
+/// What the operator may do with a provisional note from the console, in the order the pane lists them. Keeping one as a lesson
+/// is not among them: that is `delphi learn keep` at a terminal, where the operator words the trigger and types yes.
+pub const NOTE_ACTIONS: [&str; 3] = ["leave", "heuristic", "wrong"];
+
+/// The id a provisional note is acted on by: its staged reference, marked as the tier's.
+pub fn note_id(n: &Note) -> String {
+    format!("pv:{}", n.reference())
+}
+
+/// A note written by a span that had read nothing untrusted (and by no host) may be proposed as a heuristic; any other may only
+/// be left, marked wrong, or kept at the terminal.
+fn proposable(n: &Note) -> bool {
+    !n.tainted()
+}
+
+/// What the operator is asked to judge, hashed: the note, its words and how often it was used, so an answer to a stale card is refused.
+pub fn note_hash(n: &Note) -> String {
+    blake3::hash(format!("{}\n{}\n{}\n{}", note_id(n), n.rel_path(), n.uses, n.text).as_bytes()).to_hex().to_string()
+}
+
+/// The `delphi learn keep` command for a provisional note, as a lesson for its role (a rule for one no single role wrote).
+pub fn note_keep_command(n: &Note) -> String {
+    if n.role == crate::provisional_notes::SHARED {
+        format!("delphi learn keep {} --as rule", n.reference())
+    } else {
+        format!("delphi learn keep {} --as lesson --role {} --text \"T: <when it applies> D: <what to do>\"", n.reference(), n.role)
+    }
+}
+
+/// A provisional note as an entry of `decision.list` (`specs/116` §3 item 1): kind `learn`, tier `open`, tickable for `leave` only.
+pub fn note_decision(n: &Note, left: usize, now: &str) -> Value {
+    let mut choices = vec![json!({"id": "leave", "label": "Leave it", "effect": "digest", "reversible": true})];
+    if proposable(n) {
+        choices.push(json!({"id": "heuristic", "label": "Keep as a workspace heuristic: propose it in /retro", "effect": "digest", "reversible": false}));
+    }
+    choices.push(json!({"id": "wrong", "label": "Mark it wrong", "effect": "digest", "reversible": false}));
+    let more = if left == 0 { String::new() } else { format!(" {} more wait.", left) };
+    let used = format!("used {} time(s) in tasks that ended well", n.uses);
+    let mut changes = vec![n.label(), used.clone(), format!("valid until {}", n.valid_until), format!("to keep it as a lesson, at a terminal: {}", note_keep_command(n))];
+    if !proposable(n) {
+        changes.push("cannot be proposed here: it was written after reading untrusted content, or by a host".to_string());
+    }
+    json!({
+        "id": card_id(now), "source": "digest", "source_id": note_id(n), "label": "DIGEST",
+        "kind": "learn", "tier": "open", "title": clean(&n.text, TITLE_MAX),
+        "requester": "daemon", "task": "", "raised_at": n.created, "timeout_secs": Value::Null, "payload_blake3": note_hash(n),
+        "brief": {
+            "summary": clean(&format!("An unreviewed note by {} ({}), {}. No one has reviewed it; a later run of the same role may be given it as data until {}. Leave it, mark it wrong, or keep it: as a workspace heuristic through /retro, or as a lesson with `delphi learn keep` at a terminal. Nothing waits on this.{}", n.role, n.kind, used, n.valid_until, more), 400),
+            "changes": changes, "state": "plain",
+            "recommendation": {"choice_id": "leave", "why": "it stays an unreviewed note and expires on its own; it comes back here only if it is used again"},
+        },
+        "items": [{"type": "note", "id": note_id(n), "text": clean(&n.text, 400), "from": n.trigger, "role": n.role, "kind": n.kind, "uses": n.uses, "tier": n.tier.as_str(), "status": "provisional", "label": n.label()}],
+        "choices": choices,
+        "tickable": true, "tickable_reason": "leaving changes nothing",
+    })
+}
+
+/// The events one action on a provisional note writes: the `learn.digested` mark that counts toward the day's limit, and for
+/// `heuristic` a proposal the operator still has to accept in `/retro` (never a rule). The note's own file is the caller's to
+/// change, with [`crate::provisional_notes::leave`] or [`crate::provisional_notes::mark_wrong`]. `Err` for an unknown action or a
+/// proposal of a note written after reading untrusted content.
+pub fn note_act(mission_id: &str, n: &Note, action: &str) -> Result<Vec<EventEnvelope>, String> {
+    let mut out = Vec::new();
+    match action {
+        "leave" | "wrong" => {}
+        "heuristic" => {
+            if !proposable(n) {
+                return Err("this note was written after reading untrusted content, or by a host; it can be left, marked wrong, or kept with `delphi learn keep` at a terminal, not proposed here".into());
+            }
+            let text: String = n.claim().chars().take(MAX_PROPOSAL_TEXT).collect();
+            // A proposal, never a rule: the operator still accepts it in `/retro`, and nothing loads before that.
+            out.push(EventEnvelope::new(mission_id, "learn.proposed", json!({"op": "add", "scope": "workspace", "text": text, "rationale": format!("promoted from the digest: the provisional note {} by {} ({} use(s))", n.reference(), n.role, n.uses), "target": "", "tier": n.tier.min(Tier::L3).as_str()})));
+        }
+        _ => return Err(format!("`{}` is not an action on a provisional note ({})", action, NOTE_ACTIONS.join(", "))),
+    }
+    out.push(EventEnvelope::new(mission_id, "learn.digested", json!({"id": note_id(n), "action": action})));
+    Ok(out)
 }
 
 /// The card's id: one per day, whichever candidate it shows.
@@ -254,6 +345,56 @@ mod tests {
         assert_eq!(dismissed[0].kind, "learn.dropped");
         assert_eq!(act("m1", &n, "check").unwrap().len(), 1);
         assert!(act("m1", &n, "approve").is_err());
+    }
+
+    fn pnote(tier: Tier, role: &str, uses: u32) -> Note {
+        Note { id: "2026-10-29-m1-n7".into(), role: role.into(), mission: "m1".into(), note: "n7".into(), project: String::new(), tier, kind: "pitfall".into(), created: NOW.into(), valid_until: "2026-11-28".into(), uses, trigger: if tier == Tier::L0 { "host_note".into() } else { "agent_note".into() }, source: None, left_uses: None, text: if tier == Tier::L0 { "[host:x/y] the CI image has no python3 (evidence: s7)".into() } else { "the CI image has no python3".into() }, path: std::path::PathBuf::new() }
+    }
+
+    /// `specs/116` §3 item 1: the operator's choices on a provisional note. The console leaves it, marks it wrong, or proposes it for
+    /// `/retro`; a lesson is the terminal's; a tainted note cannot be proposed; nothing here writes a rule.
+    #[test]
+    fn a_provisional_note_is_left_marked_wrong_or_proposed_for_retro_and_never_written_as_a_rule_here() {
+        let n = pnote(Tier::L3, "builder", 4);
+        let d = note_decision(&n, 1, NOW);
+        let ids = |d: &Value| d["choices"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(ids(&d), ["leave", "heuristic", "wrong"]);
+        assert_eq!((d["kind"].as_str(), d["tier"].as_str(), d["source_id"].as_str(), d["brief"]["recommendation"]["choice_id"].as_str()), (Some("learn"), Some("open"), Some("pv:m1/n7"), Some("leave")));
+        let text = d.to_string();
+        assert!(text.contains("unreviewed note by builder, 2026-10-29") && text.contains("used 4 time(s)") && text.contains("delphi learn keep m1/n7 --as lesson --role builder"), "{text}");
+        assert_eq!(d["items"][0]["status"], "provisional");
+        let evs = note_act("m1", &n, "heuristic").unwrap();
+        assert_eq!(evs.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["learn.proposed", "learn.digested"], "a proposal waits for /retro; no rule is written here");
+        assert_eq!((evs[0].payload["op"].as_str(), evs[0].payload["scope"].as_str(), evs[0].payload["text"].as_str(), evs[0].payload["tier"].as_str()), (Some("add"), Some("workspace"), Some("the CI image has no python3"), Some("L3")));
+        assert_eq!(evs[1].payload, json!({"id": "pv:m1/n7", "action": "heuristic"}));
+        for a in ["leave", "wrong"] {
+            let evs = note_act("m1", &n, a).unwrap();
+            assert_eq!(evs.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["learn.digested"], "{a} writes the mark and nothing else");
+        }
+        for a in ["lesson", "keep", "promote", "approve", ""] {
+            assert!(note_act("m1", &n, a).is_err(), "{a}");
+        }
+        // A host's note, or one written after reading untrusted content, cannot be proposed from the console.
+        let host = pnote(Tier::L0, "builder", 0);
+        assert_eq!(ids(&note_decision(&host, 0, NOW)), ["leave", "wrong"]);
+        assert!(note_act("m1", &host, "heuristic").is_err() && note_decision(&host, 0, NOW).to_string().contains("from untrusted content"));
+        // The hash moves with the note's uses and words, so a stale answer is refused.
+        assert_ne!(note_hash(&n), note_hash(&pnote(Tier::L3, "builder", 5)));
+        assert_eq!(note_keep_command(&pnote(Tier::L3, "shared", 0)), "delphi learn keep m1/n7 --as rule");
+    }
+
+    /// `specs/116` §3 item 4: the daily limit is the operator's number.
+    #[test]
+    fn the_daily_limit_is_a_number_the_operator_sets() {
+        let mut evs: Vec<_> = (1..=12).map(|i| staged(i, &format!("n{}", i), "council_verdict", "L3", NOW)).collect();
+        assert_eq!(next_within("m1", &evs, NOW, 3).unwrap().1, 2, "three today: this one and two more");
+        assert_eq!(next_within("m1", &evs, NOW, 50).unwrap().1, 11);
+        assert!(next_within("m1", &evs, NOW, 0).is_none(), "zero shows none");
+        for i in 1..=3u64 {
+            evs.push(digested(100 + i, &format!("n{}", i), NOW));
+        }
+        assert!(next_within("m1", &evs, NOW, 3).is_none() && next_within("m1", &evs, NOW, 4).is_some());
+        assert_eq!(next("m1", &evs, NOW).map(|(n, _)| n.id), next_within("m1", &evs, NOW, DAILY).map(|(n, _)| n.id), "the default is ten");
     }
 
     #[test]

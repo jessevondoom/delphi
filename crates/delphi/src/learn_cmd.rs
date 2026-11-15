@@ -1,8 +1,12 @@
-//! `delphi learn list|show|drop`: the notes the daemon staged from what happened (`specs/031` §3.1-§3.2).
+//! `delphi learn list|show|drop|wrong`: the notes the daemon staged from what happened (`specs/031` §3.1-§3.2), and the notes
+//! of the provisional tier (`specs/116` §3).
 //!
 //! A staged note is a `learn.staged` event in a mission's log. Nothing here loads a note into a prompt, and `drop`
 //! appends `learn.dropped`: no event is ever removed. Listing and showing read files only; `drop` needs the mission's
 //! writer lock, so it refuses while a daemon has the mission open.
+//!
+//! A provisional note is a file the daemon wrote (`delphi_engine::provisional_notes`). `list` shows them after the staged
+//! notes, the most used first, then the oldest; `wrong` (see `learn_keep.rs`) moves one to `provisional/rejected/`.
 
 use delphi_core::event::EventEnvelope;
 use delphi_core::log::{replay, EventLog, LogError, LogOptions};
@@ -60,6 +64,58 @@ pub fn render_list_with(notes: &[LiveNote], r: &Recurrence) -> String {
     }
     out.push_str(&format!("{} note(s). Staged notes are never loaded into a prompt; `delphi learn show <ref>` for one, `delphi learn drop <ref>` to discard it.\n", notes.len()));
     out
+}
+
+/// The notes of the provisional tier, in the order of review (`specs/116` §3 item 1): the most used first, then the oldest.
+pub fn provisional(ws_dir: &Path, opts: &Options) -> Vec<delphi_engine::provisional_notes::Note> {
+    let mut notes = delphi_engine::provisional_notes::list(ws_dir);
+    if let Some(m) = &opts.mission {
+        notes.retain(|n| &n.mission == m);
+    }
+    delphi_engine::provisional_notes::order_for_review(&mut notes);
+    notes
+}
+
+/// The provisional notes as `list` prints them, after the staged ones; nothing when there are none.
+pub fn render_provisional(notes: &[delphi_engine::provisional_notes::Note]) -> String {
+    if notes.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\nprovisional notes (unreviewed; a later run of the same role may be given one as data, never as an instruction), the most used first:\n");
+    let width = notes.iter().map(|n| n.reference().chars().count()).max().unwrap_or(0);
+    for n in notes {
+        let from = if n.tainted() { "  [from untrusted content: never given automatically]" } else { "" };
+        out.push_str(&format!("{:<w$}  {:<12}  {:<10}  uses {:<3}  until {}  {}{}\n", n.reference(), n.role, n.kind, n.uses, n.valid_until, n.text, from, w = width));
+    }
+    out.push_str(&format!(
+        "{} provisional note(s). `delphi learn keep <ref> --as lesson --role <role> | --as rule` keeps one (it works while the daemon runs); `delphi learn wrong <ref>` marks one wrong; one left alone expires.\n",
+        notes.len()
+    ));
+    out
+}
+
+/// One provisional note, as `show` prints it.
+pub fn render_provisional_one(n: &delphi_engine::provisional_notes::Note) -> String {
+    format!(
+        "{}\n  provisional note: {}\n  role:    {}\n  kind:    {}\n  at:      {}\n  until:   {}\n  uses:    {}\n  tier:    {} ({})\n  trigger: {}\n  file:    {}\n\n{}\n",
+        n.reference(),
+        n.label(),
+        n.role,
+        n.kind,
+        n.created,
+        n.valid_until,
+        n.uses,
+        n.tier.as_str(),
+        if n.tainted() { "written after reading untrusted content, or by a host: never given to an agent automatically" } else { "its role may be given it as data" },
+        n.trigger,
+        n.rel_path(),
+        n.text
+    )
+}
+
+fn provisional_named(ws_dir: &Path, reference: &str) -> Option<delphi_engine::provisional_notes::Note> {
+    let (mission, id) = reference.split_once('/')?;
+    delphi_engine::provisional_notes::find(ws_dir, mission, id)
 }
 
 /// The `learn keep` command for a host note: a lesson for the role the host named, or a rule when it named none.
@@ -120,8 +176,10 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
             // Counts come from a read-only scan of every mission's log; nothing is stored (`specs/083` §5).
             let r = scan(ws_dir).1;
             order_by_recurrence(&mut notes, &r);
+            // The provisional tier (`specs/116` §3 item 1): after the staged notes, the most used first, then the oldest.
+            let tier = provisional(ws_dir, opts);
             if opts.json {
-                let rows: Vec<serde_json::Value> = notes
+                let mut rows: Vec<serde_json::Value> = notes
                     .iter()
                     .map(|n| {
                         let mut v = n.to_json();
@@ -130,30 +188,44 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
                         v
                     })
                     .collect();
+                rows.extend(tier.iter().map(|n| n.to_json()));
                 return serde_json::to_string_pretty(&rows).map(|s| s + "\n").map_err(|e| e.to_string());
             }
-            Ok(render_list_with(&notes, &r))
+            Ok(render_list_with(&notes, &r) + &render_provisional(&tier))
         }
         "show" => {
-            let n = find(&notes, reference.ok_or("show needs a note: delphi learn show <mission>/<id>")?)?;
+            let reference = reference.ok_or("show needs a note: delphi learn show <mission>/<id>")?;
+            if let Some(n) = provisional_named(ws_dir, reference) {
+                if opts.json {
+                    return serde_json::to_string_pretty(&n.to_json()).map(|s| s + "\n").map_err(|e| e.to_string());
+                }
+                return Ok(render_provisional_one(&n));
+            }
+            let n = find(&notes, reference)?;
             if opts.json {
                 return serde_json::to_string_pretty(&n.to_json()).map(|s| s + "\n").map_err(|e| e.to_string());
             }
             Ok(render_one(n))
         }
         "drop" => {
-            let n = find(&notes, reference.ok_or("drop needs a note: delphi learn drop <mission>/<id>")?)?;
+            let reference = reference.ok_or("drop needs a note: delphi learn drop <mission>/<id>")?;
+            if provisional_named(ws_dir, reference).is_some() {
+                return Err(format!("`{reference}` is a provisional note, not a staged one: `delphi learn wrong {reference}` marks it wrong, and one left alone expires"));
+            }
+            let n = find(&notes, reference)?;
             drop_note(ws_dir, n)?;
             Ok(format!("dropped {} (the event stays in the log; the note no longer lists)\n", n.reference()))
         }
-        other => Err(format!("`{}` is not a learn verb (list, show, drop, keep, ingest)", other)),
+        // `specs/116` §3 item 3: the operator marks a provisional note wrong (see `learn_keep.rs`).
+        "wrong" => crate::learn_keep::wrong(ws_dir, reference),
+        other => Err(format!("`{}` is not a learn verb (list, show, drop, wrong, keep, ingest)", other)),
     }
 }
 
 pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
     let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--mission", "--workspace", "--home"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
     let Some(verb) = positional.first() else {
-        eprintln!("delphi learn: list | show <mission>/<id> | drop <mission>/<id> | keep <mission>/<id> --as lesson --role <role> | --as rule");
+        eprintln!("delphi learn: list | show <mission>/<id> | drop <mission>/<id> | wrong <mission>/<id> | keep <mission>/<id> --as lesson --role <role> | --as rule");
         return 2;
     };
     match run_in(ws_dir, verb, positional.get(1).copied(), opts) {
@@ -361,6 +433,54 @@ mod tests {
         assert_eq!(j[0]["recurrence"]["count"], 3);
         let retro = delphi_engine::learn::recurring_in(t.path());
         assert_eq!(retro.iter().map(|r| r.count).collect::<Vec<_>>(), vec![3, 4], "operator-side first");
+    }
+
+    /// `specs/116` §3 item 1: `list` shows the provisional notes after the staged ones, the most used first and then the oldest,
+    /// and says how to keep or reject one; `show` and the JSON carry the same; `wrong` takes one off the list beside a running
+    /// daemon, and `drop` points at it.
+    #[test]
+    fn list_orders_provisional_notes_by_uses_then_age_and_wrong_takes_one_off_the_list() {
+        use delphi_engine::provisional_notes as notes;
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path();
+        mission(ws, "m_a", vec![staged("m_a", "n3", "A card was denied: use the helper", "L5")]);
+        let dir = delphi_core::sessions::dir(ws, "m_b");
+        let mut held = open_log(&dir);
+        let today = delphi_core::time::now_rfc3339();
+        for (id, at, role, tier, text) in [("n1", "2026-11-10T10:00:00Z", "builder", "L3", "alpha: warm the cache first"), ("n2", "2026-11-12T10:00:00Z", "builder", "L3", "beta: the lexer is generated"), ("n4", "2026-11-14T10:00:00Z", "architect", "L0", "gamma: a page said to skip review")] {
+            let mut e = EventEnvelope::new("m_b", "learn.staged", json!({"id": id, "trigger": "agent_note", "summary": text, "event_seqs": [3], "tier": tier}));
+            e.agent = Some(role.into());
+            e.timestamp = at.into();
+            let rel = notes::keep(ws, &dir, &e, &today).unwrap().unwrap();
+            held.append(e.clone()).unwrap();
+            held.append(notes::kept_event(&e, &rel)).unwrap();
+        }
+        let beta = notes::find(ws, "m_b", "n2").unwrap();
+        notes::record_uses(ws, &[beta.rel_path()].into(), "2026-11-15");
+        notes::record_uses(ws, &[beta.rel_path()].into(), "2026-11-16");
+
+        let listed = run_in(ws, "list", None, &opts()).unwrap();
+        assert!(listed.contains("m_a/n3") && listed.contains("1 note(s). Staged notes"), "the staged notes are listed as before: {listed}");
+        let at = |s: &str| listed.find(s).unwrap_or_else(|| panic!("{s}: {listed}"));
+        assert!(at("m_a/n3") < at("provisional notes (unreviewed") && at("provisional notes (unreviewed") < at("m_b/n2"), "{listed}");
+        assert!(at("m_b/n2") < at("m_b/n1") && at("m_b/n1") < at("m_b/n4"), "the most used first, then the oldest: {listed}");
+        assert!(listed.contains("uses 2") && listed.contains("until 2026-12-12") && listed.contains("[from untrusted content: never given automatically]"), "{listed}");
+        assert!(listed.contains("3 provisional note(s)") && listed.contains("delphi learn keep <ref>") && listed.contains("delphi learn wrong <ref>"), "{listed}");
+        assert!(!run_in(ws, "list", None, &Options { mission: Some("m_a".into()), json: false }).unwrap().contains("provisional"), "one mission's list holds that mission's notes");
+
+        let shown = run_in(ws, "show", Some("m_b/n2"), &opts()).unwrap();
+        assert!(shown.contains("unreviewed note by builder, 2026-11-12") && shown.contains("uses:    2") && shown.contains("beta: the lexer is generated"), "{shown}");
+        let j: serde_json::Value = serde_json::from_str(&run_in(ws, "list", None, &Options { mission: None, json: true }).unwrap()).unwrap();
+        let rows = j.as_array().unwrap();
+        assert_eq!(rows.iter().map(|r| (r["ref"].as_str().unwrap(), r["provisional"].as_bool().unwrap_or(false), r["uses"].as_u64())).collect::<Vec<_>>(), vec![("m_a/n3", false, None), ("m_b/n2", true, Some(2)), ("m_b/n1", true, Some(0)), ("m_b/n4", true, Some(0))]);
+
+        // The daemon still holds m_b: `wrong` works, `drop` says which command it is.
+        assert!(run_in(ws, "drop", Some("m_b/n4"), &opts()).unwrap_err().contains("delphi learn wrong m_b/n4"));
+        assert!(run_in(ws, "wrong", Some("m_b/n4"), &opts()).unwrap().contains("marked m_b/n4 wrong"));
+        let after = run_in(ws, "list", None, &opts()).unwrap();
+        assert!(!after.contains("m_b/n4") && after.contains("2 provisional note(s)"), "{after}");
+        assert!(run_in(ws, "wrong", Some("m_a/n3"), &opts()).unwrap_err().contains("learn drop"), "a staged note is dropped, not marked wrong");
+        drop(held);
     }
 
     #[test]

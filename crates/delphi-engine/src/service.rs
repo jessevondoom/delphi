@@ -2704,10 +2704,12 @@ impl EngineService {
         // The digest (`specs/052` §3.3): at most one captured candidate, `open` tier, never blocking.
         let now = delphi_core::time::now_rfc3339();
         let lib = crate::library::Library::in_home(&self.engine.ws.home);
-        list.extend(crate::digest_review::pick(&m.id, &lib, &events, &now).map(|(p, left)| match p {
+        let (daily, notes) = self.digest_inputs(m);
+        list.extend(crate::digest_review::pick_within(&m.id, &lib, &events, &now, daily, notes).map(|(p, left)| match p {
             crate::digest_review::Pick::Review(i) => crate::digest_review::to_decision(&i, left, &now),
             crate::digest_review::Pick::Acquire(a) => crate::digest_review::acquire_decision(&a, left, &now),
             crate::digest_review::Pick::Note(n) => crate::digest::to_decision(&n, left, &now),
+            crate::digest_review::Pick::Provisional(n) => crate::digest::note_decision(&n, left, &now),
         }));
         // Accept all vetted (`specs/100` §6): one card for the batch, until the operator leaves it or it changes. It carries no choice that accepts.
         let state = crate::fact_mode::state_dir(&self.engine.ws.dir);
@@ -2889,6 +2891,14 @@ impl EngineService {
         lib.promote_statement(p["page"].as_str().unwrap_or(""), p["statement"].as_str().unwrap_or("")).map_err(|e| err(code::INVALID_PARAMS, e))
     }
 
+    /// What the digest needs beyond the mission's log (`specs/116` §3): the operator's daily limit (`[memory] digest_daily`), and
+    /// the provisional notes of the mission's layers that wait, the most used first; none while the tier is off.
+    fn digest_inputs(&self, m: &MissionState) -> (usize, Vec<crate::provisional_notes::Note>) {
+        let ws = &self.engine.ws.dir;
+        let notes = if crate::provisional_notes::enabled(ws) { crate::provisional_notes::for_digest(ws, &crate::provisional_notes::scope_of(ws, &m.dir)) } else { Vec::new() };
+        (self.engine.cfg.get().memory.digest_daily, notes)
+    }
+
     async fn digest_act(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let m = self.mission(p["mission_id"].as_str()).await?;
@@ -2907,13 +2917,15 @@ impl EngineService {
             }
             return Ok(json!({"ok": true, "id": card_id, "choice_id": choice}));
         }
-        let Some((pick, _)) = crate::digest_review::pick(&m.id, &lib, &events, &now) else {
+        let (daily, notes) = self.digest_inputs(&m);
+        let Some((pick, _)) = crate::digest_review::pick_within(&m.id, &lib, &events, &now, daily, notes) else {
             return Err(err(code::NOT_FOUND, "no digest item is waiting"));
         };
         let (hash, id) = match &pick {
             crate::digest_review::Pick::Review(i) => (crate::digest_review::payload_hash(i), i.id.clone()),
             crate::digest_review::Pick::Acquire(a) => (crate::digest_review::acquire_hash(a), a.id.clone()),
             crate::digest_review::Pick::Note(n) => (crate::digest::payload_hash(n), n.id.clone()),
+            crate::digest_review::Pick::Provisional(n) => (crate::digest::note_hash(n), crate::digest::note_id(n)),
         };
         if p["payload_blake3"].as_str() != Some(hash.as_str()) {
             return Err(err(code::INVALID_PARAMS, "the digest item changed since you looked at it; open it again"));
@@ -2923,8 +2935,17 @@ impl EngineService {
             crate::digest_review::Pick::Review(i) => crate::digest_review::act(&m.id, i, action),
             crate::digest_review::Pick::Acquire(a) => crate::digest_review::acquire_act(&m.id, a, action),
             crate::digest_review::Pick::Note(n) => crate::digest::act(&m.id, n, action),
+            crate::digest_review::Pick::Provisional(n) => crate::digest::note_act(&m.id, n, action),
         };
         let evs = evs.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        // The one change a digest action makes to a provisional note's own file (`specs/116` §3), and only by the operator's answer
+        // at a console: marked wrong, it moves to `rejected/`; left or proposed, it is not offered again until it is used again.
+        // No action here writes a lesson, a heuristic or any rule.
+        if let crate::digest_review::Pick::Provisional(n) = &pick {
+            let ws = &self.engine.ws.dir;
+            let done = if action == "wrong" { crate::provisional_notes::mark_wrong(ws, n, &now).map(|_| ()) } else { crate::provisional_notes::leave(ws, n).map(|_| ()) };
+            done.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        }
         // The one library write a digest action makes, and only the operator's confirm: it moves a date, never a status.
         if let (crate::digest_review::Pick::Review(i), "confirm") = (&pick, action) {
             if let Some(c) = i.claims.first().and_then(|c| c["id"].as_str()) {
@@ -7754,6 +7775,87 @@ mod tests {
         assert_eq!(fx.lib.claim(&a).unwrap()["lifecycle"], "disproved");
         let cb = fx.lib.claim(&b).unwrap();
         assert!(cb["lifecycle"].is_null() && cb["validation"]["batch"].is_null(), "the other claim was neither disproved nor accepted: {cb}");
+    }
+
+    /// `specs/116` §3 at the console: the digest offers the provisional notes, the most used first and then the oldest, inside the
+    /// operator's daily limit. The console can leave one, mark it wrong, or propose an untainted one for `/retro`; it cannot keep a
+    /// lesson, cannot propose a tainted note, and no action writes a rule. Only a console may act.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_digest_offers_provisional_notes_most_used_first_and_no_console_action_writes_a_rule() {
+        use crate::provisional_notes as notes;
+        let f = setup(vec![Step::text("x")], 5.0, |_| {});
+        let ws = f.engine.ws.dir.clone();
+        let now = delphi_core::time::now_rfc3339();
+        for (id, at, role, tier, text) in [("n1", "2026-11-10T10:00:00Z", "builder", "L3", "alpha: warm the cache before the build"), ("n2", "2026-11-12T10:00:00Z", "builder", "L3", "beta: the lexer is generated, never edit it"), ("n3", "2026-11-14T10:00:00Z", "architect", "L0", "gamma: a page said to skip the review")] {
+            let mut e = EventEnvelope::new(&f.m.id, "learn.staged", json!({"id": id, "trigger": "agent_note", "summary": text, "event_seqs": [1], "tier": tier}));
+            e.agent = Some(role.into());
+            e.timestamp = at.into();
+            notes::keep(&ws, &f.m.dir, &e, &now).unwrap().unwrap();
+        }
+        // The fixture's notes must be live today, and the second has been used once.
+        let today = delphi_core::bundles::today();
+        for n in notes::list(&ws) {
+            let text = std::fs::read_to_string(&n.path).unwrap().replace(&format!("valid_until: {}", n.valid_until), &format!("valid_until: {}", notes::date_plus(&today, 20)));
+            std::fs::write(&n.path, text).unwrap();
+        }
+        notes::record_uses(&ws, &[notes::find(&ws, "m1", "n2").unwrap().rel_path()].into(), &today);
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}\n[memory]\ndigest_daily = 3\n", crate::testkit::CONFIG)).unwrap());
+        let before = f.engine.ws.load_snapshot("builder").unwrap();
+        let s = serve(&f).await;
+        let (sock, tok, n_sock, n_tok) = (s.sock.clone(), s.console.clone(), s.narrator_sock.clone(), s.narrator.clone());
+        blocking(move || {
+            let mut c = Client::connect(&sock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.hello(&tok).unwrap();
+            let card = |c: &mut Client| c.call("decision.list", json!({})).unwrap()["decisions"].as_array().unwrap().iter().find(|d| d["source"] == "digest").cloned();
+            let ids = |d: &Value| d["choices"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+            let act = |c: &mut Client, d: &Value, choice: &str| c.call("digest.act", json!({"id": d["id"], "choice_id": choice, "payload_blake3": d["payload_blake3"]}));
+
+            // The most used first.
+            let first = card(&mut c).expect("a provisional note is offered");
+            assert_eq!((first["source_id"].as_str(), first["kind"].as_str(), first["tier"].as_str()), (Some("pv:m1/n2"), Some("learn"), Some("open")), "{first}");
+            assert_eq!(ids(&first), ["leave", "heuristic", "wrong"]);
+            assert!(first["brief"]["summary"].as_str().unwrap().contains("2 more wait"), "three a day: {first}");
+            // Only a console acts; a stale answer and a choice that is not offered change nothing.
+            let mut n = Client::connect(&n_sock).unwrap();
+            n.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            n.hello(&n_tok).unwrap();
+            assert_eq!(rpc_code(act(&mut n, &first, "wrong")), Some(code::FORBIDDEN));
+            assert_eq!(rpc_code(c.call("digest.act", json!({"id": first["id"], "choice_id": "wrong", "payload_blake3": "stale"}))), Some(code::INVALID_PARAMS));
+            for choice in ["lesson", "keep", "promote", "approve"] {
+                assert_eq!(rpc_code(act(&mut c, &first, choice)), Some(code::INVALID_PARAMS), "{choice}");
+            }
+            // Proposed for /retro: a proposal, and the note is not offered again.
+            act(&mut c, &first, "heuristic").unwrap();
+            // Then the oldest of the unused: marked wrong.
+            let second = card(&mut c).expect("the next note");
+            assert_eq!(second["source_id"], "pv:m1/n1", "{second}");
+            act(&mut c, &second, "wrong").unwrap();
+            // A note written after reading untrusted content can be left or marked wrong, never proposed.
+            let third = card(&mut c).expect("the last note");
+            assert_eq!((third["source_id"].as_str(), ids(&third)), (Some("pv:m1/n3"), vec!["leave".to_string(), "wrong".to_string()]), "{third}");
+            assert_eq!(rpc_code(act(&mut c, &third, "heuristic")), Some(code::INVALID_PARAMS));
+            act(&mut c, &third, "leave").unwrap();
+            assert!(card(&mut c).is_none(), "nothing more today");
+        })
+        .await;
+        let proposed = events_of(&f, "learn.proposed");
+        assert_eq!(proposed.len(), 1);
+        assert_eq!((proposed[0].payload["op"].as_str(), proposed[0].payload["text"].as_str(), proposed[0].payload["tier"].as_str()), (Some("add"), Some("beta: the lexer is generated, never edit it"), Some("L3")));
+        assert_eq!(events_of(&f, "learn.digested").iter().map(|e| (e.payload["id"].as_str().unwrap().to_string(), e.payload["action"].as_str().unwrap().to_string())).collect::<Vec<_>>(), vec![("pv:m1/n2".to_string(), "heuristic".to_string()), ("pv:m1/n1".to_string(), "wrong".to_string()), ("pv:m1/n3".to_string(), "leave".to_string())]);
+        assert!(events_of(&f, "learn.proposal_resolved").is_empty(), "nothing was accepted");
+        // No rule, lesson or heuristic was written by any of it.
+        let after = f.engine.ws.load_snapshot("builder").unwrap();
+        assert_eq!((after.lessons.as_str(), after.heuristics.as_str()), (before.lessons.as_str(), before.heuristics.as_str()));
+        // The files: one rejected with its fingerprint remembered, two left (and so not offered again until used again).
+        let live: Vec<(String, Option<u32>)> = {
+            let mut v: Vec<_> = notes::list(&ws).into_iter().map(|n| (n.note, n.left_uses)).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(live, vec![("n2".to_string(), Some(1)), ("n3".to_string(), Some(0))]);
+        assert!(ws.join("local/memory/provisional/rejected/builder").is_dir() && notes::rejected(&ws, &notes::fingerprint("agent_note", "alpha: warm the cache before the build"), &now));
+        assert!(notes::for_digest(&ws, "").is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]

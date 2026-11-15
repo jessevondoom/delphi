@@ -90,10 +90,12 @@ pub const SITES: &[Site] = &[
         ],
     },
     Site {
-        name: "`delphi learn keep` (`specs/108` M2): the operator's typed yes at a terminal keeps a host note as a lesson or a rule, through the pinned write and its checks",
+        name: "`delphi learn keep` (`specs/108` M2, `specs/116` §3 item 2): the operator's typed yes at a terminal keeps an agent's or a host's note as a lesson or a rule, through the pinned write and its checks, beside a running daemon for a note of the provisional tier",
         files: &["crates/delphi/src/learn_keep.rs"],
         events: &["learn.proposal_resolved"],
         proofs: &[
+            ("crates/delphi/src/learn_keep.rs", "keep_works_with_the_daemon_running_for_a_note_from_an_inside_agent"),
+            ("crates/delphi/src/learn_keep.rs", "a_note_marked_wrong_leaves_the_tier_with_the_daemon_running_and_is_not_kept_again"),
             ("crates/delphi/src/learn_keep.rs", "keep_as_lesson_writes_one_rule_with_provenance_resolves_the_note_and_the_next_pack_carries_it"),
             ("crates/delphi/src/learn_keep.rs", "a_script_an_unknown_id_a_closed_note_an_unknown_role_and_a_relaxing_text_are_refused_with_nothing_written"),
             ("crates/delphi/src/learn_keep.rs", "a_full_lessons_file_is_refused_with_the_three_ways_out_and_nothing_written"),
@@ -103,7 +105,12 @@ pub const SITES: &[Site] = &[
         name: "the digest's `promote` (the operator's act: a candidate becomes a proposal for `/retro`; nothing loads)",
         files: &["crates/delphi-engine/src/digest.rs"],
         events: &["learn.proposed"],
-        proofs: &[("crates/delphi-engine/src/digest.rs", "promote_only_proposes_for_the_retro_review_and_never_a_card_or_a_rule_and_a_low_tier_cannot_promote")],
+        proofs: &[
+            ("crates/delphi-engine/src/digest.rs", "promote_only_proposes_for_the_retro_review_and_never_a_card_or_a_rule_and_a_low_tier_cannot_promote"),
+            // `specs/116` §3: a provisional note is proposed the same way, only when untainted, and only by a console.
+            ("crates/delphi-engine/src/digest.rs", "a_provisional_note_is_left_marked_wrong_or_proposed_for_retro_and_never_written_as_a_rule_here"),
+            ("crates/delphi-engine/src/service.rs", "the_digest_offers_provisional_notes_most_used_first_and_no_console_action_writes_a_rule"),
+        ],
     },
     Site {
         name: "project-to-home promotion (`specs/058` §7): a data-only proposal, the operator's acceptance as a tainted home entry, a withdrawal that retires it",
