@@ -125,18 +125,15 @@ pub(crate) fn find_app(delphi_app: Option<&str>, this_exe: Option<&Path>, user_h
 }
 
 /// Is starting the app switched on in this build? See [`start_with_ticket`].
-pub(crate) const START_ENABLED: bool = cfg!(test);
+pub(crate) const START_ENABLED: bool = true;
 
 /// Start the app's executable directly and hand it the ticket on its standard input (§2 item 3). No argument, no environment
 /// variable and no file carries the ticket; the pipe is written once and closed. The app runs in a session of its own, so
 /// closing the terminal does not close the window, and is told which daemon to pair with by the same three variables the
 /// bridge already reads (`DELPHI_EXE`, `DELPHI_HOME`, `DELPHI_WORKSPACE`): paths and a name, nothing secret.
 ///
-/// **Compiled for tests only, for now.** This is a new place where the program starts a process, and every such place is
-/// listed, with a class, in `crates/delphi/tests/spawn_sites.toml` (spec 093 K1), a gate file this slice may not change. Until
-/// the entry is added by whoever may (`file = "crates/delphi/src/app_cmd.rs"`, `count = 1`, `class = "operator-cli"`) and the
-/// two `cfg` lines here are removed, `delphi app` says so and asks for no ticket.
-#[cfg(test)]
+/// This is a place where the program starts a process: it is listed, with its class, in
+/// `crates/delphi/tests/spawn_sites.toml` (spec 093 K1).
 fn start_with_ticket(exe: &Path, ticket: &str, daemon: &[(&str, String)]) -> std::io::Result<u32> {
     use std::io::Write;
     use std::os::unix::process::CommandExt;
@@ -164,11 +161,6 @@ fn start_with_ticket(exe: &Path, ticket: &str, daemon: &[(&str, String)]) -> std
         let _ = child.wait();
     });
     Ok(pid)
-}
-
-#[cfg(not(test))]
-fn start_with_ticket(_exe: &Path, _ticket: &str, _daemon: &[(&str, String)]) -> std::io::Result<u32> {
-    Err(std::io::Error::other("starting the app is not switched on in this build"))
 }
 
 fn day(ts: &str) -> &str {
