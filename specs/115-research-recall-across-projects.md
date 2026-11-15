@@ -3,7 +3,7 @@ id: spec-115-research-recall-across-projects
 title: "115: Research recall across projects"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "115: your suggestions are approved" (the default `workspace` and the private flag of section 8). Open question 2 was settled later the same day ("1. follow your direction"): claims from private and internal sources are shared under the three guards of section 2.3.
+status: approved   # by the operator, 2026-11-14, in a host session: "115: your suggestions are approved" (the default `workspace` and the private flag of section 8). Open question 2 was settled later the same day ("1. follow your direction"): claims from private and internal sources are shared under the three guards of section 2.3. Section 10 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -111,3 +111,13 @@ X2 and X3 need no other spec. X4's claim part needs 112 R2.
 1. *Decided 2026-11-14:* the default is `workspace`.
 2. *Decided 2026-11-14:* claims from private and internal sources ([`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §2.4) are shared, under the guards of §2.3.
 3. Should any project be private from the start? Until the operator says so, none is.
+
+## 10. Amendment (operator, 2026-11-15): a session with no project is given shared research
+
+The operator's words, in a host session on 2026-11-15: "a session with no project should get full shared research." Until then, as built in X2, only a session inside a registered project was given another project's research; the spec did not require that, and the builder had asked before widening it. The operator approves this section by merging the pull request that adds it.
+
+1. A session that is in no registered project (a host session outside every project root, a console session, or a mission in the workspace's default project) is given the research of every non-private project of the workspace, on the same rule as a project session (§3 items 1 to 6), wherever research is shared: a host's `search_kb` and `kb_retrieve`, an agent's `kb_search`, start passages and the claim pull at mission start.
+2. The guards of §2 item 3 apply unchanged: the label and weight, the private-read mark of [`specs/103`](103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md) taken at the moment such a session is given a claim that rests on a private or internal source, and the exits (a private project shares nothing; the workspace's privacy identifiers withhold).
+3. With no own project there is no own-project boost (§3 item 3): every shared result ranks on its score alone.
+4. `research_sharing = "project"` (§2 item 1) still turns sharing off for every session, with or without a project.
+5. Built in X4, with a test for each entry point of item 1 and the mark.

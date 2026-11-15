@@ -73,25 +73,31 @@
       "line": 109,
       "number": "9",
       "title": "Open questions (the operator decides)"
+    },
+    {
+      "level": 2,
+      "line": 115,
+      "number": "10",
+      "title": "Amendment (operator, 2026-11-15): a session with no project is given shared research"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/115-research-recall-across-projects.md",
-    "sha256": "993f86377516ecc75c954d4079d5045361cf4bff63cf3d797f9f7516c82989b2"
+    "sha256": "926fc633cd1e64d7c1b0c64ea96acba9c1bb4feb3dc9fe88f0accc1ae04f7bcf"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 479,
+        "end": 625,
         "end_line": 6,
         "line": 6,
         "start": 145
       },
-      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"115: your suggestions are approved\" (the default `workspace` and the private flag of section 8). Open question 2 was settled later the same day (\"1. follow your direction\"): claims from private and internal sources are shared under the three guards of section 2.3."
+      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"115: your suggestions are approved\" (the default `workspace` and the private flag of section 8). Open question 2 was settled later the same day (\"1. follow your direction\"): claims from private and internal sources are shared under the three guards of section 2.3. Section 10 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request."
     },
-    "sha256": "993f86377516ecc75c954d4079d5045361cf4bff63cf3d797f9f7516c82989b2",
+    "sha256": "926fc633cd1e64d7c1b0c64ea96acba9c1bb4feb3dc9fe88f0accc1ae04f7bcf",
     "word": "approved"
   },
   "spec": {
@@ -106,10 +112,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 1982,
+      "end": 2128,
       "end_line": 30,
       "line": 25,
-      "start": 1367
+      "start": 1513
     },
     "text": "| # | Observation (2026-11-14) |\n| :-- | :-- |\n| E-1 | The index shows a project's files only to a session with that project's id (`kb.rs`, the project filter). Tests assert that another project gets nothing. |\n| E-2 | A research run inside a project writes to that project and never to the shared index (`research.rs`, the destination rule). |\n| E-3 | Project knowledge reaches the rest of the workspace only by promotion, one item at a time, on the operator's accept. |\n| E-4 | On a live workspace with eight projects, a search from one project for subjects researched in two others returned nothing about them. |"
   }
