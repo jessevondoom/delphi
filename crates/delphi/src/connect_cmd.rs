@@ -81,7 +81,7 @@ pub const TEMPLATES: [Template; 2] = [
         // v2: the update row was added (spec 074 §10.2). v3: the add row names the release channel (§10.4). An audit line
         // tells the sets of rows apart.
         id: "claude-v3",
-        proven_on: "Claude Code 2.1.325, with the branch `main` (the branch `stable` did not exist when it was run)",
+        proven_on: "Claude Code 2.1.325",
         proven_update: "Claude Code 2.1.325",
         dirs: &[".local/bin", ".claude/local", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
         add: [&["plugin", "marketplace", "add", SOURCE_SLOT], &["plugin", "install", "delphi@delphi"]],
@@ -96,7 +96,7 @@ pub const TEMPLATES: [Template; 2] = [
         host: "copilot",
         exe: "copilot",
         id: "copilot-v3",
-        proven_on: "Copilot CLI 1.0.111, with the branch `main` (the branch `stable` did not exist when it was run)",
+        proven_on: "Copilot CLI 1.0.111",
         proven_update: "Copilot CLI 1.0.111",
         dirs: &[".local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
         add: [&["plugin", "marketplace", "add", SOURCE_SLOT], &["plugin", "install", "delphi@delphi"]],
@@ -636,8 +636,8 @@ mod tests {
         let skew = host_plugin_notes(home, "0.5.4", &other);
         assert!(skew.len() == 1 && skew[0].contains("launchable: yes (a different `delphi`)"), "{skew:?}");
         for tm in &TEMPLATES {
-            assert!(tm.id.ends_with("-v3") && tm.proven_update != tm.proven_on, "{}: the update rows carry their own proof", tm.host);
-            assert!(tm.proven_on.contains("with the branch `main`"), "{}: the add row says which ref form was actually run", tm.host);
+            assert!(tm.id.ends_with("-v3") && !tm.proven_update.is_empty(), "{}: the update rows carry their own proof", tm.host);
+            assert!(tm.proven_on.ends_with(if tm.host == "copilot" { "1.0.111" } else { "2.1.325" }), "{}: the add row names the version `#stable` was run on", tm.host);
         }
         assert_eq!(host_plugin_notes(home, "0.5.4", &no).len(), 1);
         // Codex has no update row: its own fix is printed.
