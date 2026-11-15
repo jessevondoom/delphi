@@ -72,13 +72,13 @@ Objective: a desktop window that shows, and changes nothing. An operator opens i
 A small Rust program inside the app. It does four things.
 
 1. **Finds the daemon.** It runs `delphi daemon where` (the command the CLI keeps for clients in other languages), which prints the socket paths, the roles with their colours, the avatar table and the name pool. It looks for `delphi` in `DELPHI_EXE`, then `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, because a window started from the Finder has no shell `PATH`. If that fails it computes the narrator socket of the default workspace itself (`<home>/run/<hash>.narrator.sock`, the hash as `delphi_core::spawn::layout` makes it) and uses its built-in copy of the avatar table.
-2. **Attaches.** Two connections, as the console's observer keeps: one for calls, one for `events.subscribe`. Its own client, about a hundred lines of newline-delimited JSON-RPC; it does not depend on `delphi-core`, which would bring SQLite and an async runtime into a program that needs neither.
+2. **Attaches.** Two connections, as the terminal narrator kept before it was retired (§10): one for calls, one for `events.subscribe`. Its own client, about a hundred lines of newline-delimited JSON-RPC; it does not depend on `delphi-core`, which would bring SQLite and an async runtime into a program that needs neither.
 3. **Passes things on.** Commands for the calls of §2.2; the daemon's notifications (`event`, `delta.frame`, `resync_required`) are forwarded to the window, coalesced.
 4. **Says when it is not connected.** It never starts a daemon (starting one attaches as the console, which needs a terminal). With no daemon the window says so and how to start one; the bridge retries, and re-attaches when the daemon restarts.
 
 ### 3.3 The window
 
-It keeps no fold of its own. Like the console's observer it asks for `observe.state` at start and after a reconnect, asks again at most every 300 ms after an event, and uses `delta.frame` only for live text. The activity stream is `observe.snapshot` (the newest events of the kinds the daemon folds) plus what arrives live.
+It keeps no fold of its own. As the terminal narrator did, it asks for `observe.state` at start and after a reconnect, and asks again at most every 300 ms after an event. `delta.frame` is for live text only; the bridge forwards it and the window does not draw it yet (§9). The activity stream is `observe.snapshot` (the newest events of the kinds the daemon folds) plus what arrives live.
 
 All of it is a plain web page: with no bridge present it reads a fixture, so every screen runs in a browser and in tests without the app or a daemon.
 
@@ -100,10 +100,10 @@ Decided with the operator on 2026-11-14 from drawn screens.
 3. **Knowledge base.** A start page (search, the shelf's layers, what waits for review, what was added), a page of results, and a document's own page showing its label, status and who vouched for it.
 
    **A document is read on a page of its own** (operator, 2026-11-14: a column beside a list is not legible). Wherever a document or an item is chosen (a search result, a work output item, an agent's or a skill's manifest) it takes the full width of the content, with one clear button back to where it was opened from beside its context; choosing the screen's menu item goes back too. The app shows at most the menu and one column of content beside it, plus the roster on Activity.
-4. **Work output.** What the team produced for a mission, led by whatever that project produces. Many projects are research and reports, not specifications and code, so the screen does not assume either: it groups by what is there, in a grid or a list, with where each item lives.
+4. **Work output.** What the team produced for a mission, led by whatever that project produces. Many projects are research and reports, not specifications and code, so the screen does not assume either: it groups by what is there, in a grid or a list. The list says what a thing is and who made it; where it lives and when it changed are on the item's own page (operator, 2026-11-14).
 5. **Agents and skills, Settings.** Read-only views.
 
-Screens 4 and 5 need data the narrator socket may not offer today (`observe.state` carries recorded changes and their files, not a list of a mission's documents; `projects.list` and the page methods are not on the narrator allowlist). Each of those slices starts by saying what is missing, and any new read method is added to the allowlist on purpose, in that slice, with its own test.
+Screens 4 and 5 were expected to need a new read method. They needed none: both are drawn from `kb.get` and `observe.state` (§8, A5, A6 and A8). `projects.list` and the page methods stay off the narrator allowlist, and the allowlist is unchanged by this spec.
 
 ## 6. Slices (one per commit, built locally)
 
@@ -122,7 +122,7 @@ The operator asked on 2026-11-14 that this be built locally, as specs 104 to 110
 | A8 | Agents and skills, Settings | 6-8 |
 
 **Tests.**
-- *The window* (run as a web page, no app): the dependency gate (every version exact and hashed, three production packages, no install script); the type check; unit tests of what turns the daemon's state into what a screen shows, on a fixture taken from the console's simulator; a badge is drawn from the avatar table for every role in every activity, with the mouth cell in the role's colour and the others as eyes; a blind round shows no seat's words.
+- *The window* (run as a web page, no app): the dependency gate (every version exact and hashed, three production packages, no install script); the type check; unit tests of what turns the daemon's state into what a screen shows, on a recorded fixture (the state and events of the terminal narrator's simulator, taken before it was retired, and kept by hand since); a chip is drawn from the avatar table for every role in every activity, three face cells dark on a plate of the role's colour, the brighter fill on a light window; an agent is always its chip, its name and its role; a blind round shows no seat's words; nothing an agent or a document wrote is read as HTML.
 - *The bridge*: against a socket the test serves, it attaches with scope `narrator` and protocol major 1; a method outside §2.2 cannot be sent; a refusal from the daemon reaches the window as an error and not as a crash; it re-attaches after the socket closes; with no daemon it reports that and keeps trying.
 - *Together* (A7): the built app starts, attaches to a daemon in a temporary home, and shows its state.
 
@@ -130,7 +130,7 @@ The operator asked on 2026-11-14 that this be built locally, as specs 104 to 110
 
 - The app can do what the terminal narrator could do, and no more: it holds the same narrator token. Every rule that keeps the narrator socket read-only is the daemon's and is unchanged.
 - The rule that a token for a scope that acts goes only to a client at a terminal ([`specs/005`](005-console-and-narrator-tui.md) §2.1; operator decision 2026-10-25) stands. A window has no terminal. If the app is ever to act, it gets a scope of its own that a terminal vouches for once and that can be revoked, designed in its own spec. It is never given a console token, and the rule is never relaxed for it.
-- The app runs `delphi daemon where` and nothing else. It reads that command's output as data.
+- The app runs two programs and no other. `delphi daemon where`, to find the daemon; it reads that command's output as data. And the system's opener (`/usr/bin/open` on macOS), only for the three clicks of §2.6, each on a target the bridge has checked: a file inside the workspace or a registered project, of a listed kind, or an `http` or `https` address. Nothing the daemon, an agent or a document sent is ever run.
 - Merges stay as [`specs/094`](094-core-repo-merge-flow.md) says.
 
 ## 8. Found while building
