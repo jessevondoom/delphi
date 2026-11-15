@@ -758,6 +758,32 @@ impl Library {
         Ok(s)
     }
 
+    /// A source Delphi did not read and does not hold (`specs/113` §2 item 4, §3 item 1): what a host read through its own tools, a
+    /// file of the operator's ingested by reference, a person. It is stored as a private pointer: the locator, the title, the date and
+    /// (for a file) its hash, never a body. It is private, so it never leaves the install, is never indexed, and is never fetched; it has
+    /// no address and no origin of the daemon's, so it never counts as an origin for corroboration (`Library::cites_of`). The id is a
+    /// hash of the kind and locator, so the locator is not spelled in it. Returns the source id.
+    pub fn add_private_pointer(&self, kind: &str, locator: &str, title: &str, retrieved: &str, content_hash: Option<&str>) -> Result<String, String> {
+        let one = |s: &str, n: usize| -> String { s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+        let (locator, title) = (one(locator, 500), one(title, 300));
+        if locator.is_empty() {
+            return Err("a private source names where it is (its locator)".into());
+        }
+        let kind = one(kind, 20);
+        let id = format!("private-{}", &sha256_hex(format!("{kind}\0{locator}").as_bytes())[..16]);
+        let opts = AddOpts { private: true, ..Default::default() };
+        let mut meta = Self::base_meta(&opts, if kind == "file" { "document" } else { kind.as_str() }, if title.is_empty() { "untitled" } else { title.as_str() });
+        meta.insert("source_kind".into(), json!(kind));
+        meta.insert("locator".into(), json!(locator));
+        meta.insert("fetch_mode".into(), json!("host_reported"));
+        meta.insert("retrieved".into(), json!(one(retrieved, 40)));
+        if let Some(h) = content_hash {
+            meta.insert("content_hash".into(), json!(one(h, 80)));
+        }
+        meta.insert("tags".into(), json!([]));
+        Ok(self.store(Prepared { id, meta, text: None, assets: None, requested: Some(Level::Pointer), excerpts: None, imported: false }, &Budgets::default())?.id)
+    }
+
     /// Capture a local text or Markdown file the operator names.
     pub fn add_file(&self, path: &Path, opts: &AddOpts, budgets: &Budgets) -> Result<Stored, String> {
         let b = Budgets { text: opts.raise_text.unwrap_or(budgets.text), source: opts.raise_source.unwrap_or(budgets.source), ..*budgets };

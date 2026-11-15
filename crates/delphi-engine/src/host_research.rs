@@ -229,6 +229,60 @@ pub struct Ctx<'a> {
     pub label: &'a str,
     /// The run's id.
     pub run_id: &'a str,
+    /// The host session carries the private-read mark of `specs/103` (§2 item 5): nothing is fetched and every source is private.
+    pub read_marked: bool,
+    /// The workspace's `[privacy] identifiers` (`query_guard::identifiers`), applied to what is stored (§8).
+    pub identifiers: &'a [String],
+}
+
+/// The mark a claim that rests on a private source carries (§2 item 4).
+pub const HOST_REPORTED: &str = "host-reported";
+/// What an identifier is replaced with in stored text.
+pub const MASK: &str = "[private identifier]";
+
+/// `text` with each of the workspace's privacy identifiers (lower-case, as `query_guard::identifiers` gives them) replaced by
+/// [`MASK`] where it stands as a word or words: no letter or digit on either side, case ignored (ASCII).
+pub fn mask(text: &str, identifiers: &[String]) -> String {
+    let mut out = text.to_string();
+    for id in identifiers.iter().map(|i| i.trim()).filter(|i| !i.is_empty()) {
+        let mut from = 0;
+        while from < out.len() {
+            let Some(at) = out[from..].char_indices().map(|(i, _)| from + i).find(|&i| out.get(i..i + id.len()).is_some_and(|s| s.eq_ignore_ascii_case(id))) else { break };
+            let end = at + id.len();
+            let before = out[..at].chars().next_back().is_some_and(char::is_alphanumeric);
+            let after = out[end..].chars().next().is_some_and(char::is_alphanumeric);
+            if before || after {
+                from = at + out[at..].chars().next().map_or(1, char::len_utf8);
+                continue;
+            }
+            out.replace_range(at..end, MASK);
+            from = at + MASK.len();
+        }
+    }
+    out
+}
+
+/// Is this a source the daemon must not read, whose claims stay private (§2 items 4 and 5)?
+pub fn is_private(s: &Source, read_marked: bool) -> bool {
+    read_marked || s.private || s.kind != "web"
+}
+
+/// The call with the identifiers masked in everything that is stored but the quotes, which are checked against a page first and masked
+/// where they are stored without one.
+fn masked(p: &Parsed, ids: &[String]) -> Parsed {
+    if ids.is_empty() {
+        return p.clone();
+    }
+    let m = |s: &str| mask(s, ids);
+    Parsed {
+        question: m(&p.question),
+        answer: m(&p.answer),
+        sources: p.sources.iter().map(|s| Source { locator: m(&s.locator), title: m(&s.title), ..s.clone() }).collect(),
+        claims: p.claims.iter().map(|c| Claim { text: m(&c.text), ..c.clone() }).collect(),
+        searches: p.searches.iter().map(|s| Search { place: m(&s.place), words: m(&s.words) }).collect(),
+        gaps: p.gaps.iter().map(|g| m(g)).collect(),
+        topic_id: p.topic_id.clone(),
+    }
 }
 
 /// The fingerprint of a claim of the host's: its words, folded (`host_noted::fingerprint`).
@@ -256,6 +310,7 @@ fn refusal_word(e: &str) -> &'static str {
 /// reply (§2 item 7).
 pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fetched, String>) -> Result<Value, String> {
     let started = std::time::Instant::now();
+    let parsed = &masked(parsed, ctx.identifiers);
     let question = match &parsed.topic_id {
         Some(id) => {
             let t = Topic::at(ctx.root, id).filter(Topic::exists).ok_or_else(|| format!("no research topic `{id}` here to add to; leave out topic_id to start one"))?;
@@ -272,11 +327,20 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
     }
     let lib = Library::in_home(ctx.home);
     // One fetch per public source; what the daemon read is kept and is what the quotes are checked against.
-    let mut read: Vec<Option<(String, String, String)>> = Vec::new(); // (source id, url read, text)
+    let mut read: Vec<Read> = Vec::new();
     let mut sources_out = Vec::new();
     for (i, s) in parsed.sources.iter().enumerate() {
+        // A private source (marked so, of a kind other than web, carrying a private identifier, or any source of a session under the
+        // private-read mark) is a pointer: locator, title, date. It is never fetched.
+        if is_private(s, ctx.read_marked) || s.locator.contains(MASK) {
+            let sid = lib.add_private_pointer(&s.kind, &s.locator, &s.title, &s.retrieved, None)?;
+            topic.private_source(run, &sid, &s.kind)?;
+            sources_out.push(json!({"index": i, "kind": s.kind, "fetched": false, "private": true, "source_id": sid}));
+            read.push(Read::Private(sid, s.locator.clone()));
+            continue;
+        }
         let Some(url) = public_url(s) else {
-            read.push(None);
+            read.push(Read::Nothing);
             sources_out.push(json!({"index": i, "kind": s.kind, "fetched": false}));
             continue;
         };
@@ -290,38 +354,45 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
                 let hash = lib.read_meta(&sid).and_then(|m| m["content_hash"].as_str().map(String::from));
                 topic.page(run, &at, &sid, hash.as_deref())?;
                 sources_out.push(json!({"index": i, "kind": s.kind, "fetched": true, "url": at, "source_id": sid}));
-                read.push(Some((sid, at, text)));
+                read.push(Read::Page(sid, at, text));
             }
             Err(e) => {
                 topic.refused(run, url, if e == "capture_failed" { "capture_failed" } else { refusal_word(&e) })?;
                 sources_out.push(json!({"index": i, "kind": s.kind, "fetched": false, "url": url}));
-                read.push(None);
+                read.push(Read::Nothing);
             }
         }
     }
-    let (mut ids, mut found, mut not_found, mut claims_out) = (Vec::new(), 0usize, 0usize, Vec::new());
+    let (mut ids, mut found, mut not_found, mut private_claims, mut claims_out) = (Vec::new(), 0usize, 0usize, 0usize, Vec::new());
     for c in &parsed.claims {
-        let page = c.source.and_then(|i| read.get(i)).and_then(Option::as_ref);
-        let written = match page {
-            Some((sid, at, text)) if quote_in(text, &c.quote) => {
+        let page = c.source.and_then(|i| read.get(i)).unwrap_or(&Read::Nothing);
+        let (written, mark) = match page {
+            Read::Page(sid, at, text) if quote_in(text, &c.quote) => {
                 let fp = fingerprint(&c.text);
                 let anchors = [AnchorSpec { source_id: sid.clone(), locator: Some(at.clone()), quote: c.quote.clone(), prefix: None, suffix: None }];
-                lib.add_research_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &anchors }).map(|(v, _)| (v, true))
+                (lib.add_research_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &anchors }).map(|(v, _)| v), None)
+            }
+            // A claim on a private source: kept as the host reported it, anchored to the pointer with its quote, private to its place.
+            Read::Private(sid, locator) => {
+                let fp = private_fingerprint(&c.text);
+                let quote = mask(&c.quote, ctx.identifiers);
+                let anchors: Vec<AnchorSpec> = (!quote.trim().is_empty()).then(|| AnchorSpec { source_id: sid.clone(), locator: Some(locator.clone()), quote, prefix: None, suffix: None }).into_iter().collect();
+                (lib.add_host_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &anchors }, HOST_REPORTED), Some(HOST_REPORTED))
             }
             _ => {
                 let fp = private_fingerprint(&c.text);
-                lib.add_host_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &[] }, NOT_FOUND).map(|v| (v, false))
+                (lib.add_host_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &[] }, NOT_FOUND), Some(NOT_FOUND))
             }
         };
         match written {
-            Ok((v, anchored)) => {
+            Ok(v) => {
                 let id = v["id"].as_str().unwrap_or("").to_string();
-                if anchored {
-                    found += 1;
-                } else {
-                    not_found += 1;
+                match mark {
+                    None => found += 1,
+                    Some(HOST_REPORTED) => private_claims += 1,
+                    Some(_) => not_found += 1,
                 }
-                claims_out.push(json!({"id": id, "quote_found": anchored, "mark": if anchored { Value::Null } else { json!(NOT_FOUND) }}));
+                claims_out.push(json!({"id": id, "quote_found": mark.is_none(), "mark": mark}));
                 if !id.is_empty() && !ids.contains(&id) {
                     ids.push(id);
                 }
@@ -331,16 +402,27 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
     }
     let result = json!({
         "runner": "host", "answer": parsed.answer, "requested_by": ctx.label, "knowledge_status": "noted", "note": NOT_VALIDATED,
-        "claims": claims_out, "library_claims": ids, "sources": sources_out, "quotes_found": found, "quotes_not_found": not_found,
+        "claims": claims_out, "library_claims": ids, "sources": sources_out, "quotes_found": found, "quotes_not_found": not_found, "private_claims": private_claims,
     });
+    let private_sources = read.iter().filter(|r| matches!(r, Read::Private(..))).count();
     topic.finish(run, "done", Some(&result), &ids, None, started.elapsed().as_millis() as u64)?;
     let gaps = parsed.gaps.clone();
     topic.amend(|rec| rec["gaps"] = json!(gaps))?;
     Ok(json!({
         "recorded": true, "topic_id": topic.id, "research_id": run, "claims": parsed.claims.len(), "library_claims": ids.len(),
-        "quotes_found": found, "quotes_not_found": not_found, "status": NOT_VALIDATED,
-        "note": "not validated. Delphi fetched each public source itself and looked for each quote in what it read: a quote it found is an anchor into the page it keeps; one it did not find (or could not look for) is kept as `host-reported, not found`. Read it back with research_result and this research_id, or find it with search_kb.",
+        "quotes_found": found, "quotes_not_found": not_found, "private_sources": private_sources, "private_claims": private_claims, "fetched_nothing": ctx.read_marked, "status": NOT_VALIDATED,
+        "note": "not validated. Delphi fetched each public source itself and looked for each quote in what it read: a quote it found is an anchor into the page it keeps; one it did not find (or could not look for) is kept as `host-reported, not found`. A private, internal, file or person source was not fetched: only its locator, title and date are kept, and its claims stay private and count for no corroboration. Read it back with research_result and this research_id, or find it with search_kb.",
     }))
+}
+
+/// What the daemon has of one source of a call.
+enum Read {
+    /// It read the page: the library source, the address read, the text.
+    Page(String, String, String),
+    /// A private pointer: the library source and the locator.
+    Private(String, String),
+    /// Nothing (not public, or the fetch failed).
+    Nothing,
 }
 
 #[cfg(test)]
@@ -403,7 +485,92 @@ mod tests {
     }
 
     fn ctx<'a>(f: &'a Fx, run: &'a str) -> Ctx<'a> {
-        Ctx { home: &f.home, root: &f.ws, project: None, label: "host:claude-code/opus", run_id: run }
+        Ctx { home: &f.home, root: &f.ws, project: None, label: "host:claude-code/opus", run_id: run, read_marked: false, identifiers: &[] }
+    }
+
+    fn private_call() -> Value {
+        json!({
+            "question": "What does our tank SOP say?",
+            "answer": "The heron lab keeps tanks at 28 degrees.",
+            "sources": [
+                {"locator": "https://fish.example.org/a", "title": "Husbandry", "kind": "web", "private": true},
+                {"locator": "wiki page Heron Tank SOP", "title": "Heron tank SOP", "retrieved": "2026-11-14", "kind": "internal"},
+                {"locator": "talk with the lab manager", "title": "conversation", "kind": "person"}
+            ],
+            "claims": [
+                {"text": "Zebrafish are kept at 28 degrees", "quote": "kept at 28 degrees in most labs", "source": 0},
+                {"text": "Heron tanks are cleaned on Mondays", "quote": "Heron tanks are cleaned every Monday", "source": 1},
+                {"text": "The lab manager checks tanks daily", "quote": "I check them every day", "source": 2}
+            ]
+        })
+    }
+
+    /// AC-2: a source marked private (or internal, or a person) is never fetched; it is a pointer with its locator, title and date;
+    /// its claims are host-reported, private to their place, and raise no origin count. The privacy identifiers are masked in what is kept.
+    #[test]
+    fn a_private_source_is_not_fetched_and_its_claims_raise_no_origin() {
+        let f = fx();
+        // A public claim with the same words already stands on a page the daemon read: one origin.
+        let asked = RefCell::new(Vec::new());
+        record(&ctx(&f, "h-1"), &parse(&call(), &id).unwrap(), &web(&asked)).unwrap();
+        let lib = Library::in_home(&f.home);
+        let public = lib.claims().into_iter().find(|c| c["text"] == "Zebrafish are kept at 28 degrees" && c["scope"] == "team").unwrap();
+        assert_eq!(public["support"]["origins"], 1);
+        asked.borrow_mut().clear();
+        let ids = vec!["heron".to_string()];
+        let c = Ctx { identifiers: &ids, ..ctx(&f, "h-2") };
+        let reply = record(&c, &parse(&private_call(), &id).unwrap(), &web(&asked)).unwrap();
+        assert!(asked.borrow().is_empty(), "no private source is fetched: {:?}", asked.borrow());
+        assert_eq!((reply["private_sources"].as_u64(), reply["private_claims"].as_u64(), reply["quotes_found"].as_u64()), (Some(3), Some(3), Some(0)), "{reply}");
+        let topic = Topic::at(&f.ws, reply["topic_id"].as_str().unwrap()).unwrap();
+        let rec = topic.read().unwrap();
+        assert_eq!((rec["private"].as_bool(), rec["private_sources"].as_array().unwrap().len()), (Some(true), 3), "the record is private and names the pointers");
+        assert!(!serde_json::to_string(&rec).unwrap().to_lowercase().contains("heron"), "the identifier is masked in the record");
+        assert!(!topic.answer().to_lowercase().contains("heron"));
+        for s in rec["private_sources"].as_array().unwrap() {
+            let meta = lib.read_meta(s["source_id"].as_str().unwrap()).unwrap();
+            assert_eq!((meta["private"].as_bool(), meta["capture_level"].as_str(), meta["canonical_url"].is_null()), (Some(true), Some("pointer"), true), "{meta}");
+            assert!(meta["locator"].is_string() && meta["title"].is_string() && meta["retrieved"].is_string());
+            assert!(!lib.source_dir(s["source_id"].as_str().unwrap()).join("source.md").exists(), "no body is kept");
+            assert!(!meta["locator"].as_str().unwrap().to_lowercase().contains("heron"));
+        }
+        let private: Vec<Value> = lib.claims().into_iter().filter(|c| c["host_reported"] == json!([HOST_REPORTED])).collect();
+        assert_eq!(private.len(), 3);
+        for c in &private {
+            assert_eq!((c["scope"].as_str(), c["support"]["origins"].as_u64().unwrap_or(0)), (Some("personal"), 0), "private to its place, no origin: {c}");
+            assert!(lib.rests_on_private(c), "anchored only to a private pointer");
+            assert!(!c["text"].as_str().unwrap().to_lowercase().contains("heron") && !c["anchors"][0]["quote"].as_str().unwrap_or("").to_lowercase().contains("heron"), "{c}");
+        }
+        let public = lib.claim(public["id"].as_str().unwrap()).unwrap();
+        assert_eq!(public["support"]["origins"], 1, "the private source added no origin to the public claim with the same words");
+        assert!(public["anchors"].as_array().unwrap().iter().all(|a| !lib.read_meta(a["source_id"].as_str().unwrap()).is_some_and(|m| crate::library::is_private(&m))));
+        // In a project, the private claims are the project's.
+        let proj = f.home.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let pc = Ctx { root: &proj, project: Some("proj"), ..ctx(&f, "h-3") };
+        record(&pc, &parse(&private_call(), &id).unwrap(), &web(&asked)).unwrap();
+        assert!(lib.claims().iter().any(|c| c["scope"] == "project" && c["project"] == "proj" && c["host_reported"] == json!([HOST_REPORTED])));
+    }
+
+    /// AC-3: under the private-read mark the call makes no request at all, and every source is kept private.
+    #[test]
+    fn under_the_private_read_mark_nothing_is_fetched_and_every_source_is_private() {
+        let f = fx();
+        let asked = RefCell::new(Vec::new());
+        let c = Ctx { read_marked: true, ..ctx(&f, "h-1") };
+        let reply = record(&c, &parse(&call(), &id).unwrap(), &web(&asked)).unwrap();
+        assert!(asked.borrow().is_empty(), "no network request under the mark: {:?}", asked.borrow());
+        assert_eq!((reply["private_sources"].as_u64(), reply["quotes_found"].as_u64(), reply["fetched_nothing"].as_bool()), (Some(2), Some(0), Some(true)), "{reply}");
+        let lib = Library::in_home(&f.home);
+        assert!(lib.list().iter().all(|(_, m)| crate::library::is_private(m)), "every source is a private pointer");
+        assert!(lib.claims().iter().all(|c| c["scope"] == "personal"), "and no claim is offered beyond this install");
+    }
+
+    #[test]
+    fn identifiers_are_masked_as_words_only() {
+        let ids = vec!["heron".to_string(), "blue lab".to_string()];
+        assert_eq!(mask("Heron's tank, project-heron, herons, the Blue Lab", &ids), "[private identifier]'s tank, project-[private identifier], herons, the [private identifier]");
+        assert_eq!(mask("nothing here", &ids), "nothing here");
     }
 
     /// AC-1: two public sources and four claims leave a topic record, two library sources and four library claims; the quotes the

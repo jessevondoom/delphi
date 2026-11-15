@@ -833,10 +833,14 @@ impl EngineService {
         let project = self.host_project(&c.cwd);
         let (e, wsd, home, wider) = (self.engine.clone(), ws.dir.clone(), ws.home.clone(), self.engine.settings.wider_fetch.clone());
         let (rid, lab) = (run_id.clone(), label.clone());
-        let any_public = parsed.sources.iter().any(|s| hr::public_url(s).is_some());
+        // `specs/113` §2 item 5: a session under the private-read mark of spec 103 may record, but the daemon then fetches nothing for the
+        // call and every source is kept private. An unreadable mark counts as a mark here, as it does on the other sends.
+        let private_read = crate::private_read::state(&ws.dir, &c.mission()).would_affect_a_send();
+        let any_public = !private_read && parsed.sources.iter().any(|s| !hr::is_private(s, false) && hr::public_url(s).is_some());
         let (reply, topic_id) = tokio::task::spawn_blocking(move || -> Result<(Value, String), String> {
             let root = project.as_ref().map(|(_, r)| r.clone()).unwrap_or_else(|| wsd.clone());
-            let ctx = hr::Ctx { home: &home, root: &root, project: project.as_ref().map(|(n, _)| n.as_str()), label: &lab, run_id: &rid };
+            let identifiers = crate::query_guard::identifiers(&wsd);
+            let ctx = hr::Ctx { home: &home, root: &root, project: project.as_ref().map(|(n, _)| n.as_str()), label: &lab, run_id: &rid, read_marked: private_read, identifiers: &identifiers };
             let reply = if any_public {
                 let web = crate::research_host::LiveWeb::new(Arc::new(delphi_adapter::research::transport::HttpTransport::new()?), Arc::new(crate::research_setup::lists(&wsd, &home)?), crate::research_setup::engines(&e), wider);
                 web.observed.restore(observed);
@@ -5472,6 +5476,31 @@ mod tests {
         })
         .await;
         assert_eq!(crate::research_record::list(&ws_dir).len(), 10, "the refused call wrote no topic");
+    }
+
+    // specs/113 AC-3 over the socket: a session under the private-read mark records, the daemon fetches nothing (the canned page is never
+    // served, though the session's search returned it) and the source is kept private.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn record_research_under_the_private_read_mark_fetches_nothing() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let cwd = f.root.to_string_lossy().to_string();
+        let url = "https://h2-svc-marked.example/paper";
+        let m = s.svc.mission_at(Some("host-abcdef0123456789"), Some(&cwd)).await.unwrap();
+        m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": "r-1", "urls": [{"url": url, "via": "search:brave#1"}]}))).await.unwrap();
+        crate::research_host::canned::PAGES.lock().unwrap().push((url.to_string(), "Zebrafish tanks are kept near 28 degrees in most labs.".to_string()));
+        crate::private_read::mark(&f.engine.ws.dir, "host-abcdef0123456789", "n1", 1).unwrap();
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let r = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            c.call("host.record_research", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "question": "How warm is a zebrafish tank?", "answer": "About 28 degrees.",
+                "sources": [{"locator": url, "kind": "web", "private": false}], "claims": [{"text": "Zebrafish tanks are kept near 28 degrees", "quote": "kept near 28 degrees in most labs", "source": 0}]})).unwrap()
+        })
+        .await;
+        assert_eq!(crate::research_host::canned::served(url), 0, "no request under the mark");
+        assert_eq!((r["private_sources"].as_u64(), r["quotes_found"].as_u64(), r["fetched_nothing"].as_bool()), (Some(1), Some(0), Some(true)), "{r}");
     }
 
     // specs/092 TA-0: a host's request is staged inert at a fixed federated_peer taint, under the same limits, and only on the host socket.

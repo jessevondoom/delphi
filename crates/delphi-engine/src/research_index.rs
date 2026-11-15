@@ -13,7 +13,7 @@
 //! **What stays out.** Nothing private is listed, so no search, serve or export path can carry it: a claim that rests on a private
 //! source (`Library::rests_on_private`), and a topic whose record is private (one of its claims rests on a private source), with
 //! its answer. A claim scoped to a project is not listed either: it is offered only to its own project today (`Library::pull`), and
-//! this index is the workspace's. A topic that lives in a project's folder is that project's file and is read under the project's
+//! this index is the workspace's. Nor is a claim scoped `personal` (a host's claim Delphi could not check, `specs/113`). A topic that lives in a project's folder is that project's file and is read under the project's
 //! rules (the project layer of the index), not here.
 //!
 //! The records and the claims are JSON; the index holds Markdown. [`text_of`] writes the Markdown the index holds for one, by
@@ -73,7 +73,8 @@ pub fn files(ws: &Path, out: &mut Vec<SourceFile>) {
     let lib = crate::library::Library::in_home(home);
     for c in lib.claims() {
         let Some(id) = c["id"].as_str() else { continue };
-        if c["scope"] == "project" || lib.rests_on_private(&c) {
+        // A `personal` claim is this install's alone: a host-reported claim the daemon could not check (`specs/113` §2 items 3, 4).
+        if c["scope"] == "project" || c["scope"] == "personal" || lib.rests_on_private(&c) {
             continue;
         }
         let path = lib.claims_dir().join(format!("{id}.json"));
