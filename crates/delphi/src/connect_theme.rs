@@ -483,7 +483,7 @@ mod tests {
             assert_eq!(ours(&t).as_deref(), Some(base));
         }
         assert_eq!(serde_json::from_str::<Value>(&theme_text("dark")).unwrap()["overrides"]["purple_FOR_SUBAGENTS_ONLY"], "#a855f7");
-        assert_eq!(serde_json::from_str::<Value>(&theme_text("light-ansi")).unwrap()["overrides"]["purple_FOR_SUBAGENTS_ONLY"], "#7e22ce");
+        assert_eq!(serde_json::from_str::<Value>(&theme_text("light-ansi")).unwrap()["overrides"]["purple_FOR_SUBAGENTS_ONLY"], "#ab59f6");
         // A theme with another name, another token or another field is the operator's, not Delphi's.
         assert!(ours(&theme_text("dark").replace("Delphi", "Mine")).is_none());
         assert!(ours(&theme_text("dark").replace("purple_FOR_SUBAGENTS_ONLY", "claude")).is_none());

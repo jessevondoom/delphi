@@ -113,7 +113,7 @@ class = "git"
 
 [[site]]
 file = "crates/delphi/src/chat.rs"
-count = 3
+count = 1
 class = "operator-cli"
 
 [[site]]

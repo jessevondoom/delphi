@@ -1,0 +1,4 @@
+# Build output goes under the repository's own ignored `target/`, so nothing generated sits beside the app's sources
+# (the repo lint reads every file that is not under `target/`).
+[build]
+target-dir = "../../target/app"

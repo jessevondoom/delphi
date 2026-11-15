@@ -1,0 +1,34 @@
+{
+  "name": "delphi-app",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc",
+    "test": "TZ=UTC node --import tsx --test --test-force-exit test/*.test.ts test/*.test.tsx",
+    "check-deps": "node dev/check-deps.mjs",
+    "check": "npm run check-deps && npm run typecheck && npm test && npm run build",
+    "app": "tauri build --bundles app",
+    "app:dev": "tauri dev"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

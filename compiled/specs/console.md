@@ -6,7 +6,7 @@
 
 ## 005-console-and-narrator-tui
 
-**005: Console, Narrator Window & UDS Event-Bus Daemon** · approved (per source at `24f1cb904d07`) · tier 0 · [source](../../specs/005-console-and-narrator-tui.md)
+**005: Console, Narrator Window & UDS Event-Bus Daemon** · approved (per source at `a7e4ad229cff`) · tier 0 · [source](../../specs/005-console-and-narrator-tui.md)
 
 **source excerpt, untrusted** · `specs/005-console-and-narrator-tui.md` lines 18-22
 
@@ -30,7 +30,7 @@ This specification defines the dual-scale visual identity and real-time interact
 
 ## 005b-deck-navigation-and-visual-interface
 
-**005b: Console Decks, Operator Inbox, Multi-Narrator & Chromeless Viewer** · approved (per source at `789e9397c45b`) · tier 0 · [source](../../specs/005b-deck-navigation-and-visual-interface.md)
+**005b: Console Decks, Operator Inbox, Multi-Narrator & Chromeless Viewer** · approved (per source at `063580ec1a64`) · tier 0 · [source](../../specs/005b-deck-navigation-and-visual-interface.md)
 
 **source excerpt, untrusted** · `specs/005b-deck-navigation-and-visual-interface.md` line 19
 
@@ -40,19 +40,19 @@ This specification builds upon [Spec 005](005-console-and-narrator-tui.md) and [
 
 ## 005c-inline-console
 
-**005c: The Inline Console, an interim step toward 005b** · approved (per source at `f6bcb8fb202c`) · tier 0 · [source](../../specs/005c-inline-console.md)
+**005c: The Inline Console, an interim step toward 005b** · approved (per source at `edd971924f17`) · tier 0 · [source](../../specs/005c-inline-console.md)
 
 _No standard scope section; open the spec._
 
 ## 005d-full-screen-console
 
-**005d: The Full-Screen Console (an Ink client of the daemon)** · approved (per source at `c19b3b986638`) · tier 0 · [source](../../specs/005d-full-screen-console.md)
+**005d: The Full-Screen Console (an Ink client of the daemon)** · approved (per source at `104856b7434d`) · tier 0 · [source](../../specs/005d-full-screen-console.md)
 
 _No standard scope section; open the spec._
 
 ## 005e-console-ux-review-and-redesign
 
-**005e: Console UX Review and Redesign (chat, activity ticker, narrator, first run)** · approved (per source at `645d2bd36555`) · tier 0 · [source](../../specs/005e-console-ux-review-and-redesign.md)
+**005e: Console UX Review and Redesign (chat, activity ticker, narrator, first run)** · approved (per source at `e3225ffae5bd`) · tier 0 · [source](../../specs/005e-console-ux-review-and-redesign.md)
 
 **source excerpt, untrusted** · `specs/005e-console-ux-review-and-redesign.md` line 22
 
@@ -62,7 +62,7 @@ _No standard scope section; open the spec._
 
 ## 005f-console-redesign-build-plan
 
-**005f: Console Redesign Build Plan (ordered slices for an implementing model)** · approved (per source at `1fd634938459`) · tier 0 · [source](../../specs/005f-console-redesign-build-plan.md)
+**005f: Console Redesign Build Plan (ordered slices for an implementing model)** · approved (per source at `8d0f80a80b42`) · tier 0 · [source](../../specs/005f-console-redesign-build-plan.md)
 
 **source excerpt, untrusted** · `specs/005f-console-redesign-build-plan.md` line 23
 
@@ -72,7 +72,9 @@ Eleven slices that implement the decided design of `005e` §§5-11: first run an
 
 ## 005g-epic-threads
 
-**005g: The epic pane as threads (supersedes the rail in 005e §9.2 and replaces the forge view)** · approved (per source at `7518a1249460`) · tier 0 · [source](../../specs/005g-epic-threads.md)
+**005g: The epic pane as threads (supersedes the rail in 005e §9.2 and replaces the forge view)** · superseded (per source at `d164e65d0ac9`) · tier 0 · [source](../../specs/005g-epic-threads.md)
+
+Superseded by: 111-the-desktop-app-a-read-only-window-on-the-daemon
 
 _No standard scope section; open the spec._
 
@@ -84,7 +86,7 @@ _No standard scope section; open the spec._
 
 ## 030-console-sessions-and-conversation-context
 
-**030: Console Sessions and Conversation Context** · approved (per source at `2fa63af51d9f`) · tier 0 · [source](../../specs/030-console-sessions-and-conversation-context.md)
+**030: Console Sessions and Conversation Context** · approved (per source at `3ba61c52becb`) · tier 0 · [source](../../specs/030-console-sessions-and-conversation-context.md)
 
 _No standard scope section; open the spec._
 
@@ -102,7 +104,9 @@ _No standard scope section; open the spec._
 
 ## 034-narrator-monitoring-panes-spike
 
-**034: Narrator monitoring panes (a spike)** · approved (per source at `ae108e865aeb`) · tier 0 · [source](../../specs/034-narrator-monitoring-panes-spike.md)
+**034: Narrator monitoring panes (a spike)** · superseded (per source at `b161af6d72c5`) · tier 0 · [source](../../specs/034-narrator-monitoring-panes-spike.md)
+
+Superseded by: 111-the-desktop-app-a-read-only-window-on-the-daemon
 
 _No standard scope section; open the spec._
 
@@ -170,9 +174,9 @@ _No standard scope section; open the spec._
 
 ## 111-the-desktop-app-a-read-only-window-on-the-daemon
 
-**111: The desktop app: a read-only window on the daemon for activity, councils, the knowledge base and work output** · approved (per source at `1703a7bf50f2`) · tier 0 · [source](../../specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md)
+**111: The desktop app: a read-only window on the daemon for activity, councils, the knowledge base and work output** · approved (per source at `9269bcf05428`) · tier 0 · [source](../../specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md)
 
-**source excerpt, untrusted** · `specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md` lines 26-31
+**source excerpt, untrusted** · `specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md` lines 27-32
 
 ```text
 | # | Observation (code on `host-experience`, 2026-11-14) |
@@ -185,6 +189,6 @@ _No standard scope section; open the spec._
 
 ## ui-wireframes-and-blueprints
 
-**Delphi Interface Architecture & Visual Blueprints** · approved (per source at `d0fd637c5c23`) · tier 0 · [source](../../specs/ui-wireframes-and-blueprints.md)
+**Delphi Interface Architecture & Visual Blueprints** · approved (per source at `514624990343`) · tier 0 · [source](../../specs/ui-wireframes-and-blueprints.md)
 
 _No standard scope section; open the spec._

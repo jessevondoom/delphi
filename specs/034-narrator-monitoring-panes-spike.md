@@ -3,7 +3,8 @@ id: spec-034-narrator-monitoring-panes-spike
 title: "034: Narrator monitoring panes (a spike)"
 author: architect
 timestamp: 2026-10-26T06:00:00Z
-status: approved   # approved by the operator 2026-10-26; the three panes (#195) and the sketches (§5) are built
+status: superseded   # 2026-11-14, by spec 111 §10: the terminal narrator is retired. Before that: approved (approved by the operator 2026-10-26; the three panes (#195) and the sketches (§5) are built)
+superseded_by: "111-the-desktop-app-a-read-only-window-on-the-daemon"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -11,6 +12,8 @@ confidence: low   # panes tested on fixtures only; nobody has watched them again
 source_mission: 2026-10-23-foundational-design
 tags: [spec, narrator, monitoring, visualization, spike, draft]
 ---
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 
 # Spec 034: Narrator monitoring panes (a spike)
 

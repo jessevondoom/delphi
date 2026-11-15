@@ -6,7 +6,6 @@ import { readFileSync } from 'node:fs';
 import chalk from 'chalk';
 import stringWidth from 'string-width';
 import { ACTIVITY, asciiBadgesRequested, asciiCells, badge, currentAsciiBadges, currentCapabilities, poolBadge, useAsciiBadges, useCapabilities, type AgentState, type AvatarSpec, type Info } from '../src/theme.ts';
-import { mascot } from '../src/observe-screen.ts';
 
 const spec: AvatarSpec = JSON.parse(readFileSync(new URL('./fixtures/avatar-spec.json', import.meta.url), 'utf8'));
 const roles = Object.keys(spec.roles);
@@ -66,14 +65,6 @@ test('the eyes keep their colour and the mouth keeps the role colour in ASCII', 
   assert.equal([...uni.matchAll(/\x1b\[[0-9;]*m/g)].map((m) => m[0]).join(''), [...asc.matchAll(/\x1b\[[0-9;]*m/g)].map((m) => m[0]).join(''), 'the same colour codes in the same order');
   assert.ok(asc.includes(rgb(spec.roles['red-team']!.chassis) + '_'), 'the mouth is chassis-coloured');
   assert.ok(plain(asc) === '[~_~]');
-});
-
-test('the mascot face row is ASCII too, still seven columns', () => {
-  for (const r of roles) for (const s of STATES) {
-    const rows = withAscii(true, () => mascot(r, s, info, { dark: false }));
-    const face = plain(rows[1]);
-    assert.ok(isAscii(face) && stringWidth(face) === 7, `${r} ${s}: '${face}'`);
-  }
 });
 
 test('in ASCII the core roles stay apart (except the twins) and a blink still differs from its idle face', () => {

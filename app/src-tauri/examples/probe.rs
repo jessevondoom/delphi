@@ -1,0 +1,93 @@
+//! `cargo run --example probe`: find the daemon as the app does, attach read-only, and print what it answers. No window.
+//! It sends only the reads the app is allowed (spec 111 §2.2) and prints counts and names, never an agent's text.
+
+use serde_json::json;
+
+use delphi_app_lib::client::{Client, Method};
+use delphi_app_lib::locate;
+
+fn main() {
+    let Some(found) = locate::locate() else {
+        println!("no Delphi home was found");
+        std::process::exit(1);
+    };
+    // `--json`: the state and the snapshot as the window's fixture format, for looking at real data in a browser. This prints
+    // agents' text; it is for the operator's own machine.
+    if std::env::args().any(|a| a == "--json") {
+        let mut c = Client::attach(&found.narrator, env!("CARGO_PKG_VERSION")).unwrap_or_else(|e| {
+            eprintln!("could not attach: {e}");
+            std::process::exit(1);
+        });
+        let state = c.call(Method::ObserveState, json!({})).unwrap_or_default();
+        let events = c.call(Method::ObserveSnapshot, json!({})).map(|mut s| s["events"].take()).unwrap_or_default();
+        println!("{}", json!({ "info": found.info, "state": state, "events": events }));
+        return;
+    }
+    let args: Vec<String> = std::env::args().collect();
+    // `--get /v1/...`: one knowledge base read, printed whole.
+    if let Some(target) = args.iter().position(|a| a == "--get").and_then(|i| args.get(i + 1)) {
+        let mut c = Client::attach(&found.narrator, env!("CARGO_PKG_VERSION")).unwrap_or_else(|e| {
+            eprintln!("could not attach: {e}");
+            std::process::exit(1);
+        });
+        match c.call(Method::KbGet, json!({ "target": target })) {
+            Ok(v) => println!("{v}"),
+            Err(e) => println!("{e}"),
+        }
+        return;
+    }
+    // `--kb <query>`: the shapes of the knowledge base reads, for a query of the operator's.
+    if let Some(q) = args.iter().position(|a| a == "--kb").and_then(|i| args.get(i + 1)) {
+        let mut c = Client::attach(&found.narrator, env!("CARGO_PKG_VERSION")).unwrap_or_else(|e| {
+            eprintln!("could not attach: {e}");
+            std::process::exit(1);
+        });
+        let shape = |v: &serde_json::Value| -> String {
+            let text = v.to_string();
+            text.chars().take(1400).collect()
+        };
+        for (what, method, params) in [
+            ("kb.search", Method::KbSearch, json!({ "query": q })),
+            ("kb.get /v1/search", Method::KbGet, json!({ "target": format!("/v1/search?q={}&limit=3&facets=1", q.replace(' ', "+")) })),
+            ("kb.get /v1/documents", Method::KbGet, json!({ "target": "/v1/documents?limit=3" })),
+            ("kb.get /v1/doc", Method::KbGet, json!({ "target": format!("/v1/doc?path={}", args.iter().position(|a| a == "--doc").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("SPEC.md")) })),
+        ] {
+            match c.call(method, params) {
+                Ok(v) => println!("{what}: {}\n", shape(&v)),
+                Err(e) => println!("{what}: {e}\n"),
+            }
+        }
+        return;
+    }
+    println!("narrator socket: {}", found.narrator.display());
+    println!("delphi: {} · workspace: {} · roles: {}", found.info["version"].as_str().unwrap_or("not asked"), found.info["workspace_name"].as_str().unwrap_or("?"), found.info["roles"].as_object().map_or(0, |r| r.len()));
+    let mut client = match Client::attach(&found.narrator, env!("CARGO_PKG_VERSION")) {
+        Ok(c) => c,
+        Err(e) => {
+            println!("could not attach: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!("attached on the narrator scope");
+    match client.call(Method::ObserveState, json!({})) {
+        Ok(s) => {
+            let count = |k: &str| s[k].as_object().map(|o| o.len()).or_else(|| s[k].as_array().map(|a| a.len())).unwrap_or(0);
+            println!("observe.state: mission {} · agents {} · tasks {} · councils {} · changes {} · waiting on the operator {}", s["mission_id"].as_str().unwrap_or("none"), count("agents"), count("tasks"), count("councils"), count("changes"), count("approvals"));
+            let mut keys: Vec<&str> = s.as_object().map(|o| o.keys().map(String::as_str).collect()).unwrap_or_default();
+            keys.sort_unstable();
+            println!("fields: {}", keys.join(" "));
+        }
+        Err(e) => println!("observe.state: {e}"),
+    }
+    match client.call(Method::ObserveSnapshot, json!({})) {
+        Ok(s) => {
+            let events = s["events"].as_array().cloned().unwrap_or_default();
+            let mut kinds: Vec<String> = events.iter().filter_map(|e| e["type"].as_str().map(String::from)).collect();
+            kinds.sort_unstable();
+            kinds.dedup();
+            println!("observe.snapshot: {} events of kinds: {}", events.len(), kinds.join(" "));
+        }
+        Err(e) => println!("observe.snapshot: {e}"),
+    }
+    println!("session.ping: {:?}", client.call(Method::Ping, json!({})).map(|v| v.to_string()).map_err(|e| e.to_string()));
+}

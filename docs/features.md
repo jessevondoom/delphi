@@ -12,7 +12,7 @@ What Delphi can do, feature by feature. The [README](../README.md) is the short 
 
 ## Two windows, a decisions pane, and a change log
 
-The console is where you work. `/observe` opens the **narrator**, a read-only second window that never spends money. It shows the live Council, work grouped into threads, the agents, token use by thread, live usage for subscription seats, a timeline and tools, the archives and knowledge window, and a **change log** of what the agents finished (their own one-line reports, by session, never their reasoning; [`specs/032`](../specs/032-change-log.md)-[`034`](../specs/034-narrator-monitoring-panes-spike.md)). Links in answers open in an inline reader ([`specs/029`](../specs/029-links-and-inline-reader.md)). A **Decisions pane** ([`specs/044`](../specs/044-decisions-pane.md)) gathers every decision you owe (approval cards, provisional decisions, specs waiting for sign-off, open questions) and walks you through them one at a time with a short brief and a recommendation, and is being built now. The console respects reduced-motion and `NO_COLOR` settings.
+The console is where you work. The **desktop app** is where you watch: a read-only window that never spends money and changes nothing. It shows what agents said, read and recorded, a Council as it deliberates, the knowledge base, what the team produced, and each agent's manifest ([the desktop app](guides/desktop-app.md)). The terminal's second window, the narrator, is retired.
 
 ## Knowledge search
 

@@ -7,10 +7,9 @@ import assert from 'node:assert/strict';
 import { frame, type Model } from '../src/screen.ts';
 import * as C from '../src/composer.ts';
 import { newInbox } from '../src/inbox.ts';
-import { observeFrame, VIEWS, type OModel } from '../src/observe-screen.ts';
 import { openNotes, openSources, openSearch } from '../src/panel.ts';
 import { completions } from '../src/complete.ts';
-import { info, observerWorld, snapshot, stateWorld } from './helpers.ts';
+import { info, snapshot, stateWorld } from './helpers.ts';
 
 const state = stateWorld();
 const base: Model = {
@@ -48,14 +47,3 @@ test('research panels over the chat', () => {
   check('panel-search', { ...base, panel: openSearch('retry') }, 100, 24);
 });
 
-test('the Observer: every view at 100x30, and two narrow', () => {
-  const om = (view: (typeof VIEWS)[number]): OModel => ({ info, pal: { dark: true }, st: observerWorld(), view, pick: 0, scroll: 0, selNode: 1, live: {}, connected: true });
-  for (const view of VIEWS) {
-    const r = snapshot(`observe-${view}`, observeFrame(om(view), 100, 30));
-    assert.ok(r.ok, r.message);
-  }
-  for (const view of ['council', 'epic'] as const) {
-    const r = snapshot(`observe-${view}-narrow`, observeFrame(om(view), 56, 24));
-    assert.ok(r.ok, r.message);
-  }
-});

@@ -86,30 +86,6 @@ test('the slash menu lists commands alphabetically', () => {
   assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b)));
 });
 
-test('/observe opens a new window on every call, with the view', async () => {
-  const opened: string[][] = [];
-  delete process.env.TMUX;
-  const { c, out } = ctx(() => ({}));
-  const full = { ...c, info: { roles: {}, delphi_exe: '/bin/delphi', workspace_name: 'w', home: '/h' } as unknown as Info, open: async (a: string[]) => { opened.push(a); return null; } };
-  await runSlash('/observe council', full);
-  await runSlash('/observe council', full);
-  assert.equal(opened.length, 2);
-  assert.deepEqual(opened[0], ['sh', '-c', '/bin/delphi observe council --workspace w --home /h']);
-  assert.match(out[0]!, /new terminal window/);
-  await runSlash('/observe nonsense', full);
-  assert.equal(opened.length, 2);
-  await runSlash('/observe', { ...full, open: async () => 'no terminal' });
-  assert.match(out.at(-1)!, /could not open a terminal window \(no terminal\)/);
-});
-
-test('windowCommand: Terminal.app by default, iTerm when that is the terminal', async () => {
-  const { windowCommand } = await import('../src/window.ts');
-  assert.ok(windowCommand(['a b', "c'd"], 'darwin', {})!.join('\n').includes('tell application "Terminal"'));
-  assert.ok(windowCommand(['x'], 'darwin', { TERM_PROGRAM: 'iTerm.app' })!.join('\n').includes('create window with profile'));
-  assert.ok(windowCommand(['x'], 'darwin', {})!.join('\n').includes('set current settings of t to prof'), 'the window keeps the console profile');
-  assert.equal(windowCommand(['x'], 'win32', {}), null);
-});
-
 test('/models prints the daemon\'s pool text; /agents lists what is running', async () => {
   const m = ctx((method) => (method === 'models.get' ? { text: 'claude  usable\n' } : {}));
   await runSlash('/models', m.c);
@@ -117,13 +93,6 @@ test('/models prints the daemon\'s pool text; /agents lists what is running', as
   assert.deepEqual(m.calls[0], ['models.get', { mission_id: 'm1' }]);
   await runSlash('/agents', m.c);
   assert.equal(m.out[1], 'Nothing is running.');
-});
-
-test('openWindow opens nothing from a test run, a script or when asked not to', async () => {
-  const { openWindow } = await import('../src/window.ts');
-  assert.match((await openWindow(['true'], { NODE_ENV: 'test' }, true))!, /interactive console/);
-  assert.match((await openWindow(['true'], {}, false))!, /interactive console/);
-  assert.match((await openWindow(['true'], { DELPHI_NO_WINDOWS: '1' }, true))!, /interactive console/);
 });
 
 test('/missions lists the workspace\'s missions newest first and says how to reopen one', async () => {

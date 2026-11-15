@@ -254,6 +254,8 @@ Per [GOVERNANCE.md](../GOVERNANCE.md) §1.1, the console is persona-free: it is 
 
 ## 4. Window 2: `Narrator` (`delphi narrator`) — Live Narration & Telemetry Window
 
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
+
 The **Narrator** attaches to the workspace UDS socket from any second terminal window or monitor and shows what the agent team is doing in real time. Its screen has two parts: a persistent **agents pane** (§4.1) and one of four switchable **views** (§4.2, hotkeys `1`–`4`). The pane is always visible, and `a` toggles it to give a view the full width.
 
 ### 4.1 Agents Pane (always visible; D-18)
@@ -293,6 +295,8 @@ A footer row shows mission totals: tokens by type, total cost against budget, th
 ---
 
 ## 5. Dual-Window Spawning & Single-Screen Fallback
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 
 | Launch Method / Environment | Behavior |
 | :--- | :--- |

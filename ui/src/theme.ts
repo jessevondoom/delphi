@@ -648,12 +648,12 @@ export const roleColor = (role: string, info: Info): ChalkInstance => {
     if (ansi !== undefined) return chalk.ansi256(ansi);
   }
   const fallbackLightChassis: Record<string, string> = {
-    orchestrator: '#7e22ce',
-    architect: '#0369a1',
-    builder: '#b45309',
-    'red-team': '#b91c1c',
-    strategist: '#0f766e',
-    scout: '#854d0e',
+    orchestrator: '#8f23f3',
+    architect: '#076d9d',
+    builder: '#ab4907',
+    'red-team': '#ce1010',
+    strategist: '#067369',
+    scout: '#6d6900',
     operator: '#475569',
   };
   const chassis = isLight

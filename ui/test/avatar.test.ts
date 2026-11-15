@@ -7,7 +7,6 @@ import { readFileSync } from 'node:fs';
 import chalk from 'chalk';
 import stringWidth from 'string-width';
 import { ACTIVITY, badge, currentCapabilities, eyeColor, useCapabilities, type AgentState, type AvatarSpec, type Info } from '../src/theme.ts';
-import { mascot } from '../src/observe-screen.ts';
 
 const spec: AvatarSpec = JSON.parse(readFileSync(new URL('./fixtures/avatar-spec.json', import.meta.url), 'utf8'));
 const roles = Object.keys(spec.roles);
@@ -87,31 +86,6 @@ test('an older delphi that sends no spec still gets correct badges, eyes by posi
     assert.ok(out.includes(rgb('#0f172a') + '¬'), 'eyes are dark on light even when they are not dots');
     assert.equal(plain(badge('scout', 'running', old, { dark: true })), '⟦···⟧');
   });
-});
-
-test('the mascot is seven columns in every state and its face row is the library\'s', () => {
-  withColour(() => {
-    for (const r of roles) for (const st of STATES) {
-      const rows = mascot(r, st, info, { dark: false });
-      for (const row of rows) assert.equal(stringWidth(row), 7, `${r} ${st}`);
-      assert.equal(plain(rows[1]), spec.roles[r]!.mascot[ACTIVITY[st]], `${r} ${st}`);
-    }
-  });
-});
-
-test('the mascot is painted with backgrounds: no seams between cells, no gap before the chin', () => {
-  withColour(() => {
-    for (const r of roles) {
-      const rows = mascot(r, 'idle', info, { dark: true, bg: [13, 17, 23] });
-      assert.ok(!rows[2].includes('▀') && !rows[2].includes('▄') && rows[2].includes('\x1b[48;'), `${r}: the chin is a background colour`);
-      assert.ok(!rows[0].includes('▄') && rows[0].includes('\x1b[48;'), `${r}: so is the crown`);
-      for (const row of rows) assert.equal(stringWidth(row), 7, r);
-    }
-    assert.ok(mascot('orchestrator', 'idle', info, { dark: true })[0].includes('▄'), 'with no known background the crown is the half block');
-  });
-  const none = currentCapabilities();
-  useCapabilities({ color: 'none', attributes: false });
-  try { assert.equal(mascot('orchestrator', 'idle', info, { dark: true, bg: [13, 17, 23] })[2], '▀▀▀▀▀▀▀', 'no colour: glyphs'); } finally { useCapabilities(none); }
 });
 
 test('light or dark: DELPHI_THEME wins, COLORFGBG is the fallback, nothing set means ask the terminal', async () => {

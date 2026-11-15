@@ -3,13 +3,13 @@
 ```
  console (delphi) ──┐                 delphi __core daemon (one per workspace)
    input, approvals  ├── unix socket ──┤  agent loop · tools · approvals · builds · Council · timers
- narrator (observe) ─┘  JSON-RPC       │  model pool and routing, budget reservations
+ desktop app ───────┘  JSON-RPC       │  model pool and routing, budget reservations
    read-only, live                     │  local/sessions/<id>/*.jsonl ← the event log, single source of truth (agents cannot read it)
                                        │  local/state.db              ← derived index: FTS5 + vectors, usage ledger
  $DELPHI_HOME/workspaces/<name>/       ← all state lives here (default ~/.delphi); runtime state never goes in a project
 ```
 
-The daemon (`delphi-core`, `delphi-engine`) is the only writer of the event log and the index, and it enforces every invariant in code. The console and the narrator are clients. The console is `delphi-ui`, an [Ink](https://github.com/vadimdemedes/ink) program compiled with Bun and installed next to `delphi`; when it is absent `delphi` falls back to the Rust inline console (`delphi chat --inline`). If the daemon restarts, the console says so, re-attaches and rebuilds the conversation from the mission log. The adapter compiles one intermediate prompt representation into each provider's dialect, preserving reasoning signatures across tool loops.
+The daemon (`delphi-core`, `delphi-engine`) is the only writer of the event log and the index, and it enforces every invariant in code. The console and the desktop app are clients. The console is `delphi-ui`, an [Ink](https://github.com/vadimdemedes/ink) program compiled with Bun and installed next to `delphi`; when it is absent `delphi` falls back to the Rust inline console (`delphi chat --inline`). If the daemon restarts, the console says so, re-attaches and rebuilds the conversation from the mission log. The adapter compiles one intermediate prompt representation into each provider's dialect, preserving reasoning signatures across tool loops.
 
 ## Configuration
 
@@ -52,7 +52,7 @@ API keys never live in `config.toml`: they go to the macOS Keychain or Linux Sec
 ```text
 delphi/
 ├── crates/
-│   ├── delphi/            the executable: console, narrator, setup, run, update, lint, every subcommand; config.example.toml
+│   ├── delphi/            the executable: console, setup, run, update, lint, every subcommand; config.example.toml
 │   ├── delphi-core/       daemon plumbing: events, segmented log, hub, path guard, budget, usage ledger, TOTP
 │   ├── delphi-engine/     agent loop, tools, approvals, builds, Council, model pool, harness bridge, connectors, kb, timers, hooks
 │   ├── delphi-adapter/    provider dialects (Claude, Gemini, OpenAI-compatible), credentials, OAuth2, SigV4, MCP client
@@ -61,7 +61,7 @@ delphi/
 │   ├── delphi-bundle/     the org bundle standard: manifest, layout, deterministic validate
 │   ├── delphi-xenia/      signed-record verification for the org memory store; the release signature
 │   └── delphi-release/    the maintainers' release-signing tool (not shipped)
-├── ui/                    delphi-ui, the Ink console and narrator (src/, test/, dev/, README.md, TERMINALS.md)
+├── ui/                    delphi-ui, the Ink console (src/, test/, dev/, README.md, TERMINALS.md)
 ├── agents/<role>/AGENT.md role manifests        skills/        skill packages and CATALOG.md
 ├── themes/greek/          default theme pack     context/       seed knowledge (index, heuristics, capability matrix)
 ├── memory/agents/<role>/  seed private lessons   missions/      Delphi's own design records, roadmap, Councils, tracker

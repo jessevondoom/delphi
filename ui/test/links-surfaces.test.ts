@@ -8,10 +8,8 @@ import * as A from '../src/archives.ts';
 import * as C from '../src/composer.ts';
 import { newInbox } from '../src/inbox.ts';
 import { paintFocus, reverseSpan, scanLinks } from '../src/links.ts';
-import { feedLinks, observeFrame, type OModel } from '../src/observe-screen.ts';
 import { noteSources, passageOf } from '../src/research.ts';
 import { backShowing, chatLinks, frame, type Model } from '../src/screen.ts';
-import { epicWorld, info as epicInfo, NOW } from './epic-fixture.ts';
 import { info, plain, stateWorld } from './helpers.ts';
 
 const REV = /\x1b\[7m(.*?)\x1b\[27m/g;
@@ -59,15 +57,15 @@ test('opening from the chat is a source the console lists as read; the same file
 const doc = { path: 'specs/a.md', collection: 'specs', trust: 'internal_generated', stale: false, text: Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join('\n') };
 const k = (key: string) => ({ t: 'key', k: key, alt: false, shift: false, ctrl: false }) as never;
 
-test('p in the reader pins the passage that was cited, but only in the console; the narrator is read-only', () => {
+test('p in the reader pins the passage that was cited, and a reader opened without pins cannot pin', () => {
   const target = { k: 'pointer', path: 'specs/a.md', from: 5, to: 6 } as const;
   const console_ = A.gotDoc(A.emptyArch(true), doc, target, 100);
   const r = A.key(console_, { t: 'text', s: 'p' }, 100, 30);
   assert.deepEqual(r.action, { t: 'pin', target });
   assert.match(plain(A.view(console_, 100, 30, { dark: true }).join('\n')), /p pin/);
-  const narrator = A.gotDoc(A.emptyArch(), doc, target, 100);
-  assert.deepEqual(A.key(narrator, { t: 'text', s: 'p' }, 100, 30).action, { t: 'none' });
-  assert.doesNotMatch(plain(A.view(narrator, 100, 30, { dark: true }).join('\n')), /p pin/);
+  const noPins = A.gotDoc(A.emptyArch(), doc, target, 100);
+  assert.deepEqual(A.key(noPins, { t: 'text', s: 'p' }, 100, 30).action, { t: 'none' });
+  assert.doesNotMatch(plain(A.view(noPins, 100, 30, { dark: true }).join('\n')), /p pin/);
   const whole = A.gotDoc(A.emptyArch(true), doc, { k: 'doc', path: 'specs/a.md' }, 100);
   assert.deepEqual(A.key(whole, { t: 'text', s: 'p' }, 100, 30).action, { t: 'pin', target: { k: 'doc', path: 'specs/a.md' } });
 });
@@ -111,35 +109,4 @@ test('chat: moving focus scrolls just enough to show the link', () => {
   assert.equal(backShowing(100, 90, 20, 30), 9, 'a row below the window comes into view');
   assert.equal(backShowing(100, 85, 20, 10), 10, 'a row already in view changes nothing');
   assert.equal(backShowing(100, 99, 20, 0), 0);
-});
-
-// ── the narrator's change feed ──────────────────────────────────────────────
-
-const T0 = Date.UTC(2026, 9, 25, 10, 0);
-const feed = (over: Partial<OModel> = {}): OModel => ({
-  info: epicInfo, pal: { dark: true }, st: { ...epicWorld(), sessions: [{ id: 's_0001', reason: 'new', started_ms: T0 - 60_000, turns: 1 }], changes: [
-    { session: 's_0001', at_ms: T0, role: 'builder', task: 't_1', summary: 'added a timeout, see specs/003-retry.md#L10-L20', files: ['crates/queue/src/claim.rs'] },
-    { session: 's_0001', at_ms: T0 + 60_000, role: 'architect', task: 't_2', summary: 'wrote the spec', files: ['specs/032-change-log.md'] },
-  ] }, view: 'changes', pick: 0, scroll: 0, selNode: 0, arch: A.emptyArch(), live: {}, connected: true, still: true, now: NOW, ...over,
-} as OModel);
-
-test('feed: documents named in recorded changes are links (files that are not documents are not)', () => {
-  const links = feedLinks(feed(), 100);
-  assert.deepEqual(links.map((l) => l.label), ['specs/032-change-log.md', 'specs/003-retry.md#L10-L20'], 'newest first, as the feed is');
-  const text = observeFrame(feed(), 100, 30).map(plain);
-  assert.ok(text.some((l) => l.includes('2 links · tab to follow')));
-});
-
-test('feed: focus is drawn reversed with its target in the status row; the reader takes the body and esc returns to the feed', () => {
-  const [first] = feedLinks(feed(), 100);
-  const lit = observeFrame(feed({ feed: { focus: first!.id, note: '' } }), 100, 30);
-  assert.deepEqual(reversed(lit), ['specs/032-change-log.md']);
-  assert.ok(lit.map(plain).some((l) => l.includes('specs/032-change-log.md  (enter reads it here)')));
-  const rdr = A.gotDoc(A.emptyArch(), { ...doc, path: 'specs/032-change-log.md' }, { k: 'doc', path: 'specs/032-change-log.md' }, 100);
-  const open = observeFrame(feed({ reader: rdr }), 100, 30).map(plain);
-  assert.ok(open.some((l) => l.includes('line 1')) && !open.some((l) => l.includes('added a timeout')), 'the document replaces the feed');
-  assert.ok(open.some((l) => l.includes('delphi v')), 'the header and footer stay');
-  const back = observeFrame(feed({ reader: A.key(rdr, k('esc'), 100, 23).a }), 100, 30).map(plain);
-  assert.ok(back.some((l) => l.includes('added a timeout')));
-  assert.ok(!observeFrame(feed({ reader: rdr }), 100, 30).map(plain).join('').includes('p pin'), 'the narrator does not offer pinning');
 });

@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fold, initial, type State } from '../src/fold.ts';
-import { emptyState, type OState } from '../src/observe-screen.ts';
 import type { Info } from '../src/theme.ts';
 
 const crown: Record<string, string> = { orchestrator: '  ▄▄▄  ', architect: '▄▄▄▄▄▄▄', builder: '▄▄▄▄▄▄▄', 'red-team': '▄     ▄', strategist: '▄▄ ▄ ▄▄', scout: '   ▄   ' };
@@ -30,24 +29,6 @@ export function stateWorld(): State {
   s = fold(s, note('task.created', { prompt: 'Now write it' }, 't2'), 3000);
   s = fold(s, note('approval.requested', { approval_id: 'a1', role: 'builder', tier: 'amber', payload_blake3: 'h1', payload: { preview: '+ fn enqueue()\n+ fn dequeue()', args: { path: 'crates/queue.rs' } }, summary: 'Write crates/queue.rs (+84)', timeout_secs: 600, tool: 'write_file' }, 't2'), 3100);
   s = fold(s, note('approval.requested', { approval_id: 'r1', role: 'architect', tier: 'red', payload_blake3: 'h2', payload: { preview: 'ratify specs/011' }, summary: 'Ratify spec 011 into the canonical repository', timeout_secs: 600, tool: 'ratify' }, 't3'), 3200);
-  return s;
-}
-
-const tk = (n: number) => ({ input: n, cache_read: n * 2, cache_write: 0, output: n / 2, thinking: 0 });
-/** The Observer's view model with a council, a build, spend and a narrative. */
-export function observerWorld(): OState {
-  const s = emptyState();
-  s.mission_id = '2026-10-24-ui'; s.spent_usd = 0.42; s.budget = { cap_usd: 5 }; s.retries = 1; s.cache_hit_ratio = 0.5; s.series = [0.01, 0.05, 0.02, 0.2, 0.14]; s.pace = [0, 800, 2400, 1200, 3000, 600];
-  s.tokens = tk(1000);
-  for (const [i, r] of ['orchestrator', 'architect', 'builder', 'red-team', 'strategist', 'scout'].entries()) {
-    s.agents[r] = { role: r, state: r === 'builder' ? 'running' : r === 'red-team' ? 'waiting on you' : 'idle', task_id: 't_1', endpoint: 'direct', tier: 'frontier', model: 'claude-x', upscaled: false, tokens: tk(100 * (i + 1)), cost_usd: 0.07, calls: i + 1 };
-  }
-  s.tasks['t_1'] = { id: 't_1', flow: 'build', prompt: 'Implement the deck router', status: 'running' };
-  s.nodes['n_1'] = { id: 'n_1', role: 'orchestrator', parent: null, depth: 0, task_id: 't_1', state: 'running', tokens: 1200, cost_usd: 0.1, started_ms: 1_000_000, ended_ms: null, after: [] };
-  s.nodes['n_2'] = { id: 'n_2', role: 'builder', parent: 'n_1', depth: 1, task_id: 't_1', state: 'done', tokens: 8000, cost_usd: 0.2, started_ms: 1_005_000, ended_ms: 1_065_000, after: ['n_1'] };
-  s.narrative = ['t_1 started', 'builder finished'];
-  s.councils = [{ task_id: 't_2', proposition: 'Table or file?', seats: [{ role: 'architect', family: 'a' }, { role: 'red-team', family: 'b' }, { role: 'strategist', family: 'c' }], homogeneous: false, phase: 'verdict', stances: [{ role: 'architect', answered: true, text: 'Use a table.\nIt indexes.' }, { role: 'red-team', answered: false, text: 'no answer' }], critiques: [{ role: 'architect', recommendation: 'revise', concur: false, findings: [['P1', 'lost updates']] }], escalation: 'seats deadlocked', path: 'missions/m/councils/008.md', unresolved: [['P0', 'red-team', 'the race']], options: [['table', ['architect']], ['file', ['strategist']]] }];
-  s.builds = [{ task_id: 't_1', branch: 'delphi/t_1', attempts: ['attempt 1: red'], sha: 'abc1234', gates: [{ name: 'tests', state: 'green', detail: '12 passed' }, { name: 'audit', state: 'red', detail: '1 finding' }], findings: [['P1', 'unchecked unwrap']], flaky: true, merge: '' }];
   return s;
 }
 

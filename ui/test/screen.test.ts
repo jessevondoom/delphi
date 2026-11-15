@@ -63,9 +63,9 @@ test('footer has tokens and mode on the left, deck dots on the right, and no mon
 });
 
 test('typing / opens the command menu above the prompt, filtered', () => {
-  const lines = frame(model({ composer: C.insert(C.empty(), '/obs'), menu: { items: completions('/obs', 4, info, () => [])!.items, sel: 0 } }), 100, 30).map(plain);
-  const hit = lines.findIndex((l) => l.includes('/observe · '));
-  assert.ok(hit > 0 && hit < lines.findIndex((l) => l.startsWith('❯ /obs')), 'menu is above the prompt');
+  const lines = frame(model({ composer: C.insert(C.empty(), '/usa'), menu: { items: completions('/usa', 4, info, () => [])!.items, sel: 0 } }), 100, 30).map(plain);
+  const hit = lines.findIndex((l) => l.includes('/usage '));
+  assert.ok(hit > 0 && hit < lines.findIndex((l) => l.startsWith('❯ /usa')), 'menu is above the prompt');
   assert.ok(!lines.join('\n').includes('/council · '), 'filtered out');
 });
 

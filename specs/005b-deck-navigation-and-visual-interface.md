@@ -301,6 +301,8 @@ navigate items with arrows · press Enter to inspect
 
 ## 4. Observer / Narrator Architecture (`/observe` or `/visualize`)
 
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
+
 Per the operator's design principle, **Delphi never tiles panes internally inside a window**. Every Observer/Narrator window is strictly a **single full-pane view** that expands dynamically to 100% of the terminal geometry (reacting seamlessly to OS window resizing and `SIGWINCH`).
 
 The operator may launch multiple separate windows concurrently and arrange them however they wish across their monitors, desktops, or terminal multiplexer panes.

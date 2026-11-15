@@ -219,24 +219,48 @@ pub fn role_look(role: &str) -> (&'static str, &'static str, u8) {
 }
 
 /// The light-terminal colour (`#rrggbb`) and nearest 256-colour of a role: the avatar library's `chassis_rgb_light`
-/// (`crates/delphi/src/avatar.rs` checks this table against it, as it does [`role_look`]). Every value reaches 4.0:1 on white
-/// and on solarized light. An unknown role gets the operator's deep slate.
+/// (`crates/delphi/src/avatar.rs` checks this table against it, as it does [`role_look`]). It is the colour a role's name and
+/// glyphs are written in: every value reaches 4.5:1 on white, on solarized light and on the desktop app's light surfaces
+/// (operator decision 2026-11-14: brighter than the first set, still WCAG AA). An unknown role gets the operator's deep slate.
 pub fn role_look_light(role: &str) -> (&'static str, u8) {
     match role {
-        "orchestrator" => ("#7e22ce", 92),
-        "builder" => ("#b45309", 130),
-        "architect" => ("#0369a1", 25),
-        "red-team" => ("#b91c1c", 124),
-        "strategist" => ("#0f766e", 29),
-        "scout" => ("#854d0e", 94),
-        "administrator" => ("#5b6b82", 60),
-        "assistant" => ("#1d4ed8", 26),
-        "advocate" => ("#be123c", 125),
-        "messenger" => ("#4d7c0f", 64),
-        "validator" => ("#15803d", 29),
-        "writer" => ("#a16207", 130),
-        "investigator" => ("#57534e", 239),
+        "orchestrator" => ("#8f23f3", 93),
+        "builder" => ("#ab4907", 130),
+        "architect" => ("#076d9d", 25),
+        "red-team" => ("#ce1010", 160),
+        "strategist" => ("#067369", 23),
+        "scout" => ("#6d6900", 58),
+        "administrator" => ("#506888", 60),
+        "assistant" => ("#0c4add", 26),
+        "advocate" => ("#c80d64", 161),
+        "messenger" => ("#416608", 58),
+        "validator" => ("#0a7732", 29),
+        "writer" => ("#765403", 94),
+        "investigator" => ("#5a524a", 239),
         _ => ("#475569", 240),
+    }
+}
+
+/// A role's fill on a light surface (`#rrggbb`): the colour of a chip, a bar or a badge's strokes, where its name is written in
+/// [`role_look_light`]. Brighter than the text colour because a graphic needs 3:1 against its surface where text needs 4.5:1; a
+/// dark face drawn on it (`#1c1917`, or black) reaches 4.5:1. The avatar library holds the same table (`fill_rgb_light`) and its
+/// tests hold both rules. An unknown role gets the operator's.
+pub fn role_fill_light(role: &str) -> &'static str {
+    match role {
+        "orchestrator" => "#ab59f6",
+        "builder" => "#d95c09",
+        "architect" => "#088ac7",
+        "red-team" => "#f13e3e",
+        "strategist" => "#089285",
+        "scout" => "#8a8600",
+        "administrator" => "#6a84a7",
+        "assistant" => "#497cf5",
+        "advocate" => "#f22c88",
+        "messenger" => "#5b900c",
+        "validator" => "#0c963f",
+        "writer" => "#ac7904",
+        "investigator" => "#8d8074",
+        _ => "#73849a",
     }
 }
 

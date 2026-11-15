@@ -443,6 +443,8 @@ delphi v0.5 · ~/projects/app · activity
 
 ## 9. The narrator window (formerly the Observer)
 
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
+
 ### 9.1 Problem
 Finding 11 and the operator's requests: adopt the console's header, drop the working directory, keep the lowercase pane name, navigate with plain arrows, drop money and unneeded data, show the epic as a rail and the council as live cards.
 

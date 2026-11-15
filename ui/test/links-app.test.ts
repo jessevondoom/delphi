@@ -10,9 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { testRender } from '@opentui/react/test-utils';
 import { App } from '../src/app.tsx';
-import { Observer } from '../src/observer.tsx';
 import { Term } from '../src/terminal.ts';
-import { emptyState } from '../src/observe-screen.ts';
 import { info as baseInfo, stateWorld } from './helpers.ts';
 
 type Calls = { method: string; params: any }[];
@@ -117,26 +115,3 @@ test('console: tool details moved to ctrl+t', async () => {
 
 // ── the narrator ────────────────────────────────────────────────────────────
 
-test('narrator: in the change feed tab focuses a link, enter reads it over the feed, esc returns, and nothing can be pinned', async () => {
-  const T0 = Date.UTC(2026, 9, 25, 10, 0);
-  const st = { ...emptyState(), changes: [{ session: 's_1', at_ms: T0, role: 'architect', task: 't_1', summary: 'wrote the spec', files: ['specs/002-adapter-and-routing.md'] }], sessions: [{ id: 's_1', reason: 'new', started_ms: T0 - 1000, turns: 1 }] };
-  const daemon = fakeDaemon({ 'observe.state': () => st });
-  const term = new Term({ mouse: false });
-  const setup = await testRender(React.createElement(Observer, { cmd: daemon.rpc, ev: daemon.rpc, term, info: baseInfo, dark: true, themeForced: true, view: 'changes' }), { width: 100, height: 40 });
-  await setup.flush();
-  const settle = async (ms = 80) => { await tick(ms); await setup.flush(); };
-  const app = { unmount: () => setup.renderer.destroy() };
-  const show = () => setup.captureCharFrame();
-  assert.match(show(), /1 link · tab to follow/);
-  key(term, 'tab'); await settle();
-  assert.match(show(), /specs\/002-adapter-and-routing\.md {2}\(enter reads it here\)/);
-  key(term, 'enter'); await settle(250);
-  assert.match(show(), /the retry ladder is here/);
-  key(term, 'right'); await settle(); // the view does not change under an open document
-  assert.match(show(), /the retry ladder is here/);
-  text(term, 'p'); await settle();
-  assert.doesNotMatch(daemon.calls.map((x) => x.method).join(','), /pin/);
-  key(term, 'esc'); await settle();
-  assert.match(show(), /wrote the spec/);
-  app.unmount();
-});

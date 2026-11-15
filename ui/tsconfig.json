@@ -20,9 +20,6 @@
   },
   "include": [
     "src",
-    "test",
-    "dev/preview-sim.ts",
-    "dev/preview-daemon.ts",
-    "dev/sketch-panes.ts"
+    "test"
   ]
 }

@@ -21,7 +21,6 @@
 | `/search`, `/sources`, `/pin`, `/notes`, `/export` | knowledge base, where answers came from, the mission notebook, save the conversation |
 | `/history [records]` | the project history, read-only (`specs/102` S5): the exchange records, each checked and labelled `verified` or `CHAIN BROKEN` and never repaired, and the project report; `records` leaves the report out. Pasted text is shown as a hash and a length. No model is involved, and when history is off it says so and names the setting |
 | `/org` | the added org bundles, their goals, perspectives and open items |
-| `/observe [council\|epic\|agents\|archives\|changes]` | open the narrator in a new tmux or terminal window |
 | `/new`, `/context`, `/resume`, `/pause`, `/mission`, `/missions`, `/clear`, `/mouse`, `/quit` | sessions and conversation context; housekeeping |
 
 `?` on an empty prompt lists the keys. `Esc` clears the prompt, then stops the running task; `Alt+Enter` or `Ctrl+J` inserts a newline; the mouse wheel scrolls and `/mouse` hands selection back to the terminal. The console follows `NO_COLOR`, `TERM=dumb`, `DELPHI_THEME=dark|light`, `DELPHI_REDUCE_MOTION=1`, `DELPHI_NO_MOUSE=1` and `DELPHI_NO_TITLE=1`.
@@ -34,8 +33,8 @@ Every command takes `--workspace <name>` and `--home <dir>`; `delphi help <comma
 | :-- | :-- |
 | Start | `delphi` · `delphi chat [--inline] [--mission <id>]` · `delphi run "<task>" [--on-card deny\|policy:<file>\|authorization:<id> --auth-run <run>] [--budget <usd>] [--timeout <dur>] [--json\|--jsonl]` |
 | Set up | `setup` · `init` · `auth login\|status\|logout <endpoint>` · `endpoints test [--probe]` · `connectors status\|test\|pin <name>` · `relay [check\|totp-enroll\|totp-check]` · `skills check\|export\|import` · `bundle …` · `hooks` · `capabilities` |
-| Work | `decisions` · `timers` · `needs` · `kb index\|reindex\|stats\|search\|serve\|miss\|eval\|model info` · `observe [view] [--once]` (alias `narrator`) |
+| Work | `decisions` · `timers` · `needs` · `kb index\|reindex\|stats\|search\|serve\|miss\|eval\|model info` |
 | Inspect | `status` · `missions` · `sessions` · `tools` · `changelog` · `learn` · `release` · `doctor [--fix]` · `models [--probe]` · `daemon status\|stop\|restart` · `lint --repo <path>` · `check <kind> <path>` · `logs` · `debug bundle` |
 | Maintain | `update` · `train validate\|plan\|run` · `xenia` · `docs cli\|man\|catalog` · `completions bash\|zsh\|fish` · `help` |
 
-`delphi relay` and `delphi hooks` are long-running and need a terminal or tmux pane, because the daemon issues tokens only to processes with a controlling tty. `delphi observe --once` prints one frame as text and works without a terminal.
+`delphi relay` and `delphi hooks` are long-running and need a terminal or tmux pane, because the daemon issues tokens only to processes with a controlling tty.

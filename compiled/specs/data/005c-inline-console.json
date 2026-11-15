@@ -40,25 +40,25 @@
     },
     {
       "level": 2,
-      "line": 53,
+      "line": 55,
       "number": "4",
       "title": "A native viewer window, no browser (later work)"
     },
     {
       "level": 2,
-      "line": 68,
+      "line": 70,
       "number": "5",
       "title": "Build slices"
     },
     {
       "level": 2,
-      "line": 79,
+      "line": 81,
       "number": "6",
       "title": "Verification"
     },
     {
       "level": 2,
-      "line": 93,
+      "line": 95,
       "number": "7",
       "title": "Risks"
     }
@@ -66,7 +66,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/005c-inline-console.md",
-    "sha256": "f6bcb8fb202cdb3dbb3a4206f7dcc4098f03dda8444833c5cb1cd96feeee6725"
+    "sha256": "edd971924f17f81a807a01c75cf51cfa0c2c401f6ad1712ec7cdf7a6f1ae2143"
   },
   "source_status_at_hash": {
     "line": {
@@ -79,7 +79,7 @@
       },
       "text": "status: approved   # by the operator, 2026-10-24 (\"ratify all\"); whole document"
     },
-    "sha256": "f6bcb8fb202cdb3dbb3a4206f7dcc4098f03dda8444833c5cb1cd96feeee6725",
+    "sha256": "edd971924f17f81a807a01c75cf51cfa0c2c401f6ad1712ec7cdf7a6f1ae2143",
     "word": "approved"
   },
   "spec": {

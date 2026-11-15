@@ -1,7 +1,7 @@
 # Badges and mascots
 
-Faces, colours, crowns and mascot rows are defined in `crates/delphi/src/avatar.rs` and nowhere else. `delphi chat` and
-`delphi observe` send them to the console as `avatar` in the start-up info (`avatar::ui_spec`), and the console draws only
+Faces, colours, crowns and mascot rows are defined in `crates/delphi/src/avatar.rs` and nowhere else. `delphi chat` sends
+them to the console as `avatar` in the start-up info (`avatar::ui_spec`), and the console draws only
 what it is sent. An older `delphi` that does not send it gets built-in faces.
 
 ## Light and dark

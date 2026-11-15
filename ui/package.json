@@ -5,7 +5,6 @@
   "version": "0.0.0",
   "scripts": {
     "start": "node --experimental-ffi --import tsx --import ./dev/check-runtime.mjs src/main.tsx",
-    "preview": "bash dev/preview.sh",
     "test": "TZ=UTC node --experimental-ffi --import ./dev/check-runtime.mjs --import tsx --test --test-force-exit --test-timeout=60000 test/*.test.ts",
     "typecheck": "tsc",
     "build": "bun build --compile src/main.tsx --outfile dist/delphi-ui",

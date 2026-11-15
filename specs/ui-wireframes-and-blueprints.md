@@ -103,6 +103,8 @@ The header uses a **two-line stacked hierarchy** to prioritize agent telemetry:
 ---
 
 ### 2.7 Observer: Alternate Agents Panel (3-Line Mascot Cards View)
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 * **File:** [`assets/delphi_narrator_mascots.png`](assets/delphi_narrator_mascots.png)
 
 ![Observer: Agents Mascot Roster](assets/delphi_narrator_mascots.png)
@@ -112,6 +114,8 @@ The header uses a **two-line stacked hierarchy** to prioritize agent telemetry:
 ---
 
 ### 2.8 Observer: Live Evolving Council Debate
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 * **File:** [`assets/delphi_narrator_council_live.png`](assets/delphi_narrator_council_live.png)
 
 ![Observer: Council Chamber Live](assets/delphi_narrator_council_live.png)
@@ -121,6 +125,8 @@ The header uses a **two-line stacked hierarchy** to prioritize agent telemetry:
 ---
 
 ### 2.9 Observer: Token Spend Sparkline Over Time
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 * **File:** [`assets/delphi_narrator_spend_sparkline.png`](assets/delphi_narrator_spend_sparkline.png)
 
 ![Observer: Token Spend Sparkline](assets/delphi_narrator_spend_sparkline.png)
@@ -148,6 +154,8 @@ The header uses a **two-line stacked hierarchy** to prioritize agent telemetry:
 ---
 
 ### 2.12 Observer: High-Density Agent Telemetry Matrix
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 * **File:** [`assets/delphi_narrator_agents.png`](assets/delphi_narrator_agents.png)
 
 ![Observer: Agent Telemetry Matrix](assets/delphi_narrator_agents.png)

@@ -69,7 +69,7 @@ test('the typing bubble\'s three dots stand still: one fixed frame once it appea
 // A rule for the future: an animation must ask `motion.ts` (stillMotion / spinner / pulseOn / faceOf), not run its own clock.
 test('no source file keeps its own animation clock outside motion.ts', () => {
   const dir = new URL('../src/', import.meta.url);
-  const TIMERS_OK = new Set(['app.tsx', 'observer.tsx', 'rpc.ts', 'elog.ts', 'select.ts', 'main.tsx']); // repaint tick (gated by `still`), samples, retries, locks
+  const TIMERS_OK = new Set(['app.tsx', 'rpc.ts', 'elog.ts', 'select.ts', 'main.tsx']); // repaint tick (gated by `still`), samples, retries, locks
   for (const f of readdirSync(dir).filter((n) => /\.(ts|tsx)$/.test(n) && n !== 'motion.ts')) {
     const src = readFileSync(new URL(f, dir), 'utf8');
     assert.ok(!/Math\.floor\([^)]*\bnow\b[^)]*\/[^)]*\)\s*%/.test(src), `${f}: a frame picked from the clock (Math.floor(now / n) % k) belongs in motion.ts, behind \`still\``);

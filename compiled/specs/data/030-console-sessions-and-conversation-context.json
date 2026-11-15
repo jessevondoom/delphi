@@ -70,25 +70,25 @@
     },
     {
       "level": 2,
-      "line": 82,
+      "line": 84,
       "number": "7",
       "title": "Still open"
     },
     {
       "level": 2,
-      "line": 90,
+      "line": 92,
       "number": "8",
       "title": "Implementation plan"
     },
     {
       "level": 2,
-      "line": 110,
+      "line": 112,
       "number": "9",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 122,
+      "line": 124,
       "number": "10",
       "title": "Risks"
     }
@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/030-console-sessions-and-conversation-context.md",
-    "sha256": "2fa63af51d9f911630f3df754ae7cbd9a7c7afeb2f1fc56a1bbb3dcd5517a731"
+    "sha256": "3ba61c52becb534d5a126abd30880cca3db64e6a2924d8d996b8b8d423dec8a5"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # decisions taken by the operator 2026-10-25; S1, S2 built, S3 and S5 partly (§8)"
     },
-    "sha256": "2fa63af51d9f911630f3df754ae7cbd9a7c7afeb2f1fc56a1bbb3dcd5517a731",
+    "sha256": "3ba61c52becb534d5a126abd30880cca3db64e6a2924d8d996b8b8d423dec8a5",
     "word": "approved"
   },
   "spec": {

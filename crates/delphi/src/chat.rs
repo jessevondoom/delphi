@@ -56,8 +56,6 @@ pub enum Input {
     Council { proposition: String, seats: Vec<String>, author: Option<String> },
     /// `/distill [<path|missions/id>…]`: the writer drafts bundle knowledge from allow-listed sources into a staging directory (`specs/027` §2.3).
     Distill(Vec<String>),
-    /// `/observe [view]` (`/narrator` is an unlisted alias): open the narrator, the read-only full-screen window (a new tmux window when inside tmux, else the command to run).
-    Narrator(Option<String>),
     /// `/more`: the rest of a reply the inline console shortened.
     More,
     /// `/solo [on | off]`: toggle solo dialog mode (`specs/063` §3.3).
@@ -107,10 +105,8 @@ pub fn parse_input(line: &str) -> Input {
                 let text = cmd.trim_start().strip_prefix("build").unwrap_or("").trim();
                 if text.is_empty() { Input::Unknown("/build needs a request, for example `/build implement @specs/011-x.md in @project/app`".into()) } else { Input::Build(text.to_string()) }
             }
-            "narrator" | "observe" | "visualize" => match rest.first() {
-                Some(v) if crate::observer::View::parse(v).is_none() => Input::Unknown(format!("/observe takes dashboard, council, epic, agents, timeline or changes, not `{}`", v)),
-                v => Input::Narrator(v.map(|s| s.to_string())),
-            },
+            // Retired with the terminal narrator (`specs/111` §10).
+            "narrator" | "observe" | "visualize" => Input::Unknown("the terminal narrator is retired: the desktop app shows the team, a council, the knowledge base and what was produced (docs/guides/desktop-app.md)".into()),
             "more" => Input::More,
             "decisions" => Input::Decisions(rest.iter().map(|s| s.to_string()).collect()),
             "timer" | "timers" => Input::Timer(rest.iter().map(|s| s.to_string()).collect()),
@@ -681,7 +677,6 @@ pub(crate) struct Session {
     pub(crate) mission_id: String,
     pub(crate) shared: Arc<Shared>,
     ws_dir: PathBuf,
-    home: PathBuf,
     last_ratify: Vec<Value>,
 }
 
@@ -754,7 +749,7 @@ pub(crate) fn connect(home: &Path, ws_dir: &Path, mission: Option<String>, names
             say(&format!("{} proposal(s) await your ratification: /ratify\n", pending));
         }
     }
-    Ok(Session { cmd, mission_id, shared, ws_dir: ws_dir.to_path_buf(), home: home.to_path_buf(), last_ratify: Vec::new() })
+    Ok(Session { cmd, mission_id, shared, ws_dir: ws_dir.to_path_buf(), last_ratify: Vec::new() })
 }
 
 impl Session {
@@ -903,21 +898,6 @@ impl Session {
                 }
                 Err(e) => say(&format!("{}\n", rpc_error(&e))),
             },
-            Input::Narrator(view) => {
-                let ws = self.ws_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                let exe = daemon_exe().map(|p| p.display().to_string()).unwrap_or_else(|| "delphi".into());
-                let line = format!("{} observe {} --workspace {} --home {}", exe, view.unwrap_or_default(), ws, self.home.display());
-                if std::env::var_os("TMUX").is_some() {
-                    // The narrator is one full-screen window of its own; the views switch inside it.
-                    if std::process::Command::new("tmux").args(["new-window", &line]).status().map(|s| s.success()).unwrap_or(false) {
-                        say("(the narrator is open in a new tmux window)\n");
-                    } else {
-                        say(&format!("could not open a tmux window; run this in another terminal:\n  {}\n", line));
-                    }
-                } else {
-                    say(&format!("Run this in another terminal (it only watches):\n  {}\n", line));
-                }
-            }
             Input::Council { proposition, seats, author } => match self.cmd.call("council.start", json!({"mission_id": self.mission_id, "proposition": proposition, "seats": seats, "author_family": author})) {
                 Ok(v) => {
                     self.shared.running.fetch_add(1, Ordering::SeqCst);
@@ -1087,38 +1067,6 @@ pub(crate) fn relaunch_target(ws_dir: &Path, asked: &str) -> Option<PathBuf> {
     (dir == home_dir || registered).then_some(dir)
 }
 
-/// The full-screen Observer: the same UI executable in its read-only mode. It needs a running daemon (it only watches).
-/// Exit code 3 means the UI is not this release.
-pub fn launch_ui_observer(ui: &Path, home: &Path, ws_dir: &Path, view: Option<&str>, names: &HashMap<String, String>, once: bool) -> i32 {
-    let l = match layout(home, ws_dir) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("delphi observe: {}", e);
-            return 1;
-        }
-    };
-    if std::os::unix::net::UnixStream::connect(&l.narrator_sock).is_err() {
-        eprintln!("delphi observe: no daemon is running for this workspace. Start the console (`delphi chat`) first: the Observer only watches.");
-        return 1;
-    }
-    let info = ui_info(&l.sock, &l.narrator_sock, ws_dir, None, names);
-    let mut cmd = std::process::Command::new(ui);
-    cmd.arg("--info").arg(info.to_string()).arg("--observe");
-    if let Some(v) = view {
-        cmd.arg(v);
-    }
-    if once {
-        cmd.arg("--once");
-    }
-    match run_ui(&mut cmd) {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("delphi observe: cannot start the narrator window ({})", e);
-            1
-        }
-    }
-}
-
 /// What the UI needs to know that only this program knows: where things are, and how roles look.
 pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: Option<String>, names: &HashMap<String, String>) -> Value {
     // Where `delphi` itself is, and which workspace and home this is, for the few things the UI asks the CLI for
@@ -1166,7 +1114,7 @@ pub(crate) fn ui_info(console: &Path, narrator: &Path, ws_dir: &Path, mission: O
 }
 
 /// `delphi daemon status|stop|restart`.
-pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
+pub fn daemon(home: &Path, ws_dir: &Path, action: &str, names: &HashMap<String, String>) -> i32 {
     let l = match layout(home, ws_dir) {
         Ok(l) => l,
         Err(e) => {
@@ -1181,9 +1129,10 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str) -> i32 {
         Ok((c, hello["binary_version"].as_str().unwrap_or("?").to_string()))
     };
     match action {
-        // For clients written in other languages: where the daemon's sockets are.
+        // For clients written in other languages: where the daemon's sockets are, and how roles look and are named (the
+        // active theme's names, as the console is given them: the desktop app shows these, spec 111 §4).
         "where" => {
-            println!("{}", ui_info(&l.sock, &l.narrator_sock, ws_dir, None, &HashMap::new()));
+            println!("{}", ui_info(&l.sock, &l.narrator_sock, ws_dir, None, names));
             0
         }
         "status" => match connect() {
@@ -1315,11 +1264,9 @@ mod tests {
         assert_eq!(parse_input("/solo on"), Input::Solo(Some("on".into())));
         assert_eq!(parse_input("/quarantine scout"), Input::Quarantine("scout".into()));
         assert_eq!(parse_input("/unquarantine scout"), Input::Unquarantine("scout".into()));
-        assert_eq!(parse_input("/narrator"), Input::Narrator(None));
-        assert_eq!(parse_input("/observe council"), Input::Narrator(Some("council".into())));
-        assert!(matches!(parse_input("/narrator nonsense"), Input::Unknown(m) if m.contains("council, epic")));
-        assert!(matches!(parse_input("/narrator tile"), Input::Unknown(_)), "the four-pane tile is gone");
-        assert!(matches!(parse_input("/observe spend"), Input::Unknown(m) if m.contains("not `spend`")), "the spend view is retired");
+        for gone in ["/narrator", "/observe council", "/visualize"] {
+            assert!(matches!(parse_input(gone), Input::Unknown(m) if m.contains("retired") && m.contains("desktop app")), "{gone}");
+        }
         assert_eq!(parse_input("/resume"), Input::Resume(vec![]));
         assert_eq!(parse_input("/resume t_0001 t_0003"), Input::Resume(vec!["t_0001".into(), "t_0003".into()]));
         assert_eq!(parse_input("/pause"), Input::Pause);

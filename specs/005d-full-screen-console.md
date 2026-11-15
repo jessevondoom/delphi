@@ -66,6 +66,8 @@ List mode (tier, summary, requester badge and time left) and focus mode (one car
 
 ## 7. The Observer window
 
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
+
 `delphi observe [council|epic|forge|agents|spend|archives|thinking]`, attached with a narrator token on the narrator socket (read-only by construction, D-25). Seven full-window views, `Shift+←`/`→`, `Tab` or `1`–`7` to move, `q` to quit. It draws the daemon's folded picture (`observe.state`), so every client agrees; live text and reasoning come from the frame stream and live only in the window. `thinking` shows the reasoning of running agents with their badge, tier and model.
 
 ## 8. Daemon additions

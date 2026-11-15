@@ -19,7 +19,7 @@ default_mode = "orchestrator" # orchestrator | council
 name = "greek"                 # display names, window labels and persona voice only (specs/001 §6); behavior never depends on it
 
 [tui]
-auto_spawn_narrator = false   # Set true for automatic dual-window on launch
+auto_spawn_narrator = false   # Ignored: the terminal's second window is retired (see the desktop app guide)
 frame_rate_hz = 60
 hide_bibliographies = true    # true (default): KB searches in console resolve to summary .md pages, not .bib.md sidecars (specs/075)
 

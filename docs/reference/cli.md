@@ -387,17 +387,6 @@ The knowledge base: index it, search it.
   delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]
 ```
 
-### `delphi observe`
-
-The read-only live window (also: delphi narrator).
-
-```
-  delphi observe [dashboard|council|epic|agents|timeline|changes]
-    [--once] [--workspace <name>] [--home <dir>]
-```
-
---once prints one frame as text; it works without a terminal.
-
 ## Inspect
 
 ### `delphi status`

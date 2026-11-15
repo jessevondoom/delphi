@@ -123,6 +123,8 @@ Every slice names its tests; the plan-wide gates are in §0 rule 2 and the defin
 
 ## 7. Slice 7: daemon data for the narrator (5 h)
 
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
+
 **Goal.** `005e` §9.3. The rail and pace row need data `observe.state` does not carry.
 
 **Do.** In `crates/delphi-engine/src/observe.rs`: add to `Node` the fields `started_ms: u64`, `ended_ms: Option<u64>` (set from the event timestamps that create and complete the node) and `after: Vec<String>` (predecessor node ids). Take the edges from the plan if its edges are in the event log; if they are not, derive them from `parent` and creation order within the same parent, and document in the field's doc comment that they are derived. Add `pace: VecDeque<u64>` of the last twelve per-minute token totals (a minute bucket per `usage` event). Extend the TypeScript `OState` type in `ui/src/observe-screen.ts` and `emptyState()`. Add unit tests in `observe.rs` that fold a short event script and assert the fields.
@@ -132,6 +134,8 @@ Every slice names its tests; the plan-wide gates are in §0 rule 2 and the defin
 **Done when.** `observe.state` JSON includes the new fields for a folded mission and the narrator allowlist is unchanged (read-only).
 
 ## 8. Slice 8: narrator chrome, six views, arrows only (8 h)
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 
 **Goal.** `005e` §9.2 chrome, keys, attention slot; classic Observer retired.
 
@@ -148,6 +152,8 @@ Every slice names its tests; the plan-wide gates are in §0 rule 2 and the defin
 
 ## 9. Slice 9: the epic rail and the council weave (12 h)
 
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
+
 **Goal.** `005e` §9.2 epic and council.
 
 **Do.**
@@ -160,6 +166,8 @@ Every slice names its tests; the plan-wide gates are in §0 rule 2 and the defin
 **Done when.** `005e` §9.4 passes in full.
 
 ## 10. Slice 10: restyle the remaining narrator views (6 h)
+
+> **Superseded by [`specs/111`](111-the-desktop-app-a-read-only-window-on-the-daemon.md) §10 (operator, 2026-11-14):** the terminal's narrator window, `delphi observe` and `/observe` are retired; the desktop app shows what this section describes. Read what follows as history.
 
 **Goal.** `forge`, `agents`, `archives`, `thinking` share the chrome and palette. No boxes; hairlines and whitespace; a tinted band for the selected or running row; no money columns; no unneeded data (drop columns the operator cannot act on). `agents` leads with the roster the strip no longer names. Goldens at 80x24, 100x34 and 40x12.
 

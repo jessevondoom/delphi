@@ -269,13 +269,14 @@ pub fn claude_theme_token(name: &str) -> String {
 }
 
 /// The eight overrides of Delphi's Claude Code theme, in palette order: each name's token and its owner's colour, the dark pair or
-/// the light one (`delphi_core::research::role_look`, `role_look_light`). Nothing else of a theme is set (spec 106 §12 G7).
+/// the light fill (`delphi_core::research::role_look`, `role_fill_light`). Nothing else of a theme is set (spec 106 §12 G7).
 pub fn claude_theme_overrides(light: bool) -> Vec<(String, &'static str)> {
     CLAUDE_PALETTE
         .iter()
         .filter_map(|name| {
             let role = claude_slot_owner(name)?;
-            let hex = if light { delphi_core::research::role_look_light(role).0 } else { delphi_core::research::role_look(role).1 };
+            // A chip is a fill with dark text on it, so a light theme takes the light fill, not the colour names are written in.
+            let hex = if light { delphi_core::research::role_fill_light(role) } else { delphi_core::research::role_look(role).1 };
             Some((claude_theme_token(name), hex))
         })
         .collect()
@@ -888,7 +889,7 @@ mod tests {
         }
         assert!(claude_theme_overrides(false).contains(&("purple_FOR_SUBAGENTS_ONLY".to_string(), "#a855f7")));
         assert!(claude_theme_overrides(false).contains(&("blue_FOR_SUBAGENTS_ONLY".to_string(), "#38bdf8")));
-        assert!(claude_theme_overrides(true).contains(&("orange_FOR_SUBAGENTS_ONLY".to_string(), "#b45309")));
+        assert!(claude_theme_overrides(true).contains(&("orange_FOR_SUBAGENTS_ONLY".to_string(), "#d95c09")));
         let none = BTreeMap::new();
         for (role, _) in WORKER_ROLES {
             assert!(CLAUDE_COLORS.iter().any(|(r, _)| r == role), "{role} has a colour");

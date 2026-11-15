@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The window may listen for what the bridge forwards. It gets none of the framework's own file, shell, network or window commands (spec 111 §2).",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}
