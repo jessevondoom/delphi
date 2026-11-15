@@ -253,7 +253,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis
 
-**114: A methodical scout: known first, a plan from the gaps, the role in every call, and a written synthesis** · approved (per source at `79d56f43b7ca`) · tier 0 · [source](../../specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md)
+**114: A methodical scout: known first, a plan from the gaps, the role in every call, and a written synthesis** · approved (per source at `c97aa3b97e68`) · tier 0 · [source](../../specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md)
 
 **source excerpt, untrusted** · `specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md` lines 25-33
 
@@ -342,7 +342,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof
 
-**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `4c7a12fb54aa`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
+**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `88d0b0f47d44`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
 
 **source excerpt, untrusted** · `specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md` lines 26-34
 
