@@ -122,11 +122,23 @@ pub struct JobCtx {
     check_steps: AtomicU32,
     trail: Mutex<Trail>,
     activity: Mutex<Activity>,
+    /// The workspace's `[privacy] identifiers` (`specs/119` §2 item 7), set once by whoever starts the runner; unset means none.
+    identifiers: std::sync::OnceLock<Vec<String>>,
 }
 
 impl JobCtx {
     pub fn with_budget(max_steps: u32) -> JobCtx {
-        JobCtx { max_steps, steps: AtomicU32::new(0), check_max: check_budget(max_steps), check_steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()), activity: Mutex::new(Activity { last: Instant::now(), recent: VecDeque::new() }) }
+        JobCtx { max_steps, steps: AtomicU32::new(0), check_max: check_budget(max_steps), check_steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()), activity: Mutex::new(Activity { last: Instant::now(), recent: VecDeque::new() }), identifiers: Default::default() }
+    }
+
+    /// Give the job the workspace's privacy identifiers. The first call wins.
+    pub fn set_identifiers(&self, identifiers: Vec<String>) {
+        let _ = self.identifiers.set(identifiers);
+    }
+
+    /// The identifier guard for a query this job is about to send to an engine or hand to a host (`specs/119` §2 item 7).
+    pub fn guard(&self, query: &str) -> crate::query_guard::Guarded {
+        crate::query_guard::guard(query, self.identifiers.get().map(Vec::as_slice).unwrap_or(&[]))
     }
 
     /// Note that the job just made a call of this kind.

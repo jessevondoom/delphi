@@ -130,7 +130,7 @@ impl Engine {
         let searcher: Option<Arc<dyn Searcher>> = if !cfg.search.explicit || cfg.search.providers.is_empty() {
             None
         } else {
-            HttpTransport::new().ok().map(|t| Arc::new(TransportSearcher { transport: Arc::new(t), engines: crate::research_setup::engines(self) }) as Arc<dyn Searcher>)
+            HttpTransport::new().ok().map(|t| Arc::new(TransportSearcher { transport: Arc::new(t), engines: crate::research_setup::engines(self), identifiers: crate::query_guard::identifiers(&self.ws.dir) }) as Arc<dyn Searcher>)
         };
         let doi = HandleResolver::default();
         // The install's library, when there is one: its validated facts are read by the judge before any web search (`specs/100` §9.1).

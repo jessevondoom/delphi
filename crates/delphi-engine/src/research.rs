@@ -429,6 +429,8 @@ pub struct Deps {
     /// `YYYY-MM-DD`.
     pub date: String,
     pub limits: Limits,
+    /// The workspace's `[privacy] identifiers` (`specs/119` §2 item 7): a topic naming one is searched without it, or not at all.
+    pub identifiers: Vec<String>,
 }
 
 fn host_of(url: &str) -> String {
@@ -470,6 +472,11 @@ pub async fn run(deps: Deps, topic: &str, sh: Arc<Shared>) {
 
 async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> {
     let topic = clean_topic(topic)?;
+    // The identifier guard (`specs/119` §2 item 7), before any query is built from the topic.
+    let topic = match crate::query_guard::guard(&topic, &d.identifiers).to_send(&topic) {
+        Some(t) => t.to_string(),
+        None => return Err(crate::query_guard::WITHHELD_MESSAGE.into()),
+    };
     let started = Instant::now();
     let mut rep = Report::default();
     let lim = &d.limits;
@@ -491,7 +498,7 @@ async fn job(d: &Deps, topic: &str, sh: &Arc<Shared>) -> Result<Report, String> 
                 rep.provider = Some(f.provider.name().to_string());
                 rows.extend(f.rows);
             }
-            Err(SearchError::NotConfigured) => return Err("research is turned off: `providers` under [search] in config.toml is empty".into()),
+            Err(SearchError::NotConfigured) => return Err(crate::research_setup::no_engine_message()),
             Err(SearchError::AllFailed(why)) => {
                 if rep.provider.is_some() {
                     continue; // an earlier query worked; this one failing costs only its own results
@@ -786,6 +793,7 @@ mod tests {
             weak_sources: WeakSources::Label,
             date: "2026-10-28".into(),
             limits: Limits::default(),
+            identifiers: Vec::new(),
         }
     }
     fn web(pairs: Vec<(&str, Response)>) -> Web {
@@ -952,10 +960,35 @@ mod tests {
         d.engines.clear();
         let sh = Shared::new("t");
         run(d, "t", sh.clone()).await;
-        assert!(sh.snapshot().error.unwrap().contains("[search]"));
+        let e = sh.snapshot().error.unwrap();
+        assert!(e.contains("[search]") && e.contains("delphi research setup"), "the message names the command that sets an engine up: {e}");
         let sh = Shared::new("");
         run(deps(web(vec![]), judge(vec![]), dir.path()), "  \x1b[2J ", sh.clone()).await;
         assert!(sh.snapshot().error.unwrap().contains("name a topic"));
+    }
+
+    // specs/119 §2 item 7: a topic naming one of the workspace's privacy identifiers is searched without it, or not searched at all.
+    #[tokio::test]
+    async fn a_topic_naming_a_privacy_identifier_is_searched_without_it_or_not_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = Arc::new(web(vec![("search", search_result(&[]))]));
+        let mut d = deps(web(vec![]), judge(vec![]), dir.path());
+        d.transport = w.clone();
+        d.identifiers = vec!["heron".into()];
+        let sh = Shared::new("t");
+        run(d, "heron byzantine fault tolerance", sh.clone()).await;
+        let asked = w.asked.lock().unwrap().clone();
+        assert!(!asked.is_empty() && asked.iter().all(|u| !u.to_lowercase().contains("heron")), "{asked:?}");
+        assert!(asked.iter().any(|u| u.contains("byzantine")), "{asked:?}");
+
+        let w = Arc::new(web(vec![("search", search_result(&[]))]));
+        let mut d = deps(web(vec![]), judge(vec![]), dir.path());
+        d.transport = w.clone();
+        d.identifiers = vec!["heron".into()];
+        let sh = Shared::new("t");
+        run(d, "heron rollout", sh.clone()).await;
+        assert_eq!(sh.snapshot().error.unwrap(), crate::query_guard::WITHHELD_MESSAGE);
+        assert!(w.asked.lock().unwrap().is_empty(), "nothing was sent");
     }
 
     #[tokio::test]

@@ -119,15 +119,51 @@ pub trait ValidatedFacts: Send + Sync {
 pub struct TransportSearcher {
     pub transport: Arc<dyn Transport>,
     pub engines: Vec<ProviderSpec>,
+    /// The workspace's `[privacy] identifiers` (`specs/119` §2 item 7): a query naming one is sent without it, or not at all.
+    pub identifiers: Vec<String>,
 }
 
 impl Searcher for TransportSearcher {
     fn search(&self, query: &str) -> Result<Vec<Hit>, String> {
+        let guarded = crate::query_guard::guard(query, &self.identifiers);
+        let Some(query) = guarded.to_send(query) else { return Err(crate::query_guard::WITHHELD_MESSAGE.into()) };
         match search::search(&*self.transport, &self.engines, query) {
             Ok(f) => Ok(f.rows.into_iter().map(|r| Hit { url: r.url }).collect()),
             Err(search::SearchError::NotConfigured) => Err("no search engine is configured".into()),
             Err(search::SearchError::AllFailed(_)) => Err("every search engine failed".into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod searcher_tests {
+    use super::*;
+    use delphi_adapter::research::search::Provider;
+    use delphi_adapter::research::transport::Response;
+    use std::sync::Mutex;
+
+    struct Engine(Mutex<Vec<String>>);
+
+    impl Transport for Engine {
+        fn get(&self, url: &str, _: &[(&str, &str)], _: usize, _: std::time::Duration) -> Result<Response, String> {
+            self.0.lock().unwrap().push(url.to_string());
+            Ok(Response { status: 200, content_type: Some("application/json".into()), location: None, body: br#"{"web": {"results": [{"title": "t", "url": "https://example.org/a", "description": "d"}]}}"#.to_vec(), truncated: false })
+        }
+    }
+
+    // specs/119 §2 item 7: the searcher behind the page writer's external search and the validator's contradiction search sends no
+    // query that names a privacy identifier.
+    #[test]
+    fn the_searcher_sends_a_query_without_its_identifier_or_not_at_all() {
+        let web = Arc::new(Engine(Mutex::new(Vec::new())));
+        let s = TransportSearcher { transport: web.clone(), engines: vec![ProviderSpec { provider: Provider::Brave, key: Some("k".into()), base_url: None, cx: None }], identifiers: vec!["heron".into()] };
+        assert_eq!(s.search("postgres index bloat causes").unwrap().len(), 1);
+        assert_eq!(s.search("heron postgres index bloat").unwrap().len(), 1);
+        let err = s.search("heron rollout").unwrap_err();
+        assert_eq!(err, crate::query_guard::WITHHELD_MESSAGE);
+        let sent = web.0.lock().unwrap();
+        assert_eq!(sent.len(), 2, "the withheld query made no request: {sent:?}");
+        assert!(sent.iter().all(|u| !u.to_lowercase().contains("heron")), "{sent:?}");
     }
 }
 

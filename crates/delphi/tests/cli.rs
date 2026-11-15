@@ -217,3 +217,53 @@ fn xenia_help_and_explain_are_offline_fixed_text_that_touch_nothing_and_honour_j
     assert_eq!(o.status.code(), Some(1));
     assert!(text(&o.stdout).contains("\"found\": false") && !text(&o.stdout).contains("CANARY"));
 }
+
+// specs/119 §2 items 1, 2 and 6: `delphi init` ends with the line that names the command, and `delphi research setup` without a
+// terminal refuses unless its answers are flags, never ratifies, and is refused inside an agent seat.
+#[test]
+fn research_setup_needs_a_terminal_or_flags_writes_the_search_table_and_init_points_at_it() {
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().join("home");
+    let delphi = |args: &[&str], seat: bool| {
+        let mut c = Command::new(DELPHI);
+        c.args(args).arg("--home").arg(&home).env_remove("DELPHI_WORKSPACE").env_remove("DELPHI_BRIDGE_SOCKET").env_remove("DELPHI_BRIDGE_TOKEN").stdin(Stdio::null()).current_dir(t.path());
+        if seat {
+            c.env("DELPHI_BRIDGE_SOCKET", "/tmp/none.sock");
+        }
+        c.output().unwrap()
+    };
+    let o = delphi(&["init", "--non-interactive", "--workspace", "w"], false);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    let last = out.lines().last().unwrap();
+    assert!(last.contains("research:") && last.contains("`delphi research setup`"), "init ends with the hint: {out}");
+    let cfg = home.join("workspaces/w/config.toml");
+    let before = std::fs::read_to_string(&cfg).unwrap();
+
+    // No terminal and no flags: refused, and nothing is written.
+    let o = delphi(&["research", "setup", "--workspace", "w"], false);
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+    assert!(text(&o.stderr).contains("needs a terminal") && text(&o.stderr).contains("--engine"), "{}", text(&o.stderr));
+    // An engine with a key and no reference to one: refused. A key on the command line is not a reference.
+    for extra in [&[][..], &["--credential", "BSA-a-pasted-key"]] {
+        let mut args = vec!["research", "setup", "--workspace", "w", "--engine", "brave", "--no-test"];
+        args.extend_from_slice(extra);
+        let o = delphi(&args, false);
+        assert_eq!(o.status.code(), Some(2), "{:?}: {}", extra, text(&o.stderr));
+        assert!(text(&o.stderr).contains("--credential"), "{}", text(&o.stderr));
+    }
+    // Inside an agent seat: refused whatever the flags.
+    let o = delphi(&["research", "setup", "--workspace", "w", "--engine", "parallel", "--no-test"], true);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o.stderr).contains("refused inside an agent seat"), "{}", text(&o.stderr));
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), before, "no refusal wrote anything");
+
+    // With its answers as flags: the notice, the table, and no ratification.
+    let o = delphi(&["research", "setup", "--workspace", "w", "--engine", "brave", "--credential", "env:BRAVE_API_KEY", "--no-test"], false);
+    assert_eq!(o.status.code(), Some(0), "{}{}", text(&o.stdout), text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains("Queries leave this machine for the engine chosen (brave). Check its terms and your employer's rules first."), "{out}");
+    assert!(out.contains("Not ratified: that is yours to do") && out.contains("Test query: not run"), "{out}");
+    let after = std::fs::read_to_string(&cfg).unwrap();
+    assert!(after.contains("[search]") && after.contains("providers = [\"brave\"]") && after.contains("credential = \"env:BRAVE_API_KEY\""), "{after}");
+}

@@ -14,7 +14,7 @@
 use crate::corroboration::{self, Cite, Params, Support};
 use crate::research_chain::{ChainPlan, Direction};
 use crate::research_jobs::{Egress, Finish, JobCtx};
-use crate::research_plan::{canonical_url, clean_query, claim_fingerprint, plan, widen_to_web, Added, ClaimSet, QueryKind, Seen};
+use crate::research_plan::{canonical_url, clean_query, claim_fingerprint, widen_to_web, Added, ClaimSet, QueryKind, Seen};
 use crate::search_log::{HostSearch, Purpose, SearchLog, Source};
 use delphi_adapter::research::search::Row;
 use delphi_core::knowledge_status::{raise_for_tags, tier_detail, tier_params, Status, Tags};
@@ -280,12 +280,16 @@ fn pass_claims(depth: Depth) -> usize {
     }
 }
 
-/// The two queries of the corroboration pass for one claim: one for independent support, one for contradiction. Built from the claim
+/// The claim as the words the corroboration pass searches for.
+fn pass_subject(c: &ClaimRec) -> String {
+    format!("{} {} {}", c.x.subject, c.x.predicate, c.x.object)
+}
+
+/// The two queries of the corroboration pass for one claim (its [`pass_subject`], after the identifier guard): one for independent support, one for contradiction. Built from the claim
 /// by code and cleaned like any query (`clean_query` redacts secrets, paths and private addresses). `None` when nothing usable is left.
-fn pass_queries(c: &ClaimRec, redactor: &Redactor) -> Vec<(&'static str, String)> {
-    let claim = format!("{} {} {}", c.x.subject, c.x.predicate, c.x.object);
+fn pass_queries_for(claim: &str, redactor: &Redactor) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
-    if let Some(q) = clean_query(&claim, redactor) {
+    if let Some(q) = clean_query(claim, redactor) {
         out.push(("support", q));
     }
     if let Some(q) = clean_query(&format!("{} disputed OR incorrect OR false", claim), redactor) {
@@ -645,8 +649,11 @@ async fn read_chained(ctx: &JobCtx, deps: &Deps<'_>, plan: &crate::research_chai
 
 /// Run one research job. `Finish::Partial` when the step budget ran out; an `Err` only when nothing could be done at all.
 pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Deps<'_>) -> Result<Finish, String> {
-    let mut queries = plan(question, depth, deps.sites, deps.redactor);
-    if queries.is_empty() {
+    // The identifier guard (`specs/119` §2 item 7): a question naming one of the workspace's privacy identifiers is planned without it,
+    // or, when too little is left, no query is sent at all and the search log lists each as withheld, with no text.
+    let planned = crate::research_plan::plan_guarded(question, depth, deps.sites, deps.redactor, &|q| ctx.guard(q));
+    let mut queries = planned.queries;
+    if queries.is_empty() && planned.withheld.is_empty() {
         return Err("the question has no usable search query once private details are removed: ask it without paths, hosts or credentials".into());
     }
     queries.sort_by_key(|q| q.kind != QueryKind::Trusted);
@@ -665,6 +672,10 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     let mut log = SearchLog::new();
     for h in deps.host_searches {
         log.declare(h, deps.redactor);
+    }
+    for kind in &planned.withheld {
+        let (rung, source, purpose) = log_source(*kind, None);
+        log.withheld_identifier(rung, source, purpose);
     }
     let mut last_provider: Option<String> = None;
 
@@ -802,7 +813,18 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         'pass: for (i, _) in wanted.into_iter().take(pass_claims(depth)) {
             let c = claims[i].clone();
             pass.0 += 1;
-            for (kind, q) in pass_queries(&c, deps.redactor) {
+            // The identifier guard (`specs/119` §2 item 7), on the claim's own words before the pass adds its own: a claim naming one of the
+            // workspace's privacy identifiers is searched without it, or not at all, and then the log says so without text.
+            let subject = match ctx.guard(&pass_subject(&c)) {
+                crate::query_guard::Guarded::Clean => pass_subject(&c),
+                crate::query_guard::Guarded::Stripped(without) => without,
+                crate::query_guard::Guarded::Withheld => {
+                    let provider = last_provider.as_deref().and_then(crate::search_log::clean_id).unwrap_or_else(|| "none".into());
+                    log.withheld_identifier("web", Source::Search(provider), Purpose::Corroboration);
+                    continue;
+                }
+            };
+            for (kind, q) in pass_queries_for(&subject, deps.redactor) {
                 if ctx.egress("scout", Egress::Search, &q).is_err() {
                     spent = true;
                     break 'pass;
@@ -1986,6 +2008,43 @@ mod tests {
         assert!(lines.iter().any(|l| l["source"] == "search:brave" && l["rung"] == "web"), "{lines:?}");
         assert_balanced(&v);
         assert_eq!(v["search_log"]["private"], false);
+    }
+
+    // specs/119 AC-2b: a planned query that names a privacy identifier is not sent as written. With enough left it goes without the
+    // identifier; with too little it is not sent at all, and the search log lists it as withheld with no text.
+    #[tokio::test]
+    async fn a_query_naming_a_privacy_identifier_is_sent_without_it_or_withheld_and_listed_in_the_log() {
+        let f = Fixture::new(Verdict::Inconclusive);
+        let c = ctx(Depth::Survey);
+        c.set_identifiers(vec!["heron".into()]);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever in Project-Heron trials", Depth::Survey, &f.deps()).await.unwrap());
+        let searched = f.web.searched.lock().unwrap().clone();
+        assert!(!searched.is_empty(), "enough is left, so the searches ran");
+        assert!(searched.iter().all(|q| !q.to_lowercase().contains("heron")), "{searched:?}");
+        assert!(searched.iter().any(|q| q.contains("does aspirin reduce fever in trials")), "{searched:?}");
+        // The knowledge-base line is the local search, which leaves nothing: every other line records what was sent.
+        let outbound = |v: &Value| log_lines(v).into_iter().filter(|l| l["source"] != "kb").collect::<Vec<_>>();
+        assert!(outbound(&v).iter().all(|l| !l.to_string().to_lowercase().contains("heron")), "the log records what was sent: {v}");
+        assert_balanced(&v);
+
+        // Too little left: nothing reaches the engine, and each planned query is a withheld line without text.
+        let f = Fixture::new(Verdict::Inconclusive);
+        let c = ctx(Depth::Survey);
+        c.set_identifiers(vec!["heron".into()]);
+        let (_, v) = value(run_research(&c, "heron rollout plan", Depth::Survey, &f.deps()).await.unwrap());
+        assert!(f.web.searched.lock().unwrap().is_empty(), "{:?}", f.web.searched.lock().unwrap());
+        assert!(f.web.fetched.lock().unwrap().is_empty());
+        let withheld: Vec<Value> = log_lines(&v).into_iter().filter(|l| l["withheld"] == "identifier").collect();
+        assert!(!withheld.is_empty(), "{v}");
+        assert!(withheld.iter().all(|l| l.get("query").is_none() && l["hits"] == 0), "{withheld:?}");
+        assert_eq!(v["search_log"]["flow"]["withheld"].as_u64().unwrap() as usize, withheld.len());
+        assert_eq!(v["search_log"]["flow"]["searches"], 0);
+        assert!(outbound(&v).iter().all(|l| !l.to_string().to_lowercase().contains("heron")), "{v}");
+
+        // No identifiers set (the default): nothing changes.
+        let f = Fixture::new(Verdict::Inconclusive);
+        run_research(&ctx(Depth::Quick), "heron rollout plan", Depth::Quick, &f.deps()).await.unwrap();
+        assert!(f.web.searched.lock().unwrap().iter().any(|q| q.contains("heron")));
     }
 
     #[tokio::test]

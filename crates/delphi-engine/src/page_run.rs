@@ -117,9 +117,10 @@ impl Engine {
             return Err("no search engine is configured ([search] providers), so there is nothing to ask".into());
         }
         let transport = delphi_adapter::research::transport::HttpTransport::new().map_err(|e| format!("search could not start: {}", e))?;
-        let (q, engs) = (query.to_string(), engines);
+        let (q, engs, ws_dir) = (query.to_string(), engines, self.ws.dir.clone());
         let urls: Vec<String> = tokio::task::spawn_blocking(move || {
-            let s = crate::fact_run::TransportSearcher { transport: Arc::new(transport), engines: engs };
+            // The searcher applies the identifier guard (`specs/119` §2 item 7); the identifiers are read here, on the blocking thread.
+            let s = crate::fact_run::TransportSearcher { transport: Arc::new(transport), engines: engs, identifiers: crate::query_guard::identifiers(&ws_dir) };
             crate::fact_run::Searcher::search(&s, &q)
         })
         .await
@@ -156,9 +157,10 @@ impl Engine {
             return Err("no search engine is configured ([search] providers), so there is nothing to ask".into());
         }
         let transport = delphi_adapter::research::transport::HttpTransport::new().map_err(|e| format!("search could not start: {}", e))?;
-        let (q, engs) = (query.to_string(), engines);
+        let (q, engs, ws_dir) = (query.to_string(), engines, self.ws.dir.clone());
         let urls: Vec<String> = tokio::task::spawn_blocking(move || {
-            let s = crate::fact_run::TransportSearcher { transport: Arc::new(transport), engines: engs };
+            // The searcher applies the identifier guard (`specs/119` §2 item 7); the identifiers are read here, on the blocking thread.
+            let s = crate::fact_run::TransportSearcher { transport: Arc::new(transport), engines: engs, identifiers: crate::query_guard::identifiers(&ws_dir) };
             crate::fact_run::Searcher::search(&s, &q)
         })
         .await

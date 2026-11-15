@@ -679,12 +679,19 @@ impl EngineService {
         let c = h::Caller::parse(&p).map_err(host_err)?;
         let (question, depth) = h::research_args(&p).map_err(host_err)?;
         let question = self.engine.secrets.redact(&question);
-        if self.engine.cfg.get().search.providers.is_empty() {
-            return Err(err(code::INVALID_PARAMS, "research is turned off: `providers` under [search] in config.toml is empty"));
+        // Spec 119 §2 item 4: with no engine the request is refused with the command that sets one up, and the refusal is counted, so that
+        // the doctor and the next session-start brief can say research was asked for and could not run.
+        let asked_at = (self.engine.clock_unix)();
+        if crate::research_setup::engine_state(&self.engine.cfg.get().search) == crate::research_setup::EngineState::None {
+            let wsd = ws.dir.clone();
+            let _ = tokio::task::spawn_blocking(move || crate::research_asks::record(&wsd, crate::research_asks::Outcome::NoEngine, asked_at)).await;
+            return Err(err(code::INVALID_PARAMS, crate::research_setup::no_engine_message()));
         }
         let (e, wsd, home) = (self.engine.clone(), ws.dir.clone(), ws.home.clone());
-        let (list, engines, transport) = tokio::task::spawn_blocking(move || -> Result<_, String> {
-            Ok((crate::research_setup::lists(&wsd, &home)?, crate::research_setup::engines(&e), delphi_adapter::research::transport::HttpTransport::new()?))
+        let (list, engines, transport, identifiers) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+            let loaded = (crate::research_setup::lists(&wsd, &home)?, crate::research_setup::engines(&e), delphi_adapter::research::transport::HttpTransport::new()?, crate::query_guard::identifiers(&wsd));
+            crate::research_asks::record(&wsd, crate::research_asks::Outcome::Queued, asked_at);
+            Ok(loaded)
         })
         .await
         .map_err(|e| err(-32000, e.to_string()))?
@@ -722,6 +729,8 @@ impl EngineService {
         let rid = research_id.clone();
         let ended_rid = research_id.clone();
         let run = move |jc: Arc<crate::research_jobs::JobCtx>| async move {
+            // Spec 119 §2 item 7: the runner checks every query it sends against the workspace's privacy identifiers.
+            jc.set_identifiers(identifiers);
             if let Some(r) = &recorder {
                 let _ = r.topic.running(&r.run_id);
             }
@@ -5318,6 +5327,43 @@ mod tests {
             let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": p(json!({}))["cwd"], "research_id": id});
             assert_eq!(rpc_code(c.call("host.research_status", other)), Some(code::INVALID_PARAMS));
             assert_eq!(rpc_code(c.call("host.research_status", p(json!({"research_id": "r-none"})))), Some(code::INVALID_PARAMS));
+        })
+        .await;
+    }
+
+    // specs/119 AC-2: with no engine a research request is refused with the setup command named, the refusal is counted, and the
+    // next session-start brief says so once. With an engine the same request is queued and counted as run.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_research_request_with_no_engine_is_refused_with_the_setup_command_and_counted_for_the_next_brief() {
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let with_search = |table: &str| delphi_adapter::config::Config::parse(&format!("{}\n{}", crate::testkit::CONFIG, table)).unwrap();
+        f.engine.cfg.set(with_search("[search]\nproviders = []\n"));
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (engine, dir, root) = (f.engine.clone(), ws_dir.clone(), f.root.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.hello(&htok).unwrap();
+            let ask = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "question": "does aspirin reduce fever"});
+            for _ in 0..2 {
+                let e = c.call("host.request_research", ask.clone()).unwrap_err();
+                assert!(format!("{e:?}").contains("no search engine is set up") && format!("{e:?}").contains("delphi research setup"), "{e:?}");
+                assert_eq!(rpc_code(Err(e)), Some(code::INVALID_PARAMS));
+            }
+            let now = (engine.clock_unix)();
+            assert_eq!(crate::research_asks::counts_since(&dir, now - 60), crate::research_asks::Counts { asked: 2, ran: 0, no_engine: 2 });
+            let brief = crate::host_hooks::brief(&dir, &root, None, "n");
+            assert!(brief.contains("Research was asked for 2 times and no search engine is set up"), "{brief}");
+            assert!(!crate::host_hooks::brief(&dir, &root, None, "n").contains("Research was asked for"), "once");
+
+            // An engine the operator chose: the request is queued, and counted as one that ran.
+            engine.cfg.set(with_search("[search]\nproviders = [\"searxng\"]\n[search.searxng]\nurl = \"https://search.invalid\"\n"));
+            let r = c.call("host.request_research", ask).unwrap();
+            assert_eq!(r["status"], "queued", "{r}");
+            assert_eq!(crate::research_asks::counts_since(&dir, now - 60), crate::research_asks::Counts { asked: 3, ran: 1, no_engine: 2 });
+            let _ = c.call("host.cancel_job", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": root.to_string_lossy(), "research_id": r["research_id"]}));
         })
         .await;
     }
