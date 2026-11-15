@@ -573,6 +573,15 @@ impl Library for LiveLibrary {
         self.keep.kept.lock().unwrap().get(source_id).cloned()
     }
 
+    /// The page as the library holds it, in place of a fetch (`specs/114` §3 item 4): only a public web page whose text is kept
+    /// whole and that was checked within its recheck window (`Library::fresh_text_of_url`). A private source, excerpts, a pointer
+    /// and a source past its window are fetched as before.
+    fn held_fresh(&self, url: &str) -> Option<crate::research_run::HeldPage> {
+        let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339())?;
+        let (source_id, text) = crate::library::Library::in_home(&self.home).fresh_text_of_url(url, now)?;
+        Some(crate::research_run::HeldPage { source_id, text })
+    }
+
     /// The citation the corroboration count reads for a source this run captured: the same description the library gives a claim's
     /// anchor (`Library::cites_of`), taken as of now, with the trusted-list entry frozen when the page was captured.
     fn cite_info(&self, source_id: &str, claim_text: &str) -> Option<crate::corroboration::Cite> {
@@ -1110,6 +1119,63 @@ mod tests {
         let (at, text) = (snap.final_url.for_daemon().clone(), snap.text.for_daemon().clone());
         held.put(&at, snap);
         (LiveLibrary { home: home.to_path_buf(), ledger: home.join("ws/research/host-claims.jsonl"), label: "t".into(), retractions: crate::retractions::Policy::off(), held: Some(held), topic: None, project: None, keep }, at, text)
+    }
+
+    /// `specs/114` §3 item 4: a page the library holds stands in for a fetch only when its text is kept whole, it is public, and it
+    /// was checked within its recheck window. A pointer, a private source, a retired or purged one, one past its window and an
+    /// address the library does not hold are all fetched as before.
+    #[tokio::test]
+    async fn a_held_page_stands_in_for_a_fetch_only_when_public_kept_whole_and_inside_its_recheck_window() {
+        use delphi_adapter::config::WeakSources;
+        let home = tempfile::tempdir().unwrap();
+        let l = crate::library::Library::in_home(home.path());
+        let keep = || KeepStep::new(keep_rules(WeakSources::Label), None);
+        let (lib, url, text) = kept_library(home.path(), keep(), "https://en.wikipedia.org/wiki/Byzantine_fault", &[KEEP_PROSE]);
+        let wiki = lib.capture(&url, &text, true).await.unwrap();
+        let held = lib.held_fresh(&url).expect("kept whole and just checked");
+        assert_eq!(held.source_id, wiki);
+        assert!(held.text.contains("arbitrary behaviour from a faulty node"), "the text is the library's own: {}", held.text);
+        assert!(lib.held_fresh("https://en.wikipedia.org/wiki/Byzantine_fault#History").is_some(), "a fragment names the same page");
+        assert!(lib.held_fresh("https://en.wikipedia.org/wiki/Another_page").is_none(), "an address the library does not hold");
+        // A pointer has no text to read.
+        let (plib, purl, ptext) = kept_library(home.path(), keep(), "https://www.w3.org/TR/x", &[KEEP_PROSE]);
+        plib.capture(&purl, &ptext, true).await.unwrap();
+        assert!(plib.held_fresh(&purl).is_none());
+        // The same record, changed one field at a time: each of these is fetched again.
+        let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+        let meta_path = l.source_dir(&wiki).join("meta.json");
+        let original = std::fs::read_to_string(&meta_path).unwrap();
+        let with = |change: &dyn Fn(&mut Value)| {
+            let mut m: Value = serde_json::from_str(&original).unwrap();
+            change(&mut m);
+            std::fs::write(&meta_path, m.to_string()).unwrap();
+            let got = lib.held_fresh(&url).is_some();
+            std::fs::write(&meta_path, &original).unwrap();
+            got
+        };
+        assert!(with(&|_| {}), "unchanged, it stands in");
+        assert!(!with(&|m| m["private"] = json!(true)), "a private source is never read in place of a fetch");
+        assert!(!with(&|m| m["licence"] = json!("private")));
+        assert!(!with(&|m| m["purged"] = json!("2026-01-01T00:00:00Z")));
+        assert!(!with(&|m| m["retired"] = json!("2026-01-01T00:00:00Z")));
+        assert!(!with(&|m| m["capture_level"] = json!("excerpts")));
+        assert!(!with(&|m| m["canonical_url"] = json!("https://elsewhere.example/page")), "the record must be this address's own");
+        let old = delphi_core::time::format_unix_millis(now - 31 * 86_400, 0);
+        assert!(!with(&|m| {
+            m["last_checked"] = json!(old.clone());
+            m["retrieved"] = json!(old.clone());
+        }), "past its recheck window");
+        let recent = delphi_core::time::format_unix_millis(now - 29 * 86_400, 0);
+        assert!(with(&|m| {
+            m["last_checked"] = json!(recent.clone());
+            m["retrieved"] = json!(recent.clone());
+        }), "inside its window");
+        assert!(!with(&|m| {
+            m.as_object_mut().unwrap().remove("last_checked");
+            m.as_object_mut().unwrap().remove("retrieved");
+        }), "a record that does not say when it was checked");
+        assert_eq!(l.checked_age(&wiki, now + 3 * 86_400), Some((3, true)));
+        assert_eq!(l.checked_age(&wiki, now + 40 * 86_400), Some((40, false)));
     }
 
     /// `specs/112` §4 item 1: the page-per-source writer is one step of the one runner. A page whose trusted-list entry allows reuse

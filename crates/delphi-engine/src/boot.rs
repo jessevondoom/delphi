@@ -86,6 +86,15 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(n) = root.get("research").and_then(|r| r.get("thin_below")).and_then(|v| v.as_integer()).filter(|v| *v >= 1) {
         s.thin_below = n.min(50) as usize;
     }
+    // `specs/114` §3 item 3: when a new question continues a topic Delphi has. A share of the question's content words (above 0, at
+    // most 1) and a retrieval score (0 to 1); anything else keeps the default.
+    let bar = |key: &str| root.get("research").and_then(|r| r.get(key)).and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64)));
+    if let Some(x) = bar("continue_overlap").filter(|x| *x > 0.0 && *x <= 1.0) {
+        s.continue_bar.overlap = x;
+    }
+    if let Some(x) = bar("continue_score").filter(|x| (0.0..=1.0).contains(x)) {
+        s.continue_bar.score = x;
+    }
     // Due topics (`specs/112` §5.2): the days after which a topic's newest run is old, and the bounds a record's own figure is
     // held to. Each is 1 to 3650 days; anything else keeps the default, and bounds the wrong way round keep both defaults.
     if let Some(r) = root.get("research") {
@@ -689,6 +698,16 @@ mod tests {
         assert_eq!(settings_from(&toml::from_str("[research]\nthin_below = 500\n").unwrap()).thin_below, 50);
         for bad in ["thin_below = 0", "thin_below = -2", "thin_below = \"many\""] {
             assert_eq!(settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).thin_below, 3, "{bad}");
+        }
+        // `[research] continue_overlap`, `continue_score` (specs/114 §3 item 3): defaults 0.5 and 0.003; a share above 0 and at most 1,
+        // a score from 0 to 1; anything else keeps the default.
+        let bar = |toml_text: &str| settings_from(&toml::from_str(toml_text).unwrap()).continue_bar;
+        assert_eq!((bar("").overlap, bar("").score), (0.5, 0.003));
+        assert_eq!((bar("[research]\ncontinue_overlap = 0.8\ncontinue_score = 0.1\n").overlap, bar("[research]\ncontinue_overlap = 0.8\ncontinue_score = 0.1\n").score), (0.8, 0.1));
+        assert_eq!(bar("[research]\ncontinue_overlap = 1\n").overlap, 1.0, "a whole number is read");
+        for bad in ["continue_overlap = 0", "continue_overlap = 1.5", "continue_overlap = \"most\"", "continue_score = -0.1", "continue_score = 2"] {
+            let b = bar(&format!("[research]\n{bad}\n"));
+            assert_eq!((b.overlap, b.score), (0.5, 0.003), "{bad}");
         }
         assert_eq!(settings_from(&toml::from_str("[seats]\nrequire_families = 0\n").unwrap()).require_families, None, "0 is not a requirement");
     }

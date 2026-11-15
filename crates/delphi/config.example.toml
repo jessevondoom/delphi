@@ -383,6 +383,16 @@ sandbox = "off"
 # refresh_days = 90
 # refresh_days_min = 7
 # refresh_days_max = 730
+#
+# Known first (specs/114 section 3). Before a research run searches, it looks up what Delphi already holds on the question, as the
+# asker could have found it by searching. When a topic Delphi has overlaps the new question strongly, the run continues that topic
+# instead of starting a new one, unless the request says `new: true`. "Strongly" is both of these: the topic's question has at least
+# continue_overlap of the new question's content words (above 0, at most 1), and the topic's best search result scores at least
+# continue_score (0 to 1; the index's fused rank score: about 0.003 for a result that holds every word of a question and ranks first by
+# keywords, 0.02 to 0.05 for one that is near the question by meaning when an embedding model is installed).
+# [research]
+# continue_overlap = 0.5
+# continue_score = 0.003
 
 # Library acquisition (specs/055 section 8): once a day, the library scout proposes public-domain and research sources that match your projects
 # and these interests, as ONE batch in the digest. Nothing is fetched until you accept (or a standing rule covers it). Ratified, because it

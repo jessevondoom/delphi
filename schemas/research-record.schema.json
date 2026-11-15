@@ -57,10 +57,59 @@
           "source_id": { "type": "string", "maxLength": 80, "description": "The library source the page became." },
           "content_hash": { "type": ["string", "null"], "maxLength": 80, "description": "`sha256:<hex>` of what was read, as the library holds it." },
           "kept": { "enum": ["full", "excerpts", "pointer"], "description": "What the library kept of the page (specs/112 section 4 item 1): `full` when the licence allowed the text to be kept, else excerpts or a pointer." },
-          "outcome": { "enum": ["added", "new_version", "unchanged", "kept_richer"], "description": "What the capture did: a new source, a new version of one, nothing (the same content), or nothing because the stored capture holds more." }
+          "outcome": { "enum": ["added", "new_version", "unchanged", "kept_richer"], "description": "What the capture did: a new source, a new version of one, nothing (the same content), or nothing because the stored capture holds more." },
+          "held": { "const": true, "description": "The page was read from the library and not fetched (specs/114 section 3 item 4): the library held it, unchanged and checked within its recheck window." }
         },
         "additionalProperties": false
       }
+    },
+    "known": {
+      "type": "object",
+      "description": "What Delphi already held on the question before the newest run searched (specs/114 section 3), as the asker's own search found it: never more than the asker could have found by searching. Data, like the rest of the record.",
+      "required": ["run", "claims", "topics", "sources", "kb"],
+      "properties": {
+        "run": { "$ref": "#/$defs/run_id" },
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "status", "text"],
+            "properties": { "id": { "type": "string", "maxLength": 40 }, "status": { "type": "string", "maxLength": 20 }, "text": { "type": "string", "maxLength": 240, "description": "The claim as one line. Never its quote." } },
+            "additionalProperties": false
+          }
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "question", "overlap", "score", "workspace"],
+            "properties": {
+              "id": { "type": "string", "maxLength": 60 },
+              "question": { "type": "string", "maxLength": 240 },
+              "overlap": { "type": "number", "minimum": 0, "maximum": 1, "description": "The share of the new question's content words the topic's question has." },
+              "score": { "type": ["number", "null"], "description": "The retrieval score of the topic's best result." },
+              "workspace": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "url", "age_days", "fresh"],
+            "properties": {
+              "id": { "type": "string", "maxLength": 80 },
+              "url": { "type": "string", "maxLength": 300 },
+              "age_days": { "type": ["integer", "null"], "minimum": 0, "description": "Days since the library last checked the source." },
+              "fresh": { "type": "boolean", "description": "Its text is kept and it was checked within its recheck window." }
+            },
+            "additionalProperties": false
+          }
+        },
+        "kb": { "type": "array", "items": { "type": "string", "maxLength": 200 }, "description": "Pointers to what the knowledge base holds on the question; no text." }
+      },
+      "additionalProperties": false
     },
     "refused": {
       "type": "array",

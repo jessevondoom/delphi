@@ -754,6 +754,24 @@ impl EngineService {
             let _ = tokio::task::spawn_blocking(move || crate::research_asks::record(&wsd, crate::research_asks::Outcome::NoEngine, asked_at)).await;
             return Err(err(code::INVALID_PARAMS, crate::research_setup::no_engine_message()));
         }
+        // Known first (`specs/114` §3): what Delphi already holds on the question, searched as this host session may search (its
+        // folder's project, and nothing a host's own `search_kb` would not return). A topic that overlaps the question strongly is
+        // continued instead of a new one being started, unless the request says `new: true`.
+        let known = Arc::new(crate::research_known::LiveKnown::new(&ws.dir, &ws.home, crate::research_known::Caller::Host { cwd: c.cwd.clone() }));
+        let (again, question, offered) = match again {
+            None if p["new"] != true => {
+                let root = self.host_project(&c.cwd).map(|(_, root)| root).unwrap_or_else(|| ws.dir.clone());
+                match self.topic_to_continue(&known, &root, &question).await {
+                    Some((topic, of_record)) => {
+                        let q = self.engine.secrets.redact(&of_record);
+                        (Some((topic, None, of_record)), q, true)
+                    }
+                    None => (None, question, false),
+                }
+            }
+            again => (again, question, false),
+        };
+        let continued = again.as_ref().map(|(t, _, _)| t.id.clone());
         let (e, wsd, home) = (self.engine.clone(), ws.dir.clone(), ws.home.clone());
         let (list, engines, transport, identifiers) = tokio::task::spawn_blocking(move || -> Result<_, String> {
             let loaded = (crate::research_setup::lists(&wsd, &home)?, crate::research_setup::engines(&e), delphi_adapter::research::transport::HttpTransport::new()?, crate::query_guard::identifiers(&wsd));
@@ -803,8 +821,27 @@ impl EngineService {
         // Spec 101 §3: searches the host says it ran. Only `tool`, `query` and `hits` are read; they are logged as declared and count as nothing.
         let host_searches = crate::search_log::parse_declared(&p["host_searches"]);
         let web = self.run_web(RunWeb { list, engines, transport: Arc::new(transport), identifiers });
-        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: false, after: None, resume }, web);
-        Ok(json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."}))
+        let asked = offered.then(|| question.clone());
+        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: false, after: None, resume, known: Some(known) }, web);
+        let mut reply = json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."});
+        if let Some(id) = continued {
+            reply["continued"] = json!(true);
+            reply["topic_id"] = json!(id);
+        }
+        // `specs/114` §3 item 3: the run was offered a topic Delphi already has. The question it runs with is that topic's own.
+        if let Some(q) = asked {
+            reply["question"] = json!(q);
+            reply["continue_note"] = json!("your question overlaps a research topic Delphi already has, so this run continues that topic, with the topic's own question, from what it did not find. Pass `new: true` to research your question as a topic of its own.");
+        }
+        Ok(reply)
+    }
+
+    /// The topic a new question continues (`specs/114` §3 item 3), found with the asker's own search on a blocking thread:
+    /// `research_known::topic_to_continue`. `root` is where the question's own topic would be written.
+    async fn topic_to_continue(&self, known: &Arc<crate::research_known::LiveKnown>, root: &std::path::Path, question: &str) -> Option<(crate::research_record::Topic, String)> {
+        use crate::research_method::KnownFirst;
+        let (known, wsd, root, question, bar) = (known.clone(), self.engine.ws.dir.clone(), root.to_path_buf(), question.to_string(), self.engine.settings.continue_bar);
+        tokio::task::spawn_blocking(move || crate::research_known::topic_to_continue(&known.find(&question), &wsd, &root, &question, &bar)).await.ok().flatten()
     }
 
     /// The web a run reaches: what was loaded from the workspace. In tests, the canned engine and list a test set instead.
@@ -833,7 +870,7 @@ impl EngineService {
     /// record and the same claims in the library. The job waits for one of the running slots of the one queue.
     fn queue_run(&self, ask: RunAsk, web: RunWeb) {
         let ws = &self.engine.ws;
-        let RunAsk { question: q, depth, run_id: research_id, session, label, topic, project, host_searches, mission, pictures, after, resume } = ask;
+        let RunAsk { question: q, depth, run_id: research_id, session, label, topic, project, host_searches, mission, pictures, after, resume, known } = ask;
         let RunWeb { list, engines, transport, identifiers } = web;
         let recorder = topic.clone().map(|topic| crate::research_record::RunRecorder { topic, run_id: research_id.clone() });
         // `specs/112` §3.2: the claims the run keeps name its topic, and its project when it has one.
@@ -868,7 +905,13 @@ impl EngineService {
                 let b = &engine.settings.chain;
                 crate::research_chain::ChainPlan { cites: c, depth: b.depth, fanout: b.fanout, max_per_seed: b.max_per_seed, max_calls: b.max_calls, max_pages: b.max_pages }
             });
-            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain, record: recorder.as_ref().map(|r| r as &dyn crate::research_run::Recorder), limits, resume: resume.as_ref() };
+            // Known first (`specs/114` §3): the asker's own search for the question, made here on a blocking thread and kept, so the
+            // runner reads its answer without waiting on the index.
+            if let Some(k) = &known {
+                let (k, question) = (k.clone(), q.clone());
+                let _ = tokio::task::spawn_blocking(move || crate::research_method::KnownFirst::find(k.as_ref(), &question)).await;
+            }
+            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain, record: recorder.as_ref().map(|r| r as &dyn crate::research_run::Recorder), limits, resume: resume.as_ref(), known: known.as_deref().map(|k| k as &dyn crate::research_method::KnownFirst) };
             let out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
             if let Some(m) = &mission {
                 let urls: Vec<Value> = web.observed.snapshot().into_iter().map(|(url, via)| json!({"url": url, "via": via})).collect();
@@ -3601,7 +3644,8 @@ impl EngineService {
                 crate::scope::project_root(&self.engine.ws.dir, &id)
             }),
         };
-        self.launch_research(topic, named, None, None).await
+        // `specs/114` §3 item 3: `new: true` starts a topic of its own even when one Delphi has overlaps the question strongly.
+        self.launch_research(topic, named, None, None, p["new"] == true).await
     }
 
     /// `research.continue {topic_id, note?}` (`specs/112` §5.1): a new run on a topic that has a record. It begins from the
@@ -3629,7 +3673,7 @@ impl EngineService {
         .await
         .map_err(|e| err(-32000, e.to_string()))?;
         let Some((question, root, topic)) = found else { return Err(err(code::NOT_FOUND, "no research topic has that id: `delphi research topics` lists them")) };
-        self.launch_research(question, root, None, Some((topic, note))).await
+        self.launch_research(question, root, None, Some((topic, note)), false).await
     }
 
     /// An approved `request_research` (`specs/058` §20): the job runs in the scope the mission was stamped with, and the log says what happened.
@@ -3637,7 +3681,7 @@ impl EngineService {
     async fn agent_research(&self, mission: &str, topic: &str, by: &str) {
         let ws = &self.engine.ws.dir;
         let root = crate::scope::mission_scope(ws, &ws.join("local/missions").join(mission)).and_then(|id| crate::scope::project_root(ws, &id));
-        let outcome = self.launch_research(topic.to_string(), root, Some((mission.to_string(), by.to_string())), None).await;
+        let outcome = self.launch_research(topic.to_string(), root, Some((mission.to_string(), by.to_string())), None, false).await;
         if let Ok(m) = self.mission_at(Some(mission), None).await {
             let (kind, payload) = match outcome {
                 Ok(_) => ("research.started", json!({"topic": topic, "by": by})),
@@ -3654,7 +3698,11 @@ impl EngineService {
     /// its record is then kept in the project's folder and its claims are scoped to the project (what `Dest::Project` was).
     /// One console run at a time: `research.status` and `research.cancel` name no job, and the console draws one.
     /// `again` is the topic a run continues, with its note (`specs/112` §5.1); `topic` is then that record's question.
-    async fn launch_research(&self, topic: String, project: Option<std::path::PathBuf>, report_to: Option<(String, String)>, again: Option<(crate::research_record::Topic, Option<String>)>) -> RpcOutcome {
+    ///
+    /// Known first (`specs/114` §3): the run looks up what Delphi holds on the question as whoever asked may search (the operator, or
+    /// the role of the agent that asked). Unless `fresh` (the request said `new: true`), a topic Delphi has that overlaps the
+    /// question strongly is continued instead of a new one being started; the run's question is then that topic's own.
+    async fn launch_research(&self, topic: String, project: Option<std::path::PathBuf>, report_to: Option<(String, String)>, again: Option<(crate::research_record::Topic, Option<String>)>, fresh: bool) -> RpcOutcome {
         use crate::research_console as rc;
         use crate::research_record as rr;
         if self.console_run_going() {
@@ -3664,6 +3712,22 @@ impl EngineService {
             return Err(err(-32000, crate::research_setup::no_engine_message()));
         }
         let ws = &self.engine.ws;
+        let caller = match &report_to {
+            Some((_, role)) => crate::research_known::Caller::Role(role.clone()),
+            None => crate::research_known::Caller::Operator,
+        };
+        let known = Arc::new(crate::research_known::LiveKnown::new(&ws.dir, &ws.home, caller));
+        let (topic, again, offered) = match again {
+            None if !fresh => {
+                let asked = self.engine.secrets.redact(&topic);
+                let root = project.clone().unwrap_or_else(|| ws.dir.clone());
+                match self.topic_to_continue(&known, &root, &asked).await {
+                    Some((t, of_record)) => (of_record, Some((t, None)), true),
+                    None => (topic, None, false),
+                }
+            }
+            again => (topic, again, false),
+        };
         let question = self.engine.secrets.redact(&topic);
         let web = self.load_run_web().await.map_err(|m| err(-32000, m))?;
         let by = report_to.as_ref().map(|(_, by)| by.clone());
@@ -3719,8 +3783,8 @@ impl EngineService {
                 }
             }
         });
-        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: true, after: Some(after), resume }, web);
-        Ok(json!({"started": true, "research_id": run_id, "topic_id": topic_id, "topic": topic, "continued": again.is_some()}))
+        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: true, after: Some(after), resume, known: Some(known) }, web);
+        Ok(json!({"started": true, "research_id": run_id, "topic_id": topic_id, "topic": topic, "continued": again.is_some(), "offered": offered}))
     }
 
     /// Is this console run still queued or running in the one queue?
@@ -4438,6 +4502,8 @@ struct RunAsk {
     after: Option<AfterRun>,
     /// The run continues its topic (`specs/112` §5.1): the record's gaps, the pages it holds, and the note.
     resume: Option<crate::research_run::Resume>,
+    /// The search the run makes before its first query, as whoever asked may search (`specs/114` §3).
+    known: Option<Arc<crate::research_known::LiveKnown>>,
 }
 
 /// Tests only: a transport, the engines to ask through it, and the text of the trusted list.
@@ -8408,14 +8474,6 @@ mod tests {
             assert!(topic.answer().contains("aspirin lowers fever"), "{who}: {}", topic.answer());
             run
         };
-        // The console.
-        let console = CallContext { scope: Scope::Console, client_id: 2 };
-        let started = svc.research_start(json!({"topic": question}), console).await.unwrap();
-        assert_eq!((started["started"].as_bool(), started["topic_id"].as_str()), (Some(true), Some(topic.id.as_str())), "{started}");
-        let st = r4_console_done(&svc).await;
-        assert_eq!((st["phase"].as_str(), st["topic_id"].as_str(), st["error"].is_null()), (Some("done"), Some(topic.id.as_str()), true), "{st}");
-        assert_eq!((st["report"]["new"].as_array().unwrap().len(), st["report"]["claims"].as_u64(), st["report"]["topic_id"].as_str()), (1, Some(1), Some(topic.id.as_str())), "what the console is told at the end: {st}");
-        assert_eq!(check("console", 1)["asked_by"], json!({"kind": "operator", "label": "operator"}));
         // An inside agent, after the operator's card (`tools.rs` classifies the tool Amber; this is what an approval starts).
         svc.agent_research("m1", question, "architect").await;
         assert_eq!(events_of(&f, "research.started").len(), 1, "{:?}", events_of(&f, "research.refused"));
@@ -8424,7 +8482,17 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "the agent's run never wrote its outcome");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert_eq!(check("agent", 2)["asked_by"], json!({"kind": "role", "label": "architect"}));
+        assert_eq!(check("agent", 1)["asked_by"], json!({"kind": "role", "label": "architect"}));
+        // The console. The topic exists by now, and a question Delphi has a topic for is continued (`specs/114` §3 item 3): `new: true`
+        // asks for a run of its own, which is what this test compares.
+        let console = CallContext { scope: Scope::Console, client_id: 2 };
+        let started = svc.research_start(json!({"topic": question, "new": true}), console).await.unwrap();
+        assert_eq!((started["started"].as_bool(), started["topic_id"].as_str()), (Some(true), Some(topic.id.as_str())), "{started}");
+        assert_eq!((started["continued"].as_bool(), started["offered"].as_bool()), (Some(false), Some(false)), "{started}");
+        let st = r4_console_done(&svc).await;
+        assert_eq!((st["phase"].as_str(), st["topic_id"].as_str(), st["error"].is_null()), (Some("done"), Some(topic.id.as_str()), true), "{st}");
+        assert_eq!((st["report"]["new"].as_array().unwrap().len(), st["report"]["unchanged"].as_u64(), st["report"]["claims"].as_u64(), st["report"]["topic_id"].as_str()), (0, Some(1), Some(1), Some(topic.id.as_str())), "what the console is told at the end (the page was the agent's run's already): {st}");
+        assert_eq!(check("console", 2)["asked_by"], json!({"kind": "operator", "label": "operator"}));
         let told = events_of(&f, "research.finished").into_iter().find(|e| e.payload["by"] == "architect").unwrap().payload;
         assert_eq!((told["topic_id"].as_str(), told["outcome"].as_str(), told["claims"].as_u64()), (Some(topic.id.as_str()), Some("done"), Some(1)), "what the agent is told at its next span: {told}");
         let (_, note) = crate::research_report::undelivered(&f.m.replay().unwrap(), "architect").unwrap();
@@ -8435,8 +8503,9 @@ mod tests {
             let mut c = Client::connect(&hsock).unwrap();
             c.set_read_timeout(Some(Duration::from_secs(40))).unwrap();
             c.hello(&htok).unwrap();
-            let p = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "question": q});
+            let p = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "question": q, "new": true});
             let r = c.call("host.request_research", p.clone()).unwrap();
+            assert!(r.get("continued").is_none(), "`new: true` starts a run of its own: {r}");
             let mut ask = p.clone();
             ask["research_id"] = r["research_id"].clone();
             ask["wait"] = json!(true);
@@ -8461,6 +8530,84 @@ mod tests {
         // A host cannot read the console's run: its job and its pointer are the daemon's own session's.
         let run_id = started["research_id"].as_str().unwrap().to_string();
         assert_eq!(rpc_code(host_research_as(&s, "abcdef0123456789", &f.root, "host.research_result", &run_id).await), Some(code::INVALID_PARAMS));
+    }
+
+    /// `specs/114` §3, through the daemon: a run looks up what Delphi holds before it searches, writes it to its record as `known`
+    /// and reports it as `known_before`; a question that overlaps a topic Delphi has continues that topic, with the topic's own
+    /// question, for the console and for a host alike; `new: true` starts a topic of its own.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_question_that_overlaps_a_topic_continues_it_unless_new_and_the_record_says_what_was_known() {
+        use crate::research_record as rr;
+        let f = setup((0..24).map(|_| Step::text(R4_CLAIM)).collect(), 5.0, |_| {});
+        let s = serve(&f).await;
+        let svc = s.svc.clone();
+        svc.adopt(f.m.clone());
+        r4_web(&svc, &["https://m2-known.example/study"]);
+        let console = CallContext { scope: Scope::Console, client_id: 2 };
+        let (first, near) = ("does aspirin lower fever in adults", "does aspirin lower fever in older adults");
+        let started = svc.research_start(json!({"topic": first}), console).await.unwrap();
+        assert_eq!((started["continued"].as_bool(), started["offered"].as_bool()), (Some(false), Some(false)), "nothing is held yet: {started}");
+        r4_console_done(&svc).await;
+        let id = started["topic_id"].as_str().unwrap().to_string();
+        let topic = rr::find(&f.engine.ws.dir, &id).unwrap();
+        let rec = topic.read().unwrap();
+        assert_eq!(rec["known"]["claims"], json!([]), "the first run found nothing held, and its record says so: {rec}");
+        assert_eq!(rec["known"]["run"], rec["runs"][0]["run_id"]);
+
+        // A question most of whose words the topic has: the run continues the topic and asks the topic's own question.
+        let again = svc.research_start(json!({"topic": near}), console).await.unwrap();
+        assert_eq!((again["topic_id"].as_str(), again["topic"].as_str(), again["continued"].as_bool(), again["offered"].as_bool()), (Some(id.as_str()), Some(first), Some(true), Some(true)), "{again}");
+        r4_console_done(&svc).await;
+        let rec = topic.read().unwrap();
+        let runs = rec["runs"].as_array().unwrap();
+        assert_eq!((runs.len(), runs[1]["continued"].as_bool(), runs[1]["state"].as_str()), (2, Some(true), Some("done")), "{rec}");
+        assert!(rr::Topic::at(&f.engine.ws.dir, &rr::topic_id(near)).is_none_or(|t| !t.exists()), "no topic was started for the new wording");
+        // What the second run knew before it searched: the first run's claim and its topic, as the operator's search finds them.
+        assert_eq!(rec["known"]["run"], runs[1]["run_id"], "{rec}");
+        assert!(rec["known"]["topics"].as_array().unwrap().iter().any(|t| t["id"] == id.as_str()), "{rec}");
+        let known_claims = rec["known"]["claims"].as_array().unwrap();
+        assert_eq!((known_claims.len(), known_claims[0]["text"].as_str(), known_claims[0]["status"].as_str()), (1, Some("aspirin lowers fever"), Some("noted")), "{rec}");
+        assert_eq!(rec["result"]["known_before"]["claims"], rec["known"]["claims"], "the result reports the same list: {rec}");
+        let schema: Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/research-record.schema.json")).unwrap()).unwrap();
+        follows(&schema, &schema, &rec, "record").unwrap_or_else(|e| panic!("{e}\n{rec}"));
+
+        // A host that asks a question the first topic covers is offered that topic; with `new: true` it is not.
+        let (hsock, htok, cwd) = (s.host_sock.clone(), s.host.clone(), f.root.to_string_lossy().to_string());
+        let (offered, fresh, result) = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(40))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "question": "does aspirin lower a fever in adults", "depth": "quick"});
+            let offered = c.call("host.request_research", p.clone()).unwrap();
+            let mut ask = p.clone();
+            ask["research_id"] = offered["research_id"].clone();
+            ask["wait"] = json!(true);
+            let mut done = c.call("host.research_result", ask.clone()).unwrap();
+            for _ in 0..20 {
+                if done["status"] == "done" {
+                    break;
+                }
+                done = c.call("host.research_result", ask.clone()).unwrap();
+            }
+            let mut q = p.clone();
+            q["new"] = json!(true);
+            let fresh = c.call("host.request_research", q).unwrap();
+            (offered, fresh, done)
+        })
+        .await;
+        assert_eq!((offered["continued"].as_bool(), offered["topic_id"].as_str(), offered["question"].as_str()), (Some(true), Some(id.as_str()), Some(first)), "{offered}");
+        assert!(offered["continue_note"].as_str().is_some_and(|n| n.contains("new: true")), "{offered}");
+        assert!(fresh.get("continued").is_none() && fresh.get("continue_note").is_none(), "{fresh}");
+        // What the host is told was known is what its own search returns: the open topic and its claim.
+        assert_eq!(result["status"], "done", "{result}");
+        assert!(result["known_before"]["topics"].as_array().unwrap().iter().any(|t| t["id"] == id.as_str()), "{result}");
+        assert!(result["known_before"]["claims"].as_array().unwrap().iter().all(|c| c["text"] == "aspirin lowers fever"), "{result}");
+
+        // The console, with `new: true`: a topic of its own.
+        let own = svc.research_start(json!({"topic": near, "new": true}), console).await.unwrap();
+        assert_eq!((own["continued"].as_bool(), own["offered"].as_bool()), (Some(false), Some(false)), "{own}");
+        assert_eq!(own["topic_id"].as_str(), Some(rr::topic_id(near).as_str()), "{own}");
+        r4_console_done(&svc).await;
     }
 
     /// What the console kept from its own job, on the one runner: one run at a time (the console draws one job and its status and
@@ -8546,7 +8693,7 @@ mod tests {
         let lib = crate::library::Library::in_home(&home);
         let proj = std::fs::canonicalize(tempfile::tempdir().unwrap().keep()).unwrap();
         std::fs::write(ws.join("local/projects.json"), json!({"schema": 1, "projects": {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {"project_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "root": proj, "display_name": "proj"}}}).to_string()).unwrap();
-        let started = svc.launch_research("does aspirin lower fever".to_string(), Some(proj.clone()), None, None).await.unwrap();
+        let started = svc.launch_research("does aspirin lower fever".to_string(), Some(proj.clone()), None, None, false).await.unwrap();
         let st = r4_console_done(&svc).await;
         let id = started["topic_id"].as_str().unwrap();
         let rec: Value = serde_json::from_str(&std::fs::read_to_string(proj.join("research/topics").join(id).join("record.json")).expect("the project's own record")).unwrap();

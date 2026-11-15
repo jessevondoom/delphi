@@ -406,6 +406,24 @@ impl Topic {
         self.update(|rec| Self::set_run(rec, run_id, |run| run["unchanged"] = json!(run["unchanged"].as_u64().unwrap_or(0) + 1)))
     }
 
+    /// What Delphi already held on the question before the run searched (`specs/114` §3 item 2): claim ids with their status,
+    /// topics that overlap, sources held with their age, as the asker's own search found them (`research_method::Known::to_json`).
+    /// The newest run's replaces an earlier one's. It is data, like the rest of the record.
+    pub fn known(&self, run_id: &str, known: &Value) -> Result<(), String> {
+        let list = |k: &str| -> Vec<Value> { known[k].as_array().map(|a| a.iter().take(LIST_CAP).cloned().collect()).unwrap_or_default() };
+        self.update(|rec| rec["known"] = json!({"run": run_id, "claims": list("claims"), "topics": list("topics"), "sources": list("sources"), "kb": list("kb")}))
+    }
+
+    /// A page already in the record was read from the library and not fetched (`specs/114` §3 item 4).
+    pub fn held(&self, url: &str) -> Result<(), String> {
+        self.update(|rec| {
+            let url = clip(url, TEXT_CAP);
+            if let Some(p) = rec["pages"].as_array_mut().and_then(|pages| pages.iter_mut().find(|p| p["url"].as_str() == Some(url.as_str()))) {
+                p["held"] = json!(true);
+            }
+        })
+    }
+
     /// One page the run did not read, and the fixed word for why.
     pub fn refused(&self, run_id: &str, url: &str, why: &str) -> Result<(), String> {
         self.update(|rec| Self::push(rec, "refused", json!({"run": run_id, "url": clip(url, TEXT_CAP), "reason": clip(why, 40)})))
@@ -767,6 +785,14 @@ impl crate::research_run::Recorder for RunRecorder {
 
     fn unchanged(&self, _url: &str) {
         let _ = self.topic.unchanged(&self.run_id);
+    }
+
+    fn known(&self, known: &Value) {
+        let _ = self.topic.known(&self.run_id, known);
+    }
+
+    fn held(&self, url: &str) {
+        let _ = self.topic.held(url);
     }
 }
 

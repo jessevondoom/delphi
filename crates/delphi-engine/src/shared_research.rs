@@ -105,7 +105,24 @@ pub struct HostFound {
 /// the index cannot be read. The preview is the index's own three lines, fenced under the result's label: this is data, never
 /// instructions.
 pub fn host_search(ws_dir: &Path, home: &Path, db: &Path, cwd: &Path, query: &str, limit: usize) -> HostFound {
-    let Some(own) = scope::resolve(ws_dir, cwd).project.filter(|p| p.as_str() != scope::DEFAULT_PROJECT && scope::project_root(ws_dir, p).is_some()) else { return HostFound::default() };
+    let (hits, withheld) = host_hits(ws_dir, home, db, cwd, query, limit);
+    let mut out = HostFound { withheld, ..Default::default() };
+    for h in &hits {
+        out.results.push(host_result(ws_dir, h));
+        if let Some(entry) = mark_entry(&h.rel_path).filter(|_| h.internal) {
+            if !out.internal.contains(&entry) {
+                out.internal.push(entry);
+            }
+        }
+    }
+    out
+}
+
+/// The results [`host_search`] is made of, as the index gave them, and how many shared results were withheld: the one search a
+/// host's project research is read through. Another reader of it (`research_known`, `specs/114` §3) is given the same rows and
+/// no others, and whoever hands a row that is `internal` to a session marks that session.
+pub fn host_hits(ws_dir: &Path, home: &Path, db: &Path, cwd: &Path, query: &str, limit: usize) -> (Vec<Hit>, usize) {
+    let Some(own) = scope::resolve(ws_dir, cwd).project.filter(|p| p.as_str() != scope::DEFAULT_PROJECT && scope::project_root(ws_dir, p).is_some()) else { return Default::default() };
     let shared = SharedResearch { only: true, ..view(ws_dir, &own).unwrap_or_default() };
     let opts = SearchOpts {
         role: None,
@@ -120,31 +137,24 @@ pub fn host_search(ws_dir: &Path, home: &Path, db: &Path, cwd: &Path, query: &st
     // Two searches, one answer. Files and claims first: every row they may return is in a project's research scope, so the vector
     // leg takes its nearest among exactly those (`specs/115` §3 item 7). Findings apart: their project is the mission's stamp, so
     // they are judged after the cut and must not bring the home layer's vectors into the first search's candidates.
-    let Ok(mut found) = crate::retrieval::search(home, db, query, opts.clone()) else { return HostFound::default() };
+    let Ok(mut found) = crate::retrieval::search(home, db, query, opts.clone()) else { return Default::default() };
     if let Ok(findings) = crate::retrieval::search(home, db, query, SearchOpts { zones: Some(vec![crate::finding_record::ZONE]), ..opts }) {
         found.withheld += findings.withheld;
         found.hits.extend(findings.hits);
         found.hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     }
-    let mut out = HostFound { withheld: found.withheld, ..Default::default() };
     // Kept here as well as in the filter, so a change to the filter cannot widen this answer by itself: a row of another project
     // only when the index says it is shared, and of this project only its own claims. A superseded or draft document is not offered.
     let own_claims = format!("research/projects/{}/", own.as_str());
-    let mut seen: Vec<&str> = Vec::new();
-    for h in found.hits.iter().filter(|h| (h.shared || h.rel_path.starts_with(&own_claims)) && h.doc_status == "active") {
+    let mut out: Vec<Hit> = Vec::new();
+    for h in found.hits.into_iter().filter(|h| (h.shared || h.rel_path.starts_with(&own_claims)) && h.doc_status == "active") {
         // One result a document: its best passage.
-        if out.results.len() >= limit || seen.contains(&h.rel_path.as_str()) {
+        if out.len() >= limit || out.iter().any(|seen| seen.rel_path == h.rel_path) {
             continue;
         }
-        seen.push(&h.rel_path);
-        out.results.push(host_result(ws_dir, h));
-        if let Some(entry) = mark_entry(&h.rel_path).filter(|_| h.internal) {
-            if !out.internal.contains(&entry) {
-                out.internal.push(entry);
-            }
-        }
+        out.push(h);
     }
-    out
+    (out, found.withheld)
 }
 
 fn host_result(ws_dir: &Path, h: &Hit) -> Value {

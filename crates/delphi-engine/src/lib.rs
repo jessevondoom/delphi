@@ -185,6 +185,8 @@ pub mod research_migrate;
 pub mod research_observed;
 pub mod research_record;
 pub mod research_plan;
+pub mod research_method;
+pub mod research_known;
 pub mod search_log;
 pub mod doi;
 pub mod retractions;

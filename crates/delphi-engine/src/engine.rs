@@ -118,6 +118,9 @@ pub struct Settings {
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
+    /// `[research] continue_overlap` and `continue_score` (`specs/114` §3 item 3): when a new question is the same research as a
+    /// topic Delphi has, so the run continues that topic. Defaults: half of the question's content words, a retrieval score of 0.003.
+    pub continue_bar: crate::research_method::ContinueBar,
     /// `[research] archive_fallback` and `archive_endpoint` (`specs/101` §5, §8): look for an archived copy of a public source the
     /// daemon fetched and now finds gone. Off by default; the explicit `delphi sources archive` command works either way.
     pub archive: crate::library::ArchiveConfig,
@@ -219,6 +222,7 @@ impl Default for Settings {
             max_foreign_tokens: 100_000,
             standing_foreign_tokens: 0,
             thin_below: 3,
+            continue_bar: Default::default(),
             archive: Default::default(),
             chain: Default::default(),
             wider_fetch: Default::default(),

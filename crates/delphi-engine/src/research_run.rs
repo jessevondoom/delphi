@@ -14,6 +14,7 @@
 use crate::corroboration::{self, Cite, Params, Support};
 use crate::research_chain::{ChainPlan, Direction};
 use crate::research_jobs::{Egress, Finish, JobCtx};
+use crate::research_method::{Known, KnownFirst};
 use crate::research_plan::{canonical_url, clean_query, claim_fingerprint, widen_to_web, Added, ClaimSet, QueryKind, Seen};
 use crate::search_log::{HostSearch, Purpose, SearchLog, Source};
 use delphi_adapter::research::search::Row;
@@ -138,12 +139,25 @@ pub trait Library: Send + Sync {
     fn is_private(&self, _source_id: &str) -> bool {
         false
     }
+    /// The page at this address as the library already holds it, when it may stand in for a fetch (`specs/114` §3 item 4): the
+    /// source is public, its text is kept whole, and it was checked within its recheck window. The run then reads the kept text
+    /// and makes no request for the page. `None` for anything else, and the page is fetched as before. The default holds nothing.
+    fn held_fresh(&self, _url: &str) -> Option<HeldPage> {
+        None
+    }
     /// The DOI of a source this run captured, for citation chaining (`specs/101` §6), and only when the source may go out through the
     /// citation lookup: its record is readable and public (`egress::check` with `Channel::CitationLookup`) and names a DOI. `None` for a
     /// private source, a record that cannot be read, or a source with no DOI. Deny by default: this default says none.
     fn chainable_doi(&self, _source_id: &str) -> Option<String> {
         None
     }
+}
+
+/// A page the library holds, read in place of a fetch ([`Library::held_fresh`]).
+#[derive(Debug, Clone)]
+pub struct HeldPage {
+    pub source_id: String,
+    pub text: String,
 }
 
 /// What a run tells its record as it goes (`specs/112` §2.4): the plan, each query sent, each page read and kept, each page it did
@@ -164,6 +178,10 @@ pub trait Recorder: Send + Sync {
     fn refused(&self, _url: &str, _why: &str) {}
     /// A page the topic already holds was fetched and its content has not changed: it is not read again (`specs/112` §5.1).
     fn unchanged(&self, _url: &str) {}
+    /// What Delphi already held on the question before the run searched (`specs/114` §3 item 2): `Known::to_json`.
+    fn known(&self, _known: &Value) {}
+    /// A page the run just reported with [`page`](Recorder::page) was read from the library and not fetched (`specs/114` §3 item 4).
+    fn held(&self, _url: &str) {}
 }
 
 /// The limits of a research run: one table for every caller, the console, an inside agent and a host (`specs/112` §4 item 6,
@@ -240,6 +258,8 @@ pub struct Deps<'a> {
     pub limits: &'a Limits,
     /// The run continues a topic (`specs/112` §5.1). `None` is a run of its own.
     pub resume: Option<&'a Resume>,
+    /// The search the run makes before its first query, with the caller's visibility (`specs/114` §3). `None` looks nothing up.
+    pub known: Option<&'a dyn KnownFirst>,
 }
 
 /// What a run that continues a topic starts from (`specs/112` §5.1): the record's gaps, the pages it already holds, and the
@@ -442,16 +462,26 @@ fn coverage_report(r: &Rungs, kb: usize, trusted_claims: usize, web_claims: usiz
 /// `Some` when the page was kept as a source (whether or not any claim came out of it), `None` when the library refused it. Either
 /// way the run's record is told (`specs/112` §2.2). What `Some` holds is the ids of the library claims that were already held and
 /// gained an anchor from this page (§3.3).
-async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) -> Option<Vec<String>> {
-    let source_id = match deps.library.capture(&page.url, &page.text, trusted).await {
-        Ok(id) => id,
-        Err(e) => {
-            note(deps, |r| r.refused(&page.url, refusal_word(&e)));
-            return None;
-        }
+///
+/// `held` is the source a page read from the library already is (`specs/114` §3 item 4): nothing is captured for it, since
+/// nothing was fetched, and the record says the page was read from the library.
+#[allow(clippy::too_many_arguments)]
+async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, held: Option<&str>, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) -> Option<Vec<String>> {
+    let source_id = match held {
+        Some(id) => id.to_string(),
+        None => match deps.library.capture(&page.url, &page.text, trusted).await {
+            Ok(id) => id,
+            Err(e) => {
+                note(deps, |r| r.refused(&page.url, refusal_word(&e)));
+                return None;
+            }
+        },
     };
     note(deps, |r| r.page(&page.url, &source_id, deps.library.content_hash(&source_id).as_deref()));
-    if let Some((level, outcome)) = deps.library.kept(&source_id) {
+    if held.is_some() {
+        note(deps, |r| r.kept(&page.url, "full", "unchanged"));
+        note(deps, |r| r.held(&page.url));
+    } else if let Some((level, outcome)) = deps.library.kept(&source_id) {
         note(deps, |r| r.kept(&page.url, &level, &outcome));
     }
     let mut anchored = Vec::new();
@@ -748,6 +778,128 @@ async fn read_chained(ctx: &JobCtx, deps: &Deps<'_>, plan: &crate::research_chai
     false
 }
 
+/// What a run holds as it goes.
+struct State {
+    set: ClaimSet,
+    seen: Seen,
+    claims: Vec<ClaimRec>,
+    /// Every page the run read, with the text it read: the check works from these and fetches nothing (`specs/112` §4.3).
+    read: Vec<Page>,
+    /// The library claims this run wrote or added an anchor to (`specs/112` §3): what its record lists as its claims.
+    library_claims: Vec<String>,
+    pages_read: usize,
+    trusted_kept: usize,
+    cov: Rungs,
+    log: SearchLog,
+    last_provider: Option<String>,
+    spent: bool,
+    retrieved: String,
+    /// The pages read from the library in place of a fetch (`specs/114` §3 item 4).
+    from_library: Vec<String>,
+}
+
+/// Read one search result into the run: the page is read from the library when the library holds it fresh (`specs/114` §3 item
+/// 4, no request and no step), and fetched once otherwise; then it is kept and its claims are drawn. `li` is the search-log line
+/// of the search that returned the row and `left` the rows of that search not yet looked at, this one included. `main` is a
+/// planned query's result, which counts on its rung and against the page cap; the corroboration pass's results do neither.
+/// `true` when the step budget ran out and the run must stop sending.
+#[allow(clippy::too_many_arguments)]
+async fn read_row(ctx: &JobCtx, deps: &Deps<'_>, question: &str, st: &mut State, li: usize, row: &Row, main: bool, left: usize) -> bool {
+    if !st.seen.url(&row.url) {
+        st.log.duplicate(li);
+        return false;
+    }
+    let from_trusted_host = deps.web.is_trusted(&row.url);
+    if main {
+        if from_trusted_host {
+            st.cov.trusted_rows += 1;
+        } else {
+            st.cov.web_rows += 1;
+        }
+    }
+    // A result the fetcher will not reach is kept as a lead, not dropped, and costs no step (`specs/098` §7.5 item 1).
+    if !deps.web.can_fetch(&row.url) {
+        ctx.refused(&row.url);
+        note(deps, |r| r.refused(&row.url, "not_fetchable"));
+        if deps.library.note_lead(row).is_ok() {
+            st.cov.leads += 1;
+            st.log.kept(li);
+        } else {
+            st.log.dropped(li, "lead_not_stored", 1);
+        }
+        return false;
+    }
+    let (page, held) = match deps.library.held_fresh(&row.url) {
+        // The library holds the page, unchanged and checked within its recheck window: its kept text is read and nothing is fetched.
+        Some(h) => {
+            // A continued run does not read again a page its topic holds as the library still has it (`specs/112` §5.1).
+            if deps.resume.is_some_and(|r| r.held.get(&row.url).is_some_and(|old| deps.library.content_hash(&h.source_id).as_deref() == Some(old.as_str()))) {
+                note(deps, |r| r.unchanged(&row.url));
+                st.log.duplicate(li);
+                return false;
+            }
+            (Page { url: row.url.clone(), text: h.text }, Some(h.source_id))
+        }
+        None => {
+            if let Err(e) = ctx.egress("scout", Egress::Fetch, &row.url) {
+                if e.contains("budget") {
+                    st.spent = true;
+                    st.log.dropped(li, "budget", left);
+                    return true;
+                }
+                st.log.dropped(li, "refused", 1);
+                note(deps, |r| r.refused(&row.url, "refused"));
+                return false;
+            }
+            let Ok(page) = deps.web.fetch(&row.url) else {
+                ctx.refused(&row.url);
+                note(deps, |r| r.refused(&row.url, "fetch_failed"));
+                if main && !from_trusted_host && deps.library.note_lead(row).is_ok() {
+                    st.cov.leads += 1;
+                    st.log.kept(li);
+                } else {
+                    st.log.dropped(li, "fetch_failed", 1);
+                }
+                return false;
+            };
+            // The status shows where each page came from: the trusted list, or the search that returned its URL (`specs/098` §7.5 item 7a).
+            if main {
+                ctx.fetched_via(&row.url, &if from_trusted_host { "trusted".to_string() } else { deps.web.provenance(&row.url).unwrap_or_else(|| "unknown".to_string()) });
+            }
+            (page, None)
+        }
+    };
+    if !st.seen.text(&page.text) {
+        st.log.duplicate(li);
+        return false;
+    }
+    // A continued run does not read again a page its topic holds unchanged (`specs/112` §5.1).
+    if held.is_none() && deps.resume.is_some_and(|r| r.holds(deps, &page)) {
+        note(deps, |r| r.unchanged(&page.url));
+        st.log.duplicate(li);
+        return false;
+    }
+    let trusted = deps.web.is_trusted(&page.url);
+    if main {
+        st.pages_read += 1;
+        if trusted {
+            st.trusted_kept += 1;
+        }
+    }
+    match ingest(deps, question, &page, trusted, &st.retrieved, held.as_deref(), &mut st.set, &mut st.claims).await {
+        Some(anchored) => {
+            st.log.kept(li);
+            if held.is_some() {
+                st.from_library.push(page.url.clone());
+            }
+            st.read.push(page);
+            st.library_claims.extend(anchored);
+        }
+        None => st.log.dropped(li, "capture_failed", 1),
+    }
+    false
+}
+
 /// Run one research job. `Finish::Partial` when the step budget ran out; an `Err` only when nothing could be done at all.
 pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Deps<'_>) -> Result<Finish, String> {
     // The identifier guard (`specs/119` §2 item 7): a question naming one of the workspace's privacy identifiers is planned without it,
@@ -767,134 +919,66 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     }
     queries.sort_by_key(|q| q.kind != QueryKind::Trusted);
     note(deps, |r| r.plan(&queries.iter().map(|q| (kind_word(q.kind), q.text.as_str())).collect::<Vec<_>>()));
-    let mut set = ClaimSet::new(deps.library.known_fingerprints());
-    let (mut seen, mut claims, mut spent) = (Seen::default(), Vec::<ClaimRec>::new(), false);
-    // Every page the run read, with the text it read: the check works from these and fetches nothing (`specs/112` §4.3).
-    let mut read: Vec<Page> = Vec::new();
-    // The library claims this run wrote or added an anchor to (`specs/112` §3): what its record lists as its claims.
-    let mut library_claims: Vec<String> = Vec::new();
-    let (mut pages_read, mut trusted_kept) = (0usize, 0usize);
-    let retrieved = day();
-    let mut cov = Rungs::default();
+    // Known first (`specs/114` §3): before the first search, what Delphi already holds on the question, as the caller could have found
+    // it by searching. It is written to the record and reported in the result; it changes no query here.
+    let known: Known = deps.known.map(|k| k.find(question).capped()).unwrap_or_default();
+    if deps.known.is_some() {
+        note(deps, |r| r.known(&known.to_json()));
+    }
+    let mut st = State { set: ClaimSet::new(deps.library.known_fingerprints()), seen: Seen::default(), claims: Vec::new(), read: Vec::new(), library_claims: Vec::new(), pages_read: 0, trusted_kept: 0, cov: Rungs::default(), log: SearchLog::new(), last_provider: None, spent: false, retrieved: day(), from_library: Vec::new() };
     // The search log (`specs/101` §3): the host's declared searches first (they happened before the request), then every search the
     // daemon runs. It only records; no branch below reads it.
-    let mut log = SearchLog::new();
     for h in deps.host_searches {
-        log.declare(h, deps.redactor);
+        st.log.declare(h, deps.redactor);
     }
     for kind in &planned.withheld {
         let (rung, source, purpose) = log_source(*kind, None);
-        log.withheld_identifier(rung, source, purpose);
+        st.log.withheld_identifier(rung, source, purpose);
     }
-    let mut last_provider: Option<String> = None;
 
     'queries: for q in &queries {
-        if q.kind != QueryKind::Trusted && !widen_to_web(trusted_kept) {
+        if q.kind != QueryKind::Trusted && !widen_to_web(st.trusted_kept) {
             continue;
         }
         if ctx.egress("scout", Egress::Search, &q.text).is_err() {
-            spent = true;
+            st.spent = true;
             break;
         }
         if q.kind != QueryKind::Trusted {
-            cov.web_searched = true;
+            st.cov.web_searched = true;
         }
         let (rows, via) = match deps.web.search_via(&q.text) {
             Ok(found) => {
-                cov.answered += 1;
+                st.cov.answered += 1;
                 found
             }
             Err(e) => {
                 let why = failure_reason(&e);
-                cov.failure.get_or_insert(why);
+                st.cov.failure.get_or_insert(why);
                 let (rung, source, purpose) = log_source(q.kind, None);
-                let li = log.begin(rung, source, purpose, &q.text, None);
-                log.failed(li, why);
+                let li = st.log.begin(rung, source, purpose, &q.text, None);
+                st.log.failed(li, why);
                 note(deps, |r| r.query(&q.text, kind_word(q.kind), None, Err(why)));
                 continue;
             }
         };
         note(deps, |r| r.query(&q.text, kind_word(q.kind), via.as_deref(), Ok(rows.len())));
         if via.is_some() {
-            last_provider = via.clone();
+            st.last_provider = via.clone();
         }
         let (rung, source, purpose) = log_source(q.kind, via.as_deref());
-        let li = log.begin(rung, source, purpose, &q.text, via.as_deref());
-        log.rows(li, rows.len());
+        let li = st.log.begin(rung, source, purpose, &q.text, via.as_deref());
+        st.log.rows(li, rows.len());
         let (mut trusted_rows, mut other): (Vec<Row>, Vec<Row>) = rows.into_iter().partition(|r| deps.web.is_trusted(&r.url));
         trusted_rows.append(&mut other);
         let total = trusted_rows.len();
         for (i, row) in trusted_rows.into_iter().enumerate() {
-            if pages_read >= deps.limits.pages_at(depth) {
-                log.dropped(li, "page_cap", total - i);
+            if st.pages_read >= deps.limits.pages_at(depth) {
+                st.log.dropped(li, "page_cap", total - i);
                 break 'queries;
             }
-            if !seen.url(&row.url) {
-                log.duplicate(li);
-                continue;
-            }
-            let from_trusted_host = deps.web.is_trusted(&row.url);
-            if from_trusted_host {
-                cov.trusted_rows += 1;
-            } else {
-                cov.web_rows += 1;
-            }
-            // A result the fetcher will not reach is kept as a lead, not dropped, and costs no step (`specs/098` §7.5 item 1).
-            if !deps.web.can_fetch(&row.url) {
-                ctx.refused(&row.url);
-                note(deps, |r| r.refused(&row.url, "not_fetchable"));
-                if deps.library.note_lead(&row).is_ok() {
-                    cov.leads += 1;
-                    log.kept(li);
-                } else {
-                    log.dropped(li, "lead_not_stored", 1);
-                }
-                continue;
-            }
-            if let Err(e) = ctx.egress("scout", Egress::Fetch, &row.url) {
-                if e.contains("budget") {
-                    spent = true;
-                    log.dropped(li, "budget", total - i);
-                    break 'queries;
-                }
-                log.dropped(li, "refused", 1);
-                note(deps, |r| r.refused(&row.url, "refused"));
-                continue;
-            }
-            let Ok(page) = deps.web.fetch(&row.url) else {
-                ctx.refused(&row.url);
-                note(deps, |r| r.refused(&row.url, "fetch_failed"));
-                if !from_trusted_host && deps.library.note_lead(&row).is_ok() {
-                    cov.leads += 1;
-                    log.kept(li);
-                } else {
-                    log.dropped(li, "fetch_failed", 1);
-                }
-                continue;
-            };
-            // The status shows where each page came from: the trusted list, or the search that returned its URL (`specs/098` §7.5 item 7a).
-            ctx.fetched_via(&row.url, &if from_trusted_host { "trusted".to_string() } else { deps.web.provenance(&row.url).unwrap_or_else(|| "unknown".to_string()) });
-            if !seen.text(&page.text) {
-                log.duplicate(li);
-                continue;
-            }
-            // A continued run does not read again a page its topic holds unchanged (`specs/112` §5.1).
-            if deps.resume.is_some_and(|r| r.holds(deps, &page)) {
-                note(deps, |r| r.unchanged(&page.url));
-                log.duplicate(li);
-                continue;
-            }
-            pages_read += 1;
-            let trusted = deps.web.is_trusted(&page.url);
-            if trusted {
-                trusted_kept += 1;
-            }
-            if let Some(anchored) = ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
-                log.kept(li);
-                read.push(page);
-                library_claims.extend(anchored);
-            } else {
-                log.dropped(li, "capture_failed", 1);
+            if read_row(ctx, deps, question, &mut st, li, &row, true, total - i).await {
+                break 'queries;
             }
         }
     }
@@ -903,15 +987,16 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // independent origins gets one query for independent support and one for contradiction. A claim that rests on a private source is
     // never put in an outbound query. Every search and fetch still goes through `ctx.egress`, so the depth's step budget bounds it.
     let mut pass = (0usize, 0usize);
-    if pass_claims(depth) > 0 && !spent {
+    if pass_claims(depth) > 0 && !st.spent {
         // A claim that rests on a private source gets no outbound query; the log says so, without any text of the claim
         // (`specs/101` §3 item 3). At most as many lines as the pass would have run.
-        let private_claims = claims.iter().filter(|c| c.source_ids.iter().any(|s| deps.library.is_private(s))).count();
+        let private_claims = st.claims.iter().filter(|c| c.source_ids.iter().any(|s| deps.library.is_private(s))).count();
         for _ in 0..private_claims.min(pass_claims(depth)) {
-            let provider = last_provider.as_deref().and_then(crate::search_log::clean_id).unwrap_or_else(|| "none".into());
-            log.withheld(Source::Search(provider), Purpose::Corroboration);
+            let provider = st.last_provider.as_deref().and_then(crate::search_log::clean_id).unwrap_or_else(|| "none".into());
+            st.log.withheld(Source::Search(provider), Purpose::Corroboration);
         }
-        let mut wanted: Vec<(usize, String)> = claims
+        let mut wanted: Vec<(usize, String)> = st
+            .claims
             .iter()
             .enumerate()
             .filter(|(_, c)| !c.source_ids.iter().any(|s| deps.library.is_private(s)))
@@ -926,7 +1011,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             .collect();
         wanted.sort_by(|a, b| a.1.cmp(&b.1));
         'pass: for (i, _) in wanted.into_iter().take(pass_claims(depth)) {
-            let c = claims[i].clone();
+            let c = st.claims[i].clone();
             pass.0 += 1;
             // The identifier guard (`specs/119` §2 item 7), on the claim's own words before the pass adds its own: a claim naming one of the
             // workspace's privacy identifiers is searched without it, or not at all, and then the log says so without text.
@@ -934,14 +1019,14 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                 crate::query_guard::Guarded::Clean => pass_subject(&c),
                 crate::query_guard::Guarded::Stripped(without) => without,
                 crate::query_guard::Guarded::Withheld => {
-                    let provider = last_provider.as_deref().and_then(crate::search_log::clean_id).unwrap_or_else(|| "none".into());
-                    log.withheld_identifier("web", Source::Search(provider), Purpose::Corroboration);
+                    let provider = st.last_provider.as_deref().and_then(crate::search_log::clean_id).unwrap_or_else(|| "none".into());
+                    st.log.withheld_identifier("web", Source::Search(provider), Purpose::Corroboration);
                     continue;
                 }
             };
             for (kind, q) in pass_queries_for(&subject, deps.redactor) {
                 if ctx.egress("scout", Egress::Search, &q).is_err() {
-                    spent = true;
+                    st.spent = true;
                     break 'pass;
                 }
                 pass.1 += 1;
@@ -949,72 +1034,28 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                 let (rows, via) = match deps.web.search_via(&q) {
                     Ok(found) => found,
                     Err(e) => {
-                        let li = log.begin("web", Source::Search("unknown".into()), purpose, &q, None);
-                        log.failed(li, failure_reason(&e));
+                        let li = st.log.begin("web", Source::Search("unknown".into()), purpose, &q, None);
+                        st.log.failed(li, failure_reason(&e));
                         note(deps, |r| r.query(&q, kind, None, Err(failure_reason(&e))));
                         continue;
                     }
                 };
                 note(deps, |r| r.query(&q, kind, via.as_deref(), Ok(rows.len())));
                 let provider = via.as_deref().and_then(crate::search_log::clean_id).unwrap_or_else(|| "unknown".into());
-                let li = log.begin("web", Source::Search(provider), purpose, &q, None);
-                log.rows(li, rows.len());
+                let li = st.log.begin("web", Source::Search(provider), purpose, &q, None);
+                st.log.rows(li, rows.len());
                 // Only the first three results of a corroboration query are followed; the rest are counted, not dropped silently.
                 let followed = rows.len().min(3);
-                log.dropped(li, "not_followed", rows.len() - followed);
+                st.log.dropped(li, "not_followed", rows.len() - followed);
                 for (i, row) in rows.into_iter().take(3).enumerate() {
-                    if !seen.url(&row.url) {
-                        log.duplicate(li);
-                        continue;
-                    }
-                    if !deps.web.can_fetch(&row.url) {
-                        ctx.refused(&row.url);
-                        note(deps, |r| r.refused(&row.url, "not_fetchable"));
-                        if deps.library.note_lead(&row).is_ok() {
-                            cov.leads += 1;
-                            log.kept(li);
-                        } else {
-                            log.dropped(li, "lead_not_stored", 1);
-                        }
-                        continue;
-                    }
-                    if let Err(e) = ctx.egress("scout", Egress::Fetch, &row.url) {
-                        if e.contains("budget") {
-                            spent = true;
-                            log.dropped(li, "budget", followed - i);
-                            break 'pass;
-                        }
-                        log.dropped(li, "refused", 1);
-                        note(deps, |r| r.refused(&row.url, "refused"));
-                        continue;
-                    }
-                    let Ok(page) = deps.web.fetch(&row.url) else {
-                        ctx.refused(&row.url);
-                        note(deps, |r| r.refused(&row.url, "fetch_failed"));
-                        log.dropped(li, "fetch_failed", 1);
-                        continue;
-                    };
-                    if !seen.text(&page.text) {
-                        log.duplicate(li);
-                        continue;
-                    }
-                    if deps.resume.is_some_and(|r| r.holds(deps, &page)) {
-                        note(deps, |r| r.unchanged(&page.url));
-                        log.duplicate(li);
-                        continue;
-                    }
-                    let trusted = deps.web.is_trusted(&page.url);
-                    if let Some(anchored) = ingest(deps, question, &page, trusted, &retrieved, &mut set, &mut claims).await {
-                        log.kept(li);
-                        read.push(page);
-                        library_claims.extend(anchored);
-                    } else {
-                        log.dropped(li, "capture_failed", 1);
+                    if read_row(ctx, deps, question, &mut st, li, &row, false, followed - i).await {
+                        break 'pass;
                     }
                 }
             }
         }
     }
+    let State { set, mut seen, mut claims, read, mut library_claims, mut cov, mut log, mut spent, retrieved, from_library, .. } = st;
 
     // Citation chaining (`specs/101` §6): off unless the run was given an index. After the pass and before the validator, inside the same
     // step budget; it keeps leads and moves no claim.
@@ -1081,6 +1122,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "claims": claim_values, "citations": claims.iter().flat_map(|c| c.source_urls.iter().cloned()).collect::<BTreeSet<_>>(),
         "source_ids": source_ids, "kb_hits": set.kb_hits(), "new_claims": set.new_claims(), "contradictions": conflicts,
         "library_claims": library_claims,
+        "known_before": known.to_json(), "read_from_library": from_library,
         "freshness": {"retrieved": retrieved, "last_checked": retrieved},
         "budget_used": {"steps": ctx.steps(), "check_steps": ctx.check_steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
@@ -1206,6 +1248,8 @@ mod tests {
         refuses: BTreeMap<String, &'static str>,
         /// Say what was kept of each captured source, as the live library does.
         says_kept: bool,
+        /// Pages the library already holds fresh, by address: the source's id and its kept text (`specs/114` §3 item 4).
+        fresh: BTreeMap<String, (String, String)>,
     }
     impl Library for FakeLib {
         /// As the live library does: a private source gives no seed, and neither does one that names no DOI.
@@ -1276,6 +1320,9 @@ mod tests {
         fn content_hash(&self, source_id: &str) -> Option<String> {
             Some(format!("sha256:of-{source_id}"))
         }
+        fn held_fresh(&self, url: &str) -> Option<HeldPage> {
+            self.fresh.get(url).map(|(source_id, text)| HeldPage { source_id: source_id.clone(), text: text.clone() })
+        }
         fn kept(&self, source_id: &str) -> Option<(String, String)> {
             self.says_kept.then(|| (if source_id.ends_with("who.int") { "full" } else { "pointer" }.to_string(), "added".to_string()))
         }
@@ -1342,6 +1389,25 @@ mod tests {
         fn unchanged(&self, url: &str) {
             self.0.lock().unwrap().push(format!("unchanged {url}"));
         }
+        fn known(&self, known: &Value) {
+            self.0.lock().unwrap().push(format!("known {known}"));
+        }
+        fn held(&self, url: &str) {
+            self.0.lock().unwrap().push(format!("held {url}"));
+        }
+    }
+
+    /// What the caller's own search finds before the run: a fixed answer, and every question it was asked.
+    #[derive(Default)]
+    struct FakeKnown {
+        found: Known,
+        asked: Mutex<Vec<String>>,
+    }
+    impl KnownFirst for FakeKnown {
+        fn find(&self, question: &str) -> Known {
+            self.asked.lock().unwrap().push(question.to_string());
+            self.found.clone()
+        }
     }
 
     struct Fixture {
@@ -1365,6 +1431,8 @@ mod tests {
         limits: Limits,
         /// The topic the run continues, when it continues one.
         resume: Option<Resume>,
+        /// What the caller's search finds before the run, when the run looks.
+        known: Option<FakeKnown>,
     }
 
     impl Fixture {
@@ -1379,10 +1447,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new(), limits: Limits::default(), resume: None }
+            Fixture { record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new(), limits: Limits::default(), resume: None, known: None }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder), limits: &self.limits, resume: self.resume.as_ref() }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder), limits: &self.limits, resume: self.resume.as_ref(), known: self.known.as_ref().map(|k| k as &dyn KnownFirst) }
         }
     }
 
@@ -2470,6 +2538,104 @@ mod tests {
         let ids: Vec<&str> = v["library_claims"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert_eq!(ids.iter().filter(|id| **id == format!("c-{}", &held[..12])).count(), 1, "listed once, though two pages stated it: {ids:?}");
         assert_eq!(ids.len(), 2, "the held claim that gained anchors and the new claim: {ids:?}");
+    }
+
+    // ---- `specs/114` M2: known first ----
+
+    /// AC-2: a question whose answer is already held as library claims reports them under `known_before`, the record is told
+    /// before any query is sent, and a source the library holds fresh is read from the library: no request is made for it and
+    /// no step is spent on it.
+    #[tokio::test]
+    async fn what_is_held_is_reported_before_the_search_and_a_fresh_held_source_is_not_fetched() {
+        use crate::research_method::{KnownClaim, KnownSource};
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.record = Some(Told::default());
+        let held = claim_fingerprint("aspirin", "reduces", "fever", "adults", "");
+        f.lib.known.insert(held.clone());
+        f.lib.fresh = BTreeMap::from([
+            ("https://who.int/a".to_string(), ("src-who.int".to_string(), "who text".to_string())),
+            ("https://nih.gov/b".to_string(), ("src-nih.gov".to_string(), "nih text".to_string())),
+        ]);
+        f.known = Some(FakeKnown {
+            found: Known {
+                claims: vec![KnownClaim { id: format!("c-{}", &held[..12]), status: "noted".into(), text: "aspirin reduces fever".into() }],
+                sources: vec![KnownSource { id: "src-who.int".into(), url: "https://who.int/a".into(), age_days: Some(3), fresh: true }],
+                ..Default::default()
+            },
+            asked: Default::default(),
+        });
+        let c = ctx(Depth::Quick);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!(*f.known.as_ref().unwrap().asked.lock().unwrap(), ["does aspirin reduce fever"], "asked once, with the question");
+        assert_eq!(v["known_before"]["claims"][0], json!({"id": format!("c-{}", &held[..12]), "status": "noted", "text": "aspirin reduces fever"}), "{v}");
+        assert_eq!(v["known_before"]["sources"][0]["fresh"], true);
+        // Neither held page was asked of the web, and neither cost a step: the one step is the search.
+        let fetched = f.web.fetched.lock().unwrap().clone();
+        assert!(!fetched.iter().any(|u| u == "https://who.int/a" || u == "https://nih.gov/b"), "a held, fresh source was fetched: {fetched:?}");
+        assert_eq!(v["read_from_library"], json!(["https://who.int/a", "https://nih.gov/b"]), "{v}");
+        assert_eq!(c.steps() as usize, 1 + fetched.len(), "a step for the search and one for each page that was fetched, none for a page read from the library");
+        assert!(f.lib.captured.lock().unwrap().iter().all(|(u, _)| u == "https://blog.example/a"), "nothing is captured again for a page that was not fetched");
+        // The held pages were still read: the claim they state gained its anchors, and the check was handed the library's text.
+        assert_eq!(f.lib.anchored.lock().unwrap().len(), 2, "{v}");
+        let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
+        let known_at = told.iter().position(|l| l.starts_with("known ")).expect("the record is told what was known");
+        let first_query = told.iter().position(|l| l.starts_with("query ")).expect("a query was sent");
+        assert!(known_at < first_query, "known first: {told:?}");
+        assert!(told.contains(&"held https://who.int/a".to_string()) && told.contains(&"kept https://who.int/a full unchanged".to_string()), "{told:?}");
+        assert!(told.contains(&"page https://who.int/a src-who.int sha256:of-src-who.int".to_string()), "{told:?}");
+        assert_balanced(&v);
+
+        // A run that looks nothing up reports an empty list and tells its record nothing about it.
+        let mut g = Fixture::new(Verdict::Inconclusive);
+        g.record = Some(Told::default());
+        let (_, w) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &g.deps()).await.unwrap());
+        assert_eq!(w["known_before"], json!({"claims": [], "topics": [], "sources": [], "kb": []}));
+        assert_eq!(w["read_from_library"], json!([]));
+        assert!(!g.record.as_ref().unwrap().0.lock().unwrap().iter().any(|l| l.starts_with("known ") || l.starts_with("held ")));
+    }
+
+    /// `specs/114` §3 item 4 with `specs/112` §5.1: a continued run neither fetches nor reads again a page its topic holds as the
+    /// library still has it, when the library checked it within its window; one the library holds in a newer version than the
+    /// record is read from the library; one the library does not hold fresh is fetched once to compare, as before.
+    #[tokio::test]
+    async fn a_continued_run_does_not_fetch_a_page_the_library_holds_fresh() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.record = Some(Told::default());
+        f.lib.fresh = BTreeMap::from([
+            ("https://who.int/a".to_string(), ("src-who.int".to_string(), "who text".to_string())),
+            ("https://nih.gov/b".to_string(), ("src-nih.gov".to_string(), "a newer nih text".to_string())),
+        ]);
+        let held = [("https://who.int/a".to_string(), "sha256:of-src-who.int".to_string()), ("https://nih.gov/b".to_string(), "sha256:an-older-version".to_string()), ("https://blog.example/a".to_string(), "h:blog text".to_string())];
+        f.resume = Some(Resume { gaps: vec![], held: held.into_iter().collect(), note: None });
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
+        assert_eq!(*f.web.fetched.lock().unwrap(), ["https://blog.example/a"], "only the page the library does not hold fresh is fetched, once");
+        assert!(told.contains(&"unchanged https://who.int/a".to_string()), "{told:?}");
+        assert!(told.contains(&"held https://nih.gov/b".to_string()), "the library's newer version is read: {told:?}");
+        assert!(told.contains(&"unchanged https://blog.example/a".to_string()), "fetched to compare, and unchanged: {told:?}");
+        assert_eq!(v["read_from_library"], json!(["https://nih.gov/b"]));
+        assert_balanced(&v);
+    }
+
+    /// `specs/114` §3 item 1 and §10: looking up what is known sends nothing and fetches nothing, and what is found is not put
+    /// into a query: the queries of a run that found something are those of a run that found nothing.
+    #[tokio::test]
+    async fn looking_up_what_is_known_changes_no_query() {
+        use crate::research_method::{KnownClaim, KnownTopic};
+        let plain = Fixture::new(Verdict::Inconclusive);
+        run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &plain.deps()).await.unwrap();
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.known = Some(FakeKnown {
+            found: Known {
+                claims: vec![KnownClaim { id: "c-000000000001".into(), status: "noted".into(), text: "numbatfish prefer brackish water".into() }],
+                topics: vec![KnownTopic { id: "numbatfish-00000001".into(), question: "what water do numbatfish need".into(), overlap: 0.0, score: Some(0.2), workspace: true }],
+                ..Default::default()
+            },
+            asked: Default::default(),
+        });
+        run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap();
+        assert_eq!(*f.web.searched.lock().unwrap(), *plain.web.searched.lock().unwrap());
+        assert!(!f.web.searched.lock().unwrap().iter().any(|q| q.contains("numbatfish")));
     }
 
     // ---- `specs/112` R6: a run that continues a topic ----

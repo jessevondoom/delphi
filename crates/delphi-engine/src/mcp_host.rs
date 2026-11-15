@@ -758,6 +758,7 @@ pub fn tools() -> Value {
                     "question": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What to find out, in general terms. Required unless topic_id is given."},
                     "topic_id": {"type": "string", "maxLength": 57, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$", "description": "Continue a research topic instead of asking a new question: the topic_id an earlier research_result gave. The new run asks the topic's own question, begins from what the earlier runs did not find, and does not read again a page whose content has not changed. Give question or topic_id."},
                     "note": {"type": "string", "maxLength": 120, "description": "With topic_id only: one line, in general terms, that narrows the continued search."},
+                    "new": {"type": "boolean", "default": false, "description": "Before it searches, the run looks up what Delphi already holds on the question (the result reports it as known_before). When a research topic Delphi has overlaps your question strongly, the run continues that topic with the topic's own question, and the reply says so. Pass true to research your question as a topic of its own instead."},
                     "depth": {"type": "string", "enum": ["quick", "survey", "deep"], "default": "survey"},
                     "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."},
                     "host_searches": {
