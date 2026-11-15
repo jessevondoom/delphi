@@ -110,7 +110,10 @@ pub(crate) fn find_app(delphi_app: Option<&str>, this_exe: Option<&Path>, user_h
         return executable_of(p).ok_or_else(|| format!("DELPHI_APP names {}, which is not an executable only you can change (or a Delphi.app holding one)", p.display()));
     }
     let mut places: Vec<PathBuf> = Vec::new();
-    if let Some(target) = this_exe.and_then(|e| e.parent()).and_then(|d| d.parent()) {
+    // Only a program that is itself a build in a `target/` folder has a build beside it: an installed `delphi`
+    // (`~/.local/bin/delphi`) looks nowhere near itself.
+    let profile = this_exe.and_then(|e| e.parent()).filter(|d| d.file_name().is_some_and(|n| n == "debug" || n == "release"));
+    if let Some(target) = profile.and_then(|d| d.parent()).filter(|t| t.file_name().is_some_and(|n| n == "target")) {
         places.push(target.join("app/release/bundle/macos/Delphi.app"));
         places.push(target.join("app/release/delphi-app"));
     }
@@ -432,6 +435,11 @@ mod tests {
         std::fs::create_dir_all(d.join("target/app/release/bundle/macos/Delphi.app/Contents/MacOS")).unwrap();
         let bundled = script(&d.join("target/app/release/bundle/macos/Delphi.app/Contents/MacOS"), "delphi-app", "exit 0");
         assert_eq!(find_app(None, Some(&this), None), Ok(bundled), "the app bundle before the bare executable");
+        // An installed program is not a build in a `target/` folder, so nothing beside it is looked at.
+        std::fs::create_dir_all(d.join("local/app/release")).unwrap();
+        script(&d.join("local/app/release"), "delphi-app", "exit 0");
+        let found = find_app(None, Some(&d.join("local/bin/delphi")), Some(&d.join("nobody")));
+        assert!(found.as_ref().is_ok_and(|p| p.starts_with("/Applications")) || found.is_err(), "{found:?}");
     }
 
     fn wait_for(p: &Path) -> String {
