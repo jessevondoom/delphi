@@ -1,0 +1,116 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 115: Research recall across projects"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 33,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 39,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 45,
+      "number": "2",
+      "title": "The setting"
+    },
+    {
+      "level": 2,
+      "line": 52,
+      "number": "3",
+      "title": "What a search returns"
+    },
+    {
+      "level": 2,
+      "line": 62,
+      "number": "4",
+      "title": "What the operator sees"
+    },
+    {
+      "level": 2,
+      "line": 68,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 77,
+      "number": "6",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 84,
+      "number": "7",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "8",
+      "title": "Authority and trust: the decision this spec asks for"
+    },
+    {
+      "level": 2,
+      "line": 104,
+      "number": "9",
+      "title": "Open questions (the operator decides)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/115-research-recall-across-projects.md",
+    "sha256": "b29ccfa731b28f0011edc4bef2b2b026dc002a32485dd62faf177834f6597e7e"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 477,
+        "end_line": 6,
+        "line": 6,
+        "start": 145
+      },
+      "text": "status: draft   # written at the operator's request on 2026-11-14 (\"make specs covering all 8, show me LOE and slices\"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it. It reverses a default of spec 058, which only the operator can decide."
+    },
+    "sha256": "b29ccfa731b28f0011edc4bef2b2b026dc002a32485dd62faf177834f6597e7e",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "115",
+    "stem": "115-research-recall-across-projects",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "115: Research recall across projects"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1904,
+      "end_line": 29,
+      "line": 24,
+      "start": 1289
+    },
+    "text": "| # | Observation (2026-11-14) |\n| :-- | :-- |\n| E-1 | The index shows a project's files only to a session with that project's id (`kb.rs`, the project filter). Tests assert that another project gets nothing. |\n| E-2 | A research run inside a project writes to that project and never to the shared index (`research.rs`, the destination rule). |\n| E-3 | Project knowledge reaches the rest of the workspace only by promotion, one item at a time, on the operator's accept. |\n| E-4 | On a live workspace with eight projects, a search from one project for subjects researched in two others returned nothing about them. |"
+  }
+}

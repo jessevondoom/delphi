@@ -1,0 +1,122 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 118: Pictures and figures"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 37,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "2",
+      "title": "A licence record for every asset"
+    },
+    {
+      "level": 2,
+      "line": 57,
+      "number": "3",
+      "title": "Capture in research"
+    },
+    {
+      "level": 2,
+      "line": 64,
+      "number": "4",
+      "title": "Formats and size"
+    },
+    {
+      "level": 2,
+      "line": 71,
+      "number": "5",
+      "title": "Figures agents make"
+    },
+    {
+      "level": 2,
+      "line": 79,
+      "number": "6",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 89,
+      "number": "7",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "8",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 111,
+      "number": "9",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 117,
+      "number": "10",
+      "title": "Open questions (the operator decides)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md",
+    "sha256": "d24a1a032bfbd83f5ee3ac4d1c35414c8dbbfc4699531e5f6980556b98b1805b"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 527,
+        "end_line": 6,
+        "line": 6,
+        "start": 266
+      },
+      "text": "status: draft   # written at the operator's request on 2026-11-14 (\"make specs covering all 8, show me LOE and slices\"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it."
+    },
+    "sha256": "d24a1a032bfbd83f5ee3ac4d1c35414c8dbbfc4699531e5f6980556b98b1805b",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "118",
+    "stem": "118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "118: Pictures and figures: a stored licence, capture in research, full size, and figures agents make"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2889,
+      "end_line": 33,
+      "line": 25,
+      "start": 1609
+    },
+    "text": "| # | Observation (code on `main`, 2026-11-14) |\n| :-- | :-- |\n| E-1 | The console's research job captures pictures with a licence decision made by code for each picture: Creative Commons BY, BY-SA, CC0 and public domain are accepted; non-commercial, no-derivatives, GFDL, fair use and anything unrecognised are refused. Licence, author and credit address are stored and an attribution line is written under the picture. |\n| E-2 | The host research runner captures no picture. |\n| E-3 | When a page is expanded, pictures pass the same licence decision, and then only the bytes are written: the licence, author and credit address are thrown away (`library.rs`, the asset capture). 097 §4.5.2 asks for them to be kept with the asset. |\n| E-4 | The image method returns pictures shrunk to at most 160 pixels a side. The app cannot ask for a library picture at all. The terminal draws pictures as blocks of colour. |\n| E-5 | SVG and WebP pictures are dropped, which excludes most diagrams on the open web. |\n| E-6 | Agents can write charts and diagrams as mission artifacts (095). A generated page accepts library pictures only, so none of those can appear in one. Mermaid text in a document is not drawn in the app. |\n| E-7 | On the audited workspace no picture has been captured. |"
+  }
+}

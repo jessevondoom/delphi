@@ -1,0 +1,134 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 117: The encyclopedia in the desktop app"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 36,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "2",
+      "title": "Topic pages"
+    },
+    {
+      "level": 2,
+      "line": 59,
+      "number": "3",
+      "title": "What the app may read"
+    },
+    {
+      "level": 2,
+      "line": 66,
+      "number": "4",
+      "title": "Screens"
+    },
+    {
+      "level": 2,
+      "line": 76,
+      "number": "5",
+      "title": "The operator's own marks"
+    },
+    {
+      "level": 2,
+      "line": 85,
+      "number": "6",
+      "title": "Asking from a page"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "7",
+      "title": "The console"
+    },
+    {
+      "level": 2,
+      "line": 97,
+      "number": "8",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 109,
+      "number": "9",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 115,
+      "number": "10",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 133,
+      "number": "11",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 139,
+      "number": "12",
+      "title": "Open questions (the operator decides)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md",
+    "sha256": "0ab035ba6cfe2f684c6f17b0df3d4c8dec921aef4d76b27b6986bc6651e36f1f"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 607,
+        "end_line": 6,
+        "line": 6,
+        "start": 256
+      },
+      "text": "status: draft   # written at the operator's request on 2026-11-14 (\"make specs covering all 8, show me LOE and slices\"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it. Screens are described, not drawn; the operator has decided earlier screens from drawings."
+    },
+    "sha256": "0ab035ba6cfe2f684c6f17b0df3d4c8dec921aef4d76b27b6986bc6651e36f1f",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "117",
+    "stem": "117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "117: The encyclopedia in the desktop app: topic pages, navigation, and a view of agent memory"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2830,
+      "end_line": 32,
+      "line": 24,
+      "start": 1420
+    },
+    "text": "| # | Observation (code on `main`, 2026-11-14) |\n| :-- | :-- |\n| E-1 | Generated pages (lead, contents, cited statements, a bibliography the daemon writes, a check of every quote against its source) exist in the terminal console and the CLI only. The app reads six knowledge-base methods and shows documents as they are stored. |\n| E-2 | A page gathers library claims and sources by word overlap. It does not read the knowledge base, research entries, findings or lessons, though 097 §4.2.2 says workspace passages are records too. On a library with no claims a page has nothing to say. |\n| E-3 | A page's cache key includes the hashes of its material, so new material makes a new file instead of a new version. Earlier files are kept in a folder nothing reads. |\n| E-4 | The writer's call does not load the encyclopedia skill (see [`specs/114`](114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md) §2). |\n| E-5 | There is no list of topics, no \"what links here\", no related pages, no way to see what changed since the operator last looked, and no page for what one agent knows. Memory is reachable as documents of kind `memory`. |\n| E-6 | The operator cannot annotate a page, ask a question from it, ask for one section to be researched further, mark it read, or export it. |\n| E-7 | In the console's page view, links inside a page cannot be followed. |"
+  }
+}

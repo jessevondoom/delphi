@@ -2,7 +2,7 @@
 
 # Knowledge and memory
 
-22 specs. [All groups](./index.md).
+30 specs. [All groups](./index.md).
 
 ## 004-memory-and-coaching
 
@@ -216,4 +216,144 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 | E-3 | `search_kb` never refreshes the index; the console's search does. |
 | E-4 | Core, context and spec files without a tier in their frontmatter index as `external_untrusted`, and `search_kb` excludes untrusted documents, so much of the release's own reference may be invisible to a host. |
 | E-5 | Nothing is retrieved for a host unless it asks. Delphi's own agents get up to three passages at the start of a span. |
+```
+
+## 112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library
+
+**112: One research record: a single runner, topics that persist, and claims that reach the library** · draft (per source at `ce10b448d35d`) · tier 0 · [source](../../specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md)
+
+**source excerpt, untrusted** · `specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md` lines 24-32
+
+```text
+| # | Observation (code on `main`, 2026-11-14) |
+| :-- | :-- |
+| E-1 | There are two research runners. The console and Delphi's own agents use `research.rs`, which writes one Markdown page per web page under `local/knowledge/web/`. A host's `request_research` uses `research_run.rs`, which writes library sources and a claims file. They share the trusted list and the search providers and nothing else. |
+| E-2 | The host runner's claims go to `research/host-claims.jsonl`. The only reader of that file is the duplicate check. The claims are not in the search index and not in `library/claims/`, so pages ([`specs/097`](097-encyclopedia-search-pages.md)) and the confidence ladder ([`specs/100`](100-confidence-ladder-substantiated-vetted-and-an-audit-that-rolls-back.md)) never see them. |
+| E-3 | A host run's result (answer, coverage report) is held in memory for one hour and then gone. The console run keeps no search log and no record of its queries. |
+| E-4 | No research can be resumed, extended or refreshed. Running the same topic again starts from nothing. |
+| E-5 | The host runner calls `search_via`, which does not record what the search returned; only `search` does. So no address off the trusted list is ever allowed to be fetched, and every such result becomes a lead (`research_host.rs`, `LiveWeb`). Read in code, not run. |
+| E-6 | A page is fetched three times in a host run (to read, to capture, to check), so the stored hash may not be of the text the scout read. The check re-finds the scout's own quote on the same address and can never contradict it, and it spends the same step budget as the search. |
+| E-7 | In the audited workspace the central library held 38 sources, no claims and no pages. |
+```
+
+## 113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture
+
+**113: Host-led research: ingest, a record tool, and workers that can capture** · draft (per source at `e30d09cd1f80`) · tier 0 · [source](../../specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md)
+
+**source excerpt, untrusted** · `specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md` lines 24-29
+
+```text
+| # | Observation (2026-11-14) |
+| :-- | :-- |
+| E-1 | In the audited workspace, the research that exists was done by host sessions acting as the scout with the host's own tools (web, and connectors to internal systems). It was saved as Markdown in project `research/` folders (about fifty files across eight projects) and as 58 imported summaries. Delphi's own runner had produced no claim. |
+| E-2 | Those files are indexed as untrusted project text. They are not sources, they yield no claims, and a page cannot gather them. 48 of the 58 summaries list no source. |
+| E-3 | The scout's and the investigator's charters tell a host agent to use `propose_kb_entry` and `record_session_summary`, and the scout's source ladder includes Delphi's research endpoint. The worker files (`ecosystem/claude-code/delphi/agents/scout-worker.md`, `investigator-worker.md`) list neither those tools nor `request_research`. A worker can read and cannot record. |
+| E-4 | `propose_kb_entry` takes single claims. There is no call by which a host hands over a finished piece of research with its question, its sources and what it searched. |
+```
+
+## 114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis
+
+**114: A methodical scout: known first, a plan from the gaps, the role in every call, and a written synthesis** · draft (per source at `ebe1f1eddadd`) · tier 0 · [source](../../specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md)
+
+**source excerpt, untrusted** · `specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md` lines 24-32
+
+```text
+| # | Observation (code on `main`, 2026-11-14) |
+| :-- | :-- |
+| E-1 | The model call the runner makes as the scout is built by `scout_ipr` (`research.rs`): role "You are the scout.", no persona, no skill text, heuristics "None.", lessons "None.". The scout's charter, its five skills and its lessons file reach no research run. The page writer's call (`page_run.rs`) is built the same way. |
+| E-2 | Neither runner looks at what Delphi already holds before it searches. The only use of prior knowledge is an exact-hash match on a claim after it has been extracted. |
+| E-3 | The plan is at most three fixed queries: the topic, the topic restricted to a trusted site, and the topic with "limitations OR criticism OR disputed". "Three to five questions" is prose in the literature-survey skill. |
+| E-4 | A run stops on a budget (pages, steps, time, tokens). Nothing stops it because the question is answered or keeps it going because a part is not. |
+| E-5 | The host run's `answer` is a list of the first eight claims built by code, and is labelled "model synthesis". The console run has no synthesis across pages. |
+| E-6 | Results within one search are read in the order the provider gave them, trusted hosts first. |
+| E-7 | The one-note-per-run learning loop of 066 §5 has no code. A search of the knowledge base that finds nothing is logged from the console and the CLI only, and nothing reads the log. |
+```
+
+## 115-research-recall-across-projects
+
+**115: Research recall across projects** · draft (per source at `b29ccfa731b2`) · tier 0 · [source](../../specs/115-research-recall-across-projects.md)
+
+**source excerpt, untrusted** · `specs/115-research-recall-across-projects.md` lines 24-29
+
+```text
+| # | Observation (2026-11-14) |
+| :-- | :-- |
+| E-1 | The index shows a project's files only to a session with that project's id (`kb.rs`, the project filter). Tests assert that another project gets nothing. |
+| E-2 | A research run inside a project writes to that project and never to the shared index (`research.rs`, the destination rule). |
+| E-3 | Project knowledge reaches the rest of the workspace only by promotion, one item at a time, on the operator's accept. |
+| E-4 | On a live workspace with eight projects, a search from one project for subjects researched in two others returned nothing about them. |
+```
+
+## 116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context
+
+**116: Memory that grows: a provisional tier, findings, consolidation, and a larger start context** · draft (per source at `ad37b784afa7`) · tier 0 · [source](../../specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md)
+
+**source excerpt, untrusted** · `specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md` lines 24-34
+
+```text
+| # | Observation (2026-11-14) |
+| :-- | :-- |
+| E-1 | Every path into memory an agent reads without asking (lessons, heuristics) ends at the operator: `delphi learn keep` at a terminal with the daemon stopped, `/retro`, or the digest at ten items a day. Capture allows thirty notes a mission. On a live workspace: 62 notes staged, 51 dropped, none promoted; eight of ten roles' lessons files hold no rule. |
+| E-2 | `delphi learn keep --as lesson` accepts host notes only. A note from an agent inside the daemon cannot become a lesson by any command. |
+| E-3 | A staged note is never loaded into a prompt and is not searched by inside agents. |
+| E-4 | An investigation leaves a transcript, a mechanical episode (tools, files, the first error; at most three a mission), and a note in the mission folder only if the model chose to write one. That note defaults to `status: draft`, which the inside search leaves out. A later investigation cannot reliably find an earlier root cause. |
+| E-5 | At the start of a root span an agent is given at most three passages, 1,500 characters in all. That retrieval is skipped whenever the handoff already holds a pointer, and the claim pull just before it adds pointers (`engine.rs`, the span-start condition), so one word-overlap claim removes the passages. Child spans get none. |
+| E-6 | The inside `kb_search` returns pointers, not text, except for validated facts; 064 §4.1 asks for passages. |
+| E-7 | Nothing merges, de-duplicates or reconciles memory. Episodes are written with no expiry and supersede nothing. |
+| E-8 | Use changes nothing: read counts are logged and not reported (080), agent searches that find nothing are not logged, and no agent can say "this was wrong". Stored `confidence` is not read by ranking. |
+| E-9 | The investigator's skills (bisect, benchmarks, code search by script) need a shell scope its manifest lacks; inside the daemon and as a host worker it can only read. While it is adopted, host search defaults to validated text only, which hides the unvalidated research its own charter tells it to read first. |
+```
+
+## 117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory
+
+**117: The encyclopedia in the desktop app: topic pages, navigation, and a view of agent memory** · draft (per source at `0ab035ba6cfe`) · tier 0 · [source](../../specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md)
+
+**source excerpt, untrusted** · `specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md` lines 24-32
+
+```text
+| # | Observation (code on `main`, 2026-11-14) |
+| :-- | :-- |
+| E-1 | Generated pages (lead, contents, cited statements, a bibliography the daemon writes, a check of every quote against its source) exist in the terminal console and the CLI only. The app reads six knowledge-base methods and shows documents as they are stored. |
+| E-2 | A page gathers library claims and sources by word overlap. It does not read the knowledge base, research entries, findings or lessons, though 097 §4.2.2 says workspace passages are records too. On a library with no claims a page has nothing to say. |
+| E-3 | A page's cache key includes the hashes of its material, so new material makes a new file instead of a new version. Earlier files are kept in a folder nothing reads. |
+| E-4 | The writer's call does not load the encyclopedia skill (see [`specs/114`](114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md) §2). |
+| E-5 | There is no list of topics, no "what links here", no related pages, no way to see what changed since the operator last looked, and no page for what one agent knows. Memory is reachable as documents of kind `memory`. |
+| E-6 | The operator cannot annotate a page, ask a question from it, ask for one section to be researched further, mark it read, or export it. |
+| E-7 | In the console's page view, links inside a page cannot be followed. |
+```
+
+## 118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures
+
+**118: Pictures and figures: a stored licence, capture in research, full size, and figures agents make** · draft (per source at `d24a1a032bfb`) · tier 0 · [source](../../specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md)
+
+**source excerpt, untrusted** · `specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md` lines 25-33
+
+```text
+| # | Observation (code on `main`, 2026-11-14) |
+| :-- | :-- |
+| E-1 | The console's research job captures pictures with a licence decision made by code for each picture: Creative Commons BY, BY-SA, CC0 and public domain are accepted; non-commercial, no-derivatives, GFDL, fair use and anything unrecognised are refused. Licence, author and credit address are stored and an attribution line is written under the picture. |
+| E-2 | The host research runner captures no picture. |
+| E-3 | When a page is expanded, pictures pass the same licence decision, and then only the bytes are written: the licence, author and credit address are thrown away (`library.rs`, the asset capture). 097 §4.5.2 asks for them to be kept with the asset. |
+| E-4 | The image method returns pictures shrunk to at most 160 pixels a side. The app cannot ask for a library picture at all. The terminal draws pictures as blocks of colour. |
+| E-5 | SVG and WebP pictures are dropped, which excludes most diagrams on the open web. |
+| E-6 | Agents can write charts and diagrams as mission artifacts (095). A generated page accepts library pictures only, so none of those can appear in one. Mermaid text in a document is not drawn in the app. |
+| E-7 | On the audited workspace no picture has been captured. |
+```
+
+## 119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof
+
+**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · draft (per source at `da1eb52214fa`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
+
+**source excerpt, untrusted** · `specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md` lines 25-33
+
+```text
+| # | Observation (2026-11-14) |
+| :-- | :-- |
+| E-1 | The audited workspace has no `[search]` table, so Delphi's research cannot search the web. Sessions asked for research 17 times. `delphi doctor` reports the missing engine as an ordinary line, not a warning, and nothing in a session says what to do. |
+| E-2 | A source whose licence is not known is kept as a pointer: address, title, hash, no text (`library.rs`, the capture level). The licence is worked out by code for a few kinds of site only. All 38 sources on the workspace are pointers, so none can be searched, quoted or gathered into a page. |
+| E-3 | Retraction lookup, archived copies, citation chaining, background validation and session summaries are built and off by default. A research run never asks for an archived copy. |
+| E-4 | The validator's contradiction search has no searcher without `[search]`, so every check ends in "escalate" and no claim can reach "vetted". |
+| E-5 | Nothing shows the state of the knowledge loop in one place: how many sources have text, how many claims, how many notes wait, whose memory is empty. |
+| E-6 | Small faults found by the audit: the host result's licence is always "unknown"; `budget_used` lacks time; `freshness.last_checked` repeats `retrieved`; `want` and `context_pointers` of 066 §3 are read nowhere; the default depth is `survey` in code and `quick` in the spec; the validator's charter says the fetcher is not built, and it is; spec 052's frontmatter says nothing is built, and four slices are. |
+| E-7 | By the tracker's own notes, the research job has never been run against the live web with a real key and a real model. |
 ```

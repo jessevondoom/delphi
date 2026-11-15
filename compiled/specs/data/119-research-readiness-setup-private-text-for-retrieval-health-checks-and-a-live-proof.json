@@ -1,0 +1,134 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 119: Research readiness"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 37,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "2",
+      "title": "Setup that is hard to miss"
+    },
+    {
+      "level": 2,
+      "line": 57,
+      "number": "3",
+      "title": "Text kept privately, for retrieval only"
+    },
+    {
+      "level": 2,
+      "line": 72,
+      "number": "4",
+      "title": "Defaults reviewed"
+    },
+    {
+      "level": 2,
+      "line": 84,
+      "number": "5",
+      "title": "Knowledge health"
+    },
+    {
+      "level": 2,
+      "line": 91,
+      "number": "6",
+      "title": "Small faults"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "7",
+      "title": "Build order across specs 112 to 119"
+    },
+    {
+      "level": 2,
+      "line": 127,
+      "number": "8",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 138,
+      "number": "9",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 145,
+      "number": "10",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 158,
+      "number": "11",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 164,
+      "number": "12",
+      "title": "Open questions (the operator decides)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md",
+    "sha256": "da1eb52214fa45fc14dd1d188b9ff7543f42951c35e9f576f53d4b45435912c0"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 567,
+        "end_line": 6,
+        "line": 6,
+        "start": 251
+      },
+      "text": "status: draft   # written at the operator's request on 2026-11-14 (\"make specs covering all 8, show me LOE and slices\"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it. §3 asks for a policy decision that is the operator's."
+    },
+    "sha256": "da1eb52214fa45fc14dd1d188b9ff7543f42951c35e9f576f53d4b45435912c0",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "119",
+    "stem": "119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "119: Research readiness: setup, private text for retrieval, health checks, and a live proof"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 3379,
+      "end_line": 33,
+      "line": 25,
+      "start": 1731
+    },
+    "text": "| # | Observation (2026-11-14) |\n| :-- | :-- |\n| E-1 | The audited workspace has no `[search]` table, so Delphi's research cannot search the web. Sessions asked for research 17 times. `delphi doctor` reports the missing engine as an ordinary line, not a warning, and nothing in a session says what to do. |\n| E-2 | A source whose licence is not known is kept as a pointer: address, title, hash, no text (`library.rs`, the capture level). The licence is worked out by code for a few kinds of site only. All 38 sources on the workspace are pointers, so none can be searched, quoted or gathered into a page. |\n| E-3 | Retraction lookup, archived copies, citation chaining, background validation and session summaries are built and off by default. A research run never asks for an archived copy. |\n| E-4 | The validator's contradiction search has no searcher without `[search]`, so every check ends in \"escalate\" and no claim can reach \"vetted\". |\n| E-5 | Nothing shows the state of the knowledge loop in one place: how many sources have text, how many claims, how many notes wait, whose memory is empty. |\n| E-6 | Small faults found by the audit: the host result's licence is always \"unknown\"; `budget_used` lacks time; `freshness.last_checked` repeats `retrieved`; `want` and `context_pointers` of 066 §3 are read nowhere; the default depth is `survey` in code and `quick` in the spec; the validator's charter says the fetcher is not built, and it is; spec 052's frontmatter says nothing is built, and four slices are. |\n| E-7 | By the tracker's own notes, the research job has never been run against the live web with a real key and a real model. |"
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 116: Memory that grows"
+    },
+    {
+      "level": 2,
+      "line": 22,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 38,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 44,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 50,
+      "number": "2",
+      "title": "A provisional tier"
+    },
+    {
+      "level": 2,
+      "line": 60,
+      "number": "3",
+      "title": "Review promotes"
+    },
+    {
+      "level": 2,
+      "line": 67,
+      "number": "4",
+      "title": "A larger, steadier start context"
+    },
+    {
+      "level": 2,
+      "line": 76,
+      "number": "5",
+      "title": "Findings: what an investigation concluded"
+    },
+    {
+      "level": 2,
+      "line": 85,
+      "number": "6",
+      "title": "Consolidation"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "7",
+      "title": "Use feeds back"
+    },
+    {
+      "level": 2,
+      "line": 100,
+      "number": "8",
+      "title": "The investigator can investigate"
+    },
+    {
+      "level": 2,
+      "line": 105,
+      "number": "9",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 117,
+      "number": "10",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 124,
+      "number": "11",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 141,
+      "number": "12",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 147,
+      "number": "13",
+      "title": "Open questions (the operator decides)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md",
+    "sha256": "ad37b784afa7ef972bf4dc0864b02670c7d5c238b509874eeb8a9d049b334280"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 520,
+        "end_line": 6,
+        "line": 6,
+        "start": 259
+      },
+      "text": "status: draft   # written at the operator's request on 2026-11-14 (\"make specs covering all 8, show me LOE and slices\"), after an audit of the scout, the investigator and the knowledge base. Not approved. Nothing is built from it until the operator approves it."
+    },
+    "sha256": "ad37b784afa7ef972bf4dc0864b02670c7d5c238b509874eeb8a9d049b334280",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "116",
+    "stem": "116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "116: Memory that grows: a provisional tier, findings, consolidation, and a larger start context"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 3628,
+      "end_line": 34,
+      "line": 24,
+      "start": 1540
+    },
+    "text": "| # | Observation (2026-11-14) |\n| :-- | :-- |\n| E-1 | Every path into memory an agent reads without asking (lessons, heuristics) ends at the operator: `delphi learn keep` at a terminal with the daemon stopped, `/retro`, or the digest at ten items a day. Capture allows thirty notes a mission. On a live workspace: 62 notes staged, 51 dropped, none promoted; eight of ten roles' lessons files hold no rule. |\n| E-2 | `delphi learn keep --as lesson` accepts host notes only. A note from an agent inside the daemon cannot become a lesson by any command. |\n| E-3 | A staged note is never loaded into a prompt and is not searched by inside agents. |\n| E-4 | An investigation leaves a transcript, a mechanical episode (tools, files, the first error; at most three a mission), and a note in the mission folder only if the model chose to write one. That note defaults to `status: draft`, which the inside search leaves out. A later investigation cannot reliably find an earlier root cause. |\n| E-5 | At the start of a root span an agent is given at most three passages, 1,500 characters in all. That retrieval is skipped whenever the handoff already holds a pointer, and the claim pull just before it adds pointers (`engine.rs`, the span-start condition), so one word-overlap claim removes the passages. Child spans get none. |\n| E-6 | The inside `kb_search` returns pointers, not text, except for validated facts; 064 §4.1 asks for passages. |\n| E-7 | Nothing merges, de-duplicates or reconciles memory. Episodes are written with no expiry and supersede nothing. |\n| E-8 | Use changes nothing: read counts are logged and not reported (080), agent searches that find nothing are not logged, and no agent can say \"this was wrong\". Stored `confidence` is not read by ranking. |\n| E-9 | The investigator's skills (bisect, benchmarks, code search by script) need a shell scope its manifest lacks; inside the daemon and as a host worker it can only read. While it is adopted, host search defaults to validated text only, which hides the unvalidated research its own charter tells it to read first. |"
+  }
+}
