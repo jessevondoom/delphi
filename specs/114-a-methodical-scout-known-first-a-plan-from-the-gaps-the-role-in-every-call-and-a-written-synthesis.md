@@ -3,7 +3,7 @@ id: spec-114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-eve
 title: "114: A methodical scout: known first, a plan from the gaps, the role in every call, and a written synthesis"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "all other specs are approved", after the drafts and their slice tables were shown.
+status: approved   # by the operator, 2026-11-14, in a host session: "all other specs are approved", after the drafts and their slice tables were shown. Section 12 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -125,3 +125,15 @@ M1 stands alone. M2 to M5 depend on 112 R4.
 
 1. Coverage rule: two claims from two origins per sub-question, or one claim from a primary source is enough?
 2. Should a strongly overlapping topic be continued by default (§3.3), or should the run always ask?
+
+## 12. Amendment (operator, 2026-11-15): a short charter excerpt for the scout, in the plan and answer calls only
+
+The operator's words, in a host session on 2026-11-15, after being told that the excerpt never fits: "for the scout, write a focused short excerpt with just what the scout needs to know for its tasks, and use it only on plan and answer calls — a hybrid of 2 and 3." (The options they were shown: 1, leave it dropped; 2, carry the excerpt only in the plan and answer calls; 3, a short excerpt for the scout alone.) The operator approves this section by merging the pull request that adds it.
+
+1. Found while building M1: the charter excerpt of [`specs/106`](106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md) §2 measures about 2,585 tokens, more than the whole 2,000-token budget of §2 item 3, so in the scout's calls it was always dropped and counted.
+2. The scout's calls carry a **scout excerpt** in its place: parts of the ratified `GOVERNANCE.md` chosen by a fixed table and copied verbatim, in charter order, under the charter's own headings, as 106 §2 does. The table: §2's opening paragraph, the table's header and the `scout` row; §4 item 3 (information flow control: taint is computed, never declared); §5 item 3 (secret hygiene). It ends with the closing note 106 §2 writes: what was left out, the charter's hash, and that the whole charter governs. No other words are added.
+3. It is carried in two calls only: the plan call (§4) and the answer call (§5). The call that judges a page carries no excerpt; its governance line stays the only rule it is given.
+4. In those two calls it is loaded first, before the lessons, the skill and the heuristics, and counts against the budget of §2 item 3; whatever does not fit after it is dropped and counted as before. A test pins its size below 600 tokens with the repository's charter, and fails if the scout excerpt is ever found in a page-judging call.
+5. Fail closed: when a selected part is not found exactly once in the ratified charter, the scout excerpt is left out of the call and the omission is noted, as a dropped excerpt is today. It is never replaced by the whole charter, which does not fit.
+6. The page writer's call and the excerpt a host role is given (106 §2) are unchanged.
+7. Slice: **M8**, the scout excerpt (2 to 3 hours), built with or after M6.
