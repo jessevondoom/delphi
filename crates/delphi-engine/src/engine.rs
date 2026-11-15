@@ -597,6 +597,18 @@ impl Engine {
         self.settings.is_forbidden(role)
     }
 
+    /// Can this role be given work (`specs/063` §3.1)? It is not forbidden, in the config or for this session, and it is
+    /// inside the fleet. The one rule for every gate that hands a canonical role a task. `[agents] interactive` says only
+    /// whom the operator may address directly, so it is not asked here unless the fleet is narrowed to it.
+    pub fn can_work(&self, role: &str) -> bool {
+        !self.is_forbidden(role) && self.settings.is_dispatchable(role)
+    }
+
+    /// The canonical roles that can be given work, in the roster's order.
+    pub fn working_roles(&self) -> Vec<String> {
+        crate::frontmatter::ROLES.iter().filter(|r| self.can_work(r)).map(|r| r.to_string()).collect()
+    }
+
     pub fn introduce_agent(&self, role: &str) {
         if !self.is_forbidden(role) {
             if let Ok(mut lock) = self.session_introduced.lock() {

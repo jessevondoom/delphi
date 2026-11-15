@@ -656,6 +656,20 @@ mod tests {
     }
 
     #[test]
+    fn a_role_outside_interactive_can_still_be_given_work() {
+        // The shipped config sets `interactive` and may keep the legacy `enabled` line beside it. Neither narrows who can
+        // work: the fleet does, and `forbidden` (`specs/063` §3.1).
+        let (_t, ws) = workspace_with_config("[agents]\ninteractive = [\"orchestrator\"]\nenabled = [\"orchestrator\", \"architect\"]\nforbidden = [\"scout\"]\n");
+        pin_config(&ws);
+        let e = build(&ws.home, &ws.dir, Hub::new()).unwrap().engine;
+        for role in ["orchestrator", "architect", "strategist", "red-team", "writer"] {
+            assert!(e.can_work(role), "{role}");
+        }
+        assert!(!e.can_work("scout") && !e.can_work("no-such-role"));
+        assert!(!e.working_roles().contains(&"scout".to_string()) && e.working_roles().len() == 12);
+    }
+
+    #[test]
     fn agents_config_interactive_and_forbidden_in_boot() {
         let (t, ws) = workspace_with_config("[agents]\ninteractive = [\"orchestrator\"]\nforbidden = [\"scout\"]\nfleet = \"all\"\n");
         pin_config(&ws);

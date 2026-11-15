@@ -625,8 +625,8 @@ impl EngineService {
         let mut c = h::Caller::parse(&p).map_err(host_err)?;
         c.projects = self.engine.projects.clone();
         let (prompt, kind) = h::help_prompt(&c, ws, &p).map_err(host_err)?;
-        if !self.engine.settings.enabled_agents.iter().any(|a| a == "orchestrator") {
-            return Err(err(code::INVALID_PARAMS, "the orchestrator is not an enabled role, so there is no one to route a request: carry on with the role pack alone"));
+        if !self.engine.can_work("orchestrator") {
+            return Err(err(code::INVALID_PARAMS, "the orchestrator is not an available role, so there is no one to route a request: carry on with the role pack alone"));
         }
         let (task_id, m) = {
             let _gate = self.host_gate.lock().await;
@@ -1895,7 +1895,7 @@ impl EngineService {
         let Some((session, env)) = h::read_handoff(&ws.dir, project.as_deref(), p["session"].as_str()) else {
             return Err(err(code::INVALID_PARAMS, "no host handoff for this project: a coding tool leaves one with `handoff_put`"));
         };
-        let target = if h::servable_role(ws, &env.target_agent).is_ok() && self.engine.settings.enabled_agents.contains(&env.target_agent) { env.target_agent.clone() } else { "orchestrator".to_string() };
+        let target = if h::servable_role(ws, &env.target_agent).is_ok() && self.engine.can_work(&env.target_agent) { env.target_agent.clone() } else { "orchestrator".to_string() };
         let task_id = self.spawn_task(&m, &target, &h::resume_prompt(&session, &env), None, None);
         Ok(json!({"task_id": task_id, "mission_id": m.id, "session": session, "role": target}))
     }
@@ -2028,9 +2028,9 @@ impl EngineService {
         let now = (self.engine.clock_unix)();
         for t in self.engine.timers.due(now) {
             let Ok(m) = self.mission(Some(&t.mission_id)).await else { continue };
-            if !self.engine.settings.enabled_agents.contains(&t.target) {
-                let _ = m.append(EventEnvelope::new(&m.id, "timer.failed", json!({"timer_id": t.id, "reason": format!("`{}` is no longer an enabled role", t.target)}))).await;
-                let _ = self.engine.timers.abandon(&t.id, "role not enabled");
+            if !self.engine.can_work(&t.target) {
+                let _ = m.append(EventEnvelope::new(&m.id, "timer.failed", json!({"timer_id": t.id, "reason": format!("`{}` is no longer an available role", t.target)}))).await;
+                let _ = self.engine.timers.abandon(&t.id, "role not available");
                 continue;
             }
             let fired = Fired::of(&t, now);
@@ -3871,8 +3871,7 @@ impl EngineService {
         let o = crate::settings_store::load(&self.engine.ws.dir);
         let roles: Vec<Value> = self
             .engine
-            .settings
-            .enabled_agents
+            .working_roles()
             .iter()
             .map(|r| {
                 let shipped = self.engine.ws.load_manifest(r).map(|mf| mf.tier().to_string()).unwrap_or_else(|_| "workhorse".into());
@@ -3888,7 +3887,7 @@ impl EngineService {
     async fn settings_set(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
         let m = self.mission(p["mission_id"].as_str()).await?;
-        let setting = crate::settings_store::parse(p["key"].as_str().unwrap_or(""), &p["value"], &self.engine.settings.enabled_agents).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let setting = crate::settings_store::parse(p["key"].as_str().unwrap_or(""), &p["value"], &self.engine.working_roles()).map_err(|e| err(code::INVALID_PARAMS, e))?;
         let a = self.engine.apply_setting(&m, &setting, "operator", None, "", None).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
         Ok(json!({"key": a.key, "old": a.old, "new": a.new, "text": a.text}))
     }
@@ -3900,7 +3899,7 @@ impl EngineService {
         let want = p["id"].as_str().unwrap_or("").trim_start_matches("sg_").to_string();
         let events = m.replay().map_err(engine_err)?;
         let s = crate::settings_store::pending(&events).into_iter().find(|s| s.id.trim_start_matches("sg_") == want).ok_or_else(|| err(code::INVALID_PARAMS, format!("no open suggestion `{}` (see /settings)", want)))?;
-        let setting = crate::settings_store::parse(&s.key, &json!(s.value), &self.engine.settings.enabled_agents).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        let setting = crate::settings_store::parse(&s.key, &json!(s.value), &self.engine.working_roles()).map_err(|e| err(code::INVALID_PARAMS, e))?;
         let a = self.engine.apply_setting(&m, &setting, "suggestion", None, &s.reason, Some(&s.id)).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
         Ok(json!({"key": a.key, "old": a.old, "new": a.new, "text": a.text}))
     }
@@ -5218,7 +5217,7 @@ mod tests {
     // can be labelled a Council record, on any host method, with a fixed answer that echoes nothing.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_council_that_cannot_be_seated_is_seats_unavailable_and_no_host_call_can_write_a_council_label() {
-        let f = setup(vec![], 5.0, |s| s.enabled_agents.retain(|r| r != "strategist"));
+        let f = setup(vec![], 5.0, |s| s.forbidden_agents.push("strategist".into()));
         let ws_dir = f.engine.ws.dir.clone();
         let cwd = f.root.to_string_lossy().to_string();
         let s = serve(&f).await;
@@ -5237,7 +5236,7 @@ mod tests {
             // The default Council needs the strategist; with that role off, the host is told so at once and no Council task is raised.
             let (code_, message) = rpc_error(c.call("host.request_council", p(json!({"question": "Table or file for the retry queue?"}))));
             assert_eq!(code_, Some(code::INVALID_PARAMS));
-            assert!(message.as_deref().is_some_and(|m| m.starts_with("seats_unavailable: `strategist` is not an enabled role")), "{message:?}");
+            assert!(message.as_deref().is_some_and(|m| m.starts_with("seats_unavailable: `strategist` is not an available role")), "{message:?}");
             // The structural labels are refused on every host method; the methods that store a record body also refuse front matter.
             for (method, extra) in [
                 ("host.propose_note", json!({"council_format": 1})),

@@ -3091,7 +3091,7 @@ mod tests {
         for (error, reason) in [
             ("daemon_not_running: Delphi's daemon is not running", "daemon_down"),
             ("disabled_by_operator: the operator turned Delphi off for host tools", "disabled_by_operator"),
-            ("seats_unavailable: `strategist` is not an enabled role, so the default Council cannot be seated", "seats_unavailable"),
+            ("seats_unavailable: `strategist` is not an available role, so the default Council cannot be seated", "seats_unavailable"),
         ] {
             let a = council_unavailable_for(error).unwrap_or_else(|| panic!("{error}"));
             assert!(a.starts_with(error), "the daemon's own sentence is the first thing said: {a}");
