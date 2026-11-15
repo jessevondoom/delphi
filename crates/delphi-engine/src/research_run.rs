@@ -159,6 +159,11 @@ pub trait Library: Send + Sync {
     fn hash_as_read(&self, _url: &str, _text: &str) -> Option<String> {
         None
     }
+    /// The licence and capture level (`full`, `excerpts`, `pointer`) the library records for a source, for the result's claims
+    /// (`specs/119` §6 item 1). `None` when the library cannot say; the result then says `unknown`.
+    fn terms(&self, _source_id: &str) -> Option<(String, String)> {
+        None
+    }
     /// Is the source private? A claim that rests on a private source is never put in an outbound query (`specs/098` §7.5 item 5).
     fn is_private(&self, _source_id: &str) -> bool {
         false
@@ -380,6 +385,23 @@ pub fn validation_order(claims: &[ClaimRec]) -> Vec<usize> {
     }
     first.extend(rest);
     first
+}
+
+/// Each source's licence and capture level as the library records them (`specs/119` §6 item 1): `licence` is the first source's, and
+/// `sources` lists every one. A source the library cannot describe reads `unknown`.
+fn with_terms(mut v: Value, source_ids: &[String], lib: &dyn Library) -> Value {
+    let sources: Vec<Value> = source_ids
+        .iter()
+        .map(|s| {
+            let (licence, kept) = lib.terms(s).unwrap_or_else(|| ("unknown".into(), "unknown".into()));
+            json!({"id": s, "licence": licence, "kept": kept})
+        })
+        .collect();
+    if let Some(first) = sources.first() {
+        v["licence"] = first["licence"].clone();
+    }
+    v["sources"] = Value::Array(sources);
+    v
 }
 
 fn claim_json(c: &ClaimRec, contested: bool, library_id: Option<&str>) -> Value {
@@ -1362,7 +1384,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     library_claims.extend(staged.iter().flatten().cloned());
     let mut once = BTreeSet::new();
     library_claims.retain(|id| once.insert(id.clone()));
-    let claim_values: Vec<Value> = claims.iter().zip(&staged).map(|(c, id)| claim_json(c, c.contested, id.as_deref())).collect();
+    let claim_values: Vec<Value> = claims.iter().zip(&staged).map(|(c, id)| with_terms(claim_json(c, c.contested, id.as_deref()), &c.source_ids, deps.library)).collect();
     // The written answer (`specs/114` §5). What it is written from: the run's kept claims by their library ids, the claims the
     // library held that a page of the run stated again, and the claims known before the run. A claim the library kept no record
     // of has no id to cite and is left out.
@@ -1407,7 +1429,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "library_claims": library_claims,
         "known_before": known.to_json(), "read_from_library": from_library,
         "plan": plan_kind.as_str(), "sub_questions": sub_report, "stopped": stopped.as_str(), "rounds": rounds,
-        "freshness": {"retrieved": retrieved, "last_checked": retrieved},
+        "freshness": {"retrieved": retrieved, "last_checked": delphi_core::time::now_rfc3339()},
         "budget_used": {"steps": ctx.steps(), "check_steps": ctx.check_steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
     });
@@ -1588,6 +1610,10 @@ mod tests {
         rejects: Option<(&'static str, &'static str)>,
     }
     impl Library for FakeLib {
+        /// As the live library says when it says what it kept: a page kept whole under an open licence.
+        fn terms(&self, source_id: &str) -> Option<(String, String)> {
+            (self.says_kept && source_id == "src-who.int").then(|| ("CC-BY-4.0".to_string(), "full".to_string()))
+        }
         fn page_gone<'a>(&'a self, url: &'a str, error: &'a str) -> BoxFut<'a, Option<String>> {
             self.gone.lock().unwrap().push((url.to_string(), error.to_string()));
             Box::pin(async { None })
@@ -1976,6 +2002,25 @@ mod tests {
         let c = ctx(Depth::Survey);
         run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap();
         assert_eq!(*f.lib.gone.lock().unwrap(), [("https://who.int/gone".to_string(), "http status 404".to_string())]);
+    }
+
+    /// `specs/119` §6 item 1: each claim carries its sources' real licence and capture level (`unknown` when the library cannot say),
+    /// and `freshness.last_checked` is the time of this check, not a copy of `retrieved`.
+    #[tokio::test]
+    async fn a_claim_says_each_sources_licence_and_how_it_is_kept_and_last_checked_is_the_check() {
+        for says in [true, false] {
+            let mut f = Fixture::new(Verdict::Inconclusive);
+            f.lib.says_kept = says;
+            let c = ctx(Depth::Survey);
+            let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+            let claim = v["claims"].as_array().unwrap().iter().find(|c| c["source_ids"].as_array().unwrap().iter().any(|s| s == "src-who.int")).unwrap_or_else(|| panic!("{v}")).clone();
+            let want = if says { ("CC-BY-4.0", "full") } else { ("unknown", "unknown") };
+            assert_eq!(claim["licence"].as_str(), Some(want.0), "{claim}");
+            let s = claim["sources"].as_array().unwrap().iter().find(|s| s["id"] == "src-who.int").unwrap().clone();
+            assert_eq!((s["licence"].as_str(), s["kept"].as_str()), (Some(want.0), Some(want.1)), "{claim}");
+            let (retrieved, checked) = (v["freshness"]["retrieved"].as_str().unwrap(), v["freshness"]["last_checked"].as_str().unwrap());
+            assert!(retrieved.len() == 10 && checked.starts_with(retrieved) && checked.contains('T'), "{retrieved} {checked}");
+        }
     }
 
     #[tokio::test]

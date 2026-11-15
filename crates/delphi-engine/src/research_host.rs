@@ -655,6 +655,12 @@ impl Library for LiveLibrary {
         self.keep.kept.lock().unwrap().get(source_id).cloned()
     }
 
+    /// The source's licence and capture level from its record (`specs/119` §6 item 1).
+    fn terms(&self, source_id: &str) -> Option<(String, String)> {
+        let m = self.library().read_meta(source_id)?;
+        Some((m["licence"].as_str().unwrap_or("unknown").to_string(), m["capture_level"].as_str().unwrap_or("pointer").to_string()))
+    }
+
     /// `specs/119` §4: a page gone that a claim rests on is looked up in the archive (`Library::archive_gone_page`), through the
     /// daemon's validation fetcher, only with `[research] archive_fallback` on.
     fn page_gone<'a>(&'a self, url: &'a str, error: &'a str) -> BoxFut<'a, Option<String>> {
