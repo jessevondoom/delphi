@@ -136,6 +136,19 @@ bundle as a plugin (\-\-claude\-plugin), an AGENTS.md fragment, or a marketplace
 A bundle can also travel through a xenia store (the org's shared, signed, git\-hosted store you joined with `delphi xenia`). `publish` writes a `bundle` record from the signed bundle's own manifest, pointing at the git tree you name, and asks you once, showing the exact bytes. `add \-\-from\-xenia` verifies the store, fetches that tree under the same limits as a marketplace add, requires it to hash to the record and to be signed by the member who published it, and records the store's standing: `endorsed` (a steward of another person endorsed these exact bytes, under a current freshness statement) or `member\-signed`. `update` follows the record's newer revisions, forward only. `store` lists the store's bundles; with \-\-auto\-update it also keeps the levels in the lock current and applies the updates that cannot lower the level or change the publisher.
 sources add copies sources from your library into <dir>/sources/ (and turns the section on in bundle.toml). It writes meta.json from the library record (citation fields and the licence record, `internal` when there is none; no status, origin, reliance count or note), source.md when the capture is whole, the excerpts without your purpose notes, and recognised assets. Licence is information, not a gate: nothing is refused for it. The one refusal is a source you flagged private, which never travels in a bundle; the command is also refused inside an agent seat. It refreshes files.json when the bundle has one (sign again if it was signed) and lists the source\-licence, source\-attribution and source\-sharealike warnings `validate` would report. For a public bundle, `package` and `publish` print the sources that carry a licence note and ask you to confirm in a terminal (no \-\-yes); for an internal bundle `publish` asks. The acknowledged ids are written to .delphi\-bundle/report.json.
 Exit codes: 0 pass · 1 failed · 2 usage.
+.SS delphi app
+start the desktop app and pair it; list, revoke and grant its keys.
+.PP
+.nf
+  delphi app [\-\-workspace <name>] [\-\-home <dir>]
+  delphi app list | log
+  delphi app revoke <name>
+  delphi app grant <name> [\-\-remove] <grant>
+.fi
+.PP
+Run it in a terminal: starting the app from one is what vouches for it, and nothing is asked.
+A paired app reads, and asks only for what its grants list (read, request). `revoke` closes its
+sessions at once. The app is DELPHI_APP, else the build beside this program, else /Applications.
 .SS delphi hooks
 run your observe hooks on events.
 .PP

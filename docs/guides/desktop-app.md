@@ -44,6 +44,26 @@ An agent is always written the same way: its chip, its name in bold in its colou
 - It writes nothing under your Delphi home or your projects. Its theme and menu choices are kept by the window.
 - Outside its window it does three things, each on your click: **Show in Finder**, **Open** a deck or page, a document, a picture or a recording in your browser or viewer (never a program or a script), and open a web link in your browser. A file must be inside the workspace or one of your registered projects.
 
+## Pairing it with a terminal
+
+The rules are in [`specs/120`](../../specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md). An app that is not paired reads, as described above. A paired app holds a key of its own, proves it to the daemon on every connection, and may then call the methods of the grants its key holds, and no others.
+
+```sh
+delphi app                               # start the app from a terminal; that is what vouches for it
+delphi app list                          # the paired keys, their grants and when each was last used
+delphi app grant <name> <grant>          # give a key a grant
+delphi app grant <name> --remove <grant> # take one away; the key's open sessions are closed
+delphi app revoke <name>                 # remove a key; its open sessions are closed at once
+delphi app log                           # what paired, what was refused, what was revoked or granted
+```
+
+- Every one of these is run by you, in a terminal. They refuse when their input is not a terminal and inside an agent seat, and the daemon holds the same line: it gives a pairing ticket, revokes and grants only for a client attached to a terminal.
+- `delphi app` asks the daemon for a ticket (good once, for 60 seconds) and starts the app with it on a pipe. Nothing is asked of you. It prints the key's short name (`app-1a2b3c`) and its grants. It starts the app named by `DELPHI_APP` (the executable, or a `Delphi.app`); otherwise the build beside your `delphi` in a source checkout (`target/app/release/…`), then `/Applications/Delphi.app`, then `~/Applications/Delphi.app`. It never starts a program found under the folder you happen to be in.
+- A key is recorded in `operator/app-keys.json` under your Delphi home, which no agent can read or write. A key unused for 180 days is removed.
+- The grants are `read` (what the app reads today) and `request`. A key gets both when it is paired, and gets a new grant only when you give it: an update of the app or of Delphi never adds one.
+
+Not built yet: `delphi app` does not start the app in this build (it says so; the place where it starts a process must first be added to the list of such places), and the `request` grant has no methods, so a paired app can do nothing an unpaired one cannot.
+
 ## Looking at it without the app
 
 The window is a web page. `npm run dev` in `app/` serves it with sample data at `http://localhost:5199`; add `#council` (or any screen's name) to open that screen, and `?q=some+words#knowledge` to run a search. To look at your own daemon's data in a browser, `cargo run --example probe -- --json > dist/real.json` in `app/src-tauri` and open `?data=./real.json` on a preview of the built page. That file holds your agents' text; delete it afterwards, and never leave it in `dist/` when you build the app.

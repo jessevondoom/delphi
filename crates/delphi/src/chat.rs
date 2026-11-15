@@ -1132,7 +1132,10 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str, names: &HashMap<String, 
         // For clients written in other languages: where the daemon's sockets are, and how roles look and are named (the
         // active theme's names, as the console is given them: the desktop app shows these, spec 111 §4).
         "where" => {
-            println!("{}", ui_info(&l.sock, &l.narrator_sock, ws_dir, None, names));
+            let mut info = ui_info(&l.sock, &l.narrator_sock, ws_dir, None, names);
+            // Where the desktop app proves its key (`specs/120` §3). A path, as the others are; the app signs it.
+            info["app_socket"] = json!(l.app_sock.display().to_string());
+            println!("{}", info);
             0
         }
         "status" => match connect() {
