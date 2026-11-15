@@ -244,9 +244,10 @@ pub struct Labelled {
 /// "verified" as "checked". The tier and the index are unchanged; this is words only.
 pub const LIBRARY_TIER_NOTE: &str = "the library's fixed tier: fetched and stored by Delphi; the page's content is third-party and not checked";
 
-/// The gloss for a result's `source_type`, if it has one: only a `library` document at `federated_verified`.
+/// The gloss for a result's `source_type`, if it has one: only a `library` document at `federated_verified`, and a document of zone
+/// `research` (`specs/112` §3.5), which is indexed at the library's tier under the library's rules.
 pub fn source_type_note(zone: &str, source_type: &str) -> Option<&'static str> {
-    (zone == "library" && source_type == "federated_verified").then_some(LIBRARY_TIER_NOTE)
+    ((zone == "library" || zone == crate::research_index::ZONE) && source_type == "federated_verified").then_some(LIBRARY_TIER_NOTE)
 }
 
 impl Labelled {

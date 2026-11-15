@@ -166,6 +166,7 @@ pub mod hostmap;
 pub mod recovery;
 pub mod research;
 pub mod research_images;
+pub mod research_index;
 pub mod research_chain;
 pub mod research_host;
 pub mod research_jobs;

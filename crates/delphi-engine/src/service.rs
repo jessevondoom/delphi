@@ -1677,7 +1677,9 @@ impl EngineService {
             // `specs/109` §12: labels, not exclusion. A visible document is returned whatever its tier or draft state, labelled; the
             // release's own files come back in their own `release` group with their own limit.
             let (core, release, third_party, mode) = if db.is_file() {
-                match crate::host_labels::search(&ws.home, &db, &ws.dir, &query, vec!["core", "context", "specs", "knowledge", "library", "bundles"], limit, use_, false) {
+                // Zone `research` (`specs/112` §3.5): topic records, answers and library claims, under the library's rules; they are
+                // third-party text, so they come back in the `third_party` group, fenced, each with its label.
+                match crate::host_labels::search(&ws.home, &db, &ws.dir, &query, vec!["core", "context", "specs", "knowledge", "library", "bundles", crate::research_index::ZONE], limit, use_, false) {
                     Ok(r) => (r.rest, r.release, r.third_party, r.mode.as_str()),
                     Err(e) if e.to_string().contains("no such table") => {
                         unindexed = true;
@@ -4905,6 +4907,66 @@ mod tests {
             c.call("host.search_kb", json!({"session": session, "tool": "claude-code", "cwd": cwd, "query": query})).unwrap()
         })
         .await
+    }
+
+    /// `specs/112` AC-2, the host's half: after a run kept a claim, `search_kb` returns it labelled `noted`, with the topic's answer,
+    /// as third-party text; a claim that rests on a private source is not returned at all.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hosts_search_kb_returns_a_runs_claim_labelled_noted_and_never_one_that_rests_on_a_private_source() {
+        use crate::library::claims::{AnchorSpec, ResearchClaim};
+        use crate::library::{AddOpts, Budgets, Level, Library};
+        use crate::research_record as rr;
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (ws_dir, home) = (f.engine.ws.dir.clone(), f.engine.ws.home.clone());
+        let lib = Library::in_home(&home);
+        let files = tempfile::tempdir().unwrap();
+        let source = |name: &str, text: &str, private: bool| {
+            let p = files.path().join(format!("{name}.md"));
+            std::fs::write(&p, text).unwrap();
+            lib.add_file(&p, &AddOpts { licence: Some("CC0-1.0".into()), level: Some(Level::Full), private, ..Default::default() }, &Budgets::default()).unwrap().id
+        };
+        let (open, secret) = (source("open", "Numbatfish tanks are held at 28 degrees, the guide says.", false), source("secret", "The numbatfish vault code is 4417.", true));
+        let topic = rr::Topic::begin(&ws_dir, &rr::Begin { question: "What temperature do numbatfish tanks need?", asked_by: rr::Asker::host("host:claude-code/unknown"), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
+        let claim = |text: &str, fp: &str, source: &str, quote: &str| {
+            let anchors = [AnchorSpec { source_id: source.to_string(), locator: Some("https://example.org/numbatfish".into()), quote: quote.into(), prefix: None, suffix: None }];
+            lib.add_research_claim(&ResearchClaim { text, fingerprint: fp, project: None, topic: Some(&topic.id), anchors: &anchors }).unwrap().0["id"].as_str().unwrap().to_string()
+        };
+        let kept = claim("numbatfish tanks need 28 degrees", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &open, "tanks are held at 28 degrees");
+        let hidden = claim("the numbatfish vault code is 4417", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &secret, "vault code is 4417");
+        topic.finish("r-t-1", "done", Some(&json!({"answer": "Sources read say:\n- numbatfish tanks need 28 degrees (not validated: model synthesis)", "budget_used": {"steps": 2, "check_steps": 1}, "search_log": {"version": 1, "private": false, "lines": [], "flow": {}}})), std::slice::from_ref(&kept), None, 5).unwrap();
+        // The index exists (the console or `delphi kb index` made it); a host's search then brings it up to date before it searches.
+        assert_eq!(home.join("workspaces").join(ws_dir.file_name().unwrap()), ws_dir, "the fixture's workspace sits under its home, as the index expects");
+        drop(crate::kb::Kb::open(&ws_dir.join("local/state.db")).unwrap());
+        let found = host_search_as(&s, "abcdef0123456789", &f.root, "numbatfish tanks degrees").await;
+        let third: Vec<&Value> = found["third_party"].as_array().unwrap().iter().collect();
+        let of = |needle: &str| third.iter().find(|r| r["path"].as_str().is_some_and(|p| p.contains(needle))).copied();
+        let c = of(&format!("research/claims/{kept}.json")).unwrap_or_else(|| panic!("the kept claim is not in the answer: {found}"));
+        assert_eq!((c["status"].as_str(), c["checked"].as_str(), c["author"].as_str(), c["source_type"].as_str()), (Some("noted"), Some("not checked"), Some("third_party"), Some("federated_verified")), "{c}");
+        assert_eq!(c["label"], "third-party page, not checked");
+        assert!(c["source_type_note"].as_str().is_some_and(|n| n.contains("not checked")), "the tier's name is glossed so `verified` is not read as checked: {c}");
+        assert!(c["preview"].as_str().unwrap().contains("numbatfish tanks need 28 degrees"), "{c}");
+        assert!(of(&format!("research/topics/{}/", topic.id)).is_some(), "the topic's record or answer is found too: {found}");
+        let all = found.to_string();
+        assert!(!all.contains(&hidden) && !all.contains("4417") && !all.contains("vault code is"), "a claim that rests on a private source reached a host: {all}");
+        // Asked for by its own words, the private claim is still not there: it was never listed for the index.
+        let asked = host_search_as(&s, "abcdef0123456789", &f.root, "numbatfish vault code").await.to_string();
+        assert!(!asked.contains(&hidden) && !asked.contains("4417") && !asked.contains("vault code is"), "a claim that rests on a private source reached a host: {asked}");
+        let conn = rusqlite::Connection::open(ws_dir.join("local/state.db")).unwrap();
+        let indexed: i64 = conn.query_row("SELECT COUNT(*) FROM kb_documents WHERE rel_path LIKE ?1", [format!("%{hidden}%")], |r| r.get(0)).unwrap();
+        assert_eq!(indexed, 0, "the private claim is not in the index at all");
+        let kept_rows: i64 = conn.query_row("SELECT COUNT(*) FROM kb_documents WHERE zone = 'research' AND rel_path LIKE ?1", [format!("%{kept}%")], |r| r.get(0)).unwrap();
+        assert_eq!(kept_rows, 1, "the kept claim is");
+        // `use: verify` serves only checked text of a ratified or empirical tier: nothing of the zone.
+        let (hsock, htok, cwd) = (s.host_sock.clone(), s.host.clone(), f.root.to_string_lossy().to_string());
+        let verify = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            c.call("host.search_kb", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "query": "numbatfish tanks degrees", "use": "verify"})).unwrap()
+        })
+        .await;
+        assert!(!verify.to_string().contains("research/claims/"), "{verify}");
     }
 
     /// `host.research_status` or `host.research_result` as the host of `session` working in `cwd`.

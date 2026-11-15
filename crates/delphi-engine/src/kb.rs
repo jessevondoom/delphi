@@ -487,6 +487,8 @@ pub fn sources(ws: &Path) -> Vec<SourceFile> {
     md_files(&ws.join("local/staged"), "staged", "staged", UNTRUSTED, &mut all);
     bundle_files(ws, &mut all);
     library_files(ws, &mut all);
+    // Zone `research` (`specs/112` §3.5): the workspace's topic records and answers, and the library's claims, at the library's tier.
+    crate::research_index::files(ws, &mut all);
     project_sources(ws, &mut all);
     // Later entries (team) override earlier ones (base) for the same logical path.
     let mut by_path: BTreeMap<String, SourceFile> = BTreeMap::new();
@@ -628,7 +630,7 @@ impl Kb {
         }
         // An imported page is shown by default only when the daemon found it linking to a checked entry (`specs/068` §6.2); its
         // recorded taint stays in its own frontmatter, and the label never changes.
-        let source_type = if zone == "summaries" { (if frontmatter_flag(text, "index_worthy") { "internal_generated" } else { UNTRUSTED }).to_string() } else if bundle.is_some() || zone == "knowledge" || zone == "library" || zone == "about" || zone == "project" { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
+        let source_type = if zone == "summaries" { (if frontmatter_flag(text, "index_worthy") { "internal_generated" } else { UNTRUSTED }).to_string() } else if bundle.is_some() || zone == "knowledge" || zone == "library" || zone == "about" || zone == "project" || zone == crate::research_index::ZONE { default_source.to_string() } else { frontmatter_field(text, "source_type").filter(|s| SOURCE_TYPES.contains(&s.as_str())).unwrap_or_else(|| default_source.to_string()) };
         let from = bundle.map(|b| format!(" | Bundle: {}", b.label)).unwrap_or_default();
         let (author, confidence, status) = (frontmatter_field(text, "author").or_else(|| frontmatter_field(text, "role")), frontmatter_field(text, "confidence").unwrap_or_else(|| "low".into()), if zone == "about" { "active".into() } else { frontmatter_field(text, "status").unwrap_or_else(|| "active".into()) });
         let tx = self.conn.transaction()?;
@@ -647,7 +649,13 @@ impl Kb {
         let web_corroborated = rel_path.starts_with("context/facts/") && frontmatter_flag(text, "web_corroborated") && frontmatter_field(text, "ratified_by").as_deref() == Some("validator") && frontmatter_field(text, "kind").as_deref() == Some("fact");
         // Only a staged note or episode carries a validity date and a kind the search acts on (`specs/050` ML-3, ML-4, `specs/065`); anywhere else
         // the fields are ignored here, so a rule or a library page cannot be hidden by one.
-        let (kind, valid_until) = if zone == "staged" || zone == "episodes" { (frontmatter_field(text, "kind").filter(|k| crate::frontmatter::KINDS.contains(&k.as_str()) || k == "episode"), frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string())) } else { (None, None) };
+        let (kind, valid_until) = if zone == "staged" || zone == "episodes" { (frontmatter_field(text, "kind").filter(|k| crate::frontmatter::KINDS.contains(&k.as_str()) || k == "episode"), frontmatter_field(text, "valid_until").filter(|d| crate::frontmatter::entry_date_ok(d)).map(|d| d[..10].to_string())) } else if zone == crate::research_index::ZONE && rel_path.starts_with("research/claims/") {
+            // Zone `research` (`specs/112` §3.5): a library claim's derived status, as `research_index::claim_text` computed it from the
+            // claim's own record. Kept for the label a hit shows; only a word of the fixed list, and only for a claim's document.
+            (frontmatter_field(text, "claim_status").filter(|s| crate::research_index::STATUSES.contains(&s.as_str())), None)
+        } else {
+            (None, None)
+        };
         tx.execute("INSERT INTO kb_documents(rel_path, zone, content_blake3, author, source_type, confidence, status, updated_at, web_corroborated, kind, valid_until) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", params![rel_path, zone, hash, author, source_type, confidence, status, now, web_corroborated as i64, kind, valid_until])?;
         let doc_id = tx.last_insert_rowid();
         let (ep_role, ep_outcome, ep_tools, ep_skills, ep_errors, ep_files, ep_supersedes) = if zone == "episodes" {
@@ -1814,7 +1822,11 @@ impl Kb {
                 None => None,
             };
             let vouched_by = vouched.iter().find(|(p, _)| rel_path == *p || (p.ends_with('/') && rel_path.starts_with(p.as_str()))).map(|(_, o)| o.clone());
-            let ks = if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status, vouched_by.as_deref()) };
+            let ks = if zone == crate::research_index::ZONE {
+                // A library claim is labelled by its own derived status (`specs/112` §3.5); a topic's record and answer read noted.
+                let word: Option<String> = self.conn.query_row("SELECT kind FROM kb_documents WHERE rel_path = ?1 AND zone = 'research'", [&rel_path], |r| r.get(0)).ok().flatten();
+                crate::research_index::status_of(word.as_deref())
+            } else if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status, vouched_by.as_deref()) };
             let vouched_by = vouched_by.filter(|_| ks == delphi_core::knowledge_status::Status::Validated);
             let label = if zone == "about" { "release reference, not build authority" } else if zone == "summaries" { SUMMARY_LABEL } else { ks.label() };
             hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author });

@@ -37,10 +37,11 @@ pub fn extension(path: &str) -> String {
     Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
 }
 
-/// A file the index holds by what its extension says it is, not as Markdown.
+/// A file the index holds by what its extension says it is, not as Markdown. A research record and a library claim are JSON:
+/// the index holds the Markdown `research_index` writes for one (`specs/112` §3.5), made the same way wherever it is read.
 pub fn is_binary_doc(path: &str) -> bool {
     let e = extension(path);
-    READABLE.contains(&e.as_str()) || MEDIA.iter().any(|(m, _)| *m == e)
+    READABLE.contains(&e.as_str()) || MEDIA.iter().any(|(m, _)| *m == e) || crate::research_index::is_derived(path)
 }
 
 fn media_class(ext: &str) -> Option<&'static str> {
@@ -81,6 +82,10 @@ pub fn human_size(n: u64) -> String {
 pub fn text_of(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_string_lossy().to_string();
     let ext = extension(&name);
+    // The only JSON the index lists is a research record or a library claim (`research_index::files`).
+    if ext == "json" {
+        return crate::research_index::text_of(path);
+    }
     let size = std::fs::metadata(path).ok()?.len();
     if let Some(class) = media_class(&ext) {
         return Some(format!("{} file {}, {}, {} type {}\n\nlisted by name only: Delphi does not read pictures, sound or video (no OCR, no transcription). A note beside it named `{}.md` is indexed as an ordinary document.\n", class, name, human_size(size), class, ext, name));
