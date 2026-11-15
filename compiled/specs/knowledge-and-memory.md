@@ -271,7 +271,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 115-research-recall-across-projects
 
-**115: Research recall across projects** · approved (per source at `926fc633cd1e`) · tier 0 · [source](../../specs/115-research-recall-across-projects.md)
+**115: Research recall across projects** · approved (per source at `a7ba4b1da713`) · tier 0 · [source](../../specs/115-research-recall-across-projects.md)
 
 **source excerpt, untrusted** · `specs/115-research-recall-across-projects.md` lines 25-30
 

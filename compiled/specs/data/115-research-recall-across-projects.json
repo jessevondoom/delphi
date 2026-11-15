@@ -79,25 +79,55 @@
       "line": 115,
       "number": "10",
       "title": "Amendment (operator, 2026-11-15): a session with no project is given shared research"
+    },
+    {
+      "level": 2,
+      "line": 125,
+      "number": "11",
+      "title": "Amendment (operator, 2026-11-15): the mark held by the task, internal confirmation that does not spread, and the operator sees everything"
+    },
+    {
+      "level": 3,
+      "line": 129,
+      "number": "11.1",
+      "title": "The mark is held by the task that was handed the claim"
+    },
+    {
+      "level": 3,
+      "line": 136,
+      "number": "11.2",
+      "title": "An internal source confirms its own claim, and nothing else"
+    },
+    {
+      "level": 3,
+      "line": 142,
+      "number": "11.3",
+      "title": "The operator sees everything"
+    },
+    {
+      "level": 3,
+      "line": 146,
+      "number": "11.4",
+      "title": "Slice"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/115-research-recall-across-projects.md",
-    "sha256": "926fc633cd1e64d7c1b0c64ea96acba9c1bb4feb3dc9fe88f0accc1ae04f7bcf"
+    "sha256": "a7ba4b1da713e90ea568d2cda5b0f87d63d41d62fa42e1e4b006979408390aa7"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 625,
+        "end": 771,
         "end_line": 6,
         "line": 6,
         "start": 145
       },
-      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"115: your suggestions are approved\" (the default `workspace` and the private flag of section 8). Open question 2 was settled later the same day (\"1. follow your direction\"): claims from private and internal sources are shared under the three guards of section 2.3. Section 10 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request."
+      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"115: your suggestions are approved\" (the default `workspace` and the private flag of section 8). Open question 2 was settled later the same day (\"1. follow your direction\"): claims from private and internal sources are shared under the three guards of section 2.3. Section 10 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request. Section 11 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request."
     },
-    "sha256": "926fc633cd1e64d7c1b0c64ea96acba9c1bb4feb3dc9fe88f0accc1ae04f7bcf",
+    "sha256": "a7ba4b1da713e90ea568d2cda5b0f87d63d41d62fa42e1e4b006979408390aa7",
     "word": "approved"
   },
   "spec": {
@@ -112,10 +142,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2128,
+      "end": 2274,
       "end_line": 30,
       "line": 25,
-      "start": 1513
+      "start": 1659
     },
     "text": "| # | Observation (2026-11-14) |\n| :-- | :-- |\n| E-1 | The index shows a project's files only to a session with that project's id (`kb.rs`, the project filter). Tests assert that another project gets nothing. |\n| E-2 | A research run inside a project writes to that project and never to the shared index (`research.rs`, the destination rule). |\n| E-3 | Project knowledge reaches the rest of the workspace only by promotion, one item at a time, on the operator's accept. |\n| E-4 | On a live workspace with eight projects, a search from one project for subjects researched in two others returned nothing about them. |"
   }

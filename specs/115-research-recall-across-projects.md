@@ -3,7 +3,7 @@ id: spec-115-research-recall-across-projects
 title: "115: Research recall across projects"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "115: your suggestions are approved" (the default `workspace` and the private flag of section 8). Open question 2 was settled later the same day ("1. follow your direction"): claims from private and internal sources are shared under the three guards of section 2.3. Section 10 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
+status: approved   # by the operator, 2026-11-14, in a host session: "115: your suggestions are approved" (the default `workspace` and the private flag of section 8). Open question 2 was settled later the same day ("1. follow your direction"): claims from private and internal sources are shared under the three guards of section 2.3. Section 10 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request. Section 11 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -121,3 +121,28 @@ The operator's words, in a host session on 2026-11-15: "a session with no projec
 3. With no own project there is no own-project boost (§3 item 3): every shared result ranks on its score alone.
 4. `research_sharing = "project"` (§2 item 1) still turns sharing off for every session, with or without a project.
 5. Built in X4, with a test for each entry point of item 1 and the mark.
+
+## 11. Amendment (operator, 2026-11-15): the mark held by the task, internal confirmation that does not spread, and the operator sees everything
+
+The operator's words, in a host session on 2026-11-15, answering two questions the X4 builder raised: "1. limit it to the task. my example is internal corporate information validating a timeline or technology claim. that should be considered absilute but it can't be used to reinforce a non-internal decision for something tangentially related. we want the validation, but shouldn't limit sharing appropriate information elsewhere. 2. yes. the operator should be able to easily find and view everything delphi knows." The operator approves this section by merging the pull request that adds it.
+
+### 11.1 The mark is held by the task that was handed the claim
+
+1. Found while building X4: inside the daemon, a mission handed a claim resting on an internal or private source took the private-read mark of [`specs/103`](103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md) on the mission's own key, so every task of the mission was held, including tasks that never saw the claim.
+2. This replaces that for Delphi's own missions: the mark is taken on the key of the task that was handed the claim (`<mission>/<task>`), by its start passages or its agent's `kb_search` or `kb_retrieve`. Tasks that task starts hold it too, by 103's rule that a child has its parent's scope within a session (103 §7.1). Other tasks of the mission are not held.
+3. The claim pull at mission start hands no task the text of a claim that rests on an internal or private source: such a claim is pulled as a pointer (its id, its project and its label, no sentence and no quote), and the task that opens it is marked when it does.
+4. A host session has no tasks: its whole session is still the unit that is marked, as before.
+
+### 11.2 An internal source confirms its own claim, and nothing else
+
+5. This amends §2 item 3, "Label and weight". A claim that an internal or private source states directly, anchored to that source by its quote or its line, is **confirmed internally**: for that claim the internal source is authoritative. Its label reads `confirmed by an internal source` with the project's name. A public source that disagrees does not lower it; the disagreement is shown to the operator beside the claim.
+6. The confirmation does not spread. It is never an origin in the count of another claim, never corroboration for a claim the internal source does not itself state, and never weight in the status of any other claim, in the validator's check, in a written answer's support for another sentence, in a page, in a decision record, or in a Council's evidence. A written answer or a page may cite the claim only for what the claim says (the check of [`specs/114`](114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md) §5 already ties each marker to a held claim's statement), with its label.
+7. What crosses to other projects is unchanged from §2 item 3: the claim, its quote and a pointer, under the same guards and the mark of 11.1. Sharing the claim where it is appropriate is the point; what it may not do is lend its weight to something else.
+
+### 11.3 The operator sees everything
+
+8. The operator's own views (the console's knowledge deck, the app, and `delphi kb search` at a terminal) show the research of every project, private ones included and labelled private, and every claim whatever its source, with the label it carries. Nothing Delphi holds is hidden from the operator; the private flag and the guards limit what other sessions and agents are given, never the operator.
+
+### 11.4 Slice
+
+9. **X6**, the task-held mark (11.1) and internal confirmation (11.2), 6 to 8 hours. 11.3 is how X5 was built and needs no slice.
