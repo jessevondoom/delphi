@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fixtureBridge } from '../src/bridge.ts';
-import { dayOf, docInAddress, docTarget, frontmatter, headingOf, listTarget, searchTarget, sourceWords, titleOf, type Doc, type SearchBody } from '../src/kb.ts';
+import { dayOf, docInAddress, docTarget, frontmatter, headingOf, LIST_PAGE, listAll, listTarget, searchTarget, sourceWords, titleOf, type Doc, type SearchBody } from '../src/kb.ts';
 
 test('a read is addressed the way the daemon expects, with the query encoded', () => {
   assert.equal(searchTarget('  narrator socket & more  '), '/v1/search?q=narrator%20socket%20%26%20more&limit=20&facets=1');
@@ -53,4 +53,30 @@ test('a document named in the address must be a plain path inside the workspace'
   assert.equal(docInAddress('?doc=missions/m/report.md'), 'missions/m/report.md');
   assert.equal(docInAddress('?q=x&doc=agents%2Fscout%2FAGENT.md'), 'agents/scout/AGENT.md');
   for (const bad of ['?doc=../secrets.md', '?doc=/etc/hosts', '?doc=a/../../b.md', '?doc=https://example.com/x.md', '?doc=', '']) assert.equal(docInAddress(bad), '', bad);
+});
+
+test('a listing is read to its end, a page at a time, by collection or by kind', async () => {
+  assert.equal(listTarget(200, undefined, { collection: 'agents' }), '/v1/documents?limit=200&collection=agents');
+  assert.equal(listTarget(200, 'skill', { offset: 200 }), '/v1/documents?limit=200&kind=skill&offset=200');
+  // 450 documents in the collection: three reads, and the rows past the first page are there.
+  const all = Array.from({ length: 450 }, (_, i) => ({ rel_path: `agents/r${i}/AGENT.md`, kind: 'other', zone: 'agents', status: 'active', source_type: 'user_ratified', updated_at: '' }));
+  const asked: string[] = [];
+  const read = async (target: string) => {
+    asked.push(target);
+    const q = new URLSearchParams(target.split('?')[1]);
+    const at = Number(q.get('offset') ?? 0);
+    return { status: 200, body: all.slice(at, at + Number(q.get('limit'))) };
+  };
+  const got = await listAll(read, { collection: 'agents' });
+  assert.equal(got.status, 200);
+  assert.equal(got.rows.length, 450);
+  assert.deepEqual(asked, ['/v1/documents?limit=200&collection=agents', '/v1/documents?limit=200&collection=agents&offset=200', '/v1/documents?limit=200&collection=agents&offset=400']);
+  // A full last page costs one more read, which comes back empty.
+  asked.length = 0;
+  assert.equal((await listAll(async (t) => (asked.push(t), { status: 200, body: asked.length === 1 ? all.slice(0, LIST_PAGE) : [] }), { kind: 'skill' })).rows.length, LIST_PAGE);
+  assert.equal(asked.length, 2);
+  // It stops at the cap, and a refusal ends it with the rows so far.
+  assert.equal((await listAll(async () => ({ status: 200, body: all.slice(0, LIST_PAGE) }), {}, 400)).rows.length, 400);
+  let n = 0;
+  assert.deepEqual(await listAll(async () => (n++ === 0 ? { status: 200, body: all.slice(0, LIST_PAGE) } : { status: 503, body: {} }), {}).then((r) => [r.status, r.rows.length]), [503, 200]);
 });

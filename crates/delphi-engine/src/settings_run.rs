@@ -128,7 +128,7 @@ impl Engine {
         let (Some(key), Some(value)) = (args["key"].as_str(), args["value"].as_str().map(String::from).or_else(|| args["value"].as_f64().map(|n| n.to_string()))) else {
             return Ok(tool_result_error(format!("change_setting needs `key` and `value`. Settable: {}", settings_store::SETTABLE)));
         };
-        let setting = match settings_store::parse(key, &json!(value), &self.settings.enabled_agents) {
+        let setting = match settings_store::parse(key, &json!(value), &self.working_roles()) {
             Ok(s) => s,
             Err(e) => return Ok(tool_result_error(e)),
         };

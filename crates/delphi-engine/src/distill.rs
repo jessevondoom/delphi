@@ -268,8 +268,8 @@ impl Engine {
 
     /// Run a distill task: resolve the allow-list, start a writer span narrowed to it, scan what it staged.
     pub async fn run_distill(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, req: &Request) -> Result<crate::engine::TaskOutcome, EngineError> {
-        if !self.settings.enabled_agents.iter().any(|a| a == "writer") {
-            return Err(EngineError::Invalid("the writer role is not enabled: add \"writer\" to [agents] enabled in config.toml".into()));
+        if !self.can_work("writer") {
+            return Err(EngineError::Invalid("the writer role is not available: it is listed under [agents] forbidden in config.toml, or the fleet does not reach it".into()));
         }
         let mut plan = plan(&self.plan_guard()?, &self.ws.dir, &req.from).map_err(EngineError::Invalid)?;
         let date = self.now().chars().take(10).collect::<String>();
@@ -342,7 +342,7 @@ mod tests {
 
     /// A workspace holding the four kinds of allowed source and a canary in every place a distill must never read.
     fn fixture(steps: Vec<Step>) -> Fx {
-        let f = setup(steps, 5.0, |s| s.enabled_agents.push("writer".into()));
+        let f = setup(steps, 5.0, |_| {});
         ratify_writer(&f);
         let ws = &f.engine.ws.dir;
         put(&ws.join("team/context/arch.md"), &format!("# Architecture\nThe retry budget is three attempts.\nSee /{}/dev/notes.md and mail dev@acme.example. Key {}\n", "Users", secret()));
@@ -425,7 +425,7 @@ mod tests {
         let f = {
             // the scripted model is fixed at setup, so build the fixture again over the same script
             drop(f);
-            let f = setup(steps, 5.0, |s| s.enabled_agents.push("writer".into()));
+            let f = setup(steps, 5.0, |_| {});
             ratify_writer(&f);
             let ws = f.engine.ws.dir.clone();
             put(&ws.join("team/context/arch.md"), &format!("# Architecture\nThe retry budget is three attempts.\nSee /{}/dev/notes.md and mail dev@acme.example. Key {}\n", "Users", secret()));
@@ -478,7 +478,7 @@ mod tests {
         let stage = format!("missions/m1/distill/{}-t_0001", &f.engine.now()[..10]);
         drop(f);
         let leaked = format!("---\ntitle: x\nsummary: x\ntags: []\n---\nkey {}\n", secret());
-        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": format!("{}/knowledge/leak.md", stage), "content": leaked})), Step::text("done")], 5.0, |s| s.enabled_agents.push("writer".into()));
+        let f = setup(vec![Step::tool("w1", "write_file", json!({"path": format!("{}/knowledge/leak.md", stage), "content": leaked})), Step::text("done")], 5.0, |_| {});
         ratify_writer(&f);
         put(&f.engine.ws.dir.join("team/context/a.md"), "# A\nfact\n");
         let out = f.engine.run_distill(&f.m, "t_0001".into(), &Request::default()).await.unwrap();
@@ -487,9 +487,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn distill_is_refused_when_the_writer_is_not_enabled() {
-        let f = setup(vec![], 5.0, |_| {});
+    async fn distill_is_refused_when_the_writer_is_not_available() {
+        let f = setup(vec![], 5.0, |s| s.forbidden_agents.push("writer".into()));
         let e = f.engine.run_distill(&f.m, "t_0001".into(), &Request::default()).await.unwrap_err();
-        assert!(e.to_string().contains("writer role is not enabled"), "{}", e);
+        assert!(e.to_string().contains("writer role is not available"), "{}", e);
     }
 }
