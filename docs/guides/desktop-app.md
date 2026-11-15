@@ -6,13 +6,13 @@ It is not in a release yet. You build it from this repository.
 
 ## Build it
 
-You need Node 22.12 or newer, Rust with `cargo` on your `PATH`, and `python3`. macOS only for now.
+You need Node 22.12 or newer, Rust with `cargo` on your `PATH`, `python3`, and Chrome or Chromium (for the diagram check; `CHROME=<path>` names one). macOS only for now.
 
 ```sh
 app/dev/build.sh
 ```
 
-That installs the window's pinned dependencies without running their install scripts, runs every check (the dependency gate, the type check, the tests of the window and of the bridge, clippy), builds `Delphi.app`, and then starts the built app once against a stand-in daemon to confirm that it attaches read-only and that its window asks for its data. A window opens for a few seconds during that last step; `app/dev/build.sh --no-smoke` skips it.
+That installs the window's pinned dependencies without running their install scripts, runs every check (the dependency gate, the type check, the tests of the window and of the bridge, a check in headless Chrome that hostile Mermaid diagrams run nothing, clippy), builds `Delphi.app`, and then starts the built app once against a stand-in daemon to confirm that it attaches read-only and that its window asks for its data. A window opens for a few seconds during that last step; `app/dev/build.sh --no-smoke` skips it.
 
 The app is at `target/app/release/bundle/macos/Delphi.app`. Copy it where you keep applications.
 

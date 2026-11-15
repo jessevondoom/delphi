@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Bridge } from './bridge.ts';
+import { drawDiagram, isMermaid, type Drawn } from './diagram.ts';
 import { isWeb, parse, resolvePath, type Block, type Inline } from './md.ts';
 
 /** Where a piece of Markdown came from, so its links and pictures can be followed. Without it they are shown, not followed. */
@@ -89,6 +90,44 @@ function Picture({ src, alt, ctx }: { src: string; alt: string; ctx: RichContext
   );
 }
 
+/** A Mermaid diagram of a document (spec 118 §5 item 4): its text until it is drawn, then a picture of it, with the text a
+ * click away; when it cannot be drawn, its text and why. The renderer is loaded the first time a diagram is shown, and
+ * what it draws is only ever shown as a picture (`diagram.ts` says how the text is kept from running anything). */
+function Diagram({ text }: { text: string }) {
+  const host = useRef<HTMLElement>(null);
+  const [drawn, setDrawn] = useState<Drawn | null>(null);
+  useEffect(() => {
+    const el = host.current;
+    setDrawn(null);
+    if (!el || typeof window === 'undefined') return;
+    let gone = false;
+    const dark = getComputedStyle(document.documentElement).colorScheme === 'dark';
+    // Under the system's reduce-motion setting nothing in the drawing moves.
+    const still = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    import('./mermaid-load.ts')
+      .then(({ loadMermaid }) => loadMermaid())
+      .then((m) => drawDiagram(m, text, { dark, still, host: el }))
+      .catch((e: unknown): Drawn => ({ ok: false, why: e instanceof Error ? e.message : 'the renderer did not start' }))
+      .then((d) => { if (!gone) setDrawn(d); });
+    return () => { gone = true; };
+  }, [text]);
+  const code = <pre className="code"><span className="md-lang">mermaid</span>{text}</pre>;
+  if (!drawn?.ok) {
+    return (
+      <figure ref={host} className="md-diagram" aria-busy={drawn === null}>
+        {code}
+        {drawn && <figcaption className="md-caption">Not drawn: {drawn.why}. Its text is shown.</figcaption>}
+      </figure>
+    );
+  }
+  return (
+    <figure ref={host} className="md-diagram">
+      <img src={drawn.src} width={drawn.width || undefined} height={drawn.height || undefined} alt="A diagram, drawn from its text below" draggable={false} />
+      <details><summary className="md-caption">Its text</summary>{code}</details>
+    </figure>
+  );
+}
+
 function Link({ href, ctx, children }: { href: string; ctx: RichContext; children: ReactNode }) {
   const path = resolvePath(ctx.docPath, href);
   let act: (() => void) | null = null;
@@ -129,7 +168,9 @@ function Blocks({ blocks, ctx }: { blocks: Block[]; ctx: RichContext }) {
             return <Tag key={i} className={`md-h md-h${b.level}`}><Spans c={b.c} ctx={ctx} /></Tag>;
           }
           case 'p': return <p key={i}><Spans c={b.c} ctx={ctx} /></p>;
-          case 'code': return <pre key={i} className="code">{b.lang && <span className="md-lang">{b.lang}</span>}{b.s}</pre>;
+          case 'code':
+            if (isMermaid(b.lang)) return <Diagram key={i} text={b.s} />;
+            return <pre key={i} className="code">{b.lang && <span className="md-lang">{b.lang}</span>}{b.s}</pre>;
           case 'quote': return <blockquote key={i}><Blocks blocks={b.c} ctx={ctx} /></blockquote>;
           case 'hr': return <hr key={i} />;
           case 'image': return <Picture key={i} src={b.src} alt={b.alt} ctx={ctx} />;
