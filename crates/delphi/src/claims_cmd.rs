@@ -162,12 +162,21 @@ fn show(lib: &Library, args: &[String]) -> i32 {
     };
     let st = claims::status(&c);
     c["status"] = Value::from(st.as_str());
+    // `specs/115` §11 item 5: a claim an internal source states directly, shown to the operator with any disagreement beside it.
+    let confirmed = lib.internal_confirmation(&c);
+    if let Some(p) = &confirmed {
+        c["internal_confirmation"] = serde_json::json!({"project": p, "disputed": c["contested_by"].as_array().is_some_and(|m| !m.is_empty())});
+    }
     if args.iter().any(|a| a == "--json") {
         println!("{}", serde_json::to_string_pretty(&c).unwrap_or_default());
         return 0;
     }
     println!("{}  {} ({})", id, st.as_str(), if claims::attested(&c) { delphi_engine::library::extract::ATTESTED_LABEL } else { st.label() });
     println!("  {}", clean(c["text"].as_str().unwrap_or(""), 400));
+    if let Some(p) = &confirmed {
+        let disputed = c["contested_by"].as_array().is_some_and(|m| !m.is_empty());
+        println!("  confirmed      by an internal source ({}){}", clean(p, 80), if disputed { "; a public source disagrees (below), which does not lower it" } else { "" });
+    }
     for k in ["kind", "scope", "project", "created", "last_confirmed", "valid_until", "supersedes", "superseded_by"] {
         if let Some(v) = c[k].as_str() {
             println!("  {:<14} {}", k, clean(v, 120));
