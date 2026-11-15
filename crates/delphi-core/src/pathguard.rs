@@ -1007,6 +1007,33 @@ mod tests {
         assert!(matches!(g.check("operator/profile.md", Access::Read), Err(Denied::NeverReadable(_))));
     }
 
+    // specs/120 §2 item 5, §8: the record of the desktop app's keys and grants is under `operator/`, which no agent tool
+    // reads, lists or writes, by any spelling and whatever globs the role holds. An agent that could write it could pair a
+    // key or give one a grant.
+    #[test]
+    fn the_app_key_record_is_unreachable_by_any_agent_tool() {
+        let (t, mut g) = setup();
+        let home = t.path();
+        let record = home.join(crate::app_keys::KEYS_FILE);
+        fs::create_dir_all(record.parent().unwrap()).unwrap();
+        fs::write(&record, "{\"version\":1,\"keys\":[]}\n").unwrap();
+        symlink(&record, home.join("wt/keylink")).unwrap();
+        symlink(record.parent().unwrap(), home.join("wt/oplink")).unwrap();
+        g.read_globs = vec!["*".into(), "**".into()];
+        g.write_globs = vec!["**".into(), "@worktree/**".into(), "operator/**".into()];
+        for spelling in [
+            "operator/app-keys.json", "OPERATOR/app-keys.json", "Operator/App-Keys.json", "./operator/app-keys.json", "operator//app-keys.json", "operator/./app-keys.json", "operator/app-keys.json.tmp",
+            "../operator/app-keys.json", "@worktree/../operator/app-keys.json", "@project/app/../../operator/app-keys.json", "~/.delphi/operator/app-keys.json", "@worktree/keylink", "@worktree/oplink/app-keys.json",
+        ] {
+            assert!(g.check(spelling, Access::Read).is_err(), "`{}` must not be readable", spelling);
+            assert!(g.read_file(spelling, 100).is_err(), "`{}` must not be readable", spelling);
+            assert!(g.write_atomic(spelling, b"{\"version\":1,\"keys\":[{\"grants\":[\"request\"]}]}").is_err(), "`{}` must not be writable", spelling);
+        }
+        assert!(matches!(g.check("operator/app-keys.json", Access::Write), Err(Denied::NeverReadable(_) | Denied::NeverWritable(_))));
+        assert!(matches!(g.list("operator"), Err(Denied::NeverReadable(_))));
+        assert_eq!(fs::read_to_string(&record).unwrap(), "{\"version\":1,\"keys\":[]}\n", "nothing was written");
+    }
+
     #[test]
     fn nfc_normalization() {
         assert_eq!(canonical("missions/cafe\u{301}.md").unwrap(), "missions/caf\u{e9}.md");

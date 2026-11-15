@@ -49,6 +49,7 @@ fn authed(f: &Fixture, scope: Scope) -> Client {
         Scope::Narrator => (&f.narrator_sock, f.daemon.narrator_token()),
         Scope::Relay => (&f.relay_sock, f.daemon.relay_token()),
         Scope::Host => (&f.host_sock, f.daemon.host_token()),
+        Scope::App => panic!("the app socket takes no token (tests/app_socket.rs)"),
     };
     let mut c = Client::connect(sock).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();

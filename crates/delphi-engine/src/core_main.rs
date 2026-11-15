@@ -85,7 +85,7 @@ pub fn run(args: Vec<String>) -> ! {
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap_or_else(|e| die(&format!("runtime: {}", e)));
     rt.block_on(async move {
-        // Three sockets, each 0600 from the moment it exists: the console's, the read-only one the Narrator uses, and
+        // The sockets, each 0600 from the moment it exists: the console's, the read-only one the Narrator uses, and
         // the one a relay uses to carry approval cards to the operator.
         let bind_private = |path: &std::path::Path| {
             let _ = std::fs::remove_file(path);
@@ -100,6 +100,8 @@ pub fn run(args: Vec<String>) -> ! {
         let narrator_listener = bind_private(&l.narrator_sock);
         let relay_listener = bind_private(&l.relay_sock);
         let host_listener = bind_private(&l.host_sock);
+        // The desktop app's socket (`specs/120` §3): the same permissions; a key is proved on it, no token is issued.
+        let app_listener = bind_private(&l.app_sock);
 
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let mut cfg = DaemonConfig::new(home.clone(), canon.clone());
@@ -122,16 +124,18 @@ pub fn run(args: Vec<String>) -> ! {
             let _ = booted.engine.grant.set(std::sync::Arc::new(g));
         }
         daemon.set_extension(booted.service.extension());
+        daemon.set_app_audit(booted.service.app_audit());
         booted.service.start_timers();
         // Ready: the token travels over the pipe only.
         writeln!(ready, "{}", daemon.console_token()).unwrap_or_else(|e| die(&format!("ready pipe: {}", e)));
         drop(ready);
         eprintln!("delphi-core: ready on {} (mission {})", l.sock.display(), booted.default_mission);
-        daemon.serve_everything(listener, Some(narrator_listener), Some(relay_listener), Some(host_listener)).await;
+        daemon.serve_with_app(listener, Some(narrator_listener), Some(relay_listener), Some(host_listener), Some(app_listener)).await;
         let _ = std::fs::remove_file(&l.sock);
         let _ = std::fs::remove_file(&l.narrator_sock);
         let _ = std::fs::remove_file(&l.relay_sock);
         let _ = std::fs::remove_file(&l.host_sock);
+        let _ = std::fs::remove_file(&l.app_sock);
     });
     std::process::exit(0);
 }
