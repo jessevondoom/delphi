@@ -502,6 +502,35 @@ pub fn store(ws_dir: &Path, f: &Finding, meta: &Meta) -> Result<Stored, String> 
     Ok(Stored { rel_path: format!("missions/{}/findings/{}.md", meta.mission, name), id, text, superseded })
 }
 
+/// The operator accepted a consolidation proposal (`specs/116` §6 item 2): the finding at `earlier` (an id or a path) is superseded by
+/// the one at `later`, as `supersedes` would have done: both must be active findings of the same project, and the later must not be
+/// stored at a lower tier than the earlier. The earlier file stays and links forward.
+pub fn retire(ws_dir: &Path, earlier: &str, later: &str) -> Result<(), String> {
+    let read = |reference: &str| -> Result<(String, PathBuf, serde_yaml::Mapping, String), String> {
+        let (mission, slug) = named(reference).ok_or_else(|| format!("`{reference}` is not a finding"))?;
+        let path = delphi_core::sessions::dir(ws_dir, &mission).join("findings").join(format!("{slug}.md"));
+        let text = std::fs::symlink_metadata(&path).ok().filter(|m| m.is_file()).and_then(|_| std::fs::read_to_string(&path).ok()).ok_or_else(|| format!("there is no finding `{reference}`"))?;
+        let (map, body) = split(&text).ok_or_else(|| format!("`{reference}` is not a finding"))?;
+        Ok((format!("{mission}/{slug}"), path, map, body.to_string()))
+    };
+    let (old_id, old_path, mut old, body) = read(earlier)?;
+    let (new_id, _, new, _) = read(later)?;
+    let get = |m: &serde_yaml::Mapping, k: &str| m.get(serde_yaml::Value::String(k.into())).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if get(&old, "kind") != "finding" || get(&new, "kind") != "finding" || get(&old, "status") != "active" || get(&new, "status") != "active" {
+        return Err("both must be active findings".into());
+    }
+    let mission = |id: &str| id.split('/').next().unwrap_or("").to_string();
+    if scope_of(ws_dir, &mission(&old_id)) != scope_of(ws_dir, &mission(&new_id)) {
+        return Err("the two findings belong to different projects".into());
+    }
+    if tier_of(&get(&old, "source_type")) > tier_of(&get(&new, "source_type")) {
+        return Err("a finding cannot be retired by one stored at a lower tier".into());
+    }
+    old.insert(serde_yaml::Value::String("status".into()), serde_yaml::Value::String("superseded".into()));
+    old.insert(serde_yaml::Value::String("superseded_by".into()), serde_yaml::Value::String(new_id));
+    write_atomic(&old_path, &join(old, &body)?)
+}
+
 /// What the caller is told: where the finding is, what it is labelled, and what it retired. Never the text back.
 pub fn receipt(s: &Stored, tier: Tier) -> Value {
     let mut v = json!({"recorded": true, "finding": s.id, "path": s.rel_path, "label": label_for(tier.min(Tier::L3).name()), "status": "active"});

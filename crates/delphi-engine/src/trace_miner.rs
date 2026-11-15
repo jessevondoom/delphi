@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, HashSet};
 
 /// Maximum episodes generated per mission to prevent database bloat (`specs/065` §4.1).
 pub const MAX_EPISODES_PER_MISSION: usize = 3;
+/// How long a harvested episode is retrieved (`specs/116` §6 item 5).
+pub const EPISODE_DAYS: i64 = 180;
 
 /// Outcome classification for an episodic record (`specs/065` §3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,7 +375,8 @@ pub fn harvest_episodes(mission_id: &str, events: &[EventEnvelope], now: &str) -
             source_type,
             confidence: "high".to_string(),
             status: "active".to_string(),
-            valid_until: None,
+            // `specs/116` §6 item 5: an episode is retrieved for 180 days.
+            valid_until: Some(crate::provisional_notes::date_plus(now, EPISODE_DAYS)),
             mission: mission_id.to_string(),
             session_id,
             task_id,
@@ -423,6 +426,32 @@ fn plain_id(s: &str) -> bool {
     !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_') && s.starts_with(|c: char| c.is_ascii_lowercase())
 }
 
+/// The active episodes `ep` supersedes: those of the same mission and of its sibling sessions whose first error fingerprint is
+/// `ep`'s and whose outcome was not a resolution, as `(file stem, path)`. Nothing is followed through a symlink.
+fn superseded_by(mission_dir: &std::path::Path, ep: &Episode) -> Vec<(String, std::path::PathBuf)> {
+    let Some(err) = ep.error_fingerprints.first() else { return Vec::new() };
+    let mut out = Vec::new();
+    let Some(root) = mission_dir.parent() else { return out };
+    for m in std::fs::read_dir(root).into_iter().flatten().flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) {
+        let traces = m.path().join("traces");
+        if std::fs::symlink_metadata(&traces).is_ok_and(|t| !t.is_dir()) {
+            continue;
+        }
+        for e in std::fs::read_dir(&traces).into_iter().flatten().flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())) {
+            let name = e.file_name().to_string_lossy().to_string();
+            let Some(stem) = name.strip_suffix(".md").filter(|s| !s.starts_with('.')) else { continue };
+            let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+            let Some(fm) = crate::workspace::split_frontmatter(&text).0 else { continue };
+            let first = fm.get("error_fingerprints").and_then(|v| v.as_sequence()).and_then(|s| s.first()).and_then(|v| v.as_str());
+            let s = |k: &str| fm.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if first == Some(err.as_str()) && s("status") == "active" && s("outcome") != EpisodeOutcome::ResolvedAfterFailure.as_str() {
+                out.push((stem.to_string(), e.path()));
+            }
+        }
+    }
+    out
+}
+
 /// The dedup key of an episode already on disk, read back from its frontmatter.
 fn dedup_key_of(text: &str) -> Option<String> {
     let (fm, _) = crate::workspace::split_frontmatter(text);
@@ -467,8 +496,20 @@ pub fn write_task_episode(mission_dir: &std::path::Path, mission_id: &str, task_
     if existing.len() >= MAX_EPISODES_PER_MISSION || existing.iter().any(|(n, text)| n.ends_with(&suffix) || dedup_key_of(text).as_deref() == Some(key.as_str())) {
         return Ok(None);
     }
-    let path = mission_dir.join(episode_file(&ep.role, task_id));
+    let mut ep = ep;
+    let file = episode_file(&ep.role, task_id);
+    // `specs/116` §6 item 5: an episode that resolved an error supersedes the earlier unresolved episodes with the same error
+    // fingerprint, in this mission and its sibling sessions. Their files stay, marked superseded, and the index leaves them out.
+    let stem = file.trim_start_matches("traces/").trim_end_matches(".md").to_string();
+    let earlier = if ep.outcome == EpisodeOutcome::ResolvedAfterFailure { superseded_by(mission_dir, &ep) } else { Vec::new() };
+    ep.supersedes.extend(earlier.iter().map(|(s, _)| s.clone()));
+    let path = mission_dir.join(&file);
     delphi_core::lock::write_atomic(&path, redact(&ep.to_markdown()).as_bytes()).map_err(|e| format!("{}: {}", path.display(), e))?;
+    for (_, old) in earlier {
+        if let Ok(text) = std::fs::read_to_string(&old) {
+            let _ = delphi_core::lock::write_atomic(&old, text.replacen("\nstatus: active\n", &format!("\nstatus: superseded\nsuperseded_by: {}\n", serde_json::to_string(&stem).unwrap_or_default()), 1).as_bytes());
+        }
+    }
     Ok(Some(path))
 }
 
@@ -608,6 +649,37 @@ mod tests {
             std::os::unix::fs::symlink(t.path(), m3.join("traces")).unwrap();
             assert!(write_task_episode(&m3, "m3", "t_1", &resolved("t_1", &["L3"]), NOW, id).is_err());
         }
+    }
+
+    /// `specs/116` §6 item 5: an episode is retrieved for 180 days, and one that resolved an error supersedes the earlier unresolved
+    /// episodes with the same error fingerprint, in sibling sessions too; their files stay, marked, and the index leaves them out.
+    #[test]
+    fn an_episode_expires_after_180_days_and_a_resolution_supersedes_earlier_episodes_of_the_same_error() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path();
+        let (old_dir, new_dir) = (delphi_core::sessions::dir(ws, "m0"), delphi_core::sessions::dir(ws, "m1"));
+        std::fs::create_dir_all(old_dir.join("traces")).unwrap();
+        std::fs::create_dir_all(&new_dir).unwrap();
+        let fresh = &harvest_episodes("m1", &resolved("t_1", &["L3"]), NOW)[0];
+        assert_eq!(fresh.valid_until.as_deref(), Some("2027-05-12"));
+        let mut failed = fresh.clone();
+        (failed.outcome, failed.mission, failed.task_id) = (EpisodeOutcome::Failure, "m0".into(), "t_9".into());
+        std::fs::write(old_dir.join("traces/builder-t_9.md"), failed.to_markdown()).unwrap();
+        let mut other = failed.clone();
+        other.error_fingerprints = vec!["error: something else".into()];
+        std::fs::write(old_dir.join("traces/builder-t_8.md"), other.to_markdown()).unwrap();
+        let p = write_task_episode(&new_dir, "m1", "t_1", &resolved("t_1", &["L3"]), NOW, |s| s.to_string()).unwrap().unwrap();
+        let new = std::fs::read_to_string(&p).unwrap();
+        assert!(new.contains("supersedes: [\"builder-t_9\"]") && new.contains("valid_until: 2027-05-12"), "{new}");
+        let old = std::fs::read_to_string(old_dir.join("traces/builder-t_9.md")).unwrap();
+        assert!(old.contains("\nstatus: superseded\nsuperseded_by: \"builder-t_1\"\n"), "{old}");
+        assert!(std::fs::read_to_string(old_dir.join("traces/builder-t_8.md")).unwrap().contains("\nstatus: active\n"), "another error is untouched");
+        // The index leaves the superseded one out of an episodes search.
+        let mut kb = crate::kb::Kb::open_in_memory().unwrap();
+        kb.sync_lexical(&crate::kb::sources(ws), "t").unwrap();
+        let hits = kb.search("builder", &crate::kb::SearchOpts { include_episodes: true, role: Some("builder".into()), legs: crate::kb::Legs::LexicalOnly, today: Some("2026-11-20".into()), ..Default::default() }).unwrap();
+        assert!(hits.iter().all(|h| !h.rel_path.ends_with("builder-t_9.md")), "{:?}", hits.iter().map(|h| &h.rel_path).collect::<Vec<_>>());
+        assert!(kb.search("builder", &crate::kb::SearchOpts { include_episodes: true, role: Some("builder".into()), legs: crate::kb::Legs::LexicalOnly, today: Some("2027-05-13".into()), ..Default::default() }).unwrap().iter().all(|h| h.zone != "episodes"), "none after 180 days");
     }
 
     #[test]

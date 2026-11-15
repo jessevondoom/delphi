@@ -2431,6 +2431,7 @@ impl EngineService {
                 svc.background_validate_tick().await;
                 svc.merge_ledger_tick().await;
                 svc.health_tick().await;
+                svc.consolidate_tick().await;
             }
         });
     }
@@ -2482,6 +2483,31 @@ impl EngineService {
         let (home, ws) = (self.engine.ws.home.clone(), self.engine.ws.dir.clone());
         tokio::task::spawn_blocking(move || {
             let _ = crate::knowledge_health::write_daily(&ws, &crate::knowledge_health::gather(&home, &ws, now));
+        });
+    }
+
+    /// Consolidation (`specs/116` §6): once a day, when `[memory] consolidate` is on and the daemon has been idle five minutes with no
+    /// task running. The pass runs in its own task so the timer loop never waits for it; one at a time.
+    async fn consolidate_tick(&self) {
+        use std::sync::atomic::{AtomicBool, AtomicI64, Ordering::SeqCst};
+        static RUNNING: AtomicBool = AtomicBool::new(false);
+        static CHECKED: AtomicI64 = AtomicI64::new(0);
+        let now = (self.engine.clock_unix)();
+        let mem = self.engine.cfg.get().memory.clone();
+        if mem.consolidate == delphi_adapter::config::Consolidate::Off || now - CHECKED.load(SeqCst) < 60 {
+            return;
+        }
+        CHECKED.store(now, SeqCst);
+        let (ws, today) = (self.engine.ws.dir.clone(), delphi_core::bundles::today());
+        let ran = tokio::task::spawn_blocking(move || crate::consolidate::ran_on(&ws, &today)).await.unwrap_or(true);
+        let running = self.running.lock().unwrap().len();
+        if !crate::consolidate::due(mem.consolidate, now, self.last_operator.load(SeqCst), running, ran) || RUNNING.swap(true, SeqCst) {
+            return;
+        }
+        let e = self.engine.clone();
+        tokio::spawn(async move {
+            e.consolidate_pass(mem.consolidate, mem.consolidate_tokens).await;
+            RUNNING.store(false, SeqCst);
         });
     }
 
@@ -2797,11 +2823,13 @@ impl EngineService {
         let now = delphi_core::time::now_rfc3339();
         let lib = crate::library::Library::in_home(&self.engine.ws.home);
         let (daily, notes) = self.digest_inputs(m);
-        list.extend(crate::digest_review::pick_within(&m.id, &lib, &events, &now, daily, notes).map(|(p, left)| match p {
+        let proposals = crate::consolidate::pending(&self.engine.ws.dir);
+        list.extend(crate::digest_review::pick_with(&m.id, &lib, &events, &now, daily, notes, proposals).map(|(p, left)| match p {
             crate::digest_review::Pick::Review(i) => crate::digest_review::to_decision(&i, left, &now),
             crate::digest_review::Pick::Acquire(a) => crate::digest_review::acquire_decision(&a, left, &now),
             crate::digest_review::Pick::Note(n) => crate::digest::to_decision(&n, left, &now),
             crate::digest_review::Pick::Provisional(n) => crate::digest::note_decision(&n, left, &now),
+            crate::digest_review::Pick::Consolidation(c) => crate::consolidate::decision(&c, left, &crate::digest::card_id(&now)),
         }));
         // Accept all vetted (`specs/100` §6): one card for the batch, until the operator leaves it or it changes. It carries no choice that accepts.
         let state = crate::fact_mode::state_dir(&self.engine.ws.dir);
@@ -3010,7 +3038,8 @@ impl EngineService {
             return Ok(json!({"ok": true, "id": card_id, "choice_id": choice}));
         }
         let (daily, notes) = self.digest_inputs(&m);
-        let Some((pick, _)) = crate::digest_review::pick_within(&m.id, &lib, &events, &now, daily, notes) else {
+        let proposals = crate::consolidate::pending(&self.engine.ws.dir);
+        let Some((pick, _)) = crate::digest_review::pick_with(&m.id, &lib, &events, &now, daily, notes, proposals) else {
             return Err(err(code::NOT_FOUND, "no digest item is waiting"));
         };
         let (hash, id) = match &pick {
@@ -3018,6 +3047,7 @@ impl EngineService {
             crate::digest_review::Pick::Acquire(a) => (crate::digest_review::acquire_hash(a), a.id.clone()),
             crate::digest_review::Pick::Note(n) => (crate::digest::payload_hash(n), n.id.clone()),
             crate::digest_review::Pick::Provisional(n) => (crate::digest::note_hash(n), crate::digest::note_id(n)),
+            crate::digest_review::Pick::Consolidation(c) => (crate::consolidate::hash(c), c.id.clone()),
         };
         if p["payload_blake3"].as_str() != Some(hash.as_str()) {
             return Err(err(code::INVALID_PARAMS, "the digest item changed since you looked at it; open it again"));
@@ -3028,6 +3058,11 @@ impl EngineService {
             crate::digest_review::Pick::Acquire(a) => crate::digest_review::acquire_act(&m.id, a, action),
             crate::digest_review::Pick::Note(n) => crate::digest::act(&m.id, n, action),
             crate::digest_review::Pick::Provisional(n) => crate::digest::note_act(&m.id, n, action),
+            crate::digest_review::Pick::Consolidation(c) => {
+                // `specs/116` §6 item 3: the operator's answer at a console is the only thing that applies a proposal; none writes a
+                // lesson, a heuristic or a rule.
+                crate::consolidate::act(&self.engine.ws.dir, c, action, &now).map(|_| vec![EventEnvelope::new(&m.id, "learn.digested", json!({"id": c.id, "action": action}))])
+            }
         };
         let evs = evs.map_err(|e| err(code::INVALID_PARAMS, e))?;
         // The one change a digest action makes to a provisional note's own file (`specs/116` §3), and only by the operator's answer

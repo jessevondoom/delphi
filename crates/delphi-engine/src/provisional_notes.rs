@@ -36,8 +36,9 @@ pub const KINDS: [&str; 4] = ["practice", "pitfall", "fact", "preference"];
 pub const DEFAULT_KIND: &str = "practice";
 /// The folder of notes no single role wrote (a session summary, a capture on contact). No role has this id.
 pub const SHARED: &str = "shared";
-/// Where a note goes when it leaves the tier. None of them is indexed, and none is a role.
-pub const SHELVES: [&str; 3] = ["expired", "rejected", "kept"];
+/// Where a note goes when it leaves the tier. None of them is indexed, and none is a role. `merged` and `retired` are
+/// consolidation's (`specs/116` §6): a note merged into another, and one the operator retired as covered by a lesson.
+pub const SHELVES: [&str; 5] = ["expired", "rejected", "kept", "merged", "retired"];
 /// Days a new note lives.
 pub const LIFE_DAYS: i64 = 30;
 /// Days a note lives on from the day of its third use.
@@ -505,6 +506,74 @@ pub fn mark_wrong(ws_dir: &Path, n: &Note, now: &str) -> Result<PathBuf, String>
 /// The operator kept a note as a lesson or a rule: it leaves the tier for `kept/`, with what it became.
 pub fn mark_kept(ws_dir: &Path, n: &Note, kept_as: &str, file: &str, rule: &str, now: &str) -> Result<PathBuf, String> {
     shelve(ws_dir, n, "kept", &[("kept", now.to_string()), ("kept_as", kept_as.to_string()), ("kept_file", file.to_string()), ("kept_rule", rule.to_string())])
+}
+
+/// Consolidation's mechanical merge (`specs/116` §6 item 4): `survivor` takes the highest `uses` and the latest `valid_until` among
+/// itself and `parts` (never their sum), and each part moves to `merged/` naming the survivor. The caller has checked that they are
+/// duplicates of one layer, role, kind and tier.
+pub fn merge_into(ws_dir: &Path, survivor: &Note, parts: &[Note], now: &str) -> Result<(), String> {
+    let uses = parts.iter().map(|p| p.uses).chain([survivor.uses]).max().unwrap_or(0);
+    let until = parts.iter().map(|p| p.valid_until.clone()).chain([survivor.valid_until.clone()]).max().unwrap_or_default();
+    if !edit(ws_dir, &survivor.path, |n| {
+        n.uses = uses;
+        n.valid_until = until;
+    })? {
+        return Err(format!("{} is no longer a provisional note", survivor.reference()));
+    }
+    for p in parts {
+        shelve(ws_dir, p, "merged", &[("merged_into", survivor.reference()), ("merged", now.to_string())])?;
+    }
+    Ok(())
+}
+
+/// A merge the operator accepted (`specs/116` §6 item 3): one new note of the parts' role, layer and kind, saying `text`, at the lowest
+/// tier among them, with the highest `uses` and the latest `valid_until` of a part; each part moves to `merged/` naming it. Returns
+/// the new note's reference. It is a provisional note like any other: unreviewed, data, never instruction.
+pub fn write_merged(ws_dir: &Path, parts: &[Note], text: &str, now: &str) -> Result<String, String> {
+    let first = parts.first().ok_or("nothing to merge")?;
+    if parts.iter().any(|p| p.role != first.role || p.project != first.project || p.kind != first.kind) {
+        return Err("the notes are not of one role, layer and kind".into());
+    }
+    let (root, _) = root_of(ws_dir, &first.project).ok_or("the notes' layer is gone")?;
+    let text = one_line(text);
+    let hash = blake3::hash(format!("{}
+{}", text, parts.iter().map(Note::reference).collect::<Vec<_>>().join("
+")).as_bytes()).to_hex().to_string();
+    let note = format!("c{}", &hash[..8]);
+    let n = Note {
+        id: format!("{}-consolidated-{}", day(now), note),
+        role: first.role.clone(),
+        mission: "consolidated".into(),
+        note,
+        project: first.project.clone(),
+        tier: parts.iter().map(|p| p.tier).min().unwrap_or(Tier::L0),
+        kind: first.kind.clone(),
+        created: now.to_string(),
+        valid_until: parts.iter().map(|p| p.valid_until.clone()).max().unwrap_or_else(|| date_plus(now, LIFE_DAYS)),
+        uses: parts.iter().map(|p| p.uses).max().unwrap_or(0),
+        trigger: "consolidated".into(),
+        source: None,
+        left_uses: None,
+        text,
+        path: PathBuf::new(),
+    };
+    if n.text.is_empty() || !plain(&n.id) {
+        return Err("the merged note says nothing".into());
+    }
+    lock(ws_dir, || {
+        let dir = plain_dir(&root, &[&n.role])?;
+        write_atomic(&dir.join(format!("{}.md", n.id)), &n.render())
+    })?;
+    for p in parts {
+        shelve(ws_dir, p, "merged", &[("merged_into", n.reference()), ("merged", now.to_string())])?;
+    }
+    Ok(n.reference())
+}
+
+/// The operator retired a note from the digest (`specs/116` §6 item 2: covered by a lesson): it moves to `retired/` with `key: value`
+/// naming why. Its fingerprint is not remembered: unlike a note marked wrong, it may be written again.
+pub fn retire(ws_dir: &Path, n: &Note, key: &str, value: &str, now: &str) -> Result<PathBuf, String> {
+    shelve(ws_dir, n, "retired", &[(key, value.to_string()), ("retired", now.to_string())])
 }
 
 /// The operator left a note in the digest: it is offered again only once it has been used again.

@@ -233,6 +233,10 @@ sandbox = "off"
 # [memory]
 # provisional = true                 # false: notes stage as before and no provisional note is kept, indexed or retrieved; read at each use
 # digest_daily = 10                  # items the digest shows a day (0 to 100)
+# consolidate = false                # once a day, idle five minutes: "mechanical" merges duplicate notes (no model); true also asks one
+#                                    # tool-less model call per role for proposals (merge, contradiction, covered by a lesson, superseded
+#                                    # finding), shown in the digest; none applies until you accept it, and none writes a lesson or rule
+# consolidate_tokens = 30000         # the model pass's share of a day, in tokens
 
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the

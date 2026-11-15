@@ -759,19 +759,54 @@ impl Default for ProjectsConfig {
 /// of the same role may retrieve it as an unreviewed passage of data; off, a note stages as it did before the tier. On by default
 /// (the operator, 2026-11-14). `digest_daily`: how many items the digest shows a day (10 by default, at most 100; zero shows none).
 /// Neither key loads anything into a system prompt.
+///
+/// `consolidate` (`specs/116` §6): `false` (the default) runs no consolidation; `"mechanical"` merges exact and near-exact duplicate
+/// provisional notes, with no model; `true` (or `"model"`) does that and asks one tool-less model call for proposals, which go to the
+/// digest and change nothing until the operator accepts one. `consolidate_tokens` caps the model's share of a day (30,000).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemoryConfig {
     pub provisional: bool,
     pub digest_daily: usize,
+    pub consolidate: Consolidate,
+    pub consolidate_tokens: u64,
+}
+
+/// `[memory] consolidate`: off, the mechanical pass alone, or that and the model's proposals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Consolidate {
+    #[default]
+    Off,
+    Mechanical,
+    Model,
+}
+
+impl<'de> serde::Deserialize<'de> for Consolidate {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Consolidate, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            B(bool),
+            S(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::B(false) => Ok(Consolidate::Off),
+            Raw::B(true) => Ok(Consolidate::Model),
+            Raw::S(s) if s == "mechanical" => Ok(Consolidate::Mechanical),
+            Raw::S(s) if s == "model" => Ok(Consolidate::Model),
+            Raw::S(s) => Err(serde::de::Error::custom(format!("consolidate is false, true, \"mechanical\" or \"model\", not \"{s}\""))),
+        }
+    }
 }
 
 /// The most `[memory] digest_daily` may be.
 pub const MAX_DIGEST_DAILY: usize = 100;
+/// The most `[memory] consolidate_tokens` may be.
+pub const MAX_CONSOLIDATE_TOKENS: u64 = 1_000_000;
 
 impl Default for MemoryConfig {
     fn default() -> MemoryConfig {
-        MemoryConfig { provisional: true, digest_daily: 10 }
+        MemoryConfig { provisional: true, digest_daily: 10, consolidate: Consolidate::Off, consolidate_tokens: 30_000 }
     }
 }
 
@@ -784,7 +819,7 @@ impl MemoryConfig {
             None => MemoryConfig::default(),
             Some(v) => v.clone().try_into::<MemoryConfig>().ok()?,
         };
-        (c.digest_daily <= MAX_DIGEST_DAILY).then_some(c)
+        (c.digest_daily <= MAX_DIGEST_DAILY && c.consolidate_tokens <= MAX_CONSOLIDATE_TOKENS).then_some(c)
     }
 }
 
@@ -1211,6 +1246,7 @@ impl Config {
         if let Some(v) = root.get("memory") {
             match v.clone().try_into::<MemoryConfig>() {
                 Ok(v) if v.digest_daily > MAX_DIGEST_DAILY => errs.push(format!("[memory]: digest_daily is at most {} (specs/116 §3 item 4)", MAX_DIGEST_DAILY)),
+                Ok(v) if v.consolidate_tokens > MAX_CONSOLIDATE_TOKENS => errs.push(format!("[memory]: consolidate_tokens is at most {} (specs/116 §6 item 1)", MAX_CONSOLIDATE_TOKENS)),
                 Ok(v) => cfg.memory = v,
                 Err(e) => errs.push(format!("[memory]: {}", e)),
             }
@@ -1852,6 +1888,20 @@ pub(crate) mod tests {
             assert!(RetrievalConfig::read(&format!("[retrieval]\n{bad}\n")).is_none(), "{bad}");
         }
         assert_eq!(RetrievalConfig::read("").unwrap().use_boost, 0.0);
+    }
+
+    /// `specs/116` §6 item 1: consolidation is off by default, takes false, true, "mechanical" or "model", and its token cap is bounded.
+    #[test]
+    fn consolidation_is_off_by_default_and_its_words_and_cap_are_checked() {
+        let d = Config::parse("").unwrap().memory;
+        assert_eq!((d.consolidate, d.consolidate_tokens), (Consolidate::Off, 30_000));
+        for (v, want) in [("false", Consolidate::Off), ("true", Consolidate::Model), ("\"mechanical\"", Consolidate::Mechanical), ("\"model\"", Consolidate::Model)] {
+            assert_eq!(Config::parse(&format!("[memory]\nconsolidate = {v}\n")).unwrap().memory.consolidate, want, "{v}");
+            assert_eq!(MemoryConfig::read(&format!("[memory]\nconsolidate = {v}\n")).unwrap().consolidate, want, "{v}");
+        }
+        for bad in ["consolidate = \"always\"", "consolidate = 1", "consolidate_tokens = 2000000", "consolidate_tokens = -1"] {
+            assert!(Config::parse(&format!("[memory]\n{bad}\n")).is_err(), "{bad}");
+        }
     }
 
     #[test]
