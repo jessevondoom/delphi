@@ -88,6 +88,18 @@
         "additionalProperties": false
       }
     },
+    "ingest": {
+      "type": "object",
+      "description": "A topic `delphi research ingest` wrote (specs/113 section 3): the file it rests on, read in place, and every content hash it was ingested at. A file whose hash is listed is skipped.",
+      "required": ["path", "content_hash", "source_id", "hashes"],
+      "properties": {
+        "path": { "type": "string" },
+        "content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "source_id": { "type": "string", "maxLength": 80 },
+        "hashes": { "type": "array", "items": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+      },
+      "additionalProperties": false
+    },
     "claims": { "type": "array", "items": { "type": "string", "maxLength": 80 }, "description": "The ids of the claims the topic's runs produced, once each." },
     "gaps": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "description": "What the newest finished run reports it did not find: fixed phrases read from its coverage report." },
     "usage": {

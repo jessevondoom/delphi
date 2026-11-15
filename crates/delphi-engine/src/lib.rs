@@ -174,6 +174,7 @@ pub mod research_asks;
 pub mod role_call;
 pub mod research_images;
 pub mod research_index;
+pub mod research_ingest;
 pub mod research_chain;
 pub mod research_host;
 pub mod research_jobs;

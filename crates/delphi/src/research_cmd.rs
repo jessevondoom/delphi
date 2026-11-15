@@ -6,6 +6,10 @@
 //! `migrate` writes the claims an older `research/host-claims.jsonl` lists as library claims (`specs/112` §3.4). It is a dry run
 //! unless `--apply` is given, and `--apply` is refused inside an agent seat.
 //!
+//! `ingest` turns research files already on disk (a project's `research/` Markdown, the workspace's imported summaries) into research
+//! topics (`specs/113` §3): the file a private source, its body the answer by reference. A dry run unless `--apply`, which is refused
+//! inside an agent seat.
+//!
 //! `log` prints the search log of a finished host research job (`specs/101` §3): read-only, it prints what the daemon wrote beside the
 //! result, and calls no model and no network.
 //!
@@ -20,7 +24,7 @@ pub struct Options {
     pub json: bool,
 }
 
-const USAGE: &str = "usage: delphi research topics [--json] [--home <dir>] [--workspace <name>]\n       delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]\n       delphi research setup [--engine <name>] [--credential <env:NAME|keychain:name>] [--url <instance>] [--cx <id>] [--no-test] [--home <dir>] [--workspace <name>]";
+const USAGE: &str = "usage: delphi research topics [--json] [--home <dir>] [--workspace <name>]\n       delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research ingest <path>... | --all [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]\n       delphi research setup [--engine <name>] [--credential <env:NAME|keychain:name>] [--url <instance>] [--cx <id>] [--no-test] [--home <dir>] [--workspace <name>]";
 
 /// `args` is what follows the command name: `log <id> [flags]` or `retractions import|status [<file>] [flags]`.
 pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
@@ -29,6 +33,7 @@ pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
         Some("show") => show(ws_dir, args, o),
         Some("log") => log(ws_dir, args, o),
         Some("migrate") => migrate(home, ws_dir, args, o),
+        Some("ingest") => ingest(home, ws_dir, args, o),
         Some("retractions") => retractions(home, ws_dir, args, o),
         _ => {
             eprintln!("{USAGE}");
@@ -111,6 +116,58 @@ fn migrate(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
         print!("{}", rm::render(&plan, applied.as_ref()));
     }
     i32::from(applied.is_some_and(|a| a.failed > 0))
+}
+
+/// The operands after the subcommand word: every word that is not a flag or a flag's value.
+fn operands(args: &[String], after: usize) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut skip = false;
+    for a in &args[after.min(args.len())..] {
+        if skip {
+            skip = false;
+        } else if matches!(a.as_str(), "--home" | "--workspace") {
+            skip = true;
+        } else if !a.starts_with('-') {
+            out.push(a.as_str());
+        }
+    }
+    out
+}
+
+/// `delphi research ingest <path>... | --all [--apply]` (`specs/113` §3): research files already on disk become research topics. It
+/// prints what it would do and changes nothing; only `--apply` writes, and only the operator may ask for that.
+fn ingest(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
+    use delphi_engine::research_ingest as ri;
+    let apply = args.iter().any(|a| a == "--apply");
+    if apply && crate::xenia_terminal::inside_an_agent_seat() {
+        eprintln!("delphi research ingest --apply: refused; writing research topics and library records is the operator's to ask for and this process was started by an agent seat. Without --apply it prints what it would do.");
+        return 2;
+    }
+    let mut paths: Vec<std::path::PathBuf> = operands(args, 1).into_iter().map(std::path::PathBuf::from).collect();
+    if args.iter().any(|a| a == "--all") {
+        paths.extend(ri::all_paths(ws_dir));
+    }
+    if paths.is_empty() {
+        eprintln!("{USAGE}");
+        return 2;
+    }
+    let mut items = ri::plan(ws_dir, &paths);
+    let mut failed = 0;
+    if apply {
+        for (n, item) in items.iter_mut().enumerate() {
+            if let Err(e) = ri::apply(home, item, &ri::run_id(n)) {
+                eprintln!("delphi research ingest: {}: {e}", item.path.display());
+                item.action = ri::Action::Refused(format!("not written: {e}"));
+                failed += 1;
+            }
+        }
+    }
+    if o.json {
+        println!("{}", serde_json::to_string_pretty(&ri::to_json(&items, apply)).unwrap_or_else(|_| "{}".into()));
+    } else {
+        print!("{}", ri::render(&items, apply));
+    }
+    i32::from(failed > 0)
 }
 
 fn log(ws_dir: &Path, args: &[String], o: &Options) -> i32 {

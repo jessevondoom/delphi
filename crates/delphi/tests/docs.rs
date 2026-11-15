@@ -293,6 +293,23 @@ fn a_host_run_of_a_research_topic_follows_the_record_schema() {
     must_fail("research-record.schema.json", "a runner outside the three", &bad);
 }
 
+/// `specs/113` §3: a topic `delphi research ingest` wrote, and a second run of it, follow the record's schema.
+#[test]
+fn an_ingested_research_topic_follows_the_record_schema() {
+    use delphi_engine::research_ingest as ri;
+    let home = tempfile::tempdir().unwrap();
+    let ws = home.path().join("workspaces/w");
+    std::fs::create_dir_all(&ws).unwrap();
+    let file = ws.join("note.md");
+    std::fs::write(&file, "# Tank notes\n\nZebrafish tanks are kept at about 28 degrees in most labs.\n").unwrap();
+    let p = ri::plan(&ws, std::slice::from_ref(&file));
+    let done = ri::apply(home.path(), &p[0], "i-1").unwrap().unwrap();
+    std::fs::write(&file, "# Tank notes\n\nZebrafish tanks are kept at about 27 degrees in some labs.\n").unwrap();
+    ri::apply(home.path(), &ri::plan(&ws, std::slice::from_ref(&file))[0], "i-2").unwrap().unwrap();
+    let topic = delphi_engine::research_record::Topic::at(&ws, done["topic_id"].as_str().unwrap()).unwrap();
+    must_pass("research-record.schema.json", "an ingested topic with two runs", &topic.read().unwrap());
+}
+
 /// `specs/113` §6: the tool `record_research` declares the schema that `schemas/record-research.schema.json` holds, and a call shaped as
 /// the spec says satisfies it while the 41st claim does not.
 #[test]
