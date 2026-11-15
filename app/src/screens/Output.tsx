@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { Agent } from '../Badge.tsx';
+import { Agent, hasMascot } from '../Badge.tsx';
 import { DocView } from '../DocView.tsx';
+import { KindIcon } from '../KindIcon.tsx';
 import { fillOf } from '../avatar.ts';
 import type { Bridge } from '../bridge.ts';
 import { dayOf, listTarget, type DocRow } from '../kb.ts';
-import { GROUP_LABEL, canOpen, fileKind, groupCounts, items, type Group, type Item } from '../output.ts';
+import { GROUP_LABEL, canOpen, fileKind, groupCounts, iconOf, items, type Group, type Item } from '../output.ts';
 import type { Info, OState } from '../types.ts';
 import { clock } from '../view.ts';
 
@@ -20,7 +21,8 @@ const when = (ms: number): string => (ms ? `${dayOf(new Date(ms).toISOString())}
 export function Output({ bridge, info, state, light }: Props) {
   const [rows, setRows] = useState<DocRow[] | null>(null);
   const [problem, setProblem] = useState('');
-  const [view, setView] = useState<'grid' | 'list'>('list');
+  // The grid can be asked for in the address (`?view=grid`), as a search or a document can on the other screens.
+  const [view, setView] = useState<'grid' | 'list'>(() => (typeof location !== 'undefined' && new URLSearchParams(location.search).get('view') === 'grid' ? 'grid' : 'list'));
   const [group, setGroup] = useState<Group | 'all'>('all');
   const [picked, setPicked] = useState('');
   const [said, setSaid] = useState('');
@@ -38,8 +40,10 @@ export function Output({ bridge, info, state, light }: Props) {
   const groups = groupCounts(all);
   const shown = all.filter((x) => group === 'all' || x.group === group);
   const sel = picked ? all.find((x) => x.key === picked) : undefined;
-  const tint = (role?: string) => (role ? ({ '--c': fillOf(info, role, light) } as CSSProperties) : undefined);
-  const by = (x: Item) => (x.role ? <Agent info={info} role={x.role} light={light} /> : null);
+  // A role is written as an agent always is; any other author (the operator, an import) is a name with no chip or colour.
+  const isRole = (role?: string): role is string => !!role && hasMascot(info, role);
+  const tint = (role?: string) => (isRole(role) ? ({ '--c': fillOf(info, role, light) } as CSSProperties) : undefined);
+  const by = (x: Item) => (isRole(x.role) ? <Agent info={info} role={x.role} light={light} /> : x.role ? <span className="muted">{x.role}</span> : null);
   const outside = (act: ((p: string) => Promise<void>) | undefined, path: string) => { setSaid(''); void act?.(path).catch((e: unknown) => setSaid(String(e))); };
   const back = { label: 'Back to work output', go: () => { setPicked(''); setSaid(''); } };
 
@@ -50,7 +54,7 @@ export function Output({ bridge, info, state, light }: Props) {
         <div className="row"><button type="button" className="btn back" onClick={back.go}><span aria-hidden="true">←</span> {back.label}</button><span className="chip line">{GROUP_LABEL[sel.group]}</span><span className="chip">{sel.status}</span></div>
         <h1 className="question" style={{ fontSize: 26 }}>{sel.title}</h1>
         <dl className="facts">
-          {sel.role && <div><dt>By</dt><dd><Agent info={info} role={sel.role} light={light} /></dd></div>}
+          {sel.role && <div><dt>By</dt><dd>{by(sel)}</dd></div>}
           {when(sel.at_ms) && <div><dt>When</dt><dd>{when(sel.at_ms)}</dd></div>}
           {sel.mission && <div><dt>Mission</dt><dd>{sel.mission}</dd></div>}
           <div><dt>Files named</dt><dd>{sel.files.length || 'none'}</dd></div>
@@ -88,8 +92,8 @@ export function Output({ bridge, info, state, light }: Props) {
           </div>
         </div>
         <div className="pills" role="group" aria-label="View">
-          <button type="button" className="pill" aria-pressed={view === 'list'} onClick={() => setView('list')}>List</button>
-          <button type="button" className="pill" aria-pressed={view === 'grid'} onClick={() => setView('grid')}>Grid</button>
+          <button type="button" className="pill" aria-pressed={view === 'list'} onClick={() => setView('list')}><KindIcon icon="list" size={16} />List</button>
+          <button type="button" className="pill" aria-pressed={view === 'grid'} onClick={() => setView('grid')}><KindIcon icon="grid" size={16} />Grid</button>
         </div>
       </div>
 
@@ -105,11 +109,14 @@ export function Output({ bridge, info, state, light }: Props) {
       {view === 'grid' ? (
         <div className="tiles" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
           {shown.map((x) => (
-            <button key={x.key} type="button" className="card link" style={tint(x.role)} onClick={() => setPicked(x.key)}>
-              <span className="row" style={{ fontSize: 11 }}><span className="caps">{GROUP_LABEL[x.group]}</span><span className={x.status === 'draft' ? 'chip warn push' : 'chip push'}>{x.status}</span></span>
-              <span style={{ fontWeight: 600, fontSize: 15, lineHeight: 1.35 }}>{x.title}</span>
-              {x.detail && <span className="muted" style={{ fontSize: 12 }}>{x.detail}</span>}
-              <span className="row" style={{ fontSize: 12, marginTop: 'auto' }}>{by(x)}<span className="time push">{when(x.at_ms)}</span></span>
+            <button key={x.key} type="button" className="card link out-card" style={tint(x.role)} onClick={() => setPicked(x.key)}>
+              <span className="out-thumb"><KindIcon icon={iconOf(x)} size={34} /></span>
+              <span className="out-body">
+                <span className="row" style={{ fontSize: 11 }}><span className="caps">{GROUP_LABEL[x.group]}</span><span className={x.status === 'draft' ? 'chip warn push' : 'chip push'}>{x.status}</span></span>
+                <span style={{ fontWeight: 600, fontSize: 15, lineHeight: 1.35 }}>{x.title}</span>
+                {x.detail && <span className="muted" style={{ fontSize: 12 }}>{x.detail}</span>}
+                <span className="row" style={{ fontSize: 12, marginTop: 'auto' }}>{by(x)}<span className="time push">{when(x.at_ms)}</span></span>
+              </span>
             </button>
           ))}
         </div>
@@ -121,7 +128,7 @@ export function Output({ bridge, info, state, light }: Props) {
             <tbody>
               {shown.map((x) => (
                 <tr key={x.key}>
-                  <td style={{ width: '48%' }}><button type="button" className="cell-btn" onClick={() => setPicked(x.key)}>{x.title}</button></td>
+                  <td style={{ width: '48%' }}><button type="button" className="cell-btn with-icon" onClick={() => setPicked(x.key)}><KindIcon icon={iconOf(x)} /><span>{x.title}</span></button></td>
                   <td>{by(x)}</td>
                   <td className="muted">{GROUP_LABEL[x.group]}{x.detail ? ` · ${x.detail}` : ''}</td>
                   <td><span className={x.status === 'draft' ? 'chip warn' : 'chip'}>{x.status}</span></td>

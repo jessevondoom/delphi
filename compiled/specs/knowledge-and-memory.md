@@ -30,7 +30,7 @@ This spec reserves a tenth role, `librarian`, and fixes its charter, its boundar
 
 ## 028-knowledge-window
 
-**028: The Knowledge Window (explorer in the archives pane)** · approved (per source at `d350001e78f1`) · tier 0 · [source](../../specs/028-knowledge-window.md)
+**028: The Knowledge Window (explorer in the archives pane)** · approved (per source at `41ab592b5906`) · tier 0 · [source](../../specs/028-knowledge-window.md)
 
 _No standard scope section; open the spec._
 

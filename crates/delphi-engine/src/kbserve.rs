@@ -646,7 +646,7 @@ mod tests {
         let (home, ws) = workspace();
         let lessons = ws.path().join("base/context/lessons");
         std::fs::create_dir_all(&lessons).unwrap();
-        std::fs::write(lessons.join("a.md"), doc("internal_generated", "# A\n\nx\n")).unwrap();
+        std::fs::write(lessons.join("a.md"), "---\ntitle: t\nauthor: builder\nsource_type: internal_generated\nstatus: active\n---\n# A\n\nx\n").unwrap();
         let mut api = Api::new(home.path(), ws.path()).unwrap();
         let (s, k) = get(&mut api, "/v1/kinds");
         assert_eq!(s, 200, "{k}");
@@ -655,8 +655,10 @@ mod tests {
         let (_, docs) = get(&mut api, "/v1/documents?kind=lesson");
         assert_eq!(docs.as_array().unwrap().len(), 1);
         assert_eq!(docs[0]["kind"], "lesson", "a listing says each document's kind");
+        assert_eq!(docs[0]["author"], "builder", "and who its front matter names");
         let (_, plain) = get(&mut api, "/v1/documents?limit=5");
         assert!(plain.as_array().unwrap().iter().all(|d| d["kind"].is_string()), "also without a kind filter");
+        assert!(plain.as_array().unwrap().iter().any(|d| d["author"].is_null()), "a document that names no one has no author: {plain}");
         let (_, specs) = get(&mut api, "/v1/documents?kind=spec&limit=1&offset=1");
         assert_eq!(specs.as_array().unwrap().len(), 1, "offset and limit apply after the kind filter");
         assert_eq!(get(&mut api, "/v1/nonsense").0, 404);

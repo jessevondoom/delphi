@@ -51,7 +51,8 @@
       "status": "active",
       "source_type": "internal_generated",
       "updated_at": "2026-11-14T14:20:00Z",
-      "blake3": "a1"
+      "blake3": "a1",
+      "author": "writer"
     },
     {
       "rel_path": "missions/2026-10-25-rail/status.md",
@@ -60,7 +61,8 @@
       "status": "active",
       "source_type": "internal_generated",
       "updated_at": "2026-11-14T14:10:00Z",
-      "blake3": "a2"
+      "blake3": "a2",
+      "author": "orchestrator"
     },
     {
       "rel_path": "context/domains/retry-queues.md",
@@ -69,7 +71,8 @@
       "status": "active",
       "source_type": "user_ratified",
       "updated_at": "2026-11-12T09:00:00Z",
-      "blake3": "a3"
+      "blake3": "a3",
+      "author": "architect"
     },
     {
       "rel_path": "memory/lessons/visibility-timeouts.md",
@@ -78,7 +81,28 @@
       "status": "draft",
       "source_type": "internal_empirical",
       "updated_at": "2026-11-11T16:45:00Z",
-      "blake3": "a4"
+      "blake3": "a4",
+      "author": "builder"
+    },
+    {
+      "rel_path": "missions/2026-10-25-rail/councils/001-a-table-or-a-broker.md",
+      "kind": "mission",
+      "zone": "missions",
+      "status": "active",
+      "source_type": "internal_generated",
+      "updated_at": "2026-11-13T11:30:00Z",
+      "blake3": "a6",
+      "author": "orchestrator"
+    },
+    {
+      "rel_path": "summaries/queue-survey.md",
+      "kind": "other",
+      "zone": "summaries",
+      "status": "active",
+      "source_type": "external_untrusted",
+      "updated_at": "2026-11-09T08:15:00Z",
+      "blake3": "a7",
+      "author": "operator-import"
     },
     {
       "rel_path": "skills/spec-driven-build/SKILL.md",
@@ -241,6 +265,24 @@
       "links": [],
       "blake3": "b2",
       "text": "---\nrole: builder\nsource_type: user_ratified\nstatus: active\n---\n\n# Builder\n\nBuilds from an approved spec, one slice at a time.\n"
+    },
+    "missions/2026-10-25-rail/councils/001-a-table-or-a-broker.md": {
+      "path": "missions/2026-10-25-rail/councils/001-a-table-or-a-broker.md",
+      "collection": "missions",
+      "status": "active",
+      "stale": false,
+      "links": [],
+      "blake3": "a6",
+      "text": "---\ntitle: \"Council 001: a table or a broker\"\nauthor: orchestrator\ntimestamp: 2026-11-13T11:30:00Z\nsource_type: internal_generated\nconfidence: medium\nstatus: active\ntags: [council, council-001]\n---\n\n# Council 001: a table or a broker\n\n## Decision\n\nA table. Two seats for, one against.\n\n## Minority Report\n\nA broker is the smaller change if a second service ever reads the queue.\n"
+    },
+    "summaries/queue-survey.md": {
+      "path": "summaries/queue-survey.md",
+      "collection": "summaries",
+      "status": "active",
+      "stale": false,
+      "links": [],
+      "blake3": "a7",
+      "text": "---\ntitle: \"Queue survey\"\nauthor: operator-import\ntimestamp: 2026-11-09T08:15:00Z\nsource_type: external_untrusted\nconfidence: low\nstatus: active\n---\n\n# Queue survey\n\nThree write-ups on queues kept in a database table, brought in by the operator. Not validated.\n"
     }
   }
 }

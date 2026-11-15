@@ -1166,15 +1166,17 @@ pub struct DocInfo {
     pub status: String,
     pub blake3: String,
     pub updated_at: String,
+    /// Who the front matter names (`author`, or `role`), as the index recorded it: a display value, never an authority.
+    pub author: Option<String>,
 }
 
 fn doc_info(r: &rusqlite::Row) -> rusqlite::Result<DocInfo> {
-    Ok(DocInfo { rel_path: r.get(0)?, zone: r.get(1)?, source_type: r.get(2)?, status: r.get(3)?, blake3: r.get(4)?, updated_at: r.get(5)? })
+    Ok(DocInfo { rel_path: r.get(0)?, zone: r.get(1)?, source_type: r.get(2)?, status: r.get(3)?, blake3: r.get(4)?, updated_at: r.get(5)?, author: r.get(6)? })
 }
 
 /// A document's last change on disk: the indexer keeps the file's modification time, while `updated_at` is empty in an
 /// index the daemon built, which has no clock to give it.
-const DOC_COLS: &str = "d.rel_path, d.zone, d.source_type, d.status, d.content_blake3, strftime('%Y-%m-%dT%H:%M:%SZ', d.mtime_ns / 1000000000, 'unixepoch')";
+const DOC_COLS: &str = "d.rel_path, d.zone, d.source_type, d.status, d.content_blake3, strftime('%Y-%m-%dT%H:%M:%SZ', d.mtime_ns / 1000000000, 'unixepoch'), d.author";
 
 impl Kb {
     /// The collections (zones) with how many visible documents each holds and when the newest changed.

@@ -7,8 +7,8 @@ export type Hit = {
   label: string; status: string; note: string | null; vouched_by: string | null; updated?: string; start_line?: number; end_line?: number;
 };
 export type SearchBody = { query: string; mode?: string; candidates?: number; capped?: boolean; facets?: Record<string, number>; results: Hit[] };
-/** One row of a listing (`/v1/documents`). */
-export type DocRow = { rel_path: string; kind: string; zone: string; status: string; source_type: string; updated_at: string };
+/** One row of a listing (`/v1/documents`). `author` is who its front matter names; an older daemon does not send it. */
+export type DocRow = { rel_path: string; kind: string; zone: string; status: string; source_type: string; updated_at: string; author?: string | null };
 export type Collection = { name: string; documents: number; updated: string };
 /** One document (`/v1/doc`). */
 export type Doc = { path: string; collection: string; status: string; stale: boolean; text: string };
