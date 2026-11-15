@@ -421,6 +421,11 @@ impl Library for LiveLibrary {
         crate::library::Library::in_home(&self.home).read_meta(source_id).is_some_and(|m| crate::library::is_private(&m))
     }
 
+    /// The hash the source's own record holds, for the run's record (`specs/112` §2.2).
+    fn content_hash(&self, source_id: &str) -> Option<String> {
+        crate::library::Library::in_home(&self.home).read_meta(source_id)?["content_hash"].as_str().map(String::from)
+    }
+
     /// The seed of a citation lookup (`specs/101` §6): the DOI the source's own record names (never read from the page's text), and only
     /// for a source the daemon fetched itself that is public and readable. The one guard is `egress::check` on the record with
     /// `Channel::CitationLookup`, so a private source, a record that cannot be read (or is missing) and a name the library cannot vouch

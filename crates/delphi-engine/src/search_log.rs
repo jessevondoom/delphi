@@ -373,12 +373,15 @@ fn id_ok(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// Where a run's log is kept: `<workspace>/research/search-logs/<research_id>.json`.
+/// Where a run's log was kept before `specs/112`: `<workspace>/research/search-logs/<research_id>.json`. A run now keeps its log in its
+/// topic's folder (`research/topics/<topic-id>/search-log.json`, written by `research_record`); nothing new is written here, and a log
+/// that is already here is still read ([`read`]).
 pub fn path(ws: &Path, research_id: &str) -> Option<PathBuf> {
     id_ok(research_id).then(|| ws.join("research").join("search-logs").join(format!("{research_id}.json")))
 }
 
-/// Keep a run's log (mode 0600 on Unix, written whole then moved into place).
+/// Keep a log at the older place (mode 0600 on Unix, written whole then moved into place). The daemon no longer calls it (`specs/112`
+/// §2.3 moved the log into the topic's folder); it is what wrote the logs [`read`] still finds there.
 pub fn persist(ws: &Path, research_id: &str, log: &Value) -> Result<(), String> {
     let p = path(ws, research_id).ok_or_else(|| "not a research id".to_string())?;
     let dir = p.parent().ok_or("no parent")?;
@@ -397,7 +400,14 @@ pub fn persist(ws: &Path, research_id: &str, log: &Value) -> Result<(), String> 
     std::fs::rename(&tmp, &p).map_err(|e| e.to_string())
 }
 
-pub fn read(ws: &Path, research_id: &str) -> Result<Value, String> {
+/// The search log for `id`, for `delphi research log <id>`. `id` is a topic id or a research id: the log is read from the topic's
+/// folder (`specs/112` §2.3), and for a job that finished before the log moved there, from the older place.
+pub fn read(ws: &Path, id: &str) -> Result<Value, String> {
+    let topic = crate::research_record::find(ws, id).or_else(|| crate::research_record::find_run_for_operator(ws, id));
+    if let Some(log) = topic.and_then(|t| t.search_log()) {
+        return Ok(log);
+    }
+    let research_id = id;
     let p = path(ws, research_id).ok_or_else(|| format!("`{research_id}` is not a research id"))?;
     let text = std::fs::read_to_string(&p).map_err(|_| format!("no search log for `{research_id}`: it is written only for a research job that has finished"))?;
     serde_json::from_str(&text).map_err(|e| format!("the search log for `{research_id}` is not readable: {e}"))

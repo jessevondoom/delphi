@@ -111,6 +111,11 @@ pub trait Library: Send + Sync {
     fn cite_info(&self, _source_id: &str, _claim_text: &str) -> Option<Cite> {
         None
     }
+    /// The content hash the library holds for a source this run captured (`sha256:<hex>` of what was read), for the run's record
+    /// (`specs/112` §2.2). `None` when the library cannot say.
+    fn content_hash(&self, _source_id: &str) -> Option<String> {
+        None
+    }
     /// Is the source private? A claim that rests on a private source is never put in an outbound query (`specs/098` §7.5 item 5).
     fn is_private(&self, _source_id: &str) -> bool {
         false
@@ -121,6 +126,21 @@ pub trait Library: Send + Sync {
     fn chainable_doi(&self, _source_id: &str) -> Option<String> {
         None
     }
+}
+
+/// What a run tells its record as it goes (`specs/112` §2.4): the plan, each query sent, each page read and kept, each page it did
+/// not read. The runner only reports; nothing here is read back, and no branch of the run depends on it. Every method defaults to
+/// doing nothing.
+pub trait Recorder: Send + Sync {
+    /// The queries the run planned, as `(kind, query)`, before any is sent.
+    fn plan(&self, _queries: &[(&str, &str)]) {}
+    /// One query that was sent: its text, its purpose, the provider that answered when known, and the number of results or the fixed
+    /// reason it failed.
+    fn query(&self, _query: &str, _purpose: &str, _provider: Option<&str>, _results: Result<usize, &str>) {}
+    /// One page that was read and kept as a source, with the hash of what was read when the library gives it.
+    fn page(&self, _url: &str, _source_id: &str, _content_hash: Option<&str>) {}
+    /// One page that was not read, and a fixed word for why.
+    fn refused(&self, _url: &str, _why: &str) {}
 }
 
 pub struct Deps<'a> {
@@ -144,6 +164,8 @@ pub struct Deps<'a> {
     /// `[research] citation_chaining` (`specs/101` §6): the citation index and the bounds. `None` is the switch off: the run is what
     /// spec 098 gives and nothing is sent to an index.
     pub chain: Option<ChainPlan<'a>>,
+    /// The run's record on disk (`specs/112` §2), written as the run goes. `None` keeps no record.
+    pub record: Option<&'a dyn Recorder>,
 }
 
 #[derive(Debug, Clone)]
@@ -314,9 +336,14 @@ fn coverage_report(r: &Rungs, kb: usize, trusted_claims: usize, web_claims: usiz
 
 /// Read one page into the claim set: keep it as a source, extract its claims, and merge a claim already known into the claim that holds
 /// it (a second citation) or start a new one. The scout's quote was found in the page's text by code, so each citation is quote-verified.
-/// `true` when the page was kept as a source (whether or not any claim came out of it), `false` when the library refused it.
+/// `true` when the page was kept as a source (whether or not any claim came out of it), `false` when the library refused it. Either
+/// way the run's record is told (`specs/112` §2.2).
 async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, retrieved: &str, set: &mut ClaimSet, claims: &mut Vec<ClaimRec>) -> bool {
-    let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else { return false };
+    let Ok(source_id) = deps.library.capture(&page.url, &page.text, trusted).await else {
+        note(deps, |r| r.refused(&page.url, "capture_failed"));
+        return false;
+    };
+    note(deps, |r| r.page(&page.url, &source_id, deps.library.content_hash(&source_id).as_deref()));
     let Ok(found) = deps.scout.extract(question, page).await else { return true };
     for x in found {
         let fp = claim_fingerprint(&x.subject, &x.predicate, &x.object, &x.scope, &x.time);
@@ -347,6 +374,22 @@ async fn ingest(deps: &Deps<'_>, question: &str, page: &Page, trusted: bool, ret
         }
     }
     true
+}
+
+/// Tell the run's record something, when the run has one.
+fn note(deps: &Deps<'_>, f: impl FnOnce(&dyn Recorder)) {
+    if let Some(r) = deps.record {
+        f(r);
+    }
+}
+
+/// The word the record uses for a planned query's kind.
+fn kind_word(kind: QueryKind) -> &'static str {
+    match kind {
+        QueryKind::Trusted => "trusted",
+        QueryKind::Topic => "topic",
+        QueryKind::Gap => "gap",
+    }
 }
 
 /// The source a search belongs to in the search log (`specs/101` §3 item 1): the trusted-list search is `trusted`; every other search
@@ -459,10 +502,12 @@ async fn chain_pass(ctx: &JobCtx, deps: &Deps<'_>, claims: &[ClaimRec], seen: &m
                     Ok(w) => w,
                     Err(_) => {
                         log.failed(li, "no_results");
+                        note(deps, |r| r.query(&what, "chain", Some(crate::research_chain::PROVIDER_ID), Err("no_results")));
                         stats.failed += 1;
                         continue;
                     }
                 };
+                note(deps, |r| r.query(&what, "chain", Some(crate::research_chain::PROVIDER_ID), Ok(works.len())));
                 answered = true;
                 listed |= !works.is_empty();
                 log.rows(li, works.len());
@@ -560,13 +605,15 @@ async fn read_chained(ctx: &JobCtx, deps: &Deps<'_>, plan: &crate::research_chai
         return true;
     }
     match deps.library.capture(&landing, "", false).await {
-        Ok(_) => {
+        Ok(source_id) => {
             log.kept(li);
             stats.pages += 1;
+            note(deps, |r| r.page(&landing, &source_id, deps.library.content_hash(&source_id).as_deref()));
         }
         Err(_) => {
             log.dropped(li, "capture_failed", 1);
             stats.unresolved += 1;
+            note(deps, |r| r.refused(&landing, "capture_failed"));
         }
     }
     false
@@ -579,6 +626,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         return Err("the question has no usable search query once private details are removed: ask it without paths, hosts or credentials".into());
     }
     queries.sort_by_key(|q| q.kind != QueryKind::Trusted);
+    note(deps, |r| r.plan(&queries.iter().map(|q| (kind_word(q.kind), q.text.as_str())).collect::<Vec<_>>()));
     let mut set = ClaimSet::new(deps.library.known_fingerprints());
     let (mut seen, mut claims, mut spent) = (Seen::default(), Vec::<ClaimRec>::new(), false);
     // Every page the run read, with the text it read: the check works from these and fetches nothing (`specs/112` §4.3).
@@ -616,9 +664,11 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                 let (rung, source, purpose) = log_source(q.kind, None);
                 let li = log.begin(rung, source, purpose, &q.text, None);
                 log.failed(li, why);
+                note(deps, |r| r.query(&q.text, kind_word(q.kind), None, Err(why)));
                 continue;
             }
         };
+        note(deps, |r| r.query(&q.text, kind_word(q.kind), via.as_deref(), Ok(rows.len())));
         if via.is_some() {
             last_provider = via.clone();
         }
@@ -646,6 +696,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             // A result the fetcher will not reach is kept as a lead, not dropped, and costs no step (`specs/098` §7.5 item 1).
             if !deps.web.can_fetch(&row.url) {
                 ctx.refused(&row.url);
+                note(deps, |r| r.refused(&row.url, "not_fetchable"));
                 if deps.library.note_lead(&row).is_ok() {
                     cov.leads += 1;
                     log.kept(li);
@@ -661,10 +712,12 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                     break 'queries;
                 }
                 log.dropped(li, "refused", 1);
+                note(deps, |r| r.refused(&row.url, "refused"));
                 continue;
             }
             let Ok(page) = deps.web.fetch(&row.url) else {
                 ctx.refused(&row.url);
+                note(deps, |r| r.refused(&row.url, "fetch_failed"));
                 if !from_trusted_host && deps.library.note_lead(&row).is_ok() {
                     cov.leads += 1;
                     log.kept(li);
@@ -734,9 +787,11 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                     Err(e) => {
                         let li = log.begin("web", Source::Search("unknown".into()), purpose, &q, None);
                         log.failed(li, failure_reason(&e));
+                        note(deps, |r| r.query(&q, kind, None, Err(failure_reason(&e))));
                         continue;
                     }
                 };
+                note(deps, |r| r.query(&q, kind, via.as_deref(), Ok(rows.len())));
                 let provider = via.as_deref().and_then(crate::search_log::clean_id).unwrap_or_else(|| "unknown".into());
                 let li = log.begin("web", Source::Search(provider), purpose, &q, None);
                 log.rows(li, rows.len());
@@ -750,6 +805,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                     }
                     if !deps.web.can_fetch(&row.url) {
                         ctx.refused(&row.url);
+                        note(deps, |r| r.refused(&row.url, "not_fetchable"));
                         if deps.library.note_lead(&row).is_ok() {
                             cov.leads += 1;
                             log.kept(li);
@@ -765,10 +821,12 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
                             break 'pass;
                         }
                         log.dropped(li, "refused", 1);
+                        note(deps, |r| r.refused(&row.url, "refused"));
                         continue;
                     }
                     let Ok(page) = deps.web.fetch(&row.url) else {
                         ctx.refused(&row.url);
+                        note(deps, |r| r.refused(&row.url, "fetch_failed"));
                         log.dropped(li, "fetch_failed", 1);
                         continue;
                     };
@@ -1015,6 +1073,9 @@ mod tests {
             self.staged.lock().unwrap().push(c.id.clone());
             Ok(())
         }
+        fn content_hash(&self, source_id: &str) -> Option<String> {
+            Some(format!("sha256:of-{source_id}"))
+        }
     }
 
     fn x(object: &str) -> Extracted {
@@ -1056,7 +1117,27 @@ mod tests {
         crate::research_chain::Work { doi: doi.into(), year: None }
     }
 
+    /// A recorder that keeps what the run told it, in order, as one line each.
+    #[derive(Default)]
+    struct Told(Mutex<Vec<String>>);
+    impl Recorder for Told {
+        fn plan(&self, queries: &[(&str, &str)]) {
+            self.0.lock().unwrap().push(format!("plan {}", queries.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(",")));
+        }
+        fn query(&self, query: &str, purpose: &str, provider: Option<&str>, results: Result<usize, &str>) {
+            self.0.lock().unwrap().push(format!("query [{purpose}] {query} via {} -> {results:?}", provider.unwrap_or("-")));
+        }
+        fn page(&self, url: &str, source_id: &str, content_hash: Option<&str>) {
+            self.0.lock().unwrap().push(format!("page {url} {source_id} {}", content_hash.unwrap_or("-")));
+        }
+        fn refused(&self, url: &str, why: &str) {
+            self.0.lock().unwrap().push(format!("refused {url} {why}"));
+        }
+    }
+
     struct Fixture {
+        /// The run's record, when the test wants one.
+        record: Option<Told>,
         retractions: Option<&'static str>,
         /// The citation index, when chaining is on, and the bounds (depth, fanout, max per seed, max calls).
         cites: Option<FakeCites>,
@@ -1086,10 +1167,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
+            Fixture { record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new() }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }) }
+            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder) }
         }
     }
 
@@ -2037,5 +2118,41 @@ mod tests {
         assert!(v["claims"].as_array().unwrap().is_empty() && g.lib.captured.lock().unwrap().is_empty(), "{v}");
         assert!(!other.can_fetch(returned) && !other.can_fetch(never));
         assert_eq!((canned::served(returned), canned::served(never)), (1, 0));
+    }
+
+    // ---- `specs/112` R1: the run tells its record what it does, as it does it ----
+
+    #[tokio::test]
+    async fn the_run_reports_its_plan_each_query_each_page_kept_and_each_page_it_did_not_read() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.record = Some(Told::default());
+        f.web.provider = Some("brave");
+        f.web.rows.push(row("https://unreachable.example/x"));
+        f.web.rows.push(row("https://refuses.example/y"));
+        f.web.pages.insert("https://refuses.example/y".into(), "a page the library will not keep".into());
+        f.lib.capture_fails.insert("refuses.example".into());
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        let told = f.record.as_ref().unwrap().0.lock().unwrap().clone();
+        assert!(told[0].starts_with("plan trusted"), "the plan is written before anything is sent: {told:?}");
+        let queries: Vec<&String> = told.iter().filter(|l| l.starts_with("query ")).collect();
+        assert_eq!(queries.len(), f.web.searched.lock().unwrap().len(), "every search that was sent is in the record: {told:?}");
+        assert!(queries[0].contains("[trusted]") && queries[0].contains("via brave") && queries[0].ends_with("-> Ok(5)"), "{queries:?}");
+        for u in ["https://who.int/a", "https://nih.gov/b", "https://blog.example/a"] {
+            let h = host(u);
+            assert!(told.contains(&format!("page {u} src-{h} sha256:of-src-{h}")), "{u}: {told:?}");
+        }
+        assert!(told.contains(&"refused https://unreachable.example/x not_fetchable".to_string()), "{told:?}");
+        assert!(told.contains(&"refused https://refuses.example/y capture_failed".to_string()), "{told:?}");
+        assert_eq!(told.iter().filter(|l| l.starts_with("page ")).count(), v["source_ids"].as_array().unwrap().len(), "{told:?}");
+        // A search that fails is a line with its fixed reason, and a run with no record does the same work.
+        let mut g = Fixture::new(Verdict::Inconclusive);
+        g.record = Some(Told::default());
+        g.web.fail = Some("no_search_provider");
+        run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &g.deps()).await.unwrap();
+        let told = g.record.as_ref().unwrap().0.lock().unwrap().clone();
+        assert!(told.iter().any(|l| l.starts_with("query ") && l.ends_with("-> Err(\"no_search_provider\")")), "{told:?}");
+        let plain = Fixture::new(Verdict::Inconclusive);
+        let (_, w) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &plain.deps()).await.unwrap());
+        assert_eq!(w["claims"].as_array().unwrap().len(), 2, "{w}");
     }
 }

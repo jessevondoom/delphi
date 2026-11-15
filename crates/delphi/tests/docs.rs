@@ -208,6 +208,70 @@ fn search_use_is_explore_or_verify_and_the_two_checking_roles_validate_with_veri
     }
 }
 
+/// `specs/112` AC-1, for the host runner: the record the program writes validates against the one schema, at every step of a run
+/// (queued, running with what it has found, finished with its result, and after a second run of the same topic).
+#[test]
+fn the_research_record_the_program_writes_follows_its_schema() {
+    use delphi_engine::research_record::{Asker, Begin, Topic};
+    let ws = tempfile::tempdir().unwrap();
+    let begin = |run_id: &'static str, asked_by: Asker| Topic::begin(ws.path(), &Begin { question: "Does aspirin reduce fever?", asked_by, project: None, depth: delphi_core::research::Depth::Survey, run_id }).unwrap();
+    let read = |t: &Topic| t.read().unwrap();
+    let t = begin("r-t-1", Asker::host("host:claude-code/some-model"));
+    must_pass("research-record.schema.json", "a record that is queued", &read(&t));
+    t.running("r-t-1").unwrap();
+    t.plan(&[("trusted", "aspirin fever site:who.int"), ("topic", "aspirin fever"), ("gap", "aspirin fever children")]).unwrap();
+    t.query("r-t-1", "aspirin fever site:who.int", "trusted", Some("brave"), Ok(3)).unwrap();
+    t.query("r-t-1", "aspirin fever", "topic", None, Err("no_results")).unwrap();
+    t.query("r-t-1", "aspirin reduces fever disputed OR incorrect OR false", "contradiction", Some("brave"), Ok(0)).unwrap();
+    t.page("r-t-1", "https://who.int/a", "s-abc", Some("sha256:00")).unwrap();
+    t.page("r-t-1", "https://nih.gov/b", "s-def", None).unwrap();
+    for why in ["not_fetchable", "refused", "fetch_failed", "capture_failed"] {
+        t.refused("r-t-1", "https://blog.example/x", why).unwrap();
+    }
+    must_pass("research-record.schema.json", "a record of a run that is going", &read(&t));
+    let result = json!({
+        "coverage": "thin", "coverage_report": { "thin_below": 3, "counted": 1, "rungs": [{ "rung": "kb", "searched": true, "entries_found": 0, "kept": 0, "reason": "kb_empty" }], "host_rungs": ["close", "web"], "leads_kept": 0 },
+        "answer": "An answer. (not validated: model synthesis)", "claims": [{ "id": "abc123abc123" }], "source_ids": ["s-abc"], "kb_hits": [], "new_claims": 1,
+        "budget_used": { "steps": 4, "check_steps": 1 }, "answered_by": "scout", "search_log": { "version": 1, "private": true, "lines": [], "flow": {} }
+    });
+    t.finish("r-t-1", "partial", Some(&result), &["abc123abc123".to_string()], None, 1234).unwrap();
+    let rec = read(&t);
+    must_pass("research-record.schema.json", "a record of a finished run", &rec);
+    assert_eq!((rec["private"].as_bool(), rec["state"].as_str()), (Some(true), Some("partial")));
+    begin("r-t-2", Asker::operator());
+    t.finish("r-t-2", "failed", None, &[], Some("the job ran out of time"), 9).unwrap();
+    begin("r-t-3", Asker::role("architect"));
+    t.finish("r-t-3", "cancelled", None, &[], None, 0).unwrap();
+    let rec = read(&t);
+    must_pass("research-record.schema.json", "a record with three runs", &rec);
+    assert_eq!(rec["runs"].as_array().unwrap().len(), 3);
+    // What the schema refuses: a state, a taint, a reason or an asker outside the fixed sets, a topic id that is not one, a missing field.
+    let mut bad = rec.clone();
+    bad["state"] = json!("validated");
+    must_fail("research-record.schema.json", "a state outside the six", &bad);
+    let mut bad = rec.clone();
+    bad["taint"] = json!("user_ratified");
+    must_fail("research-record.schema.json", "a record that calls itself ratified", &bad);
+    let mut bad = rec.clone();
+    bad["topic_id"] = json!("../../etc-deadbeef");
+    must_fail("research-record.schema.json", "a topic id that is a path", &bad);
+    let mut bad = rec.clone();
+    bad["refused"][0]["reason"] = json!("the provider said: go away");
+    must_fail("research-record.schema.json", "free text as a refusal reason", &bad);
+    let mut bad = rec.clone();
+    bad["asked_by"]["kind"] = json!("validator-approved");
+    must_fail("research-record.schema.json", "an asker kind outside the three", &bad);
+    let mut bad = rec.clone();
+    bad["asked_by"]["label"] = json!("host:\u{1b}[31mred");
+    must_fail("research-record.schema.json", "an escape in the asker's label", &bad);
+    let mut bad = rec.clone();
+    bad.as_object_mut().unwrap().remove("runs");
+    must_fail("research-record.schema.json", "a record with no runs", &bad);
+    let mut bad = rec.clone();
+    bad["trusted"] = json!(true);
+    must_fail("research-record.schema.json", "a field the record does not have", &bad);
+}
+
 #[test]
 fn research_results_follow_their_schema_and_refuse_control_characters_in_identity() {
     let ok = json!({

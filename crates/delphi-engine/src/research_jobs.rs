@@ -84,6 +84,15 @@ pub enum Finish {
     Partial(Value),
 }
 
+/// How a job ended, as [`Jobs::submit_with`] tells its `on_end`: the state, the runner's value when it produced one, the error when
+/// it failed, and how long it ran.
+pub struct Ended<'a> {
+    pub state: State,
+    pub result: Option<&'a Value>,
+    pub error: Option<&'a str>,
+    pub ms: u64,
+}
+
 /// The budget ran out; the runner should return what it has as [`Finish::Partial`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct BudgetSpent;
@@ -256,6 +265,18 @@ impl Jobs {
         F: FnOnce(Arc<JobCtx>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<Finish, String>> + Send + 'static,
     {
+        self.submit_with(id, session, depth, run, |_| {})
+    }
+
+    /// [`submit`](Jobs::submit), and `on_end` is called once when the job ends, however it ends (done, partial, failed, timed out,
+    /// cancelled while queued or running), just before the job reads as finished. It is how a run's record on disk learns its last
+    /// state (`specs/112` §2.4): a cancelled or timed-out run never gets back to its own code.
+    pub fn submit_with<F, Fut, E>(&self, id: &str, session: &str, depth: Depth, run: F, on_end: E)
+    where
+        F: FnOnce(Arc<JobCtx>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Finish, String>> + Send + 'static,
+        E: FnOnce(&Ended<'_>) + Send + 'static,
+    {
         let ctx = Arc::new(JobCtx::with_budget(depth.max_steps()));
         let cancel = Arc::new(Notify::new());
         {
@@ -270,22 +291,26 @@ impl Jobs {
                 _ = cancel.notified() => None,
             };
             let Some(permit) = permit else {
+                on_end(&Ended { state: State::Cancelled, result: None, error: None, ms: 0 });
                 me.end(&id, State::Cancelled, None, None);
                 return;
             };
             me.set_state(&id, State::Running);
+            let started = Instant::now();
             let outcome = tokio::select! {
                 r = tokio::time::timeout(timeout, run(ctx)) => Some(r),
                 _ = cancel.notified() => None,
             };
             drop(permit);
-            match outcome {
-                None => me.end(&id, State::Cancelled, None, None),
-                Some(Err(_)) => me.end(&id, State::Failed, None, Some("the job ran out of time".into())),
-                Some(Ok(Ok(Finish::Done(v)))) => me.end(&id, State::Done, Some(v), None),
-                Some(Ok(Ok(Finish::Partial(v)))) => me.end(&id, State::Partial, Some(v), None),
-                Some(Ok(Err(e))) => me.end(&id, State::Failed, None, Some(e)),
-            }
+            let (state, result, error) = match outcome {
+                None => (State::Cancelled, None, None),
+                Some(Err(_)) => (State::Failed, None, Some("the job ran out of time".to_string())),
+                Some(Ok(Ok(Finish::Done(v)))) => (State::Done, Some(v), None),
+                Some(Ok(Ok(Finish::Partial(v)))) => (State::Partial, Some(v), None),
+                Some(Ok(Err(e))) => (State::Failed, None, Some(e)),
+            };
+            on_end(&Ended { state, result: result.as_ref(), error: error.as_deref(), ms: started.elapsed().as_millis() as u64 });
+            me.end(&id, state, result, error);
         });
     }
 
@@ -535,6 +560,38 @@ mod tests {
             assert_eq!(jobs.wait(id, "s", Duration::from_secs(5)).await.unwrap()["status"], "cancelled", "{id}");
         }
         assert!(!jobs.cancel("run", "s"), "already finished");
+    }
+
+    /// `specs/112` §2.4: the record learns how a job ended whichever way it ended, before the job reads as finished.
+    #[tokio::test]
+    async fn on_end_is_told_every_way_a_job_can_end() {
+        let jobs = Jobs::new(1, Duration::from_millis(300));
+        /// A job's name, the state it ended in, whether it had a result, and its error.
+        type End = (String, &'static str, bool, Option<String>);
+        let seen: Arc<Mutex<Vec<End>>> = Default::default();
+        let tell = |name: &'static str| {
+            let seen = seen.clone();
+            move |e: &Ended<'_>| seen.lock().unwrap().push((name.to_string(), e.state.as_str(), e.result.is_some(), e.error.map(String::from)))
+        };
+        jobs.submit_with("done", "s", Depth::Quick, |_| async { done(json!({"n": 1})) }, tell("done"));
+        jobs.submit_with("partial", "s", Depth::Quick, |_| async { Ok(Finish::Partial(json!({}))) }, tell("partial"));
+        jobs.submit_with("bad", "s", Depth::Quick, |_| async { Err("no provider".to_string()) }, tell("bad"));
+        for id in ["done", "partial", "bad"] {
+            jobs.wait(id, "s", Duration::from_secs(5)).await.unwrap();
+        }
+        jobs.submit_with("slow", "s", Depth::Quick, |_| async { std::future::pending::<Result<Finish, String>>().await }, tell("slow"));
+        jobs.wait("slow", "s", Duration::from_secs(5)).await.unwrap();
+        jobs.submit_with("run", "s", Depth::Quick, |_| async { std::future::pending::<Result<Finish, String>>().await }, tell("run"));
+        jobs.submit_with("queued", "s", Depth::Quick, |_| async { done(json!({})) }, tell("queued"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(jobs.cancel("queued", "s") && jobs.cancel("run", "s"));
+        for id in ["run", "queued"] {
+            jobs.wait(id, "s", Duration::from_secs(5)).await.unwrap();
+        }
+        let mut seen = seen.lock().unwrap().clone();
+        seen.sort();
+        let want = [("bad", "failed", false, Some("no provider")), ("done", "done", true, None), ("partial", "partial", true, None), ("queued", "cancelled", false, None), ("run", "cancelled", false, None), ("slow", "failed", false, Some("the job ran out of time"))];
+        assert_eq!(seen, want.map(|(n, s, r, e)| (n.to_string(), s, r, e.map(String::from))).to_vec());
     }
 
     #[tokio::test]

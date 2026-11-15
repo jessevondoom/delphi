@@ -1,4 +1,7 @@
-//! `delphi research log <id>` and `delphi research retractions import|status`.
+//! `delphi research topics`, `delphi research show <topic-id>`, `delphi research log <id>` and `delphi research retractions import|status`.
+//!
+//! `topics` lists the research records on disk and `show` prints one (`specs/112` §2, §5.3): read-only, from the files a run left in
+//! `research/topics/<topic-id>/` of the workspace or of a registered project. Record text is data and is printed as such.
 //!
 //! `log` prints the search log of a finished host research job (`specs/101` §3): read-only, it prints what the daemon wrote beside the
 //! result, and calls no model and no network.
@@ -7,18 +10,20 @@
 //! and, when `[research] retractions` is on, checks every source in the library against it. **It never calls a service**, and takes a path,
 //! not a URL: downloading the file is the operator's act (the repository is `gitlab.com/crossref/retraction-watch-data`).
 
-use delphi_engine::search_log;
+use delphi_engine::{research_record, search_log};
 use std::path::Path;
 
 pub struct Options {
     pub json: bool,
 }
 
-const USAGE: &str = "usage: delphi research log <research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]";
+const USAGE: &str = "usage: delphi research topics [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]";
 
 /// `args` is what follows the command name: `log <id> [flags]` or `retractions import|status [<file>] [flags]`.
 pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
     match args.first().map(String::as_str) {
+        Some("topics") => topics(ws_dir, o),
+        Some("show") => show(ws_dir, args, o),
         Some("log") => log(ws_dir, args, o),
         Some("retractions") => retractions(home, ws_dir, args, o),
         _ => {
@@ -41,6 +46,47 @@ fn operand(args: &[String], after: usize) -> Option<&str> {
         }
     }
     None
+}
+
+/// `delphi research topics`: every research record of the workspace and of its registered projects, newest first.
+fn topics(ws_dir: &Path, o: &Options) -> i32 {
+    let all = research_record::list(ws_dir);
+    if o.json {
+        let rows: Vec<serde_json::Value> = all
+            .iter()
+            .map(|(t, r)| serde_json::json!({"topic_id": t.id, "question": r["question"], "state": r["state"], "project": r["project"], "private": r["private"], "updated": r["updated"], "runs": r["runs"].as_array().map_or(0, Vec::len), "pages": r["pages"].as_array().map_or(0, Vec::len), "claims": r["claims"].as_array().map_or(0, Vec::len)}))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".into()));
+    } else {
+        print!("{}", research_record::render_list(&all));
+    }
+    0
+}
+
+/// `delphi research show <topic-id>`: one record and its answer.
+fn show(ws_dir: &Path, args: &[String], o: &Options) -> i32 {
+    let Some(id) = operand(args, 1) else {
+        eprintln!("{USAGE}");
+        return 2;
+    };
+    let Some(topic) = research_record::find(ws_dir, id) else {
+        eprintln!("delphi research show: no research topic `{}`: `delphi research topics` lists them", id.chars().filter(|c| !c.is_control()).take(80).collect::<String>());
+        return 1;
+    };
+    match topic.read() {
+        Ok(rec) if o.json => {
+            println!("{}", serde_json::to_string_pretty(&rec).unwrap_or_else(|_| "{}".into()));
+            0
+        }
+        Ok(rec) => {
+            print!("{}", research_record::render(&topic, &rec));
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi research show: {e}");
+            1
+        }
+    }
 }
 
 fn log(ws_dir: &Path, args: &[String], o: &Options) -> i32 {
@@ -153,7 +199,34 @@ mod tests {
         assert_eq!(cli(h, d.path(), &strings(&["log", "r-none"]), &Options { json: false }), 1, "no such log");
         assert_eq!(cli(h, d.path(), &strings(&["log", "../etc/passwd"]), &Options { json: false }), 1, "only a clean id names a file");
         assert_eq!(cli(h, d.path(), &strings(&["log"]), &Options { json: false }), 2);
-        assert_eq!(cli(h, d.path(), &strings(&["show", "r-t-1"]), &Options { json: false }), 2);
+        assert_eq!(cli(h, d.path(), &strings(&["frobnicate", "r-t-1"]), &Options { json: false }), 2, "not a subcommand");
+    }
+
+    /// `specs/112` §5.3: `topics` lists the records on disk and `show` prints one; both only read.
+    #[test]
+    fn it_lists_the_research_topics_and_shows_one_and_writes_nothing() {
+        use delphi_engine::research_record::{Asker, Begin, Topic};
+        let d = tempfile::tempdir().unwrap();
+        let h = d.path();
+        let o = Options { json: false };
+        assert_eq!(cli(h, d.path(), &strings(&["topics"]), &o), 0, "no topics yet is not an error");
+        assert!(!d.path().join("research").exists(), "listing creates nothing");
+        let t = Topic::begin(d.path(), &Begin { question: "Does aspirin reduce fever?", asked_by: Asker::host("host:claude-code/m"), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
+        let result = json!({"answer": "An answer.", "budget_used": {"steps": 2, "check_steps": 1}, "search_log": {"version": 1, "private": false, "lines": [], "flow": {"found": 0, "duplicates_removed": 0, "kept": 0, "not_kept": {}, "searches": 0, "withheld": 0}}});
+        t.finish("r-t-1", "done", Some(&result), &[], None, 5).unwrap();
+        let before = std::fs::read(t.record_path()).unwrap();
+        for json in [false, true] {
+            let o = Options { json };
+            assert_eq!(cli(h, d.path(), &strings(&["topics"]), &o), 0);
+            assert_eq!(cli(h, d.path(), &strings(&["show", t.id.as_str()]), &o), 0);
+            assert_eq!(cli(h, d.path(), &strings(&["show", "--workspace", "w", t.id.as_str()]), &o), 0, "a flag's value is not the id");
+            assert_eq!(cli(h, d.path(), &strings(&["log", t.id.as_str()]), &o), 0, "the topic's search log, by the topic's id");
+        }
+        assert_eq!(std::fs::read(t.record_path()).unwrap(), before, "showing a record does not change it");
+        assert_eq!(cli(h, d.path(), &strings(&["show", "r-t-1"]), &o), 1, "a research id is not a topic id");
+        assert_eq!(cli(h, d.path(), &strings(&["show", "nope-deadbeef"]), &o), 1, "no such topic");
+        assert_eq!(cli(h, d.path(), &strings(&["show", "../../etc/passwd"]), &o), 1, "only a topic id names a folder");
+        assert_eq!(cli(h, d.path(), &strings(&["show"]), &o), 2);
     }
 
     #[test]

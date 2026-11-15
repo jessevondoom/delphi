@@ -63,6 +63,7 @@
       },
       "additionalProperties": false
     },
+    "topic_id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$", "description": "The research topic the run's record is kept under (specs/112 section 2): `research/topics/<topic_id>/` in the workspace, or in the project's folder. `delphi research show <topic_id>` prints it." },
     "answered_by": { "type": "string", "minLength": 1 },
     "consulted": { "type": "array", "items": { "type": "string" } },
     "identity": { "$ref": "#/$defs/identity" },
