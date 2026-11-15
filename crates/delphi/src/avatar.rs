@@ -51,6 +51,9 @@ pub struct RoleTheme {
     pub role_id: &'static str,
     pub chassis_rgb: (u8, u8, u8),
     pub chassis_rgb_light: (u8, u8, u8),
+    /// The fill on a light surface (`delphi_core::research::role_fill_light`): chips, bars and badge strokes. 3:1 against the
+    /// surface, and a dark face on it reaches 4.5:1.
+    pub fill_rgb_light: (u8, u8, u8),
     /// The ANSI colour (0-15) a 16-colour terminal gets for the chassis (`specs/005e` §5): the nearest bright colour, chosen by hand.
     pub chassis_ansi: u8,
     pub chassis_ansi_light: u8,
@@ -67,7 +70,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "orchestrator",
         chassis_rgb: (168, 85, 247), // Violet #A855F7
-        chassis_rgb_light: (126, 34, 206), // Deep Purple #7E22CE
+        chassis_rgb_light: (143, 35, 243), // #8F23F3
+        fill_rgb_light: (171, 89, 246), // #AB59F6
         chassis_ansi: 13,
         chassis_ansi_light: 5,
         crown_rgb: (250, 204, 21),   // Gold #FACC15
@@ -80,7 +84,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "builder",
         chassis_rgb: (245, 158, 11), // Amber #F59E0B
-        chassis_rgb_light: (180, 83, 9), // Deep Amber #B45309
+        chassis_rgb_light: (171, 73, 7), // #AB4907
+        fill_rgb_light: (217, 92, 9), // #D95C09
         chassis_ansi: 11,
         chassis_ansi_light: 3,
         crown_rgb: (244, 63, 94),    // Rose corners #F43F5E
@@ -94,7 +99,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "architect",
         chassis_rgb: (56, 189, 248), // Cyan #38BDF8
-        chassis_rgb_light: (3, 105, 161), // Deep Blue #0369A1
+        chassis_rgb_light: (7, 109, 157), // #076D9D
+        fill_rgb_light: (8, 138, 199), // #088AC7
         chassis_ansi: 14,
         chassis_ansi_light: 4,
         crown_rgb: (255, 255, 255),  // White marble #FFFFFF
@@ -107,7 +113,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "red-team",
         chassis_rgb: (239, 68, 68),  // Crimson #EF4444
-        chassis_rgb_light: (185, 28, 28), // Dark Red #B91C1C
+        chassis_rgb_light: (206, 16, 16), // #CE1010
+        fill_rgb_light: (241, 62, 62), // #F13E3E
         chassis_ansi: 9,
         chassis_ansi_light: 1,
         crown_rgb: (250, 204, 21),   // Bronze Gold #FACC15
@@ -120,7 +127,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "strategist",
         chassis_rgb: (20, 184, 166), // Teal #14B8A6
-        chassis_rgb_light: (15, 118, 110), // Deep Teal #0F766E
+        chassis_rgb_light: (6, 115, 105), // #067369
+        fill_rgb_light: (8, 146, 133), // #089285
         chassis_ansi: 10,
         chassis_ansi_light: 6,
         crown_rgb: (249, 168, 212),  // Light Pink #F9A8D4
@@ -133,7 +141,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "scout",
         chassis_rgb: (255, 255, 0), // Bright Yellow #FFFF00
-        chassis_rgb_light: (133, 77, 14), // Olive Gold #854D0E
+        chassis_rgb_light: (109, 105, 0), // #6D6900
+        fill_rgb_light: (138, 134, 0), // #8A8600
         chassis_ansi: 3,
         chassis_ansi_light: 3,
         crown_rgb: (65, 105, 225),  // Royal Blue #4169E1
@@ -150,7 +159,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "administrator",
         chassis_rgb: (104, 121, 143), // Slate #68798F (the old #64748B was 2.99:1 on #282A36, under the 3.0 gate)
-        chassis_rgb_light: (91, 107, 130), // #5B6B82
+        chassis_rgb_light: (80, 104, 136), // #506888
+        fill_rgb_light: (106, 132, 167), // #6A84A7
         chassis_ansi: 8,
         chassis_ansi_light: 8,
         crown_rgb: (226, 232, 240),
@@ -163,7 +173,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "assistant",
         chassis_rgb: (59, 130, 246), // Blue #3B82F6
-        chassis_rgb_light: (29, 78, 216), // #1D4ED8
+        chassis_rgb_light: (12, 74, 221), // #0C4ADD
+        fill_rgb_light: (73, 124, 245), // #497CF5
         chassis_ansi: 12,
         chassis_ansi_light: 4,
         crown_rgb: (147, 197, 253),
@@ -176,7 +187,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "advocate",
         chassis_rgb: (244, 63, 94), // Rose #F43F5E
-        chassis_rgb_light: (190, 18, 60), // #BE123C
+        chassis_rgb_light: (200, 13, 100), // #C80D64
+        fill_rgb_light: (242, 44, 136), // #F22C88
         chassis_ansi: 1,
         chassis_ansi_light: 1,
         crown_rgb: (253, 224, 71),
@@ -189,7 +201,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "messenger",
         chassis_rgb: (132, 204, 22), // Lime #84CC16
-        chassis_rgb_light: (77, 124, 15), // #4D7C0F
+        chassis_rgb_light: (65, 102, 8), // #416608
+        fill_rgb_light: (91, 144, 12), // #5B900C
         chassis_ansi: 4,
         chassis_ansi_light: 4,
         crown_rgb: (255, 255, 255),
@@ -202,7 +215,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "validator",
         chassis_rgb: (34, 197, 94), // Green #22C55E
-        chassis_rgb_light: (21, 128, 61), // #15803D
+        chassis_rgb_light: (10, 119, 50), // #0A7732
+        fill_rgb_light: (12, 150, 63), // #0C963F
         chassis_ansi: 5,
         chassis_ansi_light: 5,
         crown_rgb: (250, 204, 21),
@@ -216,7 +230,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "writer",
         chassis_rgb: (253, 230, 138), // Gold, pale #FDE68A
-        chassis_rgb_light: (161, 98, 7), // #A16207
+        chassis_rgb_light: (118, 84, 3), // #765403
+        fill_rgb_light: (172, 121, 4), // #AC7904
         chassis_ansi: 6,
         chassis_ansi_light: 6,
         crown_rgb: (255, 255, 255),
@@ -229,7 +244,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "investigator",
         chassis_rgb: (241, 245, 249), // Silver #F1F5F9
-        chassis_rgb_light: (87, 83, 78), // #57534E
+        chassis_rgb_light: (90, 82, 74), // #5A524A
+        fill_rgb_light: (141, 128, 116), // #8D8074
         chassis_ansi: 15,
         chassis_ansi_light: 8,
         crown_rgb: (148, 163, 184),
@@ -242,7 +258,8 @@ pub const ROLES: [RoleTheme; 14] = [
     RoleTheme {
         role_id: "operator",
         chassis_rgb: (148, 163, 184), // Slate #94A3B8
-        chassis_rgb_light: (71, 85, 105), // Deep Slate #475569
+        chassis_rgb_light: (71, 85, 105), // #475569
+        fill_rgb_light: (115, 132, 154), // #73849A
         chassis_ansi: 7,
         chassis_ansi_light: 8,
         crown_rgb: (203, 213, 225),
@@ -423,6 +440,7 @@ pub fn ui_spec() -> serde_json::Value {
         let mut r = json!({
             "chassis": hex_rgb(t.chassis_rgb),
             "chassis_light": hex_rgb(t.chassis_rgb_light),
+            "chassis_light_fill": hex_rgb(t.fill_rgb_light),
             "ansi": t.chassis_ansi,
             "ansi_light": t.chassis_ansi_light,
             "crown": t.crown_slice,
@@ -572,6 +590,8 @@ mod tests {
             let (hex_light, _) = delphi_core::research::role_look_light(t.role_id);
             let (lr, lg, lb) = t.chassis_rgb_light;
             assert_eq!(hex_light, format!("#{lr:02x}{lg:02x}{lb:02x}"), "{} light colour", t.role_id);
+            let (fr, fg_, fb) = t.fill_rgb_light;
+            assert_eq!(delphi_core::research::role_fill_light(t.role_id), format!("#{fr:02x}{fg_:02x}{fb:02x}"), "{} light fill", t.role_id);
         }
         // Spec 087: the investigator has a look of its own, and so has every other core role.
         assert_ne!(delphi_core::research::role_look("investigator"), delphi_core::research::role_look("scout"));
@@ -884,6 +904,24 @@ mod tests {
             for bg in LIGHT {
                 assert!(contrast(t.chassis_rgb_light, bg) >= want, "{} light chassis on {:?}: {:.2}", t.role_id, bg, contrast(t.chassis_rgb_light, bg));
             }
+        }
+    }
+
+    /// A light surface's two colours for a role (operator decision 2026-11-14): the text colour reaches 4.5:1 on white, on
+    /// solarized light and on the desktop app's light surfaces; the fill reaches 3:1 on those surfaces as a graphic, and a dark
+    /// face on it (the app's ink, and black, which a host's chip uses) reaches 4.5:1. The fill is the brighter of the two.
+    #[test]
+    fn a_light_surface_has_a_readable_name_and_a_brighter_fill_for_every_role() {
+        const SURFACES: [(u8, u8, u8); 4] = [(255, 255, 255), (253, 246, 227), (247, 245, 242), (235, 231, 225)];
+        for t in ROLES.iter() {
+            for bg in SURFACES {
+                assert!(contrast(t.chassis_rgb_light, bg) >= 4.5, "{} name on {:?}: {:.2}", t.role_id, bg, contrast(t.chassis_rgb_light, bg));
+                assert!(contrast(t.fill_rgb_light, bg) >= 3.0, "{} fill on {:?}: {:.2}", t.role_id, bg, contrast(t.fill_rgb_light, bg));
+            }
+            for ink in [(28, 25, 23), (0, 0, 0)] {
+                assert!(contrast(ink, t.fill_rgb_light) >= 4.5, "{} face {:?} on its fill: {:.2}", t.role_id, ink, contrast(ink, t.fill_rgb_light));
+            }
+            assert!(contrast(t.fill_rgb_light, (255, 255, 255)) < contrast(t.chassis_rgb_light, (255, 255, 255)), "{} fill is the brighter", t.role_id);
         }
     }
 

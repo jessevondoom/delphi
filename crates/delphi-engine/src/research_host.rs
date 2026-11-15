@@ -515,8 +515,8 @@ mod tests {
         attach_identity(&mut dark, &scout, "ansi", "dark", None);
         attach_identity(&mut light, &scout, "ansi", "light", None);
         assert!(dark["display"].as_str().unwrap().starts_with("\u{1b}[38;5;226m"), "{dark}");
-        assert!(light["display"].as_str().unwrap().starts_with("\u{1b}[38;5;94m"), "{light}");
-        assert_eq!((light["identity"]["color"].as_str(), light["identity"]["color_light"].as_str()), (Some("#ffff00"), Some("#854d0e")));
+        assert!(light["display"].as_str().unwrap().starts_with("\u{1b}[38;5;58m"), "{light}");
+        assert_eq!((light["identity"]["color"].as_str(), light["identity"]["color_light"].as_str()), (Some("#ffff00"), Some("#6d6900")));
         let mut turn = json!({});
         attach_identity(&mut turn, &scout, "plain", "dark", Some("map the repo"));
         assert_eq!(turn["boundary_line"], "── Hermes (scout) takes over: map the repo ──");

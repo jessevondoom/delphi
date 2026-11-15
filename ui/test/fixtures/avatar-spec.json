@@ -75,7 +75,8 @@
         "-.-"
       ],
       "chassis": "#68798f",
-      "chassis_light": "#5b6b82",
+      "chassis_light": "#506888",
+      "chassis_light_fill": "#6a84a7",
       "crown": "▄ ▄ ▄ ▄",
       "crown_rgb": "#e2e8f0",
       "mascot": {
@@ -141,7 +142,8 @@
         "*^*"
       ],
       "chassis": "#f43f5e",
-      "chassis_light": "#be123c",
+      "chassis_light": "#c80d64",
+      "chassis_light_fill": "#f22c88",
       "crown": "▄  ▄  ▄",
       "crown_rgb": "#fde047",
       "mascot": {
@@ -207,7 +209,8 @@
         "-o-"
       ],
       "chassis": "#38bdf8",
-      "chassis_light": "#0369a1",
+      "chassis_light": "#076d9d",
+      "chassis_light_fill": "#088ac7",
       "crown": "▄▄▄▄▄▄▄",
       "crown_rgb": "#ffffff",
       "mascot": {
@@ -273,7 +276,8 @@
         "-‿-"
       ],
       "chassis": "#3b82f6",
-      "chassis_light": "#1d4ed8",
+      "chassis_light": "#0c4add",
+      "chassis_light_fill": "#497cf5",
       "crown": "  ▄ ▄  ",
       "crown_rgb": "#93c5fd",
       "mascot": {
@@ -339,7 +343,8 @@
         ">=<"
       ],
       "chassis": "#f59e0b",
-      "chassis_light": "#b45309",
+      "chassis_light": "#ab4907",
+      "chassis_light_fill": "#d95c09",
       "crown": "▄▄▄▄▄▄▄",
       "crown_rgb": "#f43f5e",
       "mascot": {
@@ -405,7 +410,8 @@
         "-_•"
       ],
       "chassis": "#f1f5f9",
-      "chassis_light": "#57534e",
+      "chassis_light": "#5a524a",
+      "chassis_light_fill": "#8d8074",
       "crown": "▄▄ ▄ ▄▄",
       "crown_rgb": "#94a3b8",
       "mascot": {
@@ -471,7 +477,8 @@
         "·w·"
       ],
       "chassis": "#84cc16",
-      "chassis_light": "#4d7c0f",
+      "chassis_light": "#416608",
+      "chassis_light_fill": "#5b900c",
       "crown": "▄▄   ▄▄",
       "crown_rgb": "#ffffff",
       "mascot": {
@@ -538,6 +545,7 @@
       ],
       "chassis": "#94a3b8",
       "chassis_light": "#475569",
+      "chassis_light_fill": "#73849a",
       "crown": "▄▄▄▄▄▄▄",
       "crown_rgb": "#cbd5e1",
       "mascot": {
@@ -603,7 +611,8 @@
         "-─-"
       ],
       "chassis": "#a855f7",
-      "chassis_light": "#7e22ce",
+      "chassis_light": "#8f23f3",
+      "chassis_light_fill": "#ab59f6",
       "crown": "  ▄▄▄  ",
       "crown_rgb": "#facc15",
       "mascot": {
@@ -673,7 +682,8 @@
         "-_-"
       ],
       "chassis": "#ef4444",
-      "chassis_light": "#b91c1c",
+      "chassis_light": "#ce1010",
+      "chassis_light_fill": "#f13e3e",
       "crown": "▄     ▄",
       "crown_rgb": "#facc15",
       "mascot": {
@@ -741,7 +751,8 @@
         "••-"
       ],
       "chassis": "#ffff00",
-      "chassis_light": "#854d0e",
+      "chassis_light": "#6d6900",
+      "chassis_light_fill": "#8a8600",
       "crown": "   ▄   ",
       "crown_rgb": "#4169e1",
       "mascot": {
@@ -807,7 +818,8 @@
         "-u-"
       ],
       "chassis": "#14b8a6",
-      "chassis_light": "#0f766e",
+      "chassis_light": "#067369",
+      "chassis_light_fill": "#089285",
       "crown": "▄▄ ▄ ▄▄",
       "crown_rgb": "#f9a8d4",
       "mascot": {
@@ -873,7 +885,8 @@
         "-_-"
       ],
       "chassis": "#22c55e",
-      "chassis_light": "#15803d",
+      "chassis_light": "#0a7732",
+      "chassis_light_fill": "#0c963f",
       "crown": " ▄▄▄▄▄ ",
       "crown_rgb": "#facc15",
       "mascot": {
@@ -939,7 +952,8 @@
         "•_-"
       ],
       "chassis": "#fde68a",
-      "chassis_light": "#a16207",
+      "chassis_light": "#765403",
+      "chassis_light_fill": "#ac7904",
       "crown": "▄ ▄▄▄ ▄",
       "crown_rgb": "#ffffff",
       "mascot": {

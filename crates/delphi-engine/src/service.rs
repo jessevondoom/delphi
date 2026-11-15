@@ -5155,7 +5155,7 @@ mod tests {
             assert_eq!(r["display"], r["signature"], "{r}");
             assert!(r["boundary_line"].as_str().unwrap().contains("(orchestrator) takes over: How do retries work?"), "{r}");
             assert!(r["return_line"].as_str().unwrap().contains("(orchestrator) hands back"), "{r}");
-            assert_eq!(r["identity"]["color_light"], "#7e22ce", "{r}");
+            assert_eq!(r["identity"]["color_light"], "#8f23f3", "{r}");
             assert!(r["answer"].as_str().unwrap().contains("three rungs"));
             // Another session cannot read it; the owner can, and it does not count again.
             let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd, "help_id": r["help_id"]});
