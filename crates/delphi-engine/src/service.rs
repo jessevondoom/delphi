@@ -4120,14 +4120,15 @@ fn refresh_kb(ws: &std::path::Path, home: &std::path::Path) -> Result<(), String
     Ok(())
 }
 
-/// How long `host.search_kb` waits for a refresh before it searches what the index holds (`specs/109` §3.1).
-const SEARCH_REFRESH_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+/// How long `host.search_kb` waits for a refresh before it searches what the index holds (`specs/109` §3.1), and the agent's
+/// `kb_search` with it (`specs/116` §4.6).
+pub(crate) const SEARCH_REFRESH_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// `host.search_kb`'s refresh (`specs/109` §3.1): when the index exists and a source is newer than it, bring it up to date as the
 /// console's `kb.search` does, waiting at most `bound`. Past the bound the search reads what is there and says `stale`; the refresh
 /// goes on in the background and the next search finds it done. One refresh per workspace at a time. `None` when there is no index
 /// yet (building one is the operator's `delphi kb index`, as before).
-fn refresh_within(ws: &std::path::Path, home: &std::path::Path, bound: std::time::Duration) -> Option<crate::kb::Freshness> {
+pub(crate) fn refresh_within(ws: &std::path::Path, home: &std::path::Path, bound: std::time::Duration) -> Option<crate::kb::Freshness> {
     static BUSY: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>> = std::sync::OnceLock::new();
     let f = crate::kb::freshness(ws)?;
     if !f.stale {
