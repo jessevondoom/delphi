@@ -238,7 +238,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture
 
-**113: Host-led research: ingest, a record tool, and workers that can capture** · approved (per source at `a3aa91a67fe6`) · tier 0 · [source](../../specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md)
+**113: Host-led research: ingest, a record tool, and workers that can capture** · approved (per source at `5093e6d15534`) · tier 0 · [source](../../specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md)
 
 **source excerpt, untrusted** · `specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md` lines 25-30
 
@@ -271,7 +271,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 115-research-recall-across-projects
 
-**115: Research recall across projects** · approved (per source at `a7ba4b1da713`) · tier 0 · [source](../../specs/115-research-recall-across-projects.md)
+**115: Research recall across projects** · approved (per source at `6729f8f7095e`) · tier 0 · [source](../../specs/115-research-recall-across-projects.md)
 
 **source excerpt, untrusted** · `specs/115-research-recall-across-projects.md` lines 25-30
 
@@ -342,7 +342,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof
 
-**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `d3210ed6a9ac`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
+**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `62b8d485b6ef`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
 
 **source excerpt, untrusted** · `specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md` lines 26-34
 
@@ -360,7 +360,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 121-data-sensitivity-private-internal-and-confidential
 
-**121: Data sensitivity: private, internal and confidential** · approved (per source at `c03533134042`) · tier 0 · [source](../../specs/121-data-sensitivity-private-internal-and-confidential.md)
+**121: Data sensitivity: private, internal and confidential** · approved (per source at `462c1014c74b`) · tier 0 · [source](../../specs/121-data-sensitivity-private-internal-and-confidential.md)
 
 **source excerpt, untrusted** · `specs/121-data-sensitivity-private-internal-and-confidential.md` line 26
 

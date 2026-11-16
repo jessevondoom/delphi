@@ -531,6 +531,17 @@ pub fn retire(ws_dir: &Path, earlier: &str, later: &str) -> Result<(), String> {
     write_atomic(&old_path, &join(old, &body)?)
 }
 
+/// `specs/121` §4: a stored finding takes the handling traits of what it names and of its source evidence, and notes what its span
+/// (`<mission>/<role>`) was given and did not use; its frontmatter shows them, and the new text is returned when it changed. Nothing
+/// the finding's own fields say lowers them, and a failure labels nothing and never fails the record.
+pub fn label_stored(ws_dir: &Path, home: Option<&Path>, mission: &str, role: &str, f: &Finding, stored: &Stored) -> Option<String> {
+    let file = delphi_core::sessions::dir(ws_dir, mission).join("findings").join(format!("{}.md", stored.id.rsplit('/').next().unwrap_or("")));
+    let sources: Vec<String> = f.evidence.iter().filter(|e| e.kind == EvidenceKind::Source).map(|e| crate::handling::source_item(e.pointer.trim())).collect();
+    let shown = crate::handling::label_file(ws_dir, home, &file, &stored.text, Some(&crate::handling::span_key(mission, role)), &sources)?;
+    write_atomic(&file, &shown).ok()?;
+    Some(shown)
+}
+
 /// What the caller is told: where the finding is, what it is labelled, and what it retired. Never the text back.
 pub fn receipt(s: &Stored, tier: Tier) -> Value {
     let mut v = json!({"recorded": true, "finding": s.id, "path": s.rel_path, "label": label_for(tier.min(Tier::L3).name()), "status": "active"});
@@ -633,10 +644,13 @@ fn record_finding(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     let Some(ws_dir) = ctx.guard.zones.local.parent() else { return ToolResult::err("no workspace") };
     // Never above the span's ceiling: a span that read untrusted content records an untrusted finding.
     let tier = ctx.span.output_tier(OutputCheck::Unverified);
-    let stored = match store(ws_dir, &f, &Meta { author: ctx.role, role: ctx.role, mission: ctx.mission_id, now: ctx.now_rfc3339, tier }) {
+    let mut stored = match store(ws_dir, &f, &Meta { author: ctx.role, role: ctx.role, mission: ctx.mission_id, now: ctx.now_rfc3339, tier }) {
         Ok(s) => s,
         Err(e) => return ToolResult::err(e),
     };
+    if let Some(shown) = label_stored(ws_dir, crate::hostmap::home_of_local(&ctx.guard.zones.local), ctx.mission_id, ctx.role, &f, &stored) {
+        stored.text = shown;
+    }
     let hash = blake3::hash(stored.text.as_bytes()).to_hex().to_string();
     ctx.index.stamp(delphi_core::provenance::Zone::Local, &stored.rel_path, &hash, tier);
     ctx.stamps.push(crate::tools::Stamp { zone: delphi_core::provenance::Zone::Local, path: stored.rel_path.clone(), blake3: hash, tier });

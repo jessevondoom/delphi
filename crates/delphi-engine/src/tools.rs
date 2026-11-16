@@ -669,6 +669,12 @@ fn kb_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     }
     let paths: Vec<String> = hits.iter().map(|h| h.rel_path.clone()).collect();
     ctx.events.extend(crate::fact_audit::fact_read_events(&ctx.span.id, ctx.role, &paths));
+    // `specs/121` §4 item 2: the labelled items among the results, noted for this span's later writes. Changes nothing returned.
+    if let Some(ws) = ctx.guard.zones.local.parent() {
+        let items: Vec<String> = hits.iter().filter_map(|h| crate::handling::item_of(&h.zone, &h.rel_path)).collect();
+        let h = if home.as_os_str().is_empty() { crate::handling::Handling::workspace_only(ws) } else { crate::handling::Handling::of(ws, &home) };
+        crate::handling::note_given(&h, ws, &crate::handling::span_key(ctx.mission_id, ctx.role), &items);
+    }
     // `specs/115` §2 item 3: a claim from an internal source among the results marks this session; the engine sets the mark.
     let given = crate::shared_research::marks_of(&hits);
     if !given.is_empty() {

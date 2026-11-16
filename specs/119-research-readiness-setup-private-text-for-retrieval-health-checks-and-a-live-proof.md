@@ -75,6 +75,8 @@ A host such as Claude Code has web search and page fetch of its own, under its o
 
 ## 3. Text kept privately, for retrieval only
 
+> **Narrowed in wording only by [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) §11 (operator, 2026-11-15):** "private" in this section is `private_text`, a licence matter, and is not the `personal` handling trait; nothing in this section's mechanism changes.
+
 **Decided by the operator, 2026-11-14:** `excerpts` is the default, between pointers and full private text.
 
 1. A new setting: `[library] unknown_licence = "pointer" | "excerpts" | "private_text"`. The default is `excerpts`. `pointer` is the behaviour before this spec; `private_text` is kept only when the operator sets it.
@@ -228,6 +230,8 @@ Found before writing this: Parallel's hosted search server answered a keyless ca
 14. **B9**, never refused and Parallel then Brave (13.2 and 13.3), 4 to 6 hours, built before B7. B7 and B8 build 13.1 with §2.1. B6 closes the program as before.
 
 ## 14. Amendment (operator, 2026-11-15): answers on private text, the 10% bound and the defaults
+
+> **See [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) §11 and §16 question 1 (operator, 2026-11-15):** item 1 is unchanged unless the operator answers that question otherwise; the words "visible to the operator and to agents" are read there as being about the `personal` trait, not `private_text`.
 
 The operator's words, in a host session on 2026-11-15, answering the four questions the B2, B3 and B5 builder raised: "119 questions: 1. no for now and revist later. 2. yes that's okay. better to have useful knowledge than small files. maybe that rule should only apply when the source is over 10KB or so of text. 3. citation chaining should be on by default with no question. archived copies and retraction lookup too. just leave the question for background validation and default it to off. 4. yes." The operator approves this section by merging the pull request that adds it.
 

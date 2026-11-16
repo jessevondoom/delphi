@@ -46,103 +46,103 @@
     },
     {
       "level": 2,
-      "line": 91,
+      "line": 93,
       "number": "4",
       "title": "Defaults reviewed"
     },
     {
       "level": 2,
-      "line": 103,
+      "line": 105,
       "number": "5",
       "title": "Knowledge health"
     },
     {
       "level": 2,
-      "line": 110,
+      "line": 112,
       "number": "6",
       "title": "Small faults"
     },
     {
       "level": 2,
-      "line": 117,
+      "line": 119,
       "number": "7",
       "title": "Build order across specs 112 to 119"
     },
     {
       "level": 2,
-      "line": 148,
+      "line": 150,
       "number": "8",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 162,
+      "line": 164,
       "number": "9",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 170,
+      "line": 172,
       "number": "10",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 185,
+      "line": 187,
       "number": "11",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 192,
+      "line": 194,
       "number": "12",
       "title": "Open questions (the operator decides)"
     },
     {
       "level": 2,
-      "line": 198,
+      "line": 200,
       "number": "13",
       "title": "Amendment (operator, 2026-11-15): the host first, research never refused, Parallel then Brave"
     },
     {
       "level": 3,
-      "line": 204,
+      "line": 206,
       "number": "13.1",
       "title": "In a host session, the host's tools do the research"
     },
     {
       "level": 3,
-      "line": 212,
+      "line": 214,
       "number": "13.2",
       "title": "Research is never refused for want of a source"
     },
     {
       "level": 3,
-      "line": 219,
+      "line": 221,
       "number": "13.3",
       "title": "Parallel first, Brave second"
     },
     {
       "level": 3,
-      "line": 226,
+      "line": 228,
       "number": "13.4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 230,
+      "line": 232,
       "number": "14",
       "title": "Amendment (operator, 2026-11-15): answers on private text, the 10% bound and the defaults"
     },
     {
       "level": 2,
-      "line": 240,
+      "line": 244,
       "number": "15",
       "title": "Amendment (operator, 2026-11-15): research under the private-read mark, chaining in a local run, the validator and Parallel, the live proof's engine"
     },
     {
       "level": 2,
-      "line": 252,
+      "line": 256,
       "number": "16",
       "title": "Amendment (operator, 2026-11-16): the host's research loop confirmed, and Copilot's fetch tool"
     }
@@ -150,7 +150,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md",
-    "sha256": "d3210ed6a9ac1ece501488130ff0625dbe713631ae742c5496b1b07f48c1adb4"
+    "sha256": "62b8d485b6ef3981ae7be83edb6b1e4385b4c485c8959d998561e3f5f6e53c54"
   },
   "source_status_at_hash": {
     "line": {
@@ -163,7 +163,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"119: let's make excerpts the default between pointers and full private text\". Section 3 was changed to that default after those words. Later the same day, on search engines: \"your choices sound good, but also add the host default tools as well, like claud's ewb search in a claude environment, etc.\" (the operator's words as typed: Claude's web search); section 2.1 was written after those words and has not been read. Section 13 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request. Section 14 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request. Section 15 (2026-11-15) is an amendment written from the operator's words of that day, as relayed to the builder by the coordinating session; it takes effect when the operator merges its pull request. Section 16 (2026-11-16) is an amendment written from the operator's words of that day, as relayed to the builder by the coordinating session, with the result of a live check; it takes effect when the operator merges its pull request."
     },
-    "sha256": "d3210ed6a9ac1ece501488130ff0625dbe713631ae742c5496b1b07f48c1adb4",
+    "sha256": "62b8d485b6ef3981ae7be83edb6b1e4385b4c485c8959d998561e3f5f6e53c54",
     "word": "approved"
   },
   "spec": {

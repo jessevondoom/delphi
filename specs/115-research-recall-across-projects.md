@@ -45,6 +45,8 @@ Objective: an agent working in any project of a workspace can find research done
 
 ## 2. The setting
 
+> **Item 3 narrowed by [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) §11 (operator, 2026-11-15):** "private or internal sources" means library-private sources and host-declared kinds, as before. A shared claim also carries its handling traits (121 §4 item 5). A claim that carries `confidential` is not handed to a reader without a grant (121 §6 item 1); whether it crosses projects at all is 121 §16 question 5.
+
 1. Workspace config: `[projects] research_sharing = "project" | "workspace"`. `project` is the behaviour before this spec. The default is `workspace` (operator, 2026-11-14); see §8.
 2. A project is private when its entry in the workspace's project list has `private = true` (`delphi project private <name> on|off`). A private project shares nothing and its sessions can still read shared research from others.
 3. Claims that rest on private or internal sources are shared too (operator, 2026-11-14), under three guards:
@@ -134,6 +136,8 @@ The operator's words, in a host session on 2026-11-15, answering two questions t
 4. A host session has no tasks: its whole session is still the unit that is marked, as before.
 
 ### 11.2 An internal source confirms its own claim, and nothing else
+
+> **Narrowed by [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) §7 and §11 (operator, 2026-11-15):** the authority belongs to a source that is `internal` by a configured arrival path or by the operator. A source that is only `personal`, only library-private, or `internal` by a host's or an agent's word does not confirm. The rule that confirmation does not spread is unchanged.
 
 5. This amends §2 item 3, "Label and weight". A claim that an internal or private source states directly, anchored to that source by its quote or its line, is **confirmed internally**: for that claim the internal source is authoritative. Its label reads `confirmed by an internal source` with the project's name. A public source that disagrees does not lower it; the disagreement is shown to the operator beside the claim.
 6. The confirmation does not spread. It is never an origin in the count of another claim, never corroboration for a claim the internal source does not itself state, and never weight in the status of any other claim, in the validator's check, in a written answer's support for another sentence, in a page, in a decision record, or in a Council's evidence. A written answer or a page may cite the claim only for what the claim says (the check of [`specs/114`](114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md) §5 already ties each marker to a held claim's statement), with its label.
