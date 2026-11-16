@@ -46,10 +46,10 @@ pub fn engine_state_in(config_text: &str) -> Option<EngineState> {
 /// request is never refused for want of a source. The private-read mark of `specs/103` does not change the answer (`specs/119` §15):
 /// a marked session researches as any other, and what keeps private text in is the cleaning of each query and the identifier guard.
 ///
-/// `host_searches` is a run raised in a host whose row of the host tool table names a search tool, and that did not ask for the
+/// `host_can_search` is a run raised in a host whose row of the host tool table names a search tool, and that did not ask for the
 /// daemon's runner (`specs/119` §13.1): the host's own tools are then the source, whatever `[search]` says.
-pub fn sources(search: &delphi_adapter::research::SearchConfig, host_searches: bool) -> crate::research_run::Sources {
-    if host_searches {
+pub fn sources(search: &delphi_adapter::research::SearchConfig, host_can_search: bool) -> crate::research_run::Sources {
+    if host_can_search {
         crate::research_run::Sources::Host
     } else if engine_state(search) == EngineState::None {
         crate::research_run::Sources::Local

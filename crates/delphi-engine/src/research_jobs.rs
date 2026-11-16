@@ -606,7 +606,7 @@ mod tests {
         let got = c.fed(Duration::from_millis(20)).await;
         assert_eq!((got.len(), got[0].query.as_str(), got[0].rows.len(), got[0].leads_only), (1, "query 0", FEED_RESULTS, false));
         assert_eq!(c.feed("query 1", vec![row(1)], false), Err(FEED_CLOSED));
-        assert_eq!(c.host_asked().unwrap().2, false);
+        assert!(!c.host_asked().unwrap().2);
         // The wait ends early once every query is handed back.
         let c = Arc::new(JobCtx::with_budget(10));
         c.ask_host(&["one".to_string(), "two".to_string()]);

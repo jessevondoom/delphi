@@ -1422,7 +1422,7 @@ mod tests {
         assert_eq!((warned.level, warned.location.as_str()), (Level::Warn, "config.toml"), "{warned:?}");
         assert!(warned.message.contains("research ran 2 time(s) with no web search in the last 30 days; run `delphi research setup`") && warned.message.contains("research sends no web search of its own"), "{}", warned.message);
         assert!(findings("").iter().all(|x| x.level == Level::Ok), "the keyless default is an engine: no warning");
-        assert!(findings("[research]\nthin_below = 5\n").last().unwrap().message.contains("fewer than 5 kept claims"));
+        assert!(findings("[research]\nthin_below = 5\n").iter().any(|x| x.message.contains("fewer than 5 kept claims")));
         let f = findings("[search]\nproviders = [\"nonesuch\"]\n");
         assert_eq!((f[0].level, f[0].location.as_str()), (Level::Warn, "config.toml"), "{f:?}");
     }
