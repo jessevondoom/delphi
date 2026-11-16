@@ -22,6 +22,44 @@ fn licensed(l: &Library, sid: &str, file: &str) {
     l.set_asset_records(sid, &[r]).unwrap();
 }
 
+/// The red-team's P2-3: a record's addresses are kept as they are when they are plain addresses (an `_` in a Wikipedia or Commons
+/// address stays), and anything that could break the credit line out of its line is still taken out.
+#[test]
+fn a_records_addresses_keep_their_underscores_and_lose_anything_that_could_make_a_link() {
+    let rec = |source: &str, credit: &str, evidence: &str| {
+        assets::picture_record(&assets::PictureFacts {
+            file: "a.png",
+            source_id: "s",
+            source_url: source,
+            licence: "CC-BY-SA-4.0",
+            evidence: "figure_link",
+            evidence_url: evidence,
+            author: "Ann_Bo",
+            credit_url: credit,
+            share_alike: true,
+            retrieved: "2026-11-16T00:00:00Z",
+            blake3: "x",
+            width: 64,
+            height: 64,
+        })
+    };
+    let wiki = "https://upload.wikimedia.org/wikipedia/commons/a/ab/Fault_tree_(x).png";
+    let page = "https://commons.wikimedia.org/wiki/File:Fault_tree_(x).png";
+    let r = rec(wiki, page, "https://en.wikipedia.org/wiki/Fault_tree#Figure_1");
+    assert_eq!((r["source_url"].as_str(), r["credit_url"].as_str(), r["licence_evidence"]["url"].as_str()), (Some(wiki), Some(page), Some("https://en.wikipedia.org/wiki/Fault_tree#Figure_1")));
+    assert_eq!(r["licence_evidence"]["check"], "figure_link", "the check is a fixed word, kept as code wrote it");
+    assert_eq!(r["attribution"], format!("Ann Bo, CC-BY-SA-4.0, {page}"), "an author is still one line of text");
+    for hostile in ["https://x.example/a](https://evil.example)", "https://x.example/*bold*", "https://x.example/<img>", "https://x.example/\u{1b}[2J"] {
+        let r = rec(hostile, hostile, hostile);
+        for k in ["source_url", "credit_url"] {
+            let v = r[k].as_str().unwrap();
+            assert!(v != hostile && !v.contains(['[', ']', '*', '<', '>', '\u{1b}']), "{k}: {hostile:?} became {v:?}");
+        }
+    }
+    let ws = rec("workspace:docs/img/chart_1.png", "workspace:docs/img/chart_1.png", "workspace");
+    assert_eq!(ws["source_url"], "workspace:docs/img/chart_1.png");
+}
+
 fn lib() -> (tempfile::TempDir, Library) {
     let home = tempfile::tempdir().unwrap();
     let l = Library::in_home(home.path());

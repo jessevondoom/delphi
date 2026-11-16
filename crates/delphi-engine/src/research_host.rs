@@ -1530,8 +1530,8 @@ mod tests {
         let wname = wrec["file"].as_str().unwrap();
         assert_eq!(wname, format!("{}.webp", blake3::hash(&webp).to_hex()));
         assert_eq!(std::fs::read(assets.join(wname)).unwrap(), webp, "stored as it is");
-        assert_eq!((wrec["licence"].as_str(), wrec["licence_evidence"]["check"].as_str(), wrec["width"].as_u64(), wrec["height"].as_u64()), (Some("CC-BY-4.0"), Some("figure link"), Some(80), Some(60)), "{wrec}");
-        assert_eq!(l.credit_line(&id, wname).as_deref(), Some("*Picture credit: author not stated, CC-BY-4.0, https://en.wikipedia.org/wiki/Fault tree*"));
+        assert_eq!((wrec["licence"].as_str(), wrec["licence_evidence"]["check"].as_str(), wrec["width"].as_u64(), wrec["height"].as_u64()), (Some("CC-BY-4.0"), Some("figure_link"), Some(80), Some(60)), "{wrec}");
+        assert_eq!(l.credit_line(&id, wname).as_deref(), Some("*Picture credit: author not stated, CC-BY-4.0, https://en.wikipedia.org/wiki/Fault_tree*"), "an address keeps its underscores");
     }
 
     /// `specs/118` AC-3 and §3 item 4: a run on a page with one openly licensed picture and one with no licence of its own keeps the

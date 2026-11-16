@@ -68,16 +68,32 @@ fn one_line(s: &str, n: usize) -> String {
     s.chars().map(|c| if c.is_control() || matches!(c, '*' | '_' | '[' | ']' | '`' | '<' | '>' | '!' | '|') { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect()
 }
 
+/// An address for a record or the credit line, kept exactly as it is when it is one: `https://`, `http://`, `workspace:` or
+/// `bundle:`, at most `n` characters, with no control character, no white space and none of the characters that could make a
+/// link, an emphasis or a picture of it (`< > * [ ] ` | ! "`). An `_` stays, so Wikipedia and Commons addresses are not broken.
+/// Anything else is made [`one_line`].
+fn one_url(s: &str, n: usize) -> String {
+    let t = s.trim();
+    let scheme = ["https://", "http://", "workspace:", "bundle:"].iter().any(|p| t.to_ascii_lowercase().starts_with(p));
+    let plain = t.chars().all(|c| !c.is_control() && !c.is_whitespace() && !matches!(c, '<' | '>' | '*' | '[' | ']' | '`' | '|' | '!' | '"'));
+    if scheme && plain && t.chars().count() <= n { t.to_string() } else { one_line(s, n) }
+}
+
+/// A fixed word chosen by code (the check that decided a licence): letters, digits, `_` and `-` only.
+fn one_word(s: &str, n: usize) -> String {
+    s.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')).take(n).collect()
+}
+
 /// The record of §2 item 1, as it is kept in the source's `images`.
 pub fn picture_record(f: &PictureFacts<'_>) -> Value {
     let mut r = json!({
         "file": f.file,
         "source_id": f.source_id,
-        "source_url": one_line(f.source_url, 500),
+        "source_url": one_url(f.source_url, 500),
         "licence": one_line(f.licence, 60),
-        "licence_evidence": {"check": one_line(f.evidence, 40), "url": one_line(f.evidence_url, 500)},
+        "licence_evidence": {"check": one_word(f.evidence, 40), "url": one_url(f.evidence_url, 500)},
         "author": one_line(f.author, 200),
-        "credit_url": one_line(f.credit_url, 500),
+        "credit_url": one_url(f.credit_url, 500),
         "share_alike": f.share_alike,
         "retrieved": f.retrieved,
         "blake3": f.blake3,
@@ -98,7 +114,7 @@ fn licence_name(licence: &str) -> String {
 fn credit_text(rec: &Value) -> String {
     let author = one_line(rec["author"].as_str().unwrap_or(""), 200);
     let credit = rec["credit_url"].as_str().filter(|c| !c.trim().is_empty()).or(rec["source_url"].as_str()).unwrap_or("");
-    format!("{}, {}, {}", if author.is_empty() { "author not stated" } else { author.as_str() }, licence_name(&one_line(rec["licence"].as_str().unwrap_or(""), 60)), one_line(credit, 500))
+    format!("{}, {}, {}", if author.is_empty() { "author not stated" } else { author.as_str() }, licence_name(&one_line(rec["licence"].as_str().unwrap_or(""), 60)), one_url(credit, 500))
 }
 
 /// Is `rec` a licence record of `file` in source `id`: it names the file, it names no other source, and it states a licence? An SVG
