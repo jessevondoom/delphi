@@ -257,14 +257,16 @@ const ROLE_LINES: &[(&str, &str)] = &[
 ];
 
 /// The roles that get a worker subagent file (spec 106 §4 item 1): every servable role whose locus is `host` or `either`, and whether
-/// the worker inherits the session's tools. Only a role whose manifest's write globs reach into the worktree (`@worktree/...`) does
-/// (amendment A4); every other worker gets the read-only list. A test reads the manifests and fails when this table drifts.
+/// the worker inherits the session's tools. A role whose manifest's write globs reach into the worktree (`@worktree/...`) does
+/// (amendment A4), and so does a role whose manifest holds a shell scope (spec 116 §8.5 item 1: the investigator, which
+/// investigates by running things; on a host Delphi grants nothing, the file asks for the session's tools and the host's
+/// permissions decide). Every other worker gets the read-only list. A test reads the manifests and fails when this table drifts.
 pub const WORKER_ROLES: &[(&str, bool)] = &[
     ("orchestrator", false),
     ("architect", false),
     ("builder", true),
     ("scout", false),
-    ("investigator", false),
+    ("investigator", true),
     ("strategist", false),
     ("red-team", false),
     ("writer", true),
@@ -483,7 +485,10 @@ fn worker_description(role: &str) -> String {
 /// The worker's short wrapper (§4 item 2). No pack text is inlined, so a stale file cannot freeze old instructions. A read-only worker
 /// on Codex is told to read through `exec_command`, the only tool its live check listed for reading (spec 110 X3).
 fn worker_body(role: &str, inherits_tools: bool, host: &str, inline: Option<&InlinePack>) -> String {
-    let scope = if inherits_tools {
+    let scope = if inherits_tools && role == "investigator" {
+        // Spec 116 §8.5 item 2: the investigator runs what the investigation needs, away from the project's source.
+        "Do the task you were given, as this role, inside your host's permissions: run what the investigation needs (searches, builds, tests, bisects, benchmarks), in a git worktree or a scratch folder. Do not change the project's source; say what should change instead. End with `record_finding`.".to_string()
+    } else if inherits_tools {
         "Do the task you were given, as this role, inside your host's permissions.".to_string()
     } else if host == "codex" {
         "Do the task you were given, as this role. You work read-only: read and search files with `exec_command` only to read (for example `cat`, `rg`, `ls`), and change nothing: no `apply_patch`, no command that writes a file or changes state; say what should change instead.".to_string()
@@ -1174,13 +1179,15 @@ mod tests {
             if servable && matches!(locus, "host" | "either") {
                 let writes = fm.get("default_access_scope").and_then(|s| s.get("write")).and_then(|w| w.as_sequence()).cloned().unwrap_or_default();
                 let worktree = writes.iter().filter_map(|w| w.as_str()).any(|w| w.starts_with("@worktree/"));
-                want.push((role.clone(), worktree));
+                // Spec 116 §8.5 item 1: the rule's second case, a role whose manifest holds a shell scope.
+                let shell = fm.get("default_access_scope").and_then(|s| s.get("execute")).and_then(|w| w.as_sequence()).is_some_and(|x| x.iter().any(|e| e.as_str() == Some("shell-worktree-scoped")));
+                want.push((role.clone(), worktree || shell));
             }
         }
         let mut have: Vec<(String, bool)> = WORKER_ROLES.iter().map(|(r, i)| (r.to_string(), *i)).collect();
         have.sort();
-        assert_eq!(have, want, "WORKER_ROLES drifted from the manifests (servable, locus host or either; inherits tools only with an @worktree/ write glob)");
-        assert_eq!(WORKER_ROLES.iter().filter(|(_, i)| *i).map(|(r, _)| *r).collect::<Vec<_>>(), ["builder", "writer"]);
+        assert_eq!(have, want, "WORKER_ROLES drifted from the manifests (servable, locus host or either; inherits tools only with an @worktree/ write glob or a shell scope)");
+        assert_eq!(WORKER_ROLES.iter().filter(|(_, i)| *i).map(|(r, _)| *r).collect::<Vec<_>>(), ["builder", "investigator", "writer"]);
     }
 
     #[test]
@@ -1225,6 +1232,10 @@ mod tests {
                     }
                 }
                 assert_eq!(t.contains("You work read-only"), !inherits, "{ctx}");
+                // Spec 116 §8.5 item 2: the investigator alone is told to run what an investigation needs, away from the project's source.
+                let investigates = t.contains("run what the investigation needs (searches, builds, tests, bisects, benchmarks), in a git worktree or a scratch folder. Do not change the project's source") && t.contains("End with `record_finding`.");
+                assert_eq!(investigates, *role == "investigator", "{ctx}");
+                assert!(t.contains("Your host's permissions apply to everything you do. You have no authority beyond them."), "{ctx}");
             }
         }
         assert!(worker_file("claude-code", "messenger", &none()).is_err(), "a role kept from hosts has no worker");

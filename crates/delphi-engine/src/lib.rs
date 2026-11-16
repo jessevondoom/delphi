@@ -117,6 +117,8 @@ pub mod harness;
 pub mod coverage;
 pub mod harness_opts;
 pub mod harness_run;
+#[cfg(test)]
+mod investigation_tests;
 pub mod inventory;
 pub mod learn;
 pub mod learn_stats;
@@ -137,6 +139,7 @@ mod xenia_scope_tests;
 #[cfg(test)]
 mod service_gates_tests;
 pub mod vecext;
+pub mod verify_source;
 pub mod mission;
 pub mod grades;
 pub mod models;
