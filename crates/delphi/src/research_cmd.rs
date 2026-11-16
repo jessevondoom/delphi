@@ -17,6 +17,9 @@
 //! `log` prints the search log of a finished host research job (`specs/101` §3): read-only, it prints what the daemon wrote beside the
 //! result, and calls no model and no network.
 //!
+//! `suggest` lists the questions asked of the knowledge base most often and not answered (`specs/114` §6 item 2): read-only, it
+//! researches nothing and needs no daemon.
+//!
 //! `retractions` is the local Retraction Watch snapshot (`specs/101` §4). `import <file>` reads a file from disk, builds the local index,
 //! and, when `[research] retractions` is on, checks every source in the library against it. **It never calls a service**, and takes a path,
 //! not a URL: downloading the file is the operator's act (the repository is `gitlab.com/crossref/retraction-watch-data`).
@@ -28,7 +31,7 @@ pub struct Options {
     pub json: bool,
 }
 
-const USAGE: &str = "usage: delphi research topics [--due] [--json] [--home <dir>] [--workspace <name>]\n       delphi research continue <topic-id> [--note <text>] [--json] [--home <dir>] [--workspace <name>]\n       delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research ingest <path>... | --all [--apply] [--fetch] [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]\n       delphi research setup [--engine <name>] [--credential <env:NAME|keychain:name>] [--url <instance>] [--cx <id>] [--no-test] [--home <dir>] [--workspace <name>]";
+const USAGE: &str = "usage: delphi research topics [--due] [--json] [--home <dir>] [--workspace <name>]\n       delphi research continue <topic-id> [--note <text>] [--json] [--home <dir>] [--workspace <name>]\n       delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research ingest <path>... | --all [--apply] [--fetch] [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]\n       delphi research suggest [--limit <n>] [--json] [--home <dir>] [--workspace <name>]\n       delphi research setup [--engine <name>] [--credential <env:NAME|keychain:name>] [--url <instance>] [--cx <id>] [--no-test] [--home <dir>] [--workspace <name>]";
 
 /// `args` is what follows the command name: `log <id> [flags]` or `retractions import|status [<file>] [flags]`.
 pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
@@ -40,6 +43,7 @@ pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
         Some("migrate") => migrate(home, ws_dir, args, o),
         Some("ingest") => ingest(home, ws_dir, args, o),
         Some("retractions") => retractions(home, ws_dir, args, o),
+        Some("suggest") => suggest(ws_dir, args, o),
         _ => {
             eprintln!("{USAGE}");
             2
@@ -276,6 +280,46 @@ fn ingest(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
     i32::from(failed > 0)
 }
 
+/// `delphi research suggest [--limit <n>]` (`specs/114` §6 item 2): the questions asked of the knowledge base most often and not
+/// answered, from `local/kb-misses.jsonl` (the console's searches, an inside agent's and a host's that found nothing), the most
+/// asked first and then the newest. It prints and nothing else: nothing is researched, no daemon is needed, and no model or
+/// network is called. The words are what someone typed, printed as data; the list is the operator's, so it is refused inside an
+/// agent seat, where it would hand one agent or host's words to another.
+fn suggest(ws_dir: &Path, args: &[String], o: &Options) -> i32 {
+    if crate::xenia_terminal::inside_an_agent_seat() {
+        eprintln!("delphi research suggest: refused; the list holds what agents and hosts searched for, for the operator to read, and this process was started by an agent seat.");
+        return 2;
+    }
+    let limit = match args.iter().position(|a| a == "--limit").map(|i| args.get(i + 1).and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0)) {
+        None => 20,
+        Some(Some(n)) => n,
+        Some(None) => {
+            eprintln!("delphi research suggest: --limit takes a number above 0");
+            return 2;
+        }
+    };
+    let all = delphi_engine::kb::unanswered(ws_dir);
+    let shown: Vec<_> = all.iter().take(limit).collect();
+    if o.json {
+        let rows: Vec<serde_json::Value> = shown.iter().map(|(q, n, t, who)| serde_json::json!({"question": q, "asked": n, "last_asked": delphi_core::time::format_unix_millis(*t, 0), "asked_by": who})).collect();
+        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".into()));
+        return 0;
+    }
+    if shown.is_empty() {
+        println!("no unanswered questions: no search of the knowledge base has come back empty");
+        return 0;
+    }
+    println!("questions asked of the knowledge base and not answered, most asked first (what was typed, not checked):");
+    for (i, (q, n, t, who)) in shown.iter().enumerate() {
+        println!("{:>3}. {}  ({} time{}, last {}, by {})", i + 1, q, n, if *n == 1 { "" } else { "s" }, &delphi_core::time::format_unix_millis(*t, 0)[..10], who.join(", "));
+    }
+    if all.len() > shown.len() {
+        println!("     and {} more (--limit)", all.len() - shown.len());
+    }
+    println!("nothing is researched from this list: ask with `/research` in the console, or an agent's or host's request_research");
+    0
+}
+
 fn log(ws_dir: &Path, args: &[String], o: &Options) -> i32 {
     let Some(id) = operand(args, 1) else {
         eprintln!("{USAGE}");
@@ -438,6 +482,32 @@ mod tests {
     }
 
     /// `specs/112` §5.3: `topics` lists the records on disk and `show` prints one; both only read.
+    #[test]
+    fn suggest_is_listed_in_the_usage() {
+        assert!(USAGE.contains("delphi research suggest [--limit <n>]"));
+    }
+
+    /// `specs/114` §6 item 2: `suggest` lists what was asked and not found, writes nothing and needs no daemon.
+    #[test]
+    fn suggest_lists_the_questions_asked_and_not_answered_and_writes_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let (h, o) = (d.path(), Options { json: false });
+        assert_eq!(cli(h, d.path(), &strings(&["suggest"]), &o), 0, "nothing asked yet is not an error");
+        assert!(!d.path().join("local").exists(), "listing creates nothing");
+        delphi_engine::kb::log_search(d.path(), "tank salinity", None, 0);
+        delphi_engine::kb::log_miss(d.path(), "Tank salinity", delphi_engine::kb::Searcher::Host("host:claude-code/opus"), 0);
+        let misses = d.path().join("local/kb-misses.jsonl");
+        let before = std::fs::read(&misses).unwrap();
+        for json in [false, true] {
+            assert_eq!(cli(h, d.path(), &strings(&["suggest"]), &Options { json }), 0);
+            assert_eq!(cli(h, d.path(), &strings(&["suggest", "--limit", "1"]), &Options { json }), 0);
+        }
+        assert_eq!(cli(h, d.path(), &strings(&["suggest", "--limit", "0"]), &o), 2);
+        assert_eq!(cli(h, d.path(), &strings(&["suggest", "--limit"]), &o), 2);
+        assert_eq!(std::fs::read(&misses).unwrap(), before, "suggesting changes nothing");
+        assert!(!d.path().join("research").exists(), "nothing is researched");
+    }
+
     #[test]
     fn it_lists_the_research_topics_and_shows_one_and_writes_nothing() {
         use delphi_engine::research_record::{Asker, Begin, Topic};

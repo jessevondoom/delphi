@@ -43,6 +43,15 @@ pub const SITES: &[Site] = &[
         ],
     },
     Site {
+        name: "the run note of a research run (`specs/114` §6 item 1): composed by code from the run's search log and pages, staged at tier L0 for the scout as its own `practice`, so the provisional tier keeps it untrusted, never retrieved automatically, and only the operator promotes it",
+        files: &["crates/delphi-engine/src/research_note.rs"],
+        events: &["learn.staged"],
+        proofs: &[
+            ("crates/delphi-engine/src/research_note.rs", "the_run_note_is_staged_for_the_scout_untrusted_with_the_ready_trigger"),
+            ("crates/delphi-engine/src/service.rs", "a_research_run_stages_one_untrusted_note_for_the_scout_that_no_agent_is_given_automatically"),
+        ],
+    },
+    Site {
         name: "`delphi customize note` (the operator's own note, tier L5, staged and never loaded)",
         files: &["crates/delphi-engine/src/customize.rs"],
         events: &["learn.staged"],
