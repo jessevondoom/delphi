@@ -21,7 +21,19 @@ How it is put together:
 
 Two programs with no code in common have to sign and check the same text, so one test vector is held by both: `crates/delphi-core/src/app_handshake.vector`, checked by `key.rs` here and by `app_keys.rs` in the daemon.
 
-`cargo run --example pair_probe` (named in `DELPHI_APP`, with a scratch `DELPHI_HOME`) is the same path with no window, for checking a daemon and a bridge against each other.
+`cargo run --example pair_probe` (named in `DELPHI_APP`, with a scratch `DELPHI_HOME`) is the same path with no window, for checking a daemon and a bridge against each other. With `DELPHI_PROBE_ASK='{"what":"page.rebuild","arg":{"slug":"<a topic>"}}'` it also asks for that once its session is open, through the same two steps the window's command takes.
+
+### The end-to-end check (spec 120 §9), for a person at a terminal
+
+Not done by the builders: a ticket is given only to a client at a terminal, and an agent has none. On a scratch home (`H=$(mktemp -d)`; every command below takes `--home $H`, and the probe `DELPHI_HOME=$H DELPHI_EXE=<the built delphi>`):
+
+1. `delphi init --home $H`, then `delphi pages new "Tides" --home $H` so there is a topic to ask about.
+2. Pair: `DELPHI_APP=<path to target/app/debug/examples/pair_probe> delphi app --home $H` once `delphi app` starts the app in your build (its process-start site is a gate-file change of its own); it prints the key's name, and `delphi app list --home $H` shows one key with `read, request`.
+3. Start again with no ticket: `DELPHI_HOME=$H pair_probe` reports `paired` and both grants.
+4. Ask: `DELPHI_PROBE_ASK='{"what":"page.rebuild","arg":{"slug":"tides"}}' DELPHI_HOME=$H pair_probe` reports the request's id and state; `delphi app log --home $H` lists the pairing and the request.
+5. Revoke: `delphi app revoke <name> --home $H`; the probe then reports `read-only` and why, and asking is refused without the daemon being asked.
+
+The same five steps with the built window in place of the probe are the check of the window itself: the title row reads `paired as <name> · read, request`, "Rebuild now" on a topic page is a button, and its line goes from running to done.
 
 ### Where the private key is kept
 

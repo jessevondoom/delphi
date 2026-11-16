@@ -104,6 +104,12 @@ impl Tally {
         self.running.values().flatten().any(|w| matches!(w, Work::Rebuild(s) if s == slug))
     }
 
+    /// Tests: how many requests of `key` are counted in its hour.
+    #[cfg(test)]
+    pub(crate) fn counted(&self, key: &str) -> usize {
+        self.asked.get(key).map_or(0, |a| a.len())
+    }
+
     fn next_id(&mut self, now_ms: i64) -> String {
         self.made += 1;
         format!("aq-{:x}-{}", now_ms, self.made)
