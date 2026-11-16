@@ -306,14 +306,14 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
     };
     match search {
         Err(errs) => r.warn(CHECK, "config.toml", format!("[search] cannot be read, so research cannot run: {}", errs.join("; "))),
-        // spec 119 §2 item 3: a missing engine is a fact on a quiet install and a warning once a session has asked for research and been
-        // refused or served nothing: the count is of requests in the last 30 days, read from the daemon's own tally.
+        // spec 119 §2 item 3 and §13.2 item 9: a missing engine is a fact on a quiet install and a warning once research has run with
+        // no web search: the count is of such runs in the last 30 days, read from the daemon's own tally (the brief's count).
         Ok(s) if s.providers.is_empty() => {
             let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0);
-            let asked = delphi_engine::research_asks::counts_since(&ws.dir, now - delphi_engine::research_asks::THIRTY_DAYS).asked;
-            let fact = "search: no engine is configured (`providers = []` under [search]), so research cannot search the web";
-            if asked > 0 {
-                r.warn(CHECK, "config.toml", format!("{fact}; research was asked for {asked} time(s) in the last 30 days; run `{}`", delphi_engine::research_setup::SETUP_COMMAND));
+            let no_web = delphi_engine::research_asks::counts_since(&ws.dir, now - delphi_engine::research_asks::THIRTY_DAYS).no_web;
+            let fact = "search: no engine is configured (`providers = []` under [search]), so research sends no web search of its own: in a host session the host's tools search, and otherwise a run reads only what Delphi holds and the trusted sites it knows";
+            if no_web > 0 {
+                r.warn(CHECK, "config.toml", format!("{fact}; research ran {no_web} time(s) with no web search in the last 30 days; run `{}`", delphi_engine::research_setup::SETUP_COMMAND));
             } else {
                 r.push(Level::Ok, CHECK, "", format!("{fact}; `{}` sets one up", delphi_engine::research_setup::SETUP_COMMAND));
             }
@@ -1395,21 +1395,21 @@ mod tests {
         assert!(f.iter().all(|x| x.level == Level::Ok), "a missing key is a fact, not a warning: {f:?}");
         assert!(!f.iter().map(|x| x.message.as_str()).collect::<String>().contains("delphi-kagi"), "no credential reference is echoed");
         // No engine at all, a custom threshold, and an unreadable table.
-        assert!(findings("[search]\nproviders = []\n")[0].message.contains("research cannot search the web"));
-        // Spec 119 §2 item 3: a missing engine is a fact while nobody asked for research, and a warning once a session did in the last 30
-        // days; a request older than that does not count, and an engine that is there is never warned about.
+        assert!(findings("[search]\nproviders = []\n")[0].message.contains("research sends no web search of its own"));
+        // Spec 119 §2 item 3 and §13.2 item 9: a missing engine is a fact while no research ran without a web search, and a warning once
+        // one did in the last 30 days; a run older than that does not count, and an engine that is there is never warned about.
         let none = "[search]\nproviders = []\n";
         let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap();
         let quiet = &findings(none)[0];
         assert!(quiet.level == Level::Ok && quiet.message.contains("`delphi research setup` sets one up"), "{quiet:?}");
         std::fs::create_dir_all(ws.dir.join("local")).unwrap();
-        delphi_engine::research_asks::record(&ws.dir, delphi_engine::research_asks::Outcome::NoEngine, now - 45 * 86_400);
+        delphi_engine::research_asks::record(&ws.dir, delphi_engine::research_asks::Outcome::NoWebSearch, now - 45 * 86_400);
         assert_eq!(findings(none)[0].level, Level::Ok, "asked 45 days ago");
-        delphi_engine::research_asks::record(&ws.dir, delphi_engine::research_asks::Outcome::NoEngine, now - 3 * 86_400);
-        delphi_engine::research_asks::record(&ws.dir, delphi_engine::research_asks::Outcome::NoEngine, now - 60);
+        delphi_engine::research_asks::record(&ws.dir, delphi_engine::research_asks::Outcome::NoWebSearch, now - 3 * 86_400);
+        delphi_engine::research_asks::record(&ws.dir, delphi_engine::research_asks::Outcome::NoWebSearch, now - 60);
         let warned = &findings(none)[0];
         assert_eq!((warned.level, warned.location.as_str()), (Level::Warn, "config.toml"), "{warned:?}");
-        assert!(warned.message.contains("research was asked for 2 time(s) in the last 30 days; run `delphi research setup`") && warned.message.contains("research cannot search the web"), "{}", warned.message);
+        assert!(warned.message.contains("research ran 2 time(s) with no web search in the last 30 days; run `delphi research setup`") && warned.message.contains("research sends no web search of its own"), "{}", warned.message);
         assert!(findings("").iter().all(|x| x.level == Level::Ok), "the keyless default is an engine: no warning");
         assert!(findings("[research]\nthin_below = 5\n").last().unwrap().message.contains("fewer than 5 kept claims"));
         let f = findings("[search]\nproviders = [\"nonesuch\"]\n");

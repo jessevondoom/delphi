@@ -140,11 +140,13 @@ pub struct Line {
     pub failed: Option<&'static str>,
     /// Reported by the host, not made by the daemon. Counts as nothing.
     pub declared: bool,
+    /// Not a search: the addresses a local run already knew on the trusted list (`specs/119` §13.2). Nothing was sent to anyone.
+    pub local: bool,
 }
 
 impl Line {
     fn new(rung: &'static str, source: Source, purpose: Purpose) -> Line {
-        Line { rung, source, purpose, query: None, withheld: false, identifier: false, at: delphi_core::time::now_rfc3339(), hits: 0, kept: 0, duplicates: 0, not_kept: BTreeMap::new(), via: None, failed: None, declared: false }
+        Line { rung, source, purpose, query: None, withheld: false, identifier: false, at: delphi_core::time::now_rfc3339(), hits: 0, kept: 0, duplicates: 0, not_kept: BTreeMap::new(), via: None, failed: None, declared: false, local: false }
     }
 
     /// Does the line account for every result it found? A declared line, a withheld one and the knowledge-base line are not searches the
@@ -181,6 +183,9 @@ impl Line {
         }
         if self.declared {
             o.insert("declared".into(), json!(true));
+        }
+        if self.local {
+            o.insert("local".into(), json!(true));
         }
         Value::Object(o)
     }
@@ -286,6 +291,15 @@ impl SearchLog {
         self.push(l)
     }
 
+    /// The line of a local run (`specs/119` §13.2): `hits` addresses on the trusted list that Delphi already knew for the question, read
+    /// with no query sent to anyone. It carries no query text and is not counted as a search; what was read of it is in the flow.
+    pub fn local(&mut self, hits: usize) -> usize {
+        let mut l = Line::new("trusted", Source::Trusted, Purpose::Trusted);
+        l.local = true;
+        l.hits = hits;
+        self.push(l)
+    }
+
     pub fn rows(&mut self, i: usize, hits: usize) {
         if let Some(l) = self.at(i) {
             l.hits = hits;
@@ -356,7 +370,7 @@ impl SearchLog {
             if !l.counts() {
                 continue;
             }
-            if !l.withheld {
+            if !l.withheld && !l.local {
                 f.searches += 1;
             }
             f.found += l.hits;
@@ -437,6 +451,7 @@ pub fn render(log: &Value, research_id: &str) -> String {
             (Some(q), _) => format!("\"{q}\""),
             (None, Some("identifier")) => "(withheld: it named a private identifier; nothing was sent)".to_string(),
             (None, Some(_)) => "(withheld: private; nothing was sent)".to_string(),
+            (None, None) if l["local"] == true => "(no query: addresses Delphi already knew, read locally; nothing was sent)".to_string(),
             (None, None) => "(no query)".to_string(),
         };
         let tag = if l["declared"] == true { "  [declared by the host; counts as nothing]" } else { "" };

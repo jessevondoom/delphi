@@ -99,14 +99,15 @@ fn a_line_that_names_the_log_never_also_names_a_permission_a_tier_or_an_approval
 #[test]
 fn the_runner_only_writes_to_the_log_and_never_branches_on_it() {
     // In `research_run.rs`, every use of the `log` value is a call that records (`begin`, `withheld`, `withheld_identifier` (the
-    // identifier guard of spec 119, which records a line with no text), `rows`, `failed`, `kept`,
+    // identifier guard of spec 119, which records a line with no text), `local` (the line of a local run, spec 119 section 13.2,
+    // which records how many known addresses were read and no text), `rows`, `failed`, `kept`,
     // `duplicate`, `dropped`, `kb`, `declare`), the final read of its private flag and its two renderings. A condition on its content
     // (`log.lines()`/`log.flow()` inside an `if` or `match`) would let a result of the log change what the run does.
     let root = root();
     let src = std::fs::read_to_string(root.join("crates/delphi-engine/src/research_run.rs")).unwrap();
     let body = production(&src);
     let uses = Regex::new(r"\blog\.(\w+)").unwrap();
-    let allowed = ["begin", "withheld", "withheld_identifier", "rows", "failed", "kept", "duplicate", "dropped", "kb", "declare", "private", "flow", "lines", "to_json"];
+    let allowed = ["begin", "withheld", "withheld_identifier", "local", "rows", "failed", "kept", "duplicate", "dropped", "kb", "declare", "private", "flow", "lines", "to_json"];
     let mut other = Vec::new();
     let mut reads = Vec::new();
     for (n, line) in body.lines().enumerate() {

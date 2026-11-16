@@ -512,6 +512,14 @@ impl Topic {
                     run["error"] = json!(clip(e, TEXT_CAP));
                 }
                 // Why the run stopped sending queries, and after how many rounds (`specs/114` §4 item 5): one of the fixed words.
+                // Where the run's web results came from (`specs/119` §13.2): one of the fixed words.
+                if let Some(s) = result.and_then(|r| r["sources"].as_str()).filter(|w| crate::research_run::SOURCES.contains(w)) {
+                    run["sources"] = json!(s);
+                }
+                // The run was planned under the private-read mark (`specs/119` §15).
+                if result.is_some_and(|r| r["planned_under_mark"] == true) {
+                    run["planned_under_mark"] = json!(true);
+                }
                 if let Some(why) = result.and_then(|r| r["stopped"].as_str()).filter(|w| STOPS.contains(w)) {
                     run["stopped"] = json!(why);
                     run["rounds"] = json!(result.and_then(|r| r["rounds"].as_u64()).unwrap_or(0));

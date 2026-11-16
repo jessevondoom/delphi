@@ -789,14 +789,14 @@ impl EngineService {
             None => h::research_args(&p).map_err(host_err)?,
         };
         let question = self.engine.secrets.redact(&question);
-        // Spec 119 §2 item 4: with no engine the request is refused with the command that sets one up, and the refusal is counted, so that
-        // the doctor and the next session-start brief can say research was asked for and could not run.
+        // Spec 119 §13.2: a request is never refused for want of a source. With no engine (`providers = []`) the run is local: no query
+        // is sent to anyone. Such a run is counted, so that the doctor and the next session-start brief can say research ran with no
+        // web search. A session under the private-read mark of spec 103 researches as any other (`specs/119` §15): every query is
+        // cleaned and passes the identifier guard, and the reply and the result say the run was planned under the mark.
         let asked_at = (self.engine.clock_unix)();
-        if crate::research_setup::engine_state(&self.engine.cfg.get().search) == crate::research_setup::EngineState::None {
-            let wsd = ws.dir.clone();
-            let _ = tokio::task::spawn_blocking(move || crate::research_asks::record(&wsd, crate::research_asks::Outcome::NoEngine, asked_at)).await;
-            return Err(err(code::INVALID_PARAMS, crate::research_setup::no_engine_message()));
-        }
+        let marked = crate::private_read::state(&ws.dir, &c.mission()).would_affect_a_send();
+        let sources = crate::research_setup::sources(&self.engine.cfg.get().search);
+        let outcome = if sources == crate::research_run::Sources::Local { crate::research_asks::Outcome::NoWebSearch } else { crate::research_asks::Outcome::Queued };
         // Known first (`specs/114` §3): what Delphi already holds on the question, searched as this host session may search (its
         // folder's project, and nothing a host's own `search_kb` would not return). A topic that overlaps the question strongly is
         // continued instead of a new one being started, unless the request says `new: true`.
@@ -818,7 +818,7 @@ impl EngineService {
         let (e, wsd, home) = (self.engine.clone(), ws.dir.clone(), ws.home.clone());
         let (list, engines, transport, identifiers) = tokio::task::spawn_blocking(move || -> Result<_, String> {
             let loaded = (crate::research_setup::lists(&wsd, &home)?, crate::research_setup::engines(&e), delphi_adapter::research::transport::HttpTransport::new()?, crate::query_guard::identifiers(&wsd));
-            crate::research_asks::record(&wsd, crate::research_asks::Outcome::Queued, asked_at);
+            crate::research_asks::record(&wsd, outcome, asked_at);
             Ok(loaded)
         })
         .await
@@ -865,8 +865,15 @@ impl EngineService {
         let host_searches = crate::search_log::parse_declared(&p["host_searches"]);
         let web = self.run_web(RunWeb { list, engines, transport: Arc::new(transport), identifiers });
         let asked = offered.then(|| question.clone());
-        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: false, after: None, resume, known: Some(known) }, web);
-        let mut reply = json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."});
+        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: false, after: None, resume, known: Some(known), sources, marked }, web);
+        let mut reply = json!({"research_id": research_id, "status": "queued", "depth": depth, "sources": sources.as_str(), "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."});
+        if sources == crate::research_run::Sources::Local {
+            reply["sources_note"] = json!(crate::research_setup::local_note());
+        }
+        if marked {
+            reply["planned_under_mark"] = json!(true);
+            reply["mark_note"] = json!(crate::research_setup::MARK_NOTE);
+        }
         if let Some(id) = continued {
             reply["continued"] = json!(true);
             reply["topic_id"] = json!(id);
@@ -913,8 +920,10 @@ impl EngineService {
     /// record and the same claims in the library. The job waits for one of the running slots of the one queue.
     fn queue_run(&self, ask: RunAsk, web: RunWeb) {
         let ws = &self.engine.ws;
-        let RunAsk { question: q, depth, run_id: research_id, session, label, topic, project, host_searches, mission, pictures, after, resume, known } = ask;
+        let RunAsk { question: q, depth, run_id: research_id, session, label, topic, project, host_searches, mission, pictures, after, resume, known, sources, marked } = ask;
         let RunWeb { list, engines, transport, identifiers } = web;
+        // A local run is handed no engine at all (`specs/119` §13.2): whatever the runner did, there is nobody to send a query to.
+        let engines = if sources == crate::research_run::Sources::Local { Vec::new() } else { engines };
         let recorder = topic.clone().map(|topic| crate::research_record::RunRecorder { topic, run_id: research_id.clone() });
         // `specs/112` §3.2: the claims the run keeps name its topic, and its project when it has one.
         let (claims_topic, claims_project) = (topic.as_ref().map(|t| t.id.clone()), project);
@@ -955,7 +964,7 @@ impl EngineService {
                 let (k, question) = (k.clone(), q.clone());
                 let _ = tokio::task::spawn_blocking(move || crate::research_method::KnownFirst::find(k.as_ref(), &question)).await;
             }
-            let deps = crate::research_run::Deps { web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain, record: recorder.as_ref().map(|r| r as &dyn crate::research_run::Recorder), limits, resume: resume.as_ref(), known: known.as_deref().map(|k| k as &dyn crate::research_method::KnownFirst) };
+            let deps = crate::research_run::Deps { sources, marked, web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain, record: recorder.as_ref().map(|r| r as &dyn crate::research_run::Recorder), limits, resume: resume.as_ref(), known: known.as_deref().map(|k| k as &dyn crate::research_method::KnownFirst) };
             let out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
             if let Some(m) = &mission {
                 let urls: Vec<Value> = web.observed.snapshot().into_iter().map(|(url, via)| json!({"url": url, "via": via})).collect();
@@ -3924,10 +3933,11 @@ impl EngineService {
         if self.console_run_going() {
             return Err(err(-32000, "a research job is already running"));
         }
-        if crate::research_setup::engine_state(&self.engine.cfg.get().search) == crate::research_setup::EngineState::None {
-            return Err(err(-32000, crate::research_setup::no_engine_message()));
-        }
+        // Spec 119 §13.2: with no engine the run is local; it is not refused. There is no host here, so the engines are the only web source.
+        let sources = crate::research_setup::sources(&self.engine.cfg.get().search);
         let ws = &self.engine.ws;
+        // An inside agent's task under the private-read mark researches as any other (`specs/119` §15); its result says so.
+        let marked = report_to.as_ref().is_some_and(|(mission, _)| crate::private_read::state(&ws.dir, mission).would_affect_a_send());
         let caller = match &report_to {
             Some((_, role)) => crate::research_known::Caller::Role(role.clone()),
             None => crate::research_known::Caller::Operator,
@@ -3999,8 +4009,8 @@ impl EngineService {
                 }
             }
         });
-        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: true, after: Some(after), resume, known: Some(known) }, web);
-        Ok(json!({"started": true, "research_id": run_id, "topic_id": topic_id, "topic": topic, "continued": again.is_some(), "offered": offered}))
+        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: true, after: Some(after), resume, known: Some(known), sources, marked }, web);
+        Ok(json!({"started": true, "research_id": run_id, "topic_id": topic_id, "topic": topic, "continued": again.is_some(), "offered": offered, "sources": sources.as_str()}))
     }
 
     /// Is this console run still queued or running in the one queue?
@@ -4719,6 +4729,10 @@ struct RunAsk {
     resume: Option<crate::research_run::Resume>,
     /// The search the run makes before its first query, as whoever asked may search (`specs/114` §3).
     known: Option<Arc<crate::research_known::LiveKnown>>,
+    /// Where the run's web results come from (`specs/119` §13.2).
+    sources: crate::research_run::Sources,
+    /// The session or task that asked is under the private-read mark (`specs/119` §15): the run is the same, and its result says so.
+    marked: bool,
 }
 
 /// Tests only: a transport, the engines to ask through it, and the text of the trusted list.
@@ -6185,16 +6199,20 @@ mod tests {
         .await;
     }
 
-    // specs/119 AC-2: with no engine a research request is refused with the setup command named, the refusal is counted, and the
-    // next session-start brief says so once. With an engine the same request is queued and counted as run.
+    // specs/119 §13.2 (it replaces AC-2's refusal): with no engine a research request is not refused. It is queued as a local run, the
+    // reply says so and names the setup command, the run is counted, and the next session-start brief says so once. No request
+    // reaches an engine. With an engine the same request is queued and counted as run.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_research_request_with_no_engine_is_refused_with_the_setup_command_and_counted_for_the_next_brief() {
+    async fn a_research_request_with_no_engine_runs_locally_sends_no_query_and_is_counted_for_the_next_brief() {
         let f = setup(vec![], 5.0, |_| {});
         let ws_dir = f.engine.ws.dir.clone();
         let cwd = f.root.to_string_lossy().to_string();
         let with_search = |table: &str| delphi_adapter::config::Config::parse(&format!("{}\n{}", crate::testkit::CONFIG, table)).unwrap();
         f.engine.cfg.set(with_search("[search]\nproviders = []\n"));
         let s = serve(&f).await;
+        // A transport that records every request: a local run must make none to an engine, though one is in the test's web.
+        let web = Arc::new(RecordingWeb::default());
+        *s.svc.research_web.lock().unwrap() = Some((web.clone(), vec![delphi_adapter::research::search::ProviderSpec { provider: delphi_adapter::research::search::Provider::Searxng, key: None, base_url: Some("https://search.invalid".into()), cx: None }], "[[source]]\nhost = \"en.wikipedia.org\"\nreuse = \"full\"\n".to_string()));
         let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
         let (engine, dir, root) = (f.engine.clone(), ws_dir.clone(), f.root.clone());
         blocking(move || {
@@ -6202,22 +6220,39 @@ mod tests {
             c.hello(&htok).unwrap();
             let ask = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "question": "does aspirin reduce fever"});
             for _ in 0..2 {
-                let e = c.call("host.request_research", ask.clone()).unwrap_err();
-                assert!(format!("{e:?}").contains("no search engine is set up") && format!("{e:?}").contains("delphi research setup"), "{e:?}");
-                assert_eq!(rpc_code(Err(e)), Some(code::INVALID_PARAMS));
+                let r = c.call("host.request_research", ask.clone()).unwrap();
+                assert_eq!((r["status"].as_str(), r["sources"].as_str()), (Some("queued"), Some("local")), "{r}");
+                assert!(r["sources_note"].as_str().unwrap().contains("delphi research setup") && r["sources_note"].as_str().unwrap().contains("sends no web search"), "{r}");
+                let done = c.call("host.research_result", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": root.to_string_lossy(), "research_id": r["research_id"], "wait": true})).unwrap();
+                assert!(matches!(done["status"].as_str(), Some("done" | "partial")), "a local run ends; it is not refused: {done}");
+                assert_eq!((done["sources"].as_str(), done["web_search"].as_bool()), (Some("local"), Some(false)), "{done}");
+                assert_eq!(done["search_log"]["flow"]["searches"], 0, "{done}");
             }
+            assert!(web.seen.lock().unwrap().is_empty(), "a local run sent a request: {:?}", web.seen.lock().unwrap());
             let now = (engine.clock_unix)();
-            assert_eq!(crate::research_asks::counts_since(&dir, now - 60), crate::research_asks::Counts { asked: 2, ran: 0, no_engine: 2 });
+            assert_eq!(crate::research_asks::counts_since(&dir, now - 60), crate::research_asks::Counts { asked: 2, ran: 2, no_web: 2 });
             let brief = crate::host_hooks::brief(&dir, &root, None, "n");
-            assert!(brief.contains("Research was asked for 2 times and no search engine is set up"), "{brief}");
-            assert!(!crate::host_hooks::brief(&dir, &root, None, "n").contains("Research was asked for"), "once");
+            assert!(brief.contains("Research ran 2 times with no web search: the operator can run `delphi research setup` at a terminal."), "{brief}");
+            assert!(!crate::host_hooks::brief(&dir, &root, None, "n").contains("Research ran"), "once");
 
             // An engine the operator chose: the request is queued, and counted as one that ran.
             engine.cfg.set(with_search("[search]\nproviders = [\"searxng\"]\n[search.searxng]\nurl = \"https://search.invalid\"\n"));
             let r = c.call("host.request_research", ask).unwrap();
-            assert_eq!(r["status"], "queued", "{r}");
-            assert_eq!(crate::research_asks::counts_since(&dir, now - 60), crate::research_asks::Counts { asked: 3, ran: 1, no_engine: 2 });
+            assert_eq!((r["status"].as_str(), r["sources"].as_str()), (Some("queued"), Some("engines")), "{r}");
+            assert!(r.get("sources_note").is_none(), "{r}");
+            assert_eq!(crate::research_asks::counts_since(&dir, now - 60), crate::research_asks::Counts { asked: 3, ran: 3, no_web: 2 });
             let _ = c.call("host.cancel_job", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": root.to_string_lossy(), "research_id": r["research_id"]}));
+            assert!(r.get("planned_under_mark").is_none(), "{r}");
+
+            // specs/119 §15: a session under the private-read mark researches as any other. Its run is not local; the reply says the
+            // queries are cleaned, guarded and listed.
+            crate::private_read::mark(&dir, "host-abcdef0123456789", "n1", 1).unwrap();
+            let r = c.call("host.request_research", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": root.to_string_lossy(), "question": "does aspirin reduce fever", "new": true})).unwrap();
+            assert_eq!((r["status"].as_str(), r["sources"].as_str(), r["planned_under_mark"].as_bool()), (Some("queued"), Some("engines"), Some(true)), "{r}");
+            assert!(r["mark_note"].as_str().unwrap().contains("identifier guard"), "{r}");
+            let done = c.call("host.research_result", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": root.to_string_lossy(), "research_id": r["research_id"], "wait": true})).unwrap();
+            assert_eq!((done["sources"].as_str(), done["planned_under_mark"].as_bool()), (Some("engines"), Some(true)), "{done}");
+            assert!(!web.seen.lock().unwrap().is_empty(), "a marked session's run asked the engine");
         })
         .await;
     }
@@ -8571,7 +8606,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn research_is_for_the_console_and_says_plainly_when_nothing_can_run() {
+    async fn research_is_for_the_console_and_with_no_engine_it_runs_locally() {
         let f = setup(vec![], 5.0, |_| {});
         let svc = EngineService::new(f.engine.clone(), "m1");
         let (narrator, console) = (CallContext { scope: Scope::Narrator, client_id: 1 }, CallContext { scope: Scope::Console, client_id: 2 });
@@ -8583,11 +8618,25 @@ mod tests {
         let e = svc.research_start(json!({"topic": "bft", "project": "nowhere"}), console).await.unwrap_err();
         assert!((e.code, e.message.contains("not a registered project")) == (code::INVALID_PARAMS, true), "an unregistered project is refused before anything starts: {}", e.message);
         assert_eq!(svc.research_status(console).await.unwrap_err().code, code::NOT_FOUND, "and no job was recorded");
-        // Research turned off (`providers = []`): the job cannot start, and the reason is the config key.
+        // No engine (`providers = []`): the run is not refused (`specs/119` §13.2). It starts as a local run, and the reply says so.
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}\n[search]\nproviders = []\n", crate::testkit::CONFIG)).unwrap());
-        let e = svc.research_start(json!({"topic": "bft"}), console).await.unwrap_err();
-        assert!(e.message.contains("[search]"), "{}", e.message);
-        assert_eq!(svc.research_status(console).await.unwrap_err().code, code::NOT_FOUND, "a run that could not start is not a run: the refusal is the answer");
+        let r = svc.research_start(json!({"topic": "bft"}), console).await.unwrap();
+        assert_eq!((r["started"].as_bool(), r["sources"].as_str()), (Some(true), Some("local")), "{r}");
+        assert!(svc.research_status(console).await.is_ok(), "a local run is a run");
+        let _ = svc.research_cancel(console).await;
+    }
+
+    /// A search engine for tests that remembers every request made of it and answers each with no result.
+    #[derive(Default)]
+    struct RecordingWeb {
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl delphi_adapter::research::transport::Transport for RecordingWeb {
+        fn get(&self, url: &str, _headers: &[(&str, &str)], _max_bytes: usize, _timeout: std::time::Duration) -> Result<delphi_adapter::research::transport::Response, String> {
+            self.seen.lock().unwrap().push(url.to_string());
+            Ok(delphi_adapter::research::transport::Response { status: 200, location: None, content_type: Some("application/json".into()), body: json!({"results": []}).to_string().into_bytes(), truncated: false })
+        }
     }
 
     // ---- `specs/112` R4: one runner for the console, an inside agent and a host ----

@@ -1,7 +1,7 @@
 //! `delphi research setup` (`specs/119` §2 items 1, 2 and 6; slice B1): choose the search engine research asks, and prove it works.
 //!
-//! It asks which engine (Brave is suggested first and Mojeek second; any engine the code supports is taken), says once that
-//! queries leave this machine for that engine, takes the key with hidden input straight into the keychain as `delphi setup` takes
+//! It asks which engine (Parallel's keyless engine is offered first and Brave second, `specs/119` §13.3; any engine the code supports is
+//! taken), says once that queries leave this machine for that engine, takes the key with hidden input straight into the keychain as `delphi setup` takes
 //! a model key (never a file, never the screen), writes the `[search]` table of the workspace's `config.toml`, runs one test query
 //! and one test fetch from the trusted list, and prints what worked. `[search]` is one of the ratified access blocks, because it
 //! names who receives queries: the change is shown and takes effect only when the operator ratifies it.
@@ -31,8 +31,9 @@ use delphi_engine::research_setup::{engine_state_in, EngineState, SETUP_COMMAND}
 use std::path::{Path, PathBuf};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
-/// The order engines are offered in (§2 item 6: Brave first, Mojeek second; operator, 2026-11-14).
-pub const OFFERED: [Provider; 6] = [Provider::Brave, Provider::Mojeek, Provider::Searxng, Provider::Kagi, Provider::Google, Provider::Parallel];
+/// The order engines are offered in (§13.3 item 10, which replaces §2 item 6: Parallel's keyless engine first, Brave second;
+/// operator, 2026-11-15).
+pub const OFFERED: [Provider; 6] = [Provider::Parallel, Provider::Brave, Provider::Mojeek, Provider::Searxng, Provider::Kagi, Provider::Google];
 /// The test query: public words, the same on every install.
 const TEST_QUERY: &str = "encyclopedia open access";
 
@@ -66,8 +67,12 @@ pub struct Outcome {
     pub fetch_ok: Option<bool>,
 }
 
-/// §2 item 6: said before any key is entered and before any query is sent.
+/// §2 item 6: said before any key is entered and before any query is sent. For Parallel it also says that its retention terms are
+/// not published (§13.3 item 11).
 pub fn notice(engine: &str) -> String {
+    if engine == Provider::Parallel.name() {
+        return format!("Queries leave this machine for the engine chosen ({engine}). Parallel does not publish how long it keeps queries or whether it uses them. Check its terms and your employer's rules first.");
+    }
     format!("Queries leave this machine for the engine chosen ({engine}). Check its terms and your employer's rules first.")
 }
 
@@ -84,12 +89,12 @@ fn title(p: Provider) -> &'static str {
 
 fn about(p: Provider) -> &'static str {
     match p {
-        Provider::Brave => "its own index; needs a key (suggested)",
+        Provider::Brave => "its own index; needs a key (suggested second: asked when parallel fails or is rate limited)",
         Provider::Mojeek => "its own index; needs a key",
         Provider::Searxng => "an instance you name; no key, and no vendor sees your queries but the instance",
         Provider::Kagi => "needs a key",
         Provider::Google => "needs a key and an engine id, and only with a Gemini endpoint configured",
-        Provider::Parallel => "hosted, no key or account, rate limited",
+        Provider::Parallel => "hosted, no key or account, rate limited; its retention terms are not published (the default)",
     }
 }
 
@@ -99,22 +104,31 @@ pub fn hint(ws_dir: &Path) -> Option<String> {
     let text = std::fs::read_to_string(ws_dir.join("config.toml")).ok()?;
     match engine_state_in(&text)? {
         EngineState::Chosen => None,
-        EngineState::None => Some(format!("  research: no search engine is set up, so research cannot search the web. Run `{SETUP_COMMAND}`.")),
+        EngineState::None => Some(format!("  research: no search engine is set up, so research sends no web search of its own (a host session's own tools still search). Run `{SETUP_COMMAND}`.")),
         EngineState::DefaultOnly => Some(format!("  research: no search engine of your own is set up (the keyless default, parallel, is asked: rate limited, and it sees your queries). Run `{SETUP_COMMAND}` to choose one.")),
     }
 }
 
-/// `[search]` in `doc` with `p` first, the engines already written after it, and `p`'s own settings.
+/// `[search]` in `doc` with `p` in it and `p`'s own settings (§13.3 item 11). Parallel's keyless engine stays first where the table
+/// has it, and is written first where `providers` was never written (it is the engine asked then): choosing Brave there gives
+/// `["parallel", "brave"]`, so the table names its engines in full and a Parallel error or rate limit passes the query on. Otherwise
+/// `p` goes first and the engines already written follow. A `providers` the operator emptied does not gain Parallel.
 fn write_search(doc: &mut DocumentMut, p: Provider, credential: Option<&str>, url: Option<&str>, cx: Option<&str>) {
     if !doc.get("search").is_some_and(|s| s.is_table()) {
         doc["search"] = Item::Table(Table::new());
     }
     let search = doc["search"].as_table_mut().expect("search is a table");
+    let old: Option<Vec<String>> = search.get("providers").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let parallel = Provider::Parallel.name();
+    let keep_parallel_first = p != Provider::Parallel && old.as_ref().is_none_or(|o| o.first().is_some_and(|f| f == parallel));
     let mut names = Array::new();
+    if keep_parallel_first {
+        names.push(parallel);
+    }
     names.push(p.name());
-    for old in search.get("providers").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_str()) {
-        if old != p.name() {
-            names.push(old);
+    for old in old.iter().flatten() {
+        if old != p.name() && !(keep_parallel_first && old == parallel) {
+            names.push(old.as_str());
         }
     }
     search["providers"] = value(names);
@@ -232,9 +246,9 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, net: Option<&Net>, o: &Opts) -> Resul
     let text = std::fs::read_to_string(&cfg_path).map_err(|e| anyhow!("{}: {}", cfg_path.display(), e))?;
     let mut doc: DocumentMut = text.parse().map_err(|e| anyhow!("config.toml is not valid TOML: {}", e))?;
     match engine_state_in(&text) {
-        Some(EngineState::Chosen) => ui.say("  A search engine is already set up; the one you choose now is asked first."),
-        Some(EngineState::DefaultOnly) => ui.say("  No engine of your own is set up: the keyless default (parallel) is asked."),
-        Some(EngineState::None) => ui.say("  No search engine is set up, so research cannot search the web."),
+        Some(EngineState::Chosen) => ui.say("  A search engine is already set up. The one you choose now is added; parallel, where it is first, stays first."),
+        Some(EngineState::DefaultOnly) => ui.say("  No engine is written in config.toml: the keyless default (parallel) is asked."),
+        Some(EngineState::None) => ui.say("  No search engine is set up (`providers = []`), so research sends no web search of its own."),
         None => bail!("[search] in config.toml cannot be read; fix it by hand first (`delphi doctor` says what is wrong)"),
     }
 
@@ -253,8 +267,15 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, net: Option<&Net>, o: &Opts) -> Resul
     let name = name.trim().to_lowercase();
     let p = Provider::parse(&name).ok_or_else(|| anyhow!("unknown engine `{}` (expected {})", name, OFFERED.map(|p| p.name()).join(", ")))?;
 
-    // 2. The one-line notice, before a key is entered or a query is sent (§2 item 6).
+    // 2. The one-line notice, before a key is entered or a query is sent (§2 item 6). When the table will ask Parallel first and the
+    // engine chosen is another, Parallel is named too: it is the engine most queries go to (§13.3 item 11).
     ui.say(&format!("\n{}", notice(p.name())));
+    let mut preview = doc.clone();
+    write_search(&mut preview, p, None, None, None);
+    let first_is_parallel = preview["search"]["providers"].as_array().and_then(|a| a.get(0)).and_then(|v| v.as_str()) == Some(Provider::Parallel.name());
+    if p != Provider::Parallel && first_is_parallel {
+        ui.say(&format!("Parallel stays the engine asked first; {} is asked when it fails or is rate limited. {}", p.name(), notice(Provider::Parallel.name())));
+    }
 
     // 3. What the engine needs besides a key.
     let ask = |ui: &mut dyn Ui, given: &Option<String>, flag: &str, question: &str| -> Result<String> {
@@ -593,23 +614,25 @@ mod tests {
     #[test]
     fn on_a_fresh_home_setup_writes_search_keeps_the_key_in_the_keychain_and_the_daemon_then_has_the_engine() {
         let (_t, o) = workspace();
-        assert!(!effective_search(&o).explicit, "a fresh workspace has no engine of the operator's own");
+        // specs/119 §13.3 item 11: init writes the table in full, with Parallel's keyless engine.
+        assert_eq!(effective_search(&o).providers, vec![Provider::Parallel], "a fresh workspace asks parallel");
+        assert!(std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap().contains("[search]\nproviders = [\"parallel\"]"));
         let key = "BSA-not-a-real-key-0123456789";
-        let mut ui = Script { secrets: [key.to_string()].into(), ..Default::default() };
+        let mut ui = Script { lines: ["brave".to_string()].into(), secrets: [key.to_string()].into(), ..Default::default() };
         let (env, web) = (Keychain::default(), FakeWeb::new(200));
         let net = Net { transport: &web, resolve: &|_| None };
         let out = run(&mut ui, &env, Some(&net), &o).unwrap();
         assert_eq!(out, Outcome { engine: Some("brave".into()), ratified: true, search_ok: Some(true), fetch_ok: Some(true) });
 
         let cfg = std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap();
-        assert!(cfg.contains("[search]") && cfg.contains("providers = [\"brave\"]") && cfg.contains("credential = \"keychain:brave-search-key\""), "{cfg}");
+        assert!(cfg.contains("[search]") && cfg.contains("providers = [\"parallel\", \"brave\"]") && cfg.contains("credential = \"keychain:brave-search-key\""), "once a Brave key is given the table is parallel then brave: {cfg}");
         assert!(!cfg.contains(key), "the key is not in config.toml");
         assert_eq!(*env.stored.borrow(), vec![("brave-search-key".to_string(), key.to_string())]);
         assert!(ui.said.iter().all(|l| !l.contains(key)), "the key is never printed");
 
         // What the daemon reads: the ratified table, with the engine the operator chose.
         let s = effective_search(&o);
-        assert!(s.explicit && s.providers == vec![Provider::Brave], "{s:?}");
+        assert!(s.explicit && s.providers == vec![Provider::Parallel, Provider::Brave], "{s:?}");
         assert_eq!(engine_state_in(&cfg), Some(EngineState::Chosen));
         assert_eq!(hint(&o.ws_dir), None, "nothing left to say at the end of init or connect");
 
@@ -624,11 +647,44 @@ mod tests {
         }
     }
 
-    // specs/119 §2 item 6: Brave is offered first and Mojeek second, any supported engine is taken, and the one-line notice is
-    // printed before a key is asked for.
+    // specs/119 §13.3 items 10 and 11: with no answer setup takes Parallel's keyless engine, asks for no key, and before any query
+    // says that queries leave the machine for Parallel and that its retention terms are not published.
     #[test]
-    fn brave_and_mojeek_are_suggested_first_and_the_notice_comes_before_the_key() {
-        assert_eq!((OFFERED[0], OFFERED[1]), (Provider::Brave, Provider::Mojeek));
+    fn parallel_is_the_default_engine_needs_no_key_and_its_notice_says_its_terms_are_not_published() {
+        let (_t, o) = workspace();
+        let mut ui = Script::default();
+        let (env, web) = (Keychain::default(), FakeWeb::new(200));
+        let out = run(&mut ui, &env, Some(&Net { transport: &web, resolve: &|_| None }), &o).unwrap();
+        assert_eq!(out.engine.as_deref(), Some("parallel"));
+        assert!(env.stored.borrow().is_empty() && !ui.said.iter().any(|l| l.contains("(hidden)")), "no key is asked for: {:?}", ui.said);
+        let at = |needle: &str| ui.said.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}: {:?}", ui.said));
+        let notice_at = at("Queries leave this machine for the engine chosen (parallel). Parallel does not publish how long it keeps queries or whether it uses them. Check its terms and your employer's rules first.");
+        assert!(at("? Engine") < notice_at && notice_at < at("test query"), "the notice comes before the first query to parallel: {:?}", ui.said);
+        assert!(std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap().contains("providers = [\"parallel\"]"));
+        // Brave chosen where parallel is first: both are named before the key is asked for.
+        let (_t, o) = workspace();
+        let mut ui = Script { lines: ["brave".to_string()].into(), secrets: ["brave-key-0123456789".to_string()].into(), yes: [false; 5].into(), ..Default::default() };
+        run(&mut ui, &Keychain::default(), None, &o).unwrap();
+        let at = |needle: &str| ui.said.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}: {:?}", ui.said));
+        assert!(at("(brave)") < at("Parallel stays the engine asked first") && at("Parallel does not publish") < at("? Brave Search API key (hidden)"), "{:?}", ui.said);
+        // A table the operator emptied does not gain parallel; a table that never had it does not either.
+        for (before, want) in [("providers = []", "providers = [\"brave\"]"), ("providers = [\"searxng\"]\n[search.searxng]\nurl = \"https://s.example\"", "providers = [\"brave\", \"searxng\"]")] {
+            let (_t, mut o) = workspace();
+            let cfg = o.ws_dir.join("config.toml");
+            std::fs::write(&cfg, std::fs::read_to_string(&cfg).unwrap().replace("providers = [\"parallel\"]", before)).unwrap();
+            o.from_flags = true;
+            o.engine = Some("brave".into());
+            o.credential = Some("env:BRAVE_API_KEY".into());
+            run(&mut Script::default(), &Keychain::default(), None, &o).unwrap();
+            assert!(std::fs::read_to_string(&cfg).unwrap().contains(want), "{before}: {}", std::fs::read_to_string(&cfg).unwrap());
+        }
+    }
+
+    // specs/119 §13.3 item 10 (it replaces §2 item 6): Parallel is offered first and Brave second, any supported engine is taken, and
+    // the one-line notice is printed before a key is asked for.
+    #[test]
+    fn parallel_and_brave_are_offered_first_and_the_notice_comes_before_the_key() {
+        assert_eq!((OFFERED[0], OFFERED[1]), (Provider::Parallel, Provider::Brave));
         for p in Provider::ALL {
             assert!(OFFERED.contains(&p), "{} is offered", p.name());
         }
@@ -638,12 +694,12 @@ mod tests {
         let out = run(&mut ui, &Keychain::default(), None, &o).unwrap();
         assert_eq!(out, Outcome { engine: Some("mojeek".into()), ratified: false, search_ok: None, fetch_ok: None });
         let at = |needle: &str| ui.said.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}: {:?}", ui.said));
-        assert!(at("brave ") < at("mojeek ") && at("mojeek ") < at("searxng "), "the order engines are offered in");
+        assert!(at("  parallel ") < at("  brave ") && at("  brave ") < at("  mojeek ") && at("  mojeek ") < at("  searxng "), "the order engines are offered in");
         let notice_at = at("Queries leave this machine for the engine chosen (mojeek). Check its terms and your employer's rules first.");
         assert!(at("? Engine") < notice_at && notice_at < at("? Mojeek API key (hidden)"));
-        // Declined at the ratify question: written, pending, and the daemon still has no engine of the operator's own.
-        assert!(std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap().contains("providers = [\"mojeek\"]"));
-        assert!(!effective_search(&o).explicit);
+        // Declined at the ratify question: written, pending, and the daemon still asks only what init ratified.
+        assert!(std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap().contains("providers = [\"parallel\", \"mojeek\"]"));
+        assert_eq!(effective_search(&o).providers, vec![Provider::Parallel]);
         assert!(hint(&o.ws_dir).is_none(), "the live file names an engine; the pending change is the doctor's to report");
     }
 
@@ -651,7 +707,7 @@ mod tests {
     fn a_key_the_engine_rejects_is_not_stored_and_nothing_is_written() {
         let (_t, o) = workspace();
         let before = std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap();
-        let mut ui = Script { secrets: ["wrong-key-0123456789".to_string()].into(), ..Default::default() };
+        let mut ui = Script { lines: ["brave".to_string()].into(), secrets: ["wrong-key-0123456789".to_string()].into(), ..Default::default() };
         let (env, web) = (Keychain::default(), FakeWeb::new(401));
         let out = run(&mut ui, &env, Some(&Net { transport: &web, resolve: &|_| None }), &o).unwrap();
         assert_eq!(out, Outcome { engine: None, ratified: false, search_ok: Some(false), fetch_ok: None });
@@ -660,11 +716,11 @@ mod tests {
         assert_eq!(web.urls().len(), 1, "no fetch after a failed query with a typed key");
         // Too short to be a key: nothing is asked of the engine at all.
         let web = FakeWeb::new(200);
-        let mut ui = Script { secrets: ["abc".to_string()].into(), ..Default::default() };
+        let mut ui = Script { lines: ["brave".to_string()].into(), secrets: ["abc".to_string()].into(), ..Default::default() };
         assert_eq!(run(&mut ui, &env, Some(&Net { transport: &web, resolve: &|_| None }), &o).unwrap(), Outcome::default());
         assert!(web.urls().is_empty());
         // A keychain that cannot take the key: an error, and the config is still untouched.
-        let mut ui = Script { secrets: ["good-key-0123456789".to_string()].into(), ..Default::default() };
+        let mut ui = Script { lines: ["brave".to_string()].into(), secrets: ["good-key-0123456789".to_string()].into(), ..Default::default() };
         let err = run(&mut ui, &Keychain { locked: true, ..Default::default() }, None, &o).unwrap_err();
         assert!(err.to_string().contains("keychain"), "{err}");
         assert_eq!(std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap(), before);
@@ -698,7 +754,7 @@ mod tests {
         assert!(web.seen.lock().unwrap()[0].1.iter().any(|(_, v)| v == "key-from-the-environment"));
         assert!(ui.said.iter().any(|l| l.contains("Not ratified: that is yours to do")));
         assert!(std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap().contains("credential = \"env:BRAVE_API_KEY\""));
-        assert!(!effective_search(&o).explicit, "written, pending, not in force");
+        assert_eq!(effective_search(&o).providers, vec![Provider::Parallel], "written, pending, not in force");
     }
 
     #[test]
@@ -726,11 +782,11 @@ mod tests {
         let (_t, o) = workspace();
         let cfg = o.ws_dir.join("config.toml");
         let base = std::fs::read_to_string(&cfg).unwrap();
-        assert!(hint(&o.ws_dir).unwrap().contains("Run `delphi research setup` to choose one."), "a fresh workspace: the keyless default only");
-        std::fs::write(&cfg, format!("{base}\n[search]\nproviders = []\n")).unwrap();
-        assert_eq!(hint(&o.ws_dir).unwrap(), "  research: no search engine is set up, so research cannot search the web. Run `delphi research setup`.");
-        std::fs::write(&cfg, format!("{base}\n[search]\nproviders = [\"parallel\"]\n")).unwrap();
-        assert_eq!(hint(&o.ws_dir), None);
+        assert_eq!(hint(&o.ws_dir), None, "a fresh workspace: init wrote the table with parallel");
+        std::fs::write(&cfg, base.replace("[search]\nproviders = [\"parallel\"]", "")).unwrap();
+        assert!(hint(&o.ws_dir).unwrap().contains("Run `delphi research setup` to choose one."), "an older workspace with no table: the keyless default only");
+        std::fs::write(&cfg, base.replace("providers = [\"parallel\"]", "providers = []")).unwrap();
+        assert_eq!(hint(&o.ws_dir).unwrap(), "  research: no search engine is set up, so research sends no web search of its own (a host session's own tools still search). Run `delphi research setup`.");
         std::fs::write(&cfg, "not toml [").unwrap();
         assert_eq!(hint(&o.ws_dir), None, "an unreadable config is the doctor's to report");
         assert_eq!(hint(&o.ws_dir.join("nowhere")), None);

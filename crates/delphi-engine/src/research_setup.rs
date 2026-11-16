@@ -15,7 +15,8 @@ pub const SETUP_COMMAND: &str = "delphi research setup";
 /// What `[search]` says about engines (`specs/119` §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineState {
-    /// `providers = []`: no engine can be asked, and a research request is refused.
+    /// `providers = []`: no engine may be asked. It is the operator's way of keeping queries on this machine (`specs/119` §13.2
+    /// item 7): a research run then reads what Delphi holds and the trusted addresses it already knows, and is not refused.
     None,
     /// No `providers` key: only the keyless default of `specs/028` §12 is asked. The operator has chosen nothing.
     DefaultOnly,
@@ -41,9 +42,23 @@ pub fn engine_state_in(config_text: &str) -> Option<EngineState> {
     }
 }
 
-/// What a research request is told when no engine can be asked (`specs/119` §2 item 4).
-pub fn no_engine_message() -> String {
-    format!("research cannot run: no search engine is set up (`providers` under [search] in config.toml is empty). The operator sets one up at a terminal with `{}`", SETUP_COMMAND)
+/// Where a research run gets its web results (`specs/119` §13.2 items 6 and 7). With no engine (`providers = []`) the run is local. A
+/// request is never refused for want of a source. The private-read mark of `specs/103` does not change the answer (`specs/119` §15):
+/// a marked session researches as any other, and what keeps private text in is the cleaning of each query and the identifier guard.
+pub fn sources(search: &delphi_adapter::research::SearchConfig) -> crate::research_run::Sources {
+    if engine_state(search) == EngineState::None {
+        crate::research_run::Sources::Local
+    } else {
+        crate::research_run::Sources::Engines
+    }
+}
+
+/// What the reply to a request says when the session that asked is under the private-read mark (`specs/119` §15): fixed words.
+pub const MARK_NOTE: &str = "this session has read private material. The research runs as usual: every query is cleaned of secrets, paths and private addresses and passes the identifier guard, and the search log of the result lists each query the run planned, so the operator can see what left this machine.";
+
+/// What the reply to a request says when its run is local (`specs/119` §13.2 item 6): fixed words.
+pub fn local_note() -> String {
+    format!("this run sends no web search: it reads what Delphi already holds and the trusted sites it already knows by their addresses. Its answer's label says so. The operator can set up a search engine at a terminal with `{}`", SETUP_COMMAND)
 }
 
 /// The default list shipped in this build, used when the workspace's copy of `context/sources/trusted.toml` is missing.
@@ -76,9 +91,39 @@ pub fn engines(engine: &Engine) -> Vec<ProviderSpec> {
         .collect()
 }
 
+/// The engines the validator's contradiction search may ask (`specs/028` §12.1, `specs/119` §13.3 item 12). It sends claim text, so:
+/// none unless the operator wrote `providers`; and Parallel's keyless engine, which `delphi init` and setup write so that research
+/// always has a working table, only when the operator has turned background validation on (the setup question that says claim text
+/// goes to the search engine). Brave, or any other engine the operator set up with a key or an address, is asked as before.
+pub fn validator_engines(engines: Vec<ProviderSpec>, search: &delphi_adapter::research::SearchConfig, background: bool) -> Vec<ProviderSpec> {
+    if !search.explicit {
+        return Vec::new();
+    }
+    engines.into_iter().filter(|e| background || e.provider != delphi_adapter::research::search::Provider::Parallel).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // specs/119 §13.3 item 12: Parallel written by init or setup does not start receiving claim text. The validator's search asks it
+    // only with background validation on; an engine the operator set up is asked as before; the unwritten default never is.
+    #[test]
+    fn the_validators_search_asks_parallel_only_when_background_validation_is_on() {
+        use delphi_adapter::research::search::Provider;
+        let cfg = |t: &str| delphi_adapter::research::SearchConfig::parse(&toml::from_str::<toml::Value>(t).unwrap()["search"], false).unwrap();
+        let specs = |s: &delphi_adapter::research::SearchConfig| -> Vec<ProviderSpec> { s.providers.iter().map(|p| ProviderSpec { provider: *p, key: None, base_url: None, cx: None }).collect() };
+        let names = |s: &delphi_adapter::research::SearchConfig, background: bool| -> Vec<Provider> { validator_engines(specs(s), s, background).into_iter().map(|e| e.provider).collect() };
+        let init = cfg("[search]\nproviders = [\"parallel\"]\n");
+        assert!(names(&init, false).is_empty(), "the table init writes gives the validator no engine");
+        assert_eq!(names(&init, true), vec![Provider::Parallel]);
+        let both = cfg("[search]\nproviders = [\"parallel\", \"brave\"]\n[search.brave]\ncredential = \"env:K\"\n");
+        assert_eq!(names(&both, false), vec![Provider::Brave]);
+        assert_eq!(names(&both, true), vec![Provider::Parallel, Provider::Brave]);
+        let unwritten = delphi_adapter::research::SearchConfig::default();
+        assert!(names(&unwritten, true).is_empty() && names(&unwritten, false).is_empty(), "the unwritten default is never asked");
+        assert!(names(&cfg("[search]\nproviders = []\n"), true).is_empty());
+    }
 
     // specs/119 §2: what counts as an engine. An empty list is none; no table is the keyless default, which the operator did not choose.
     #[test]
@@ -90,7 +135,13 @@ mod tests {
         assert_eq!(engine_state_in("[search]\nproviders = [\"brave\"]\n[search.brave]\ncredential = \"keychain:brave-search-key\"\n"), Some(EngineState::Chosen));
         assert_eq!(engine_state_in("[search]\nproviders = [\"nonesuch\"]\n"), None, "a table that cannot be read");
         assert_eq!(engine_state_in("not toml ["), None);
-        assert!(no_engine_message().contains("`delphi research setup`"));
+        assert!(local_note().contains("`delphi research setup`"));
+        // specs/119 §13.2: no engine is a local run; nothing is a refusal.
+        use crate::research_run::Sources;
+        let cfg = |t: &str| delphi_adapter::research::SearchConfig::parse(&toml::from_str::<toml::Value>(t).unwrap()["search"], false).unwrap();
+        assert_eq!(sources(&cfg("[search]\nproviders = []\n")), Sources::Local);
+        assert_eq!(sources(&cfg("[search]\nproviders = [\"parallel\"]\n")), Sources::Engines);
+        assert_eq!(sources(&delphi_adapter::research::SearchConfig::default()), Sources::Engines);
     }
 
     #[test]

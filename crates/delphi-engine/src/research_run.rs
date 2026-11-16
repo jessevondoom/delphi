@@ -14,7 +14,7 @@
 use crate::corroboration::{self, Cite, Params, Support};
 use crate::research_chain::{ChainPlan, Direction};
 use crate::research_jobs::{Egress, Finish, JobCtx};
-use crate::research_method::{check_answer, claims_list, coverage, next_query, read_class, reading_order, subs_report, url_date, written_label, AnswerAsk, AnswerClaim, Asked, Known, KnownFirst, PlanKind, Stop, SubQuestion, SubStatus, ANSWER_CHARS, ANSWER_CLAIMS, LIST_LABEL};
+use crate::research_method::{check_answer, claims_list, coverage, next_query, read_class, reading_order, subs_report, url_date, written_label, AnswerAsk, AnswerClaim, Asked, Known, KnownFirst, PlanKind, Stop, SubQuestion, SubStatus, ANSWER_CHARS, ANSWER_CLAIMS, LIST_LABEL, NO_WEB_LABEL};
 use crate::research_plan::{canonical_url, clean_query, claim_fingerprint, widen_to_web, Added, ClaimSet, QueryKind, Seen};
 use crate::search_log::{HostSearch, Purpose, SearchLog, Source};
 use delphi_adapter::research::search::Row;
@@ -274,8 +274,36 @@ impl Limits {
     }
 }
 
+/// Where a run's web results come from (`specs/119` §13.2). The result and the record say which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sources {
+    /// The engines of `[search]`, in the operator's order.
+    #[default]
+    Engines,
+    /// No engine may be asked: the run reads what Delphi holds and the addresses it already knows on the trusted list, and sends
+    /// no query to anyone.
+    Local,
+}
+
+impl Sources {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Sources::Engines => "engines",
+            Sources::Local => "local",
+        }
+    }
+}
+
+/// The words of [`Sources`], for the record.
+pub const SOURCES: [&str; 2] = ["engines", "local"];
+
 pub struct Deps<'a> {
     pub web: &'a dyn Web,
+    /// Where the run's web results come from (`specs/119` §13.2).
+    pub sources: Sources,
+    /// Whoever asked is under the private-read mark of `specs/103` (`specs/119` §15). Nothing the run does differs: every query is
+    /// cleaned and guarded as always. The result says the run was planned under the mark.
+    pub marked: bool,
     pub scout: &'a dyn Scout,
     pub validator: &'a dyn Validator,
     pub library: &'a dyn Library,
@@ -931,6 +959,26 @@ fn gap_round(ctx: &JobCtx, deps: &Deps<'_>, st: &State, asked: &mut [Asked], not
     (out, withheld, tried)
 }
 
+/// The one round of a local run (`specs/119` §13.2): no query is sent to anyone. The run reads the sources Delphi already holds
+/// for the question (`known.sources`, found as the asker could have found them) whose address is on the trusted list: from the
+/// library when it holds the page fresh, by its address through the daemon's fetcher otherwise. An address that is not on the
+/// trusted list is not read. The page cap and the step budget hold as in any round.
+async fn local_round(ctx: &JobCtx, deps: &Deps<'_>, question: &str, depth: Depth, st: &mut State, known: &Known) -> Stop {
+    let rows: Vec<Row> = known.sources.iter().filter(|s| deps.web.is_trusted(&s.url)).map(|s| Row { title: String::new(), url: s.url.clone(), snippet: String::new() }).collect();
+    let li = st.log.local(rows.len());
+    let total = rows.len();
+    for (i, row) in rows.iter().enumerate() {
+        if st.pages_read >= deps.limits.pages_at(depth) {
+            st.log.dropped(li, "page_cap", total - i);
+            return Stop::PageBudget;
+        }
+        if read_row(ctx, deps, question, st, li, row, true, total - i, Tag::default()).await {
+            return Stop::StepBudget;
+        }
+    }
+    Stop::PlanDone
+}
+
 /// Send one round's queries and read what they return. Within one search's results pages are read trusted and primary first, then
 /// trusted, then those on a host a kept claim's source is on, then the rest, newer first where the address states a date
 /// (`specs/114` §4 item 6). `Some` when sending must stop: the step budget or the page cap.
@@ -1129,7 +1177,10 @@ async fn read_row(ctx: &JobCtx, deps: &Deps<'_>, question: &str, st: &mut State,
 /// (`research_method::check_answer`, then the library's page check); an answer that fails is written once more with the findings;
 /// if that fails too, or a call fails, the run returns the code-built list. The last line of the answer is its label, which says
 /// what was done: `written by the scout from N claims, not validated`, or `list of claims (no synthesis)`.
-async fn write_the_answer(deps: &Deps<'_>, question: &str, subs: &[SubQuestion], given: &[AnswerClaim], groups: &[Vec<String>]) -> (String, Value) {
+///
+/// `no_web` is a run in which no web search answered (`specs/119` §13.2): the label says so.
+async fn write_the_answer(deps: &Deps<'_>, question: &str, subs: &[SubQuestion], given: &[AnswerClaim], groups: &[Vec<String>], no_web: bool) -> (String, Value) {
+    let labelled = |label: String| if no_web { format!("{label}, {NO_WEB_LABEL}") } else { label };
     if given.is_empty() {
         return ("No claim could be drawn from the sources read. (not validated)".to_string(), json!({"by": "none", "claims": 0, "attempts": 0}));
     }
@@ -1145,7 +1196,7 @@ async fn write_the_answer(deps: &Deps<'_>, question: &str, subs: &[SubQuestion],
             }
         }
         if findings.is_empty() {
-            let label = written_label(given.len());
+            let label = labelled(written_label(given.len()));
             return (format!("{text}\n\n{label}"), json!({"by": "scout", "claims": given.len(), "attempts": attempts, "label": label}));
         }
         // How many findings the check made, never their text: a finding can quote the answer, and the answer is a model's words.
@@ -1153,7 +1204,8 @@ async fn write_the_answer(deps: &Deps<'_>, question: &str, subs: &[SubQuestion],
         fix = Some(findings.join("\n"));
     }
     let list: String = claims_list(given).chars().take(ANSWER_CHARS).collect();
-    (format!("{list}\n\n{LIST_LABEL}"), json!({"by": "list", "claims": given.len(), "attempts": attempts, "rejected": rejected, "label": LIST_LABEL}))
+    let label = labelled(LIST_LABEL.to_string());
+    (format!("{list}\n\n{label}"), json!({"by": "list", "claims": given.len(), "attempts": attempts, "rejected": rejected, "label": label}))
 }
 
 /// Run one research job. `Finish::Partial` when the step budget ran out; an `Err` only when nothing could be done at all.
@@ -1234,6 +1286,10 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             round.sort_by_key(|q| q.kind != QueryKind::Trusted);
         }
     }
+    // A local run sends no query (`specs/119` §13.2), so its record plans none.
+    if deps.sources == Sources::Local {
+        round.clear();
+    }
     note(deps, |r| r.plan(&round.iter().map(|q| (kind_word(q.kind), q.text.as_str())).collect::<Vec<_>>()));
     note(deps, |r| r.planned(plan_kind.as_str(), &crate::research_method::subs_json(&st.subs)));
 
@@ -1241,7 +1297,11 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // sub-questions still uncovered. The run stops sending when every sub-question is covered, when two rounds in a row added no
     // claim, when no uncovered sub-question has a query left, or on a budget. The fixed plan has no sub-questions and one round.
     let (mut rounds, mut barren) = (0usize, 0usize);
-    let stopped: Stop = loop {
+    let stopped: Stop = if deps.sources == Sources::Local {
+        rounds = 1;
+        local_round(ctx, deps, question, depth, &mut st, &known).await
+    } else {
+        loop {
         rounds += 1;
         let before = st.claims.len() + st.found_again.len();
         if let Some(stop) = send_round(ctx, deps, question, depth, &mut st, &round).await {
@@ -1269,13 +1329,15 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
             break Stop::NoMoreQueries;
         }
         round = next;
+        }
     };
 
     // The corroboration pass (`specs/098` §7.5 item 5): for a survey or a deep run, each central PUBLIC claim with fewer than three
     // independent origins gets one query for independent support and one for contradiction. A claim that rests on a private source is
     // never put in an outbound query. Every search and fetch still goes through `ctx.egress`, so the depth's step budget bounds it.
     let mut pass = (0usize, 0usize);
-    if pass_claims(depth) > 0 && !st.spent {
+    // A local run sends no query, so it has no pass.
+    if pass_claims(depth) > 0 && !st.spent && deps.sources != Sources::Local {
         // A claim that rests on a private source gets no outbound query; the log says so, without any text of the claim
         // (`specs/101` §3 item 3). At most as many lines as the pass would have run.
         let private_claims = st.claims.iter().filter(|c| c.source_ids.iter().any(|s| deps.library.is_private(s))).count();
@@ -1402,7 +1464,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     given.truncate(ANSWER_CLAIMS);
     // The claims that disagree with each other, by the ids the answer cites them with.
     let groups: Vec<Vec<String>> = conflicts.iter().map(|g| g.iter().filter_map(|id| claims.iter().position(|c| c.id == *id).and_then(|i| staged[i].clone())).filter(|id| given.iter().any(|c| c.id == *id)).collect::<Vec<_>>()).filter(|g: &Vec<String>| g.len() > 1).collect();
-    let (answer, synthesis) = write_the_answer(deps, question, &subs, &given, &groups).await;
+    let (answer, synthesis) = write_the_answer(deps, question, &subs, &given, &groups, cov.answered == 0).await;
     let mut source_ids: Vec<&String> = claims.iter().flat_map(|c| c.source_ids.iter()).collect();
     source_ids.sort();
     source_ids.dedup();
@@ -1429,6 +1491,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "library_claims": library_claims,
         "known_before": known.to_json(), "read_from_library": from_library,
         "plan": plan_kind.as_str(), "sub_questions": sub_report, "stopped": stopped.as_str(), "rounds": rounds,
+        "sources": deps.sources.as_str(), "web_search": cov.answered > 0, "planned_under_mark": deps.marked,
         "freshness": {"retrieved": retrieved, "last_checked": delphi_core::time::now_rfc3339()},
         "budget_used": {"steps": ctx.steps(), "check_steps": ctx.check_steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
@@ -1811,6 +1874,7 @@ mod tests {
         resume: Option<Resume>,
         /// What the caller's search finds before the run, when the run looks.
         known: Option<FakeKnown>,
+        sources: Sources,
     }
 
     impl Fixture {
@@ -1825,10 +1889,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new(), limits: Limits::default(), resume: None, known: None }
+            Fixture { sources: Sources::Engines, record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new(), limits: Limits::default(), resume: None, known: None }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder), limits: &self.limits, resume: self.resume.as_ref(), known: self.known.as_ref().map(|k| k as &dyn KnownFirst) }
+            Deps { sources: self.sources, marked: false, web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder), limits: &self.limits, resume: self.resume.as_ref(), known: self.known.as_ref().map(|k| k as &dyn KnownFirst) }
         }
     }
 
@@ -3656,5 +3720,82 @@ mod tests {
         g.resume = Some(Resume { note: Some("see /etc/shadow".into()), ..Default::default() });
         run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &g.deps()).await.unwrap();
         assert!(!g.web.searched.lock().unwrap().iter().any(|q| q.contains("/etc/shadow")), "{:?}", g.web.searched.lock().unwrap());
+    }
+
+    // ---- `specs/119` §13.2 (B9): a run with no web source is local, not refused ----
+
+    /// What the caller's search finds for a local run: a source on the trusted list, one off it (which the fake could reach), and one
+    /// whose address is not an address.
+    fn known_sources() -> FakeKnown {
+        use crate::research_method::KnownSource;
+        let s = |id: &str, url: &str| KnownSource { id: id.into(), url: url.into(), age_days: Some(400), fresh: false };
+        FakeKnown { found: Known { sources: vec![s("src-who", "https://who.int/a"), s("src-blog", "https://blog.example/a"), s("src-none", "a note with no address")], ..Default::default() }, asked: Default::default() }
+    }
+
+    /// A local run sends no query to anyone, whatever the plan holds; it reads the trusted addresses Delphi already knew for the
+    /// question and no other; its result and its label say so; and it has no corroboration pass.
+    #[tokio::test]
+    async fn a_local_run_sends_no_query_reads_only_known_trusted_addresses_and_says_so() {
+        let mut f = Fixture::new(Verdict::Supports);
+        f.sources = Sources::Local;
+        f.known = Some(known_sources());
+        let (partial, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        assert!(!partial, "{v}");
+        assert!(f.web.searched.lock().unwrap().is_empty(), "a local run searched: {:?}", f.web.searched.lock().unwrap());
+        assert_eq!(*f.web.fetched.lock().unwrap(), ["https://who.int/a"], "only the known address on the trusted list is read");
+        assert_eq!((v["sources"].as_str(), v["web_search"].as_bool(), v["stopped"].as_str()), (Some("local"), Some(false), Some("plan_done")), "{v}");
+        assert_eq!(v["corroboration_pass"], json!({"claims": 0, "queries": 0}));
+        assert_eq!(v["claims"].as_array().unwrap().len(), 1, "{v}");
+        assert!(v["answer"].as_str().unwrap().ends_with(", no web search"), "{}", v["answer"]);
+        assert!(v["synthesis"]["label"].as_str().unwrap().ends_with("no web search"), "{v}");
+        // The log has one line for what was read, marked local, with no query text; nothing counts as a search.
+        let lines = v["search_log"]["lines"].as_array().unwrap();
+        let local: Vec<&Value> = lines.iter().filter(|l| l["local"] == true).collect();
+        assert_eq!(local.len(), 1, "{lines:?}");
+        assert!(local[0].get("query").is_none() && local[0]["hits"] == 1 && local[0]["kept"] == 1, "{}", local[0]);
+        assert_eq!((v["search_log"]["flow"]["searches"].as_u64(), v["search_log"]["flow"]["found"].as_u64()), (Some(0), Some(1)));
+        assert!(SearchLog::new().flow().balanced());
+    }
+
+    /// A local run with nothing known is still a run: it ends done with no claim, and is not an error.
+    #[tokio::test]
+    async fn a_local_run_with_nothing_known_ends_with_no_claim_and_is_not_refused() {
+        let mut f = Fixture::new(Verdict::Supports);
+        f.sources = Sources::Local;
+        let (partial, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert!(!partial && v["claims"].as_array().unwrap().is_empty(), "{v}");
+        assert!(f.web.searched.lock().unwrap().is_empty() && f.web.fetched.lock().unwrap().is_empty());
+        assert_eq!(v["sources"], "local");
+    }
+
+    /// A local run still chains citations when the switch is on (`specs/119` §15 item 5): the lookups send public DOIs to the citation
+    /// index, and still no query goes to a search engine.
+    #[tokio::test]
+    async fn a_local_run_chains_citations_from_public_dois_and_still_searches_nothing() {
+        let mut f = Fixture::new(Verdict::Supports);
+        f.sources = Sources::Local;
+        f.known = Some(known_sources());
+        f.lib.dois = BTreeMap::from([("who.int".into(), "10.1000/who".into())]);
+        f.cites = Some(FakeCites::default());
+        lists(&mut f, "10.1000/who", &["10.1000/ref1"], &[]);
+        let (_, v) = value(run_research(&ctx(Depth::Deep), "does aspirin reduce fever", Depth::Deep, &f.deps()).await.unwrap());
+        assert_eq!(chain_calls(&f), [("10.1000/who".into(), "references"), ("10.1000/who".into(), "citations")], "{v}");
+        assert!(f.web.searched.lock().unwrap().is_empty(), "{:?}", f.web.searched.lock().unwrap());
+        assert_eq!((v["sources"].as_str(), v["web_search"].as_bool()), (Some("local"), Some(false)), "{v}");
+    }
+
+    /// An engine run in which every search fails used no web search either, and its label says so; one that was answered does not.
+    #[tokio::test]
+    async fn the_label_says_no_web_search_only_when_no_search_answered() {
+        let mut f = Fixture::new(Verdict::Supports);
+        f.web.fail = Some("no_results");
+        f.known = Some(FakeKnown { found: Known { claims: vec![crate::research_method::KnownClaim { id: "c-000000000001".into(), status: "noted".into(), text: "aspirin lowers fever".into() }], ..Default::default() }, asked: Default::default() });
+        let (_, v) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!((v["sources"].as_str(), v["web_search"].as_bool()), (Some("engines"), Some(false)), "{v}");
+        assert!(v["answer"].as_str().unwrap().ends_with("no web search"), "{}", v["answer"]);
+        let g = Fixture::new(Verdict::Supports);
+        let (_, v) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &g.deps()).await.unwrap());
+        assert_eq!(v["web_search"], true);
+        assert!(!v["answer"].as_str().unwrap().contains("no web search"), "{}", v["answer"]);
     }
 }

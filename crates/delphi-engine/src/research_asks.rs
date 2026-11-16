@@ -1,11 +1,12 @@
 //! Research that was asked for, and what became of the request (`specs/119` §2 items 3 and 4, §5 item 1).
 //!
-//! One line per `request_research` call in `local/research-asks.jsonl`: when, and whether the job was queued or refused because no
-//! search engine is set up. No question text, no session and no caller is written: the file answers three counting questions and
-//! nothing else.
+//! One line per `request_research` call in `local/research-asks.jsonl`: when, and whether the job was queued with a web source or
+//! ran with no web search (`specs/119` §13.2: research is never refused for want of a source). No question text, no session and no
+//! caller is written: the file answers three counting questions and nothing else. A line written before §13.2 says `no_engine`: that
+//! request was refused, and it is counted with the runs that had no web search.
 //!
-//! - `delphi doctor` warns about a missing engine only when research was asked for in the last 30 days ([`counts_since`]).
-//! - The next session-start brief says once how often research was refused for want of an engine ([`take_unmentioned`]); the
+//! - `delphi doctor` warns about a missing engine only when research ran with no web search in the last 30 days ([`counts_since`]).
+//! - The next session-start brief says once how often research ran with no web search ([`take_unmentioned`]); the
 //!   marker beside the file remembers how far that has been said.
 //! - `delphi kb health` reports requests in 30 days and how many ran.
 //!
@@ -24,17 +25,17 @@ pub const THIRTY_DAYS: i64 = 30 * 86_400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
-    /// The job was accepted and queued.
+    /// The job was queued with a web source: the host's own tools or an engine.
     Queued,
-    /// Refused: no search engine is set up.
-    NoEngine,
+    /// The job was queued and runs locally: no engine may be asked and no host searches for it (`specs/119` §13.2).
+    NoWebSearch,
 }
 
 impl Outcome {
     fn as_str(self) -> &'static str {
         match self {
             Outcome::Queued => "queued",
-            Outcome::NoEngine => "no_engine",
+            Outcome::NoWebSearch => "no_web_search",
         }
     }
 }
@@ -42,8 +43,10 @@ impl Outcome {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counts {
     pub asked: usize,
+    /// Requests that ran, with a web source or without.
     pub ran: usize,
-    pub no_engine: usize,
+    /// Requests that had no web search: runs since `specs/119` §13.2, and the refusals written before it.
+    pub no_web: usize,
 }
 
 fn file(ws_dir: &Path) -> PathBuf {
@@ -81,18 +84,22 @@ pub fn counts_since(ws_dir: &Path, since: i64) -> Counts {
         c.asked += 1;
         match outcome.as_str() {
             "queued" => c.ran += 1,
-            "no_engine" => c.no_engine += 1,
+            "no_web_search" => {
+                c.ran += 1;
+                c.no_web += 1;
+            }
+            "no_engine" => c.no_web += 1,
             _ => {}
         }
     }
     c
 }
 
-/// How many requests were refused for want of an engine since this was last asked, and remember that they have now been said. `0`
-/// when there are none or when the marker cannot be written (a refusal that would be repeated in every brief is not said at all).
+/// How many requests ran with no web search since this was last asked, and remember that they have now been said. `0` when there
+/// are none or when the marker cannot be written (a count that would be repeated in every brief is not said at all).
 pub fn take_unmentioned(ws_dir: &Path) -> usize {
     let said: i64 = std::fs::read_to_string(ws_dir.join(MENTIONED)).ok().and_then(|t| t.trim().parse().ok()).unwrap_or(i64::MIN);
-    let refused: Vec<i64> = lines(ws_dir).into_iter().filter(|(at, o)| o == "no_engine" && *at > said).map(|(at, _)| at).collect();
+    let refused: Vec<i64> = lines(ws_dir).into_iter().filter(|(at, o)| o == "no_web_search" && *at > said).map(|(at, _)| at).collect();
     let Some(latest) = refused.iter().max() else { return 0 };
     match std::fs::write(ws_dir.join(MENTIONED), latest.to_string()) {
         Ok(()) => refused.len(),
@@ -100,9 +107,9 @@ pub fn take_unmentioned(ws_dir: &Path) -> usize {
     }
 }
 
-/// The brief's sentence (`specs/119` §2 item 4): fixed words and a number.
+/// The brief's sentence (`specs/119` §13.2 item 9): fixed words and a number.
 pub fn brief_line(n: usize) -> String {
-    format!("Research was asked for {} time{} and no search engine is set up: the operator can run `{}` at a terminal.", n, if n == 1 { "" } else { "s" }, crate::research_setup::SETUP_COMMAND)
+    format!("Research ran {} time{} with no web search: the operator can run `{}` at a terminal.", n, if n == 1 { "" } else { "s" }, crate::research_setup::SETUP_COMMAND)
 }
 
 #[cfg(test)]
@@ -120,31 +127,34 @@ mod tests {
         let t = ws();
         let now = 1_800_000_000;
         record(t.path(), Outcome::Queued, now - 40 * 86_400);
-        record(t.path(), Outcome::NoEngine, now - 86_400);
-        record(t.path(), Outcome::NoEngine, now - 60);
+        record(t.path(), Outcome::NoWebSearch, now - 86_400);
+        record(t.path(), Outcome::NoWebSearch, now - 60);
         record(t.path(), Outcome::Queued, now);
-        assert_eq!(counts_since(t.path(), now - THIRTY_DAYS), Counts { asked: 3, ran: 1, no_engine: 2 });
+        assert_eq!(counts_since(t.path(), now - THIRTY_DAYS), Counts { asked: 3, ran: 3, no_web: 2 });
         assert_eq!(counts_since(t.path(), 0).asked, 4);
         let text = std::fs::read_to_string(t.path().join(FILE)).unwrap();
         for l in text.lines() {
             let v: Value = serde_json::from_str(l).unwrap();
             assert_eq!(v.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["outcome", "unix"], "{l}");
         }
+        // A line written before research stopped being refused: asked, not run, and counted with the runs that had no web search.
+        std::fs::OpenOptions::new().append(true).open(t.path().join(FILE)).unwrap().write_all(format!("{}\n", json!({"unix": now, "outcome": "no_engine"})).as_bytes()).unwrap();
+        assert_eq!(counts_since(t.path(), now - THIRTY_DAYS), Counts { asked: 4, ran: 3, no_web: 3 });
     }
 
     #[test]
-    fn a_refusal_is_mentioned_once_and_a_later_one_once_more() {
+    fn a_run_with_no_web_search_is_mentioned_once_and_a_later_one_once_more() {
         let t = ws();
         assert_eq!(take_unmentioned(t.path()), 0, "nothing was asked");
-        record(t.path(), Outcome::NoEngine, 100);
-        record(t.path(), Outcome::NoEngine, 200);
+        record(t.path(), Outcome::NoWebSearch, 100);
+        record(t.path(), Outcome::NoWebSearch, 200);
         record(t.path(), Outcome::Queued, 300);
         assert_eq!(take_unmentioned(t.path()), 2);
         assert_eq!(take_unmentioned(t.path()), 0, "said once");
-        record(t.path(), Outcome::NoEngine, 400);
+        record(t.path(), Outcome::NoWebSearch, 400);
         assert_eq!(take_unmentioned(t.path()), 1);
-        assert_eq!(brief_line(1), "Research was asked for 1 time and no search engine is set up: the operator can run `delphi research setup` at a terminal.");
-        assert!(brief_line(17).starts_with("Research was asked for 17 times and no search engine is set up"));
+        assert_eq!(brief_line(1), "Research ran 1 time with no web search: the operator can run `delphi research setup` at a terminal.");
+        assert!(brief_line(17).starts_with("Research ran 17 times with no web search"));
     }
 
     #[test]
