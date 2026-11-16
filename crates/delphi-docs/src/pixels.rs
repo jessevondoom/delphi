@@ -22,6 +22,55 @@ pub fn decode(b: &[u8]) -> Result<Image, DocError> {
 /// The most pixels a WebP may have before anything is allocated for it (the raster readers' limit).
 const MAX_WEBP_PIXELS: usize = 24_000_000;
 
+/// Every frame a WebP holds (a `VP8 ` or `VP8L` chunk at the top level or inside an animation frame, `ANMF`) declares a size of its
+/// own, which `image-webp` decodes at before it compares it with the canvas. Each is read here first and refused when it is larger
+/// than the canvas (`cw` x `ch`), than its animation frame, or than the pixel limit, so a small canvas cannot hide a huge frame.
+fn webp_frames(b: &[u8], cw: usize, ch: usize) -> Result<(), DocError> {
+    let bad = |why: &str| Err(DocError(format!("the WebP file is refused: {}", why)));
+    let u24 = |p: &[u8]| p[0] as usize | (p[1] as usize) << 8 | (p[2] as usize) << 16;
+    // (chunks, the largest frame they may hold), walked without recursion past one level of `ANMF`.
+    let mut todo: Vec<(&[u8], usize, usize, bool)> = vec![(b.get(12..).unwrap_or(&[]), cw, ch, true)];
+    while let Some((mut rest, mw, mh, top)) = todo.pop() {
+        while rest.len() >= 8 {
+            let kind = &rest[..4];
+            let size = u32::from_le_bytes([rest[4], rest[5], rest[6], rest[7]]) as usize;
+            let Some(payload) = rest.get(8..8 + size) else { return bad("a chunk is longer than the file") };
+            let (fw, fh) = match kind {
+                b"VP8 " => {
+                    if payload.len() < 10 || payload[3..6] != [0x9d, 0x01, 0x2a] {
+                        return bad("a lossy frame has no valid header");
+                    }
+                    ((u16::from_le_bytes([payload[6], payload[7]]) & 0x3fff) as usize, (u16::from_le_bytes([payload[8], payload[9]]) & 0x3fff) as usize)
+                }
+                b"VP8L" => {
+                    if payload.len() < 5 || payload[0] != 0x2f {
+                        return bad("a lossless frame has no valid header");
+                    }
+                    let bits = u32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
+                    (((bits & 0x3fff) + 1) as usize, (((bits >> 14) & 0x3fff) + 1) as usize)
+                }
+                b"ANMF" if top => {
+                    if payload.len() < 16 {
+                        return bad("an animation frame has no valid header");
+                    }
+                    let (aw, ah) = (u24(&payload[6..9]) + 1, u24(&payload[9..12]) + 1);
+                    if aw > mw || ah > mh {
+                        return bad("an animation frame is larger than its canvas");
+                    }
+                    todo.push((&payload[16..], aw, ah, false));
+                    (0, 0)
+                }
+                _ => (0, 0),
+            };
+            if fw > mw || fh > mh || fw.saturating_mul(fh) > MAX_WEBP_PIXELS {
+                return bad("a frame is larger than its canvas");
+            }
+            rest = &rest[(8 + size + (size & 1)).min(rest.len())..];
+        }
+    }
+    Ok(())
+}
+
 /// A WebP (`specs/118` §4 item 1), lossy, lossless or the first frame of an animation, decoded by `image-webp`. Its size is read
 /// from the header and checked before the picture is decoded, so a header that claims a huge picture allocates nothing for it.
 fn webp(b: &[u8]) -> Result<Image, DocError> {
@@ -32,6 +81,7 @@ fn webp(b: &[u8]) -> Result<Image, DocError> {
     if w == 0 || h == 0 || w.saturating_mul(h) > MAX_WEBP_PIXELS {
         return Err(DocError(format!("the picture would be {}x{} pixels; the limit is {} pixels in all", w, h, MAX_WEBP_PIXELS)));
     }
+    webp_frames(b, w, h)?;
     d.set_memory_limit(MAX_WEBP_PIXELS * 4);
     let alpha = d.has_alpha();
     let mut buf = vec![0u8; d.output_buffer_size().ok_or_else(bad)?];
@@ -215,6 +265,64 @@ mod tests {
         huge[4..8].copy_from_slice(&n.to_le_bytes());
         let e = decode(&huge).unwrap_err();
         assert!(e.0.contains("the limit is"), "{}", e.0);
+    }
+
+    /// A WebP of `chunks` (fourcc, payload), padded and sized as the format says.
+    fn riff(chunks: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+        let mut body = b"WEBP".to_vec();
+        for (kind, payload) in chunks {
+            body.extend_from_slice(*kind);
+            body.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            body.extend_from_slice(payload);
+            if payload.len() % 2 == 1 {
+                body.push(0);
+            }
+        }
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend(body);
+        out
+    }
+
+    /// The red-team's P2-1: an extended WebP whose canvas is 64x64 holds a lossy frame whose own header says 16000x16000.
+    /// `image-webp` would decode the frame at its own size (about a gigabyte) before comparing it with the canvas.
+    #[test]
+    fn a_frame_larger_than_its_canvas_is_refused_before_it_is_decoded() {
+        let vp8x = {
+            let mut p = vec![0u8; 10];
+            p[4..7].copy_from_slice(&[63, 0, 0]);
+            p[7..10].copy_from_slice(&[63, 0, 0]);
+            p
+        };
+        let huge_vp8 = {
+            let mut p = vec![0x10, 0x02, 0x00, 0x9d, 0x01, 0x2a];
+            p.extend_from_slice(&16000u16.to_le_bytes());
+            p.extend_from_slice(&16000u16.to_le_bytes());
+            p.extend_from_slice(&[0u8; 32]);
+            p
+        };
+        let e = decode(&riff(&[(b"VP8X", vp8x.clone()), (b"VP8 ", huge_vp8.clone())])).unwrap_err();
+        assert_eq!(e.0, "the WebP file is refused: a frame is larger than its canvas");
+        // The same inside an animation frame, and an animation frame larger than the canvas.
+        let mut anmf = vec![0u8; 16];
+        anmf[6..9].copy_from_slice(&[63, 0, 0]);
+        anmf[9..12].copy_from_slice(&[63, 0, 0]);
+        let mut inner = b"VP8 ".to_vec();
+        inner.extend_from_slice(&(huge_vp8.len() as u32).to_le_bytes());
+        inner.extend_from_slice(&huge_vp8);
+        let mut framed = anmf.clone();
+        framed.extend_from_slice(&inner);
+        let mut animated = vp8x.clone();
+        animated[0] = 0x02;
+        assert!(webp_frames(&riff(&[(b"VP8X", animated.clone()), (b"ANMF", framed)]), 64, 64).unwrap_err().0.contains("larger than its canvas"));
+        let mut wide = anmf.clone();
+        wide[6..9].copy_from_slice(&[0xff, 0x3f, 0]);
+        assert!(webp_frames(&riff(&[(b"VP8X", animated), (b"ANMF", wide)]), 64, 64).unwrap_err().0.contains("larger than its canvas"));
+        // An honest file passes the check and decodes.
+        let img = load("rgba.png");
+        let ok = webp_of(&img);
+        assert!(webp_frames(&ok, img.width, img.height).is_ok());
+        assert_eq!(decode(&ok).unwrap(), img);
     }
 
     #[test]
