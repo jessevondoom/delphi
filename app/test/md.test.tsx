@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { PICTURE_SIDE_MAX, Rich, pictureSide, pictureTarget } from '../src/Rich.tsx';
+import { PICTURE_SIDE_MAX, Rich, isLibraryPicture, libraryTarget, pictureSide, pictureTarget, refusalWords } from '../src/Rich.tsx';
 import { inline, isWeb, parse, resolvePath } from '../src/md.ts';
 import { STILL_CSS, asksToLoad, isMermaid, mermaidConfig } from '../src/diagram.ts';
 
@@ -74,6 +74,17 @@ test('a picture is asked for at the size of the space it is drawn in, at most 1,
   assert.equal(pictureSide(500, Number.NaN), 500, 'a nonsense ratio is 1');
   assert.equal(pictureSide(500, 40), 1600, 'a ratio is at most 4');
   assert.equal(pictureTarget('missions/m/report.md', 'img/a b.png?x=1#y', 900), '/v1/image?path=missions%2Fm%2Freport.md&src=img%2Fa%20b.png&max=900');
+});
+
+test('a library picture is asked for in its one plain form, and a refusal is shown as words (spec 118 §4 item 4, AC-7)', () => {
+  for (const ok of ['lib:s-1/0f3a.png', 'lib:oecd-2024-report/figure-1.JPG', 'lib:a_b.c/x.gif']) assert.ok(isLibraryPicture(ok), ok);
+  for (const no of ['lib:s/../meta.json', 'lib:../s/a.png', 'lib:s/sub/a.png', 'lib:s/a b.png', 'lib:s/a.svg', 'lib:s', 'lib:/a.png', 'lib:./a.png', 'img/a.png', 'https://x.example/a.png', 'lib:s/a.png?x=1']) assert.ok(!isLibraryPicture(no), no);
+  assert.equal(libraryTarget('lib:s-1/a.png', 900), '/v1/image?src=lib:s-1/a.png&max=900');
+  assert.equal(refusalWords({ error: 'no licence record' }), 'no licence record');
+  for (const odd of [null, {}, { error: 3 }, { error: '' }, { error: 'x'.repeat(300) }]) assert.equal(refusalWords(odd), 'not available');
+  // With no daemon to ask, a library picture is its words, never an empty box or an image element.
+  const html = renderToStaticMarkup(<Rich text={'![A tide chart](lib:s-1/a.png)'} />);
+  assert.ok(html.includes('A tide chart') && !html.includes('<img') && !html.includes('<canvas'), html);
 });
 
 test('a Mermaid block is its text until the window draws it, and its text is never HTML (spec 118 §5 item 4)', () => {

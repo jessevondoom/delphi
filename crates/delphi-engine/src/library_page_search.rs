@@ -274,8 +274,9 @@ impl Library {
         g
     }
 
-    /// The pictures a source holds that a page may show: PNG, JPEG and GIF files in its `assets/` with plain names (the
-    /// console's picture reader decodes those three, and a name with a space or a bracket cannot be a Markdown link).
+    /// The pictures a source holds that a page may show: PNG, JPEG and GIF files in its `assets/` with plain names (the console's
+    /// picture reader decodes those three, and a name with a space or a bracket cannot be a Markdown link) and a licence record
+    /// (`specs/118` §2 item 2).
     pub fn image_assets(&self, id: &str) -> Vec<GatheredAsset> {
         let Ok(rd) = std::fs::read_dir(self.source_dir(id).join("assets")) else { return Vec::new() };
         let mut out: Vec<GatheredAsset> = rd
@@ -285,7 +286,7 @@ impl Library {
                 let ext = name.rsplit_once('.')?.1.to_lowercase();
                 let plain = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
                 let meta = e.metadata().ok()?;
-                (plain && meta.is_file() && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif")).then(|| GatheredAsset { uri: format!("lib:{}/{}", id, name), source_id: id.to_string(), file: name, bytes: meta.len() })
+                (plain && meta.is_file() && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif") && self.asset_record(id, &name).is_some()).then(|| GatheredAsset { uri: format!("lib:{}/{}", id, name), source_id: id.to_string(), file: name, bytes: meta.len() })
             })
             .collect();
         out.sort_by(|a, b| a.file.cmp(&b.file));
@@ -619,7 +620,7 @@ Layout, in this order (leave out what the records do not support):\n\
 2. `# Title`, then a lead of one to three paragraphs whose first sentence starts `**Title** is ...` and says what the subject is. The lead stands alone.\n\
 3. Optionally a two-column table `| Attribute | Summary |` of three to six key facts, each row carrying a citation marker.\n\
 4. `## Contents` as a numbered list of links `[Section](#section)`, only when there are two or more `## ` sections; each link names a heading on the page, in lowercase with hyphens for spaces.\n\
-5. `## ` sections in neutral, plain words. Where an ASSET below helps, put the image alone on its own line, `![what it shows](lib:<source>/<file>)`, copied exactly from the ASSETS list, then an italic caption line `*Figure N: what to notice [s-<source>].*`. You must cite that source directly.\n\
+5. `## ` sections in neutral, plain words. Where an ASSET below helps, put the image alone on its own line, `![what it shows](lib:<source>/<file>)`, copied exactly from the ASSETS list, then an italic caption line `*Figure N: what to notice [s-<source>].*`. You must cite that source directly. Do not write the picture's credit; Delphi writes it under the picture.\n\
 6. If the records split evenly across unrelated meanings, write a disambiguation page instead: `**Query** may refer to:` and a bullet list of `[Meaning](page:slug)` with a cited one-line description each.\n\n\
 Rules:\n\
 - Markdown only. {}\n\

@@ -197,6 +197,7 @@ pub mod search_log;
 pub mod doi;
 pub mod retractions;
 pub mod research_run;
+pub mod research_note;
 pub mod research_digest;
 pub mod research_pending;
 pub mod research_setup;

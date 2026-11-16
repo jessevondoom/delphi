@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md",
-    "sha256": "c97aa3b97e68a72aee35756ae8ba72776cfd0ccf99875fc6b71cb944cb2dedfa"
+    "sha256": "173e9643fe703d594bdb0ce3580aebca46c953d99d6f682b2a5acf7fcd4e9e94"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"all other specs are approved\", after the drafts and their slice tables were shown. Section 12 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request."
     },
-    "sha256": "c97aa3b97e68a72aee35756ae8ba72776cfd0ccf99875fc6b71cb944cb2dedfa",
+    "sha256": "173e9643fe703d594bdb0ce3580aebca46c953d99d6f682b2a5acf7fcd4e9e94",
     "word": "approved"
   },
   "spec": {

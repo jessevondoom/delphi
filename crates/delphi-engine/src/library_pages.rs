@@ -19,7 +19,7 @@ pub use super::page_check::{banner, is_record_label, markers, record_status, sho
 use super::page_check::{glyph, norm, Rec};
 
 /// Bumped when the page layout changes, so cached pages of an older layout are rebuilt.
-pub(super) const TEMPLATE_VERSION: &str = "2";
+pub(super) const TEMPLATE_VERSION: &str = "3";
 
 pub const NOTED_HEADING: &str = "Noted, not validated";
 const NOTE_MAX: usize = 500;
@@ -153,7 +153,8 @@ impl Library {
             Stamp::Validator { result } => banner(&date, Some((&date, &format!("{}{}", result, unsupported))), ""),
             Stamp::NotRun { note } => banner(&date, None, &format!("{}{}", note, unsupported)),
         };
-        let markdown = format!("{}\n\n{}\n\n{}", head, body, self.bibliography_table(&checked.cited, style, scope));
+        // The credit line under each picture is the daemon's (`specs/118` §2 item 4), written from the picture's licence record.
+        let markdown = format!("{}\n\n{}\n\n{}", head, self.with_credits(&body), self.bibliography_table(&checked.cited, style, scope));
         if self.ensure().is_ok() {
             let _ = std::fs::create_dir_all(self.pages_dir());
             let _ = std::fs::write(&cache, &markdown);

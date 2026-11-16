@@ -57,30 +57,55 @@ export function pictureTarget(docPath: string, src: string, side: number): strin
   return `/v1/image?path=${encodeURIComponent(docPath)}&src=${encodeURIComponent(src.split(/[?#]/)[0]!)}&max=${side}`;
 }
 
-/** A picture beside a workspace document, asked of the daemon as pixels at the size of the space it is drawn in, and
- * painted on a canvas. A click opens the file. A library picture (`lib:`) is not asked for: the app may show one only
- * with its licence record (spec 118 §4 item 4), which is not built yet. */
+/** A picture of the library, as a page names it: `lib:<source>/<file>`, plain parts, a picture the daemon decodes. */
+const LIBRARY_PICTURE = /^lib:[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.(png|jpe?g|gif)$/i;
+export const isLibraryPicture = (src: string): boolean => LIBRARY_PICTURE.test(src) && !src.slice(4).split('/').some((p) => p === '.' || p === '..');
+
+/** The image read for a picture of the library at `side` pixels a side: the one form the bridge passes (spec 118 §4 item 4). */
+export function libraryTarget(src: string, side: number): string {
+  return `/v1/image?src=${src}&max=${side}`;
+}
+
+/** What the daemon answered for a library picture it would not send, in words for the reader: `no licence record` when the
+ * picture has none (spec 118 §2 item 2). */
+export function refusalWords(body: unknown): string {
+  const e = (body as { error?: unknown } | null)?.error;
+  return typeof e === 'string' && e.length > 0 && e.length <= 200 ? e : 'not available';
+}
+
+/** A picture beside a workspace document, or a picture of the library (`lib:`), asked of the daemon as pixels at the size of
+ * the space it is drawn in, and painted on a canvas. A click opens a workspace picture's file. A library picture comes with
+ * its credit line (author, licence, credit address), shown under it; one the daemon refuses (it has no licence record,
+ * spec 118 §2 item 2) is its words and the refusal, not an empty box. */
 function Picture({ src, alt, ctx }: { src: string; alt: string; ctx: RichContext }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const frame = useRef<HTMLButtonElement>(null);
-  const path = resolvePath(ctx.docPath, src);
+  const library = !!ctx.bridge && isLibraryPicture(src);
+  const path = library ? null : resolvePath(ctx.docPath, src);
   const local = !!ctx.bridge && !!ctx.docPath && !!path && PICTURE.test(src.split(/[?#]/)[0]!);
   // A picture the window has no way to ask for is its words from the first frame, not an empty box.
-  const [state, setState] = useState<'wait' | 'shown' | 'none'>(local ? 'wait' : 'none');
+  const [state, setState] = useState<'wait' | 'shown' | 'none'>(local || library ? 'wait' : 'none');
+  const [credit, setCredit] = useState('');
+  const [refused, setRefused] = useState('');
 
   useEffect(() => {
-    if (!local || !ctx.bridge || !ctx.docPath) { setState('none'); return; }
+    if (!ctx.bridge || !(library || (local && ctx.docPath))) { setState('none'); return; }
     let gone = false;
     setState('wait');
+    setCredit('');
+    setRefused('');
     // The space the picture may take: the text column it sits in (the button is no wider than its picture yet).
     const room = frame.current?.parentElement?.clientWidth ?? 0;
     const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
-    ctx.bridge.kb(pictureTarget(ctx.docPath, src, pictureSide(room, dpr)))
+    const side = pictureSide(room, dpr);
+    ctx.bridge.kb(library ? libraryTarget(src, side) : pictureTarget(ctx.docPath!, src, side))
       .then((r) => {
         if (gone) return;
-        const b = r.body as { width?: number; height?: number; rgba?: string };
+        const b = r.body as { width?: number; height?: number; rgba?: string; credit?: { line?: unknown } };
         const el = canvas.current;
+        if (library && r.status !== 200) { setRefused(refusalWords(r.body)); setState('none'); return; }
         if (r.status !== 200 || !b.width || !b.height || !b.rgba || !el) { setState('none'); return; }
+        if (library) setCredit(typeof b.credit?.line === 'string' ? b.credit.line.slice(0, 800) : '');
         const raw = atob(b.rgba);
         const px = new Uint8ClampedArray(raw.length);
         for (let i = 0; i < raw.length; i++) px[i] = raw.charCodeAt(i);
@@ -94,10 +119,11 @@ function Picture({ src, alt, ctx }: { src: string; alt: string; ctx: RichContext
       })
       .catch(() => { if (!gone) setState('none'); });
     return () => { gone = true; };
-  }, [ctx.bridge, ctx.docPath, src, local]);
+  }, [ctx.bridge, ctx.docPath, src, local, library]);
 
   const open = () => { if (path) void ctx.bridge?.open?.(path).catch(() => {}); else if (isWeb(src)) void ctx.bridge?.openUrl?.(src).catch(() => {}); };
   const can = (path && ctx.bridge?.open) || (isWeb(src) && ctx.bridge?.openUrl);
+  if (state === 'none' && refused) return <span className="md-alt">{alt || src} (picture not shown: {refused})</span>;
   if (state === 'none') {
     // A picture the window cannot draw (an address on the web, a kind the daemon does not decode) is named, and opens outside.
     return can ? <button type="button" className="md-link" onClick={open}>{alt || src} (picture, opens outside)</button> : <span className="md-alt">{alt || src}</span>;
@@ -106,6 +132,7 @@ function Picture({ src, alt, ctx }: { src: string; alt: string; ctx: RichContext
     <button ref={frame} type="button" className="md-picture" onClick={open} disabled={!can} aria-label={alt ? `${alt}: open the picture` : 'Open the picture'}>
       <canvas ref={canvas} role="img" aria-label={alt} style={{ visibility: state === 'shown' ? 'visible' : 'hidden' }} />
       {alt && <span className="md-caption">{alt}</span>}
+      {credit && <span className="md-caption md-credit">Picture credit: {credit}</span>}
     </button>
   );
 }

@@ -17,7 +17,8 @@
           "title": { "type": "string", "maxLength": 300 },
           "retrieved": { "type": "string", "maxLength": 40, "description": "When you read it." },
           "kind": { "type": "string", "enum": ["web", "internal", "file", "person"], "default": "web" },
-          "private": { "type": "boolean", "default": false, "description": "True for anything not public: Delphi then never fetches it and keeps only its locator, title and date." }
+          "private": { "type": "boolean", "default": false, "description": "True for anything not public: Delphi then never fetches it and keeps only its locator, title and date." },
+          "pictures": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 500 }, "description": "Addresses (https) of pictures on this page worth keeping. Delphi keeps one only if the page it reads shows it and its own rules allow it (trusted host, a description, a licence that allows keeping it); you cannot hand over a picture." }
         },
         "required": ["locator"],
         "additionalProperties": false
