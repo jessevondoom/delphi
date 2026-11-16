@@ -13,7 +13,9 @@
 //!   cycle is refused); clip-path chains at most [`MAX_CLIP_CHAIN`] long and no marker inside a marker, checked before the renderer
 //!   follows either; no `pattern`, `filter` or `mask` (each draws into a picture of its own whose size the file chooses); at most
 //!   [`MAX_LAYERS`] groups that draw into a layer, none nested deeper than [`MAX_LAYER_DEPTH`] and none larger than [`MAX_LAYER_AREA`]
-//!   canvases; a canvas of at most [`MAX_SIDE`] pixels a side; and [`TIME_LIMIT`] for all of it, after which the picture is refused.
+//!   canvases; a canvas of at most [`MAX_SIDE`] pixels a side; painting of at most [`MAX_PAINT_CANVASES`] canvases (gradients
+//!   weighted) and [`MAX_DASHES`] dashes, counted on the renderer's tree before it draws; one drawing at a time in the whole process
+//!   (a drawing past its [`TIME_LIMIT`] is refused but keeps the one slot until it ends, so drawings never pile up).
 //!
 //! Every refusal is a fixed sentence chosen here, never words of the file.
 
@@ -52,20 +54,62 @@ pub struct Drawn {
     pub height: usize,
 }
 
+/// The painting one SVG may cost, in canvases: the area of every shape's fill and stroke (clipped to the canvas, a gradient counted
+/// [`GRADIENT_WEIGHT`] times) and of every layer, summed.
+pub const MAX_PAINT_CANVASES: f64 = 200.0;
+pub const GRADIENT_WEIGHT: f64 = 3.0;
+/// Dash segments over the whole file (a stroke's length over its dash pattern's length).
+pub const MAX_DASHES: f64 = 200_000.0;
+
+/// The one slot a drawing runs in, for the whole process. The drawing's own thread holds it until the drawing ends, so a drawing
+/// that passed its time limit still holds it and no second one starts beside it: CPU spent on drawings is at most one core.
+static SLOT_BUSY: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+static SLOT_FREED: std::sync::Condvar = std::sync::Condvar::new();
+
+struct Slot;
+
+impl Slot {
+    /// The slot, waiting at most `wait` for the drawing that holds it to end.
+    fn acquire(wait: Duration) -> Option<Slot> {
+        let deadline = std::time::Instant::now() + wait;
+        let mut busy = SLOT_BUSY.lock().unwrap_or_else(|e| e.into_inner());
+        while *busy {
+            let left = deadline.checked_duration_since(std::time::Instant::now()).filter(|d| !d.is_zero())?;
+            busy = SLOT_FREED.wait_timeout(busy, left).unwrap_or_else(|e| e.into_inner()).0;
+        }
+        *busy = true;
+        Some(Slot)
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        *SLOT_BUSY.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        SLOT_FREED.notify_all();
+    }
+}
+
 /// Draw `svg` to a PNG under every bound of this module. `Err` is a fixed sentence saying why it was refused.
 pub fn render(svg: &[u8]) -> Result<Drawn, &'static str> {
+    render_with(svg, TIME_LIMIT, TIME_LIMIT)
+}
+
+/// [`render`], waiting at most `wait` for the slot and `limit` for the drawing.
+fn render_with(svg: &[u8], wait: Duration, limit: Duration) -> Result<Drawn, &'static str> {
     if svg.len() > MAX_SVG_BYTES {
         return Err("an SVG larger than 2 MiB is not drawn");
     }
+    let slot = Slot::acquire(wait).ok_or("another SVG is still being drawn")?;
     let bytes = svg.to_vec();
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("svg-render".into()).stack_size(8 << 20).spawn(move || {
+        let _slot = slot; // released when this drawing ends, not when its caller stops waiting
         let _ = tx.send(render_now(&bytes));
     });
     if spawned.is_err() {
         return Err("the SVG could not be drawn");
     }
-    match rx.recv_timeout(TIME_LIMIT) {
+    match rx.recv_timeout(limit) {
         Ok(r) => r,
         Err(_) => Err("the SVG took too long to draw"),
     }
@@ -95,7 +139,7 @@ fn render_now(svg: &[u8]) -> Result<Drawn, &'static str> {
     }
     let scale = (MAX_SIDE as f64 / w).min(MAX_SIDE as f64 / h).min(1.0);
     let (pw, ph) = (((w * scale).round() as u32).clamp(1, MAX_SIDE), ((h * scale).round() as u32).clamp(1, MAX_SIDE));
-    audit_tree(&tree, scale, pw as f64 * ph as f64)?;
+    audit_tree(&tree, scale, (w, h))?;
     let mut pixmap = tiny_skia::Pixmap::new(pw, ph).ok_or("the SVG could not be drawn")?;
     resvg::render(&tree, tiny_skia::Transform::from_scale(scale as f32, scale as f32), &mut pixmap.as_mut());
     let rgba: Vec<u8> = pixmap
@@ -303,13 +347,37 @@ fn cost<'a>(n: roxmltree::Node<'a, 'a>, ids: &HashMap<&str, roxmltree::NodeId>, 
     Ok(total)
 }
 
-/// The checks made on the renderer's own tree before it draws: the element count, and the layers isolated groups will allocate.
-fn audit_tree(tree: &usvg::Tree, scale: f64, canvas: f64) -> Result<(), &'static str> {
+/// The area of `r` (in the tree's units) that lies on the canvas `size`, in pixels at `scale`.
+fn on_canvas(r: usvg::Rect, size: (f64, f64), scale: f64) -> f64 {
+    let w = (r.right() as f64).min(size.0) - (r.left() as f64).max(0.0);
+    let h = (r.bottom() as f64).min(size.1) - (r.top() as f64).max(0.0);
+    if w.is_finite() && h.is_finite() { w.max(0.0) * h.max(0.0) * scale * scale } else { 0.0 }
+}
+
+/// What painting with `paint` costs, per pixel, against a flat colour.
+fn paint_weight(paint: &usvg::Paint) -> f64 {
+    match paint {
+        usvg::Paint::Color(_) => 1.0,
+        _ => GRADIENT_WEIGHT,
+    }
+}
+
+/// The length of a path's outline through its points (an upper bound on the length of its curves), in its own units.
+fn outline_length(p: &usvg::tiny_skia_path::Path) -> f64 {
+    p.points().windows(2).map(|w| (((w[1].x - w[0].x) as f64).powi(2) + ((w[1].y - w[0].y) as f64).powi(2)).sqrt()).filter(|d| d.is_finite()).sum()
+}
+
+/// The checks made on the renderer's own tree before it draws: the element count, the layers isolated groups will allocate, and
+/// what painting it all will cost (the area painted, and the dashes stroked), so that drawing is bounded in time as well as memory.
+fn audit_tree(tree: &usvg::Tree, scale: f64, size: (f64, f64)) -> Result<(), &'static str> {
     struct Walk {
         nodes: u64,
         layers: usize,
+        painted: f64,
+        dashes: f64,
     }
-    fn walk(g: &usvg::Group, depth: usize, scale: f64, canvas: f64, w: &mut Walk) -> Result<(), &'static str> {
+    let canvas = (size.0 * scale).max(1.0) * (size.1 * scale).max(1.0);
+    fn walk(g: &usvg::Group, depth: usize, scale: f64, size: (f64, f64), canvas: f64, w: &mut Walk) -> Result<(), &'static str> {
         let mut depth = depth;
         if g.should_isolate() {
             w.layers += 1;
@@ -322,6 +390,7 @@ fn audit_tree(tree: &usvg::Tree, scale: f64, canvas: f64) -> Result<(), &'static
                 if !area.is_finite() || area > canvas * MAX_LAYER_AREA {
                     return Err("the SVG has a layer too large to draw");
                 }
+                w.painted += area; // the layer is composited onto what is under it
             }
             // Each clip path of a chain is drawn into a canvas-sized picture of its own, all held at once: each is a layer.
             let (mut clip, mut clip_depth) = (g.clip_path(), depth);
@@ -331,7 +400,8 @@ fn audit_tree(tree: &usvg::Tree, scale: f64, canvas: f64) -> Result<(), &'static
                 if w.layers > MAX_LAYERS || clip_depth > MAX_LAYER_DEPTH {
                     return Err("the SVG has too many layers to draw");
                 }
-                walk(c.root(), clip_depth, scale, canvas, w)?;
+                w.painted += canvas; // a clip path is drawn over the whole canvas
+                walk(c.root(), clip_depth, scale, size, canvas, w)?;
                 clip = c.clip_path();
             }
         }
@@ -340,13 +410,35 @@ fn audit_tree(tree: &usvg::Tree, scale: f64, canvas: f64) -> Result<(), &'static
             if w.nodes > MAX_EXPANDED {
                 return Err("the SVG has too many parts to draw once its references are counted");
             }
-            if let usvg::Node::Group(cg) = c {
-                walk(cg, depth, scale, canvas, w)?;
+            match c {
+                usvg::Node::Group(cg) => walk(cg, depth, scale, size, canvas, w)?,
+                usvg::Node::Path(p) if p.is_visible() => {
+                    if let (Some(f), Some(b)) = (p.fill(), p.abs_bounding_box()) {
+                        w.painted += on_canvas(b, size, scale) * paint_weight(f.paint());
+                    }
+                    if let Some(s) = p.stroke() {
+                        let (sx, sy) = p.abs_transform().get_scale();
+                        let k = (sx.abs().max(sy.abs()) as f64) * scale;
+                        let length = outline_length(p.data());
+                        // A stroke paints about its length times its width, and never more than its bounds on the canvas.
+                        let along = length * k * (s.width().get() as f64 * k).max(1.0);
+                        let bounds = p.abs_stroke_bounding_box().map_or(0.0, |b| on_canvas(b, size, scale));
+                        w.painted += along.min(bounds).max(0.0) * paint_weight(s.paint());
+                        if let Some(d) = s.dasharray() {
+                            let period: f64 = d.iter().map(|x| *x as f64).sum();
+                            w.dashes += if period > 0.0 { length / period } else { f64::INFINITY };
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if !(w.painted <= MAX_PAINT_CANVASES * canvas && w.dashes <= MAX_DASHES) {
+                return Err("the SVG would take too long to draw");
             }
         }
         Ok(())
     }
-    walk(tree.root(), 0, scale, canvas, &mut Walk { nodes: 0, layers: 0 })
+    walk(tree.root(), 0, scale, size, canvas, &mut Walk { nodes: 0, layers: 0, painted: 0.0, dashes: 0.0 })
 }
 
 #[cfg(test)]
@@ -421,7 +513,7 @@ mod tests {
         }
         body.push_str("</defs><use href=\"#l10\"/>");
         let started = std::time::Instant::now();
-        assert_eq!(render(&svg(&body)), Err("the SVG has too many parts to draw once its references are counted"));
+        assert_eq!(render_now(&svg(&body)), Err("the SVG has too many parts to draw once its references are counted"));
         assert!(started.elapsed() < Duration::from_secs(2), "refused by counting, not by drawing: {:?}", started.elapsed());
         assert_eq!(render(&svg("<g id=\"a\"><use href=\"#b\"/></g><g id=\"b\"><use xlink:href=\"#a\"/></g>")), Err("the SVG refers to itself in a loop"));
     }
@@ -453,7 +545,7 @@ mod tests {
             let file = clip_chain(n, side, "attribute");
             assert!(file.len() <= MAX_SVG_BYTES);
             let started = std::time::Instant::now();
-            assert_eq!(render(&file), Err("the SVG chains clip paths too deeply to draw"), "{n} links");
+            assert_eq!(render_now(&file), Err("the SVG chains clip paths too deeply to draw"), "{n} links");
             assert!(started.elapsed() < Duration::from_secs(1), "{n} links: {:?}", started.elapsed());
         }
         assert_eq!(render(&clip_chain(6, 100, "style")), Err("the SVG chains clip paths too deeply to draw"), "named in a style attribute");
@@ -467,6 +559,42 @@ mod tests {
         // Each link of a chain counts as a layer on the renderer's own tree too.
         assert_eq!(render(&clip_chain(4, 100, "attribute")), Err("the SVG has too many layers to draw"));
         assert!(render(&clip_chain(2, 100, "attribute")).is_ok());
+    }
+
+    /// A canvas `side` pixels square with `n` rectangles over all of it, each filled with a radial gradient at half opacity: the
+    /// red-team's `cpu_grad.svg` (28,000 of them took about 170 s of CPU each time it was drawn).
+    fn gradients(n: usize, side: u32) -> Vec<u8> {
+        let rects: String = (0..n).map(|_| format!("<rect width=\"{side}\" height=\"{side}\" fill=\"url(#g)\" fill-opacity=\"0.5\"/>")).collect();
+        format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{side}\" height=\"{side}\"><defs><radialGradient id=\"g\"><stop offset=\"0\" stop-color=\"red\"/><stop offset=\"1\" stop-color=\"blue\"/></radialGradient></defs>{rects}</svg>").into_bytes()
+    }
+
+    #[test]
+    fn painting_that_would_take_too_long_is_refused_before_it_starts() {
+        let many = gradients(20_000, 1_600);
+        assert!(many.len() <= MAX_SVG_BYTES);
+        assert_eq!(render(&many), Err("the SVG would take too long to draw"));
+        let started = std::time::Instant::now();
+        assert_eq!(render_now(&gradients(2_000, 1_600)), Err("the SVG would take too long to draw"));
+        assert!(started.elapsed() < Duration::from_secs(1), "refused by the budget, not by the clock: {:?}", started.elapsed());
+        let dashed = "<path d=\"M0 0 L200 120 L0 120 L200 0 L0 0\" stroke=\"black\" stroke-dasharray=\"0.0005\"/>";
+        assert_eq!(render(&svg(dashed)), Err("the SVG would take too long to draw"), "a dash of 0.0005 over 700 units is over a million dashes");
+        assert!(render(&gradients(20, 400)).is_ok(), "twenty gradients over the canvas are drawn");
+        assert!(render(&svg("<path d=\"M0 0 L200 120\" stroke=\"black\" stroke-dasharray=\"4 2\"/>")).is_ok(), "an ordinary dashed line is drawn");
+    }
+
+    #[test]
+    fn a_timed_out_drawing_keeps_the_one_slot_so_two_never_run_at_once() {
+        let small = svg("<rect width=\"10\" height=\"10\"/>");
+        // While a drawing holds the slot, another waits for it and, past its wait, is refused without starting.
+        let held = Slot::acquire(Duration::from_secs(60)).expect("the slot comes free");
+        assert_eq!(render_with(&small, Duration::from_millis(50), TIME_LIMIT), Err("another SVG is still being drawn"));
+        drop(held);
+        assert!(render_with(&small, Duration::from_secs(60), TIME_LIMIT).is_ok());
+        // A drawing whose caller stopped waiting still holds the slot until it ends: no second drawing runs beside it.
+        let slow = gradients(8, 1_600);
+        assert_eq!(render_with(&slow, Duration::from_secs(60), Duration::ZERO), Err("the SVG took too long to draw"));
+        assert!(Slot::acquire(Duration::ZERO).is_none(), "the timed-out drawing still holds the slot");
+        drop(Slot::acquire(Duration::from_secs(120)).expect("and gives it back when it ends"));
     }
 
     #[test]
@@ -504,7 +632,7 @@ mod tests {
             let file = svg(&body);
             assert!(file.len() <= MAX_SVG_BYTES, "{what}");
             let started = std::time::Instant::now();
-            assert_eq!(render(&file), Err("the SVG has too many parts to draw once its references are counted"), "{what}");
+            assert_eq!(render_now(&file), Err("the SVG has too many parts to draw once its references are counted"), "{what}");
             assert!(started.elapsed() < Duration::from_secs(2), "{what}: refused by counting, not by drawing: {:?}", started.elapsed());
         }
         let sheet = format!("<style>path {{ stroke: black }}<!-- a comment splits the text --> path {{ marker-mid: url(#m) }}</style>{arrow}<path d=\"M0 0 L9 9\"/>");
