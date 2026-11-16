@@ -494,6 +494,8 @@ pub const ANSWER_CHARS: usize = 7600;
 pub const NOT_FOUND: &str = "Not found.";
 /// The label of a code-built list (`specs/114` §5 item 3). The words "model synthesis" are never applied to one.
 pub const LIST_LABEL: &str = "list of claims (no synthesis)";
+/// What the label of an answer adds when no web search answered in the run (`specs/119` §13.2).
+pub const NO_WEB_LABEL: &str = "no web search";
 
 /// The label of an answer the scout wrote and the check passed (`specs/114` §5 item 3).
 pub fn written_label(claims: usize) -> String {

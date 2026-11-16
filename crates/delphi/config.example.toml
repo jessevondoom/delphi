@@ -274,10 +274,14 @@ sandbox = "off"
 
 # Research (specs/028 section 10): the web search engines the archives pane's expand mode asks, in order, one at a time (the next only if
 # the last failed). Ratified, because it names who receives your queries. Which sites may be read is context/sources/trusted.toml plus your
-# own $DELPHI_HOME/operator/trusted-sources.toml. Unset: "parallel" (a hosted MCP search, no key or account, rate limited, sees the query
-# text). providers = [] turns research off; providers = ["searxng"] keeps queries off any vendor.
-# [search]
-# providers = ["parallel", "brave", "searxng"]   # parallel | brave | mojeek | searxng | kagi | google (google only with a Gemini endpoint)
+# own $DELPHI_HOME/operator/trusted-sources.toml. "parallel" is a hosted MCP search: no key or account, rate limited, it sees the query
+# text, and it does not publish how long it keeps queries. `delphi research setup` adds Brave as the second engine once you give it a
+# key: providers = ["parallel", "brave"]. A table with no providers key asks "parallel". providers = [] names no engine and keeps
+# queries on this machine: research is not refused then (specs/119 section 13.2); in a host session the host's own tools search, and
+# otherwise a run reads what Delphi holds and the trusted sites it already knows. providers = ["searxng"] keeps queries off any vendor.
+# The validator's contradiction search sends claim text: it asks "parallel" only with [validator] background = true.
+[search]
+providers = ["parallel"]   # parallel | brave | mojeek | searxng | kagi | google (google only with a Gemini endpoint), in the order asked
 # [search.brave]
 # credential = "env:BRAVE_API_KEY"
 # [search.mojeek]
@@ -291,16 +295,18 @@ sandbox = "off"
 # [research]
 # thin_below = 3
 #
-# Archived copies (specs/101 section 5). Off by default. With archive_fallback = true, when `delphi sources show` finds a PUBLIC source it
+# Archived copies (specs/101 section 5). On by default (specs/119 section 14); archive_fallback = false turns it off. When `delphi sources
+# show` or a research run finds a PUBLIC source the daemon
 # fetched itself gone and holds no readable text, the daemon asks one web archive whether it has a copy and keeps it as a labelled version
 # of the source ("Archived copy from <date>, not the live page"). Read-only: it only asks and reads, and never asks the archive to save a page.
 # A private source, a record that cannot be read, and an address that is not public send nothing. A copy adds no origin and no trusted
 # source to any claim; a claim resting on it reads "checked against an archived copy". `delphi sources archive <id | url>` does the same on
 # your say-so whether or not this is on. The endpoint must be https.
-# archive_fallback = false
+# archive_fallback = true
 # archive_endpoint = "https://archive.org/wayback/available"
 #
-# Citation chaining (specs/101 section 6). Off by default. With citation_chaining = true, a research run asks ONE citation index
+# Citation chaining (specs/101 section 6). On by default (specs/119 section 14); citation_chaining = false turns it off. A research run
+# (a local one too: only public DOIs are sent) asks ONE citation index
 # (OpenCitations' Index API) what each of the run's best public works cites and what cites it, and keeps the DOIs it names as "noted"
 # leads (https://doi.org/<doi>, recorded and never fetched). What is sent is a public DOI of a source the daemon fetched itself, and
 # nothing else: a source that is private, whose record cannot be read, or that names no DOI gives nothing to send, and neither does a
@@ -308,7 +314,7 @@ sandbox = "off"
 # origin to any claim and changes no status. The index answers [] both for "none" and for "no list", so the report says "not available
 # for N works" when a seed had neither. The bounds are hypotheses to calibrate from the search log: levels followed (1 to 3), seed
 # works a level (1 to 10), works kept per seed (1 to 50), calls to the index per run (1 to 200). The endpoint must be https.
-# citation_chaining = false
+# citation_chaining = true
 # citation_endpoint = "https://api.opencitations.net/index/v2"
 # chain_depth = 1
 # chain_fanout = 2
@@ -349,13 +355,14 @@ sandbox = "off"
 # any claim it served is, and never leaves this machine then. `delphi research log <id>` prints it. Always on (the `search_log` flag was
 # removed, specs/098 section 13.2).
 #
-# Retraction check (specs/101 section 4). Off by default. With it on, a source that has a DOI is looked up in a LOCAL copy of the Retraction
+# Retraction check (specs/101 section 4). On by default (specs/119 section 14); retractions = false turns it off. It checks nothing until
+# you import the data. A source that has a DOI is looked up in a LOCAL copy of the Retraction
 # Watch data at capture and at re-check, and when you import a new copy. A retracted work stops counting as an independent origin and a
 # claim only it supports reads contested; a work under an expression of concern stops counting too; a correction is only a label. Nothing
 # is deleted: the capture stays readable, marked. Import the file you downloaded yourself (the repository is
 # gitlab.com/crossref/retraction-watch-data) with `delphi research retractions import <file>`. Delphi makes no call to a service about a
 # DOI, ever: a DOI would tell a third party what you are reading. A snapshot older than retractions_stale_days is called stale.
-# retractions = false
+# retractions = true
 #
 # Pictures (specs/118 section 3). A research run (from the console, an inside agent or a host) and record_research keep the pictures
 # of a page whose text they keep, by the same gates as before: a host on the trusted lists, a description (alternative text), at
