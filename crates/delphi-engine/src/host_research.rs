@@ -353,6 +353,12 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
         // private-read mark) is a pointer: locator, title, date. It is never fetched.
         if is_private(s, ctx.read_marked) || s.locator.contains(MASK) {
             let sid = lib.add_private_pointer(&s.kind, &s.locator, &s.title, &s.retrieved, None)?;
+            // `specs/121` §3 item 4 (narrowing 113 §2 item 4): a host's `internal` adds `internal` and `person` adds `personal`, set
+            // by `host`, with no weight (§7 item 4); before the claims are written, so they take it as `derived`.
+            let declared = crate::handling::host_kind(&s.kind);
+            if !declared.is_empty() {
+                crate::handling::Handling::library_only(ctx.home).add(&crate::handling::source_item(&sid), None, &declared, &crate::handling::By::Host, &[])?;
+            }
             topic.private_source(run, &sid, &s.kind)?;
             sources_out.push(json!({"index": i, "kind": s.kind, "fetched": false, "private": true, "source_id": sid}));
             read.push(Read::Private(sid, s.locator.clone()));

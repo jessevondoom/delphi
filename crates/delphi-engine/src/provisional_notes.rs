@@ -445,7 +445,15 @@ pub fn keep(ws_dir: &Path, mission_dir: &Path, e: &EventEnvelope, now: &str) -> 
         if note_files(&dir).iter().filter_map(|p| read(p)).any(|o| o.fingerprint() == print) {
             return Ok(None);
         }
-        write_atomic(&dir.join(format!("{}.md", n.id)), &n.render())?;
+        // `specs/121` §4: the note takes the handling traits of what it names and notes what its span was given; its frontmatter
+        // shows them.
+        let file = dir.join(format!("{}.md", n.id));
+        let text = n.render();
+        let local = ws_dir.join("local");
+        let home = crate::hostmap::home_of_local(&local);
+        let key = crate::handling::span_key(&e.mission_id, e.agent.as_deref().unwrap_or(&n.role));
+        let shown = crate::handling::label_file(ws_dir, home, &file, &text, Some(&key), &[]).unwrap_or(text);
+        write_atomic(&file, &shown)?;
         Ok(Some(n.rel_path()))
     })
 }
@@ -463,7 +471,8 @@ fn edit(ws_dir: &Path, path: &Path, change: impl FnOnce(&mut Note)) -> Result<bo
     lock(ws_dir, || {
         let Some(mut n) = read(path) else { return Ok(false) };
         change(&mut n);
-        write_atomic(path, &n.render())?;
+        // The handling view (`specs/121` §3 item 6) is the record's, put back on every rewrite.
+        write_atomic(path, &crate::handling::view_for(ws_dir, path, &n.render()))?;
         Ok(true)
     })
 }
@@ -560,9 +569,14 @@ pub fn write_merged(ws_dir: &Path, parts: &[Note], text: &str, now: &str) -> Res
     if n.text.is_empty() || !plain(&n.id) {
         return Err("the merged note says nothing".into());
     }
+    // `specs/121` §4 item 1: the merged note takes the handling traits of its parts.
+    let parts_used: Vec<String> = parts.iter().filter_map(|p| crate::handling::item_in_ws(ws_dir, &p.path)).collect();
     lock(ws_dir, || {
         let dir = plain_dir(&root, &[&n.role])?;
-        write_atomic(&dir.join(format!("{}.md", n.id)), &n.render())
+        let file = dir.join(format!("{}.md", n.id));
+        let text = n.render();
+        let shown = crate::handling::label_file(ws_dir, None, &file, &text, None, &parts_used).unwrap_or(text);
+        write_atomic(&file, &shown)
     })?;
     for p in parts {
         shelve(ws_dir, p, "merged", &[("merged_into", n.reference()), ("merged", now.to_string())])?;

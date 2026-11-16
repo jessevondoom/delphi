@@ -45,6 +45,8 @@ A task **has read a private entry** when a daemon path returned the text (or any
 
 KB documents of the kinds `private-doc`, `slack`, `wiki` and `email` (`kb_import.rs::is_internal`) are **not** private in this sense: they are the organisation's shared material, readable on purpose. Making them private by this spec would mark nearly every task. See OD-6.
 
+> **Narrowed by [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) §11 (operator, 2026-11-15):** these kinds still do not set the mark, and the three records that define "private" for the mark are unchanged. "The organisation's shared material" is replaced by the assignment of 121 §3: email and direct messages carry the `personal` trait by default; channels, wiki and `private-doc` carry `internal`.
+
 **The unit** is the task (and, for a host such as Claude Code calling Delphi over MCP, the MCP session id). The mark is **sticky** until the task ends. It records the entry ids read and the time, never the text.
 
 **The set of reading paths is enumerated**, in the same way the egress paths are: a table `READS` in `crates/delphi-engine/src/egress.rs` names every daemon function that can return private text to a seat or caller (the MCP host's `kb_retrieve`/`search_kb`, the library slice and claim readers, page reads, and any history reader added by spec 102 S5b). A test fails if a reader of private records is not in the table, so a new reader cannot ship unmarked. NOT VALIDATED: that the first table is complete; the red-team slice (M4) exists to attack it.
@@ -143,6 +145,8 @@ Each has my recommended answer.
 
 ### 7.1 The operator's answers, 2026-11-12 (short version; fuller answers to follow)
 
+> **Rows 6 and 7 (OD-6) replaced by [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) §5 and §11 (operator, 2026-11-15):** the quoting rule applies to the `personal` trait, not to three import kinds; `wiki` and channel material is quotable with an internal label. Whether a summary still needs no ask is 121 §16 question 2.
+
 Quoted from the operator's turn: "1&2 default to ask, 3. agreed. 4. operator in the console or an agent with explicit operator permission. 5. defer. 6. slack, email, and private-doc should be visible to the operator and to agents but should not be directly quoted in any work without express permission. summaries are the only allowable default. 7. see 6."
 
 | OD | Decision | What it changes in this spec |
@@ -157,6 +161,8 @@ Quoted from the operator's turn: "1&2 default to ask, 3. agreed. 4. operator in 
 Open for the fuller answers: OD-8 (the fingerprint index, deferred as recommended unless told otherwise) and OD-9 (a marked card is denied by reply, approved at the console only: as recommended unless told otherwise).
 
 **M5 (new, not started): the quoting rule for `slack`, `email` and `private-doc` documents.** Design first (a short section or a spec 055 amendment): the definition of a direct quote, where the rule is enforced, how express permission is recorded, and the cost to research (it must not make these documents harder to find or read). An estimate is not given: it is not designed.
+
+> **M5 replaced by [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) slice S2 (operator, 2026-11-15):** M5 is closed without being built.
 
 ## 8. What this does not change
 
