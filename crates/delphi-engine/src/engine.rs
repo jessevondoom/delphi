@@ -499,6 +499,10 @@ pub(crate) struct SpanCtx {
     /// A seat of the above read a `noted` entry a host or the web left in the knowledge base: for the rest of the span it has no tools
     /// and cannot dispatch, as for peer text (`specs/098` §12 item 13, `specs/086` §4.3).
     pub(crate) read_noted: bool,
+    /// The project an investigation's shell would copy (`specs/116` §8.1); set at the span's start for a role that investigates.
+    pub(crate) investigate_in: Option<(String, PathBuf)>,
+    /// This span's investigation copy, made at its first command. Dropping the span deletes it.
+    pub(crate) investigation: Option<exec::InvestigationGuard>,
 }
 
 impl SpanCtx {
@@ -526,6 +530,52 @@ fn final_text(blocks: &[ContentBlock]) -> String {
     blocks.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n")
 }
 
+/// The manifest scope that carries `run_command` and `shell`.
+const SHELL_SCOPE: &str = "shell-worktree-scoped";
+
+/// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
+pub(crate) fn builds(m: &AgentManifest) -> bool {
+    m.execute.iter().any(|e| e == SHELL_SCOPE) && m.write.iter().any(|g| g.starts_with("@worktree/"))
+}
+
+/// An investigation's shell (`specs/116` §8.1): the scope with no write scope in the worktree. It never runs in a task's
+/// worktree: it runs in a copy of the project that is deleted when the span ends, always in the OS sandbox.
+pub(crate) fn investigates(m: &AgentManifest) -> bool {
+    m.execute.iter().any(|e| e == SHELL_SCOPE) && !m.write.iter().any(|g| g.starts_with("@worktree/"))
+}
+
+/// Where a command runs.
+pub(crate) enum Place {
+    Build(crate::worktree::Worktree),
+    Investigate(crate::worktree::Investigation),
+}
+
+impl Place {
+    fn path(&self) -> &std::path::Path {
+        match self {
+            Place::Build(w) => &w.path,
+            Place::Investigate(i) => &i.tree,
+        }
+    }
+
+    /// The card's words for where and how: a Builder's command is not sandboxed when it asks; an investigation's always is.
+    fn card(&self) -> (&'static str, &'static str, bool) {
+        match self {
+            Place::Build(_) => ("in the worktree", "@worktree", false),
+            Place::Investigate(_) => ("in the investigation's throwaway worktree, sandboxed with no network", "@investigation", true),
+        }
+    }
+
+    /// The refusal an investigation gives a command that talks to a remote; a Builder's commands have the operator's deny rules.
+    fn refuses_argv(&self, argv: &[String]) -> Option<String> {
+        matches!(self, Place::Investigate(_)).then(|| exec::ExecEnv::investigation_denied(argv)).flatten()
+    }
+
+    fn refuses_line(&self, line: &str) -> Option<String> {
+        matches!(self, Place::Investigate(_)).then(|| exec::ExecEnv::investigation_denied_line(line)).flatten()
+    }
+}
+
 pub(crate) fn tool_result_error(msg: impl Into<String>) -> tools::ToolResult {
     tools::ToolResult { content: msg.into(), is_error: true }
 }
@@ -544,6 +594,12 @@ fn shell_def() -> ToolDef {
         description: "Run a shell command line (`bash -c`) in your task worktree: pipes, redirects, `&&` and loops work. Killed after a timeout; one call is one command line, with no interactive input. Prefer it for chains such as `cargo test 2>&1 | tail -n 40`; use `run_command` for a single program with exact arguments. Harmless read and test commands may run at once; anything destructive or dangerous (deleting, publishing, privileged or outside the worktree) waits for the operator's approval.".into(),
         input_schema: json!({"type": "object", "required": ["command"], "properties": {"command": {"type": "string"}, "timeout_secs": {"type": "integer"}}}),
     }
+}
+
+/// `run_command` or `shell` as an investigation is offered it (`specs/116` §8.1): the same tool, told where it runs.
+fn investigation_def(mut def: ToolDef) -> ToolDef {
+    def.description = format!("{} For you it runs in a throwaway copy of the project, checked out at its head, in the OS sandbox with no network: check out any commit, build, run tests and benchmarks, `git bisect`, write scratch files. Nothing there reaches the project, a branch or a remote (push, fetch, pull and clone are refused), and the copy is deleted when your span ends, so put what you learned in your finding.", def.description.replace("your task worktree", "your investigation worktree"));
+    def
 }
 
 fn dispatch_def() -> ToolDef {
@@ -906,7 +962,7 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| self.default_tier_of(&role, &manifest));
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -958,6 +1014,11 @@ impl Engine {
                 if let Err(e) = self.attach_worktree(&mut sc, &handoff).await {
                     setup_error = Some(e);
                 }
+            }
+            // Spec 116 §8.1: a role that investigates may run commands in a copy of the project. Only the project is settled here;
+            // the copy is made at the first command and deleted when the span ends. Never in a run that holds a grant.
+            if investigates(&sc.manifest) && self.grant.get().is_none() {
+                sc.investigate_in = self.project_for(&handoff).ok();
             }
 
             // Block 5: resolve each pointer as this role; the span's ceiling is clamped before turn 1.
@@ -1262,6 +1323,13 @@ impl Engine {
                 let mut e = sc.ev(crate::seat::RECEIPT_KIND, r.to_value());
                 e.endpoint_id = Some(ep_id);
                 m.append(e).await?;
+            }
+            // Spec 116 §8.1 item 4: the span ended, so its investigation copy goes, with everything in it. (A span that ends any
+            // other way, by an error or a cancel, drops the same guard.)
+            if let Some(guard) = sc.investigation.take() {
+                let (key, root) = (guard.inv.key.clone(), guard.inv.root.clone());
+                tokio::task::spawn_blocking(move || drop(guard)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
+                m.append(sc.ev("investigation.worktree_removed", json!({"key": key, "gone": !root.exists()}))).await?;
             }
             m.append(sc.ev("dag.node.state", state)).await?;
             self.name_release(&m.id, &sc.span_id);
@@ -1876,7 +1944,7 @@ impl Engine {
             tier: sc.tier.clone(),
             prefer_family: Some(sc.family.clone()),
             avoid_families: sc.avoid_families.clone(),
-            mutating: sc.guard.zones.worktree.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped"),
+            mutating: sc.guard.zones.worktree.is_some() && builds(&sc.manifest),
             mutating_harnesses: self.mutating_harnesses(),
             min_context_tokens: 0,
             target: self.cfg.get().routing.targets.get(&sc.role).cloned(),
@@ -2005,10 +2073,17 @@ impl Engine {
         }
         // A granted run has no worktree (see `attach_worktree`'s caller): the command is offered anyway, and the daemon check
         // (`granted_run_command`) is what decides each call; `shell` is stripped below by the allowlist.
-        if (sc.guard.zones.worktree.is_some() || granted) && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
+        if (sc.guard.zones.worktree.is_some() || granted) && builds(&sc.manifest) {
             defs.push(run_command_def());
             if self.exec.cfg.shell {
                 defs.push(shell_def());
+            }
+        }
+        // Spec 116 §8.1: an investigation's shell, offered only where it can run: a project to copy, an OS sandbox, no grant.
+        if sc.investigate_in.is_some() && !granted && investigates(&sc.manifest) && self.exec.sandbox.is_some() {
+            defs.push(investigation_def(run_command_def()));
+            if self.exec.cfg.shell {
+                defs.push(investigation_def(shell_def()));
             }
         }
         if self.offers_alignment(sc) {
@@ -2388,16 +2463,21 @@ impl Engine {
         if let Some(done) = self.granted_run_command(sc, args).await? {
             return Ok(done);
         }
-        if !sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
+        if !sc.manifest.execute.iter().any(|e| e == SHELL_SCOPE) {
             return Ok(tool_result_error("this role's manifest does not authorize shell-worktree-scoped"));
         }
-        let Some(wt) = self.exec.known_worktree(&sc.task_id) else {
-            return Ok(tool_result_error("this task has no worktree"));
-        };
         let argv = match exec::parse_argv(args) {
             Ok(a) => a,
             Err(e) => return Ok(tool_result_error(e.to_string())),
         };
+        let place = match self.command_place(sc).await? {
+            Ok(p) => p,
+            Err(why) => return Ok(tool_result_error(why)),
+        };
+        if let Some(why) = place.refuses_argv(&argv) {
+            return Ok(tool_result_error(format!("refused by policy: {}", why)));
+        }
+        let (where_, cwd, boxed) = place.card();
         // An added bundle's deny rules (`specs/023` §6.5): they can only refuse, and a policy that cannot be verified refuses too.
         match crate::bundle_load::policy(&self.ws) {
             Ok(p) => {
@@ -2422,7 +2502,7 @@ impl Engine {
             }
         }
         // The policy: deny rules, the sandbox, allow rules and the read-only list decide what needs a card.
-        match self.exec.verdict_at(&argv, Some(&wt.path)) {
+        match self.exec.verdict_at(&argv, Some(place.path())) {
             exec::Verdict::Refused(why) => return Ok(tool_result_error(format!("refused by policy: {}", why))),
             exec::Verdict::Allowed(_) => {}
             exec::Verdict::Ask => {
@@ -2433,8 +2513,8 @@ impl Engine {
                     tool: "run_command".into(),
                     tier: tools::ToolTier::Amber,
                     kind: tools::ActionKind::UnsandboxedExec,
-                    summary: format!("run `{}` in the worktree (not sandboxed)", argv.join(" ")),
-                    payload: json!({"tool": "run_command", "argv": argv, "cwd": "@worktree", "sandboxed": false, "timeout_secs": args["timeout_secs"]}),
+                    summary: format!("run `{}` {}{}", argv.join(" "), where_, if boxed { "" } else { " (not sandboxed)" }),
+                    payload: json!({"tool": "run_command", "argv": argv, "cwd": cwd, "sandboxed": boxed, "timeout_secs": args["timeout_secs"]}),
                     pattern,
                 };
                 if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
@@ -2445,13 +2525,13 @@ impl Engine {
             }
         }
         // What a read-only command prints may be untrusted text (a vendored file): it taints like `read_file`.
-        if exec::is_safe_read_only(&argv, Some(&wt.path)) {
+        if exec::is_safe_read_only(&argv, Some(place.path())) {
             let hit = argv[1..].iter().filter(|a| !a.starts_with('-')).any(|a| self.rules.untrusted(a.trim_start_matches("./")) || self.rules.untrusted(&format!("{}/x", a.trim_start_matches("./").trim_end_matches('/'))));
             if hit && sc.span.observe_input(delphi_core::provenance::Tier::L0) {
                 sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "run_command output"}))).await?;
             }
         }
-        self.finish_command(sc, call_id, "run_command", &wt, &argv, &argv.join(" "), args).await
+        self.finish_command(sc, call_id, "run_command", &place, &argv, &argv.join(" "), args).await
     }
 
     /// `shell` (`specs/061`): a command line through `bash -c`, judged as a whole. The gates are `run_command`'s; the
@@ -2460,16 +2540,21 @@ impl Engine {
         if let Some(denied) = self.granted_exec_denial(sc, "shell", args).await? {
             return Ok(denied);
         }
-        if !sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") || !self.exec.cfg.shell {
+        if !sc.manifest.execute.iter().any(|e| e == SHELL_SCOPE) || !self.exec.cfg.shell {
             return Ok(tool_result_error("this role's manifest does not authorize shell-worktree-scoped, or the shell tool is switched off"));
         }
-        let Some(wt) = self.exec.known_worktree(&sc.task_id) else {
-            return Ok(tool_result_error("this task has no worktree"));
-        };
         let line = match exec::parse_shell(args) {
             Ok(l) => l,
             Err(e) => return Ok(tool_result_error(e.to_string())),
         };
+        let place = match self.command_place(sc).await? {
+            Ok(p) => p,
+            Err(why) => return Ok(tool_result_error(why)),
+        };
+        if let Some(why) = place.refuses_line(&line) {
+            return Ok(tool_result_error(format!("refused by policy: {}", why)));
+        }
+        let (where_, cwd, boxed) = place.card();
         match crate::bundle_load::policy(&self.ws) {
             Ok(p) => {
                 for seg in line.split([';', '|', '&', '\n']) {
@@ -2495,14 +2580,14 @@ impl Engine {
                 }
             }
         }
-        let verdict = self.exec.verdict_shell(&line, Some(&wt.path));
+        let verdict = self.exec.verdict_shell(&line, Some(place.path()));
         let shown: String = line.chars().take(200).collect();
         match verdict {
             exec::ShellVerdict::Refused(why) => return Ok(tool_result_error(format!("refused by policy: {}", why))),
             exec::ShellVerdict::Allowed(_) => {}
             exec::ShellVerdict::Hard(why) => {
-                let payload = json!({"tool": "shell", "command": line, "cwd": "@worktree", "sandboxed": false, "danger": "hard", "why": why, "timeout_secs": args["timeout_secs"]});
-                let summary = format!("run `{}` in the worktree: {} (not sandboxed)", shown, why);
+                let payload = json!({"tool": "shell", "command": line, "cwd": cwd, "sandboxed": boxed, "danger": "hard", "why": why, "timeout_secs": args["timeout_secs"]});
+                let summary = format!("run `{}` {}: {}{}", shown, where_, why, if boxed { "" } else { " (not sandboxed)" });
                 if let Some(denied) = self.ask(sc, ApprovalTier::Red, "shell", "shell", &summary, &payload).await? {
                     return Ok(denied);
                 }
@@ -2513,8 +2598,8 @@ impl Engine {
                     tool: "shell".into(),
                     tier: tools::ToolTier::Amber,
                     kind: if safe { tools::ActionKind::SafeShell } else { tools::ActionKind::UnsandboxedExec },
-                    summary: format!("run `{}` in the worktree (not sandboxed)", shown),
-                    payload: json!({"tool": "shell", "command": line, "cwd": "@worktree", "sandboxed": false, "danger": if safe { "safe" } else { "caution" }, "timeout_secs": args["timeout_secs"]}),
+                    summary: format!("run `{}` {}{}", shown, where_, if boxed { "" } else { " (not sandboxed)" }),
+                    payload: json!({"tool": "shell", "command": line, "cwd": cwd, "sandboxed": boxed, "danger": if safe { "safe" } else { "caution" }, "timeout_secs": args["timeout_secs"]}),
                     pattern: crate::shellsafe::pattern(&line),
                 };
                 if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
@@ -2530,17 +2615,28 @@ impl Engine {
             sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "shell output"}))).await?;
         }
         let argv = vec![exec::ExecEnv::shell_program().to_string(), "-c".to_string(), line.clone()];
-        self.finish_command(sc, call_id, "shell", &wt, &argv, &line, args).await
+        self.finish_command(sc, call_id, "shell", &place, &argv, &line, args).await
     }
 
     /// Write-ahead, run, stamp what changed and render: the tail `run_command` and `shell` share.
     #[allow(clippy::too_many_arguments)]
-    async fn finish_command(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, tool: &str, wt: &crate::worktree::Worktree, argv: &[String], shown: &str, args: &Value) -> Result<tools::ToolResult, EngineError> {
+    async fn finish_command(self: &Arc<Self>, sc: &mut SpanCtx, call_id: &str, tool: &str, place: &Place, argv: &[String], shown: &str, args: &Value) -> Result<tools::ToolResult, EngineError> {
         // Write-ahead: a crash between these two events leaves a command whose outcome is unknown.
         sc.m.append(sc.ev("action.intent", json!({"action_id": call_id, "tool": tool, "argv": argv}))).await?;
-        let (exec, wt2, argv2) = (self.exec.clone(), wt.clone(), argv.to_vec());
+        let (exec, argv2) = (self.exec.clone(), argv.to_vec());
         let timeout = args["timeout_secs"].as_u64().filter(|n| *n > 0).map(Duration::from_secs);
-        let ran = tokio::task::spawn_blocking(move || exec.run(&wt2, &argv2, timeout)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
+        let ran = match place {
+            Place::Build(wt) => {
+                let wt2 = wt.clone();
+                tokio::task::spawn_blocking(move || exec.run(&wt2, &argv2, timeout)).await
+            }
+            // Spec 116 §8.1: always the OS sandbox, whatever `[exec] sandbox` says.
+            Place::Investigate(inv) => {
+                let inv2 = inv.clone();
+                tokio::task::spawn_blocking(move || exec.run_investigation(&inv2, &argv2, timeout)).await
+            }
+        }
+        .map_err(|e| EngineError::Invalid(e.to_string()))?;
         let report = match ran {
             Ok(r) => r,
             Err(e) => {
@@ -2551,7 +2647,8 @@ impl Engine {
         // Files the command created or changed take this span's tier, exactly as if a file tool had written them.
         let tier = sc.span.output_tier(OutputCheck::Unverified);
         let mut events = Vec::new();
-        {
+        // An investigation's files are scratch that is deleted with the span: nothing of it is in a zone, so nothing is stamped.
+        if let Place::Build(wt) = place {
             let mut idx = sc.m.index.lock().unwrap();
             for rel in report.changed.iter().take(500) {
                 let Ok(bytes) = std::fs::read(wt.path.join(rel)) else { continue };
@@ -2568,6 +2665,39 @@ impl Engine {
         sc.m.append_batch(events).await?;
         let (text, is_error) = exec::render(&report, &[shown.to_string()]);
         Ok(tools::ToolResult { content: text, is_error })
+    }
+
+    /// Where this span's commands run. A Builder's run in its task's worktree. An investigation's (`specs/116` §8.1) run in a copy
+    /// of the project made here at the first command: its own repository under the workspace's worktree folder, detached at the
+    /// project's head, with no remote. The inner error is the refusal the model is told.
+    async fn command_place(self: &Arc<Self>, sc: &mut SpanCtx) -> Result<Result<Place, String>, EngineError> {
+        if builds(&sc.manifest) {
+            return Ok(self.exec.known_worktree(&sc.task_id).map(Place::Build).ok_or_else(|| "this task has no worktree".to_string()));
+        }
+        if self.grant.get().is_some() {
+            return Ok(Err("an investigation runs no commands in a run that holds an operator authorization".into()));
+        }
+        if let Some(g) = &sc.investigation {
+            return Ok(Ok(Place::Investigate(g.inv.clone())));
+        }
+        let Some((name, project)) = sc.investigate_in.clone() else {
+            return Ok(Err("this task names no project to investigate: mention one with an @project/<name>/… pointer".into()));
+        };
+        if self.exec.sandbox.is_none() {
+            return Ok(Err("an investigation's commands run only in the OS sandbox, and this machine has none (see `delphi doctor`)".into()));
+        }
+        let key = format!("i{}", &blake3::hash(format!("{}/{}/{}", sc.m.id, sc.task_id, sc.span_id).as_bytes()).to_hex()[..24]);
+        let exec = self.exec.clone();
+        let made = tokio::task::spawn_blocking(move || exec.open_investigation(&key, &project)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
+        match made {
+            Ok(guard) => {
+                let inv = guard.inv.clone();
+                sc.investigation = Some(guard);
+                sc.m.append(sc.ev("investigation.worktree_created", json!({"project": name, "key": inv.key, "base_sha": inv.base_sha}))).await?;
+                Ok(Ok(Place::Investigate(inv)))
+            }
+            Err(e) => Ok(Err(format!("could not set up the investigation worktree: {}", e))),
+        }
     }
 
     /// As [`Engine::ask`] for a classified tool call. In an optimistic task an eligible call is decided provisionally

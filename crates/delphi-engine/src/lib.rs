@@ -115,6 +115,8 @@ pub mod harness;
 pub mod coverage;
 pub mod harness_opts;
 pub mod harness_run;
+#[cfg(test)]
+mod investigation_tests;
 pub mod inventory;
 pub mod learn;
 pub mod learn_stats;

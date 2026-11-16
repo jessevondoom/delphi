@@ -541,6 +541,117 @@ impl Worktree {
     }
 }
 
+/// A throwaway copy of a project for an investigation (`specs/116` §8.1).
+///
+/// It is a repository of its own, not a linked worktree of the project: the project's objects are fetched into it by the daemon,
+/// and its files are checked out detached at the project's head. So nothing an investigation does (a checkout, a bisect, a commit,
+/// a build) writes into the project's `.git`, its index or its files, and the sandbox it runs in needs no path of the project at
+/// all. It has no remote, so nothing in it can be pushed or fetched; it is deleted when the span ends.
+///
+/// The git directory is `<root>/repo` and the files are in `<root>/tree`, whose `.git` is a pointer file. The sandbox never lets a
+/// `.git` path be written, so a sandboxed command can use git here and cannot repoint the tree at another repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Investigation {
+    pub key: String,
+    pub root: PathBuf,
+    pub tree: PathBuf,
+    pub git_dir: PathBuf,
+    pub project: PathBuf,
+    pub base_sha: String,
+}
+
+impl Worktrees {
+    /// Where investigation copies live: beside the task worktrees, under the workspace.
+    pub fn investigations_root(&self) -> PathBuf {
+        self.root.join(".investigations")
+    }
+
+    /// Copy `project` at its `HEAD` into a new investigation named `key`. Every git call is the daemon's, hardened as for a task
+    /// worktree, and all of them finish before any sandboxed command runs: the daemon never runs git here again.
+    pub fn create_investigation(&self, project: &Path, key: &str) -> Result<Investigation, GitError> {
+        if !valid_task_id(key) {
+            return Err(GitError::BadTaskId(key.into()));
+        }
+        let home = self.home()?.to_path_buf();
+        let project = std::fs::canonicalize(project).map_err(|e| GitError::Io(format!("{}: {}", project.display(), e)))?;
+        let mut c = git_command(None, None, &home);
+        c.arg("-C").arg(&project).args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+        let base_sha = run(c, "rev-parse HEAD").map_err(|_| GitError::NotAGitRepo(project.clone()))?.trim().to_string();
+        let bad = unsafe_config(&project, &home)?;
+        if !bad.is_empty() {
+            return Err(GitError::UnsafeConfig(bad));
+        }
+        let io = |e: std::io::Error| GitError::Io(e.to_string());
+        let root = self.investigations_root().join(key);
+        if root.exists() {
+            return Err(GitError::Exists(root));
+        }
+        std::fs::create_dir_all(root.join("tree")).map_err(io)?;
+        let root = std::fs::canonicalize(&root).map_err(io)?;
+        let (tree, git_dir) = (root.join("tree"), root.join("repo"));
+        let made = (|| {
+            // No template: no sample hooks, no description, nothing from the machine's git installation.
+            let mut c = git_command(None, None, &home);
+            c.args(["init", "--quiet", "--template="]).arg("--separate-git-dir").arg(&git_dir).arg(&tree);
+            run(c, "init")?;
+            // The project's branches and tags, as they are now, and its head (which may be on no branch). The one place the
+            // hardening's ban on the local transport is lifted: the address is the registered project, built here, and
+            // submodules are not followed. The project is only read.
+            let mut c = git_command(Some(&git_dir), Some(&tree), &home);
+            c.args(["-c", "protocol.file.allow=always", "fetch", "--quiet", "--no-recurse-submodules", "--no-write-fetch-head", "--update-head-ok"]).arg(&project).args(["+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*", "+HEAD:refs/delphi/base"]);
+            run(c, "fetch")?;
+            let mut c = git_command(Some(&git_dir), Some(&tree), &home);
+            c.args(["checkout", "--quiet", "--force", "--detach", &base_sha]);
+            run(c, "checkout").map(|_| ())
+        })();
+        let inv = Investigation { key: key.into(), root, tree, git_dir, project, base_sha };
+        if let Err(e) = made {
+            inv.remove();
+            return Err(e);
+        }
+        Ok(inv)
+    }
+
+    /// Delete every investigation copy `live` does not name: what a daemon that died left behind.
+    pub fn sweep_investigations(&self, live: &dyn Fn(&str) -> bool) {
+        for e in std::fs::read_dir(self.investigations_root()).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !live(&name) {
+                force_remove(&e.path());
+            }
+        }
+    }
+}
+
+impl Investigation {
+    /// Delete the copy. No git runs: the directory is removed as files, whatever a command left in it.
+    pub fn remove(&self) {
+        force_remove(&self.root);
+    }
+}
+
+/// Remove a directory tree even when something in it was made unreadable or unwritable.
+pub(crate) fn force_remove(dir: &Path) {
+    if std::fs::remove_dir_all(dir).is_ok() || !dir.exists() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fn open_up(p: &Path) {
+            let Ok(meta) = std::fs::symlink_metadata(p) else { return };
+            if meta.file_type().is_dir() {
+                let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700));
+                for e in std::fs::read_dir(p).into_iter().flatten().flatten() {
+                    open_up(&e.path());
+                }
+            }
+        }
+        open_up(dir);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -804,5 +915,124 @@ pub(crate) mod tests {
         let d = tempfile::tempdir().unwrap();
         let w = Worktrees::new(&d.path().join("wt"));
         assert!(matches!(w.create(d.path(), "t_1"), Err(GitError::NotAGitRepo(_))));
+    }
+
+    /// Every file under `dir` (the `.git` directory included) with its bytes, and every directory and symlink by name: what
+    /// "byte-identical" is checked against.
+    pub(crate) fn tree_bytes(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        fn walk(d: &Path, root: &Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
+            for e in fs::read_dir(d).unwrap().flatten() {
+                let (p, ft) = (e.path(), e.file_type().unwrap());
+                let rel = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                if ft.is_dir() {
+                    out.insert(format!("{rel}/"), vec![]);
+                    walk(&p, root, out);
+                } else if ft.is_symlink() {
+                    out.insert(format!("{rel}@"), fs::read_link(&p).unwrap().to_string_lossy().into_owned().into_bytes());
+                } else {
+                    out.insert(rel, fs::read(&p).unwrap());
+                }
+            }
+        }
+        let mut out = Default::default();
+        walk(dir, dir, &mut out);
+        out
+    }
+
+    /// The parts of [`tree_bytes`] the spec names: the index and the refs (loose, packed and `HEAD`).
+    pub(crate) fn index_and_refs(all: &std::collections::BTreeMap<String, Vec<u8>>) -> Vec<(&String, &Vec<u8>)> {
+        all.iter().filter(|(k, _)| *k == ".git/index" || *k == ".git/HEAD" || *k == ".git/packed-refs" || k.starts_with(".git/refs/") || k.starts_with(".git/logs/") || k.starts_with(".git/worktrees")).collect()
+    }
+
+    /// Commit everything in `p` with `message`, by the same hardened calls; returns the commit.
+    pub(crate) fn commit(p: &Path, scratch_home: &Path, message: &str) -> String {
+        for args in [vec!["add", "--all"], vec!["commit", "--quiet", "-m", message]] {
+            let mut c = git_command(None, None, scratch_home);
+            c.arg("-C").arg(p).args(&args);
+            run(c, "setup").unwrap();
+        }
+        let mut c = git_command(None, None, scratch_home);
+        c.arg("-C").arg(p).args(["rev-parse", "HEAD"]);
+        run(c, "rev-parse").unwrap().trim().to_string()
+    }
+
+    /// `specs/116` §8.1 items 2 and 4: an investigation copy is a repository of its own, detached at the project's head, with no
+    /// remote; making it, using it and deleting it leave the project's working tree, index and refs byte-identical.
+    #[test]
+    fn an_investigation_copy_is_its_own_repository_and_the_project_is_byte_identical_before_and_after() {
+        let (_d, p, w) = fx();
+        let home = p.parent().unwrap().join("gh");
+        fs::write(p.join("src/lib.rs"), "pub fn a() {}\npub fn b() {}\n").unwrap();
+        let head = commit(&p, &home, "second");
+        let mut c = git_command(None, None, &home);
+        c.arg("-C").arg(&p).args(["tag", "v1"]);
+        run(c, "tag").unwrap();
+        // The operator's own uncommitted work and an untracked file: neither is copied, neither is touched.
+        fs::write(p.join("src/lib.rs"), "pub fn dirty() {}\n").unwrap();
+        fs::write(p.join("notes.txt"), "mine").unwrap();
+        let before = tree_bytes(&p);
+        assert!(before.contains_key(".git/index") && before.contains_key(".git/HEAD"));
+
+        let inv = w.create_investigation(&p, "i_0001").unwrap();
+        assert!(inv.root.starts_with(fs::canonicalize(w.investigations_root()).unwrap()) && !inv.root.starts_with(&p), "under the workspace's worktree folder, not in the project");
+        assert_eq!(inv.base_sha, head);
+        assert_eq!(fs::read_to_string(inv.tree.join("src/lib.rs")).unwrap(), "pub fn a() {}\npub fn b() {}\n", "the committed state at the head");
+        assert!(!inv.tree.join("notes.txt").exists());
+        let gitfile = fs::read_to_string(inv.tree.join(".git")).unwrap();
+        assert_eq!(gitfile.trim(), format!("gitdir: {}", inv.git_dir.display()), "the tree points at its own repository, not the project's");
+        assert!(!inv.git_dir.components().any(|c| c.as_os_str() == ".git"), "the copy's git directory has no `.git` segment, so a sandboxed git can write it");
+        let git = |args: &[&str]| {
+            let mut c = git_command(Some(&inv.git_dir), Some(&inv.tree), &home);
+            c.args(args);
+            run(c, "check")
+        };
+        assert_eq!(git(&["rev-parse", "HEAD"]).unwrap().trim(), head);
+        assert!(git(&["symbolic-ref", "-q", "HEAD"]).is_err(), "detached: it is on no branch");
+        assert_eq!(git(&["remote"]).unwrap(), "", "no remote: nothing to push to or fetch from");
+        let cfg = fs::read_to_string(inv.git_dir.join("config")).unwrap();
+        assert!(!cfg.contains("url") && !cfg.contains(&p.display().to_string()), "the project's address is not kept: {cfg}");
+        assert!(!inv.git_dir.join("objects/info/alternates").exists(), "its objects are its own, not borrowed from the project");
+        assert!(!inv.git_dir.join("hooks").exists(), "no hooks came with it");
+        assert_eq!(git(&["rev-parse", "v1"]).unwrap().trim(), head, "tags and branches came along, so any commit can be checked out");
+        assert_eq!(git(&["rev-parse", "main~1"]).unwrap().trim().len(), 40);
+        assert_eq!(tree_bytes(&p), before, "making the copy changed nothing in the project, its .git included");
+
+        // What an investigation does: another commit checked out, a commit of its own, a bisect ref, a scratch file.
+        git(&["checkout", "--quiet", "--detach", "main~1"]).unwrap();
+        fs::write(inv.tree.join("scratch.txt"), "x").unwrap();
+        git(&["add", "--all"]).unwrap();
+        git(&["commit", "--quiet", "-m", "scratch"]).unwrap();
+        git(&["update-ref", "refs/bisect/bad", "HEAD"]).unwrap();
+        assert_eq!(tree_bytes(&p), before, "nothing done in the copy reaches the project");
+
+        assert!(matches!(w.create_investigation(&p, "i_0001"), Err(GitError::Exists(_))));
+        assert!(matches!(w.create_investigation(&p, "../escape"), Err(GitError::BadTaskId(_))));
+        inv.remove();
+        assert!(!inv.root.exists(), "the copy is gone");
+        let after = tree_bytes(&p);
+        assert_eq!(index_and_refs(&after), index_and_refs(&before), "index and refs");
+        assert_eq!(after, before, "and every other byte of the project");
+    }
+
+    #[test]
+    fn a_leftover_investigation_copy_is_swept_and_a_locked_down_one_is_still_removed() {
+        let (_d, p, w) = fx();
+        let (stale, live) = (w.create_investigation(&p, "i_stale").unwrap(), w.create_investigation(&p, "i_live").unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::create_dir_all(stale.tree.join("locked/inner")).unwrap();
+            fs::write(stale.tree.join("locked/inner/f"), "x").unwrap();
+            fs::set_permissions(stale.tree.join("locked/inner"), fs::Permissions::from_mode(0o000)).unwrap();
+            fs::set_permissions(stale.tree.join("locked"), fs::Permissions::from_mode(0o500)).unwrap();
+        }
+        w.sweep_investigations(&|k| k == "i_live");
+        assert!(!stale.root.exists() && live.root.exists());
+        // An unsafe project config is refused, as for a task worktree.
+        let mut c = git_command(None, None, &p.parent().unwrap().join("gh"));
+        c.arg("-C").arg(&p).args(["config", "filter.x.clean", "cat"]);
+        run(c, "config").unwrap();
+        assert!(matches!(w.create_investigation(&p, "i_unsafe"), Err(GitError::UnsafeConfig(_))));
+        assert!(!w.investigations_root().join("i_unsafe").exists());
     }
 }

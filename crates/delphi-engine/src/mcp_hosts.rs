@@ -258,9 +258,9 @@ const ROLE_LINES: &[(&str, &str)] = &[
 
 /// The roles that get a worker subagent file (spec 106 §4 item 1): every servable role whose locus is `host` or `either`, and whether
 /// the worker inherits the session's tools. A role whose manifest's write globs reach into the worktree (`@worktree/...`) does
-/// (amendment A4), and so does the investigator (spec 116 §8.5 item 1: a role that investigates by running things; on a host Delphi
-/// grants nothing, the file asks for the session's tools and the host's permissions decide). Every other worker gets the read-only
-/// list. A test reads the manifests and fails when this table drifts.
+/// (amendment A4), and so does a role whose manifest holds a shell scope (spec 116 §8.5 item 1: the investigator, which
+/// investigates by running things; on a host Delphi grants nothing, the file asks for the session's tools and the host's
+/// permissions decide). Every other worker gets the read-only list. A test reads the manifests and fails when this table drifts.
 pub const WORKER_ROLES: &[(&str, bool)] = &[
     ("orchestrator", false),
     ("architect", false),
@@ -1179,14 +1179,14 @@ mod tests {
             if servable && matches!(locus, "host" | "either") {
                 let writes = fm.get("default_access_scope").and_then(|s| s.get("write")).and_then(|w| w.as_sequence()).cloned().unwrap_or_default();
                 let worktree = writes.iter().filter_map(|w| w.as_str()).any(|w| w.starts_with("@worktree/"));
-                // Spec 116 §8.5 item 1: the rule's second case, the investigator. It is named here until its manifest holds the
-                // shell scope the spec's rule reads (slice G9 adds it with the engine's throwaway worktree).
-                want.push((role.clone(), worktree || role == "investigator"));
+                // Spec 116 §8.5 item 1: the rule's second case, a role whose manifest holds a shell scope.
+                let shell = fm.get("default_access_scope").and_then(|s| s.get("execute")).and_then(|w| w.as_sequence()).is_some_and(|x| x.iter().any(|e| e.as_str() == Some("shell-worktree-scoped")));
+                want.push((role.clone(), worktree || shell));
             }
         }
         let mut have: Vec<(String, bool)> = WORKER_ROLES.iter().map(|(r, i)| (r.to_string(), *i)).collect();
         have.sort();
-        assert_eq!(have, want, "WORKER_ROLES drifted from the manifests (servable, locus host or either; inherits tools only with an @worktree/ write glob, or as the investigator)");
+        assert_eq!(have, want, "WORKER_ROLES drifted from the manifests (servable, locus host or either; inherits tools only with an @worktree/ write glob or a shell scope)");
         assert_eq!(WORKER_ROLES.iter().filter(|(_, i)| *i).map(|(r, _)| *r).collect::<Vec<_>>(), ["builder", "investigator", "writer"]);
     }
 

@@ -86,7 +86,8 @@ impl Engine {
         let deny = |reason: String| -> (Value, ToolResult) { (json!({"authorization_id": grant.id(), "tool": "run_command", "reason": reason, "approved": false}), tool_result_error(GRANTED_DENIAL)) };
         // The role must be one that may run commands at all, and the span must not have read anything from outside that lowered its ceiling
         // to `federated_peer` or below (spec 092 TA-0, GOVERNANCE §5.12: such a card is never approved under this item).
-        let refusal = pre_refusal(sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped"), sc.span.ceiling(), self.places.get().is_some());
+        // A Builder only: a role that holds the shell scope to investigate (`specs/116` §8.1) never uses an authorization.
+        let refusal = pre_refusal(crate::engine::builds(&sc.manifest), sc.span.ceiling(), self.places.get().is_some());
         if let Some(reason) = refusal {
             let (body, denied) = deny(reason);
             sc.m.append(sc.ev(REFUSED_USE, body)).await?;
