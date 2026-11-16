@@ -3,7 +3,8 @@ id: spec-121-data-sensitivity-private-internal-and-confidential
 title: "121: Data sensitivity: private, internal and confidential"
 author: architect
 timestamp: 2026-11-15T00:00:00Z
-status: draft   # a proposal, not permission. Written 2026-11-15 from the operator's words of that day (quoted in section 1) and from the ruling of a Panel (council t_0001, PROCEED-WITH-CHANGES) as it was relayed to the author. The Panel's record is in the operator's Delphi home and was not read by the author. Nothing here is built, and nothing in section 11 takes effect until the operator approves this spec.
+status: approved   # by the operator, 2026-11-15, in a host session: "approve spec 121 and merge 740 when ready", after the draft, its slices and its five open questions were shown. The open questions of the last section stay open: until the operator answers each, the provisional behaviour the draft names for it is what is built. Written from the operator's words of that day (quoted in section 1) and the ruling of a Panel (council t_0001, PROCEED-WITH-CHANGES) as relayed to the author.
+approved_by: operator (2026-11-15)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,8 +15,8 @@ tags: [spec, privacy, sensitivity, handling, internal, confidential, labelling, 
 
 # Spec 121: Data sensitivity: private, internal and confidential
 
-> **Status: draft, 2026-11-15, awaiting the operator.** A draft is a proposal. No slice may be built against it.
-> **Would narrow or replace**, when approved and not before: parts of [`specs/103`](103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md), [`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md), [`specs/115`](115-research-recall-across-projects.md), [`specs/119`](119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md) and [`specs/098`](098-where-agents-run-host-first-locus-and-the-inside-exceptions.md). §11 lists the exact text. This draft edits none of those specs.
+> **Status: approved by the operator, 2026-11-15** (see the frontmatter). Until each open question of §16 is answered, the provisional behaviour named for it is what is built.
+> **Narrows or replaces**, from its approval on 2026-11-15: parts of [`specs/103`](103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md), [`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md), [`specs/115`](115-research-recall-across-projects.md), [`specs/119`](119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md) and [`specs/098`](098-where-agents-run-host-first-locus-and-the-inside-exceptions.md). §11 lists the exact text. This draft edits none of those specs.
 > **Five questions are open for the operator** (§16). The draft names a behaviour for each so that it can be read end to end; none of the five is decided.
 
 ---

@@ -1114,4 +1114,4 @@ The operator asked on 2026-11-15 to clarify the private and internal concepts an
 
 | Spec | Slice | Content | State |
 | :-- | :-- | :-- | :-- |
-| 121 | S0 | the spec: three handling traits (`personal` shown as private, `internal`, `confidential`), assigned by the daemon, carried to derived records, a placeholder and one batched ask for private material in work output, a reader grant for confidential, output labelling; exits deferred | drafted 2026-11-15, awaiting the operator (five open questions in its section 16; pull request open) |
+| 121 | S0 | the spec: three handling traits (`personal` shown as private, `internal`, `confidential`), assigned by the daemon, carried to derived records, a placeholder and one batched ask for private material in work output, a reader grant for confidential, output labelling; exits deferred | approved 2026-11-15 ("approve spec 121 and merge 740 when ready"); the five open questions stay open, with the draft's provisional behaviour until answered; S1 to S3 not built |
