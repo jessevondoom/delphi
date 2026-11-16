@@ -309,7 +309,12 @@ mod tests {
         let f = fx();
         let Some(o) = go(&f, "ps -o pid=,pgid=,sess= -p $$", |_| {}, quick()) else { return };
         let cols: Vec<&str> = o.stdout.split_whitespace().collect();
-        if cols.len() >= 2 {
+        if cols.len() >= 3 && matches!(Sandbox::detect().map(|s| s.mode()), Ok(crate::Mode::Bwrap)) {
+            // bubblewrap runs the shell in a pid namespace of its own, under bwrap's init (pid 1 there), which has called
+            // `setsid` (`--new-session`): the shell is in init's group and session. The namespace ends with that init, and the
+            // kernel kills everything in it (`the_timeout_kills_the_command_and_everything_it_started` holds this on Linux).
+            assert_eq!((cols[1], cols[2]), ("1", "1"), "the shell is in the session the namespace's init leads: {}", o.stdout);
+        } else if cols.len() >= 2 {
             assert_eq!(cols[0], cols[1], "the shell is its own process-group leader: {}", o.stdout);
         }
     }
