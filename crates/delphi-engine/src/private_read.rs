@@ -99,7 +99,7 @@ pub const READS: [Read; 29] = [
     Read { file: "library_export.rs", what: "`export_one` reads `source.md` and the excerpts of a source to write a bundle", how: How::Withholds { proof_file: "delphi-engine/src/library_tests.rs", proof_test: "a_private_source_never_leaves_and_is_never_indexed" } },
     Read { file: "library_extract.rs", what: "reads source text to check that a summary page's quote is a verbatim substring of a source the library holds, for the operator's accept and attest flow", how: How::OperatorOnly { why: "reached by `digest.act` and the attest commands, which need the console scope or the operator's terminal; the candidates carry the page's own quote" } },
     Read { file: "library_history.rs", what: "`Library::history` lists a source's kept captures", how: How::NoReturn { why: "it measures `source.md` (bytes) and reads the record; the entry carries a version, a hash, a size, a change note and an anchor count, no text" } },
-    Read { file: "kb.rs", what: "the index: `chunk_content` returns indexed text; `include_staged` opts in to staged notes (host-noted entries among them)", how: How::NoReturn { why: "the index lists only library sources that are not private (`Library::indexable`); staged notes are off unless a caller sets `include_staged`, and the callers are the `service.rs` row (host search, marks) and the console's `kb.search`" } },
+    Read { file: "kb.rs", what: "the index: `chunk_content` returns indexed text; `include_staged` opts in to staged notes (host-noted entries among them)", how: How::NoReturn { why: "the index lists only library sources that are not private (`Library::indexable`, and the passages of `Library::indexable_excerpts`); staged notes are off unless a caller sets `include_staged`, and the callers are the `service.rs` row (host search, marks) and the console's `kb.search`" } },
     Read { file: "mcp_project.rs", what: "the MCP server's own readers (`search_project`, `search_memory`, `query_memory`, `kb_retrieve`): they run in the MCP server process, which has no daemon session to mark", how: How::NoReturn { why: "their file sets exclude the `staged` zone (`scope.rs` drops it) and their KB zone list names no `staged`; `local/staged` is never readable by a role (`pathguard`). The project layer of the index (`specs/109` §11, zone `project`) holds only the project's scaffold folders and its layer's context and knowledge, never `staged`, so no noted entry is in it and none is served from it. The test `the_mcp_servers_own_readers_never_return_a_noted_entry` proves it with a canary" } },
     Read { file: "host_rpc.rs", what: "`read_handoff`: `host.handoff_get` returns the handoff another session of the same project put", how: How::Skips { exposure: "the text came from another session whose mark (if any) is its own: the reading session is unmarked, so a handoff that carries words from a private note reaches a fresh session with no mark and nothing held on its sends. Accepted for now by OD-5 (no inheritance); a decision, not a bug" } },
     Read { file: "host_recall.rs", what: "`host.recall_sessions` (`specs/108` M1): returns the summaries, notes and handoffs earlier host sessions of the same project left", how: How::Withholds { proof_file: "delphi-engine/src/host_recall.rs", proof_test: "a_second_session_recalls_the_first_and_not_itself_another_project_a_dropped_note_or_a_marked_session" } },
@@ -138,12 +138,13 @@ const SEATS_CANNOT_READ: &str = "an answer written by seats that cannot read a n
 const MCP_OWN: &str = "runs in the MCP server's own process over files and the index; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`) and the index lists no private source";
 
 /// The methods of the host socket (`delphi_core::server::HOST_METHODS`).
-pub const HOST_SURFACE: [Surface; 30] = [
+pub const HOST_SURFACE: [Surface; 31] = [
     no_return("session.ping", "answers `pong`"),
     Surface { name: "host.search_kb", how: How::Marks },
     no_return("host.propose_note", WRITES),
     no_return("host.propose_kb_entry", "a write: it returns a status, a ref, a `private` flag and a reason slug per claim, never the claim text"),
     no_return("host.record_finding", "a write (`specs/116` §5): it returns the finding's id, path and label, or a refusal that names the caller's own pointer, never a finding's text"),
+    no_return("host.flag_wrong", "a write (`specs/116` §7 item 2): it returns the disputed item's logical path, its dispute label and two flags, or a refusal that names the caller's own pointer, never an item's text"),
     no_return("host.request_test_authorization", WRITES),
     no_return("host.record_session_summary", WRITES),
     no_return("host.handoff_put", WRITES),
@@ -172,7 +173,7 @@ pub const HOST_SURFACE: [Surface; 30] = [
 ];
 
 /// The tools of the MCP server (`mcp_host::tools()`).
-pub const MCP_SURFACE: [Surface; 44] = [
+pub const MCP_SURFACE: [Surface; 45] = [
     Surface { name: "search_kb", how: How::Marks },
     no_return("list_roles", PROJECT_FILES),
     no_return("delphi_roster", PROJECT_FILES),
@@ -196,6 +197,7 @@ pub const MCP_SURFACE: [Surface; 44] = [
     no_return("request_test_authorization", WRITES),
     no_return("propose_kb_entry", WRITES),
     no_return("record_finding", WRITES),
+    no_return("flag_wrong", WRITES),
     no_return("propose_council_record", WRITES),
     no_return("record_session_summary", WRITES),
     no_return("handoff_put", WRITES),

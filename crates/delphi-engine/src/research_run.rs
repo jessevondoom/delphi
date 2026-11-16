@@ -125,6 +125,13 @@ pub trait Library: Send + Sync {
     fn anchor_known(&self, _fingerprint: &str, _x: &Extracted, _source_id: &str, _url: &str) -> Option<String> {
         None
     }
+    /// A page this run found gone (`http status 404` or `410`, the fetcher's `error`) that the library holds as a source a claim rests
+    /// on: the library asks one web archive for a copy and keeps it as a labelled version (`specs/119` §4, `[research] archive_fallback`;
+    /// `specs/101` §5). Returns the source id when a copy was kept. The copy is not read by this run and adds no origin. The default
+    /// asks nothing.
+    fn page_gone<'a>(&'a self, _url: &'a str, _error: &'a str) -> BoxFut<'a, Option<String>> {
+        Box::pin(async { None })
+    }
     /// Keep a search result the fetcher will not reach as a `noted` lead: its address, title and snippet, dated, with where it came
     /// from, and nothing more (`specs/098` §7.5 item 1). It is never validated and is not a page. The default keeps nothing.
     fn note_lead(&self, _row: &Row) -> Result<(), String> {
@@ -150,6 +157,11 @@ pub trait Library: Send + Sync {
     /// The content hash a capture of this page, as this run read it, would record (`specs/112` §5.1): what a continued run
     /// compares with the hash its topic's record holds for the address. `None` when the library cannot say; the page is then read.
     fn hash_as_read(&self, _url: &str, _text: &str) -> Option<String> {
+        None
+    }
+    /// The licence and capture level (`full`, `excerpts`, `pointer`) the library records for a source, for the result's claims
+    /// (`specs/119` §6 item 1). `None` when the library cannot say; the result then says `unknown`.
+    fn terms(&self, _source_id: &str) -> Option<(String, String)> {
         None
     }
     /// Is the source private? A claim that rests on a private source is never put in an outbound query (`specs/098` §7.5 item 5).
@@ -373,6 +385,23 @@ pub fn validation_order(claims: &[ClaimRec]) -> Vec<usize> {
     }
     first.extend(rest);
     first
+}
+
+/// Each source's licence and capture level as the library records them (`specs/119` §6 item 1): `licence` is the first source's, and
+/// `sources` lists every one. A source the library cannot describe reads `unknown`.
+fn with_terms(mut v: Value, source_ids: &[String], lib: &dyn Library) -> Value {
+    let sources: Vec<Value> = source_ids
+        .iter()
+        .map(|s| {
+            let (licence, kept) = lib.terms(s).unwrap_or_else(|| ("unknown".into(), "unknown".into()));
+            json!({"id": s, "licence": licence, "kept": kept})
+        })
+        .collect();
+    if let Some(first) = sources.first() {
+        v["licence"] = first["licence"].clone();
+    }
+    v["sources"] = Value::Array(sources);
+    v
 }
 
 fn claim_json(c: &ClaimRec, contested: bool, library_id: Option<&str>) -> Value {
@@ -1099,7 +1128,15 @@ async fn read_row(ctx: &JobCtx, deps: &Deps<'_>, question: &str, st: &mut State,
                 note(deps, |r| r.refused(&row.url, "refused"));
                 return false;
             }
-            let Ok(page) = deps.web.fetch(&row.url) else {
+            let page = match deps.web.fetch(&row.url) {
+                Ok(page) => Some(page),
+                Err(e) => {
+                    // A page gone that a claim rests on: the run asks for an archived copy (`specs/119` §4), off unless `archive_fallback`.
+                    let _ = deps.library.page_gone(&row.url, &e).await;
+                    None
+                }
+            };
+            let Some(page) = page else {
                 ctx.refused(&row.url);
                 note(deps, |r| r.refused(&row.url, "fetch_failed"));
                 if main && !from_trusted_host && deps.library.note_lead(row).is_ok() {
@@ -1411,7 +1448,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     library_claims.extend(staged.iter().flatten().cloned());
     let mut once = BTreeSet::new();
     library_claims.retain(|id| once.insert(id.clone()));
-    let claim_values: Vec<Value> = claims.iter().zip(&staged).map(|(c, id)| claim_json(c, c.contested, id.as_deref())).collect();
+    let claim_values: Vec<Value> = claims.iter().zip(&staged).map(|(c, id)| with_terms(claim_json(c, c.contested, id.as_deref()), &c.source_ids, deps.library)).collect();
     // The written answer (`specs/114` §5). What it is written from: the run's kept claims by their library ids, the claims the
     // library held that a page of the run stated again, and the claims known before the run. A claim the library kept no record
     // of has no id to cite and is left out.
@@ -1459,7 +1496,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "library_claims": library_claims,
         "known_before": known.to_json(), "read_from_library": from_library,
         "plan": plan_kind.as_str(), "sub_questions": sub_report, "stopped": stopped.as_str(), "rounds": rounds,
-        "freshness": {"retrieved": retrieved, "last_checked": retrieved},
+        "freshness": {"retrieved": retrieved, "last_checked": delphi_core::time::now_rfc3339()},
         "budget_used": {"steps": ctx.steps(), "check_steps": ctx.check_steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
     });
@@ -1500,6 +1537,8 @@ mod tests {
     struct FakeWeb {
         rows: Vec<Row>,
         pages: HashMap<String, String>,
+        /// Addresses the fetcher reaches and finds gone (`http status 404`).
+        gone: BTreeSet<String>,
         trusted: Vec<&'static str>,
         searched: Mutex<Vec<String>>,
         /// URLs `fetch` was called with.
@@ -1540,10 +1579,13 @@ mod tests {
         }
         /// The fake reaches any URL it holds a page for, trusted or not; a row with no page is one the fetcher will not reach.
         fn can_fetch(&self, url: &str) -> bool {
-            self.pages.contains_key(url)
+            self.pages.contains_key(url) || self.gone.contains(url)
         }
         fn fetch(&self, url: &str) -> Result<Page, String> {
             self.fetched.lock().unwrap().push(url.to_string());
+            if self.gone.contains(url) {
+                return Err("http status 404".to_string());
+            }
             self.pages.get(url).map(|t| Page { url: url.into(), text: t.clone() }).ok_or_else(|| "off list".to_string())
         }
     }
@@ -1647,12 +1689,22 @@ mod tests {
         says_kept: bool,
         /// Pages the library already holds fresh, by address: the source's id and its kept text (`specs/114` §3 item 4).
         fresh: BTreeMap<String, (String, String)>,
+        /// Every page the run reported gone, with the fetcher's word (`specs/119` §4).
+        gone: Mutex<Vec<(String, String)>>,
         /// Hosts the validator's source lists class as primary.
         primary: BTreeSet<String>,
         /// The library's page check rejects an answer that holds this word, with this finding.
         rejects: Option<(&'static str, &'static str)>,
     }
     impl Library for FakeLib {
+        /// As the live library says when it says what it kept: a page kept whole under an open licence.
+        fn terms(&self, source_id: &str) -> Option<(String, String)> {
+            (self.says_kept && source_id == "src-who.int").then(|| ("CC-BY-4.0".to_string(), "full".to_string()))
+        }
+        fn page_gone<'a>(&'a self, url: &'a str, error: &'a str) -> BoxFut<'a, Option<String>> {
+            self.gone.lock().unwrap().push((url.to_string(), error.to_string()));
+            Box::pin(async { None })
+        }
         /// As the live library does: a private source gives no seed, and neither does one that names no DOI.
         fn chainable_doi(&self, source_id: &str) -> Option<String> {
             let h = source_id.strip_prefix("src-")?;
@@ -2024,6 +2076,38 @@ mod tests {
     /// The rung with this name in a result's coverage report.
     fn rung_of<'a>(v: &'a Value, name: &str) -> &'a Value {
         v["coverage_report"]["rungs"].as_array().unwrap().iter().find(|r| r["rung"] == name).unwrap_or_else(|| panic!("no {name} rung in {v}"))
+    }
+
+    /// `specs/119` §4: a page the fetcher finds gone is handed to the library, which may ask the archive for a copy; a page that was
+    /// read, and one the fetcher never reaches, are not.
+    #[tokio::test]
+    async fn a_page_found_gone_is_handed_to_the_library_to_ask_for_an_archived_copy() {
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.web.rows = vec![row("https://who.int/a"), row("https://who.int/gone"), row("https://blog.example/z")];
+        f.web.pages = HashMap::from([("https://who.int/a".to_string(), "who text".to_string())]);
+        f.web.gone = BTreeSet::from(["https://who.int/gone".to_string()]);
+        let c = ctx(Depth::Survey);
+        run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap();
+        assert_eq!(*f.lib.gone.lock().unwrap(), [("https://who.int/gone".to_string(), "http status 404".to_string())]);
+    }
+
+    /// `specs/119` §6 item 1: each claim carries its sources' real licence and capture level (`unknown` when the library cannot say),
+    /// and `freshness.last_checked` is the time of this check, not a copy of `retrieved`.
+    #[tokio::test]
+    async fn a_claim_says_each_sources_licence_and_how_it_is_kept_and_last_checked_is_the_check() {
+        for says in [true, false] {
+            let mut f = Fixture::new(Verdict::Inconclusive);
+            f.lib.says_kept = says;
+            let c = ctx(Depth::Survey);
+            let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+            let claim = v["claims"].as_array().unwrap().iter().find(|c| c["source_ids"].as_array().unwrap().iter().any(|s| s == "src-who.int")).unwrap_or_else(|| panic!("{v}")).clone();
+            let want = if says { ("CC-BY-4.0", "full") } else { ("unknown", "unknown") };
+            assert_eq!(claim["licence"].as_str(), Some(want.0), "{claim}");
+            let s = claim["sources"].as_array().unwrap().iter().find(|s| s["id"] == "src-who.int").unwrap().clone();
+            assert_eq!((s["licence"].as_str(), s["kept"].as_str()), (Some(want.0), Some(want.1)), "{claim}");
+            let (retrieved, checked) = (v["freshness"]["retrieved"].as_str().unwrap(), v["freshness"]["last_checked"].as_str().unwrap());
+            assert!(retrieved.len() == 10 && checked.starts_with(retrieved) && checked.contains('T'), "{retrieved} {checked}");
+        }
     }
 
     #[tokio::test]

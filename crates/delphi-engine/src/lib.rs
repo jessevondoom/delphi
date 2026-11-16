@@ -97,6 +97,7 @@ pub mod capabilities;
 pub mod connector_run;
 pub mod connectors;
 pub mod connectors_cli;
+pub mod consolidate;
 pub mod endpoints_cli;
 pub mod engine;
 pub mod exec;
@@ -209,6 +210,7 @@ pub mod tier_audit;
 pub mod accept_all;
 pub mod timers;
 pub mod tools;
+pub mod use_signals;
 pub mod workspace;
 pub mod worktree;
 

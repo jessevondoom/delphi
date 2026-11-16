@@ -329,7 +329,15 @@ impl Jobs {
                 Some(Ok(Ok(Finish::Partial(v)))) => (State::Partial, Some(v), None),
                 Some(Ok(Err(e))) => (State::Failed, None, Some(e)),
             };
-            on_end(&Ended { state, result: result.as_ref(), error: error.as_deref(), ms: started.elapsed().as_millis() as u64 });
+            let ms = started.elapsed().as_millis() as u64;
+            // `budget_used.ms` (`specs/119` §6 item 1): how long the run took, by the job's own clock.
+            let result = result.map(|mut v| {
+                if v["budget_used"].is_object() {
+                    v["budget_used"]["ms"] = serde_json::json!(ms);
+                }
+                v
+            });
+            on_end(&Ended { state, result: result.as_ref(), error: error.as_deref(), ms });
             me.end(&id, state, result, error);
         });
     }
@@ -549,6 +557,23 @@ mod tests {
         assert!(via[2]["url"].as_str().unwrap().chars().count() <= 300 && via[2]["via"].as_str().unwrap().chars().count() <= 80, "{s}");
         let _ = tx.send(());
         jobs.wait("rp", "s", Duration::from_secs(5)).await.unwrap();
+    }
+
+    /// `specs/119` §6 item 1: `budget_used` gains `ms`, the time the run took by the job's clock; a result without `budget_used` is left
+    /// as it was.
+    #[tokio::test]
+    async fn the_result_says_how_long_the_run_took() {
+        let jobs = Jobs::default();
+        jobs.submit("t1", "s", Depth::Quick, |_| async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            done(json!({"budget_used": {"steps": 1, "check_steps": 0}}))
+        });
+        jobs.submit("t2", "s", Depth::Quick, |_| async { done(json!({"n": 1})) });
+        let r = jobs.wait("t1", "s", Duration::from_secs(5)).await.unwrap();
+        assert!(r["budget_used"]["ms"].as_u64().is_some_and(|ms| ms >= 20), "{r}");
+        assert_eq!(r["budget_used"]["steps"], 1);
+        let r = jobs.wait("t2", "s", Duration::from_secs(5)).await.unwrap();
+        assert!(r["budget_used"].is_null(), "{r}");
     }
 
     #[tokio::test]

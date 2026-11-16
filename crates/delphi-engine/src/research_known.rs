@@ -183,7 +183,7 @@ fn row_of(rel_path: &str) -> Row<'_> {
         ["research", "claims", file] => file.strip_suffix(".json").map_or(Row::Other, Row::Claim),
         ["research", "projects", _, dir, file] if *dir == crate::research_index::CLAIMS_DIR => file.strip_suffix(".json").map_or(Row::Other, Row::Claim),
         ["research", "topics", id, file] if matches!(*file, "record.json" | "answer.md") && crate::research_record::valid_topic_id(id) => Row::Topic(id),
-        ["library", "sources", id, "source.md"] => Row::Source(id),
+        ["library", "sources", id, "source.md" | "excerpts.md"] => Row::Source(id),
         _ => Row::Other,
     }
 }

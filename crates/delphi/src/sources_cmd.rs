@@ -22,7 +22,9 @@ const USAGE: &str = "usage:
     [--work-bytes <n>] [--home <dir>]
   delphi sources excerpt list <id> [--json] [--home <dir>]
   delphi sources bib [<id>...] [--format apa|mla|chicago|plain|csl-json|bibtex] [--home <dir>]
-  delphi sources purge <id> [--home <dir>]";
+  delphi sources purge <id> [--home <dir>]
+  delphi sources private list [--json] [--home <dir>]
+  delphi sources private purge [--older-than <days>] [--home <dir>]";
 
 /// A line for a terminal: external titles never carry control characters into it.
 fn clean(s: &str, n: usize) -> String {
@@ -43,7 +45,7 @@ fn mib(args: &[String], name: &str) -> Result<Option<u64>, String> {
 
 /// The words that are not flags or flag values.
 fn positional(args: &[String]) -> Vec<&String> {
-    const WITH_VALUE: [&str; 17] = ["--level", "--licence", "--title", "--rights-holder", "--attribution", "--max-text-mib", "--max-source-mib", "--home", "--workspace", "--locator", "--purpose", "--text", "--file", "--prefix", "--suffix", "--work-bytes", "--format"];
+    const WITH_VALUE: [&str; 18] = ["--older-than", "--level", "--licence", "--title", "--rights-holder", "--attribution", "--max-text-mib", "--max-source-mib", "--home", "--workspace", "--locator", "--purpose", "--text", "--file", "--prefix", "--suffix", "--work-bytes", "--format"];
     args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !WITH_VALUE.contains(&args[*i - 1].as_str()))).map(|(_, a)| a).collect()
 }
 
@@ -88,6 +90,7 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
         Some("show") => show(&lib, rest, home),
         Some("archive") => archive(&lib, rest, home),
         Some("purge") => purge(&lib, rest),
+        Some("private") => private(&lib, rest),
         Some("history") => history(&lib, rest),
         Some("excerpt") => excerpt(&lib, rest),
         Some("bib") => bibliography(&lib, rest),
@@ -340,6 +343,63 @@ fn purge(lib: &Library, args: &[String]) -> i32 {
         Err(e) => {
             eprintln!("delphi sources purge: {}", e);
             1
+        }
+    }
+}
+
+/// `delphi sources private list|purge` (`specs/119` §3 item 4): the text research kept privately under `[library] unknown_licence =
+/// "private_text"`. `list` shows each source, its size and when it was last read or checked; `purge` removes the text (all of it, or what
+/// is older than `--older-than` days) and keeps the pointer and the claims, whose anchors into it are marked `text_removed`. Sources the
+/// operator flagged private by hand are not listed or touched. `purge` is refused inside an agent seat.
+fn private(lib: &Library, args: &[String]) -> i32 {
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            let all = lib.private_texts();
+            if args.iter().any(|a| a == "--json") {
+                let rows: Vec<Value> = all.iter().map(|p| serde_json::json!({"id": p.id, "title": p.title, "bytes": p.bytes, "touched": p.touched})).collect();
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({"sources": rows, "bytes": all.iter().map(|p| p.bytes).sum::<u64>()})).unwrap_or_default());
+                return 0;
+            }
+            if all.is_empty() {
+                println!("No text is kept privately. ([library] unknown_licence = \"private_text\" keeps it; the default keeps quoted passages only.)");
+                return 0;
+            }
+            for p in &all {
+                println!("{}  {} bytes  {}  {}", p.id, p.bytes, p.touched.get(..10).unwrap_or(&p.touched), clean(&p.title, 70));
+            }
+            println!("{} source(s), {} bytes kept privately (never exported, never in a bundle; quoted at most 300 characters at a time)", all.len(), all.iter().map(|p| p.bytes).sum::<u64>());
+            0
+        }
+        Some("purge") => {
+            if !operator_only("private purge") {
+                return 2;
+            }
+            let older = match value_of(args, "--older-than").map(|v| v.map(|d| d.parse::<u64>())) {
+                Ok(None) => None,
+                Ok(Some(Ok(d))) => Some(d),
+                Ok(Some(Err(_))) | Err(_) => {
+                    eprintln!("delphi sources private purge: --older-than takes a whole number of days\n{}", USAGE);
+                    return 2;
+                }
+            };
+            let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0);
+            match lib.purge_private_text(older, now) {
+                Ok(done) => {
+                    for (id, n) in &done {
+                        println!("{}: text removed ({} bytes); the pointer and its claims are kept, their anchors marked text_removed", id, n);
+                    }
+                    println!("{} source(s), {} bytes removed", done.len(), done.iter().map(|(_, n)| n).sum::<u64>());
+                    0
+                }
+                Err(e) => {
+                    eprintln!("delphi sources private purge: {}", e);
+                    1
+                }
+            }
+        }
+        _ => {
+            eprintln!("{}", USAGE);
+            2
         }
     }
 }

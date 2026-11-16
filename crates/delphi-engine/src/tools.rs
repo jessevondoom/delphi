@@ -300,6 +300,10 @@ impl Registry {
         for spec in crate::finding_record::specs() {
             r.register(spec);
         }
+        // `flag_wrong` (`specs/116` §7 item 2): every role may dispute what the knowledge base gave it; it labels, never edits.
+        for spec in crate::use_signals::specs() {
+            r.register(spec);
+        }
         r
     }
 
@@ -1794,8 +1798,8 @@ mod tests {
     fn the_registry_offers_write_tools_only_to_roles_with_a_write_scope_and_accepts_new_tools() {
         let mut r = Registry::builtin();
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "record_finding"]);
-        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram", "record_finding"]);
+        assert_eq!(names(r.defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "record_finding", "flag_wrong"]);
+        assert_eq!(names(r.defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram", "record_finding", "flag_wrong"]);
         assert!(r.classify("nope", &json!({})).is_err());
         fn ping(_: &mut ToolCtx, _: &Value) -> ToolResult {
             ToolResult::ok("pong".to_string())
@@ -2299,6 +2303,32 @@ mod tests {
         let mut ctx = ToolCtx { guard, span, index: &mut index, rules: &rules, probe: &AssumeClean, role, mission_id: mission, now_rfc3339: "2026-11-14T00:00:00Z", stamps: vec![], events: vec![] };
         let r = run(&mut ctx, tool, &args);
         (r, ctx.events)
+    }
+
+    /// `specs/116` §7 item 2: `flag_wrong` records a dispute, labels the item for the next search, edits nothing, and counts only
+    /// from a span that read nothing untrusted; the agent cannot choose whether it counts, and no file tool reaches the ledger.
+    #[test]
+    fn flag_wrong_labels_the_item_counts_only_an_untainted_span_and_edits_nothing() {
+        let (_t, ws, guard) = finding_ws(&[("m1", ""), ("m2", "")]);
+        let before = fs::read_to_string(ws.join("team/context/ladder.md")).unwrap();
+        let mut tainted = Span::root("sp2");
+        tainted.observe_input(Tier::L0);
+        let (r, ev) = call_in(&guard, &mut tainted, "scout", "m1", "flag_wrong", json!({"pointer": "context/ladder.md#L7-L8", "why": "a page says the timer is not reset", "counted": true}));
+        assert!(!r.is_error, "{}", r.content);
+        let v: Value = serde_json::from_str(&r.content).unwrap();
+        assert_eq!((v["counted"].as_bool(), v["label"].as_str()), (Some(false), Some("disputed by scout")), "a tainted span's dispute is shown, never counted, whatever it asks");
+        assert_eq!(ev, vec![(crate::use_signals::EVENT.to_string(), json!({"target": "context/ladder.md", "by": "scout", "counted": false}))]);
+        let mut span = Span::root("sp1");
+        let (r, _) = call_in(&guard, &mut span, "builder", "m2", "flag_wrong", json!({"pointer": "context/ladder.md", "why": "rung three waits sixty seconds now"}));
+        assert_eq!(serde_json::from_str::<Value>(&r.content).unwrap()["counted"], true);
+        assert!(call_in(&guard, &mut span, "builder", "m2", "flag_wrong", json!({"pointer": "context/ladder.md", "why": "again"})).0.is_error, "once per mission and role");
+        assert!(call_in(&guard, &mut span, "builder", "m2", "flag_wrong", json!({"pointer": "context/elsewhere.md", "why": "no such item"})).0.is_error);
+        let found = call_in(&guard, &mut span, "builder", "m2", "kb_search", json!({"query": "backoff timer reset"})).0.content;
+        assert!(found.contains("disputed by scout, builder"), "{found}");
+        assert_eq!(fs::read_to_string(ws.join("team/context/ladder.md")).unwrap(), before, "nothing is edited");
+        for path in ["local/memory/disputes.jsonl", "memory/disputes.jsonl"] {
+            assert!(call_in(&guard, &mut span, "builder", "m2", "read_file", json!({"path": path})).0.is_error, "{path}");
+        }
     }
 
     fn ladder_finding() -> Value {
@@ -2877,8 +2907,8 @@ mod tests {
     #[test]
     fn tool_definitions_depend_on_the_role_having_write_scope() {
         let names = |d: Vec<ToolDef>| d.into_iter().map(|t| t.name).collect::<Vec<_>>();
-        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "record_finding"]);
-        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram", "record_finding"]);
+        assert_eq!(names(tool_defs(false)), ["read_file", "read_doc", "list_dir", "search", "check", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "record_finding", "flag_wrong"]);
+        assert_eq!(names(tool_defs(true)), ["read_file", "read_doc", "list_dir", "search", "check", "write_file", "name_thread", "raise_decision", "record_change", "note", "suggest_rule", "kb_search", "recall_memory", "xenia_search", "xenia_help", "external_available", "request_research", "inspect_system", "propose_admin_action", "request_test_authorization", "write_archive", "write_html", "write_chart", "write_report", "write_deck", "write_sheet", "write_diagram", "record_finding", "flag_wrong"]);
     }
 
     #[test]

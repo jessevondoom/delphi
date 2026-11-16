@@ -687,22 +687,47 @@ impl AgentsConfig {
 
 /// `[retrieval]` (`specs/064` §4.2, `specs/116` §4 item 2). `auto`: a span starts with passages from the knowledge base. `start_passages`
 /// and `start_chars`: how many, and how many characters in all (six and 4,000 by default; at most ten and 16,000; zero in either
-/// gives a span none).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+/// gives a span none). The three ranking terms of `specs/116` §7 item 3 are each a share of a result's score, off at zero (the
+/// default) and at most [`MAX_RANK_TERM`]: `use_boost` raises an item the daemon handed to spans that then ended well, `dispute_penalty`
+/// lowers an item flagged wrong, and `confidence_weight` raises a validated fact by its stored `confidence`.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RetrievalConfig {
     pub auto: bool,
     pub start_passages: usize,
     pub start_chars: usize,
+    pub use_boost: f64,
+    pub dispute_penalty: f64,
+    pub confidence_weight: f64,
 }
 
 /// The most `[retrieval] start_passages` and `start_chars` may be.
 pub const MAX_START_PASSAGES: usize = 10;
 pub const MAX_START_CHARS: usize = 16_000;
+/// The most each ranking term of `[retrieval]` may be: a share of a result's score, so no term can more than move a result a little.
+pub const MAX_RANK_TERM: f64 = 0.5;
 
 impl Default for RetrievalConfig {
     fn default() -> RetrievalConfig {
-        RetrievalConfig { auto: true, start_passages: 6, start_chars: 4000 }
+        RetrievalConfig { auto: true, start_passages: 6, start_chars: 4000, use_boost: 0.0, dispute_penalty: 0.0, confidence_weight: 0.0 }
+    }
+}
+
+impl RetrievalConfig {
+    /// Are the three ranking terms each a number from 0 to [`MAX_RANK_TERM`]?
+    pub fn terms_ok(&self) -> bool {
+        [self.use_boost, self.dispute_penalty, self.confidence_weight].iter().all(|t| t.is_finite() && (0.0..=MAX_RANK_TERM).contains(t))
+    }
+
+    /// The `[retrieval]` settings in a `config.toml`'s text; `None` when they cannot be read as written or are out of range. The
+    /// daemon reads the ranking terms from the file at each search, so a change needs no restart; `None` is read as all terms off.
+    pub fn read(text: &str) -> Option<RetrievalConfig> {
+        let root = toml::from_str::<toml::Value>(text).ok()?;
+        let c = match root.get("retrieval") {
+            None => RetrievalConfig::default(),
+            Some(v) => v.clone().try_into::<RetrievalConfig>().ok()?,
+        };
+        c.terms_ok().then_some(c)
     }
 }
 
@@ -734,19 +759,54 @@ impl Default for ProjectsConfig {
 /// of the same role may retrieve it as an unreviewed passage of data; off, a note stages as it did before the tier. On by default
 /// (the operator, 2026-11-14). `digest_daily`: how many items the digest shows a day (10 by default, at most 100; zero shows none).
 /// Neither key loads anything into a system prompt.
+///
+/// `consolidate` (`specs/116` §6): `false` (the default) runs no consolidation; `"mechanical"` merges exact and near-exact duplicate
+/// provisional notes, with no model; `true` (or `"model"`) does that and asks one tool-less model call for proposals, which go to the
+/// digest and change nothing until the operator accepts one. `consolidate_tokens` caps the model's share of a day (30,000).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemoryConfig {
     pub provisional: bool,
     pub digest_daily: usize,
+    pub consolidate: Consolidate,
+    pub consolidate_tokens: u64,
+}
+
+/// `[memory] consolidate`: off, the mechanical pass alone, or that and the model's proposals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Consolidate {
+    #[default]
+    Off,
+    Mechanical,
+    Model,
+}
+
+impl<'de> serde::Deserialize<'de> for Consolidate {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Consolidate, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            B(bool),
+            S(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::B(false) => Ok(Consolidate::Off),
+            Raw::B(true) => Ok(Consolidate::Model),
+            Raw::S(s) if s == "mechanical" => Ok(Consolidate::Mechanical),
+            Raw::S(s) if s == "model" => Ok(Consolidate::Model),
+            Raw::S(s) => Err(serde::de::Error::custom(format!("consolidate is false, true, \"mechanical\" or \"model\", not \"{s}\""))),
+        }
+    }
 }
 
 /// The most `[memory] digest_daily` may be.
 pub const MAX_DIGEST_DAILY: usize = 100;
+/// The most `[memory] consolidate_tokens` may be.
+pub const MAX_CONSOLIDATE_TOKENS: u64 = 1_000_000;
 
 impl Default for MemoryConfig {
     fn default() -> MemoryConfig {
-        MemoryConfig { provisional: true, digest_daily: 10 }
+        MemoryConfig { provisional: true, digest_daily: 10, consolidate: Consolidate::Off, consolidate_tokens: 30_000 }
     }
 }
 
@@ -759,7 +819,7 @@ impl MemoryConfig {
             None => MemoryConfig::default(),
             Some(v) => v.clone().try_into::<MemoryConfig>().ok()?,
         };
-        (c.digest_daily <= MAX_DIGEST_DAILY).then_some(c)
+        (c.digest_daily <= MAX_DIGEST_DAILY && c.consolidate_tokens <= MAX_CONSOLIDATE_TOKENS).then_some(c)
     }
 }
 
@@ -859,11 +919,76 @@ impl McpConfig {
 }
 
 /// `[library]`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LibraryConfig {
     pub pages: PagesConfig,
     pub acquire: AcquireConfig,
+    /// How much of a web page whose licence is unknown (or closed) a research run keeps (`specs/119` §3). The default is `excerpts`.
+    #[serde(deserialize_with = "de_unknown_licence")]
+    pub unknown_licence: UnknownLicence,
+    /// The most text kept under `unknown_licence = "private_text"`, in MiB (`specs/119` §3 item 5); past it the oldest is removed first.
+    pub private_text_max_mib: u64,
+    /// `deny` (the default) or `allow` (`specs/098` §7.2). Read by the doctor and the seat check from the file itself; named here so
+    /// that `[library]` with it parses.
+    #[serde(deserialize_with = "de_private_to_models")]
+    pub private_to_models: String,
+}
+
+impl Default for LibraryConfig {
+    fn default() -> Self {
+        LibraryConfig { pages: PagesConfig::default(), acquire: AcquireConfig::default(), unknown_licence: UnknownLicence::default(), private_text_max_mib: 500, private_to_models: "deny".into() }
+    }
+}
+
+/// `[library] unknown_licence` (`specs/119` §3 item 1; the operator chose `excerpts` as the default on 2026-11-14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnknownLicence {
+    /// The behaviour before spec 119: an address, a title and a hash; no text. A claim's anchor keeps its quote alone.
+    Pointer,
+    /// The passages a run quoted, each at most 300 characters with up to 200 on either side, as kept excerpts.
+    #[default]
+    Excerpts,
+    /// The whole text, kept as a private source: indexed for nothing that leaves the install, quoted at most 300 characters at a time.
+    PrivateText,
+}
+
+impl UnknownLicence {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnknownLicence::Pointer => "pointer",
+            UnknownLicence::Excerpts => "excerpts",
+            UnknownLicence::PrivateText => "private_text",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<UnknownLicence> {
+        match s {
+            "pointer" => Some(UnknownLicence::Pointer),
+            "excerpts" => Some(UnknownLicence::Excerpts),
+            "private_text" => Some(UnknownLicence::PrivateText),
+            _ => None,
+        }
+    }
+
+    /// The setting as `config.toml` says it, for a reader that has only the file (the daemon's research run reads it at each run). A file
+    /// that cannot be read, or a value that is not one of the three, keeps the default.
+    pub fn read(config_toml: &str) -> UnknownLicence {
+        toml::from_str::<toml::Value>(config_toml).ok().and_then(|v| v.get("library")?.get("unknown_licence")?.as_str().and_then(UnknownLicence::parse)).unwrap_or_default()
+    }
+}
+
+fn de_unknown_licence<'de, D: serde::Deserializer<'de>>(d: D) -> Result<UnknownLicence, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    UnknownLicence::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("unknown_licence `{}` is not one of pointer, excerpts, private_text", s)))
+}
+
+fn de_private_to_models<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    match s.as_str() {
+        "deny" | "allow" => Ok(s),
+        _ => Err(serde::de::Error::custom(format!("private_to_models `{}` is not one of deny, allow", s))),
+    }
 }
 
 /// Whether a page may use external search: `ask` (the default) needs `--external` or the console's key each time.
@@ -1150,6 +1275,7 @@ impl Config {
         }
         if let Some(v) = root.get("library") {
             match v.clone().try_into::<LibraryConfig>() {
+                Ok(v) if v.private_text_max_mib == 0 => errs.push("[library]: private_text_max_mib is at least 1".into()),
                 Ok(v) => match v.acquire.check() {
                     Ok(()) => cfg.library = v,
                     Err(e) => errs.push(format!("[library.acquire]: {}", e)),
@@ -1173,6 +1299,7 @@ impl Config {
         if let Some(v) = root.get("retrieval") {
             match v.clone().try_into::<RetrievalConfig>() {
                 Ok(v) if v.start_passages > MAX_START_PASSAGES || v.start_chars > MAX_START_CHARS => errs.push(format!("[retrieval]: start_passages is at most {} and start_chars at most {} (specs/116 §4 item 2)", MAX_START_PASSAGES, MAX_START_CHARS)),
+                Ok(v) if !v.terms_ok() => errs.push(format!("[retrieval]: use_boost, dispute_penalty and confidence_weight are each a number from 0 to {} (specs/116 §7 item 3)", MAX_RANK_TERM)),
                 Ok(v) => cfg.retrieval = v,
                 Err(e) => errs.push(format!("[retrieval]: {}", e)),
             }
@@ -1188,6 +1315,7 @@ impl Config {
         if let Some(v) = root.get("memory") {
             match v.clone().try_into::<MemoryConfig>() {
                 Ok(v) if v.digest_daily > MAX_DIGEST_DAILY => errs.push(format!("[memory]: digest_daily is at most {} (specs/116 §3 item 4)", MAX_DIGEST_DAILY)),
+                Ok(v) if v.consolidate_tokens > MAX_CONSOLIDATE_TOKENS => errs.push(format!("[memory]: consolidate_tokens is at most {} (specs/116 §6 item 1)", MAX_CONSOLIDATE_TOKENS)),
                 Ok(v) => cfg.memory = v,
                 Err(e) => errs.push(format!("[memory]: {}", e)),
             }
@@ -1817,6 +1945,34 @@ pub(crate) mod tests {
         assert!(MemoryConfig::read("not toml [").is_none());
     }
 
+    /// `specs/116` §7 item 3: the three ranking terms are off at zero and bounded.
+    #[test]
+    fn the_ranking_terms_are_zero_by_default_and_bounded() {
+        let d = Config::parse("").unwrap().retrieval;
+        assert_eq!((d.use_boost, d.dispute_penalty, d.confidence_weight), (0.0, 0.0, 0.0));
+        let set = Config::parse("[retrieval]\nuse_boost = 0.2\ndispute_penalty = 0.5\nconfidence_weight = 0.1\n").unwrap().retrieval;
+        assert_eq!((set.use_boost, set.dispute_penalty, set.confidence_weight), (0.2, 0.5, 0.1));
+        for bad in ["use_boost = 0.6", "dispute_penalty = -0.1", "confidence_weight = \"high\"", "use_boost = nan"] {
+            assert!(Config::parse(&format!("[retrieval]\n{bad}\n")).is_err(), "{bad}");
+            assert!(RetrievalConfig::read(&format!("[retrieval]\n{bad}\n")).is_none(), "{bad}");
+        }
+        assert_eq!(RetrievalConfig::read("").unwrap().use_boost, 0.0);
+    }
+
+    /// `specs/116` §6 item 1: consolidation is off by default, takes false, true, "mechanical" or "model", and its token cap is bounded.
+    #[test]
+    fn consolidation_is_off_by_default_and_its_words_and_cap_are_checked() {
+        let d = Config::parse("").unwrap().memory;
+        assert_eq!((d.consolidate, d.consolidate_tokens), (Consolidate::Off, 30_000));
+        for (v, want) in [("false", Consolidate::Off), ("true", Consolidate::Model), ("\"mechanical\"", Consolidate::Mechanical), ("\"model\"", Consolidate::Model)] {
+            assert_eq!(Config::parse(&format!("[memory]\nconsolidate = {v}\n")).unwrap().memory.consolidate, want, "{v}");
+            assert_eq!(MemoryConfig::read(&format!("[memory]\nconsolidate = {v}\n")).unwrap().consolidate, want, "{v}");
+        }
+        for bad in ["consolidate = \"always\"", "consolidate = 1", "consolidate_tokens = 2000000", "consolidate_tokens = -1"] {
+            assert!(Config::parse(&format!("[memory]\n{bad}\n")).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn mcp_switch_reads_fail_closed() {
         assert!(McpConfig::enabled_in(""));
@@ -2189,6 +2345,25 @@ tools = { search = "read", note = "draft", send = "write" }
             let errs = Config::parse(&format!("{}\n[library.acquire]\n{}\n", SAMPLE, bad)).unwrap_err().join("\n");
             assert!(errs.contains(why), "{}: {}", bad, errs);
         }
+    }
+
+    /// `specs/119` §3 item 1: excerpts by default; `pointer` and `private_text` only when set; any other word is a problem the doctor
+    /// names. `private_to_models` parses beside it (it was refused as an unknown field of `[library]` before).
+    #[test]
+    fn unknown_licence_defaults_to_excerpts_and_its_neighbours_parse() {
+        let def = Config::parse(SAMPLE).unwrap().library;
+        assert_eq!((def.unknown_licence, def.private_text_max_mib, def.private_to_models.as_str()), (UnknownLicence::Excerpts, 500, "deny"));
+        for (word, want) in [("pointer", UnknownLicence::Pointer), ("excerpts", UnknownLicence::Excerpts), ("private_text", UnknownLicence::PrivateText)] {
+            let c = Config::parse(&format!("{}\n[library]\nunknown_licence = \"{}\"\nprivate_to_models = \"allow\"\nprivate_text_max_mib = 20\n", SAMPLE, word)).unwrap().library;
+            assert_eq!((c.unknown_licence, c.private_text_max_mib, c.private_to_models.as_str()), (want, 20, "allow"));
+            assert_eq!(UnknownLicence::read(&format!("[library]\nunknown_licence = \"{}\"\n", word)), want);
+        }
+        for (bad, why) in [("unknown_licence = \"full\"", "unknown_licence"), ("private_text_max_mib = 0", "private_text_max_mib"), ("private_to_models = \"maybe\"", "private_to_models")] {
+            let errs = Config::parse(&format!("{}\n[library]\n{}\n", SAMPLE, bad)).unwrap_err().join("\n");
+            assert!(errs.contains(why), "{}: {}", bad, errs);
+        }
+        assert_eq!(UnknownLicence::read("[library]\nunknown_licence = \"full\"\n"), UnknownLicence::Excerpts, "a wrong word keeps the default");
+        assert_eq!(UnknownLicence::read("not toml ["), UnknownLicence::Excerpts);
     }
 
     #[test]
