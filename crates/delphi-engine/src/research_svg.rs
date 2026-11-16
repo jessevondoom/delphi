@@ -71,51 +71,61 @@ const SVG_STACK: usize = 256 << 20;
 
 /// The one slot a drawing runs in, for the whole process. The drawing's own thread holds it until the drawing ends, so a drawing
 /// that passed its time limit still holds it and no second one starts beside it: CPU spent on drawings is at most one core.
-/// It holds when the drawing that has it began.
-static SLOT_BUSY: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-static SLOT_FREED: std::sync::Condvar = std::sync::Condvar::new();
+static GATE: Gate = Gate::new();
 
-struct Slot;
+/// A one-drawing gate: when the drawing that holds it began, and a signal when it is freed. The process has one, [`GATE`]; a test
+/// of the gate's rules uses one of its own so that it never holds up another test's drawing.
+struct Gate {
+    busy: std::sync::Mutex<Option<std::time::Instant>>,
+    freed: std::sync::Condvar,
+}
 
-impl Slot {
-    /// The slot, waiting at most `wait` for the drawing that holds it to end. A drawing already past [`TIME_LIMIT`] will not end
-    /// soon, so a caller is refused at once rather than waiting for it.
-    fn acquire(wait: Duration) -> Option<Slot> {
-        Self::acquire_from(wait, std::time::Instant::now())
+/// The gate held by one drawing; dropping it frees the gate.
+struct Slot(&'static Gate);
+
+impl Gate {
+    const fn new() -> Gate {
+        Gate { busy: std::sync::Mutex::new(None), freed: std::sync::Condvar::new() }
     }
 
-    /// [`Slot::acquire`], the drawing that takes the slot counted as begun at `began` (a test sets an earlier time).
-    fn acquire_from(wait: Duration, began: std::time::Instant) -> Option<Slot> {
+    /// The slot, waiting at most `wait` for the drawing that holds it to end. A drawing already past [`TIME_LIMIT`] will not end
+    /// soon, so a caller is refused at once rather than waiting for it.
+    fn acquire(&'static self, wait: Duration) -> Option<Slot> {
+        self.acquire_from(wait, std::time::Instant::now())
+    }
+
+    /// [`Gate::acquire`], the drawing that takes the slot counted as begun at `began` (a test sets an earlier time).
+    fn acquire_from(&'static self, wait: Duration, began: std::time::Instant) -> Option<Slot> {
         let deadline = std::time::Instant::now() + wait;
-        let mut busy = SLOT_BUSY.lock().unwrap_or_else(|e| e.into_inner());
+        let mut busy = self.busy.lock().unwrap_or_else(|e| e.into_inner());
         while let Some(since) = *busy {
             let overdue = TIME_LIMIT.checked_sub(since.elapsed()).filter(|d| !d.is_zero())?;
             let left = deadline.checked_duration_since(std::time::Instant::now()).filter(|d| !d.is_zero())?;
-            busy = SLOT_FREED.wait_timeout(busy, left.min(overdue)).unwrap_or_else(|e| e.into_inner()).0;
+            busy = self.freed.wait_timeout(busy, left.min(overdue)).unwrap_or_else(|e| e.into_inner()).0;
         }
         *busy = Some(began);
-        Some(Slot)
+        Some(Slot(self))
     }
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        *SLOT_BUSY.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        SLOT_FREED.notify_all();
+        *self.0.busy.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.0.freed.notify_all();
     }
 }
 
 /// Draw `svg` to a PNG under every bound of this module. `Err` is a fixed sentence saying why it was refused.
 pub fn render(svg: &[u8]) -> Result<Drawn, &'static str> {
-    render_with(svg, TIME_LIMIT, TIME_LIMIT)
+    render_with(svg, &GATE, TIME_LIMIT, TIME_LIMIT)
 }
 
 /// [`render`], waiting at most `wait` for the slot and `limit` for the drawing.
-fn render_with(svg: &[u8], wait: Duration, limit: Duration) -> Result<Drawn, &'static str> {
+fn render_with(svg: &[u8], gate: &'static Gate, wait: Duration, limit: Duration) -> Result<Drawn, &'static str> {
     if svg.len() > MAX_SVG_BYTES {
         return Err("an SVG larger than 2 MiB is not drawn");
     }
-    let slot = Slot::acquire(wait).ok_or("another SVG is still being drawn")?;
+    let slot = gate.acquire(wait).ok_or("another SVG is still being drawn")?;
     let bytes = svg.to_vec();
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("svg-render".into()).stack_size(SVG_STACK).spawn(move || {
@@ -675,17 +685,18 @@ mod tests {
 
     #[test]
     fn a_timed_out_drawing_keeps_the_one_slot_so_two_never_run_at_once() {
+        static G: Gate = Gate::new(); // its own gate, so holding it never holds up another test
         let small = svg("<rect width=\"10\" height=\"10\"/>");
         // While a drawing holds the slot, another waits for it and, past its wait, is refused without starting.
-        let held = Slot::acquire(Duration::from_secs(60)).expect("the slot comes free");
-        assert_eq!(render_with(&small, Duration::from_millis(50), TIME_LIMIT), Err("another SVG is still being drawn"));
+        let held = G.acquire(Duration::from_secs(60)).expect("the slot comes free");
+        assert_eq!(render_with(&small, &G, Duration::from_millis(50), TIME_LIMIT), Err("another SVG is still being drawn"));
         drop(held);
-        assert!(render_with(&small, Duration::from_secs(60), TIME_LIMIT).is_ok());
+        assert!(render_with(&small, &G, Duration::from_secs(60), TIME_LIMIT).is_ok());
         // A drawing whose caller stopped waiting still holds the slot until it ends: no second drawing runs beside it.
         let slow = gradients(8, 1_600);
-        assert_eq!(render_with(&slow, Duration::from_secs(60), Duration::ZERO), Err("the SVG took too long to draw"));
-        assert!(Slot::acquire(Duration::ZERO).is_none(), "the timed-out drawing still holds the slot");
-        drop(Slot::acquire(Duration::from_secs(120)).expect("and gives it back when it ends"));
+        assert_eq!(render_with(&slow, &G, Duration::from_secs(60), Duration::ZERO), Err("the SVG took too long to draw"));
+        assert!(G.acquire(Duration::ZERO).is_none(), "the timed-out drawing still holds the slot");
+        drop(G.acquire(Duration::from_secs(120)).expect("and gives it back when it ends"));
     }
 
     /// The red-team's second pass: a chain through `use`. Each clip path holds only a `use` of a rectangle that is itself clipped by
@@ -740,14 +751,15 @@ mod tests {
 
     #[test]
     fn a_caller_is_refused_at_once_when_the_drawing_in_the_slot_is_past_its_time_limit() {
+        static G: Gate = Gate::new(); // its own gate, so holding it never holds up another test
         let small = svg("<rect width=\"10\" height=\"10\"/>");
         let long_ago = std::time::Instant::now().checked_sub(TIME_LIMIT + Duration::from_secs(1)).expect("the clock goes back that far");
-        let held = Slot::acquire_from(Duration::from_secs(60), long_ago).expect("the slot comes free");
+        let held = G.acquire_from(Duration::from_secs(60), long_ago).expect("the slot comes free");
         let started = std::time::Instant::now();
-        assert_eq!(render_with(&small, TIME_LIMIT, TIME_LIMIT), Err("another SVG is still being drawn"));
+        assert_eq!(render_with(&small, &G, TIME_LIMIT, TIME_LIMIT), Err("another SVG is still being drawn"));
         assert!(started.elapsed() < Duration::from_secs(1), "no wait for an overdue drawing: {:?}", started.elapsed());
         drop(held);
-        assert!(render_with(&small, Duration::from_secs(60), TIME_LIMIT).is_ok());
+        assert!(render_with(&small, &G, Duration::from_secs(60), TIME_LIMIT).is_ok());
     }
 
     /// One long path drawn many times through levels of `use`: `levels` levels, each of `fan` uses of the level below.
