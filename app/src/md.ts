@@ -210,3 +210,18 @@ export function resolvePath(docPath: string | undefined, href: string): string |
 
 /** Whether an address is one the window will hand to the system's browser. */
 export const isWeb = (href: string): boolean => /^https?:\/\/[^\s]+$/i.test(href);
+
+/** The words of a run of inline parts, with no styling: what a heading or a passage says. */
+export function plain(c: Inline[]): string {
+  return c.map((x) => (x.t === 'text' || x.t === 'code' ? x.s : x.t === 'br' ? ' ' : x.t === 'image' ? x.alt : plain(x.c))).join('');
+}
+
+/** The words of a paragraph, a list or a quote; nothing for a block that is not prose (code, a table, a picture, a rule, a heading). */
+export function blockText(b: Block): string {
+  switch (b.t) {
+    case 'p': return plain(b.c);
+    case 'quote': return b.c.map(blockText).filter(Boolean).join(' ');
+    case 'list': return b.items.map((it) => it.c.map(blockText).filter(Boolean).join(' ')).filter(Boolean).join(' ');
+    default: return '';
+  }
+}

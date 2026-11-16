@@ -414,10 +414,10 @@ The knowledge base: index it, search it.
   delphi kb search <query> [--role <role>] [--untrusted|--all] [--staged] [--unreviewed] [--about] [--summaries|--bibs]
   delphi kb search <query> --project <name> | --all-projects
   delphi kb import <file.md | dir | -> [--home <dir>] [--workspace <name>]
-  delphi kb review [stats | show <ref> | keep <ref>…|--all | discard <ref>…|--all]
+  delphi kb review [stats | show <ref> | keep <ref>…|--all | discard <ref>…|--all] | flag <ptr> --why <text>
   delphi kb refresh [--stale [--minutes <n, at most 4>] | <id> (--still-current | <file.md | ->)]
   delphi kb quarantine [<id> [--restore]] | extract <page-id> (--auto | <candidates.json | ->)
-  delphi kb index | reindex | stats | health [--json] | attest [<page-id>]
+  delphi kb index | reindex | stats | health [--json] | attest [<page-id>] | reads [--top <n>] | disputes [clear <ptr>]
   delphi kb serve [--bind <host:port>] [--workspace <name>] [--home <dir>]
 ```
 

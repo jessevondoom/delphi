@@ -29,7 +29,9 @@ It is not signed. An app you build yourself opens normally. One copied from anot
 | :-- | :-- |
 | Activity | What agents said, read and recorded, newest first, each in its role's colour; the agents and what each is doing; what is waiting on you |
 | Councils | The question, the stages, each seat's lens, position and critique; the council's activity while it runs; the verdict and what was left unresolved once it is in. In the blind round a seat's words are not shown |
+| Encyclopedia | A page for each topic the workspace knows about, generated from cited records and marked as such: topics by letter or by project, what is new or changed since you read it, what is due for a rebuild, what has open questions. On a page a citation marker opens a panel with the claim, its status and its anchors, and an anchor opens the source at the quoted passage, highlighted. Under the page: its bibliography, where to start, related pages, what links to it, open questions and earlier versions. Also a page for a source, for a claim and for a research topic, and a dated list of changes. Needs a paired app (below) |
 | Knowledge base | Search, the collections and their sizes, what changed last; results with their labels; a reader with a document's provenance |
+| Agent memory | For each role: its ratified lessons, its notes not yet reviewed (with how often each was used and when it expires), its findings, its recent episodes, and "learned lately", one dated list of all four; and the same for every role by date. You are shown all of it. Needs a paired app |
 | Work output | What the team produced, grouped by what is there: mission documents, research, context, recorded changes, builds |
 | Agents and skills | Each role's manifest and each skill |
 | Settings | The window's theme and menu; the daemon's approval mode and budget, to read |
@@ -39,9 +41,10 @@ An agent is always written the same way: its chip, its name in bold in its colou
 ## What it can and cannot reach
 
 - It attaches to the daemon's read-only socket (the narrator scope). Once you have paired it (below), it attaches to the daemon's app socket instead, proving its key each time. It attaches to no other socket and is never given a console token.
-- It can call nine of the daemon's read methods, and six reads of the knowledge base through one of them. The list is fixed in the app and checked against the daemon's own allowlist by a test. Pairing does not add to it.
+- It can call nine of the daemon's read methods, and six reads of the knowledge base through one of them. A paired app can also call the encyclopedia's eleven reads (`pages.list`, `pages.get`, `pages.versions`, `pages.links`, `topics.list`, `topics.get`, `library.source`, `library.claim`, `memory.roles`, `memory.role`, `changes.since`; [`specs/117`](../../specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md) §3), each proved by a test of the daemon to write nothing. Those eleven are never sent on the read-only socket, because one of them returns the text of your private sources: the app refuses them itself until it has proved its key. The list is fixed in the app and checked against the daemon's own lists by a test.
 - It opens no network port and loads nothing from the network.
-- It writes nothing under your Delphi home or your projects, with one exception: a paired app keeps its key in `app/key.json` under your Delphi home, readable by you alone. Its theme and menu choices are kept by the window.
+- It writes nothing under your projects, and under your Delphi home only its own folder, `app/`, readable by you alone: its key (`app/key.json`) once paired; your marks on the encyclopedia (`app/marks.json`), written when you read a page to its end, pin a topic or write a note; and a page you export (`app/exports/<topic>.md`). None of these is sent to the daemon and no agent is given them. Its theme and menu choices are kept by the window.
+- It asks for nothing to be done. Where a page offers "Ask a follow-up", "Research this section further", "Rebuild now" or "Dispute this statement", the app composes the command (`delphi research continue …`, `delphi pages rebuild …`, `delphi pages dispute …`), puts it on your clipboard and says so; you run it in a terminal. What you type is quoted so that a shell reads it as one argument.
 - Outside its window it does three things, each on your click: **Show in Finder**, **Open** a deck or page, a document, a picture or a recording in your browser or viewer (never a program or a script), and open a web link in your browser. A file must be inside the workspace or one of your registered projects.
 
 ## Pairing it with a terminal
@@ -62,7 +65,16 @@ delphi app log                           # what paired, what was refused, what w
 - A key is recorded in `operator/app-keys.json` under your Delphi home, which no agent can read or write. A key unused for 180 days is removed.
 - The grants are `read` (what the app reads today) and `request`. A key gets both when it is paired, and gets a new grant only when you give it: an update of the app or of Delphi never adds one.
 
-Not built yet: `delphi app` does not start the app in this build (it says so; the place where it starts a process must first be added to the list of such places), and the `request` grant has no methods, so a paired app can do nothing an unpaired one cannot. The window does not yet say whether it is paired.
+Not built yet: `delphi app` does not start the app in this build (it says so; the place where it starts a process must first be added to the list of such places), and the `request` grant has no methods, so a paired app acts no more than an unpaired one: what pairing adds is the encyclopedia and agent memory, which are reads. The window does not yet say whether it is paired; the encyclopedia says how to pair when it is not.
+
+## Your marks on the encyclopedia
+
+- **Read.** A page version is marked read when you scroll to its end. The home page lists a page as *new* until then and as *changed* when the daemon has rebuilt it since.
+- **Notes.** "Add a note" beside a passage keeps a note in the margin. A note stays with its passage through later versions of the page for as long as the passage's words are kept (the citations beside them may change); when the passage is gone the note is listed under the page as orphaned, with the words it was attached to.
+- **Pins.** A pinned topic is listed first on the home page.
+- **Export.** "Export as Markdown" writes the page as the daemon stored it, banner first and bibliography last, to `app/exports/` under your Delphi home and shows it in the Finder. "Print or save as PDF" opens the system's print dialog. A page with no "Generated page. Not authoritative." banner is not exported.
+
+A source the library keeps privately for retrieval ([`specs/119`](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md) §3) is shown in the window only as the passage a claim cites; any other source, a private one included, is shown whole, labelled private.
 
 ### Where the app keeps its key
 

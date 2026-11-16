@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Bridge } from './bridge.ts';
 import { drawDiagram, isMermaid, type Drawn } from './diagram.ts';
-import { isWeb, parse, resolvePath, type Block, type Inline } from './md.ts';
+import { anchorOf, pieces } from './ency.ts';
+import { isWeb, parse, plain, resolvePath, type Block, type Inline } from './md.ts';
 
 /** Where a piece of Markdown came from, so its links and pictures can be followed. Without it they are shown, not followed. */
 export type RichContext = {
@@ -10,7 +11,26 @@ export type RichContext = {
   docPath?: string;
   /** Open another document of the workspace in the reader. */
   openDoc?: (path: string) => void;
+  /** A generated page (spec 117 §4 item 2): its citation markers (`[c-…]`, `[s-…]`) are buttons that hand over the records they name. */
+  cite?: (labels: string[]) => void;
+  /** A generated page: a `page:<slug>` link opens that topic. */
+  openPage?: (slug: string) => void;
+  /** A generated page: headings carry the anchors its `#section` links name, and such a link moves to its heading. */
+  anchors?: boolean;
+  /** Draw something around each block at the top level of the text (a page's margin notes): the block, its place, and how it is drawn. */
+  wrap?: (block: Block, index: number, drawn: ReactNode) => ReactNode;
 };
+
+/** The id a heading of a generated page is given, for the contents and `#section` links. */
+export const sectionId = (anchor: string): string => `sec-${anchor}`;
+
+/** Move to a heading of the page. At once: nothing here glides, so there is nothing for reduce motion to still. */
+export function toSection(anchor: string): void {
+  if (typeof document === 'undefined') return;
+  const el = document.getElementById(sectionId(anchor));
+  el?.scrollIntoView({ behavior: 'auto', block: 'start' });
+  el?.focus({ preventScroll: true });
+}
 
 const PICTURE = /\.(png|jpe?g|gif)$/i;
 const isDocument = (path: string): boolean => /\.(md|mdx|markdown|txt)$/i.test(path);
@@ -159,7 +179,10 @@ function Link({ href, ctx, children }: { href: string; ctx: RichContext; childre
   const path = resolvePath(ctx.docPath, href);
   let act: (() => void) | null = null;
   let hint = '';
-  if (isWeb(href) && ctx.bridge?.openUrl) { act = () => void ctx.bridge!.openUrl!(href).catch(() => {}); hint = 'opens in your browser'; }
+  const page = /^page:([a-z0-9]+(?:-[a-z0-9]+)*)$/.exec(href)?.[1];
+  if (page && ctx.openPage) { act = () => ctx.openPage!(page); hint = `the topic page ${page}`; }
+  else if (ctx.anchors && /^#[^\s#]+$/.test(href)) { act = () => toSection(href.slice(1)); hint = 'a section of this page'; }
+  else if (isWeb(href) && ctx.bridge?.openUrl) { act = () => void ctx.bridge!.openUrl!(href).catch(() => {}); hint = 'opens in your browser'; }
   else if (path && isDocument(path) && ctx.openDoc) { act = () => ctx.openDoc!(path); hint = path; }
   else if (path && ctx.bridge?.open) { act = () => void ctx.bridge!.open!(path).catch(() => {}); hint = `${path} (opens outside)`; }
   if (!act) return <span className="md-ref" title={href}>{children}</span>;
@@ -171,7 +194,16 @@ function Spans({ c, ctx }: { c: Inline[]; ctx: RichContext }) {
     <>
       {c.map((x, i) => {
         switch (x.t) {
-          case 'text': return <span key={i}>{x.s}</span>;
+          case 'text':
+            if (!ctx.cite) return <span key={i}>{x.s}</span>;
+            // The words, and each citation marker as a button naming its records. The marker's own text is what is shown.
+            return (
+              <span key={i}>
+                {pieces(x.s).map((p, k) => (p.t === 'text' ? p.s : (
+                  <button key={k} type="button" className="cite" title="Show what this cites" aria-label={`Citation: ${p.cites.map((c) => c.label).join(', ')}`} onClick={() => ctx.cite!(p.cites.map((c) => c.label))}>{p.raw.slice(1, -1)}</button>
+                )))}
+              </span>
+            );
           case 'code': return <code key={i}>{x.s}</code>;
           case 'strong': return <strong key={i}><Spans c={x.c} ctx={ctx} /></strong>;
           case 'em': return <em key={i}><Spans c={x.c} ctx={ctx} /></em>;
@@ -185,14 +217,19 @@ function Spans({ c, ctx }: { c: Inline[]; ctx: RichContext }) {
   );
 }
 
-function Blocks({ blocks, ctx }: { blocks: Block[]; ctx: RichContext }) {
+function Blocks({ blocks, ctx, top = false }: { blocks: Block[]; ctx: RichContext; top?: boolean }) {
+  if (top && ctx.wrap) {
+    const inner = { ...ctx, wrap: undefined };
+    return <>{blocks.map((b, i) => <Fragment key={i}>{ctx.wrap!(b, i, <Blocks blocks={[b]} ctx={inner} />)}</Fragment>)}</>;
+  }
   return (
     <>
       {blocks.map((b, i) => {
         switch (b.t) {
           case 'h': {
             const Tag = `h${Math.min(6, b.level + 1)}` as 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
-            return <Tag key={i} className={`md-h md-h${b.level}`}><Spans c={b.c} ctx={ctx} /></Tag>;
+            // A heading that can be moved to takes the focus when it is, so the keyboard goes on from there.
+            return <Tag key={i} className={`md-h md-h${b.level}`} id={ctx.anchors ? sectionId(anchorOf(plain(b.c))) : undefined} tabIndex={ctx.anchors ? -1 : undefined}><Spans c={b.c} ctx={ctx} /></Tag>;
           }
           case 'p': return <p key={i}><Spans c={b.c} ctx={ctx} /></p>;
           case 'code':
@@ -227,5 +264,5 @@ function Blocks({ blocks, ctx }: { blocks: Block[]; ctx: RichContext }) {
 
 /** Markdown drawn as elements made from data. Every piece of the text ends in a text node; none of it is parsed as HTML. */
 export function Rich({ text, ctx = {} }: { text: string; ctx?: RichContext }) {
-  return <div className="rich"><Blocks blocks={parse(text)} ctx={ctx} /></div>;
+  return <div className="rich"><Blocks blocks={parse(text)} ctx={ctx} top /></div>;
 }

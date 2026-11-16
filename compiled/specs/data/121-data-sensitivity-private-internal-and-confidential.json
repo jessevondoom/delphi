@@ -1,0 +1,158 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 121: Data sensitivity: private, internal and confidential"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 45,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 53,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 59,
+      "number": "2",
+      "title": "Three traits, under their own name"
+    },
+    {
+      "level": 2,
+      "line": 74,
+      "number": "3",
+      "title": "Assignment"
+    },
+    {
+      "level": 2,
+      "line": 99,
+      "number": "4",
+      "title": "Propagation"
+    },
+    {
+      "level": 2,
+      "line": 110,
+      "number": "5",
+      "title": "Private in work output: a placeholder and one ask"
+    },
+    {
+      "level": 2,
+      "line": 124,
+      "number": "6",
+      "title": "Confidential: gated by reader"
+    },
+    {
+      "level": 2,
+      "line": 135,
+      "number": "7",
+      "title": "Internal: trusted for the organisation's own specifics"
+    },
+    {
+      "level": 2,
+      "line": 143,
+      "number": "8",
+      "title": "Labelling work output"
+    },
+    {
+      "level": 2,
+      "line": 152,
+      "number": "9",
+      "title": "Stated limits"
+    },
+    {
+      "level": 2,
+      "line": 161,
+      "number": "10",
+      "title": "Exit channels (deferred)"
+    },
+    {
+      "level": 2,
+      "line": 165,
+      "number": "11",
+      "title": "Supersession: takes effect only on approval"
+    },
+    {
+      "level": 2,
+      "line": 181,
+      "number": "12",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 199,
+      "number": "13",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 208,
+      "number": "14",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 218,
+      "number": "15",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 231,
+      "number": "16",
+      "title": "Open questions (the operator decides)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/121-data-sensitivity-private-internal-and-confidential.md",
+    "sha256": "c0353313404251ff7d167784a20eed10c9f2d559ea97d5e3cc5492da7a844cce"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 675,
+        "end_line": 6,
+        "line": 6,
+        "start": 185
+      },
+      "text": "status: approved   # by the operator, 2026-11-15, in a host session: \"approve spec 121 and merge 740 when ready\", after the draft, its slices and its five open questions were shown. The open questions of the last section stay open: until the operator answers each, the provisional behaviour the draft names for it is what is built. Written from the operator's words of that day (quoted in section 1) and the ruling of a Panel (council t_0001, PROCEED-WITH-CHANGES) as relayed to the author."
+    },
+    "sha256": "c0353313404251ff7d167784a20eed10c9f2d559ea97d5e3cc5492da7a844cce",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "121",
+    "stem": "121-data-sensitivity-private-internal-and-confidential",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "121: Data sensitivity: private, internal and confidential"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2182,
+      "end_line": 26,
+      "line": 26,
+      "start": 2118
+    },
+    "text": "The operator's words, in a host session on 2026-11-15, as typed:"
+  }
+}

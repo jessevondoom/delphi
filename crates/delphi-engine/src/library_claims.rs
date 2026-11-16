@@ -1377,6 +1377,38 @@ impl Library {
         anchors.iter().filter_map(|a| a["source_id"].as_str()).filter_map(|s| self.read_meta(s)).any(|m| is_internal_source(&m))
     }
 
+    /// `specs/115` §11 item 5: is this claim **confirmed internally**, stated directly by an internal or private source? It is when an
+    /// anchor that still holds ties it to such a source ([`is_internal_source`]) by its quote or its line. Returns the name of the
+    /// project the claim belongs to, for its label (`confirmed by an internal source (<project>)`), or `this install` for a claim of
+    /// no project. `None` for an attributed claim (an opinion), a claim in a lifecycle (retired, superseded, disproved by the operator)
+    /// or past its date, and a host's claim with no anchor (its word alone states nothing the daemon can tie to a source).
+    ///
+    /// **It does not spread** (§11 item 6). It is a label for this one claim: [`status`] does not read it, so the claim's derived
+    /// status, every other claim's status and support, the validator's check, a written answer, a page, a decision record and a
+    /// Council's evidence are exactly what they were; the internal source is still never an origin ([`Library::cites_of`]). A public
+    /// source that disagrees (a contested mark) does not take the confirmation away; the operator sees both (`delphi claims show`).
+    pub fn internal_confirmation(&self, c: &Value) -> Option<String> {
+        if c["kind"] == "attributed" || c["lifecycle"].is_string() {
+            return None;
+        }
+        if c["valid_until"].as_str().is_some_and(|v| v < today().as_str()) {
+            return None;
+        }
+        // Where the library holds the source's text, the quote must have been found in it (the anchor kept its place, `start`); a
+        // private pointer holds no text, so its anchor's line and quote are what tie the claim to it.
+        let ties = |a: &&Value| {
+            let quoted = a["quote"].as_str().is_some_and(|q| !q.trim().is_empty());
+            let lined = a["locator"].as_str().is_some_and(|l| !l.trim().is_empty());
+            let Some(sid) = a["source_id"].as_str() else { return false };
+            let found = a["start"].is_u64() || !self.source_dir(sid).join("source.md").is_file();
+            active(a) && (quoted || lined) && found && self.read_meta(sid).is_some_and(|m| is_internal_source(&m))
+        };
+        if !anchors_of(c).iter().any(ties) {
+            return None;
+        }
+        Some(c["project"].as_str().map(str::trim).filter(|p| !p.is_empty()).unwrap_or("this install").to_string())
+    }
+
     /// Claims for a mission, by pointer (`specs/055` §5): selected by the words of the prompt and by the mission's project,
     /// ranked by status, recency and how often they were relied on. Disproved and retired claims are not offered. A
     /// project-scoped claim is offered only to its project. Pointers carry no text.

@@ -5,7 +5,8 @@
 //! With a paired key (spec 120 §2 item 7, §3) the two connections are made on the daemon's app socket instead, each proved
 //! by a signature; the first time, a ticket a terminal handed over pairs the key. With no key, a key the daemon refuses, or
 //! a daemon with no app socket, it attaches on the narrator socket and reads, as before. Either way the window can ask for
-//! the same nine reads and nothing else.
+//! the same nine reads; a paired window can also ask for the encyclopedia's eleven (spec 117 §3; `crate::ency`), which the
+//! client never sends on the narrator socket. Nothing else can be named.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -274,6 +275,7 @@ impl Bridge {
             Error::Closed => "the daemon closed the app socket; it does for a minute after five refusals".to_string(),
             Error::Io(_) => "the daemon's app socket did not answer".to_string(),
             Error::Protocol(m) => m,
+            Error::NotPaired => crate::client::NOT_PAIRED.to_string(),
         };
         let stored = self.key.lock().unwrap().get_or_insert_with(|| keys.load()).clone();
         let ticket = self.ticket.lock().unwrap().take();
@@ -634,24 +636,75 @@ mod tests {
         // The daemon's own list, read from its source, so a method removed there fails here.
         let server = include_str!("../../../crates/delphi-core/src/server.rs");
         let line = server.lines().find(|l| l.contains("pub const NARRATOR_METHODS")).expect("the allowlist is where it was");
+        let narrator = |m: Method| line.contains(&format!("\"{}\"", m.name()));
+        // Every method is a narrator method, or it is one of the encyclopedia's reads (spec 117 §3), which the client
+        // sends only on a connection that proved a paired key (spec 120): never both, never neither.
         for m in Method::ALL {
-            assert!(line.contains(&format!("\"{}\"", m.name())), "{} is not a narrator method", m.name());
+            assert!(narrator(m) != m.paired_only(), "{} must be a narrator method or a paired-only read, and not both", m.name());
+        }
+        for m in Method::NARRATOR {
+            assert!(narrator(m) && !m.paired_only(), "{} is not a narrator method", m.name());
         }
         let names: std::collections::BTreeSet<&str> = Method::ALL.iter().map(|m| m.name()).collect();
         assert_eq!(names.len(), Method::ALL.len());
         // Nothing the app can name starts work, answers an approval or changes a setting.
         for m in Method::ALL {
             let n = m.name();
-            assert!(!["task.", "approval.resolve", "permissions.set", "settings.", "decision.", "ratify.", "budget.set", "shell.", "app.", "auth."].iter().any(|p| n.starts_with(p)), "{n}");
+            assert!(!["task.", "approval.resolve", "permissions.set", "settings.", "decision.", "ratify.", "budget.set", "shell.", "app.", "auth.", "pages.promote", "pages.dispute", "pages.save", "pages.refresh", "pages.open", "pages.search", "research."].iter().any(|p| n.starts_with(p)), "{n}");
         }
         // Spec 120 K3: pairing and the signed handshake are how a connection begins. The list of what the app can call
-        // did not grow by them: it is the nine reads of spec 111 §2.2, and each is also a row of the daemon's `read` grant.
-        assert_eq!(Method::ALL.len(), 9);
+        // did not grow by them: it is the nine reads of spec 111 §2.2 and, since spec 117 E5, the encyclopedia's eleven,
+        // and each of the twenty is a row of the daemon's `read` grant.
+        assert_eq!((Method::NARRATOR.len(), Method::PAIRED_ONLY.len(), Method::ALL.len()), (9, 11, 20));
+        assert!(Method::ALL.iter().all(|m| Method::NARRATOR.contains(m) != Method::PAIRED_ONLY.contains(m)));
         let grants = include_str!("../../../crates/delphi-core/src/app_keys.rs");
         let read = grants.split("name: \"read\"").nth(1).and_then(|s| s.split("Grant {").next()).expect("the grant table is where it was");
         for m in Method::ALL {
             assert!(read.contains(&format!("\"{}\"", m.name())), "{} is not under the daemon's `read` grant", m.name());
         }
+        // The paired-only reads are exactly the daemon's `ENCYCLOPEDIA_READS`, in its order: one added there, or one here
+        // that the daemon does not list, fails.
+        let listed = grants.lines().find(|l| l.contains("pub const ENCYCLOPEDIA_READS")).and_then(|l| l.split_once('=')).map(|(_, r)| r.trim().trim_end_matches(';').to_string()).expect("the encyclopedia's list is where it was");
+        let ours = format!("[{}]", Method::PAIRED_ONLY.iter().map(|m| format!("\"{}\"", m.name())).collect::<Vec<_>>().join(", "));
+        assert_eq!(listed, ours);
+    }
+
+    /// Spec 117 §3 with spec 120: an encyclopedia read is sent on a connection that proved a paired key and on no other.
+    /// On the narrator socket the bridge answers for itself, and the daemon is not asked.
+    #[test]
+    fn an_encyclopedia_read_is_sent_only_on_a_paired_connection() {
+        let t = tempfile::tempdir().unwrap();
+        // No key: the narrator socket. Every paired-only read is refused by the client, and none reaches the daemon.
+        let sock = t.path().join("n.sock");
+        let seen: Seen = Arc::default();
+        daemon(&sock, seen.clone(), vec![], false);
+        let (bridge, rx) = start(sock);
+        wait_for(&rx, |g| matches!(g, Got::Conn(true, _)));
+        for m in Method::PAIRED_ONLY {
+            let said = bridge.call(m, json!({})).unwrap_err();
+            assert_eq!(said, crate::client::NOT_PAIRED, "{}", m.name());
+        }
+        // The connection is kept, and a narrator read still goes through.
+        assert_eq!(bridge.call(Method::Ping, json!({})).unwrap(), json!({"echo": "session.ping"}));
+        let sent = methods(&seen);
+        assert!(Method::PAIRED_ONLY.iter().all(|m| !sent.iter().any(|s| s == m.name())), "{sent:?}");
+        bridge.stop();
+
+        // A paired key: the same reads go over the app socket, and the narrator socket hears nothing.
+        let (home, nsock, asock) = (t.path().join("home"), t.path().join("n2.sock"), t.path().join("a.sock"));
+        let seed = [5u8; 32];
+        key::FileStore::under(&home).save(&AppKey::new(PAIRED_NAME, seed).unwrap()).unwrap();
+        let narrator_seen: Seen = Arc::default();
+        daemon(&nsock, narrator_seen.clone(), vec![], false);
+        let app = app_socket(&asock, None, vec![(PAIRED_NAME.to_string(), key::public_hex(&seed))]);
+        let (bridge, rx) = start_with_keys(&home, nsock, &asock, None);
+        wait_for(&rx, |g| matches!(g, Got::Conn(true, _)));
+        for m in Method::PAIRED_ONLY {
+            assert_eq!(bridge.call(m, json!({})).unwrap(), json!({"echo": m.name()}));
+        }
+        assert!(methods(&narrator_seen).is_empty());
+        assert_eq!(methods(&app.seen)[3..], Method::PAIRED_ONLY.map(|m| m.name().to_string()));
+        bridge.stop();
     }
 
     // ── Spec 120 K3: the app socket. ──────────────────────────────────────────────────────────────────────────────────

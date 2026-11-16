@@ -295,7 +295,8 @@ pub fn of_hit_with(ws_dir: &Path, h: &Hit, hashes: Option<&HashMap<String, Strin
     }
     // `specs/115` §3 item 2, §2 item 3: another project's research says so, and a claim from an internal source says that first.
     if h.internal {
-        label = h.label.to_string();
+        // §11 item 5: a claim an internal source states reads `confirmed by an internal source (<project>)`.
+        label = h.shown_label();
     } else if h.shared {
         label = if matches!(status, "noted" | "draft") { crate::shared_research::SHARED_LABEL.to_string() } else { format!("another project's research, {}", h.label) };
     }

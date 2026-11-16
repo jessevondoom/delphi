@@ -247,13 +247,16 @@ impl Reader<'_> {
             }
             None => self.kb.search(query, &opts).map_err(|e| e.to_string())?,
         };
+        // `specs/115` §11 item 8: the operator sees private projects' research too, labelled private.
+        let private: Vec<String> = if projects.is_some() { crate::scope::project_entries(self.ws).into_iter().filter(|e| e.private).map(|e| e.id.as_str().to_string()).collect() } else { Vec::new() };
         let mut out = Vec::new();
         for h in hits {
             let Some(d) = self.kb.document(&h.rel_path, &self.view_of(q, &h.rel_path)).map_err(|e| e.to_string())? else { continue };
             if collection.map(|c| c != &d.zone).unwrap_or(false) {
                 continue;
             }
-            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "kind": kind_of(&d.rel_path, &d.zone), "updated": d.updated_at, "trust": d.source_type, "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score, "note": h.note, "knowledge_status": h.status, "label": h.shown_label(), "vouched_by": h.vouched_by, "project": h.project}));
+            let is_private = crate::shared_research::project_of_path(&h.rel_path).is_some_and(|id| private.iter().any(|p| p == id));
+            out.push(json!({"pointer": h.pointer, "path": h.rel_path, "collection": d.zone, "kind": kind_of(&d.rel_path, &d.zone), "updated": d.updated_at, "trust": d.source_type, "status": d.status, "heading": h.heading_path, "preview": h.preview, "start_line": h.start_line, "end_line": h.end_line, "blake3": h.blake3, "score": h.score, "note": h.note, "knowledge_status": h.status, "label": h.shown_label(), "vouched_by": h.vouched_by, "project": h.project, "private_project": is_private}));
             if !facets && kind.is_none() && out.len() >= limit {
                 break;
             }

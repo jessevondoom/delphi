@@ -1,0 +1,240 @@
+{
+  "pages.list": {
+    "pages": [],
+    "topics": [
+      {
+        "built": 1794700800, "change": "2 statements added, 1 statement removed, 2 sources added", "cited": ["c-fbebef7001b9", "s-kb-0123456789abcdef", "c-0a1b2c3d4e5f", "s-local-tides-md-3277c799", "f-fedcba9876543210", "c-5d6e7f809a1b", "c-77aa88bb99cc"],
+        "created": 1794528000, "due": null,
+        "key_terms": [
+          { "term": "Spring tide", "definition": "the higher tide near a new or full moon", "cites": ["c-0a1b2c3d4e5f"] },
+          { "term": "Tide table", "definition": "a published list of the times of high and low water", "cites": ["s-local-tides-md-3277c799"] }
+        ],
+        "links": ["lighthouse-lamps"],
+        "open_questions": ["From the research record: no source on the list says how tides differ in the harbour's inner basin."],
+        "origin": { "kind": "research", "topic_id": "when-do-tides-come-77eb208a" }, "outcome": "pass_contested",
+        "records": [
+          { "id": "s-kb-0123456789abcdef", "kind": "passage", "title": "Tides", "locator": "context/tides.md L3", "origin": "context/tides.md", "status": "○ not validated", "text": "Tides come twice a day. Read the harbour's own tables first.", "hash": "blake3:11aa", "rel_path": "context/domains/retry-queues.md", "start_line": 3 },
+          { "id": "f-fedcba9876543210", "kind": "finding", "title": "Why do tides come twice?", "locator": "missions/m9/findings/why-do-tides-come-twice.md", "origin": "scout", "status": "○ not validated", "text": "Conclusion (open): The moon and the sun.", "hash": "blake3:22bb", "rel_path": "missions/m9/findings/why-do-tides-come-twice.md", "start_line": 17 }
+        ],
+        "research_topics": ["when-do-tides-come-77eb208a"], "see_also": ["lighthouse-lamps"], "slug": "tides",
+        "start_here": [
+          { "cites": ["s-local-tides-md-3277c799"], "why": "Read the harbour's tide table first" },
+          { "cites": ["c-fbebef7001b9"], "why": "Then the claim that tides come twice a day" },
+          { "cites": ["f-fedcba9876543210"], "why": "Then the scout's finding on why" }
+        ],
+        "status": "generated", "title": "Tides", "valid_until": 1797292800, "valid_until_date": "2026-12-15", "version": 2
+      },
+      {
+        "built": 1794786843, "change": "no statement or source changed", "cited": [], "created": 1, "due": "a claim it was built from changed", "key_terms": [], "links": [], "open_questions": [],
+        "origin": { "kind": "operator" }, "outcome": "claims_only", "records": [], "research_topics": [], "see_also": [], "slug": "lighthouse-lamps", "start_here": [],
+        "status": "generated", "title": "Lighthouse lamps", "valid_until": 1794873243, "valid_until_date": "2026-11-16", "version": 2
+      },
+      {
+        "built": null, "change": null, "cited": [], "created": 1794700800, "due": "never built", "origin": { "kind": "research", "topic_id": "who-kept-the-harbour-ledger-1a2b3c4d" }, "outcome": null,
+        "research_topics": ["who-kept-the-harbour-ledger-1a2b3c4d"], "slug": "harbour-ledger", "status": "generated", "title": "Harbour ledger", "valid_until": null, "valid_until_date": null, "version": 0
+      }
+    ]
+  },
+  "pages.get": {
+    "tides": {
+      "built": true, "change": "2 statements added, 1 statement removed, 2 sources added", "cited": ["c-fbebef7001b9", "s-kb-0123456789abcdef", "c-0a1b2c3d4e5f", "s-local-tides-md-3277c799", "f-fedcba9876543210", "c-5d6e7f809a1b", "c-77aa88bb99cc"],
+      "created": 1794528000, "due": null,
+      "key_terms": [
+        { "term": "Spring tide", "definition": "the higher tide near a new or full moon", "cites": ["c-0a1b2c3d4e5f"] },
+        { "term": "Tide table", "definition": "a published list of the times of high and low water", "cites": ["s-local-tides-md-3277c799"] }
+      ],
+      "links": ["lighthouse-lamps"],
+      "markdown": "Generated page. Not authoritative. Written by the writer role on 2026-11-15 from the sources listed below; checked by the validator on 2026-11-15 (pass, one cited claim is contested). Read the cited sources before relying on it.\n\n# Tides\n\nTides are the regular rise and fall of the sea. On most coasts the tide comes in twice a day [c-fbebef7001b9]. The harbour's own tables are the first thing to read [s-kb-0123456789abcdef].\n\n## Key terms\n\n- **Spring tide**: the higher tide near a new or full moon [c-0a1b2c3d4e5f].\n- **Tide table**: a published list of the times of high and low water [s-local-tides-md-3277c799].\n\n## Contents\n\n- [Why twice a day](#why-twice-a-day)\n- [Spring and neap tides](#spring-and-neap-tides)\n\n## Why twice a day\n\nThe moon pulls the sea towards it, and the turning earth carries each coast through two bulges of water a day [c-fbebef7001b9, s-local-tides-md-3277c799].\n\n> The tide comes in twice a day.\n\nA scout's finding in this workspace gives the same reason and marks it open [f-fedcba9876543210].\n\n### What the tables add\n\nThe almanac's table gives the times of high water for each harbour [c-5d6e7f809a1b].\n\n## Spring and neap tides\n\nSpring tides are higher than usual and come near a new or full moon [c-0a1b2c3d4e5f ● validated]. Whether the harbour's ledger recorded them is disputed [c-77aa88bb99cc].\n\nFor the lamps that mark the harbour mouth at high water, see [Lighthouse lamps](page:lighthouse-lamps), or go back to [why twice a day](#why-twice-a-day).\n\n## Start here\n\n1. Read the harbour's tide table first [s-local-tides-md-3277c799].\n2. Then the claim that tides come twice a day [c-fbebef7001b9].\n3. Then the scout's finding on why [f-fedcba9876543210].\n\n## See also\n\n- [Lighthouse lamps](page:lighthouse-lamps)\n\n## Open questions\n\n- From the research record: no source on the list says how tides differ in the harbour's inner basin.\n\n## Bibliography and citations\n\n| Id | Status | Title | Author or origin | Date | Locator | Citation |\n| :-- | :-- | :-- | :-- | :-- | :-- | :-- |\n| c-0a1b2c3d4e5f | ● validated | Spring tides are higher than usual and come near a new or full moon. | tides.md | 2026-11-14 | §1 | tides.md. |\n| c-5d6e7f809a1b | ○ not validated | The almanac's table gives the times of high water for each harbour. | The Harbour Almanac | 2026-11-15 | p. 12 | (kept privately) |\n| c-77aa88bb99cc | ◆ not validated | The harbour's ledger recorded every spring tide. | ledger.md | 2026-11-15 | §1 | (private source) |\n| c-fbebef7001b9 | ○ not validated | Tides come twice a day. | tides.md | 2026-11-15 | §1 | tides.md. |\n| f-fedcba9876543210 | ○ not validated | Why do tides come twice? | scout | — | missions/m9/findings/why-do-tides-come-twice.md | finding in this workspace's knowledge base |\n| s-kb-0123456789abcdef | ○ not validated | Tides | context/tides.md | — | context/tides.md L3 | passage in this workspace's knowledge base |\n| s-local-tides-md-3277c799 | ○ not validated | tides.md | operator | 2026-11-15 | — | tides.md. |\n",
+      "open_questions": ["From the research record: no source on the list says how tides differ in the harbour's inner basin."],
+      "origin": { "kind": "research", "topic_id": "when-do-tides-come-77eb208a" }, "outcome": "pass_contested",
+      "records": [
+        { "id": "s-kb-0123456789abcdef", "kind": "passage", "title": "Tides", "locator": "context/tides.md L3", "origin": "context/tides.md", "status": "○ not validated", "text": "Tides come twice a day. Read the harbour's own tables first.", "hash": "blake3:11aa", "rel_path": "context/domains/retry-queues.md", "start_line": 3 },
+        { "id": "f-fedcba9876543210", "kind": "finding", "title": "Why do tides come twice?", "locator": "missions/m9/findings/why-do-tides-come-twice.md", "origin": "scout", "status": "○ not validated", "text": "Conclusion (open): The moon and the sun.", "hash": "blake3:22bb", "rel_path": "", "start_line": 17 }
+      ],
+      "research_topics": ["when-do-tides-come-77eb208a"], "see_also": ["lighthouse-lamps"], "slug": "tides",
+      "start_here": [
+        { "cites": ["s-local-tides-md-3277c799"], "why": "Read the harbour's tide table first" },
+        { "cites": ["c-fbebef7001b9"], "why": "Then the claim that tides come twice a day" },
+        { "cites": ["f-fedcba9876543210"], "why": "Then the scout's finding on why" }
+      ],
+      "status": "generated", "title": "Tides", "valid_until": 1797292800, "valid_until_date": "2026-12-15", "version": 2, "version_shown": null
+    },
+    "tides@20261114T000000Z": {
+      "built": true, "change": "2 statements added, 1 statement removed, 2 sources added", "cited": ["c-fbebef7001b9", "s-local-tides-md-3277c799", "c-0a1b2c3d4e5f"], "created": 1794528000, "due": null, "key_terms": [], "links": [],
+      "markdown": "Generated page. Not authoritative. Written by the writer role on 2026-11-14 from the sources listed below; checked by the validator on 2026-11-14 (pass). Read the cited sources before relying on it.\n\n# Tides\n\nTides are the regular rise and fall of the sea. On most coasts the tide comes in twice a day [c-fbebef7001b9].\n\n## Why twice a day\n\nThe moon pulls the sea towards it, and the turning earth carries each coast through two bulges of water a day [c-fbebef7001b9].\n\nOlder tables give the times by the church clock [s-local-tides-md-3277c799].\n\n## Spring and neap tides\n\nSpring tides are higher than usual and come near a new or full moon [c-0a1b2c3d4e5f].\n\n## Bibliography and citations\n\n| Id | Status | Title | Author or origin | Date | Locator | Citation |\n| :-- | :-- | :-- | :-- | :-- | :-- | :-- |\n| c-0a1b2c3d4e5f | ○ not validated | Spring tides are higher than usual and come near a new or full moon. | tides.md | 2026-11-14 | §1 | tides.md. |\n| c-fbebef7001b9 | ○ not validated | Tides come twice a day. | tides.md | 2026-11-14 | §1 | tides.md. |\n| s-local-tides-md-3277c799 | ○ not validated | tides.md | operator | 2026-11-14 | — | tides.md. |\n",
+      "open_questions": [], "origin": { "kind": "research", "topic_id": "when-do-tides-come-77eb208a" }, "outcome": "pass_contested", "records": [], "research_topics": ["when-do-tides-come-77eb208a"], "see_also": [], "slug": "tides", "start_here": [],
+      "status": "generated", "title": "Tides", "valid_until": 1797292800, "valid_until_date": "2026-12-15", "version": 2, "version_shown": "20261114T000000Z"
+    },
+    "lighthouse-lamps": {
+      "built": true, "change": "no statement or source changed", "cited": [], "created": 1, "due": "a claim it was built from changed", "key_terms": [], "links": [],
+      "markdown": "Generated page. Not authoritative. Written by the writer role on 2026-11-15 from the sources listed below; not yet checked by the validator (claims-only page: the library holds nothing on this topic yet; unsupported: no sources cited). Read the cited sources before relying on it.\n\n# Lighthouse lamps\n\nNo claims on this topic yet.\n\n## Bibliography and citations\n\n| Id | Status | Title | Author or origin | Date | Locator | Citation |\n| :-- | :-- | :-- | :-- | :-- | :-- | :-- |\n| no sources cited | — | — | — | — | — | — |\n",
+      "open_questions": [], "origin": { "kind": "operator" }, "outcome": "claims_only", "records": [], "research_topics": [], "see_also": [], "slug": "lighthouse-lamps", "start_here": [],
+      "status": "generated", "title": "Lighthouse lamps", "valid_until": 1794873243, "valid_until_date": "2026-11-16", "version": 2, "version_shown": null
+    },
+    "lighthouse-lamps@20261115T235403Z": {
+      "built": true, "change": "no statement or source changed", "cited": [], "created": 1, "due": "a claim it was built from changed", "key_terms": [], "links": [],
+      "markdown": "Generated page. Not authoritative. Written by the writer role on 2026-11-15 from the sources listed below; not yet checked by the validator (claims-only page: the library holds nothing on this topic yet; unsupported: no sources cited). Read the cited sources before relying on it.\n\n# Lighthouse lamps\n\nNo claims on this topic yet.\n\n## Bibliography and citations\n\n| Id | Status | Title | Author or origin | Date | Locator | Citation |\n| :-- | :-- | :-- | :-- | :-- | :-- | :-- |\n| no sources cited | — | — | — | — | — | — |\n",
+      "open_questions": [], "origin": { "kind": "operator" }, "outcome": "claims_only", "records": [], "research_topics": [], "see_also": [], "slug": "lighthouse-lamps", "start_here": [],
+      "status": "generated", "title": "Lighthouse lamps", "valid_until": 1794873243, "valid_until_date": "2026-11-16", "version": 2, "version_shown": "20261115T235403Z"
+    },
+    "harbour-ledger": {
+      "built": false, "change": null, "cited": [], "created": 1794700800, "due": "never built", "markdown": "", "origin": { "kind": "research", "topic_id": "who-kept-the-harbour-ledger-1a2b3c4d" }, "outcome": null,
+      "research_topics": ["who-kept-the-harbour-ledger-1a2b3c4d"], "slug": "harbour-ledger", "status": "generated", "title": "Harbour ledger", "valid_until": null, "valid_until_date": null, "version": 0, "version_shown": null
+    }
+  },
+  "pages.versions": {
+    "tides": { "slug": "tides", "versions": [{ "built": 1794614400, "change": "first version", "number": 1, "outcome": "pass", "version": "20261114T000000Z" }] },
+    "lighthouse-lamps": { "slug": "lighthouse-lamps", "versions": [{ "built": 1794786843, "change": "first version", "number": 1, "outcome": "claims_only", "version": "20261115T235403Z" }] },
+    "harbour-ledger": { "slug": "harbour-ledger", "versions": [] }
+  },
+  "pages.links": {
+    "tides": { "exists": true, "links_here": [], "links_out": ["lighthouse-lamps"], "slug": "tides" },
+    "lighthouse-lamps": { "exists": true, "links_here": ["tides"], "links_out": [], "slug": "lighthouse-lamps" },
+    "harbour-ledger": { "exists": true, "links_here": [], "links_out": [], "slug": "harbour-ledger" }
+  },
+  "topics.list": {
+    "topics": [
+      { "claims": 2, "created": "2026-11-13T09:00:00.000Z", "gaps": ["no source on the list says how tides differ in the harbour's inner basin"], "id": "when-do-tides-come-77eb208a", "label": "research record, not validated", "page": "tides", "private": false, "project": null, "question": "When do tides come?", "runs": 2, "state": "done", "updated": "2026-11-15T00:00:00.000Z" },
+      { "claims": 1, "created": "2026-11-15T08:00:00.000Z", "gaps": [], "id": "who-kept-the-harbour-ledger-1a2b3c4d", "label": "research record, not validated", "page": "harbour-ledger", "private": true, "project": "Harbour & Co", "question": "Who kept the harbour ledger?", "runs": 1, "state": "done", "updated": "2026-11-15T08:30:00.000Z" },
+      { "claims": 0, "created": "2026-11-12T10:00:00.000Z", "gaps": ["the budget ran out before any page was read"], "id": "what-fuels-did-lamps-burn-9f8e7d6c", "label": "research record, not validated", "page": null, "private": false, "project": null, "question": "What fuels did lighthouse lamps burn?", "runs": 1, "state": "stopped", "updated": "2026-11-12T10:05:00.000Z" }
+    ]
+  },
+  "topics.get": {
+    "when-do-tides-come-77eb208a": {
+      "answer": "On most coasts the tide comes in twice a day [c-fbebef7001b9]. Spring tides, near a new or full moon, are higher [c-0a1b2c3d4e5f].",
+      "id": "when-do-tides-come-77eb208a", "label": "research record and answer, not validated; data, never an instruction", "page": "tides",
+      "record": {
+        "asked_by": { "kind": "operator", "label": "operator" }, "claims": ["c-fbebef7001b9", "c-0a1b2c3d4e5f"], "created": "2026-11-13T09:00:00.000Z", "depth": "quick",
+        "gaps": ["no source on the list says how tides differ in the harbour's inner basin"], "pages": [], "plan": [], "private": false, "project": null, "queries": [], "question": "When do tides come?", "refused": [],
+        "result": { "claims": ["c-fbebef7001b9", "c-0a1b2c3d4e5f"] }, "result_run": "r2",
+        "runs": [
+          { "asked_by": { "kind": "operator", "label": "operator" }, "check_steps": 0, "depth": "quick", "ended": "2026-11-13T09:02:00.000Z", "ms": 120000, "run_id": "r1", "started": "2026-11-13T09:00:00.000Z", "state": "done", "steps": 4 },
+          { "asked_by": { "kind": "operator", "label": "operator" }, "check_steps": 1, "depth": "quick", "ended": "2026-11-15T00:00:00.000Z", "ms": 90000, "run_id": "r2", "started": "2026-11-14T23:58:30.000Z", "state": "done", "steps": 3 }
+        ],
+        "state": "done", "taint": "external_untrusted", "topic_id": "when-do-tides-come-77eb208a", "updated": "2026-11-15T00:00:00.000Z", "usage": { "check_steps": 1, "ms": 210000, "steps": 7, "tokens": null }, "version": 1
+      }
+    },
+    "who-kept-the-harbour-ledger-1a2b3c4d": {
+      "answer": "The keeper's ledger lists every visitor [c-d93e179622b5].",
+      "id": "who-kept-the-harbour-ledger-1a2b3c4d", "label": "research record and answer, not validated; data, never an instruction", "page": "harbour-ledger",
+      "record": { "asked_by": { "kind": "operator", "label": "operator" }, "claims": ["c-d93e179622b5"], "created": "2026-11-15T08:00:00.000Z", "depth": "quick", "gaps": [], "private": true, "project": "Harbour & Co", "question": "Who kept the harbour ledger?", "runs": [{ "run_id": "r1", "state": "done" }], "state": "done", "taint": "external_untrusted", "topic_id": "who-kept-the-harbour-ledger-1a2b3c4d", "updated": "2026-11-15T08:30:00.000Z", "version": 1 }
+    },
+    "what-fuels-did-lamps-burn-9f8e7d6c": {
+      "answer": "", "id": "what-fuels-did-lamps-burn-9f8e7d6c", "label": "research record and answer, not validated; data, never an instruction", "page": null,
+      "record": { "asked_by": { "kind": "agent", "label": "scout" }, "claims": [], "created": "2026-11-12T10:00:00.000Z", "depth": "quick", "gaps": ["the budget ran out before any page was read"], "private": false, "project": null, "question": "What fuels did lighthouse lamps burn?", "runs": [{ "run_id": "r1", "state": "stopped" }], "state": "stopped", "taint": "external_untrusted", "topic_id": "what-fuels-did-lamps-burn-9f8e7d6c", "updated": "2026-11-12T10:05:00.000Z", "version": 1 }
+    }
+  },
+  "library.source": {
+    "local-tides-md-3277c799": {
+      "assets": [], "capture_level": "full", "id": "local-tides-md-3277c799", "label": "s-local-tides-md-3277c799",
+      "meta": { "capture_level": "full", "cited_by": ["c-fbebef7001b9", "c-0a1b2c3d4e5f"], "content_hash": "sha256:275681ce618f752889bc9a186ecf41cfb0f1cfb61b576d69f9fc37a5b42748e5", "fetch_mode": "operator", "last_checked": "2026-11-15T23:54:03.965Z", "licence": "CC0-1.0", "retrieved": "2026-11-13T09:01:00.000Z", "share_alike": false, "status": "not validated", "tags": [], "title": "tides.md", "type": "document", "version": "1", "work_bytes": 236 },
+      "private": false, "status": "not validated",
+      "text": "# Tides\n\nThe tide comes in twice a day. Spring tides are higher than usual and come near a new or full moon.\n\nThe moon pulls the sea towards it, and the turning earth carries each coast\nthrough two bulges of water a day.\n\nRead the harbour's own tables before putting to sea.\n",
+      "truncated": false
+    },
+    "local-ledger-md-cb15b5e9": {
+      "assets": [], "capture_level": "full", "id": "local-ledger-md-cb15b5e9", "label": "s-local-ledger-md-cb15b5e9",
+      "meta": { "capture_level": "full", "cited_by": ["c-d93e179622b5", "c-77aa88bb99cc"], "content_hash": "sha256:8846ae2943b86157ba0680c4715bcdda935676295c35cf09b2f17c04b0c57605", "fetch_mode": "operator", "last_checked": "2026-11-15T23:54:03.966Z", "licence": "private", "retrieved": "2026-11-15T23:54:03.966Z", "share_alike": false, "status": "not validated", "tags": [], "title": "ledger.md", "type": "document", "version": "1", "work_bytes": 51 },
+      "private": true, "status": "not validated", "text": "# Ledger\n\nThe keeper's ledger lists every visitor.\n", "truncated": false
+    },
+    "almanac-1911-5d6e7f80": {
+      "assets": [], "capture_level": "full", "id": "almanac-1911-5d6e7f80", "label": "s-almanac-1911-5d6e7f80",
+      "meta": { "URL": "https://almanac.example/1911/tides", "author": [{ "literal": "The Harbour Almanac" }], "capture_level": "full", "cited_by": ["c-5d6e7f809a1b"], "fetch_mode": "research", "kept_privately": "unknown_licence", "last_checked": "2026-11-15T00:00:00.000Z", "retrieved": "2026-11-15T00:00:00.000Z", "status": "not validated", "title": "Tide tables for 1911", "type": "webpage", "version": "1" },
+      "passage_only": true, "private": true, "status": "not validated", "text": "the times of high water for each harbour", "truncated": false
+    }
+  },
+  "library.claim": {
+    "c-fbebef7001b9": {
+      "claim": {
+        "anchors": [{ "end": 38, "locator": "§1", "prefix": "# Tides\n\nThe tide comes in ", "quote": "twice a day", "quote_hash": "sha256:a3c2e9e039c0314aff7aea7a2479304d300f23d3af5aeb14b6086049fdc7c15b", "source_id": "local-tides-md-3277c799", "start": 27, "state": "active", "suffix": ".", "version": "1" },
+          { "locator": "§2", "quote": "carries each coast through two bulges of water a day", "source_id": "local-tides-md-3277c799", "state": "active", "version": "1" }],
+        "cited_by": [], "contested_by": [], "created": "2026-11-13T09:01:30.000Z", "id": "c-fbebef7001b9", "kind": "fact", "last_confirmed": "2026-11-15T23:54:03.967Z", "scope": "team",
+        "support": { "computed": "2026-11-15T23:54:03.973Z", "contradicted": false, "counted": 1, "origins": 1, "trusted_sources": 0, "zeroed": [] }, "text": "Tides come twice a day."
+      },
+      "shown": "○ not validated", "sources": [{ "id": "local-tides-md-3277c799", "private": false, "title": "tides.md" }], "status": "noted"
+    },
+    "c-0a1b2c3d4e5f": {
+      "claim": {
+        "anchors": [{ "locator": "§1", "quote": "Spring tides are higher than usual and come near a new or full moon", "source_id": "local-tides-md-3277c799", "state": "active", "version": "1" }],
+        "cited_by": [], "contested_by": [], "created": "2026-11-14T00:00:00.000Z", "id": "c-0a1b2c3d4e5f", "kind": "fact", "last_confirmed": "2026-11-15T00:00:00.000Z", "scope": "team",
+        "support": { "contradicted": false, "counted": 1, "origins": 1, "trusted_sources": 0, "zeroed": [] }, "text": "Spring tides are higher than usual and come near a new or full moon."
+      },
+      "shown": "● validated", "sources": [{ "id": "local-tides-md-3277c799", "private": false, "title": "tides.md" }], "status": "validated"
+    },
+    "c-d93e179622b5": {
+      "claim": {
+        "anchors": [{ "locator": "§1", "quote": "lists every visitor", "source_id": "local-ledger-md-cb15b5e9", "state": "active", "version": "1" }],
+        "cited_by": [], "contested_by": [], "created": "2026-11-15T08:10:00.000Z", "id": "c-d93e179622b5", "kind": "fact", "last_confirmed": "2026-11-15T08:10:00.000Z", "project": "Harbour & Co", "scope": "team",
+        "support": { "contradicted": false, "counted": 0, "origins": 0, "trusted_sources": 0, "zeroed": [] }, "text": "The ledger lists every visitor."
+      },
+      "shown": "○ not validated", "sources": [{ "id": "local-ledger-md-cb15b5e9", "private": true, "title": "ledger.md" }], "status": "noted"
+    },
+    "c-77aa88bb99cc": {
+      "claim": {
+        "anchors": [{ "locator": "§1", "quote": "recorded every spring tide", "source_id": "local-ledger-md-cb15b5e9", "state": "active", "version": "1" }],
+        "cited_by": [], "contested_by": [{ "by": "operator", "at": "2026-11-15T12:00:00.000Z", "note": "The ledger lists visitors, not tides." }], "created": "2026-11-15T09:00:00.000Z", "id": "c-77aa88bb99cc", "kind": "fact", "last_confirmed": "2026-11-15T09:00:00.000Z", "scope": "team",
+        "support": { "contradicted": true, "counted": 0, "origins": 0, "trusted_sources": 0, "zeroed": [] }, "text": "The harbour's ledger recorded every spring tide."
+      },
+      "shown": "◆ not validated", "sources": [{ "id": "local-ledger-md-cb15b5e9", "private": true, "title": "ledger.md" }], "status": "contested"
+    },
+    "c-5d6e7f809a1b": {
+      "claim": {
+        "anchors": [{ "locator": "p. 12", "quote": "the times of high water for each harbour", "source_id": "almanac-1911-5d6e7f80", "state": "active", "version": "1" }],
+        "cited_by": [], "contested_by": [], "created": "2026-11-15T00:00:00.000Z", "id": "c-5d6e7f809a1b", "kind": "fact", "last_confirmed": "2026-11-15T00:00:00.000Z", "origin": "research", "scope": "team",
+        "support": { "contradicted": false, "counted": 0, "origins": 0, "trusted_sources": 0, "zeroed": [] }, "text": "The almanac's table gives the times of high water for each harbour."
+      },
+      "shown": "○ not validated", "sources": [{ "id": "almanac-1911-5d6e7f80", "private": true, "title": "Tide tables for 1911" }], "status": "noted"
+    }
+  },
+  "memory.roles": {
+    "roles": [
+      { "findings": 0, "lesson_files": 1, "notes": 0, "role": "architect" },
+      { "findings": 1, "lesson_files": 2, "notes": 2, "role": "scout" }
+    ]
+  },
+  "memory.role": {
+    "scout": {
+      "findings": [
+        {
+          "author": "scout", "finding_status": "open", "id": "m9/why-do-tides-come-twice", "label": "agent finding, not validated", "rel_path": "missions/m9/findings/why-do-tides-come-twice.md", "role": "scout", "source_type": "internal_generated", "status": "active",
+          "text": "---\nid: m9/why-do-tides-come-twice\ntitle: Why do tides come twice?\nauthor: scout\nrole: scout\ntimestamp: 2026-11-15T00:00:00Z\nstatus: active\nsource_type: internal_generated\nkind: finding\nlabel: agent finding, not validated\nfinding_status: open\nconfidence: low\nsource_mission: m9\ntags:\n- finding\n---\n# Why do tides come twice?\n\nConclusion (open): The moon and the sun.\n\n## How verified\n\nRead the tables.\n",
+          "timestamp": "2026-11-15T00:00:00Z", "title": "Why do tides come twice?"
+        }
+      ],
+      "lessons": [
+        { "from": "operator ratified", "text": "- Name the engine a query went to in the run note.\n" },
+        { "from": "workspace ratified", "text": "- Check the tide tables first.\n- 2026-11-10: a page that quotes a table needs the table's own source, not the page that copied it.\n" }
+      ],
+      "notes": [
+        { "id": "pn-01", "role": "scout", "mission": "m9", "project": null, "kind": "method", "created": "2026-11-14", "valid_until": "2026-12-14", "uses": 3, "tier": "L3", "source": "missions/m9", "text": "The almanac site answers slowly; ask for one page at a time.", "label": "unreviewed note by scout, 2026-11-14" },
+        { "id": "pn-02", "role": "scout", "mission": "m9", "project": "Harbour & Co", "kind": "source", "created": "2026-11-15", "valid_until": null, "uses": 0, "tier": "L3", "source": "missions/m9", "text": "The harbour office keeps a second ledger for pilots.", "label": "unreviewed note by scout, 2026-11-15" }
+      ],
+      "role": "scout"
+    },
+    "architect": {
+      "findings": [],
+      "lessons": [{ "from": "workspace ratified", "text": "- Say which spec section a choice comes from.\n" }],
+      "notes": [],
+      "role": "architect"
+    }
+  },
+  "changes.since": {
+    "findings": [
+      { "author": "scout", "finding_status": "open", "id": "m9/why-do-tides-come-twice", "label": "agent finding, not validated", "rel_path": "missions/m9/findings/why-do-tides-come-twice.md", "role": "scout", "source_type": "internal_generated", "status": "active", "timestamp": "2026-11-15T00:00:00Z", "title": "Why do tides come twice?" }
+    ],
+    "notes": [
+      { "id": "pn-01", "role": "scout", "mission": "m9", "project": null, "kind": "method", "created": "2026-11-14", "valid_until": "2026-12-14", "uses": 3, "tier": "L3", "source": "missions/m9", "text": "The almanac site answers slowly; ask for one page at a time.", "label": "unreviewed note by scout, 2026-11-14" },
+      { "id": "pn-02", "role": "scout", "mission": "m9", "project": "Harbour & Co", "kind": "source", "created": "2026-11-15", "valid_until": null, "uses": 0, "tier": "L3", "source": "missions/m9", "text": "The harbour office keeps a second ledger for pilots.", "label": "unreviewed note by scout, 2026-11-15" }
+    ],
+    "pages": [
+      { "built": 1794700800, "change": "2 statements added, 1 statement removed, 2 sources added", "slug": "tides", "title": "Tides", "version": 2 },
+      { "built": 1794786843, "change": "no statement or source changed", "slug": "lighthouse-lamps", "title": "Lighthouse lamps", "version": 2 }
+    ],
+    "research": [
+      { "id": "when-do-tides-come-77eb208a", "question": "When do tides come?", "state": "done", "updated": "2026-11-15T00:00:00.000Z" },
+      { "id": "who-kept-the-harbour-ledger-1a2b3c4d", "question": "Who kept the harbour ledger?", "state": "done", "updated": "2026-11-15T08:30:00.000Z" },
+      { "id": "what-fuels-did-lamps-burn-9f8e7d6c", "question": "What fuels did lighthouse lamps burn?", "state": "stopped", "updated": "2026-11-12T10:05:00.000Z" }
+    ],
+    "since": 0
+  }
+}

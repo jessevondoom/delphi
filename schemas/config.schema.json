@@ -387,7 +387,10 @@
       "properties": {
         "auto": { "type": "boolean", "default": true, "description": "A span (a root span, and a child span on its first turn) starts with passages from the knowledge base, labelled and tainted. false: agents search only when they call kb_search." },
         "start_passages": { "type": "integer", "minimum": 0, "maximum": 10, "default": 6, "description": "How many passages a span starts with (specs/116 section 4.2); at most two from one document. 0 gives none." },
-        "start_chars": { "type": "integer", "minimum": 0, "maximum": 16000, "default": 4000, "description": "How many characters the start passages may take in all (specs/116 section 4.2)." }
+        "start_chars": { "type": "integer", "minimum": 0, "maximum": 16000, "default": 4000, "description": "How many characters the start passages may take in all (specs/116 section 4.2)." },
+        "use_boost": { "type": "number", "minimum": 0, "maximum": 0.5, "default": 0, "description": "Share of its score added to an item the daemon handed to spans that then ended well (specs/116 section 7 item 3): one count a task, saturating at three; a provisional note and an agent's own search earn none. 0 is off." },
+        "dispute_penalty": { "type": "number", "minimum": 0, "maximum": 0.5, "default": 0, "description": "Share of its score taken from an item disputed with flag_wrong (counted disputes only) or by the operator; it is still returned, labelled. 0 is off." },
+        "confidence_weight": { "type": "number", "minimum": 0, "maximum": 0.5, "default": 0, "description": "Share of its score added to a validated fact by the confidence the fact store recorded (high: all of it, medium: half); a file elsewhere that claims a confidence counts as low. 0 is off." }
       }
     },
     "projects": {
@@ -405,7 +408,9 @@
       "additionalProperties": false,
       "properties": {
         "provisional": { "type": "boolean", "default": true, "description": "An agent's note is kept in the provisional tier (local/memory/provisional/<role>/), where a later span of the same role may be given it as a passage of data labelled unreviewed; a note written after reading untrusted content, or by a host, is never given automatically. false: notes stage as before and no provisional note is kept, indexed or retrieved. Read at each use, so it takes effect at once; a config.toml that cannot be read as written also turns it off." },
-        "digest_daily": { "type": "integer", "minimum": 0, "maximum": 100, "default": 10, "description": "How many items the digest shows a day (specs/116 section 3 item 4). 0 shows none." }
+        "digest_daily": { "type": "integer", "minimum": 0, "maximum": 100, "default": 10, "description": "How many items the digest shows a day (specs/116 section 3 item 4). 0 shows none." },
+        "consolidate": { "oneOf": [{ "type": "boolean" }, { "enum": ["mechanical", "model"] }], "default": false, "description": "Consolidation (specs/116 section 6), once a day after five idle minutes. false: none. \"mechanical\": duplicate provisional notes of one role, kind and tier are merged, with no model. true or \"model\": that, and one tool-less model call per role proposes merges, contradictions, notes covered by a lesson and superseded findings; proposals go to the digest and change nothing until accepted, and none writes a lesson or a rule." },
+        "consolidate_tokens": { "type": "integer", "minimum": 0, "maximum": 1000000, "default": 30000, "description": "The model pass's share of a day, in tokens (specs/116 section 6 item 1)." }
       }
     },
     "hooks": { "type": "object", "description": "`[[hooks.observe]]` and `[[hooks.deny]]` (specs/018): commands that can only watch or refuse." }

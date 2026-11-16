@@ -214,6 +214,10 @@ sandbox = "off"
 # auto = true                        # a span (a task, and each agent it dispatches) starts with passages from the knowledge base; false: only when an agent calls kb_search
 # start_passages = 6                 # how many passages a span starts with (at most 10; at most 2 from one document; 0: none)
 # start_chars = 4000                 # how many characters they may take in all (at most 16000)
+# Use feeds back (specs/116 section 7): three small ranking terms, each a share of a result's score, 0 (off, the default) to 0.5.
+# use_boost = 0.0                    # raises an item the daemon handed to spans that then ended well (one count a task, at most three)
+# dispute_penalty = 0.0              # lowers an item disputed with flag_wrong or `delphi kb flag` (it is still returned, labelled)
+# confidence_weight = 0.0            # raises a validated fact by the confidence the fact store recorded
 
 # Research recall across projects (specs/115). Yours to set: no agent can write this file.
 # [projects]
@@ -229,6 +233,10 @@ sandbox = "off"
 # [memory]
 # provisional = true                 # false: notes stage as before and no provisional note is kept, indexed or retrieved; read at each use
 # digest_daily = 10                  # items the digest shows a day (0 to 100)
+# consolidate = false                # once a day, idle five minutes: "mechanical" merges duplicate notes (no model); true also asks one
+#                                    # tool-less model call per role for proposals (merge, contradiction, covered by a lesson, superseded
+#                                    # finding), shown in the digest; none applies until you accept it, and none writes a lesson or rule
+# consolidate_tokens = 30000         # the model pass's share of a day, in tokens
 
 # Fact validator (specs/040 section 15.1). off: no fetch of any kind. advisory (default): the full fact path as a dry run; it uses the
 # network, records what it would ratify and writes nothing validated. ratify: real writes, allowed only while the daemon's latch and the
