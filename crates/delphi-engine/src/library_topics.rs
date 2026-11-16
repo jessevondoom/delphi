@@ -657,6 +657,7 @@ impl Library {
         });
         side["reason"] = json!(c.verdict.reason);
         side["validator"] = c.verdict.to_json();
+        side["figure_failures"] = json!(c.verdict.figure_failures);
         side["valid_until"] = json!(valid_until);
         side["volatility"] = json!(meta.volatility.as_str());
         side["ttl_reason"] = json!(meta.reason);

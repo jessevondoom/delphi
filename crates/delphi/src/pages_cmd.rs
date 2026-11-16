@@ -182,6 +182,9 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
                     if !p.flags.is_empty() {
                         eprintln!("unverified figure (in no cited material): {}", p.flags.join(", "));
                     }
+                    for f in &p.figure_failures {
+                        eprintln!("figure dropped: {}", f);
+                    }
                     if p.withheld > 0 {
                         eprintln!("{} claim(s) rest on a private source and are left off", p.withheld);
                     }
