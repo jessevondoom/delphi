@@ -45,6 +45,8 @@ Objective: research done in a host is recorded as fully as research done by the 
 
 ## 2. `record_research`: a host hands over a piece of research
 
+> **Item 4 narrowed by [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) §11 (operator, 2026-11-15):** storage is unchanged. In addition a host's kind `internal` adds the handling trait `internal` and kind `person` adds `personal`, both recorded as set by `host`, with no weight (121 §7 item 4). `private: true` remains the library-private flag and is not the `personal` trait.
+
 1. A new MCP tool. Input: `question`; `answer` (Markdown, at most 24 KiB); `sources[]`, each with a `locator` (a URL, or a description for a source that has no public address), `title`, `retrieved`, `kind` (`web`, `internal`, `file`, `person`), and `private: true|false`; `claims[]`, each with `text`, `quote`, and the index of its source; `searches[]`, each with where it was run and the words used; `gaps[]`; optional `topic_id` to add to an existing topic.
 2. The daemon writes a research record (112 §2) with `runner: "host"` and the host and model as `requested_by`.
 3. For a source with a public URL and `private: false`, the daemon fetches the page itself, under the trusted-list and egress rules that apply to its own runner, and checks each quote against the text. A quote it finds is an anchor; a quote it does not find is kept as `host-reported, not found`. This is the rule `propose_kb_entry` already follows.
