@@ -360,7 +360,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 121-data-sensitivity-private-internal-and-confidential
 
-**121: Data sensitivity: private, internal and confidential** · approved (per source at `c03533134042`) · tier 0 · [source](../../specs/121-data-sensitivity-private-internal-and-confidential.md)
+**121: Data sensitivity: private, internal and confidential** · approved (per source at `462c1014c74b`) · tier 0 · [source](../../specs/121-data-sensitivity-private-internal-and-confidential.md)
 
 **source excerpt, untrusted** · `specs/121-data-sensitivity-private-internal-and-confidential.md` line 26
 
