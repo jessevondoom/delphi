@@ -1,0 +1,15 @@
+{
+  "about": "The ten fixed questions of spec 114 M7 (section 8): run before (the code at pull request 717) and after (main), comparing sub-questions covered, claims with two origins, and tokens. Each asks for several parts, so a plan has something to break down. Fixed: do not edit a question once results for it are recorded; add a new id instead.",
+  "cases": [
+    {"id": "q01", "depth": "survey", "question": "What is the half-life of caffeine in healthy adults, and which factors make it longer or shorter?"},
+    {"id": "q02", "depth": "survey", "question": "When was the James Webb Space Telescope launched, where does it orbit, and what are its four science instruments?"},
+    {"id": "q03", "depth": "survey", "question": "How does HTTP/3 differ from HTTP/2 in its transport protocol and in head-of-line blocking?"},
+    {"id": "q04", "depth": "survey", "question": "At what temperature does water boil at the summit of Mount Everest, and why is it lower than at sea level?"},
+    {"id": "q05", "depth": "survey", "question": "How does ocean acidification affect coral reefs, and how much has surface ocean pH fallen since pre-industrial times?"},
+    {"id": "q06", "depth": "survey", "question": "How does CRISPR-Cas9 cut DNA, and what are the main sources of off-target edits?"},
+    {"id": "q07", "depth": "survey", "question": "What daily sodium intake does the World Health Organization recommend for adults, and how does typical global intake compare?"},
+    {"id": "q08", "depth": "survey", "question": "What caused the August 2003 Northeast blackout in North America, and what reliability rules changed afterwards?"},
+    {"id": "q09", "depth": "survey", "question": "How does Rust's borrow checker prevent data races, and what patterns does it reject that are actually safe?"},
+    {"id": "q10", "depth": "survey", "question": "What is the Kessler syndrome, and what measures do space agencies use to limit orbital debris?"}
+  ]
+}
