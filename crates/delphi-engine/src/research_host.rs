@@ -23,11 +23,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 
-const CLAIM_OUTPUT: u64 = 1500;
-/// The most the plan call may write: five sub-questions with two queries each (`specs/114` §4 item 1).
-const PLAN_OUTPUT: u64 = 900;
+/// The output caps of the scout's three calls (`specs/114` §13, the operator's 8,000 for all three, 2026-11-16): room for a model
+/// that reasons before it answers, and still a bound, since the runner meters no tokens and the page call reads untrusted text.
+const SCOUT_CALL_OUTPUT: u64 = 8_000;
+/// The most the call that reads a page and lists its claims may write.
+const CLAIM_OUTPUT: u64 = SCOUT_CALL_OUTPUT;
+/// The most the plan call may write: five sub-questions with two queries each, after any reasoning (`specs/114` §4 item 1).
+const PLAN_OUTPUT: u64 = SCOUT_CALL_OUTPUT;
 /// The most the answer call may write (`specs/114` §5 item 1): the answer is cut to `research_method::ANSWER_CHARS` whatever comes back.
-const ANSWER_OUTPUT: u64 = 2600;
+const ANSWER_OUTPUT: u64 = SCOUT_CALL_OUTPUT;
 
 /// Run a blocking call without stalling the daemon's other work.
 fn blocking<T>(f: impl FnOnce() -> T) -> T {

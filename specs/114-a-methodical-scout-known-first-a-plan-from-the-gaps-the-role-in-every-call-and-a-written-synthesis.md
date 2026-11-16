@@ -3,7 +3,7 @@ id: spec-114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-eve
 title: "114: A methodical scout: known first, a plan from the gaps, the role in every call, and a written synthesis"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "all other specs are approved", after the drafts and their slice tables were shown. Section 12 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
+status: approved   # by the operator, 2026-11-14, in a host session: "all other specs are approved", after the drafts and their slice tables were shown. Section 12 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request. Section 13 (2026-11-16) likewise.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -138,3 +138,13 @@ The operator's words, in a host session on 2026-11-15, after being told that the
 6. The page writer's call and the excerpt a host role is given (106 §2) are unchanged.
 7. Slice: **M8**, the scout excerpt (2 to 3 hours), built with or after M6.
 8. *Decided by the operator, 2026-11-15, after M8 was built:* "go with a for the 735 chouce". With 106 §2's closing note as written the scout excerpt measured 890 tokens, so item 2's note and item 4's 600-token cap could not both hold. Option (a) stands: the scout excerpt keeps the cap and ends with a short form of the closing note, which names what was left out by number only, gives the charter's hash and says that the whole charter governs; it leaves out the items' titles, the §5.12 sentence and the line that says how to read the whole charter. This replaces the closing-note sentence of item 2 for the scout excerpt only.
+
+## 13. Amendment (operator, 2026-11-16): one output cap of 8,000 tokens for the scout's three calls
+
+The operator's words, in a host session on 2026-11-16, after the M7 evaluation and being told what the caps are, why they cannot simply be removed, and what a far higher cap would cost: "make it 8K for all 3 limits and we can readjust". The operator approves this section by merging the pull request that adds it.
+
+1. Found by M7 (`dev/research-eval/results-2026-11-16.json`): with a local model that reasons before it answers, the plan call's cap of 900 output tokens cut every plan short (so five runs fell back to the fixed plan of §4), and the page call's cap of 1,500 cut 40 to 50 percent of its replies, losing their claims. Those caps, and the answer call's 2,600, were the code's own numbers; this spec did not state them.
+2. The plan call (§4 item 1), the call that reads a page and lists its claims, and the answer call (§5 item 1) each ask for at most **8,000** output tokens.
+3. The caps stay. The runner meters no tokens (M5), so they are what bounds these calls, and the page call reads untrusted text: a page written to make the model ramble costs at most this much per page. The cap is not clamped to a model's own maximum output: a provider may refuse a call whose cap is above that maximum, and which of the models the scout can be routed to have a lower one was not checked.
+4. The answer is still cut to its character limit after it arrives (§5); a longer answer than that is spent and thrown away.
+5. The operator will readjust them. A run-level token budget, once the runner meters tokens, is the better bound; it is not part of this amendment.
