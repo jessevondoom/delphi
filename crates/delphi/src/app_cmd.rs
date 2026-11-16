@@ -201,8 +201,16 @@ pub(crate) fn render_event(timestamp: &str, kind: &str, p: &Value) -> String {
         "app.revoked" => format!("revoked; {} session(s) closed", p["sessions_closed"].as_u64().unwrap_or(0)),
         "app.granted" => format!("{} {}", if p["removed"] == true { "lost" } else { "given" }, p["grant"].as_str().unwrap_or("?")),
         "app.expired" => "removed: unused for 180 days".to_string(),
-        // `app.request` (§4.2 item 4, slice K4): the method and the ids it named.
-        "app.request" => format!("asked {} {}", p["method"].as_str().unwrap_or("?"), p["ids"]),
+        // `app.request` (§4.2 item 4): the method, the ids it named and where the request stands. Never what was typed: the
+        // daemon does not record it. The reason is the daemon's own sentence, cut to one short line when it was written.
+        "app.request" => {
+            let state = match (p["state"].as_str(), p["why"].as_str()) {
+                (Some(s), Some(why)) => format!(": {} ({})", s, why.chars().filter(|c| !c.is_control()).take(200).collect::<String>()),
+                (Some(s), None) => format!(": {}", s),
+                _ => String::new(),
+            };
+            format!("asked {} {}{}", p["method"].as_str().unwrap_or("?"), p["ids"], state)
+        }
         other => other.to_string(),
     };
     format!("{}  {:<12}{}", timestamp, name, what)
@@ -589,6 +597,8 @@ mod tests {
         assert_eq!(render_event("T", "app.revoked", &json!({"name": "app-0a1b2c", "sessions_closed": 2})), "T  app-0a1b2c  revoked; 2 session(s) closed");
         assert_eq!(render_event("T", "app.granted", &json!({"name": "app-0a1b2c", "grant": "request", "removed": true})), "T  app-0a1b2c  lost request");
         assert_eq!(render_event("T", "app.request", &json!({"name": "app-0a1b2c", "method": "app.page_rebuild", "ids": {"slug": "x"}})), "T  app-0a1b2c  asked app.page_rebuild {\"slug\":\"x\"}");
+        assert_eq!(render_event("T", "app.request", &json!({"name": "app-0a1b2c", "request": "aq-1-1", "method": "app.research_continue", "ids": {"topic_id": "tides-0123abcd"}, "state": "queued"})), "T  app-0a1b2c  asked app.research_continue {\"topic_id\":\"tides-0123abcd\"}: queued");
+        assert_eq!(render_event("T", "app.request", &json!({"name": "app-0a1b2c", "method": "app.page_dispute", "ids": {"claim": "c-1"}, "state": "refused", "why": "no claim has\nthat id"})), "T  app-0a1b2c  asked app.page_dispute {\"claim\":\"c-1\"}: refused (no claim hasthat id)");
         let t = tempfile::tempdir().unwrap();
         assert!(render_log(t.path(), 200).starts_with("nothing yet"));
     }

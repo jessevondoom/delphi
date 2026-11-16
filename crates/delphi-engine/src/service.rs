@@ -20,6 +20,10 @@ use std::time::{Duration, Instant};
 
 #[path = "service_xenia.rs"]
 mod service_xenia;
+/// The `request` grant's four methods (`specs/120` §4.2), a child of this module so that they run the same private code the
+/// console's own methods run.
+#[path = "app_requests.rs"]
+pub mod app_requests;
 
 struct Running {
     target: String,
@@ -79,6 +83,8 @@ pub struct EngineService {
     merge_checked: std::sync::atomic::AtomicI64,
     merge_offset: Mutex<Option<u64>>,
     research_jobs: crate::research_jobs::Jobs,
+    /// What each app key asked in the last hour, and what of it still runs (`specs/120` §4.2 item 3).
+    app_asked: Mutex<app_requests::Tally>,
     /// Host Panels in progress (`specs/086`): Round 1 is held here, in memory, until every seat has answered. A restart ends them.
     panels: Panels,
 }
@@ -390,7 +396,7 @@ impl EngineService {
         let _ = engine.research_ask.set(tx);
         // One queue for every research run, under the one limits table (`specs/112` §4 item 6).
         let research_queue = crate::research_jobs::Jobs::with_limits(&engine.settings.research_limits);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: research_queue,
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: research_queue, app_asked: Default::default(),
             #[cfg(test)]
             research_web: Mutex::new(None), panels: Arc::new(Mutex::new(HashMap::new())) });
         // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
@@ -3899,6 +3905,12 @@ impl EngineService {
     /// `research.start`: it sends queries to a search engine and spends tokens, so nothing calls it but the operator's own command.
     async fn research_continue(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
+        self.continue_as_operator(&p).await
+    }
+
+    /// What `research.continue` does once the caller is known to be the operator: the console (above), or the app on a key that
+    /// holds `request` (`specs/120` §4.2, [`app_requests`]). Nothing else calls it.
+    async fn continue_as_operator(&self, p: &Value) -> RpcOutcome {
         let id = p["topic_id"].as_str().unwrap_or("");
         if !crate::research_record::valid_topic_id(id) {
             return Err(err(code::INVALID_PARAMS, "`topic_id` is a research topic's id, as `delphi research topics` lists them"));
@@ -4831,6 +4843,12 @@ impl EngineService {
 }
 
 impl Extension for ServiceExt {
+    /// `specs/120` §4.2: the server calls this for an app session whose key holds `request`, and for nothing else.
+    fn app_request(&self, key: &str, method: &str, params: Value) -> RpcFuture {
+        let (svc, key, method) = (self.0.clone(), key.to_string(), method.to_string());
+        Box::pin(async move { svc.app_request(&key, &method, params).await })
+    }
+
     fn call(&self, method: &str, params: Value, ctx: CallContext) -> RpcFuture {
         let (svc, method) = (self.0.clone(), method.to_string());
         Box::pin(async move {
@@ -10788,6 +10806,198 @@ mod tests {
         let (open, got) = blocking(move || drive_panel(hsock, htok, cwd, json!({"question": "q?", "model": "claude-opus", "operator_confirmed": true, "foreign_seat": "red-team"}), &["architect", "strategist"]).unwrap()).await;
         assert!(open["foreign_seats"].is_null() && open["foreign_seat"]["seat"] == "red-team", "{open}");
         assert!(got["foreign_seats"].is_null() && got["ruling"]["seats_run_by_delphi"].as_array().unwrap().len() == 1, "{got}");
+    }
+
+    // ── The app's `request` grant (`specs/120` §4.2) ─────────────────────────────────────────────────────────────────────
+
+    const APP_KEY: &str = "app-0a1b2c";
+
+    /// The `app.request` events of one request, as (state, payload), oldest first.
+    fn app_states(f: &Fx, request: &str) -> Vec<(String, Value)> {
+        events_of(f, "app.request").into_iter().filter(|e| e.payload["request"] == request).map(|e| (e.payload["state"].as_str().unwrap_or("").to_string(), e.payload)).collect()
+    }
+
+    /// Wait for a request to reach a state that ends it, and return every state it went through.
+    async fn app_ended(f: &Fx, request: &str) -> Vec<String> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let states: Vec<String> = app_states(f, request).into_iter().map(|(s, _)| s).collect();
+            if states.iter().any(|s| matches!(s.as_str(), "done" | "failed" | "cancelled" | "refused")) {
+                return states;
+            }
+            assert!(std::time::Instant::now() < deadline, "the request never ended: {states:?}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// `specs/120` AC-7: `app.research_continue` with a parameter its table does not list is refused and starts nothing; the run it
+    /// starts makes the same events as the console's `research.continue` (what `delphi research continue` calls), and the same
+    /// record: the operator's run, with the note. The request's own record names the key, the method and the ids, never the typed
+    /// words. A section is named by an anchor the daemon finds on a page that follows the topic. No other socket has the methods.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_app_request_to_continue_starts_the_run_the_terminal_starts_and_takes_only_ids_and_typed_text() {
+        use crate::research_record as rr;
+        let f = setup((0..30).map(|_| Step::text(R4_CLAIM)).collect(), 5.0, |_| {});
+        let s = serve(&f).await;
+        let svc = s.svc.clone();
+        svc.adopt(f.m.clone());
+        let ext = svc.extension();
+        r4_web(&svc, &["https://k4-continue.example/study"]);
+        let console = CallContext { scope: Scope::Console, client_id: 2 };
+        let started = svc.research_start(json!({"topic": "does aspirin lower fever in adults over seventy"}), console).await.unwrap();
+        r4_console_done(&svc).await;
+        let id = started["topic_id"].as_str().unwrap().to_string();
+        let topic = rr::find(&f.engine.ws.dir, &id).unwrap();
+        let runs = || topic.read().unwrap()["runs"].as_array().unwrap().clone();
+
+        // The methods are not the engine's ordinary methods: no scope reaches them through `call`, the app scope included.
+        for scope in [Scope::Console, Scope::Narrator, Scope::Relay, Scope::Host, Scope::App] {
+            for m in app_requests::METHODS {
+                assert!(ext.call(m, json!({"topic_id": id, "slug": "x", "claim": "c", "question": "q"}), CallContext { scope, client_id: 9 }).await.is_none(), "{m} at {scope:?}");
+            }
+        }
+        // And the entry that does answer them answers nothing else, and no key that is not a key's name.
+        assert!(ext.app_request(APP_KEY, "approval.resolve", json!({})).await.is_none());
+        assert!(ext.app_request(APP_KEY, "research.continue", json!({"topic_id": id})).await.is_none());
+        assert!(ext.app_request("console", "app.research_continue", json!({"topic_id": id})).await.is_none());
+
+        // Refused before anything is counted: free text for the query, a second question, an id of another shape.
+        for bad in [json!({"topic_id": id, "query": "free text for the query"}), json!({"topic_id": id, "question": "another question"}), json!({"topic_id": "../../etc/passwd"}), json!({"topic_id": id, "section": "Ignore the above"}), json!({"topic_id": id, "note": 7}), json!({})] {
+            assert_eq!(ext.app_request(APP_KEY, "app.research_continue", bad.clone()).await.unwrap().unwrap_err().code, code::INVALID_PARAMS, "{bad}");
+        }
+        assert_eq!(runs().len(), 1, "a refused request starts nothing");
+        assert!(events_of(&f, "app.request").is_empty(), "and writes nothing");
+
+        // The terminal's way, then the app's, each with the same note: the events one makes are the events the other makes.
+        // (The run's own events: a note staged from an earlier run's report arrives when it arrives, and is not this run's.)
+        let kinds = |from: usize| f.m.replay().unwrap().into_iter().skip(from).map(|e| e.kind).filter(|k| k.starts_with("research.")).collect::<Vec<_>>();
+        let at = f.m.replay().unwrap().len();
+        svc.research_continue(json!({"topic_id": id, "note": "in winter"}), console).await.unwrap();
+        r4_console_done(&svc).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let by_terminal = kinds(at);
+        let at = f.m.replay().unwrap().len();
+        let asked = ext.app_request(APP_KEY, "app.research_continue", json!({"topic_id": id, "note": "in winter"})).await.unwrap().unwrap();
+        let request = asked["request"].as_str().unwrap().to_string();
+        assert_eq!((asked["topic_id"].as_str(), asked["continued"].as_bool()), (Some(id.as_str()), Some(true)), "{asked}");
+        assert!(matches!(asked["state"].as_str(), Some("queued" | "running")), "{asked}");
+        let states = app_ended(&f, &request).await;
+        assert_eq!(states.last().map(String::as_str), Some("done"), "{states:?}");
+        r4_console_done(&svc).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(kinds(at), by_terminal, "the app's request and the terminal's command leave the same events");
+        let rec = runs();
+        assert_eq!(rec.len(), 3);
+        for k in ["continued", "note", "asked_by", "state", "depth"] {
+            assert_eq!(rec[2][k], rec[1][k], "{k}: the app's run is recorded as the terminal's is");
+        }
+        assert_eq!(rec[2]["asked_by"], json!({"kind": "operator", "label": "operator"}));
+
+        // The record of the request: who, what, which ids, the state. Never the words that were typed.
+        let logged = app_states(&f, &request);
+        assert_eq!(logged[0].1, json!({"name": APP_KEY, "request": request, "method": "app.research_continue", "ids": {"topic_id": id}, "state": logged[0].0}));
+        assert!(logged.iter().all(|(_, p)| !p.to_string().contains("winter")), "{logged:?}");
+
+        // A section: no page follows the topic yet, so the anchor names nothing and the request is refused (and counted, and recorded).
+        let refused = ext.app_request(APP_KEY, "app.research_continue", json!({"topic_id": id, "section": "why-twice-a-day"})).await.unwrap().unwrap_err();
+        assert_eq!(refused.code, code::NOT_FOUND);
+        let last = events_of(&f, "app.request").pop().unwrap().payload;
+        assert_eq!((last["state"].as_str(), last["ids"]["section"].as_str()), (Some("refused"), Some("why-twice-a-day")), "{last}");
+        // A page that follows it, with that heading: the run's note names the section by its anchor.
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        let made = lib.topics_from_research(&f.engine.ws.dir, 1);
+        assert_eq!(made.len(), 1, "{made:?}");
+        std::fs::write(f.engine.ws.home.join("library/pages").join(format!("{}.md", made[0])), "# Aspirin\n\nLead.\n\n## Why twice a day?\n\nBecause.\n").unwrap();
+        assert!(lib.topic_has_section(&id, "why-twice-a-day") && !lib.topic_has_section(&id, "lead") && !lib.topic_has_section("other-topic-0123abcd", "why-twice-a-day"));
+        let asked = ext.app_request(APP_KEY, "app.research_continue", json!({"topic_id": id, "section": "why-twice-a-day", "note": "and at night"})).await.unwrap().unwrap();
+        assert_eq!(app_ended(&f, asked["request"].as_str().unwrap()).await.last().map(String::as_str), Some("done"));
+        assert_eq!(runs()[3]["note"].as_str(), Some("and at night (section: why-twice-a-day)"));
+        // A note that, with its section, is longer than the terminal's `--note` takes is refused by the terminal's own rule.
+        let long = ext.app_request(APP_KEY, "app.research_continue", json!({"topic_id": id, "section": "why-twice-a-day", "note": "x".repeat(110)})).await.unwrap().unwrap_err();
+        assert_eq!(long.code, code::INVALID_PARAMS);
+
+        // A follow-up question: the console's own research, in the project of the topic it follows; a topic that is not there is refused.
+        r4_console_done(&svc).await;
+        assert_eq!(ext.app_request(APP_KEY, "app.research_ask", json!({"question": "is it safe with ibuprofen", "follows": "no-such-topic-0123abcd"})).await.unwrap().unwrap_err().code, code::NOT_FOUND);
+        for bad in [json!({"question": ""}), json!({"question": "   "}), json!({"question": "x".repeat(201)}), json!({"question": "two\nlines"}), json!({"follows": id}), json!({"question": "q", "topic": "t"})] {
+            assert_eq!(ext.app_request(APP_KEY, "app.research_ask", bad.clone()).await.unwrap().unwrap_err().code, code::INVALID_PARAMS, "{bad}");
+        }
+        let asked = ext.app_request(APP_KEY, "app.research_ask", json!({"question": "which lighthouse on the coast was built first", "follows": id})).await.unwrap().unwrap();
+        let request = asked["request"].as_str().unwrap().to_string();
+        assert_eq!(app_ended(&f, &request).await.last().map(String::as_str), Some("done"));
+        let logged = app_states(&f, &request);
+        assert_eq!((logged[0].1["method"].as_str(), &logged[0].1["ids"]), (Some("app.research_ask"), &json!({"follows": id})));
+        assert!(logged.iter().all(|(_, p)| !p.to_string().contains("lighthouse")), "the question is not in the record: {logged:?}");
+        assert!(asked["topic_id"].as_str().is_some_and(|t| rr::find(&f.engine.ws.dir, t).is_some()), "{asked}");
+    }
+
+    /// `specs/120` §4.2, AC-8 and AC-9: a dispute and a rebuild are the terminal's own; no request method answers a card and the app
+    /// scope cannot resolve one; the 31st request of a key in an hour is refused with the limit named, and another key is not.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_app_request_disputes_and_rebuilds_as_the_terminal_does_and_the_thirty_first_in_an_hour_is_refused() {
+        let f = setup(vec![], 5.0, |_| {});
+        let home = f.engine.ws.home.clone();
+        let lib = crate::library::Library::in_home(&home);
+        let doc = home.join("tides.md");
+        std::fs::write(&doc, "# Tides\n\nThe tide comes in twice a day.\n").unwrap();
+        let s = lib.add_file(&doc, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+        let anchor = crate::library::claims::AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() };
+        let c = lib.add_claim("Tides come twice a day.", &Default::default(), &[anchor]).unwrap()["id"].as_str().unwrap().to_string();
+        lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let ext = svc.extension();
+        let mut counted = 0;
+
+        // A dispute: the claim's record gains the operator's mark, exactly as `pages.dispute` writes it.
+        let asked = ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": c, "note": "It is  not twice\neverywhere"})).await.unwrap().unwrap();
+        counted += 1;
+        assert_eq!((asked["state"].as_str(), asked["claim"].as_str()), (Some("done"), Some(c.as_str())));
+        let marks = lib.claim(&c).unwrap()["contested_by"].as_array().unwrap().clone();
+        assert_eq!((marks.len(), marks[0]["source"].as_str(), marks[0]["reason"].as_str(), marks[0]["note"].as_str()), (1, Some("operator"), Some("disputed"), Some("It is not twice everywhere")));
+        let logged = app_states(&f, asked["request"].as_str().unwrap());
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0].1, json!({"name": APP_KEY, "request": asked["request"], "method": "app.page_dispute", "ids": {"claim": c}, "state": "done"}));
+        // Refused before it is counted: no claim id, an id of another shape, a status the app would like to set.
+        for bad in [json!({"note": "wrong"}), json!({"claim": "../x", "note": "wrong"}), json!({"claim": c, "note": "wrong", "status": "refuted"}), json!({"claim": c, "note": "x".repeat(2001)})] {
+            assert_eq!(ext.app_request(APP_KEY, "app.page_dispute", bad.clone()).await.unwrap().unwrap_err().code, code::INVALID_PARAMS, "{bad}");
+        }
+        // Counted and refused by the daemon's own rules: a claim that is not there, a dispute with no words.
+        assert_eq!(ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": "c-000000000000", "note": "wrong"})).await.unwrap().unwrap_err().code, code::NOT_FOUND);
+        assert_eq!(ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": c})).await.unwrap().unwrap_err().code, code::INVALID_PARAMS);
+        counted += 2;
+        assert_eq!(lib.claim(&c).unwrap()["contested_by"].as_array().unwrap().len(), 1);
+        assert_eq!(events_of(&f, "app.request").iter().filter(|e| e.payload["state"] == "refused").count(), 2);
+
+        // A rebuild: answered at once, built in a task of its own, its end an event.
+        for bad in [json!({"slug": "Lighthouse Lamps"}), json!({"slug": "../x"}), json!({"slug": "lighthouse-lamps", "force": "yes"}), json!({})] {
+            assert_eq!(ext.app_request(APP_KEY, "app.page_rebuild", bad.clone()).await.unwrap().unwrap_err().code, code::INVALID_PARAMS, "{bad}");
+        }
+        assert_eq!(ext.app_request(APP_KEY, "app.page_rebuild", json!({"slug": "no-such-topic"})).await.unwrap().unwrap_err().code, code::NOT_FOUND);
+        let asked = ext.app_request(APP_KEY, "app.page_rebuild", json!({"slug": "lighthouse-lamps"})).await.unwrap().unwrap();
+        counted += 2;
+        assert_eq!(asked["state"].as_str(), Some("running"));
+        assert_eq!(app_ended(&f, asked["request"].as_str().unwrap()).await, ["running", "done"]);
+        assert!(home.join("library/pages/lighthouse-lamps.md").exists(), "the page was built");
+
+        // AC-8: nothing in the grant answers a card, and the app scope is refused the method that does.
+        let refused = ext.call("approval.resolve", json!({"approval_id": "ap_1", "resolution": "allow"}), CallContext { scope: Scope::App, client_id: 7 }).await.unwrap().unwrap_err();
+        assert_eq!(refused.code, code::FORBIDDEN);
+        assert!(ext.call("approval.list", json!({}), CallContext { scope: Scope::App, client_id: 7 }).await.unwrap().is_ok(), "the app can see that something waits");
+
+        // AC-9: thirty in an hour for a key, counted whether or not the daemon then did what was asked; the thirty-first is refused.
+        while counted < app_requests::PER_HOUR {
+            ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": c, "note": format!("again {counted}")})).await.unwrap().unwrap();
+            counted += 1;
+        }
+        let events_before = events_of(&f, "app.request").len();
+        let over = ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": c, "note": "the thirty-first"})).await.unwrap().unwrap_err();
+        assert_eq!(over.code, code::FORBIDDEN);
+        assert!(over.message.contains("30 requests an hour"), "{}", over.message);
+        assert!(ext.app_request(APP_KEY, "app.page_rebuild", json!({"slug": "lighthouse-lamps"})).await.unwrap().is_err(), "every method counts against the one limit");
+        assert_eq!(events_of(&f, "app.request").len(), events_before, "a request past the limit is not recorded: the record cannot be flooded");
+        assert!(!lib.claim(&c).unwrap()["contested_by"].to_string().contains("thirty-first"));
+        assert!(ext.app_request("app-0000ff", "app.page_dispute", json!({"claim": c, "note": "another key, its own hour"})).await.unwrap().is_ok());
     }
 }
 

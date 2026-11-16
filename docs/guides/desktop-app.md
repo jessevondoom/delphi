@@ -44,7 +44,7 @@ An agent is always written the same way: its chip, its name in bold in its colou
 - It can call nine of the daemon's read methods, and six reads of the knowledge base through one of them. A paired app can also call the encyclopedia's eleven reads (`pages.list`, `pages.get`, `pages.versions`, `pages.links`, `topics.list`, `topics.get`, `library.source`, `library.claim`, `memory.roles`, `memory.role`, `changes.since`; [`specs/117`](../../specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md) §3), each proved by a test of the daemon to write nothing. Those eleven are never sent on the read-only socket, because one of them returns the text of your private sources: the app refuses them itself until it has proved its key. The list is fixed in the app and checked against the daemon's own lists by a test.
 - It opens no network port and loads nothing from the network.
 - It writes nothing under your projects, and under your Delphi home only its own folder, `app/`, readable by you alone: its key (`app/key.json`) once paired; your marks on the encyclopedia (`app/marks.json`), written when you read a page to its end, pin a topic or write a note; and a page you export (`app/exports/<topic>.md`). None of these is sent to the daemon and no agent is given them. Its theme and menu choices are kept by the window.
-- It asks for nothing to be done. Where a page offers "Ask a follow-up", "Research this section further", "Rebuild now" or "Dispute this statement", the app composes the command (`delphi research continue …`, `delphi pages rebuild …`, `delphi pages dispute …`), puts it on your clipboard and says so; you run it in a terminal. What you type is quoted so that a shell reads it as one argument.
+- The window asks for nothing to be done yet. Where a page offers "Ask a follow-up", "Research this section further", "Rebuild now" or "Dispute this statement", the app composes the command (`delphi research continue …`, `delphi pages rebuild …`, `delphi pages dispute …`), puts it on your clipboard and says so; you run it in a terminal. What you type is quoted so that a shell reads it as one argument.
 - Outside its window it does three things, each on your click: **Show in Finder**, **Open** a deck or page, a document, a picture or a recording in your browser or viewer (never a program or a script), and open a web link in your browser. A file must be inside the workspace or one of your registered projects.
 
 ## Pairing it with a terminal
@@ -65,7 +65,24 @@ delphi app log                           # what paired, what was refused, what w
 - A key is recorded in `operator/app-keys.json` under your Delphi home, which no agent can read or write. A key unused for 180 days is removed.
 - The grants are `read` (what the app reads today) and `request`. A key gets both when it is paired, and gets a new grant only when you give it: an update of the app or of Delphi never adds one.
 
-Not built yet: `delphi app` does not start the app in this build (it says so; the place where it starts a process must first be added to the list of such places), and the `request` grant has no methods, so a paired app acts no more than an unpaired one: what pairing adds is the encyclopedia and agent memory, which are reads. The window does not yet say whether it is paired; the encyclopedia says how to pair when it is not.
+Not built yet: `delphi app` does not start the app in this build (it says so; the place where it starts a process must first be added to the list of such places).
+
+### What a paired app may ask for
+
+A key that holds `request` may ask the daemon to start four things, each of which you could start at a terminal without being asked anything:
+
+| The app asks | The same as | It sends |
+| :-- | :-- | :-- |
+| `app.research_continue` | `delphi research continue <topic> [--note …]` | the topic's id; a section's anchor; a note you typed |
+| `app.research_ask` | `/research <question>` in the console | the question you typed; the id of the topic it follows |
+| `app.page_rebuild` | `delphi pages rebuild <slug>` | the page's slug |
+| `app.page_dispute` | `delphi pages dispute <claim> --note …` | the claim's id; a note you typed |
+
+- **Ids and what you typed, nothing else.** A request that carries any other parameter is refused. The daemon looks up what an id names; text from a page, a source or an agent cannot be put in a request. A section is named by its heading's anchor (lowercase letters, digits and hyphens), and only when a page that follows the topic has that heading.
+- **The daemon's own rules still hold.** A request runs as yours, under the same budgets and limits as the command it stands for: one research run from the console or the app at a time, a note of at most 120 characters, a question of at most 200. Anything that needs your approval asks you in the console; no request answers it, and the app cannot.
+- **Limits.** 30 requests an hour for a key and 4 running at once; past either the request is refused and says which. The hour's count is kept in the daemon's memory and starts again when the daemon does.
+- **The record.** Each request is an `app.request` event with the key's name, the method, the ids and where it stands (queued, running, done, failed, cancelled, refused and why). What you typed is not in it. `delphi app log` prints them.
+- **Revoking.** `delphi app revoke <name>` closes the key's sessions at once. A request that was already being started is not cut halfway: it finishes starting, and its work runs under the daemon's usual limits.
 
 ## Your marks on the encyclopedia
 
