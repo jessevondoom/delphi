@@ -2,12 +2,14 @@
 //! the daemon, attaches on the read-only narrator scope, and gives the window a few named reads and the daemon's notifications.
 //! When a terminal has paired it (spec 120), it attaches on the app socket instead, proving its key on every connection; the
 //! window is given the same reads either way, and a paired window the encyclopedia's reads as well (spec 117 §3; `ency`).
+//! The operator's own marks on the encyclopedia (spec 117 §5; `marks`) are kept in the app's folder and never sent anywhere.
 
 pub mod bridge;
 pub mod client;
 pub mod ency;
 pub mod key;
 pub mod locate;
+pub mod marks;
 
 use std::sync::Arc;
 
@@ -86,6 +88,40 @@ fn encyclopedia(bridge: State<'_, Arc<Bridge>>, read: String, arg: Option<Value>
     bridge.call(method, params).map(|reply| ency::shown(method, &arg, reply))
 }
 
+fn home() -> Result<std::path::PathBuf, String> {
+    locate::delphi_home().ok_or_else(|| "no Delphi home was found on this machine".to_string())
+}
+
+/// The operator's own marks (spec 117 §5): read pages, notes on passages, pins. Kept in `<home>/app/marks.json` and never
+/// sent to the daemon; reading them creates nothing.
+#[tauri::command(async)]
+fn marks_load() -> Result<Value, String> {
+    marks::load(&home()?)
+}
+
+#[tauri::command(async)]
+fn marks_save(marks: Value) -> Result<(), String> {
+    marks::save(&home()?, &marks)
+}
+
+/// Export a page as Markdown (spec 117 §5 item 4): written to `<home>/app/exports/<name>.md` with its banner, and shown
+/// in the Finder. Returns where it was written.
+#[tauri::command(async)]
+fn export_page(name: String, text: String) -> Result<String, String> {
+    let file = marks::export(&home()?, &name, &text)?;
+    // Shown, never opened or run; a system that cannot show it still has the file, and the window says where.
+    if cfg!(target_os = "macos") {
+        let _ = std::process::Command::new("/usr/bin/open").arg("-R").arg(&file).status();
+    }
+    Ok(file.to_string_lossy().into_owned())
+}
+
+/// The system's print dialog for the page in the window (spec 117 §5 item 4): the operator prints it or saves it as PDF.
+#[tauri::command]
+fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.print().map_err(|e| format!("the print dialog could not be opened: {e}"))
+}
+
 fn handed_over(done: std::io::Result<std::process::ExitStatus>, what: &str) -> Result<(), String> {
     match done {
         Ok(s) if s.success() => Ok(()),
@@ -155,7 +191,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, kb, encyclopedia, reveal, open_file, open_url])
+        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, kb, encyclopedia, marks_load, marks_save, export_page, print_page, reveal, open_file, open_url])
         .run(tauri::generate_context!())
         .expect("the Delphi window could not start");
 }
