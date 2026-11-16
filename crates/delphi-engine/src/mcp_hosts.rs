@@ -409,7 +409,7 @@ pub fn role_agent_file(host: &str, role: &str, models: &BTreeMap<String, String>
         }
         "copilot" => {
             let m = model.map(|m| format!("model: {}\n", quoted(&m))).unwrap_or_default();
-            let tools = copilot_tools(&["council_brief", "council_submit", "get_agent", "search_memory", "kb_retrieve"]);
+            let tools = copilot_tools(&[], &["council_brief", "council_submit", "get_agent", "search_memory", "kb_retrieve"]);
             (format!("agents/delphi-{role}.agent.md").into(), format!("---\nname: delphi-{role}\ndescription: {desc}\n{m}{tools}---\n\n{body}"))
         }
         "agy" => {
@@ -441,10 +441,13 @@ pub fn role_agent_files(host: &str, models: &BTreeMap<String, String>) -> Result
 /// Delphi's read-only tools a read-only worker may call (spec 106 A4), beside the seats' read-only built-ins.
 const WORKER_READ_TOOLS: &[&str] = &["get_agent", "get_skill", "list_roles", "list_skills", "specs_status", "specs_show", "specs_list", "search_project", "search_memory", "query_memory", "kb_retrieve", "search_kb"];
 
-/// The `tools:` line of a read-only Copilot CLI file (spec 110 X3): Copilot's read and search tools and the named Delphi tools as
-/// `delphi/<tool>`, never its shell, edit or delegate tools.
-fn copilot_tools(delphi: &[&str]) -> String {
+/// The `tools:` line of a read-only Copilot CLI file (spec 110 X3): Copilot's read and search tools, the host's own search and fetch
+/// tools a research worker is given ([`worker_host_tools`]), and the named Delphi tools as `delphi/<tool>`, never its shell, edit or
+/// delegate tools. `web_fetch` is the name an agent file lists for Copilot's fetch tool: a live check on 2026-11-16 (`specs/119`
+/// §16) showed a file listing it exposing `web_fetch` and running it, and the same file without it exposing no fetch tool.
+fn copilot_tools(host: &[&str], delphi: &[&str]) -> String {
     let mut all: Vec<String> = vec!["\"read\"".into(), "\"search\"".into()];
+    all.extend(host.iter().map(|t| format!("\"{t}\"")));
     all.extend(delphi.iter().map(|t| format!("\"delphi/{t}\"")));
     format!("tools: [{}]\n", all.join(", "))
 }
@@ -615,7 +618,7 @@ pub fn worker_file_with(host: &str, role: &str, models: &BTreeMap<String, String
         "copilot" => {
             // Spec 110 §8.1: a Copilot agent file with no tool list gets every tool, so a read-only worker names its tools (A4 of 106).
             let m = model.map(|m| format!("model: {}\n", quoted(&m))).unwrap_or_default();
-            let tools = if *inherits { String::new() } else { copilot_tools(&worker_tools(role)) };
+            let tools = if *inherits { String::new() } else { copilot_tools(&worker_host_tools(host, role), &worker_tools(role)) };
             (format!("agents/delphi-{role}-worker.agent.md").into(), format!("---\nname: delphi-{role}-worker\ndescription: {desc}\n{m}{tools}---\n\n{md_mark}{body}"))
         }
         "agy" => (
@@ -1243,9 +1246,19 @@ mod tests {
                 assert!(tools.starts_with("Read, Grep, Glob, WebSearch, WebFetch, mcp__") && !tools.contains("Bash") && !tools.contains("Edit") && !tools.contains("Write"), "{tools}");
             }
             // A host with no search tool in the table: its worker file names neither tool.
-            for h in ["codex", "agy", "copilot"] {
+            for h in ["codex", "agy"] {
                 let (_, t) = worker_file(h, role, &none()).unwrap();
                 assert!(!t.contains("WebSearch") && !t.contains("WebFetch") && !t.contains("web_fetch") && !t.contains("web_search"), "{h} {role}");
+            }
+            // Copilot's row names a fetch tool and no search tool: the scout's file lists `web_fetch` (the name a live check on
+            // 2026-11-16 showed an agent file must list, `specs/119` §16), right after Copilot's read and search tools, and no other
+            // role's file names it. No Copilot file names a web search tool.
+            assert_eq!(worker_host_tools("copilot", role), if research { vec!["web_fetch"] } else { Vec::new() }, "{role}");
+            let (_, t) = worker_file("copilot", role, &none()).unwrap();
+            assert_eq!(t.contains("\"web_fetch\""), research && !inherits, "copilot {role}");
+            assert!(!t.contains("WebSearch") && !t.contains("WebFetch") && !t.contains("web_search"), "copilot {role}");
+            if research && !inherits {
+                assert!(t.contains("tools: [\"read\", \"search\", \"web_fetch\", \"delphi/get_agent\""), "{t}");
             }
         }
     }
@@ -1453,7 +1466,9 @@ mod tests {
             let tools = t.lines().find(|l| l.starts_with("tools: "));
             assert_eq!(tools.is_none(), *inherits, "{role}");
             if let Some(tools) = tools {
-                assert!(tools.starts_with("tools: [\"read\", \"search\", \"delphi/get_agent\""), "{role}: {tools}");
+                // The scout's file also lists Copilot's own fetch tool (`specs/119` §16); no other read-only worker's does.
+                let start = if *role == "scout" { "tools: [\"read\", \"search\", \"web_fetch\", \"delphi/get_agent\"" } else { "tools: [\"read\", \"search\", \"delphi/get_agent\"" };
+                assert!(tools.starts_with(start), "{role}: {tools}");
                 for wide in ["bash", "shell", "edit", "apply_patch", "task", "\"*\"", "council_submit", "propose_council_record", "handoff_put"] {
                     assert!(!tools.contains(wide), "{role}: {wide}");
                 }
