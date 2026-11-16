@@ -28,11 +28,15 @@ pub struct Conn {
     pub paired: Option<String>,
     /// The grants that key held when the session opened.
     pub grants: Vec<String>,
+    /// Why a window that has a key (or was handed a ticket) is reading without one: the key was refused, could not be
+    /// read, the pairing failed. Empty when it is paired or never tried. The title row shows it (spec 120 §6 item 2).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub unpaired_because: String,
 }
 
 impl Conn {
     fn off(detail: &str) -> Conn {
-        Conn { connected: false, detail: detail.to_string(), paired: None, grants: Vec::new() }
+        Conn { connected: false, detail: detail.to_string(), paired: None, grants: Vec::new(), unpaired_because: String::new() }
     }
 }
 
@@ -49,6 +53,9 @@ pub trait Sink: Send + Sync + 'static {
     /// The daemon dropped notifications for this client: ask for the state again.
     fn resync(&self);
 }
+
+/// What the window is told when it asks for something to be started without a paired key.
+pub const NOT_PAIRED_TO_ASK: &str = "asking from this window needs a paired key: run `delphi app` in a terminal once";
 
 /// The knowledge base reads the window may ask for through `kb.get` (spec 111 §2.2): search, listings, one document, and a
 /// picture beside a document (the daemon decodes it and sends pixels, never the file). Everything else under `/v1/` is left out.
@@ -224,8 +231,24 @@ impl Bridge {
         }
     }
 
+    /// One of the four requests (spec 120 §4.2). Asked only when this window's key held `request` when its session
+    /// opened; otherwise the answer is the sentence that says how to get there, and the daemon is not asked. The daemon
+    /// reads the key's record again for every call, so a grant taken away since is refused there too.
+    pub fn request(&self, method: Method, params: Value) -> Result<Value, String> {
+        if !method.asks() {
+            return Err("that is not a request this app makes".into());
+        }
+        let conn = self.conn();
+        match conn.paired {
+            None => return Err(NOT_PAIRED_TO_ASK.into()),
+            Some(name) if !conn.grants.iter().any(|g| g == "request") => return Err(format!("this app's key does not hold `request`: `delphi app grant {name} request` in a terminal gives it")),
+            Some(_) => {}
+        }
+        self.call(method, params)
+    }
+
     fn set_conn(&self, sink: &dyn Sink, connected: bool, detail: &str) {
-        self.say(sink, Conn { connected, detail: detail.to_string(), paired: None, grants: Vec::new() });
+        self.say(sink, Conn { connected, detail: detail.to_string(), paired: None, grants: Vec::new(), unpaired_because: String::new() });
     }
 
     fn say(&self, sink: &dyn Sink, c: Conn) {
@@ -248,7 +271,7 @@ impl Bridge {
             match self.attach_paired(app, keys) {
                 Ok(Some((events, name, grants))) => {
                     let detail = format!("Connected to the daemon, paired as {name}");
-                    return Ok((events, Conn { connected: true, detail, paired: Some(name), grants }));
+                    return Ok((events, Conn { connected: true, detail, paired: Some(name), grants, unpaired_because: String::new() }));
                 }
                 Ok(None) => {}
                 Err(why) => why_not_paired = why,
@@ -260,7 +283,7 @@ impl Bridge {
         events.call(Method::Subscribe, json!({}))?;
         *self.calls.lock().unwrap() = Some(calls);
         let detail = if why_not_paired.is_empty() { "Connected to the daemon, read-only".to_string() } else { format!("Connected to the daemon, read-only ({why_not_paired})") };
-        Ok((events, Conn { connected: true, detail, paired: None, grants: Vec::new() }))
+        Ok((events, Conn { connected: true, detail, paired: None, grants: Vec::new(), unpaired_because: why_not_paired }))
     }
 
     /// The paired way in (spec 120 §2 items 4, 5 and 7; §3 item 2). `Ok(None)`: there is no key and no ticket, or no app
@@ -639,30 +662,39 @@ mod tests {
         let server = include_str!("../../../crates/delphi-core/src/server.rs");
         let line = server.lines().find(|l| l.contains("pub const NARRATOR_METHODS")).expect("the allowlist is where it was");
         let narrator = |m: Method| line.contains(&format!("\"{}\"", m.name()));
-        // Every method is a narrator method, or it is one of the encyclopedia's reads (spec 117 §3), which the client
-        // sends only on a connection that proved a paired key (spec 120): never both, never neither.
+        // Every method is exactly one of three: a narrator method; one of the encyclopedia's reads (spec 117 §3), which the
+        // client sends only on a connection that proved a paired key (spec 120); or one of the four requests (spec 120 §4.2).
         for m in Method::ALL {
-            assert!(narrator(m) != m.paired_only(), "{} must be a narrator method or a paired-only read, and not both", m.name());
+            assert_eq!([narrator(m), m.paired_only(), m.asks()].iter().filter(|x| **x).count(), 1, "{} must be a narrator method, a paired-only read or a request, and only one of them", m.name());
         }
         for m in Method::NARRATOR {
-            assert!(narrator(m) && !m.paired_only(), "{} is not a narrator method", m.name());
+            assert!(narrator(m) && !m.paired_only() && !m.asks(), "{} is not a narrator method", m.name());
         }
         let names: std::collections::BTreeSet<&str> = Method::ALL.iter().map(|m| m.name()).collect();
         assert_eq!(names.len(), Method::ALL.len());
-        // Nothing the app can name starts work, answers an approval or changes a setting.
-        for m in Method::ALL {
+        // No read the app can name starts work, answers an approval or changes a setting.
+        let reads: Vec<Method> = Method::ALL.iter().copied().filter(|m| !m.asks()).collect();
+        for m in &reads {
             let n = m.name();
             assert!(!["task.", "approval.resolve", "permissions.set", "settings.", "decision.", "ratify.", "budget.set", "shell.", "app.", "auth.", "pages.promote", "pages.dispute", "pages.save", "pages.refresh", "pages.open", "pages.search", "research."].iter().any(|p| n.starts_with(p)), "{n}");
         }
-        // Spec 120 K3: pairing and the signed handshake are how a connection begins. The list of what the app can call
-        // did not grow by them: it is the nine reads of spec 111 §2.2 and, since spec 117 E5, the encyclopedia's eleven,
-        // and each of the twenty is a row of the daemon's `read` grant.
-        assert_eq!((Method::NARRATOR.len(), Method::PAIRED_ONLY.len(), Method::ALL.len()), (9, 11, 20));
-        assert!(Method::ALL.iter().all(|m| Method::NARRATOR.contains(m) != Method::PAIRED_ONLY.contains(m)));
+        // Spec 120 K3: pairing and the signed handshake are how a connection begins, and the list of what the app can call
+        // did not grow by them. It is the nine reads of spec 111 §2.2, the encyclopedia's eleven (spec 117 E5), each a row
+        // of the daemon's `read` grant; and, since spec 120 K5, the four requests of the daemon's `request` grant, which
+        // are the only methods here that are not reads.
+        assert_eq!((Method::NARRATOR.len(), Method::PAIRED_ONLY.len(), Method::REQUESTS.len(), Method::ALL.len()), (9, 11, 4, 24));
+        assert_eq!(reads.len(), 20);
         let grants = include_str!("../../../crates/delphi-core/src/app_keys.rs");
         let read = grants.split("name: \"read\"").nth(1).and_then(|s| s.split("Grant {").next()).expect("the grant table is where it was");
-        for m in Method::ALL {
+        for m in &reads {
             assert!(read.contains(&format!("\"{}\"", m.name())), "{} is not under the daemon's `read` grant", m.name());
+        }
+        // The requests are exactly the daemon's `REQUEST_METHODS`, in its order, and that list is the `request` grant's row.
+        let asked = grants.lines().find(|l| l.contains("pub const REQUEST_METHODS")).and_then(|l| l.split_once('=')).map(|(_, r)| r.trim().trim_end_matches(';').to_string()).expect("the request list is where it was");
+        assert_eq!(asked, format!("[{}]", Method::REQUESTS.iter().map(|m| format!("\"{}\"", m.name())).collect::<Vec<_>>().join(", ")));
+        assert!(grants.contains("Grant { name: \"request\", methods: &REQUEST_METHODS }"), "the `request` grant is that list");
+        for m in Method::REQUESTS {
+            assert!(!read.contains(&format!("\"{}\"", m.name())), "{} must not be a read", m.name());
         }
         // The paired-only reads are exactly the daemon's `ENCYCLOPEDIA_READS`, in its order: one added there, or one here
         // that the daemon does not list, fails.
@@ -897,7 +929,65 @@ mod tests {
         let said = wait_for(&rx, |g| matches!(g, Got::Conn(true, _)));
         assert!(matches!(&said, Got::Conn(true, d) if d.contains("read-only") && d.contains("the pairing was refused")), "{said:?}");
         assert_eq!(methods(&app2.seen), ["app.pair"]);
+        // The reason is the window's to show while it is connected (spec 120 §6 item 2), and a window with no key asks for nothing.
+        assert!(bridge.conn().unpaired_because.contains("the pairing was refused"), "{:?}", bridge.conn());
+        assert_eq!(bridge.request(Method::PageRebuild, json!({"slug": "tides"})).unwrap_err(), NOT_PAIRED_TO_ASK);
+        assert_eq!(methods(&app2.seen), ["app.pair"]);
         assert!(!home2.join("app/key.json").exists(), "a key that was not paired is not kept");
+        bridge.stop();
+    }
+
+    /// Spec 120 §4.2, §6 item 1 (K5): a request is sent only by a window that proved a key holding `request`, and then
+    /// on the app socket with the parameters `ask::request` built. A window reading on the narrator socket, or one whose
+    /// key holds only `read`, is told how to get there and the daemon is not asked. Nothing but the four is a request.
+    #[test]
+    fn a_request_is_sent_only_on_a_paired_connection_whose_key_holds_request() {
+        let t = tempfile::tempdir().unwrap();
+        // No key: the narrator socket hears no request, by the bridge's rule and again by the client's.
+        let sock = t.path().join("n.sock");
+        let seen: Seen = Arc::default();
+        daemon(&sock, seen.clone(), vec![], false);
+        let (bridge, rx) = start(sock);
+        wait_for(&rx, |g| matches!(g, Got::Conn(true, _)));
+        for m in Method::REQUESTS {
+            assert_eq!(bridge.request(m, json!({"slug": "tides"})).unwrap_err(), NOT_PAIRED_TO_ASK, "{}", m.name());
+            assert_eq!(bridge.call(m, json!({"slug": "tides"})).unwrap_err(), crate::client::NOT_PAIRED, "{}", m.name());
+        }
+        assert!(methods(&seen).iter().all(|m| !m.starts_with("app.")), "{:?}", methods(&seen));
+        assert_eq!(bridge.conn().unpaired_because, "", "a window that never had a key has no reason to show");
+        bridge.stop();
+
+        // A paired key holding `request`: each of the four goes over the app socket as built, and the narrator hears nothing.
+        let (home, nsock, asock) = (t.path().join("home"), t.path().join("n2.sock"), t.path().join("a.sock"));
+        let seed = [6u8; 32];
+        key::FileStore::under(&home).save(&AppKey::new(PAIRED_NAME, seed).unwrap()).unwrap();
+        let narrator_seen: Seen = Arc::default();
+        daemon(&nsock, narrator_seen.clone(), vec![], false);
+        let app = app_socket(&asock, None, vec![(PAIRED_NAME.to_string(), key::public_hex(&seed))]);
+        let (bridge, rx) = start_with_keys(&home, nsock, &asock, None);
+        wait_for(&rx, |g| matches!(g, Got::Conn(true, _)));
+        let window = json!({"topic_id": "tides-0123abcd", "section": "why-twice-a-day", "note": "in winter", "question": "why twice?", "follows": "tides-0123abcd", "slug": "tides", "claim": "c-1", "query": "free text", "text": "a page's words"});
+        let mut sent = Vec::new();
+        for what in ["research.continue", "research.ask", "page.rebuild", "page.dispute"] {
+            let (method, params) = crate::ask::request(what, &window).unwrap();
+            assert_eq!(bridge.request(method, params.clone()).unwrap(), json!({"echo": method.name()}));
+            sent.push((method.name().to_string(), params));
+        }
+        let on_wire: Vec<(String, Value)> = app.seen.lock().unwrap()[3..].iter().map(|r| (r["method"].as_str().unwrap().to_string(), r["params"].clone())).collect();
+        assert_eq!(on_wire, sent);
+        assert_eq!(on_wire.iter().map(|(m, _)| m.as_str()).collect::<Vec<_>>(), ["app.research_continue", "app.research_ask", "app.page_rebuild", "app.page_dispute"]);
+        assert!(on_wire.iter().all(|(_, p)| p.get("query").is_none() && p.get("text").is_none()), "{on_wire:?}");
+        assert!(methods(&narrator_seen).is_empty());
+        // A read is not a request, whatever it is called with.
+        for m in [Method::Ping, Method::KbGet, Method::PagesGet, Method::Subscribe] {
+            assert_eq!(bridge.request(m, json!({})).unwrap_err(), "that is not a request this app makes");
+        }
+        // The same window once its key holds `read` alone: told which command gives the grant, and nothing more is sent.
+        let before = app.seen.lock().unwrap().len();
+        bridge.conn.lock().unwrap().grants = vec!["read".to_string()];
+        let said = bridge.request(Method::PageRebuild, json!({"slug": "tides"})).unwrap_err();
+        assert_eq!(said, format!("this app's key does not hold `request`: `delphi app grant {PAIRED_NAME} request` in a terminal gives it"));
+        assert_eq!(app.seen.lock().unwrap().len(), before);
         bridge.stop();
     }
 }

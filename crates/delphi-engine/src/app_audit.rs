@@ -2,6 +2,9 @@
 //! (`app.paired`, `app.refused`, `app.revoked`, `app.granted`, `app.expired`) is written as an event of the default
 //! mission, where every attached client and `delphi app log` can read it. The server makes the payload from a key's short
 //! name, a grant's name and a fixed reason: nothing a peer sent as text reaches the log.
+//!
+//! The sixth kind, `app.request` (§4.2 item 4), is not the server's to report: the engine writes it itself for each request
+//! it counted ([`crate::service::app_requests`]), and the server's sink refuses it.
 
 use crate::service::EngineService;
 use delphi_core::event::EventEnvelope;
@@ -9,14 +12,16 @@ use delphi_core::server::AppAudit;
 use serde_json::Value;
 use std::sync::Arc;
 
-/// The event kinds the app socket writes. `app.request` is slice K4's.
-pub const APP_EVENTS: [&str; 5] = ["app.paired", "app.refused", "app.revoked", "app.granted", "app.expired"];
+/// The event kinds the app socket writes.
+pub const APP_EVENTS: [&str; 6] = ["app.paired", "app.refused", "app.revoked", "app.granted", "app.expired", REQUEST_EVENT];
+/// A request of the `request` grant and each change of its state (`specs/120` §4.2 item 4).
+pub const REQUEST_EVENT: &str = "app.request";
 
 impl EngineService {
     /// Write one app-socket record as an event. A kind outside [`APP_EVENTS`] is dropped: the server names the kind, and
     /// this is not a way to write any event.
     pub async fn record_app(&self, kind: &str, payload: Value) {
-        if !APP_EVENTS.contains(&kind) {
+        if !APP_EVENTS.contains(&kind) || kind == REQUEST_EVENT {
             return;
         }
         if let Ok(m) = self.mission_at(None, None).await {
@@ -49,6 +54,10 @@ mod tests {
         svc.adopt(f.m.clone());
         svc.record_app("app.refused", json!({"reason": "bad_signature", "name": "app-0a1b2c", "locked_out": false})).await;
         svc.record_app("approval.resolved", json!({"approval_id": "ap_1", "resolution": "allow"})).await;
+        // A request's record is the engine's own to write, for a request it counted: the server cannot report one.
+        svc.record_app("app.request", json!({"name": "app-0a1b2c", "method": "app.page_rebuild", "ids": {"slug": "tides"}, "state": "done"})).await;
+        assert!(events_of(&f, "app.request").is_empty());
+        assert_eq!(super::APP_EVENTS.len(), 6);
         let refused = events_of(&f, "app.refused");
         assert_eq!(refused.len(), 1);
         assert_eq!((refused[0].payload["reason"].as_str(), refused[0].payload["name"].as_str()), (Some("bad_signature"), Some("app-0a1b2c")));

@@ -69,5 +69,8 @@ export type Envelope = {
   pool_slot?: string; round?: number; payload: Record<string, unknown>;
 };
 
-/** `paired`: the short name of the key this window proved (spec 120), when it is attached on the app socket; `grants`: what that key holds. */
-export type Conn = { connected: boolean; detail: string; paired?: string | null; grants?: string[] };
+/**
+ * `paired`: the short name of the key this window proved (spec 120), when it is attached on the app socket; `grants`: what
+ * that key holds; `unpaired_because`: why a window that has a key, or was handed a ticket, is reading without one.
+ */
+export type Conn = { connected: boolean; detail: string; paired?: string | null; grants?: string[]; unpaired_because?: string };

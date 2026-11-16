@@ -47,6 +47,8 @@ pub struct Page {
     pub cached: bool,
     /// Numbers, dates and proper names no cited material contains (`unverified figure`), kept in the sidecar.
     pub flags: Vec<String>,
+    /// Figures dropped during page checks (`specs/118` §5 item 3): failed number/label check, rendering or markers.
+    pub figure_failures: Vec<super::figures::FigureFailure>,
 }
 
 pub(super) fn content_words(s: &str) -> BTreeSet<String> {
@@ -116,11 +118,14 @@ impl Library {
     pub fn build_page_scoped(&self, topic: &str, draft: Option<&str>, style: Format, scope: Scope) -> Result<Page, Vec<Finding>> {
         let topic = topic.split_whitespace().collect::<Vec<_>>().join(" ");
         let (claims, withheld) = self.topic_claims(&topic);
-        let (body, lines) = match draft {
-            Some(d) => (d.trim().to_string(), None),
+        let (body, lines, figure_failures) = match draft {
+            Some(d) => {
+                let res = self.resolve_figures(d.trim(), scope, "writer");
+                (res.body, None, res.failures)
+            }
             None => {
                 let lines = claim_lines(&claims);
-                (render_body(&topic, &lines.0, &lines.1), Some(lines))
+                (render_body(&topic, &lines.0, &lines.1), Some(lines), Vec::new())
             }
         };
         let checked = self.check_body(&body, scope);
@@ -128,13 +133,13 @@ impl Library {
             return Err(checked.findings);
         }
         let hash_claims: Option<&[Value]> = if draft.is_some() { None } else { Some(&claims) };
-        Ok(self.finish_page(PageParts { topic, body, lines, checked, hash_claims, hash_draft: draft.map(str::to_string), style, scope, withheld, stamp: Stamp::Mechanical, extra: Value::Null, use_cache: true }))
+        Ok(self.finish_page(PageParts { topic, body, lines, checked, hash_claims, hash_draft: draft.map(str::to_string), style, scope, withheld, stamp: Stamp::Mechanical, extra: Value::Null, use_cache: true, figure_failures }))
     }
 
     /// Lay the page out and store it: the banner for `parts.stamp`, the body, the table; the file and its sidecar go to
     /// `pages/`. The status is always `generated`.
     pub(super) fn finish_page(&self, p: PageParts) -> Page {
-        let PageParts { topic, body, lines, checked, hash_claims, hash_draft, style, scope, withheld, stamp, extra, use_cache } = p;
+        let PageParts { topic, body, lines, checked, hash_claims, hash_draft, style, scope, withheld, stamp, extra, use_cache, figure_failures } = p;
         let (validated, noted) = lines.unwrap_or_else(|| self.body_lines(&body));
         let recs: Vec<Rec> = checked.cited.iter().filter_map(|c| self.resolve(c, scope).ok()).collect();
         let sources: Vec<String> = recs.iter().flat_map(Self::rec_sources).collect::<BTreeSet<_>>().into_iter().collect();
@@ -143,7 +148,7 @@ impl Library {
         let cache = self.pages_dir().join(format!("{}-{}.md", slug(&topic), hash));
         if use_cache {
             if let Ok(md) = std::fs::read_to_string(&cache) {
-                return Page { topic, validated, noted, sources, withheld, hash, markdown: md, cached: true, flags: checked.flags };
+                return Page { topic, validated, noted, sources, withheld, hash, markdown: md, cached: true, flags: checked.flags, figure_failures };
             }
         }
         let date = delphi_core::time::now_rfc3339().chars().take(10).collect::<String>();
@@ -158,13 +163,13 @@ impl Library {
         if self.ensure().is_ok() {
             let _ = std::fs::create_dir_all(self.pages_dir());
             let _ = std::fs::write(&cache, &markdown);
-            let mut sidecar = json!({"topic": topic, "template": TEMPLATE_VERSION, "written": date, "scope": format!("{:?}", scope).to_lowercase(), "cited": checked.cited.iter().map(Cite::label).collect::<Vec<_>>(), "unverified_figures": checked.flags, "status": "generated"});
+            let mut sidecar = json!({"topic": topic, "template": TEMPLATE_VERSION, "written": date, "scope": format!("{:?}", scope).to_lowercase(), "cited": checked.cited.iter().map(Cite::label).collect::<Vec<_>>(), "unverified_figures": checked.flags, "figure_failures": figure_failures, "status": "generated"});
             if let (Some(o), Some(e)) = (sidecar.as_object_mut(), extra.as_object()) {
                 o.extend(e.clone());
             }
             let _ = std::fs::write(cache.with_extension("json"), serde_json::to_vec_pretty(&sidecar).unwrap_or_default());
         }
-        Page { topic, validated, noted, sources, withheld, hash, markdown, cached: false, flags: checked.flags }
+        Page { topic, validated, noted, sources, withheld, hash, markdown, cached: false, flags: checked.flags, figure_failures }
     }
 
     /// The paragraphs of a written body that carry a marker, split by whether every claim they cite is validated.
@@ -231,6 +236,7 @@ pub(super) struct PageParts<'a> {
     pub stamp: Stamp,
     pub extra: Value,
     pub use_cache: bool,
+    pub figure_failures: Vec<super::figures::FigureFailure>,
 }
 
 pub(super) fn claim_lines(claims: &[Value]) -> (Vec<Line>, Vec<Line>) {

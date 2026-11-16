@@ -20,6 +20,12 @@ pub const NO_RECORD: &str = "no licence record";
 pub const UNLICENSED_DIR: &str = "unlicensed";
 /// How the daemon's credit line under a page's picture starts (§2 item 4). Only the daemon writes a line that starts so.
 pub const CREDIT_PREFIX: &str = "*Picture credit: ";
+/// The bucket name in `lib:<bucket>/<file>` for agent-made figures (`specs/118` §5 item 2); never a source id.
+pub const FIGURES_BUCKET: &str = "_figures";
+/// The licence recorded on an agent-made figure (`specs/118` §5 item 2).
+pub const GENERATED_LICENCE: &str = "generated";
+/// How the daemon's label line under an agent-made figure starts (`specs/118` §5 item 2).
+pub const FIGURE_LABEL_PREFIX: &str = "Figure made by ";
 /// The check that decided the licence of a workspace document's picture: it is the operator's own material.
 pub const EVIDENCE_WORKSPACE: &str = "workspace";
 /// The check that decided the licence of a picture adopted with a bundle's source: that source's licence.
@@ -64,7 +70,7 @@ pub struct PictureFacts<'a> {
 
 /// One line of external text for a record or the credit line: no control character, no Markdown that could make a link, an emphasis
 /// or a picture of it, at most `n` characters.
-fn one_line(s: &str, n: usize) -> String {
+pub(super) fn one_line(s: &str, n: usize) -> String {
     s.chars().map(|c| if c.is_control() || matches!(c, '*' | '_' | '[' | ']' | '`' | '<' | '>' | '!' | '|') { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect()
 }
 
@@ -134,8 +140,12 @@ pub struct Unrecorded {
 }
 
 impl Library {
-    /// The licence record of picture `file` of source `id`, when the source's record has one (§2 item 1).
+    /// The licence record of picture `file` of source `id` (§2 item 1), or of agent-made figure `file` when `id` is
+    /// [`FIGURES_BUCKET`] (`specs/118` §5 item 2).
     pub fn asset_record(&self, id: &str, file: &str) -> Option<Value> {
+        if id == FIGURES_BUCKET {
+            return self.figure_asset_record(file);
+        }
         let meta = self.read_meta(id)?;
         meta["images"].as_array()?.iter().find(|r| is_record_of(r, id, file)).cloned()
     }
@@ -170,28 +180,31 @@ impl Library {
         Ok(n)
     }
 
-    /// The pictures of every source's `assets/` that have no licence record (§2 item 3). With `apply` each is moved to
-    /// `assets/unlicensed/`, which is never served; nothing is deleted. A file already there is not listed again.
+    /// The pictures of every source's `assets/` and of `figures/` that have no licence record (§2 item 3). With `apply` each
+    /// is moved to `unlicensed/`, which is never served; nothing is deleted. A file already there is not listed again.
     pub fn assets_check(&self, apply: bool) -> Vec<Unrecorded> {
         let mut out = Vec::new();
-        for (id, _) in self.list() {
-            let dir = self.source_dir(&id).join("assets");
-            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let mut scan = |source_id: &str, dir: PathBuf| {
+            let Ok(rd) = std::fs::read_dir(&dir) else { return };
             let mut files: Vec<String> = rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())).filter_map(|e| e.file_name().to_str().map(String::from)).filter(|n| is_picture_name(n)).collect();
             files.sort();
             // The SVGs pictures were drawn from belong to their PNG's record; they are not served and are not unrecorded.
-            let originals: Vec<String> = self.read_meta(&id).and_then(|m| m["images"].as_array().map(|a| a.iter().filter(|r| r["file"].as_str().is_some_and(|f| is_record_of(r, &id, f))).filter_map(|r| svg_original(r).map(String::from)).collect())).unwrap_or_default();
+            let originals: Vec<String> = self.read_meta(source_id).and_then(|m| m["images"].as_array().map(|a| a.iter().filter(|r| r["file"].as_str().is_some_and(|f| is_record_of(r, source_id, f))).filter_map(|r| svg_original(r).map(String::from)).collect())).unwrap_or_default();
             for file in files {
-                if self.asset_record(&id, &file).is_some() || originals.contains(&file) {
+                if self.asset_record(source_id, &file).is_some() || originals.contains(&file) {
                     continue;
                 }
                 let moved = apply && {
                     let to = dir.join(UNLICENSED_DIR);
                     std::fs::create_dir_all(&to).is_ok() && !to.join(&file).exists() && std::fs::rename(dir.join(&file), to.join(&file)).is_ok()
                 };
-                out.push(Unrecorded { source_id: id.clone(), file, moved });
+                out.push(Unrecorded { source_id: source_id.to_string(), file, moved });
             }
+        };
+        for (id, _) in self.list() {
+            scan(&id, self.source_dir(&id).join("assets"));
         }
+        scan(FIGURES_BUCKET, self.figures_dir());
         if apply && out.iter().any(|u| u.moved) {
             self.log("assets_unlicensed", json!({"moved": out.iter().filter(|u| u.moved).map(|u| format!("{}/{}", u.source_id, u.file)).collect::<Vec<_>>()}));
         }
@@ -252,15 +265,16 @@ impl Library {
         }
     }
 
-    /// The page body with the daemon's credit line put under each library picture that has a licence record (§2 item 4). A line
-    /// that shows a `lib:` picture is followed by the line; a picture with no record gets none (the check refuses it before this).
+    /// The page body with the daemon's credit or figure-label line put under each library picture that has a record (§2 item 4,
+    /// `specs/118` §5 item 2). A line that shows a `lib:` picture is followed by the line; a picture with no record gets none.
     pub fn with_credits(&self, body: &str) -> String {
         let mut out = String::with_capacity(body.len() + 256);
         for line in body.lines() {
             out.push_str(line);
             out.push('\n');
             for (sid, file) in lib_pictures(line) {
-                if let Some(c) = self.credit_line(&sid, &file) {
+                let label = if sid == FIGURES_BUCKET { self.figure_label(&file) } else { self.credit_line(&sid, &file) };
+                if let Some(c) = label {
                     out.push_str(&c);
                     out.push('\n');
                 }

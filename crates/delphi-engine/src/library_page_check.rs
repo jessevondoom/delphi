@@ -57,6 +57,12 @@ pub enum Finding {
     CreditMissing(String),
     /// The text carries a credit line of its own; only the daemon writes one, under the picture it credits.
     CreditInBody,
+    /// An agent-made figure without the daemon's label line under it (`specs/118` §5 item 2).
+    FigureLabelMissing(String),
+    /// The text carries a figure label line of its own; only the daemon writes them.
+    FigureLabelInBody,
+    /// The body still holds an unrendered ` ```figure ` block (`specs/118` §5 item 1).
+    UnrenderedFigure,
     /// A `#section` link that names no heading on the page.
     UnknownAnchor(String),
     /// A `page:` link whose slug is not a plain lowercase-hyphen slug.
@@ -92,6 +98,9 @@ impl std::fmt::Display for Finding {
             Finding::ImageUnlicensed(r) => write!(f, "image has no licence record, so it may not be shown: {}", short(r)),
             Finding::CreditMissing(r) => write!(f, "image is missing the credit line the daemon writes under it: {}", short(r)),
             Finding::CreditInBody => write!(f, "the text contains a picture credit line; only the daemon writes them"),
+            Finding::FigureLabelMissing(r) => write!(f, "figure is missing the label line the daemon writes under it: {}", short(r)),
+            Finding::FigureLabelInBody => write!(f, "the text contains a figure label line; only the daemon writes them"),
+            Finding::UnrenderedFigure => write!(f, "the text contains an unrendered figure block"),
             Finding::ImageUncited(id) => write!(f, "image from `{}`, which the page does not cite", id),
             Finding::UnknownAnchor(a) => write!(f, "the link `#{}` names no heading on the page", short(a)),
             Finding::BadPageLink(l) => write!(f, "a `page:` link must name a slug of lowercase letters, digits and hyphens: {}", short(l)),
@@ -214,6 +223,10 @@ pub fn glyph(s: Status) -> &'static str {
 
 pub fn shown_status(s: Status) -> String {
     format!("{} {}", glyph(s), s.label())
+}
+
+pub(super) fn parse_marker_list(tok: &str) -> Option<Vec<Cite>> {
+    marker(tok)
 }
 
 fn marker(tok: &str) -> Option<Vec<Cite>> {
@@ -631,7 +644,30 @@ impl Library {
         if body.lines().any(|l| l.trim_start().starts_with(super::assets::CREDIT_PREFIX.trim_end())) {
             push(Finding::CreditInBody, &mut out.findings);
         }
+        if body.lines().any(|l| l.trim_start().starts_with(super::assets::FIGURE_LABEL_PREFIX.trim_end())) {
+            push(Finding::FigureLabelInBody, &mut out.findings);
+        }
+        if super::figures::has_figure_blocks(body) {
+            push(Finding::UnrenderedFigure, &mut out.findings);
+        }
         out.cited = markers(body);
+        for (sid, file) in super::assets::lib_pictures(body) {
+            if sid == super::assets::FIGURES_BUCKET {
+                if let Some(rec) = self.figure_asset_record(&file) {
+                    if let Some(arr) = rec["markers"].as_array() {
+                        for m in arr.iter().filter_map(Value::as_str) {
+                            if let Some(parsed) = parse_marker_list(&format!("[{}]", m)) {
+                                for c in parsed {
+                                    if !out.cited.iter().any(|x| x.source == c.source && x.id == c.id) {
+                                        out.cited.push(c);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let mut recs: BTreeMap<String, Rec> = BTreeMap::new();
         for c in &out.cited {
             match self.resolve(c, scope) {
@@ -710,6 +746,16 @@ impl Library {
         }
         for (image, target) in refs(body) {
             if let Some(r) = target.strip_prefix("lib:") {
+                if let Some((sid, file)) = r.split_once('/') {
+                    if sid == super::assets::FIGURES_BUCKET {
+                        if !image || self.asset_file(sid, file).is_none() {
+                            push(Finding::UnknownImage(target), &mut out.findings);
+                        } else if self.asset_record(sid, file).is_none() {
+                            push(Finding::ImageUnlicensed(target), &mut out.findings);
+                        }
+                        continue;
+                    }
+                }
                 let ok = image
                     && r.split_once('/').is_some_and(|(sid, file)| {
                         let file_ok = !file.is_empty() && !file.contains(['/', '\\']) && file != "..";
@@ -830,9 +876,13 @@ impl Library {
         while i < lines.len() {
             kept.push(lines[i]);
             for (sid, file) in super::assets::lib_pictures(lines[i]) {
-                let Some(want) = self.credit_line(&sid, &file) else { continue };
+                let is_figure = sid == super::assets::FIGURES_BUCKET;
+                let want = if is_figure { self.figure_label(&file) } else { self.credit_line(&sid, &file) };
+                let Some(want) = want else { continue };
                 if lines.get(i + 1).is_some_and(|l| l.trim() == want) {
                     i += 1;
+                } else if is_figure {
+                    found.push(Finding::FigureLabelMissing(format!("lib:{}/{}", sid, file)));
                 } else {
                     found.push(Finding::CreditMissing(format!("lib:{}/{}", sid, file)));
                 }

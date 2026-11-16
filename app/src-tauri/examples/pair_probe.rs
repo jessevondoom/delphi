@@ -3,6 +3,10 @@
 //! writes what happened to `<DELPHI_HOME>/app/pair-probe.txt`. Started with no ticket and a key from an earlier run, it shows
 //! that the key alone opens a session. For checking a daemon and a bridge against each other on one machine.
 //!
+//! With `DELPHI_PROBE_ASK` set to a request as the window would name it (spec 120 §4.2), for example
+//! `{"what":"page.rebuild","arg":{"slug":"tides"}}`, it also asks for that once the session is open and reports the
+//! daemon's answer: the end-to-end check of spec 120 §9 without a window.
+//!
 //! It keeps its key in a file under `DELPHI_HOME`'s `app/` folder, never in the keychain, and refuses to run unless
 //! `DELPHI_HOME` is set, so it cannot leave a key in the operator's real home by accident.
 
@@ -42,6 +46,14 @@ fn main() {
         if c.connected {
             let ping = bridge.call(Method::Ping, json!({})).map_err(|e| e.to_string());
             said = json!({"ticket": ticket.is_some(), "connected": true, "detail": c.detail, "paired": c.paired, "grants": c.grants, "ping": format!("{ping:?}")});
+            if let Some(ask) = std::env::var("DELPHI_PROBE_ASK").ok().and_then(|a| serde_json::from_str::<Value>(&a).ok()) {
+                // Through the same two steps the window's command takes: the fields are picked and checked, then the bridge decides.
+                let asked = match delphi_app_lib::ask::request(ask["what"].as_str().unwrap_or(""), &ask["arg"]) {
+                    Some((method, params)) => bridge.request(method, params).map_err(|e| e.to_string()),
+                    None => Err("not a request this app makes, or a field of another shape".to_string()),
+                };
+                said["asked"] = json!(format!("{asked:?}"));
+            }
             break;
         }
         said["detail"] = json!(c.detail);

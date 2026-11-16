@@ -143,10 +143,19 @@ impl Library {
     }
 
     /// The file behind `lib:<source>/<file>`: a plain-named file in the source's `assets/`, if the source exists and is not
-    /// purged. The console's picture reader serves nothing else out of the library.
+    /// purged, or an agent-made figure in `library/figures/` when `<source>` is `_figures`. The console's picture reader
+    /// serves nothing else out of the library.
     pub fn asset_file(&self, id: &str, file: &str) -> Option<PathBuf> {
         let plain = !file.is_empty() && file != "." && file != ".." && file.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-        if !plain || !(is_picture(file) || file.to_ascii_lowercase().ends_with(".webp")) || !self.read_meta(id).is_some_and(|m| m["purged"].is_null()) {
+        if !plain || !(is_picture(file) || file.to_ascii_lowercase().ends_with(".webp")) {
+            return None;
+        }
+        if id == super::assets::FIGURES_BUCKET {
+            let dir = self.figures_dir().canonicalize().ok()?;
+            let f = dir.join(file).canonicalize().ok()?;
+            return (f.starts_with(&dir) && f.is_file()).then_some(f);
+        }
+        if !self.read_meta(id).is_some_and(|m| m["purged"].is_null()) {
             return None;
         }
         let dir = self.source_dir(id).join("assets").canonicalize().ok()?;

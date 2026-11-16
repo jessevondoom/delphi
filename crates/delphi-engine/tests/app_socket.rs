@@ -380,7 +380,7 @@ async fn a_session_calls_only_the_methods_of_the_grants_its_key_holds_now() {
     assert_eq!(s.call("session.ping", json!({})).unwrap(), json!("pong"));
     assert_eq!(s.call("events.subscribe", json!({})).unwrap()["subscribed"], true);
     assert_eq!(s.call("session.snapshot", json!({})).unwrap()["clients"]["app"], 1);
-    for m in ["approval.resolve", "approval.relay_resolve", "budget.set", "permissions.set", "ratify.apply", "mission.rewind", "daemon.shutdown", "task.submit", "settings.set", "auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair", "app.hello", "host.propose_note", "app.research_continue", "nope"] {
+    for m in ["approval.resolve", "approval.relay_resolve", "budget.set", "permissions.set", "ratify.apply", "mission.rewind", "daemon.shutdown", "task.submit", "settings.set", "auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair", "app.hello", "host.propose_note", "app.research_cancel", "app.page_promote", "nope"] {
         match s.call(m, json!({"name": name, "grant": "request"})) {
             Err(ClientError::Rpc { code: c, message, .. }) => assert!(c == code::FORBIDDEN && message.contains("under no grant"), "{m}: {message}"),
             other => panic!("{m} must be refused, got {other:?}"),
@@ -443,4 +443,94 @@ async fn revoking_a_key_closes_its_open_sessions_at_once() {
     // (macOS refuses to set a timeout on a socket its peer has closed; the session already has one.)
     let _ = b1.set_read_timeout(Some(Duration::from_secs(3)));
     assert!(matches!(b1.call("session.ping", json!({})), Err(ClientError::Closed) | Err(ClientError::Io(_))));
+}
+
+/// An engine stand-in that records what the server hands it. A request takes a while, as a real one may.
+struct Recorder {
+    /// `(key, method, params)` of each request the server handed over.
+    asked: Arc<Mutex<Vec<(String, String, Value)>>>,
+    /// Requests that ran to their end.
+    finished: Arc<std::sync::atomic::AtomicUsize>,
+    /// Every method offered to the ordinary entry.
+    called: Arc<Mutex<Vec<String>>>,
+}
+
+impl delphi_core::server::Extension for Recorder {
+    fn call(&self, method: &str, _params: Value, _ctx: delphi_core::server::CallContext) -> delphi_core::server::RpcFuture {
+        self.called.lock().unwrap().push(method.to_string());
+        Box::pin(async { None })
+    }
+
+    fn app_request(&self, key: &str, method: &str, params: Value) -> delphi_core::server::RpcFuture {
+        self.asked.lock().unwrap().push((key.to_string(), method.to_string(), params));
+        let finished = self.finished.clone();
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(Ok(json!({"state": "running"})))
+        })
+    }
+}
+
+/// `specs/120` §4.2 at the socket (K4): the four request methods reach the engine only from an app session whose key holds
+/// `request` at that moment, with the key's own name (never a name the peer sent); from every other socket they do not
+/// exist. A request being answered when its key is revoked is not cut halfway: the session ends at once (AC-10) and the
+/// work runs to its own end.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_reaches_the_engine_only_from_a_key_that_holds_the_grant_and_is_not_cut_by_a_revocation() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let f = start(TtyPolicy::Disabled, |_| {}).await;
+    let (asked, finished, called) = (Arc::new(Mutex::new(Vec::new())), Arc::new(AtomicUsize::new(0)), Arc::new(Mutex::new(Vec::new())));
+    f.daemon.set_extension(Arc::new(Recorder { asked: asked.clone(), finished: finished.clone(), called: called.clone() }));
+    let name = f.pair(&A);
+    let mut s = f.session(&A, &name);
+    // The key's name is the session's, whatever the parameters say.
+    let r = s.call("app.page_rebuild", json!({"slug": "tides", "name": "app-ffffff", "key": "console"})).unwrap();
+    assert_eq!(r["state"], "running");
+    assert_eq!(asked.lock().unwrap()[0], (name.clone(), "app.page_rebuild".to_string(), json!({"slug": "tides", "name": "app-ffffff", "key": "console"})));
+
+    // No other socket has the methods: the console and the narrator are told there is no such method, and the engine is not asked.
+    let mut con = f.console();
+    let mut nar = Client::connect(&f.narrator_sock).unwrap();
+    nar.hello(f.daemon.narrator_token()).unwrap();
+    for m in delphi_core::app_keys::REQUEST_METHODS {
+        assert_eq!(rpc_code(con.call(m, json!({"slug": "tides"}))), Some(code::METHOD_NOT_FOUND), "{m} on the console socket");
+        assert!(matches!(rpc_code(nar.call(m, json!({"slug": "tides"}))), Some(code::METHOD_NOT_FOUND | code::FORBIDDEN)), "{m} on the narrator socket");
+    }
+    assert_eq!(asked.lock().unwrap().len(), 1);
+    assert!(called.lock().unwrap().iter().all(|m| !m.starts_with("app.")), "the ordinary entry is never offered a request: {:?}", called.lock().unwrap());
+
+    // Without the grant: refused by the table, before the engine hears of it. Reading is not asking.
+    con.call("app.grant", json!({"name": name, "grant": "request", "remove": true})).unwrap();
+    let mut s = f.session(&A, &name);
+    for m in delphi_core::app_keys::REQUEST_METHODS {
+        match s.call(m, json!({"slug": "tides"})) {
+            Err(ClientError::Rpc { code: c, message, .. }) => assert!(c == code::FORBIDDEN && message.contains("`request` grant"), "{m}: {message}"),
+            other => panic!("{m} must be refused, got {other:?}"),
+        }
+    }
+    assert_eq!(s.call("session.ping", json!({})).unwrap(), json!("pong"), "it still reads");
+    assert_eq!(asked.lock().unwrap().len(), 1);
+
+    // Given back, and revoked while a request is being answered: the session is closed at once, and the request ends on its own.
+    con.call("app.grant", json!({"name": name, "grant": "request"})).unwrap();
+    let before = finished.load(Ordering::SeqCst);
+    let in_flight = std::thread::spawn(move || s.call("app.research_ask", json!({"question": "why"})));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while asked.lock().unwrap().len() < 2 {
+        assert!(std::time::Instant::now() < deadline, "the request never reached the engine");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(con.call("app.revoke", json!({"name": name})).unwrap()["sessions_closed"], 1);
+    assert_eq!(finished.load(Ordering::SeqCst), before, "the request had not ended when its key was revoked");
+    let answer = tokio::task::spawn_blocking(move || in_flight.join().unwrap()).await.unwrap();
+    assert!(matches!(answer, Err(ClientError::Closed) | Err(ClientError::Io(_))), "the revoked session gets no answer: {answer:?}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while finished.load(Ordering::SeqCst) == before {
+        assert!(std::time::Instant::now() < deadline, "a request cut by a revocation must still run to its end");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // And the revoked key asks for nothing more.
+    assert!(f.knock().unwrap().hello(&A, &name).is_err());
+    assert_eq!(asked.lock().unwrap().len(), 2);
 }

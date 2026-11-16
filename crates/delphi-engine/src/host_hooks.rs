@@ -337,10 +337,10 @@ pub fn brief(ws_dir: &Path, cwd: &Path, current: Option<&str>, nonce: &str) -> S
     if !data.is_empty() {
         plain.push(RULE_LINE.to_string());
     }
-    // Spec 119 §2 item 4: research that was asked for and refused for want of a search engine is said once, in fixed words and a number.
-    let refused = crate::research_asks::take_unmentioned(ws_dir);
-    if refused > 0 {
-        plain.push(crate::research_asks::brief_line(refused));
+    // Spec 119 §13.2 item 9: research that ran with no web search is said once, in fixed words and a number.
+    let no_web = crate::research_asks::take_unmentioned(ws_dir);
+    if no_web > 0 {
+        plain.push(crate::research_asks::brief_line(no_web));
     }
     let project_id = project.active_project_id();
     // Spec 113 §4 item 4: research the last session left as files and did not hand over is said once, in fixed words and a number.
@@ -1219,24 +1219,24 @@ mod tests {
         assert!(data.contains("001-a (approved)") && data.contains("002-b (draft)"), "{data}");
     }
 
-    // specs/119 AC-2: research refused for want of an engine is said in the next brief, with its count, and only once.
+    // specs/119 §13.2 item 9: research that ran with no web search is said in the next brief, with its count, and only once.
     #[test]
-    fn research_refused_for_want_of_an_engine_is_said_once_in_the_next_brief() {
+    fn research_that_ran_with_no_web_search_is_said_once_in_the_next_brief() {
         let (t, dir) = ws();
         let (root, _) = project(&t, &dir);
-        assert!(!brief(&dir, &root, None, N).contains("search engine"), "nothing was asked");
-        crate::research_asks::record(&dir, crate::research_asks::Outcome::NoEngine, 1_800_000_000);
-        crate::research_asks::record(&dir, crate::research_asks::Outcome::NoEngine, 1_800_000_060);
+        assert!(!brief(&dir, &root, None, N).contains("web search"), "nothing was asked");
+        crate::research_asks::record(&dir, crate::research_asks::Outcome::NoWebSearch, 1_800_000_000);
+        crate::research_asks::record(&dir, crate::research_asks::Outcome::NoWebSearch, 1_800_000_060);
         crate::research_asks::record(&dir, crate::research_asks::Outcome::Queued, 1_800_000_090);
         let b = brief(&dir, &root, None, N);
-        assert!(b.contains("Research was asked for 2 times and no search engine is set up: the operator can run `delphi research setup` at a terminal."), "{b}");
+        assert!(b.contains("Research ran 2 times with no web search: the operator can run `delphi research setup` at a terminal."), "{b}");
         assert!(b.chars().count() <= MAX_BRIEF);
         // The sentence is this module's own fixed words: it stands outside the fenced project data.
         let open = b.find("DELPHI DATA").unwrap_or(b.len());
-        assert!(b.find("Research was asked for").unwrap() < open, "{b}");
-        assert!(!brief(&dir, &root, None, N).contains("Research was asked for"), "said once");
-        crate::research_asks::record(&dir, crate::research_asks::Outcome::NoEngine, 1_800_000_200);
-        assert!(brief(&dir, &root, None, N).contains("Research was asked for 1 time and"), "a later refusal is said once more");
+        assert!(b.find("Research ran").unwrap() < open, "{b}");
+        assert!(!brief(&dir, &root, None, N).contains("Research ran"), "said once");
+        crate::research_asks::record(&dir, crate::research_asks::Outcome::NoWebSearch, 1_800_000_200);
+        assert!(brief(&dir, &root, None, N).contains("Research ran 1 time with no web search"), "a later one is said once more");
     }
 
     #[test]

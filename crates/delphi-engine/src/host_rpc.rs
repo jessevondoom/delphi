@@ -501,6 +501,43 @@ pub fn research_args(p: &Value) -> Result<(String, delphi_core::research::Depth)
     Ok((q, depth))
 }
 
+/// Which runner a host asked for (`specs/119` §13.1 item 2): `true` for `runner: "daemon"`, Delphi's own runner; absent is the host's.
+pub fn research_runner_is_daemon(p: &Value) -> Result<bool, HostErr> {
+    match p.get("runner").filter(|v| !v.is_null()).map(|v| v.as_str()) {
+        None => Ok(false),
+        Some(Some("daemon")) => Ok(true),
+        _ => bad("`runner` is \"daemon\" (Delphi's own runner searches) or absent (your own search tool is asked first)"),
+    }
+}
+
+/// The most characters of a fed query that are read, and of a result's address.
+const FEED_QUERY_MAX: usize = 400;
+const FEED_URL_MAX: usize = 2000;
+
+/// What a host hands back with `research_feed` (`specs/119` §2.1 item 4): the query, as the run asked it, and at most ten results.
+/// Only each result's address is kept: a title and a snippet are the host's words, and nothing reads them. An address must be an
+/// http(s) one with no blank or control character.
+pub fn feed_args(p: &Value) -> Result<(String, Vec<delphi_adapter::research::search::Row>), HostErr> {
+    let query = p["query"].as_str().map(str::trim).unwrap_or("");
+    if query.is_empty() || query.chars().count() > FEED_QUERY_MAX {
+        return bad("`query` is one of the queries this run asked for, exactly as it was given");
+    }
+    let Some(results) = p["results"].as_array() else { return bad("`results` is a list (it may be empty)") };
+    if results.len() > crate::research_jobs::FEED_RESULTS {
+        return bad("at most 10 results a query");
+    }
+    let mut rows = Vec::new();
+    for r in results {
+        let url = r["url"].as_str().map(str::trim).unwrap_or("");
+        let ok = (url.starts_with("https://") || url.starts_with("http://")) && url.len() <= FEED_URL_MAX && !url.chars().any(|c| c.is_control() || c.is_whitespace());
+        if !ok {
+            return bad("each result needs `url`, an http(s) address");
+        }
+        rows.push(delphi_adapter::research::search::Row { title: String::new(), url: url.to_string(), snippet: String::new() });
+    }
+    Ok((query.to_string(), rows))
+}
+
 /// The proposition a Council is convened on, from a host's request (`specs/062` §7.1). It is content from outside Delphi:
 /// fenced as such, so the seats treat it as the question under debate and not as an instruction.
 pub fn council_proposition(c: &Caller, p: &Value) -> Result<String, HostErr> {

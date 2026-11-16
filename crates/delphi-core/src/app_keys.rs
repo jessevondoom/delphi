@@ -40,7 +40,9 @@ pub struct Grant {
 ///   leave a workspace byte-identical (`delphi-engine`'s `every_encyclopedia_read_leaves_the_workspace_byte_identical_and_calls_no_model`).
 ///   They are not narrator methods: the narrator socket's list is unchanged, so a private source's text reaches the app only on a key
 ///   the operator paired.
-/// * `request`: the first acting grant. Its four methods are slice K4's; until then the name exists and reaches nothing.
+/// * `request`: the first acting grant (§4.2), four methods ([`REQUEST_METHODS`]). Each asks the daemon to start something the operator
+///   could start from a terminal without being asked anything; each takes ids and typed text only. They are answered by
+///   [`crate::server::Extension::app_request`] and by nothing else, so no other socket reaches them.
 pub const GRANTS: [Grant; 2] = [
     Grant {
         name: "read",
@@ -71,11 +73,19 @@ pub const GRANTS: [Grant; 2] = [
             "changes.since",
         ],
     },
-    Grant { name: "request", methods: &[] },
+    Grant { name: "request", methods: &REQUEST_METHODS },
 ];
+
+/// The `request` grant's methods (`specs/120` §4.2): the only methods of the app socket that start anything.
+pub const REQUEST_METHODS: [&str; 4] = ["app.research_continue", "app.research_ask", "app.page_rebuild", "app.page_dispute"];
 
 /// The encyclopedia's reads (`specs/117` §3 item 1), rows of the `read` grant and of no other list.
 pub const ENCYCLOPEDIA_READS: [&str; 11] = ["pages.list", "pages.get", "pages.versions", "pages.links", "topics.list", "topics.get", "library.source", "library.claim", "memory.roles", "memory.role", "changes.since"];
+
+/// Every method the app socket can reach, with its grant, in the table's order: what the gate file is held equal to.
+pub fn all_methods() -> Vec<(&'static str, &'static str)> {
+    GRANTS.iter().flat_map(|g| g.methods.iter().map(move |m| (g.name, *m))).collect()
+}
 
 /// Is `name` a grant the table defines?
 pub fn is_grant(name: &str) -> bool {
@@ -238,9 +248,9 @@ mod tests {
     }
 
     /// §4.1: `read` is what the narrator socket reads and the encyclopedia's eleven reads (spec 117 §3), no more and no less, and
-    /// nothing else is reachable in this slice.
+    /// `request` is the four methods of §4.2, and nothing else is reachable.
     #[test]
-    fn the_read_grant_is_the_narrator_list_and_request_reaches_nothing_yet() {
+    fn the_read_grant_is_the_narrator_list_and_request_is_its_four_methods() {
         let mut read: Vec<&str> = GRANTS[0].methods.to_vec();
         let mut narrator: Vec<&str> = crate::server::NARRATOR_METHODS.iter().chain(ENCYCLOPEDIA_READS.iter()).copied().collect();
         read.sort();
@@ -248,7 +258,13 @@ mod tests {
         assert!(ENCYCLOPEDIA_READS.iter().all(|m| !crate::server::NARRATOR_METHODS.contains(m)), "the encyclopedia's reads are not narrator methods");
         assert_eq!(read.len(), 23);
         assert_eq!((GRANTS[0].name, read), ("read", narrator));
-        assert_eq!((GRANTS[1].name, GRANTS[1].methods.len()), ("request", 0));
+        assert_eq!((GRANTS[1].name, GRANTS[1].methods), ("request", &["app.research_continue", "app.research_ask", "app.page_rebuild", "app.page_dispute"][..]));
+        // No acting method is a read, and none answers a card, changes a setting, a grant or a key (§5 item 3, §8).
+        for m in GRANTS[1].methods {
+            assert!(m.starts_with("app.") && !crate::server::NARRATOR_METHODS.contains(m) && !ENCYCLOPEDIA_READS.contains(m), "{m}");
+            assert!(!["approval", "settings", "budget", "permissions", "grant", "revoke", "pair", "key"].iter().any(|w| m.contains(w)), "{m}");
+        }
+        assert_eq!(all_methods().len(), 27, "23 reads and 4 requests; a 28th method needs an approved spec and the gate file");
         assert_eq!(GRANTS.len(), 2, "a third grant needs an approved spec (specs/120 §5 item 1)");
         // No method is listed twice, under one grant or two: a method has exactly one grant.
         let all: Vec<&str> = GRANTS.iter().flat_map(|g| g.methods.iter().copied()).collect();
@@ -269,6 +285,10 @@ mod tests {
         assert_eq!(check_call(&GRANTS, &held(&["read"]), "observe.state"), Ok(()));
         assert_eq!(check_call(&GRANTS, &held(&["request"]), "observe.state"), Err(CallRefused::Lacks("read")));
         assert_eq!(check_call(&GRANTS, &held(&[]), "session.ping"), Err(CallRefused::Lacks("read")));
+        for m in REQUEST_METHODS {
+            assert_eq!(check_call(&GRANTS, &held(&["request"]), m), Ok(()));
+            assert_eq!(check_call(&GRANTS, &held(&["read"]), m), Err(CallRefused::Lacks("request")), "{m}: reading is not asking");
+        }
         for m in ["approval.resolve", "budget.set", "settings.set", "task.submit", "daemon.shutdown", "auth.pair_ticket", "app.revoke", "app.grant", "app.keys", "app.pair", "hello", "auth.issue", ""] {
             assert_eq!(check_call(&GRANTS, &held(&["read", "request", "answer", "*"]), m), Err(CallRefused::NoGrant), "{m}");
         }
@@ -281,7 +301,7 @@ mod tests {
         let store = KeyStore::at(t.path());
         store.save(&[key("app-00000a", &["read", "request"], "2026-11-10T00:00:00.000Z")]).unwrap();
         // The release after: the table has a third grant with a method of its own.
-        let grown = [Grant { name: "read", methods: GRANTS[0].methods }, Grant { name: "request", methods: &[] }, Grant { name: "curate", methods: &["app.topic_pin"] }];
+        let grown = [Grant { name: "read", methods: GRANTS[0].methods }, Grant { name: "request", methods: GRANTS[1].methods }, Grant { name: "curate", methods: &["app.topic_pin"] }];
         let keys = store.load().unwrap();
         assert_eq!(keys[0].grants, ["read", "request"], "the record is unchanged by a new table");
         assert_eq!(check_call(&grown, &keys[0].grants, "app.topic_pin"), Err(CallRefused::Lacks("curate")));

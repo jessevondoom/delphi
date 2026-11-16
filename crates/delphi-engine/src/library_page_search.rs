@@ -560,6 +560,7 @@ impl Library {
             "reason": c.verdict.reason, "failed_at": if failed { json!(r.now) } else { Value::Null }, "validator": c.verdict.to_json(),
             "title": title, "page_kind": meta.kind.as_str(), "depth": r.depth.as_str(), "valid_until": valid_until, "volatility": meta.volatility.as_str(), "ttl_reason": meta.reason, "ttl_days": meta.days,
             "assets": g.assets.iter().map(|a| a.uri.clone()).collect::<Vec<_>>(),
+            "figure_failures": c.verdict.figure_failures,
         });
         self.write_side(key, &v);
         self.log("page_built", json!({"key": key, "outcome": v["outcome"], "cited": v["cited"]}));
@@ -620,7 +621,7 @@ Layout, in this order (leave out what the records do not support):\n\
 2. `# Title`, then a lead of one to three paragraphs whose first sentence starts `**Title** is ...` and says what the subject is. The lead stands alone.\n\
 3. Optionally a two-column table `| Attribute | Summary |` of three to six key facts, each row carrying a citation marker.\n\
 4. `## Contents` as a numbered list of links `[Section](#section)`, only when there are two or more `## ` sections; each link names a heading on the page, in lowercase with hyphens for spaces.\n\
-5. `## ` sections in neutral, plain words. Where an ASSET below helps, put the image alone on its own line, `![what it shows](lib:<source>/<file>)`, copied exactly from the ASSETS list, then an italic caption line `*Figure N: what to notice [s-<source>].*`. You must cite that source directly. Do not write the picture's credit; Delphi writes it under the picture.\n\
+5. `## ` sections in neutral, plain words. Where an ASSET below helps, put the image alone on its own line, `![what it shows](lib:<source>/<file>)`, copied exactly from the ASSETS list, then an italic caption line `*Figure N: what to notice [s-<source>].*`. You must cite that source directly. Do not write the picture's credit; Delphi writes it under the picture. Where a chart or diagram of cited numbers or named concepts helps, ask for one with a fenced ` ```figure ` block holding one JSON object with `\"type\"` (`bar`, `line`, `area`, `scatter`, `pie`, `flow`, `tree`, `sequence`, `timeline`, `matrix`, etc.), `\"title\"`, inline `\"data\"` (charts) or `\"nodes\"`/`\"edges\"` (diagrams), and `\"from\": [\"c-...\", \"s-...\"]` naming the cited records it rests on. Every chart number must appear in those cited records, and every diagram node label must appear in your page text. Never write `Figure made by ...`; Delphi renders and labels the figure.\n\
 6. If the records split evenly across unrelated meanings, write a disambiguation page instead: `**Query** may refer to:` and a bullet list of `[Meaning](page:slug)` with a cited one-line description each.\n\n\
 Rules:\n\
 - Markdown only. {}\n\

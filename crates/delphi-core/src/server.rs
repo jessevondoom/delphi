@@ -42,7 +42,7 @@ pub const RELAY_METHODS: [&str; 5] = ["session.ping", "events.subscribe", "appro
 
 /// The only methods the host socket answers (besides the `hello` handshake): stage a lesson or a summary as untrusted
 /// content, and keep or read one handoff (`specs/062` §8). A host cannot start work, read events or approve anything.
-pub const HOST_METHODS: [&str; 31] = ["session.ping", "host.search_kb", "host.propose_note", "host.propose_kb_entry", "host.record_finding", "host.flag_wrong","host.request_test_authorization", "host.record_session_summary", "host.handoff_put", "host.handoff_get", "host.recall_sessions", "host.ingest_transcript", "host.request_help", "host.help_result", "host.request_council", "host.council_status", "host.council_result", "host.council_open", "host.council_frame", "host.council_brief", "host.council_submit", "host.council_choose", "host.request_research", "host.research_status", "host.research_result", "host.record_research", "host.cancel_job", "host.route_decided", "host.reads_seen", "host.ask_family", "host.ask_result"];
+pub const HOST_METHODS: [&str; 32] = ["session.ping", "host.search_kb", "host.propose_note", "host.propose_kb_entry", "host.record_finding", "host.flag_wrong","host.request_test_authorization", "host.record_session_summary", "host.handoff_put", "host.handoff_get", "host.recall_sessions", "host.ingest_transcript", "host.request_help", "host.help_result", "host.request_council", "host.council_status", "host.council_result", "host.council_open", "host.council_frame", "host.council_brief", "host.council_submit", "host.council_choose", "host.request_research", "host.research_status", "host.research_result", "host.record_research", "host.research_feed", "host.cancel_job", "host.route_decided", "host.reads_seen", "host.ask_family", "host.ask_result"];
 
 /// The console methods that pair, list, revoke and grant the desktop app's keys (`specs/120` §2, §5). All four need the console
 /// scope; the three that change what a key may do also need the caller to be attached to a terminal, as `auth.issue` does.
@@ -103,6 +103,15 @@ pub type RpcFuture = Pin<Box<dyn Future<Output = Option<RpcOutcome>> + Send>>;
 /// privileged methods are the extension's job; the server has already authenticated the connection.
 pub trait Extension: Send + Sync {
     fn call(&self, method: &str, params: Value, ctx: CallContext) -> RpcFuture;
+
+    /// One of the `request` grant's methods ([`crate::app_keys::REQUEST_METHODS`], `specs/120` §4.2), asked on the app socket by the
+    /// key named `key`. The server calls this only for an app session whose key holds the grant now, and calls nothing else for
+    /// these methods: [`Extension::call`] is never offered them, so no console, narrator, relay or host client reaches them.
+    /// An extension that does not answer them leaves this as it is.
+    fn app_request(&self, key: &str, method: &str, params: Value) -> RpcFuture {
+        let _ = (key, method, params);
+        Box::pin(async { None })
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -841,6 +850,23 @@ impl Daemon {
         }
     }
 
+    /// Hand one of the `request` grant's methods to the extension, **as a task of its own**. Revoking a key, or taking a grant
+    /// from it, ends its session by dropping the session's future, a call in flight included (`specs/120` §2 item 8); a request
+    /// that had begun to start work must not be cut halfway through a write, so the work is not part of that future. A request
+    /// that was already being answered when its key was revoked runs to its own end and its answer is thrown away.
+    async fn app_request(&self, req: Request, key: String) -> Response {
+        let id = req.id.clone();
+        let Some(ext) = self.extension.lock().unwrap().clone() else { return Response::err(id, code::METHOD_NOT_FOUND, "unknown method") };
+        let (method, params) = (req.method, req.params);
+        let work = tokio::spawn(async move { ext.app_request(&key, &method, params).await });
+        match work.await {
+            Ok(Some(Ok(v))) => Response::ok(id, v),
+            Ok(Some(Err(e))) => Response { jsonrpc: "2.0".into(), id, result: None, error: Some(e) },
+            Ok(None) => Response::err(id, code::METHOD_NOT_FOUND, "unknown method"),
+            Err(_) => Response::err(id, code::INTERNAL, "the request could not be answered"),
+        }
+    }
+
     async fn dispatch(&self, req: Request, scope: Scope, client_id: u64, peer: &Peer) -> Response {
         let id = req.id.clone();
         // The app socket offers the methods of the grants the key holds at this moment, by name, and nothing else
@@ -850,6 +876,14 @@ impl Daemon {
                 crate::elog::warn("daemon", "rpc_forbidden", "a method outside the key's grants was refused", json!({"method": req.method, "kind": "app"}));
                 return Response::err(id, code::FORBIDDEN, &why);
             }
+        }
+        // The `request` grant's methods are the app socket's alone (`specs/120` §4.2): a session whose key holds the grant has them
+        // answered by the extension's own entry for them; from any other socket they do not exist.
+        if app_keys::REQUEST_METHODS.contains(&req.method.as_str()) {
+            return match (scope, peer.app.as_deref()) {
+                (Scope::App, Some(key)) => self.app_request(req, key.to_string()).await,
+                _ => Response::err(id, code::METHOD_NOT_FOUND, "unknown method"),
+            };
         }
         // The narrator socket offers a fixed list of read methods. A new method is unreachable from it until
         // someone adds it here on purpose, so nothing mutating can get through by being left off a deny list.

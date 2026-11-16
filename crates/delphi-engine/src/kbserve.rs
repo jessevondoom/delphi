@@ -340,7 +340,11 @@ impl Reader<'_> {
             let Some(record) = lib.asset_record(sid, name) else { return Ok(fail(403, crate::library::assets::NO_RECORD)) };
             let mut got = self.picture(&file, side)?;
             if got.status == 200 {
-                got.body["credit"] = crate::library::Library::credit_of(&record);
+                if record["licence"] == crate::library::assets::GENERATED_LICENCE {
+                    got.body["figure"] = json!({"licence": record["licence"], "made_by": record["made_by"], "markers": record["markers"], "label": lib.figure_label(name)});
+                } else {
+                    got.body["credit"] = crate::library::Library::credit_of(&record);
+                }
             }
             return Ok(got);
         }
@@ -977,5 +981,38 @@ mod tests {
         let (s, body) = http(run.addr, &req("HEAD", "/v1/health", Some(&token), &host));
         assert!(s == 200 && body.is_empty());
         run.stop();
+    }
+
+    #[test]
+    fn library_figure_image_serves_generated_metadata_without_credit_and_refuses_unrecorded() {
+        let (home, ws) = workspace();
+        let lib = crate::library::Library::in_home(home.path());
+        let src_dir = ws.path().join("tmp_src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let p = src_dir.join("m.md");
+        std::fs::write(&p, "Latency is 42 ms and target is 50 ms across Fetch and Check.").unwrap();
+        let sid = lib.add_file(&p, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+        let draft = format!(
+            "# Metrics\n\nCheck Fetch [s-{sid}].\n\n```figure\n{{\"type\": \"bar\", \"title\": \"Lat\", \"data\": {{\"columns\": [\"Metric\", \"Val\"], \"rows\": [[\"Measured\", 42], [\"Target\", 50]]}}, \"from\": [\"s-{sid}\"]}}\n```\n",
+            sid = sid
+        );
+        let res = lib.resolve_figures(&draft, crate::library::pages::Scope::External, "writer");
+        assert!(res.failures.is_empty() && res.assets.len() == 1, "{:?}", res.failures);
+        let uri = &res.assets[0];
+        let file = uri.strip_prefix("lib:_figures/").unwrap();
+
+        let api = Api::new(home.path(), ws.path()).unwrap();
+        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: Some(home.path()) };
+        let r = op.get(&format!("/v1/image?src={}", uri));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(r.body["credit"].is_null(), "a generated figure never carries a source picture credit: {}", r.body);
+        assert_eq!(r.body["figure"]["licence"], "generated");
+        assert_eq!(r.body["figure"]["made_by"], "writer");
+        assert_eq!(r.body["figure"]["label"], format!("Figure made by writer from [s-{}]. Not from a source.", sid));
+
+        let stem = file.strip_suffix(".png").unwrap();
+        std::fs::remove_file(lib.figures_dir().join(format!("{}.json", stem))).unwrap();
+        let r2 = op.get(&format!("/v1/image?src={}", uri));
+        assert_eq!(r2.status, 403, "{}", r2.body);
     }
 }

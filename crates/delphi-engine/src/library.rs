@@ -26,6 +26,8 @@ pub mod claims;
 pub mod extract;
 #[path = "library_excerpts.rs"]
 pub mod excerpts;
+#[path = "library_figures.rs"]
+pub mod figures;
 #[path = "library_history.rs"]
 pub mod history;
 #[path = "library_meta.rs"]
