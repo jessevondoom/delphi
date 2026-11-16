@@ -115,31 +115,25 @@
       "line": 231,
       "number": "16",
       "title": "Open questions (the operator decides)"
-    },
-    {
-      "level": 2,
-      "line": 245,
-      "number": "17",
-      "title": "Amendment: two decisions taken while building S1 (2026-11-16)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/121-data-sensitivity-private-internal-and-confidential.md",
-    "sha256": "462c1014c74b4ceb776002ed503897b7ebbddf48d6d9e520b5530fce6de985bd"
+    "sha256": "c0353313404251ff7d167784a20eed10c9f2d559ea97d5e3cc5492da7a844cce"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 876,
+        "end": 675,
         "end_line": 6,
         "line": 6,
         "start": 185
       },
-      "text": "status: approved   # by the operator, 2026-11-15, in a host session: \"approve spec 121 and merge 740 when ready\", after the draft, its slices and its five open questions were shown. The open questions of the last section stay open: until the operator answers each, the provisional behaviour the draft names for it is what is built. Written from the operator's words of that day (quoted in section 1) and the ruling of a Panel (council t_0001, PROCEED-WITH-CHANGES) as relayed to the author. Section 17 (2026-11-16) is an amendment written from the operator's words of that day (\"4: yes\", on the two choices the S1 builder reported); it takes effect when the operator merges its pull request."
+      "text": "status: approved   # by the operator, 2026-11-15, in a host session: \"approve spec 121 and merge 740 when ready\", after the draft, its slices and its five open questions were shown. The open questions of the last section stay open: until the operator answers each, the provisional behaviour the draft names for it is what is built. Written from the operator's words of that day (quoted in section 1) and the ruling of a Panel (council t_0001, PROCEED-WITH-CHANGES) as relayed to the author."
     },
-    "sha256": "462c1014c74b4ceb776002ed503897b7ebbddf48d6d9e520b5530fce6de985bd",
+    "sha256": "c0353313404251ff7d167784a20eed10c9f2d559ea97d5e3cc5492da7a844cce",
     "word": "approved"
   },
   "spec": {
@@ -154,10 +148,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2383,
+      "end": 2182,
       "end_line": 26,
       "line": 26,
-      "start": 2319
+      "start": 2118
     },
     "text": "The operator's words, in a host session on 2026-11-15, as typed:"
   }

@@ -3,7 +3,7 @@ id: spec-121-data-sensitivity-private-internal-and-confidential
 title: "121: Data sensitivity: private, internal and confidential"
 author: architect
 timestamp: 2026-11-15T00:00:00Z
-status: approved   # by the operator, 2026-11-15, in a host session: "approve spec 121 and merge 740 when ready", after the draft, its slices and its five open questions were shown. The open questions of the last section stay open: until the operator answers each, the provisional behaviour the draft names for it is what is built. Written from the operator's words of that day (quoted in section 1) and the ruling of a Panel (council t_0001, PROCEED-WITH-CHANGES) as relayed to the author. Section 17 (2026-11-16) is an amendment written from the operator's words of that day ("4: yes", on the two choices the S1 builder reported); it takes effect when the operator merges its pull request.
+status: approved   # by the operator, 2026-11-15, in a host session: "approve spec 121 and merge 740 when ready", after the draft, its slices and its five open questions were shown. The open questions of the last section stay open: until the operator answers each, the provisional behaviour the draft names for it is what is built. Written from the operator's words of that day (quoted in section 1) and the ruling of a Panel (council t_0001, PROCEED-WITH-CHANGES) as relayed to the author.
 approved_by: operator (2026-11-15)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -239,16 +239,3 @@ Each is open. The draft's behaviour is named so the text can be read whole; it i
 5. **Does confidential stay within its project?** Under spec 115 a claim crosses projects. The draft keeps a confidential claim out of every reader without a grant, and lets a granted role see it across projects. The alternative is that a confidential claim never leaves its project, whatever the grant.
 
 Also for the operator to confirm, though the Panel reached consensus on it: the accepted risk of §9 item 2 (queries that carry private substance are logged and shown, not refused).
-
----
-
-## 17. Amendment: two decisions taken while building S1 (2026-11-16)
-
-The S1 builder listed the choices it had made where this spec was silent. The operator's words, on 2026-11-16, as typed (item 4 is the one that answers this spec's choices):
-
-> "questions: 1&2: follow your recommendation. 3: keep as-is. 4: yes. 5: yes except for copilot web_fetch — keep that in or test live — there's a logged in copilot session on this machine"
-
-"4: yes" confirms both choices below. They narrow §3; nothing else in this spec changes. The questions of §16 stay open.
-
-1. **An email whose recipients are not known is `personal`.** §3 item 1 labels "the operator's email, one sender to few recipients" as `personal`, and §9 item 5 leaves an item unlabelled where the connector's metadata cannot tell. For an email, the recipients being unknown does not make it unknown: it is the operator's own mail, so it takes the default `personal`. It becomes `internal` instead only when its recipients are known and §3 item 1 says so (a list address, or more than the company-wide count). The default still configures nothing (§7).
-2. **`delphi handling set` is the operator's at a terminal, as `clear` is.** §3 item 3 says only that clearing is the operator's alone at a terminal or the console. Setting a trait as the operator also gives `internal` the weight of §7, which no agent or host may give (§3 item 4). So `delphi handling set` is refused inside an agent seat and in a process without a terminal, as `clear` is. An agent or a host still adds a trait to what it writes or reports (§3 item 4), with no weight.
