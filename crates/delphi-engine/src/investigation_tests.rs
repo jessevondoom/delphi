@@ -10,7 +10,7 @@ use crate::worktree::tests::{commit, index_and_refs, init_repo, tree_bytes};
 use delphi_sandbox::Sandbox;
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 const PROMPT: &str = "Find the commit that broke @project/app/src/lib.rs";
@@ -23,9 +23,12 @@ fn with_git(c: &mut ExecConfig) {
         return;
     }
     for root in ["/Applications/Xcode.app/Contents/Developer", "/Library/Developer/CommandLineTools", "/opt/homebrew", "/usr/local"] {
-        let bin = Path::new(root).join(if root.contains("Developer") { "usr/bin" } else { "bin" });
+        // The real path: a CI runner's `/Applications/Xcode.app` is a symlink to a versioned Xcode, and the sandbox lets a
+        // command stat only the real ancestors of what it may run, so `PATH` must not name the link.
+        let Ok(root) = fs::canonicalize(root) else { continue };
+        let bin = root.join(if root.to_string_lossy().contains("Developer") { "usr/bin" } else { "bin" });
         if bin.join("git").exists() {
-            c.toolchain.push(PathBuf::from(root));
+            c.toolchain.push(root.clone());
             c.env.insert("PATH".into(), format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display()));
             return;
         }
