@@ -213,7 +213,11 @@ fn audit_xml(doc: &roxmltree::Document<'_>) -> Result<(), &'static str> {
             return Err("the SVG nests too deeply to draw");
         }
         if let Some(id) = n.attribute("id") {
-            ids.entry(id).or_insert(n.id());
+            // usvg resolves `use` to the first element of an id and clip paths and markers to the last, so with two elements of
+            // one id the audit could follow one while the renderer follows the other.
+            if ids.insert(id, n.id()).is_some() {
+                return Err("the SVG gives two elements the same id");
+            }
         }
         if name == "marker" {
             markers = true;
@@ -281,18 +285,28 @@ fn vertices(n: roxmltree::Node<'_, '_>) -> u64 {
 
 /// The `#id`s a property value names with `url(#id)` (quoted or not, with spaces or not).
 fn url_ids(value: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut rest = value;
-    while let Some(p) = rest.find("url(") {
-        let after = &rest[p + 4..];
-        let Some(close) = after.find(')') else { break };
-        let inner = after[..close].trim().trim_matches(|c| c == '"' || c == '\'').trim();
+    // What usvg itself reads (`svgtypes::FuncIRI`), and, as a superset, every `url(` in any case with any spacing or quoting.
+    let mut out: Vec<&str> = svgtypes::FuncIRI::from_str(value.trim()).ok().map(|f| f.0).into_iter().collect();
+    let lower = value.to_ascii_lowercase(); // ASCII lowercasing keeps every byte offset
+    let mut at = 0;
+    while let Some(p) = lower[at..].find("url(") {
+        let start = at + p + 4;
+        let Some(close) = lower[start..].find(')') else { break };
+        let inner = value[start..start + close].trim().trim_matches(|c| c == '"' || c == '\'').trim();
         if let Some(id) = inner.strip_prefix('#') {
-            out.push(id);
+            out.push(id.trim());
         }
-        rest = &after[close + 1..];
+        at = start + close + 1;
     }
     out
+}
+
+/// The element a `use` (or anything with an `href`) names, resolved exactly as usvg resolves it: an `href` with no namespace before
+/// `xlink:href`, whatever their order, read with `svgtypes::IRI` (which allows spaces around `#id`).
+fn href_id<'a>(n: roxmltree::Node<'a, 'a>) -> Option<&'a str> {
+    const XLINK: &str = "http://www.w3.org/1999/xlink";
+    let a = n.attributes().find(|a| a.name() == "href" && a.namespace().is_none()).or_else(|| n.attributes().find(|a| a.name() == "href" && a.namespace() == Some(XLINK)))?;
+    svgtypes::IRI::from_str(a.value()).ok().map(|i| i.0)
 }
 
 /// What element `n` names through property `prop`, set as an attribute or in its `style` attribute.
@@ -394,7 +408,7 @@ fn drawn<'a>(start: roxmltree::Node<'a, 'a>, elem: &dyn Fn(&str) -> Option<roxml
                 return Err("the SVG has too many parts to draw once its references are counted");
             }
             if n.tag_name().name() == "use" {
-                if let Some(t) = n.attributes().find(|a| a.name() == "href").and_then(|a| a.value().strip_prefix('#')).and_then(elem) {
+                if let Some(t) = href_id(n).and_then(elem) {
                     todo.push(t);
                 }
             }
@@ -427,8 +441,7 @@ fn cost<'a>(n: roxmltree::Node<'a, 'a>, ids: &HashMap<&str, roxmltree::NodeId>, 
         }
     }
     if n.tag_name().name() == "use" {
-        let href = n.attributes().find(|a| a.name() == "href").map(|a| a.value()).unwrap_or("");
-        if let Some(target) = href.strip_prefix('#').and_then(|id| ids.get(id)).and_then(|id| n.document().get_node(*id)) {
+        if let Some(target) = href_id(n).and_then(|id| ids.get(id)).and_then(|id| n.document().get_node(*id)) {
             total = total.plus(cost(target, ids, marker, memo, busy)?);
         }
     }
@@ -791,6 +804,47 @@ mod tests {
         let one = roxmltree::Document::parse("<g><path d=\"M0 0l1 1 2 2\"/><polyline points=\"0,0 1,1\"/><use href=\"#x\"/></g>").unwrap();
         let ids = HashMap::new();
         assert_eq!(cost(one.root_element(), &ids, Cost::default(), &mut HashMap::new(), &mut Vec::new()).unwrap(), Cost { elements: 4, segments: 6 });
+    }
+
+    /// The red-team's third pass: references the audit read differently from usvg. usvg reads an `href` with `svgtypes::IRI`
+    /// (spaces around `#id` allowed) and prefers `href` to `xlink:href` whatever their order; the audit took the first attribute
+    /// named `href` and needed `#` first. Each spelling hid a use bomb from the count, or a clip chain from the depth.
+    #[test]
+    fn references_are_read_exactly_as_the_renderer_reads_them() {
+        let bomb = |spell: &dyn Fn(usize) -> String| {
+            let mut body = String::from("<defs><rect id=\"l0\" width=\"1\" height=\"1\"/>");
+            for i in 1..=10 {
+                body.push_str(&format!("<g id=\"l{i}\">"));
+                for _ in 0..10 {
+                    body.push_str(&spell(i - 1));
+                }
+                body.push_str("</g>");
+            }
+            body.push_str("</defs><use href=\"#l10\"/>");
+            svg(&body)
+        };
+        let spellings: [(&str, &dyn Fn(usize) -> String); 3] = [
+            ("leading space", &|t| format!("<use href=\" #l{t}\"/>")),
+            ("trailing space", &|t| format!("<use href=\"#l{t} \"/>")),
+            ("href after xlink:href", &|t| format!("<use xlink:href=\"#l0\" href=\"#l{t}\"/>")),
+        ];
+        for (what, spell) in spellings {
+            let started = std::time::Instant::now();
+            assert_eq!(render_now(&bomb(spell)), Err("the SVG has too many parts to draw once its references are counted"), "{what}");
+            assert!(started.elapsed() < Duration::from_secs(1), "{what}: {:?}", started.elapsed());
+        }
+        // A clip chain through `use` whose `href` has a leading space.
+        let mut s = String::from("<defs>");
+        for i in 0..8 {
+            s.push_str(&format!("<clipPath id=\"c{i}\"><use href=\" #r{}\"/></clipPath><rect id=\"r{}\" width=\"9\" height=\"9\" clip-path=\"url( #c{} )\"/>", i + 1, i + 1, i + 1));
+        }
+        s.push_str("<clipPath id=\"c8\"><rect width=\"9\" height=\"9\"/></clipPath></defs><rect width=\"9\" height=\"9\" clip-path=\"url(#c0)\"/>");
+        assert_eq!(render_now(&svg(&s)), Err("the SVG chains clip paths too deeply to draw"));
+        // Two elements of one id: usvg follows the first for `use` and the last for clip paths.
+        let twice = "<defs><clipPath id=\"c\"><rect width=\"9\" height=\"9\"/></clipPath><clipPath id=\"c\"><rect width=\"9\" height=\"9\"/></clipPath></defs><rect width=\"9\" height=\"9\" clip-path=\"url(#c)\"/>";
+        assert_eq!(render_now(&svg(twice)), Err("the SVG gives two elements the same id"));
+        assert_eq!(url_ids("URL( '#a' ) url(#b)"), vec!["a", "b"]);
+        assert_eq!(url_ids("url(#a)"), vec!["a", "a"], "what svgtypes reads, and the scan");
     }
 
     #[test]
