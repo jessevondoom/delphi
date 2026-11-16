@@ -1,0 +1,51 @@
+# What the desktop app may call on the daemon's app socket, grant by grant (spec 120 section 4).
+#
+# A grant is a named list of methods. A paired key calls only the methods of the grants its own record holds, and a method
+# listed under no grant cannot be called on the app socket at all. The same lists are the table in code,
+# `delphi_core::app_keys::GRANTS`; `crates/delphi/tests/app_grants.rs` fails when the two differ, in either direction and
+# in order.
+#
+# This file is a gate path (`merge-gates.toml`): a pull request that changes it cannot be merged on a chat quote and needs
+# the operator at a terminal. A row is added only when an approved spec, or an approved amendment to spec 120, names the
+# grant and lists the method (spec 120 section 5, item 1). A key never gains a grant by an upgrade; the operator gives it
+# with `delphi app grant <name> <grant>`.
+
+# Everything the narrator scope reads, and the encyclopedia's eleven reads (spec 117 section 3). Nothing here writes.
+[[grant]]
+name = "read"
+methods = [
+    "session.ping",
+    "events.subscribe",
+    "session.snapshot",
+    "observe.snapshot",
+    "observe.state",
+    "kb.search",
+    "kb.get",
+    "usage.get",
+    "budget.get",
+    "approval.list",
+    "permissions.get",
+    "ratify.list",
+    "pages.list",
+    "pages.get",
+    "pages.versions",
+    "pages.links",
+    "topics.list",
+    "topics.get",
+    "library.source",
+    "library.claim",
+    "memory.roles",
+    "memory.role",
+    "changes.since",
+]
+
+# The first acting grant (spec 120 section 4.2). Each asks the daemon to start something the operator could start from a
+# terminal without being asked anything, and takes ids and typed text only.
+[[grant]]
+name = "request"
+methods = [
+    "app.research_continue",
+    "app.research_ask",
+    "app.page_rebuild",
+    "app.page_dispute",
+]
