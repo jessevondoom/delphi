@@ -297,7 +297,8 @@ pub fn get_bytes(transport: &dyn Transport, list: &TrustedList, url: &str, accep
     Err(ImgError::TooManyRedirects)
 }
 
-/// What a file is by its first bytes (not by its name or the server's word): `png`, `jpg` or `gif`; anything else, SVG and WebP included, is `None`.
+/// What a file is by its first bytes (not by its name or the server's word): `png`, `jpg`, `gif`, `webp` or `svg` (`specs/118` §4);
+/// anything else is `None`.
 pub fn sniff(b: &[u8]) -> Option<&'static str> {
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("png")
@@ -305,8 +306,34 @@ pub fn sniff(b: &[u8]) -> Option<&'static str> {
         Some("jpg")
     } else if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
         Some("gif")
+    } else if b.len() >= 16 && b.starts_with(b"RIFF") && &b[8..12] == b"WEBP" && matches!(&b[12..16], b"VP8 " | b"VP8L" | b"VP8X") {
+        Some("webp")
+    } else if looks_like_svg(b) {
+        Some("svg")
     } else {
         None
+    }
+}
+
+/// Is this the start of an SVG document (after an optional byte-order mark, white space, an XML declaration, comments and an SVG
+/// doctype)? A web page that holds an `<svg>` is not one.
+fn looks_like_svg(b: &[u8]) -> bool {
+    let head = String::from_utf8_lossy(&b[..b.len().min(4096)]).to_ascii_lowercase();
+    let mut rest = head.trim_start_matches('\u{feff}');
+    loop {
+        rest = rest.trim_start();
+        if let Some(r) = rest.strip_prefix("<?xml") {
+            let Some(end) = r.find("?>") else { return false };
+            rest = &r[end + 2..];
+        } else if let Some(r) = rest.strip_prefix("<!--") {
+            let Some(end) = r.find("-->") else { return false };
+            rest = &r[end + 3..];
+        } else if let Some(r) = rest.strip_prefix("<!doctype svg") {
+            let Some(end) = r.find('>') else { return false };
+            rest = &r[end + 1..];
+        } else {
+            return rest.starts_with("<svg") && matches!(rest.as_bytes().get(4), Some(b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/'));
+        }
     }
 }
 
@@ -487,7 +514,12 @@ mod tests {
         assert_eq!(sniff(b"\x89PNG\r\n\x1a\n\0\0"), Some("png"));
         assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("jpg"));
         assert_eq!(sniff(b"GIF89a.."), Some("gif"));
-        for no in [&b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"[..], b"RIFF\0\0\0\0WEBPVP8 ", b"<!doctype html><title>x</title>", b"", b"\x89PNG"] {
+        assert_eq!(sniff(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(sniff(b"RIFF\0\0\0\0WEBPVP8L"), Some("webp"));
+        for svg in [&b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"[..], b"\xef\xbb\xbf  <?xml version=\"1.0\"?>\n<!-- made by hand -->\n<svg>", b"<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"x\">\n<svg/>"] {
+            assert_eq!(sniff(svg), Some("svg"), "{:?}", String::from_utf8_lossy(svg));
+        }
+        for no in [&b"<!doctype html><title>x</title>"[..], b"<!doctype html><html><body><svg></svg></body></html>", b"<svgfoo/>", b"text <svg/>", b"<?xml version=\"1.0\"?><rss/>", b"RIFF\0\0\0\0WAVEfmt ", b"RIFF\0\0\0\0WEBPjunk", b"", b"\x89PNG"] {
             assert_eq!(sniff(no), None, "{:?}", String::from_utf8_lossy(no));
         }
     }

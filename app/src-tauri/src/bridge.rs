@@ -115,10 +115,10 @@ fn lib_part(s: &str) -> bool {
     !s.is_empty() && s.len() <= 200 && s != "." && s != ".." && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-/// A picture the daemon decodes: PNG, JPEG or GIF.
+/// A picture the daemon decodes: PNG, JPEG, GIF or WebP (an SVG is never served, spec 118 §4 item 2).
 fn is_picture(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
-    [".png", ".jpg", ".jpeg", ".gif"].iter().any(|e| l.ends_with(e))
+    [".png", ".jpg", ".jpeg", ".gif", ".webp"].iter().any(|e| l.ends_with(e))
 }
 
 /// A query name or value decoded as the daemon decodes it (`kbserve::parse_query`): `+` is a space, `%XX` a byte.
@@ -610,6 +610,7 @@ mod tests {
         assert_eq!(t("/v1/image?src=lib:src1/a.png").as_deref(), Some("/v1/image?src=lib:src1/a.png"));
         assert_eq!(t("/v1/image?src=lib%3Asrc1/a.png&max=400").as_deref(), Some("/v1/image?src=lib:src1/a.png&max=400"));
         assert_eq!(t("/v1/image?max=99999&src=lib:s-1_x.y/0f.JPG").as_deref(), Some("/v1/image?src=lib:s-1_x.y/0f.JPG&max=1600"));
+        assert_eq!(t("/v1/image?src=lib:src1/a.webp").as_deref(), Some("/v1/image?src=lib:src1/a.webp"), "a WebP is kept as it is (spec 118 §4 item 1)");
         // Anything else that names the library is refused: a second `src`, a `path`, another name, a path in the name, a file
         // that is not a picture, a part that is not plain.
         for lib in [
@@ -626,6 +627,7 @@ mod tests {
             "/v1/image?src=lib:s",
             "/v1/image?src=lib:/a.png",
             "/v1/image?src=lib:s/.png%00.png",
+            "/v1/image?src=lib:s/a.svg",
         ] {
             assert_eq!(t(lib), None, "{lib}");
         }

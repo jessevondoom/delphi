@@ -2077,6 +2077,51 @@ mod page_search_cache {
         assert_eq!(get(true, "lib:no-such/chart.png").status, 404);
     }
 
+    /// `specs/118` §4: a WebP with its record is served as a picture, shrunk to `max`; an SVG is never served, even when a record
+    /// names it as its own file, and the SVG a PNG was drawn from is not an unrecorded picture.
+    #[test]
+    fn a_webp_is_served_with_its_record_and_an_svg_never_is() {
+        let (d, l) = lib();
+        let ws = d.path().join("ws");
+        std::fs::create_dir_all(ws.join("docs")).unwrap();
+        std::fs::write(ws.join("docs/w.md"), "# Wave heights\n\nWaves rise in a storm.\n").unwrap();
+        let s = l.capture_workspace_doc(&ws, &ws.join("docs/w.md"), "docs/w.md", &Budgets::default()).unwrap();
+        let assets = l.source_dir(&s.id).join("assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        let rgba: Vec<u8> = (0..100 * 50).flat_map(|i| [(i % 100 * 2) as u8, (i / 100 * 5) as u8, 30, 255]).collect();
+        let mut webp = Vec::new();
+        image_webp::WebPEncoder::new(&mut webp).encode(&rgba, 100, 50, image_webp::ColorType::Rgba8).unwrap();
+        std::fs::write(assets.join("map.webp"), &webp).unwrap();
+        licensed(&l, &s.id, "map.webp");
+        std::fs::write(assets.join("drawn.png"), png()).unwrap();
+        std::fs::write(assets.join("abc123.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"/>").unwrap();
+        std::fs::write(assets.join("loose.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"/>").unwrap();
+        licensed(&l, &s.id, "drawn.png");
+        licensed(&l, &s.id, "loose.svg"); // a record that names an SVG as its own file: it does not count
+        let mut meta = l.read_meta(&s.id).unwrap();
+        for r in meta["images"].as_array_mut().unwrap() {
+            if r["file"] == "drawn.png" {
+                r[assets::RENDERED_FROM] = serde_json::json!({"format": "svg", "file": "abc123.svg", "blake3": "x"});
+            }
+        }
+        l.write_json(&l.source_dir(&s.id).join("meta.json"), &meta).unwrap();
+
+        let kb = crate::kb::Kb::open_in_memory().unwrap();
+        let get = |src: &str| crate::kbserve::Reader { kb: &kb, ws: &ws, operator: true, home: Some(d.path()) }.get(&format!("/v1/image?src={src}"));
+        let w = get(&format!("lib:{}/map.webp&max=40", s.id));
+        assert_eq!((w.status, w.body["width"].as_u64(), w.body["height"].as_u64()), (200, Some(40), Some(20)), "{}", w.body);
+        assert!(w.body["credit"]["line"].as_str().is_some_and(|c| c.contains("CC-BY-4.0")), "{}", w.body);
+        assert_eq!(get(&format!("lib:{}/map.webp", s.id)).body["width"].as_u64(), Some(100), "never enlarged past its own size");
+        for svg in ["abc123.svg", "loose.svg"] {
+            let no = get(&format!("lib:{}/{svg}", s.id));
+            assert!(no.status == 403 || no.status == 404, "{svg}: {} {}", no.status, no.body);
+            assert!(l.asset_record(&s.id, svg).is_none(), "{svg}");
+        }
+        let unrecorded: Vec<String> = l.assets_check(false).into_iter().map(|u| u.file).collect();
+        assert_eq!(unrecorded, vec!["loose.svg".to_string()], "the SVG a PNG was drawn from belongs to that PNG's record; a loose one is listed");
+        assert!(l.image_assets(&s.id).iter().any(|a| a.file == "map.webp") && !l.image_assets(&s.id).iter().any(|a| a.file.ends_with(".svg")));
+    }
+
     #[test]
     fn eviction_drops_the_least_recently_opened_and_never_a_pinned_page() {
         let (_d, l, w) = setup();

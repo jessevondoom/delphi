@@ -25,10 +25,21 @@ pub const EVIDENCE_WORKSPACE: &str = "workspace";
 /// The check that decided the licence of a picture adopted with a bundle's source: that source's licence.
 pub const EVIDENCE_BUNDLE: &str = "bundle";
 
-/// Is this file name one of a picture (the formats a capture may keep, and the two P4 will add)?
+/// The field of a PNG's record that names the SVG it was drawn from (`specs/118` §4 item 2): `{"format": "svg", "file", "blake3"}`.
+/// That SVG is kept beside the PNG for the record. It has no record of its own, so nothing serves it.
+pub const RENDERED_FROM: &str = "rendered_from";
+
+/// Is this file name one of a picture (the formats a capture may keep: PNG, JPEG, GIF, WebP, and the SVG a PNG was drawn from)?
 pub fn is_picture_name(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
     [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].iter().any(|e| l.ends_with(e))
+}
+
+/// The SVG file a record says its PNG was drawn from, when its name is a plain one (`<hex>.svg`).
+pub fn svg_original(rec: &Value) -> Option<&str> {
+    let f = rec[RENDERED_FROM]["file"].as_str()?;
+    let stem = f.strip_suffix(".svg")?;
+    (!stem.is_empty() && stem.len() <= 96 && stem.chars().all(|c| c.is_ascii_hexdigit())).then_some(f)
 }
 
 /// The facts of one picture's licence record, as a capture knows them.
@@ -90,10 +101,11 @@ fn credit_text(rec: &Value) -> String {
     format!("{}, {}, {}", if author.is_empty() { "author not stated" } else { author.as_str() }, licence_name(&one_line(rec["licence"].as_str().unwrap_or(""), 60)), one_line(credit, 500))
 }
 
-/// Is `rec` a licence record of `file` in source `id`: it names the file, it names no other source, and it states a licence?
+/// Is `rec` a licence record of `file` in source `id`: it names the file, it names no other source, and it states a licence? An SVG
+/// never has one, whatever a record says: it is never shown as SVG (`specs/118` §4 item 2), only drawn to a PNG at capture.
 fn is_record_of(rec: &Value, id: &str, file: &str) -> bool {
     let licence = rec["licence"].as_str().map(str::trim).unwrap_or("");
-    rec["file"].as_str() == Some(file) && rec["source_id"].as_str().is_none_or(|s| s == id) && !licence.is_empty() && !matches!(licence.to_ascii_lowercase().as_str(), "unknown" | "none")
+    !file.to_ascii_lowercase().ends_with(".svg") && rec["file"].as_str() == Some(file) && rec["source_id"].as_str().is_none_or(|s| s == id) && !licence.is_empty() && !matches!(licence.to_ascii_lowercase().as_str(), "unknown" | "none")
 }
 
 /// One file of a source's `assets/` that has no licence record.
@@ -151,8 +163,10 @@ impl Library {
             let Ok(rd) = std::fs::read_dir(&dir) else { continue };
             let mut files: Vec<String> = rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())).filter_map(|e| e.file_name().to_str().map(String::from)).filter(|n| is_picture_name(n)).collect();
             files.sort();
+            // The SVGs pictures were drawn from belong to their PNG's record; they are not served and are not unrecorded.
+            let originals: Vec<String> = self.read_meta(&id).and_then(|m| m["images"].as_array().map(|a| a.iter().filter(|r| r["file"].as_str().is_some_and(|f| is_record_of(r, &id, f))).filter_map(|r| svg_original(r).map(String::from)).collect())).unwrap_or_default();
             for file in files {
-                if self.asset_record(&id, &file).is_some() {
+                if self.asset_record(&id, &file).is_some() || originals.contains(&file) {
                     continue;
                 }
                 let moved = apply && {
@@ -188,7 +202,8 @@ impl Library {
         let retrieved = delphi_core::time::now_rfc3339();
         let mut records = Vec::new();
         for e in rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())) {
-            let Some(file) = e.file_name().to_str().map(String::from).filter(|n| is_picture_name(n)) else { continue };
+            // An SVG is never shown as SVG (`specs/118` §4 item 2), so a bundle's SVG gets no record and is never served.
+            let Some(file) = e.file_name().to_str().map(String::from).filter(|n| is_picture_name(n) && !n.to_ascii_lowercase().ends_with(".svg")) else { continue };
             let bytes = std::fs::read(e.path()).unwrap_or_default();
             let (w, h) = delphi_docs::pixels::decode(&bytes).map(|p| (p.width, p.height)).unwrap_or((0, 0));
             let own = given.iter().find(|r| r["file"].as_str() == Some(file.as_str()));

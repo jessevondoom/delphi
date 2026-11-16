@@ -734,17 +734,18 @@ impl Library {
         if meta["capture_level"] != "full" || !meta["purged"].is_null() {
             return Err("pictures are kept only with a source whose text is kept".into());
         }
-        let plain = |name: &str| !name.is_empty() && name.len() <= 100 && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') && matches!(name.rsplit_once('.').map(|(_, e)| e), Some("png" | "jpg" | "gif"));
+        let plain = |name: &str| !name.is_empty() && name.len() <= 100 && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') && matches!(name.rsplit_once('.').map(|(_, e)| e), Some("png" | "jpg" | "gif" | "webp"));
         let kept: Vec<&Value> = records.iter().filter(|r| r["file"].as_str().is_some_and(|f| plain(f) && dir.join(f).is_file())).collect();
-        let bytes: u64 = kept.iter().filter_map(|r| std::fs::metadata(dir.join(r["file"].as_str()?)).ok()).map(|m| m.len()).sum();
+        // A PNG drawn from an SVG brings the SVG with it, for the record (`specs/118` §4 item 2); it counts against the budgets too.
+        let originals: Vec<&str> = kept.iter().filter_map(|r| assets::svg_original(r)).filter(|f| dir.join(f).is_file()).collect();
+        let bytes: u64 = kept.iter().filter_map(|r| r["file"].as_str()).chain(originals.iter().copied()).filter_map(|f| std::fs::metadata(dir.join(f)).ok()).map(|m| m.len()).sum();
         let held = dir_bytes(&self.source_dir(id));
         if held + bytes > budgets.source || self.used_bytes() + bytes > budgets.library {
             return Err("the pictures would pass the source's or the library's budget; none was kept".into());
         }
         let assets = self.source_dir(id).join("assets");
         std::fs::create_dir_all(&assets).map_err(|e| e.to_string())?;
-        for r in &kept {
-            let f = r["file"].as_str().unwrap_or_default();
+        for f in kept.iter().filter_map(|r| r["file"].as_str()).chain(originals.iter().copied()) {
             std::fs::copy(dir.join(f), assets.join(f)).map_err(|e| format!("{}: {}", f, e))?;
         }
         drop(meta);

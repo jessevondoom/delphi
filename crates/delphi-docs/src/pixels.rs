@@ -1,4 +1,4 @@
-//! Pixels for the reader (`specs/029` §9): any image the knowledge base may hold (PNG, JPEG, GIF), decoded and
+//! Pixels for the reader (`specs/029` §9): any image the knowledge base may hold (PNG, JPEG, GIF; WebP since `specs/118` §4), decoded and
 //! shrunk to a few dozen cells. Nothing here draws; the console paints the result in half-block cells.
 
 use crate::png::Image;
@@ -12,9 +12,32 @@ pub fn decode(b: &[u8]) -> Result<Image, DocError> {
         crate::jpeg::decode(b)
     } else if b.starts_with(b"GIF8") {
         crate::gif::decode(b)
+    } else if b.len() >= 12 && b.starts_with(b"RIFF") && &b[8..12] == b"WEBP" {
+        webp(b)
     } else {
-        Err(DocError("not an image this reader draws (PNG, JPEG and GIF are)".into()))
+        Err(DocError("not an image this reader draws (PNG, JPEG, GIF and WebP are)".into()))
     }
+}
+
+/// The most pixels a WebP may have before anything is allocated for it (the raster readers' limit).
+const MAX_WEBP_PIXELS: usize = 24_000_000;
+
+/// A WebP (`specs/118` §4 item 1), lossy, lossless or the first frame of an animation, decoded by `image-webp`. Its size is read
+/// from the header and checked before the picture is decoded, so a header that claims a huge picture allocates nothing for it.
+fn webp(b: &[u8]) -> Result<Image, DocError> {
+    let bad = || DocError("the WebP file could not be decoded".into());
+    let mut d = image_webp::WebPDecoder::new(std::io::Cursor::new(b)).map_err(|_| bad())?;
+    let (w, h) = d.dimensions();
+    let (w, h) = (w as usize, h as usize);
+    if w == 0 || h == 0 || w.saturating_mul(h) > MAX_WEBP_PIXELS {
+        return Err(DocError(format!("the picture would be {}x{} pixels; the limit is {} pixels in all", w, h, MAX_WEBP_PIXELS)));
+    }
+    d.set_memory_limit(MAX_WEBP_PIXELS * 4);
+    let alpha = d.has_alpha();
+    let mut buf = vec![0u8; d.output_buffer_size().ok_or_else(bad)?];
+    d.read_image(&mut buf).map_err(|_| bad())?;
+    let rgba = if alpha { buf } else { buf.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect() };
+    Ok(Image { width: w, height: h, rgba })
 }
 
 /// `img` shrunk to fit inside `max_w` x `max_h` pixels, keeping its proportions and never enlarging it. Each output
@@ -161,6 +184,37 @@ mod tests {
         assert_eq!(half.pixel(0, 0), [100, 50, 25, 255]);
         let clear = fit(&Image { width: 2, height: 1, rgba: vec![255, 0, 0, 0, 0, 0, 255, 255] }, 1, 1);
         assert_eq!(&clear.pixel(0, 0)[..3], &[0, 0, 255], "a transparent pixel adds no colour");
+    }
+
+    /// A lossless WebP of `img`, written by `image-webp`'s own encoder.
+    fn webp_of(img: &Image) -> Vec<u8> {
+        let mut out = Vec::new();
+        image_webp::WebPEncoder::new(&mut out).encode(&img.rgba, img.width as u32, img.height as u32, image_webp::ColorType::Rgba8).unwrap();
+        out
+    }
+
+    #[test]
+    fn a_lossless_webp_comes_back_as_the_same_picture_and_a_broken_or_huge_one_is_refused() {
+        let img = load("rgba.png");
+        let w = webp_of(&img);
+        assert!(w.starts_with(b"RIFF") && &w[8..12] == b"WEBP");
+        assert_eq!(decode(&w).unwrap(), img, "lossless is exact");
+        for cut in [12usize, 20, w.len() / 2] {
+            assert!(decode(&w[..cut]).is_err(), "cut at {}", cut);
+        }
+        let mut flipped = w.clone();
+        for i in (20..flipped.len()).step_by(5) {
+            flipped[i] ^= 0x5A;
+        }
+        let _ = decode(&flipped); // must not panic
+        // A simple-lossless header (VP8L) that claims 16384x16384 pixels: refused before the picture is allocated.
+        let mut huge = b"RIFF\0\0\0\0WEBPVP8L\x05\0\0\0\x2f".to_vec();
+        huge.extend_from_slice(&(16383u32 | (16383 << 14)).to_le_bytes());
+        huge.push(0);
+        let n = (huge.len() - 8) as u32;
+        huge[4..8].copy_from_slice(&n.to_le_bytes());
+        let e = decode(&huge).unwrap_err();
+        assert!(e.0.contains("the limit is"), "{}", e.0);
     }
 
     #[test]

@@ -146,7 +146,7 @@ impl Library {
     /// purged. The console's picture reader serves nothing else out of the library.
     pub fn asset_file(&self, id: &str, file: &str) -> Option<PathBuf> {
         let plain = !file.is_empty() && file != "." && file != ".." && file.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-        if !plain || !is_picture(file) || !self.read_meta(id).is_some_and(|m| m["purged"].is_null()) {
+        if !plain || !(is_picture(file) || file.to_ascii_lowercase().ends_with(".webp")) || !self.read_meta(id).is_some_and(|m| m["purged"].is_null()) {
             return None;
         }
         let dir = self.source_dir(id).join("assets").canonicalize().ok()?;
