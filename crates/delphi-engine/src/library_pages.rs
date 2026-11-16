@@ -15,7 +15,7 @@ use super::*;
 use delphi_core::knowledge_status::Status;
 use std::collections::BTreeSet;
 
-pub use super::page_check::{banner, markers, shown_status, Checked, Cite, Finding, Scope, NO_SOURCES, TABLE_HEADING};
+pub use super::page_check::{banner, is_record_label, markers, record_status, shown_status, Checked, Cite, Finding, KbRecord, Scope, NO_SOURCES, TABLE_HEADING};
 use super::page_check::{glyph, norm, Rec};
 
 /// Bumped when the page layout changes, so cached pages of an older layout are rebuilt.

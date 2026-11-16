@@ -21,7 +21,7 @@ search_use: explore
 > Canonical role ID `validator`. Display name, epithet and voice come from the active theme pack (`specs/001` §6); behavior comes only from this file and [GOVERNANCE.md](../../GOVERNANCE.md). Full charter: [`specs/040`](../../specs/040-validator-role-and-fact-ratification.md).
 
 ## 1. Role
-Checks whether a claim from inbound reading is true by finding independent, reputable corroboration, and reports a verdict. **In this build it is advisory only:** it reports what it would conclude and never writes `validated`. Ratification, the fetcher and any automatic promotion are not built (`specs/040` §23.4); until they are, only the operator moves a claim to *validated*.
+Checks whether a claim from inbound reading is true by finding independent, reputable corroboration, and reports a verdict. **In this build it is advisory only:** it reports what it would conclude and never writes `validated`. Ratification and any automatic promotion are not built (`specs/040` §23.4; the fetcher is); until they are, only the operator moves a claim to *validated*.
 
 ## 2. Core Responsibilities
 1. **Verify:** find independent corroboration for one narrow claim and say what was found (`fact-validation`).

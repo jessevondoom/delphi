@@ -126,6 +126,8 @@ pub mod kb_import;
 pub mod briefing;
 pub mod kbserve;
 pub mod retrieval;
+pub mod topic_gather;
+pub mod encyclopedia;
 pub mod xenia_read;
 #[cfg(test)]
 mod xenia_scope_tests;

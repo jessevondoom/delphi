@@ -71,6 +71,9 @@ pub struct EngineService {
     /// When the background validator was last looked at, and whether a check of its is running now.
     background_checked: std::sync::atomic::AtomicI64,
     background_running: std::sync::atomic::AtomicBool,
+    /// The idle rebuild of topic pages (`specs/117` §2 item 3): when it last looked, and whether a rebuild is running.
+    topics_checked: std::sync::atomic::AtomicI64,
+    topics_running: std::sync::atomic::AtomicBool,
     /// The merge trigger (`specs/102` §3.2): when the merge ledger was last looked at, and the byte offset the daemon has read to
     /// (`None` until the first look, which starts at the ledger's end so an old merge never concludes a later prompt).
     merge_checked: std::sync::atomic::AtomicI64,
@@ -338,6 +341,24 @@ fn host_err(e: crate::host_rpc::HostErr) -> RpcError {
     err(c, e.to_string())
 }
 
+/// How often the daemon looks for a topic page to rebuild while idle (`specs/117` §2 item 3).
+const TOPICS_TICK_SECS: i64 = 600;
+
+/// The encyclopedia's reads (`specs/117` §3) are the operator's: the console, or the desktop app on a key the operator paired (whose
+/// `read` grant lists them). The narrator, a relay and a host are refused.
+fn need_reader(scope: Scope) -> Result<(), RpcError> {
+    if matches!(scope, Scope::Console | Scope::App) {
+        Ok(())
+    } else {
+        Err(err(code::FORBIDDEN, "this read is the operator's: the console, or the app on a paired key"))
+    }
+}
+
+/// Run one of the encyclopedia's reads on a blocking thread: they read files.
+async fn blocking_read(f: impl FnOnce() -> Result<Value, String> + Send + 'static) -> RpcOutcome {
+    tokio::task::spawn_blocking(f).await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(code::NOT_FOUND, e))
+}
+
 fn need_console(ctx: &CallContext) -> Result<(), RpcError> {
     if ctx.scope == Scope::Console {
         Ok(())
@@ -369,7 +390,7 @@ impl EngineService {
         let _ = engine.research_ask.set(tx);
         // One queue for every research run, under the one limits table (`specs/112` §4 item 6).
         let research_queue = crate::research_jobs::Jobs::with_limits(&engine.settings.research_limits);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: research_queue,
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: research_queue,
             #[cfg(test)]
             research_web: Mutex::new(None), panels: Arc::new(Mutex::new(HashMap::new())) });
         // An approved `request_research` card (`specs/058` §20): the mission's own scope decides where the pages go.
@@ -893,11 +914,12 @@ impl EngineService {
             let retractions_line = engine.settings.retractions.then(|| retractions.status_line(&delphi_core::time::now_rfc3339(), engine.settings.retractions_stale_days));
             let refresh_home = home.clone();
             // The keep step (`specs/112` §4 item 1): the trusted list's licence decides whether a page's text is kept, the validator's
-            // lists decide what a weak or excluded source is, and a run from the console or an inside agent keeps pictures.
+            // lists decide what a weak or excluded source is, and a run from the console or an inside agent keeps pictures. A page no
+            // licence lets the library keep whole is kept as `[library] unknown_licence` says (`specs/119` §3).
             let limits = &engine.settings.research_limits;
             let rules = crate::research_host::KeepRules { list: web.list.clone(), classes: crate::fact_sources::SourceList::new(engine.cfg.get().validator.sources.clone()), weak: engine.cfg.get().validator.weak_sources };
             let pics = pictures.then(|| crate::research_host::Pictures { transport: transport.clone(), per_source: limits.pictures_per_source, left: std::sync::atomic::AtomicUsize::new(limits.pictures_per_run) });
-            let mut keep = crate::research_host::KeepStep::new(rules, pics);
+            let mut keep = crate::research_host::KeepStep::new(rules, pics).with_unknown_licence(engine.cfg.get().library.unknown_licence, engine.cfg.get().library.private_text_max_mib).with_archive(engine.settings.archive.clone());
             if let Some(r) = &recorder {
                 keep = keep.recording(r.topic.clone(), &r.run_id);
             }
@@ -2411,6 +2433,7 @@ impl EngineService {
                 svc.timer_tick().await;
                 svc.acquire_tick().await;
                 svc.background_validate_tick().await;
+                svc.topics_tick().await;
                 svc.merge_ledger_tick().await;
                 svc.health_tick().await;
             }
@@ -2505,6 +2528,32 @@ impl EngineService {
         tokio::spawn(async move {
             let _ = svc.engine.background_validate_tick(&m, svc.last_operator.load(SeqCst), tasks).await;
             svc.background_running.store(false, SeqCst);
+        });
+    }
+
+    /// Every `TOPICS_TICK_SECS`, while the operator has been quiet for `fact_background::IDLE_SECS` and no task runs: rebuild one due topic
+    /// page (`specs/117` §2 item 3), within `[library.pages] per_day`, unless `auto_rebuild = false`. One at a time, in its own task.
+    async fn topics_tick(self: &Arc<Self>) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = (self.engine.clock_unix)();
+        let pages = self.engine.cfg.get().library.pages.clone();
+        if !pages.enabled || !pages.auto_rebuild || now - self.topics_checked.load(SeqCst) < TOPICS_TICK_SECS {
+            return;
+        }
+        self.topics_checked.store(now, SeqCst);
+        if now - self.last_operator.load(SeqCst) < crate::fact_background::IDLE_SECS || !self.running.lock().unwrap().is_empty() {
+            return;
+        }
+        if self.topics_running.swap(true, SeqCst) {
+            return;
+        }
+        let svc = self.clone();
+        tokio::spawn(async move {
+            // Fixed words only: a reason can carry a page's or a claim's text, which the error log never holds.
+            if let Some(Err(_)) = svc.engine.topic_idle_rebuild().await {
+                delphi_core::elog::warn("daemon", "topic_rebuild_failed", "an idle rebuild of a topic page did not finish", json!({}));
+            }
+            svc.topics_running.store(false, SeqCst);
         });
     }
 
@@ -2927,11 +2976,86 @@ impl EngineService {
         Ok(v)
     }
 
+    /// `pages.list` (`specs/117` §3): the search pages and the topic pages. The console's, and the paired app's; reads only.
     async fn pages_list(&self, _p: Value, ctx: CallContext) -> RpcOutcome {
-        need_console(&ctx)?;
-        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        need_reader(ctx.scope)?;
+        let (home, ws, now) = self.reader_paths();
         let ttl = self.engine.cfg.get().library.pages.external_ttl_secs;
-        Ok(json!({"pages": lib.pages(self.pages_now(), ttl).iter().map(|e| e.to_json()).collect::<Vec<_>>()}))
+        blocking_read(move || Ok(crate::encyclopedia::pages_list(&home, &ws, now, ttl))).await
+    }
+
+    fn reader_paths(&self) -> (std::path::PathBuf, std::path::PathBuf, u64) {
+        (self.engine.ws.home.clone(), self.engine.ws.dir.clone(), self.pages_now())
+    }
+
+    /// `pages.get {slug, version?}` (`specs/117` §3): one topic and its page. Reads only.
+    async fn pages_get(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_reader(ctx.scope)?;
+        let (home, ws, now) = self.reader_paths();
+        blocking_read(move || crate::encyclopedia::pages_get(&home, &ws, now, &p)).await
+    }
+
+    /// `pages.versions {slug}` (`specs/117` §3). Reads only.
+    async fn pages_versions(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_reader(ctx.scope)?;
+        let (home, _, _) = self.reader_paths();
+        blocking_read(move || crate::encyclopedia::pages_versions(&home, &p)).await
+    }
+
+    /// `pages.links {slug}` (`specs/117` §3): what links here, from the link table. Reads only.
+    async fn pages_links(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_reader(ctx.scope)?;
+        let (home, _, _) = self.reader_paths();
+        blocking_read(move || crate::encyclopedia::pages_links(&home, &p)).await
+    }
+
+    /// `topics.list` (`specs/117` §3): the research topics. Reads only.
+    async fn topics_list(&self, _p: Value, ctx: CallContext) -> RpcOutcome {
+        need_reader(ctx.scope)?;
+        let (home, ws, _) = self.reader_paths();
+        blocking_read(move || Ok(crate::encyclopedia::topics_list(&home, &ws))).await
+    }
+
+    /// `topics.get {id}` (`specs/117` §3): one research topic's record and answer. Reads only.
+    async fn topics_get(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_reader(ctx.scope)?;
+        let (home, ws, _) = self.reader_paths();
+        blocking_read(move || crate::encyclopedia::topics_get(&home, &ws, &p)).await
+    }
+
+    /// `library.source {id}` (`specs/117` §3 item 3): a source's record and kept text, as the operator's console shows it. Reads only.
+    async fn library_source(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_reader(ctx.scope)?;
+        let (home, _, _) = self.reader_paths();
+        blocking_read(move || crate::encyclopedia::library_source(&home, &p)).await
+    }
+
+    /// `library.claim {id}` (`specs/117` §3). Reads only.
+    async fn library_claim(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_reader(ctx.scope)?;
+        let (home, _, _) = self.reader_paths();
+        blocking_read(move || crate::encyclopedia::library_claim(&home, &p)).await
+    }
+
+    /// `memory.roles` (`specs/117` §3). Reads only.
+    async fn memory_roles(&self, _p: Value, ctx: CallContext) -> RpcOutcome {
+        need_reader(ctx.scope)?;
+        let (home, ws, _) = self.reader_paths();
+        blocking_read(move || Ok(crate::encyclopedia::memory_roles(&home, &ws))).await
+    }
+
+    /// `memory.role {role}` (`specs/117` §3): a role's lessons, provisional notes and findings. Reads only.
+    async fn memory_role(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_reader(ctx.scope)?;
+        let (home, ws, _) = self.reader_paths();
+        blocking_read(move || crate::encyclopedia::memory_role(&home, &ws, &p)).await
+    }
+
+    /// `changes.since {time}` (`specs/117` §3). Reads only.
+    async fn changes_since(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_reader(ctx.scope)?;
+        let (home, ws, now) = self.reader_paths();
+        blocking_read(move || crate::encyclopedia::changes_since(&home, &ws, now, &p)).await
     }
 
     async fn pages_open(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -2943,6 +3067,14 @@ impl EngineService {
         let mut v = e.to_json();
         v["markdown"] = json!(md);
         Ok(v)
+    }
+
+    /// `pages.rebuild`: the operator rebuilds one topic's page now (`specs/117` §2 item 2). Console only; it calls the writer and the validator.
+    async fn pages_rebuild(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let slug = p["slug"].as_str().unwrap_or("").to_string();
+        let e = self.engine.clone().topic_rebuild(&slug).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        Ok(e.to_json())
     }
 
     async fn pages_pin(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -4721,6 +4853,17 @@ impl Extension for ServiceExt {
                 "pages.list" => svc.pages_list(params, ctx).await,
                 "pages.open" => svc.pages_open(params, ctx).await,
                 "pages.pin" => svc.pages_pin(params, ctx).await,
+                "pages.rebuild" => svc.pages_rebuild(params, ctx).await,
+                "pages.get" => svc.pages_get(params, ctx).await,
+                "pages.versions" => svc.pages_versions(params, ctx).await,
+                "pages.links" => svc.pages_links(params, ctx).await,
+                "topics.list" => svc.topics_list(params, ctx).await,
+                "topics.get" => svc.topics_get(params, ctx).await,
+                "library.source" => svc.library_source(params, ctx).await,
+                "library.claim" => svc.library_claim(params, ctx).await,
+                "memory.roles" => svc.memory_roles(params, ctx).await,
+                "memory.role" => svc.memory_role(params, ctx).await,
+                "changes.since" => svc.changes_since(params, ctx).await,
                 "pages.dispute" => svc.pages_dispute(params, ctx).await,
                 "pages.promote" => svc.pages_promote(params, ctx).await,
                 "digest.act" => svc.digest_act(params, ctx).await,
@@ -8506,7 +8649,9 @@ mod tests {
             assert_eq!(run["state"], "done", "{who}: {rec}");
             let id = run["run_id"].as_str().unwrap();
             assert!(rec["queries"].as_array().unwrap().iter().any(|q| q["run"] == id), "{who}: the run's queries are in its record: {rec}");
-            assert!(rec["pages"].as_array().unwrap().iter().any(|p| p["run"] == id && p["url"] == page && p["kept"] == "pointer"), "{who}: the page it read is in its record: {rec}");
+            // A page of unknown licence is captured as a pointer and gains the quoted passage (`specs/119` §3 item 6): a later run
+            // finds it held as excerpts.
+            assert!(rec["pages"].as_array().unwrap().iter().any(|p| p["run"] == id && p["url"] == page && matches!(p["kept"].as_str(), Some("pointer" | "excerpts"))), "{who}: the page it read is in its record: {rec}");
             assert_eq!(rec["claims"].as_array().unwrap().len(), 1, "{who}: the claim it kept is listed once: {rec}");
             assert!(topic.search_log().is_some_and(|l| l["lines"].as_array().is_some_and(|a| !a.is_empty())), "{who}: the run has a search log");
             assert!(topic.answer().contains("aspirin lowers fever"), "{who}: {}", topic.answer());
@@ -10499,5 +10644,118 @@ mod tests {
         let (open, got) = blocking(move || drive_panel(hsock, htok, cwd, json!({"question": "q?", "model": "claude-opus", "operator_confirmed": true, "foreign_seat": "red-team"}), &["architect", "strategist"]).unwrap()).await;
         assert!(open["foreign_seats"].is_null() && open["foreign_seat"]["seat"] == "red-team", "{open}");
         assert!(got["foreign_seats"].is_null() && got["ruling"]["seats_run_by_delphi"].as_array().unwrap().len() == 1, "{got}");
+    }
+}
+
+#[cfg(test)]
+mod encyclopedia_reads_tests {
+    use super::*;
+    use crate::testkit::setup;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    fn hashes(dir: &Path, out: &mut BTreeMap<String, String>) {
+        use sha2::{Digest, Sha256};
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            let md = std::fs::symlink_metadata(&p).unwrap();
+            if md.is_dir() {
+                out.insert(format!("{}/", p.display()), String::new());
+                hashes(&p, out);
+            } else {
+                let h: String = Sha256::digest(std::fs::read(&p).unwrap_or_default()).iter().map(|b| format!("{b:02x}")).collect();
+                out.insert(p.display().to_string(), h);
+            }
+        }
+    }
+
+    /// `specs/117` §3 item 2, AC-3: each of the eleven reads, called on a workspace that holds every kind of thing they read, leaves every
+    /// file byte-identical (and makes no file and no folder) and calls no model. Every other scope than the console and the app is refused.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_encyclopedia_read_leaves_the_workspace_byte_identical_and_calls_no_model() {
+        let f = setup(vec![], 5.0, |_| {});
+        let (home, ws) = (f.engine.ws.home.clone(), f.engine.ws.dir.clone());
+        // A library: a public and a private source, a claim on each.
+        let lib = crate::library::Library::in_home(&home);
+        let doc = home.join("tides.md");
+        std::fs::write(&doc, "# Tides\n\nThe tide comes in twice a day.\n").unwrap();
+        let s = lib.add_file(&doc, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+        let private = home.join("ledger.md");
+        std::fs::write(&private, "# Ledger\n\nThe keeper's ledger lists every visitor.\n").unwrap();
+        let ps = lib.add_file(&private, &crate::library::AddOpts { licence: Some("private".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+        let anchor = |sid: &str, q: &str| crate::library::claims::AnchorSpec { source_id: sid.into(), locator: Some("§1".into()), quote: q.into(), ..Default::default() };
+        let c = lib.add_claim("Tides come twice a day.", &Default::default(), &[anchor(&s, "twice a day")]).unwrap()["id"].as_str().unwrap().to_string();
+        lib.add_claim("The ledger lists every visitor.", &Default::default(), &[anchor(&ps, "lists every visitor")]).unwrap();
+        // A research topic, a topic page built twice (a version and a link), a finding, lessons and an index.
+        let b = crate::research_record::Begin { question: "When do tides come?", asked_by: crate::research_record::Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r1" };
+        crate::research_record::Topic::begin(&ws, &b).unwrap().finish("r1", "done", Some(&json!({"claims": [&c]})), std::slice::from_ref(&c), None, 0).unwrap();
+        lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        f.engine.topic_rebuild("lighthouse-lamps").await.unwrap();
+        f.engine.topic_rebuild("lighthouse-lamps").await.unwrap();
+        let finding = crate::finding_record::Finding::parse(&json!({"question": "Why do tides come twice?", "conclusion": "The moon and the sun.", "status": "open", "evidence": [], "ruled_out": [], "how_verified": "Read the tables."}), &[], &|s| s.to_string()).unwrap();
+        std::fs::create_dir_all(ws.join("local/sessions/m9")).unwrap();
+        crate::finding_record::store(&ws, &finding, &crate::finding_record::Meta { author: "scout", role: "scout", mission: "m9", now: "2026-11-15T00:00:00Z", tier: delphi_core::provenance::Tier::L3 }).unwrap();
+        std::fs::create_dir_all(ws.join("local/ratified/memory/agents/scout")).unwrap();
+        std::fs::write(ws.join("local/ratified/memory/agents/scout/lessons.md"), "- Check the tide tables first.\n").unwrap();
+        {
+            let mut kb = crate::kb::Kb::open(&ws.join("local/state.db")).unwrap();
+            kb.upsert_from("context/tides.md", "context", "external_untrusted", "# Tides\n\nTides come twice a day.\n", "t").unwrap();
+        }
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let ext = svc.extension();
+        let mut before = BTreeMap::new();
+        hashes(&f.root, &mut before);
+        let requests = f.model.requests().len();
+
+        let app = || CallContext { scope: Scope::App, client_id: 7 };
+        let calls: Vec<(&str, Value)> = vec![
+            ("pages.list", json!({})),
+            ("pages.get", json!({"slug": "lighthouse-lamps"})),
+            ("pages.versions", json!({"slug": "lighthouse-lamps"})),
+            ("pages.links", json!({"slug": "lighthouse-lamps"})),
+            ("topics.list", json!({})),
+            ("topics.get", json!({"id": crate::research_record::topic_id("When do tides come?")})),
+            ("library.source", json!({"id": ps})),
+            ("library.claim", json!({"id": c})),
+            ("memory.roles", json!({})),
+            ("memory.role", json!({"role": "scout"})),
+            ("changes.since", json!({"time": 0})),
+        ];
+        assert_eq!(calls.iter().map(|(m, _)| *m).collect::<Vec<_>>(), crate::encyclopedia::METHODS.to_vec());
+        assert_eq!(crate::encyclopedia::METHODS, delphi_core::app_keys::ENCYCLOPEDIA_READS);
+        let mut answers = BTreeMap::new();
+        for (m, p) in &calls {
+            let r = ext.call(m, p.clone(), app()).await.expect("handled").unwrap_or_else(|e| panic!("{m}: {e:?}"));
+            answers.insert(*m, r);
+        }
+        let mut after = BTreeMap::new();
+        hashes(&f.root, &mut after);
+        assert_eq!(before, after, "an encyclopedia read changed, made or removed a file");
+        assert_eq!(f.model.requests().len(), requests, "no model was called");
+
+        // What came back is what the operator's console shows.
+        assert_eq!(answers["pages.list"]["topics"][0]["slug"], "lighthouse-lamps");
+        assert!(answers["pages.get"]["markdown"].as_str().unwrap().contains("Generated page. Not authoritative."));
+        assert_eq!(answers["pages.versions"]["versions"].as_array().unwrap().len(), 1);
+        assert_eq!(answers["topics.list"]["topics"].as_array().unwrap().len(), 1);
+        assert!(answers["library.source"]["private"] == true && answers["library.source"]["text"].as_str().unwrap().contains("every visitor"), "the app is the operator's window");
+        assert_eq!(answers["library.claim"]["claim"]["id"], json!(c));
+        assert!(answers["memory.roles"]["roles"].as_array().unwrap().iter().any(|r| r["role"] == "scout" && r["findings"] == 1 && r["lesson_files"] == 1));
+        assert!(answers["memory.role"]["lessons"][0]["text"].as_str().unwrap().contains("tide tables") && answers["memory.role"]["findings"].as_array().unwrap().len() == 1);
+        assert!(answers["changes.since"]["pages"].as_array().unwrap().len() == 1 && answers["changes.since"]["findings"].as_array().unwrap().len() == 1);
+
+        // The narrator, a relay and a host are refused each of them; the console is answered.
+        for scope in [Scope::Narrator, Scope::Relay, Scope::Host] {
+            for (m, p) in &calls {
+                assert!(ext.call(m, p.clone(), CallContext { scope, client_id: 1 }).await.expect("handled").is_err(), "{m} answered {scope:?}");
+            }
+        }
+        assert!(ext.call("pages.get", json!({"slug": "lighthouse-lamps"}), CallContext { scope: Scope::Console, client_id: 1 }).await.expect("handled").is_ok());
+        // A paired key holding `read` reaches them; one holding only `request` does not.
+        for m in crate::encyclopedia::METHODS {
+            assert!(delphi_core::app_keys::check_call(&delphi_core::app_keys::GRANTS, &["read".to_string()], m).is_ok(), "{m}");
+            assert!(delphi_core::app_keys::check_call(&delphi_core::app_keys::GRANTS, &["request".to_string()], m).is_err(), "{m}");
+        }
     }
 }

@@ -2210,3 +2210,102 @@ fn a_local_file_source_id_does_not_spell_the_path_and_an_older_entry_is_still_fo
     let again = l.add_file(&f, &open("own"), &Budgets::default()).unwrap();
     assert_eq!((again.id, again.outcome), (legacy, Outcome::Unchanged), "found under the older id, not added again");
 }
+
+/// Every file under `dir`, as text, for the scan of `specs/119` §9.
+fn texts_under(dir: &Path) -> Vec<(PathBuf, String)> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else { return out };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(texts_under(&p));
+        } else if let Ok(b) = std::fs::read(&p) {
+            out.push((p, String::from_utf8_lossy(&b).into_owned()));
+        }
+    }
+    out
+}
+
+/// A page's worth of text no other source shares: numbered words, about 2,600 characters.
+fn private_prose() -> String {
+    (0..300).map(|i| format!("ruvel{} ", (i * 7919) % 10007)).collect::<String>().trim().to_string()
+}
+
+/// `specs/119` §3 item 2 and §9, AC-4, the heart of slice B2: a source kept privately under `private_text` is searchable by nothing
+/// that leaves the install. A generated page that carries a run of more than 300 characters of its text is refused; one that quotes it
+/// in 300 characters or less is built and marks it `kept privately`; an external page may not cite it at all. Then the scan: the
+/// generated pages, a bibliography export and a bundle's `sources/` written from the whole library hold no run of 301 characters of
+/// its text anywhere.
+#[test]
+fn no_generated_page_export_or_bundle_carries_more_than_300_characters_of_a_privately_kept_source() {
+    use crate::library::bib::{self, Format};
+    use crate::library::pages::{Finding, Scope};
+    let (d, l) = lib();
+    let prose = private_prose();
+    let snap = crate::fact_fetch::test_snapshot("https://b2-scan.example/notes", "Ruvel field notes", &[&prose]);
+    let s = l.add_fetched("https://b2-scan.example/notes", &snap, &AddOpts { keep_closed_privately: true, ..Default::default() }, &Budgets::default()).unwrap();
+    let meta = l.read_meta(&s.id).unwrap();
+    assert_eq!((s.level, meta["private"].as_bool(), meta["kept_privately"].as_str()), (Level::Full, Some(true), Some("unknown_licence")), "{meta}");
+    let private = std::fs::read_to_string(l.source_dir(&s.id).join("source.md")).unwrap();
+    assert!(private.contains(&prose));
+    let public = l.add_file(&file(d.path(), "open.md", "# Open\n\nAn open note on ruvel fields, kept whole."), &open("CC0-1.0"), &Budgets::default()).unwrap().id;
+    // A claim resting on it, so a page without a draft would gather it too.
+    let quote: String = prose.chars().take(40).collect();
+    let spec = crate::library::claims::AnchorSpec { source_id: s.id.clone(), locator: Some("¶1".into()), quote: quote.clone(), ..Default::default() };
+    l.add_claim("Ruvel fields are numbered.", &crate::library::claims::ClaimOpts::default(), &[spec]).unwrap();
+
+    // A page quoting 301 characters of it is refused; a paraphrase that copies 301 unquoted characters is too.
+    let long: String = prose.chars().skip(100).take(301).collect();
+    let err = l.build_page_scoped("ruvel", Some(&format!("The notes say \"{long}\" [s-{}].", s.id)), Format::Plain, Scope::Internal).unwrap_err();
+    assert!(err.contains(&Finding::PrivateRun(s.id.clone())), "{err:?}");
+    let err = l.build_page_scoped("ruvel", Some(&format!("In short, {long} [s-{}].", s.id)), Format::Plain, Scope::Internal).unwrap_err();
+    assert!(err.contains(&Finding::PrivateRun(s.id.clone())), "{err:?}");
+    assert!(err.iter().any(|f| f.to_string().contains("more than 300 characters")), "{err:?}");
+    // 300 characters is allowed, named and linked; the bibliography says how it is kept.
+    let ok: String = prose.chars().skip(100).take(300).collect();
+    let page = l.build_page_scoped("ruvel", Some(&format!("The notes say \"{}\" [s-{}].", ok.trim(), s.id)), Format::Plain, Scope::Internal).unwrap();
+    assert!(page.markdown.contains("(kept privately)"), "{}", page.markdown);
+    // An external page may not cite it at all.
+    let ext = l.build_page_scoped("ruvel", Some(&format!("The notes say \"{}\" [s-{}].", quote, s.id)), Format::Plain, Scope::External).unwrap_err();
+    assert!(ext.iter().any(|f| matches!(f, Finding::NotCitable { .. })), "{ext:?}");
+
+    // An export (the bibliography of every source) and a bundle's `sources/` written from the whole library.
+    let bib = bib::export(&l, &[], bib::Format::Plain).unwrap().text;
+    let bundle = d.path().join("bundle");
+    let out = l.export_to_bundle(&bundle, &[s.id.clone(), public.clone()], false);
+    assert!(out.iter().any(|(id, r)| *id == s.id && r.is_err()) && out.iter().any(|(id, r)| *id == public && r.is_ok()), "{out:?}");
+    let mut scanned = vec![(PathBuf::from("bibliography"), bib), (PathBuf::from("page"), page.markdown.clone())];
+    scanned.extend(texts_under(&bundle));
+    scanned.extend(texts_under(&l.root().join("pages")));
+    assert!(scanned.len() >= 4, "{:?}", scanned.iter().map(|(p, _)| p).collect::<Vec<_>>());
+    for (path, text) in &scanned {
+        assert!(!crate::library::private::shares_run(&private, text, 300), "{} carries more than 300 characters of the private source", path.display());
+    }
+    // The scan itself sees a run when there is one.
+    assert!(crate::library::private::shares_run(&private, &format!("x {long} y"), 300));
+}
+
+/// `specs/119` §3 item 4 and AC-6: `delphi sources private purge` removes the kept text and leaves the pointer and its claims, their
+/// anchors marked `text_removed`; `--older-than` leaves what is younger; a source the operator flagged private by hand is not touched.
+#[test]
+fn purging_private_text_keeps_the_pointer_and_marks_its_anchors_text_removed() {
+    let (d, l) = lib();
+    let snap = crate::fact_fetch::test_snapshot("https://b2-purge.example/notes", "Ruvel notes", &[&private_prose()]);
+    let s = l.add_fetched("https://b2-purge.example/notes", &snap, &AddOpts { keep_closed_privately: true, ..Default::default() }, &Budgets::default()).unwrap();
+    let quote: String = private_prose().chars().take(40).collect();
+    let spec = crate::library::claims::AnchorSpec { source_id: s.id.clone(), locator: Some("¶1".into()), quote, ..Default::default() };
+    let c = l.add_claim("Ruvel fields are numbered.", &crate::library::claims::ClaimOpts::default(), &[spec]).unwrap()["id"].as_str().unwrap().to_string();
+    let own = l.add_file(&file(d.path(), "mine.md", "my own private notes"), &AddOpts { private: true, level: Some(Level::Full), ..open("all-rights-reserved") }, &Budgets::default()).unwrap().id;
+    assert_eq!(l.private_texts().len(), 1, "only what research kept privately is listed");
+    let now = delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap();
+    assert!(l.purge_private_text(Some(1), now).unwrap().is_empty(), "nothing is a day old yet");
+    let done = l.purge_private_text(None, now).unwrap();
+    assert_eq!(done.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec![s.id.as_str()]);
+    assert!(done[0].1 > 0);
+    assert!(!l.source_dir(&s.id).join("source.md").exists() && l.read_meta(&s.id).is_some(), "the text goes, the pointer stays");
+    let claim = l.claim(&c).unwrap();
+    let a = &claim["anchors"][0];
+    assert!(a["text_removed"].is_string() && a["state"] == "pointer_only", "{a}");
+    assert!(l.source_dir(&own).join("source.md").exists(), "a source the operator flagged private is not purged here");
+    assert!(l.private_texts().is_empty());
+}
