@@ -144,6 +144,8 @@ The Scout and Investigator manifests (`agents/scout/AGENT.md`, `agents/investiga
 
 ### 7.2 Host sources are the host's to approve
 
+> **See [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) §11 (operator, 2026-11-15):** unchanged for library-private entries. Whether the `private_to_models` rule also holds for items that carry the `personal` handling trait is 121 §16 question 3 (until answered, the same rule is applied to them); confidential items never go to a foreign-family seat (121 §6 item 8).
+
 - **The operator approves host sources in the host**, in its own settings and permission system (for Claude Code, its connector and tool permissions and a "research sources" section of `CLAUDE.md` that `delphi connect` writes as a template). Delphi does not read these settings, does not grant them and cannot widen them. The pack says: use the sources your host has approved, in rung order; do not ask Delphi for access to them.
 - **A missing source is skipped, not an error.** If a host has no Slack, no meeting-transcript tool or no email connector, the role goes to the next rung and says which rungs it used.
 - **Private by default; public only when the daemon can check it.** Content enters the library like any other: no preview, no per-item approval, nothing held. The `private` flag (055 §10.1) is decided by the daemon, **not by the host's declared `rung`**:

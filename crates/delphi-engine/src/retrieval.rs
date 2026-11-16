@@ -279,6 +279,12 @@ pub fn span_start(home: &Path, db: &Path, mission: &str, objective: &str, role: 
     }
     // `given`: what the daemon handed over, for the ended-well count of `specs/116` §7 item 3 (`use_signals::earned`).
     let given_paths: Vec<String> = given.iter().map(|h| h.rel_path.clone()).collect();
+    // `specs/121` §4 item 2: the labelled items this span was handed, by id, so what it writes can note what it may rest on. A note
+    // only: it changes nothing handed over and is read by no gate.
+    if let Some(ws) = db.parent().and_then(Path::parent) {
+        let items: Vec<String> = given.iter().filter_map(|h| crate::handling::item_of(&h.zone, &h.rel_path)).collect();
+        crate::handling::note_given(&crate::handling::Handling::of(ws, home), ws, &crate::handling::span_key(mission, role), &items);
+    }
     let internal = crate::shared_research::marks_of(given);
     let generation = Kb::open_readonly(db).map(|k| k.index_generation()).unwrap_or(0);
     let stats = serde_json::json!({"mode": r.mode.as_str(), "ms": r.ms, "hits": n, "bytes": text.len(), "generation": generation, "auto": true, "child": !once, "provisional": provisional, "given": given_paths});

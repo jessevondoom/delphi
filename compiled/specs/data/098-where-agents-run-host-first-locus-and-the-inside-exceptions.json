@@ -106,139 +106,139 @@
     },
     {
       "level": 3,
-      "line": 158,
+      "line": 160,
       "number": "7.3",
       "title": "The reflex and the offer"
     },
     {
       "level": 3,
-      "line": 166,
+      "line": 168,
       "number": "7.4",
       "title": "No false limitations"
     },
     {
       "level": 3,
-      "line": 175,
+      "line": 177,
       "number": "7.5",
       "title": "Research grows Delphi: everything found is kept, labeled by how well it is supported"
     },
     {
       "level": 3,
-      "line": 196,
+      "line": 198,
       "number": "7.6",
       "title": "Corroboration: due diligence, not proof"
     },
     {
       "level": 2,
-      "line": 223,
+      "line": 225,
       "number": "8",
       "title": "`route` for any query"
     },
     {
       "level": 2,
-      "line": 236,
+      "line": 238,
       "number": "9",
       "title": "Generated task-scoped agents"
     },
     {
       "level": 2,
-      "line": 245,
+      "line": 247,
       "number": "10",
       "title": "Builder in the host, and the spec lifecycle"
     },
     {
       "level": 2,
-      "line": 266,
+      "line": 268,
       "number": "11",
       "title": "Records and summaries"
     },
     {
       "level": 2,
-      "line": 272,
+      "line": 274,
       "number": "12",
       "title": "Authority invariants and the stated limit"
     },
     {
       "level": 3,
-      "line": 297,
+      "line": 299,
       "number": "12.1",
       "title": "What is enforced, and what is not"
     },
     {
       "level": 2,
-      "line": 318,
+      "line": 320,
       "number": "13",
       "title": "Slices (one pull request each; none starts before approval)"
     },
     {
       "level": 3,
-      "line": 336,
+      "line": 338,
       "number": "13.1",
       "title": "Order, exit criteria and flags"
     },
     {
       "level": 3,
-      "line": 357,
+      "line": 359,
       "number": "13.2",
       "title": "Flags pulled, and the roll-back plan (operator decision, 2026-11-11)"
     },
     {
       "level": 2,
-      "line": 379,
+      "line": 381,
       "number": "14",
       "title": "Decisions"
     },
     {
       "level": 2,
-      "line": 412,
+      "line": 414,
       "number": "15",
       "title": "Council review"
     },
     {
       "level": 3,
-      "line": 431,
+      "line": 433,
       "number": "15.1",
       "title": "Council `t_0002` (2026-11-10, on this draft)"
     },
     {
       "level": 3,
-      "line": 447,
+      "line": 449,
       "number": "15.2",
       "title": "Councils `t_0004` and `t_0005` (2026-11-10, on the full text)"
     },
     {
       "level": 3,
-      "line": 470,
+      "line": 472,
       "number": "15.3",
       "title": "Council `t_0006` (2026-11-10, on the confidence-ladder proposal)"
     },
     {
       "level": 2,
-      "line": 486,
+      "line": 488,
       "number": "16",
       "title": "Acceptance criteria"
     },
     {
       "level": 3,
-      "line": 504,
+      "line": 506,
       "number": "16.1",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 526,
+      "line": 528,
       "number": "17",
       "title": "Not verified"
     },
     {
       "level": 2,
-      "line": 544,
+      "line": 546,
       "number": "18",
       "title": "Pinned items (proposed values; the slices calibrate them)"
     },
     {
       "level": 2,
-      "line": 560,
+      "line": 562,
       "number": "19",
       "title": "Progress you can see, and cancel"
     }
@@ -246,7 +246,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/098-where-agents-run-host-first-locus-and-the-inside-exceptions.md",
-    "sha256": "284aca72c31cabd6fd16113df60463c25480092255e487fd6dbc12ad08ad2170"
+    "sha256": "cf593a46810db4c111b93299c5e4014aed88bbad61ac07ecc4d0363527383dbf"
   },
   "source_status_at_hash": {
     "line": {
@@ -259,7 +259,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-10 (\"approve spec 098\"): the text as written. OD-1 to OD-6 and OD-8 to OD-11 of section 14 take their recommendations. OD-7 (inside fetch) was decided by the operator the same day (\"7a yes, 7b off\"): 7a is approved, 7b is off and not built. A review with a completed red-team Round 2 (section 17) was not run before approval. The text takes effect when this pull request merges."
     },
-    "sha256": "284aca72c31cabd6fd16113df60463c25480092255e487fd6dbc12ad08ad2170",
+    "sha256": "cf593a46810db4c111b93299c5e4014aed88bbad61ac07ecc4d0363527383dbf",
     "word": "approved"
   },
   "spec": {

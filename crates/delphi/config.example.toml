@@ -224,6 +224,21 @@ sandbox = "off"
 # research_sharing = "workspace"     # workspace (default): a session may read the research of this workspace's other projects, labelled with the project, and nothing else of them. project: a project's research stays in that project. `delphi project private <name> on` keeps one project out either way
 # own_project_boost = 0.001          # added to the score of a result of the session's own project, so it ranks ahead of another project's at equal score (0 to 0.1)
 
+# How data is handled (specs/121 section 3): private (your own mail, direct messages, meetings of one or two), internal, confidential.
+# Not a trust tier: no source_type, promotion, tool or private-read mark changes with it. With no row, the built-in defaults apply
+# (email: private, plus internal when every address is on org_domains; to a list address or to more than company_wide_recipients:
+# internal; slack, wiki, private-doc: internal; anything else unlabelled and counted by `delphi handling status`). A row makes its path
+# configured: only there does a marking such as CONFIDENTIAL in a header set a trait, and only an internal from a configured path (or
+# set by you) is authoritative for the organisation's own specifics. Yours to set: no agent can write this file.
+# [handling]
+# org_domains = ["example.com"]
+# list_addresses = ["all@example.com"]
+# company_wide_recipients = 10
+# [[handling.path]]
+# kind = "wiki"                        # a connector or import kind: email, dm, slack, wiki, private-doc, meeting, file, web, import, ...
+# under = "https://wiki.example.com/hr/"  # optional: the start of the locator (a folder, channel, space, address); the longest match wins
+# traits = ["confidential"]            # any of personal (shown as private), internal, confidential; empty: configured, carries none
+
 # Memory that grows (specs/116 sections 2 and 3). A note an agent keeps (the `note` tool, a host's propose_note or session summary, a
 # capture on contact) is also filed under local/memory/provisional/<role>/. It is never an instruction and never part of a system prompt:
 # a later span of the same role may be given it as a passage of data labelled "unreviewed note by <role>, <date>" (at most two of the
