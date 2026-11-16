@@ -359,3 +359,43 @@ fn kb_search_names_the_project_of_its_research_results_and_the_project_flags_are
         assert!(text(&o.stderr).contains("are the operator's") && !text(&o.stdout).contains("wallabytide"), "{}", text(&o.stderr));
     }
 }
+
+/// Spec 121 §3 items 3, 5 and 7: `handling status` and the first `reconcile` change nothing; `--apply` labels an imported email and
+/// a later run changes nothing; `set` and `clear` are refused inside an agent seat and without a terminal.
+#[test]
+fn handling_status_and_reconcile_count_and_set_and_clear_are_the_operators() {
+    let (t, home) = workspace();
+    let page = t.path().join("mail.md");
+    std::fs::write(&page, "# Mail digest\n\nThe launch moves to May. Source: https://mail.example.com/thread/1\n").unwrap();
+    let run = |args: &[&str], seat: bool| {
+        let mut c = Command::new(DELPHI);
+        c.args(args).args(["--workspace", "w"]).arg("--home").arg(&home).env_remove("DELPHI_WORKSPACE").env_remove("DELPHI_BRIDGE_SOCKET").env_remove("DELPHI_BRIDGE_TOKEN").stdin(Stdio::null()).current_dir(t.path());
+        if seat {
+            c.env("DELPHI_BRIDGE_SOCKET", "/tmp/none.sock");
+        }
+        c.output().unwrap()
+    };
+    let o = run(&["kb", "import", page.to_str().unwrap()], false);
+    assert!(o.status.success(), "{}{}", text(&o.stdout), text(&o.stderr));
+    let records = home.join("workspaces/w/local/handling/records.json");
+    let before = std::fs::read_to_string(&records).unwrap();
+    assert!(before.contains("\"personal\""), "the import assigned by path: {before}");
+    std::fs::remove_file(&records).unwrap();
+    let o = run(&["handling", "status", "--json"], false);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or_else(|_| panic!("{}", text(&o.stderr)));
+    assert_eq!(v["labelled_by_path"]["email"], 1);
+    let o = run(&["handling", "reconcile"], false);
+    assert!(o.status.success() && text(&o.stdout).contains("first reconciliation is a dry run") && !records.exists(), "{}", text(&o.stdout));
+    let o = run(&["handling", "reconcile", "--apply", "--json"], false);
+    assert!(o.status.success() && records.exists(), "{}", text(&o.stderr));
+    let o = run(&["handling", "reconcile", "--json"], false);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!((v["dry_run"].as_bool(), v["changed"].as_u64()), (Some(false), Some(0)), "after --apply a plain run applies, and changes nothing");
+    let after = std::fs::read_to_string(&records).unwrap();
+    for (cmd, seat, why) in [("clear", true, "agent seat"), ("clear", false, "at a terminal"), ("set", true, "agent seat"), ("set", false, "at a terminal")] {
+        let o = run(&["handling", cmd, "local/summaries/x.md", "private"], seat);
+        assert_eq!(o.status.code(), Some(2), "{cmd} {seat}");
+        assert!(text(&o.stderr).contains(why), "{}", text(&o.stderr));
+    }
+    assert_eq!(std::fs::read_to_string(&records).unwrap(), after, "a refused set or clear changes nothing");
+}

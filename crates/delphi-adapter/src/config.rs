@@ -593,6 +593,8 @@ pub struct Config {
     pub retrieval: RetrievalConfig,
     /// `[projects]`: research recall across the workspace's projects (`specs/115` §2).
     pub projects: ProjectsConfig,
+    /// `[handling]`: which arrival paths carry which handling traits (`specs/121` §3 item 1).
+    pub handling: HandlingConfig,
     /// `[memory]`: the provisional tier and the digest's daily limit (`specs/116` §2 item 7, §3 item 4).
     pub memory: MemoryConfig,
     /// `[agents]`: operator direct interaction, fleet accessibility, and quarantine (`specs/063` §3.1).
@@ -752,6 +754,92 @@ pub const RESEARCH_SHARING: [&str; 2] = ["project", "workspace"];
 impl Default for ProjectsConfig {
     fn default() -> ProjectsConfig {
         ProjectsConfig { research_sharing: "workspace".into(), own_project_boost: 0.001 }
+    }
+}
+
+/// `[handling]` (`specs/121` §3 item 1): which arrival paths carry which handling traits. The traits say how a piece of data is
+/// to be handled (`personal`, shown as private; `internal`; `confidential`); they are not a trust tier and decide no tool, no
+/// `source_type` and no promotion. Only the operator edits this table (`config.toml` is a path no agent can write).
+///
+/// A `[[handling.path]]` row names a connector or import kind and, optionally, the start of a locator (a folder, a channel, a
+/// space, an address), and the traits an item arriving that way carries. A row is what makes a path *configured*: a marking in
+/// the content counts only on a configured path, and so does the research weight of `internal` (`specs/121` §7). Where no row
+/// matches, the built-in defaults of `specs/121` §3 item 1 apply, and they configure nothing.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HandlingConfig {
+    /// The organisation's mail domains (`example.com`). A message or a meeting whose every address is on one is also `internal`.
+    pub org_domains: Vec<String>,
+    /// List addresses: an email sent to one is `internal` and not `personal`.
+    pub list_addresses: Vec<String>,
+    /// An email to more than this many recipients is company-wide: `internal`, not `personal`.
+    pub company_wide_recipients: usize,
+    pub path: Vec<HandlingPath>,
+}
+
+/// One `[[handling.path]]` row.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandlingPath {
+    /// A connector or import kind: `email`, `dm`, `slack`, `wiki`, `private-doc`, `meeting`, `file`, `web`, `internal`, `person`, ...
+    pub kind: String,
+    /// The start of the item's locator this row is for (compared without case); absent, the row is for every item of the kind.
+    #[serde(default)]
+    pub under: Option<String>,
+    /// The traits the path carries: any of [`HANDLING_TRAITS`]. Empty: the path is configured and carries none.
+    #[serde(default)]
+    pub traits: Vec<String>,
+}
+
+/// The handling traits, by their code names (`specs/121` §2 item 1).
+pub const HANDLING_TRAITS: [&str; 3] = ["personal", "internal", "confidential"];
+/// The most `[[handling.path]]` rows.
+pub const MAX_HANDLING_PATHS: usize = 200;
+
+impl Default for HandlingConfig {
+    fn default() -> HandlingConfig {
+        HandlingConfig { org_domains: Vec::new(), list_addresses: Vec::new(), company_wide_recipients: 10, path: Vec::new() }
+    }
+}
+
+impl HandlingConfig {
+    /// What is wrong with the table, or nothing.
+    pub fn check(&self) -> Result<(), String> {
+        if self.path.len() > MAX_HANDLING_PATHS {
+            return Err(format!("at most {} [[handling.path]] rows", MAX_HANDLING_PATHS));
+        }
+        if self.company_wide_recipients == 0 {
+            return Err("company_wide_recipients is at least 1".into());
+        }
+        for d in &self.org_domains {
+            if d.trim().is_empty() || d.contains('@') || d.contains(char::is_whitespace) {
+                return Err(format!("org_domains: `{}` is not a domain (write `example.com`)", d));
+            }
+        }
+        for a in &self.list_addresses {
+            if !a.contains('@') || a.contains(char::is_whitespace) {
+                return Err(format!("list_addresses: `{}` is not an address", a));
+            }
+        }
+        for (i, p) in self.path.iter().enumerate() {
+            let ok = !p.kind.is_empty() && p.kind.len() <= 40 && p.kind.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+            if !ok {
+                return Err(format!("path {}: kind `{}` is not a kind (lower-case letters, digits, `-`, `_`)", i + 1, p.kind));
+            }
+            if p.under.as_deref().is_some_and(|u| u.trim().is_empty() || u.len() > 400) {
+                return Err(format!("path {}: `under` is 1 to 400 characters when given", i + 1));
+            }
+            if let Some(bad) = p.traits.iter().find(|t| !HANDLING_TRAITS.contains(&t.as_str())) {
+                return Err(format!("path {}: trait `{}` is not one of personal, internal, confidential", i + 1, bad));
+            }
+        }
+        Ok(())
+    }
+
+    /// The table as `config.toml` holds it. A file that does not parse, or a table that fails [`HandlingConfig::check`], reads as
+    /// the defaults with no rows: nothing is then a configured path, so no marking and no weight is given by a broken file.
+    pub fn read(config_toml: &str) -> HandlingConfig {
+        toml::from_str::<toml::Value>(config_toml).ok().and_then(|v| v.get("handling").cloned()).and_then(|v| v.try_into::<HandlingConfig>().ok()).filter(|c| c.check().is_ok()).unwrap_or_default()
     }
 }
 
@@ -1310,6 +1398,15 @@ impl Config {
                 Ok(v) if !(v.own_project_boost.is_finite() && (0.0..=MAX_OWN_PROJECT_BOOST).contains(&v.own_project_boost)) => errs.push(format!("[projects] own_project_boost: a number from 0 to {} (specs/115 §3)", MAX_OWN_PROJECT_BOOST)),
                 Ok(v) => cfg.projects = v,
                 Err(e) => errs.push(format!("[projects]: {}", e)),
+            }
+        }
+        if let Some(v) = root.get("handling") {
+            match v.clone().try_into::<HandlingConfig>() {
+                Ok(v) => match v.check() {
+                    Ok(()) => cfg.handling = v,
+                    Err(e) => errs.push(format!("[handling]: {}", e)),
+                },
+                Err(e) => errs.push(format!("[handling]: {}", e)),
             }
         }
         if let Some(v) = root.get("memory") {
@@ -2383,5 +2480,25 @@ tools = { search = "read", note = "draft", send = "write" }
         assert!(!custom.is_interactive("builder"));
         assert!(custom.is_forbidden("scout"));
         assert!(!custom.is_interactive("scout"));
+    }
+
+    /// `specs/121` §3 item 1: the table is empty by default; rows, domains and list addresses parse; a wrong trait, kind or key is
+    /// a problem; and a broken table read from the file directly configures nothing.
+    #[test]
+    fn the_handling_table_is_empty_by_default_and_its_rows_are_checked() {
+        let def = Config::parse(SAMPLE).unwrap().handling;
+        assert_eq!(def, HandlingConfig::default());
+        assert!(def.path.is_empty() && def.company_wide_recipients == 10);
+        let text = "[handling]\norg_domains = [\"example.com\"]\nlist_addresses = [\"all@example.com\"]\ncompany_wide_recipients = 25\n[[handling.path]]\nkind = \"wiki\"\nunder = \"https://wiki.example.com/hr/\"\ntraits = [\"internal\", \"confidential\"]\n[[handling.path]]\nkind = \"file\"\n";
+        let c = Config::parse(&format!("{}\n{}", SAMPLE, text)).unwrap().handling;
+        assert_eq!((c.org_domains.len(), c.list_addresses.len(), c.company_wide_recipients, c.path.len()), (1, 1, 25, 2));
+        assert_eq!(c.path[0], HandlingPath { kind: "wiki".into(), under: Some("https://wiki.example.com/hr/".into()), traits: vec!["internal".into(), "confidential".into()] });
+        assert!(c.path[1].traits.is_empty() && c.path[1].under.is_none());
+        assert_eq!(HandlingConfig::read(text), c);
+        for bad in ["[handling]\nsecret = true\n", "[[handling.path]]\nkind = \"wiki\"\ntraits = [\"private\"]\n", "[[handling.path]]\nkind = \"Wiki Space\"\n", "[[handling.path]]\ntraits = [\"internal\"]\n", "[handling]\norg_domains = [\"a@example.com\"]\n", "[handling]\nlist_addresses = [\"example.com\"]\n", "[handling]\ncompany_wide_recipients = 0\n"] {
+            let errs = Config::parse(&format!("{}\n{}", SAMPLE, bad)).unwrap_err().join("\n");
+            assert!(errs.contains("[handling]"), "{bad}: {errs}");
+            assert_eq!(HandlingConfig::read(bad), HandlingConfig::default(), "{bad}: a broken table configures nothing");
+        }
     }
 }

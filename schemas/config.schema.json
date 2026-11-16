@@ -402,6 +402,31 @@
         "own_project_boost": { "type": "number", "minimum": 0, "maximum": 0.1, "default": 0.001, "description": "Added to the score of a result of the session's own project, so it ranks ahead of another project's research at equal score (specs/115 section 3)." }
       }
     },
+    "handling": {
+      "type": "object",
+      "description": "Which arrival paths carry which handling traits (specs/121 section 3 item 1): personal (shown as private), internal, confidential. Not a trust tier. The operator's setting: no agent can write it. A table that fails its check configures nothing.",
+      "additionalProperties": false,
+      "properties": {
+        "org_domains": { "type": "array", "items": { "type": "string" }, "default": [], "description": "The organisation's mail domains (example.com). A message or meeting whose every address is on one is also internal." },
+        "list_addresses": { "type": "array", "items": { "type": "string" }, "default": [], "description": "List addresses: an email sent to one is internal and not private." },
+        "company_wide_recipients": { "type": "integer", "minimum": 1, "default": 10, "description": "An email to more than this many recipients is company-wide: internal, not private." },
+        "path": {
+          "type": "array",
+          "maxItems": 200,
+          "description": "[[handling.path]] rows. A matching row makes the path configured: a marking in the content counts only there, and so does the research weight of internal (specs/121 section 7). The longest matching `under` wins.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind"],
+            "properties": {
+              "kind": { "type": "string", "pattern": "^[a-z0-9_-]{1,40}$", "description": "A connector or import kind: email, dm, slack, wiki, private-doc, meeting, file, web, import, ..." },
+              "under": { "type": "string", "minLength": 1, "maxLength": 400, "description": "The start of the item's locator (compared without case). Absent: every item of the kind." },
+              "traits": { "type": "array", "items": { "enum": ["personal", "internal", "confidential"] }, "default": [], "description": "The traits the path carries; confidential brings internal. Empty: configured, carries none." }
+            }
+          }
+        }
+      }
+    },
     "memory": {
       "type": "object",
       "description": "Memory that grows (specs/116 sections 2 and 3): the provisional tier and the digest's daily limit. Neither key loads anything into a system prompt.",

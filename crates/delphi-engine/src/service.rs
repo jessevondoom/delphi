@@ -564,6 +564,8 @@ impl EngineService {
         let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
         let (author, now, tier) = (c.label(p["model"].as_str()), self.engine.now(), delphi_core::provenance::Tier::L0);
         let stored = fr::store(&ws.dir, &finding, &fr::Meta { author: &author, role: &role, mission: &m.id, now: &now, tier }).map_err(|e| err(code::INVALID_PARAMS, e))?;
+        // `specs/121` §4: as the inside tool's, the daemon labels the file it wrote from what it names (`fr::label_stored`).
+        fr::label_stored(&ws.dir, Some(ws.home.as_path()), &m.id, &role, &finding, &stored);
         m.append(EventEnvelope::new(&m.id, "finding.recorded", json!({"finding": stored.id, "path": stored.rel_path, "status": finding.status, "by": author, "role": role, "tier": tier.as_str(), "superseded": stored.superseded}))).await.map_err(engine_err)?;
         Ok(fr::receipt(&stored, tier))
     }

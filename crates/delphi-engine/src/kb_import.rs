@@ -399,6 +399,14 @@ pub fn import(ws: &Path, input: &Input, resolve: &dyn Fn(&str) -> Option<String>
     }
     // The bibliography is written on every import, so a page never lacks one (§6.7).
     std::fs::write(&bibliography, bib).map_err(|e| format!("{}: {}", bibliography.display(), e))?;
+    // `specs/121` §3 items 1 and 2: the page takes the handling traits of the paths its bibliography lists (an email, a wiki, a
+    // channel), and a marking in it counts only when the operator configured one of those paths. A failure labels nothing.
+    if let (Some(item), Ok(text)) = (crate::handling::item_in_ws(ws, &page), std::fs::read_to_string(&page)) {
+        let arrivals = crate::handling_reconcile::page_arrivals(&page, sources.iter().map(|r| crate::handling::Arrival::of(r.kind, &r.locator)).collect());
+        if let Err(e) = crate::handling::Handling::workspace_only(ws).arrive_by(&crate::handling::config_of(ws), &item, Some(&crate::handling::content_hash(&text)), &arrivals, Some(&text)) {
+            delphi_core::elog::warn("handling", "import_not_labelled", &e, serde_json::json!({"page": item}));
+        }
+    }
     Ok(Imported { id, title, outcome, page, bibliography, sources, internal, links, unresolved, index_worthy, warnings })
 }
 
