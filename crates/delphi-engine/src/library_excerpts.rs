@@ -1,8 +1,8 @@
 //! Excerpts and anchors (`specs/055` §3.1, §4.1, §4.3; slice SK2).
 //!
 //! An excerpt is a quoted passage kept from a source with a locator and a purpose. The bounds are checked here, in code:
-//! at most 4 KiB per excerpt; for a restricted source not held whole, at most 10% of the work or 16 KiB in total,
-//! whichever is smaller; and a quotation on a generated page is at most 1 KiB. Excerpts are quotation, never a substitute
+//! at most 4 KiB per excerpt; for a restricted source not held whole, at most 16 KiB in total, and at most 10% of the work
+//! when the work is longer than 10 KB (`specs/119` §14 item 2); and a quotation on a generated page is at most 1 KiB. Excerpts are quotation, never a substitute
 //! copy: nothing here reassembles a source's Markdown from them.
 //!
 //! An anchor points into a source by exact quote, plus a short prefix and suffix of the surrounding text (the text-quote
@@ -15,6 +15,9 @@ use std::collections::HashSet;
 
 pub const EXCERPT_MAX: usize = 4 * 1024;
 pub const RESTRICTED_TOTAL_MAX: usize = 16 * 1024;
+/// The 10% bound applies only to a source whose text is longer than this many bytes (`specs/119` §14 item 2: 10 KB). A shorter one
+/// is bounded by the size of one excerpt or passage and by [`RESTRICTED_TOTAL_MAX`]: a tenth of a short page is less than one quote.
+pub const TENTH_ABOVE: u64 = 10 * 1024;
 pub const PAGE_QUOTE_MAX: usize = 1024;
 /// The longest passage, in characters, a research run keeps of a source it does not hold whole, and the longest run of a privately
 /// kept source's text one citation may carry (`specs/119` §3 items 2 and 6).
@@ -176,9 +179,15 @@ pub fn page_quotation(text: &str) -> Result<&str, String> {
     Ok(text)
 }
 
-/// The most a restricted source not held whole may keep as excerpts in total: 10% of the work or 16 KiB, whichever is smaller.
+/// The most a restricted source not held whole may keep as excerpts in total (`specs/119` §14 item 2): 16 KiB, and for a work
+/// longer than [`TENTH_ABOVE`] bytes 10% of the work when that is smaller. The rule is the same for an excerpt the operator
+/// keeps and for a passage a research run keeps.
 pub fn total_allowed(work_bytes: u64) -> u64 {
-    (work_bytes / 10).min(RESTRICTED_TOTAL_MAX as u64)
+    if work_bytes > TENTH_ABOVE {
+        (work_bytes / 10).min(RESTRICTED_TOTAL_MAX as u64)
+    } else {
+        RESTRICTED_TOTAL_MAX as u64
+    }
 }
 
 /// Re-resolve the excerpts of the previous version against the new text. Found: the anchor moves to the new version.
@@ -227,9 +236,11 @@ impl Library {
     /// "excerpts"`): the quote, at most [`PASSAGE_MAX`] characters, with at most [`PASSAGE_CONTEXT`] characters of the page on either side,
     /// as an excerpt of the source; returns its anchor, an ordinary one (prefix and suffix from the page). The same quote kept before
     /// returns the anchor it has. Refused for a source held whole (its anchor is found in its text), a private one, a purged one, and
-    /// past 16 KiB kept of the source in all, counted with the context. (The 10% bound of an operator's excerpt of a restricted work is
-    /// not applied: §3 item 6 sets the passage's own bounds, and 10% of a short page is shorter than one quote.) The caller found
-    /// `quote` in the text the run read, between `before` and `after`; nothing is fetched here.
+    /// past 16 KiB kept of the source in all, counted with the context. The 10% bound is the library's own (`specs/119` §14 item 2,
+    /// [`total_allowed`]): when the source's recorded length is over 10 KB, the quoted passages kept of it, counted as an operator's
+    /// excerpts are (the quotes, not their context), may not pass a tenth of it; a shorter source, or one whose length is not
+    /// recorded, has the passage's own bounds and the 16 KiB cap. The caller found `quote` in the text the run read, between
+    /// `before` and `after`; nothing is fetched here.
     pub fn keep_research_passage(&self, id: &str, quote: &str, before: &str, after: &str, locator: &str) -> Result<Anchor, String> {
         let mut meta = self.read_meta(id).ok_or_else(|| format!("no source `{}`", id))?;
         if !meta["purged"].is_null() {
@@ -260,6 +271,12 @@ impl Library {
         let adding = quote.len() + before.len() + after.len();
         if (used + adding) as u64 > allowed {
             return Err(format!("the passages kept of this source would pass {} bytes", allowed));
+        }
+        if let Some(work) = meta["work_bytes"].as_u64().filter(|w| *w > TENTH_ABOVE) {
+            let quoted: usize = existing.iter().map(|e| e["text"].as_str().map_or(0, str::len)).sum();
+            if (quoted + quote.len()) as u64 > total_allowed(work) {
+                return Err(format!("the passages kept of this source would pass 10% of its text ({} bytes)", total_allowed(work)));
+            }
         }
         let n = existing.iter().filter_map(|e| e["id"].as_str()?.strip_prefix('e')?.parse::<u64>().ok()).max().unwrap_or(0) + 1;
         let excerpt = json!({"id": format!("e{}", n), "locator": locator.trim(), "purpose": RESEARCH_PURPOSE, "text": quote, "bytes": quote.len(), "context_before": before, "context_after": after, "added": delphi_core::time::now_rfc3339(), "anchor": anchor, "via": "research"});
@@ -310,7 +327,7 @@ impl Library {
             let used: usize = existing.iter().map(|e| e["text"].as_str().map_or(0, str::len)).sum();
             let allowed = total_allowed(work);
             if (used + text.len()) as u64 > allowed {
-                return Err(format!("a restricted source may keep at most 10% of the work or 16 KiB in excerpts, whichever is smaller: {} bytes here; {} kept and {} more would pass it", allowed, used, text.len()));
+                return Err(format!("a restricted source may keep at most 10% of the work or 16 KiB in excerpts, whichever is smaller (the 10% only for a work over 10 KB): {} bytes here; {} kept and {} more would pass it", allowed, used, text.len()));
             }
             if meta["work_bytes"].is_null() {
                 meta["work_bytes"] = json!(work);

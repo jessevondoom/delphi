@@ -49,6 +49,12 @@ pub fn project_roots(root: &toml::Value) -> Vec<(String, PathBuf)> {
 /// Operational settings from `config.toml`, with the defaults of `crates/delphi/config.example.toml`.
 pub fn settings_from(root: &toml::Value) -> Settings {
     let mut s = Settings { loop_cfg: crate::loopctl::LoopConfig::from_root(root), ..Settings::default() };
+    // `specs/119` §14 item 3: retraction lookup, an archived copy when a page is gone, and citation chaining are on for every
+    // workspace whose config does not set them; each stays a key the operator can turn off below. `Settings::default()` leaves them
+    // off, so an engine built without a config (a test's) never asks the archive or the citation index.
+    s.retractions = true;
+    s.archive.enabled = true;
+    s.chain.enabled = true;
     if let Some(v) = root.get("budget").and_then(|b| b.get("mission_budget_usd")).and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))) {
         s.mission_budget_usd = v;
     }
@@ -106,8 +112,8 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         };
         s.research_refresh = crate::research_record::Refresh { days: days("refresh_days").unwrap_or(d.days), min, max };
     }
-    // Archived copies (`specs/101` §5, §8): a boolean, off unless it is exactly `true`; the endpoint must be an https URL, else the pinned
-    // default stays. Any other value of either keeps the default.
+    // Archived copies (`specs/101` §5, §8; on by default, `specs/119` §14 item 3): a boolean, off only when it is exactly `false`; the
+    // endpoint must be an https URL, else the pinned default stays. Any other value of either keeps the default.
     if let Some(r) = root.get("research") {
         if let Some(b) = r.get("archive_fallback").and_then(|v| v.as_bool()) {
             s.archive.enabled = b;
@@ -116,7 +122,7 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.archive.endpoint = e.to_string();
         }
     }
-    // Citation chaining (`specs/101` §6, §8): a boolean, off unless it is exactly `true`; the endpoint must be an https URL with no
+    // Citation chaining (`specs/101` §6, §8; on by default, `specs/119` §14 item 3): a boolean, off only when it is exactly `false`; the endpoint must be an https URL with no
     // credentials, query or fragment, else the pinned default stays; the bounds are counts in a range, and a value of the wrong kind or
     // outside the range keeps the default.
     if let Some(r) = root.get("research") {
@@ -190,7 +196,7 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             l.pictures_per_run = n as usize;
         }
     }
-    // `[research] retractions` and `retractions_stale_days` (`specs/101` §4, §8): a boolean, off unless exactly `true`; the age is 1 to 3650
+    // `[research] retractions` and `retractions_stale_days` (`specs/101` §4, §8; on by default, `specs/119` §14 item 3): a boolean, off only when exactly `false`; the age is 1 to 3650
     // days. A value of the wrong kind keeps the default.
     if let Some(b) = root.get("research").and_then(|r| r.get("retractions")).and_then(|v| v.as_bool()) {
         s.retractions = b;
@@ -622,19 +628,40 @@ mod tests {
     }
 
     #[test]
-    fn archived_copies_are_off_by_default_the_endpoint_must_be_https_and_a_bad_value_keeps_the_default() {
+    fn archived_copies_are_on_unless_turned_off_the_endpoint_must_be_https_and_a_bad_value_keeps_the_default() {
         use crate::library::ArchiveConfig;
-        // `[research] archive_fallback` and `archive_endpoint` (specs/101 §5, §8): off, and the one pinned endpoint.
-        assert_eq!(settings_from(&toml::from_str("").unwrap()).archive, ArchiveConfig::default());
+        // `[research] archive_fallback` and `archive_endpoint` (specs/101 §5, §8; specs/119 §14 item 3): on for a workspace that does
+        // not set it, the one pinned endpoint, and off in an engine built with no config.
+        let unset = ArchiveConfig { enabled: true, ..ArchiveConfig::default() };
+        assert_eq!(settings_from(&toml::from_str("").unwrap()).archive, unset);
         assert!(!ArchiveConfig::default().enabled && ArchiveConfig::default().endpoint == "https://archive.org/wayback/available");
         let on = settings_from(&toml::from_str("[research]\narchive_fallback = true\narchive_endpoint = \"https://archive.example.net/wayback/available\"\n").unwrap()).archive;
         assert!(on.enabled && on.endpoint == "https://archive.example.net/wayback/available");
+        assert!(!settings_from(&toml::from_str("[research]\narchive_fallback = false\n").unwrap()).archive.enabled, "the operator turns it off");
         for bad in ["archive_fallback = \"yes\"", "archive_fallback = 1", "archive_endpoint = \"http://archive.org/wayback/available\"", "archive_endpoint = \"ftp://x.example/\"", "archive_endpoint = 3", "archive_endpoint = \"not a url\""] {
             let a = settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).archive;
-            assert_eq!(a, ArchiveConfig::default(), "{bad}");
+            assert_eq!(a, unset, "{bad}");
         }
         // The switch does not move the other [research] numbers.
         assert_eq!(settings_from(&toml::from_str("[research]\narchive_fallback = true\n").unwrap()).thin_below, 3);
+    }
+
+    // specs/119 §14 item 3: retraction lookup, archived copies and citation chaining are on for every workspace that does not set
+    // them, each is a key the operator can turn off, and an engine built with no config has all three off.
+    #[test]
+    fn retraction_lookup_archived_copies_and_citation_chaining_are_on_by_default_and_each_can_be_turned_off() {
+        let of = |text: &str| {
+            let s = settings_from(&toml::from_str(text).unwrap());
+            (s.retractions, s.archive.enabled, s.chain.enabled)
+        };
+        assert_eq!(of(""), (true, true, true));
+        assert_eq!(of("[research]\nthin_below = 4\n"), (true, true, true));
+        assert_eq!(of("[research]\nretractions = false\n"), (false, true, true));
+        assert_eq!(of("[research]\narchive_fallback = false\n"), (true, false, true));
+        assert_eq!(of("[research]\ncitation_chaining = false\n"), (true, true, false));
+        assert_eq!(of("[research]\nretractions = \"no\"\ncitation_chaining = 0\n"), (true, true, true), "a value of the wrong kind keeps the default");
+        let d = Settings::default();
+        assert_eq!((d.retractions, d.archive.enabled, d.chain.enabled), (false, false, false), "an engine built with no config asks nobody");
     }
 
     #[test]

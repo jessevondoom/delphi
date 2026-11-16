@@ -356,10 +356,15 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
     r.push(Level::Ok, CHECK, "", format!("{}; {}; an answer from fewer than {} kept claims says coverage: thin ([research] thin_below); {}", trusted, kb, thin, egress));
     // spec 101 §4 item 4: with the switch on, the retraction snapshot's age is a fact the operator needs: a missing or old one checks nothing
     // or checks against old data. Off says nothing (the library as spec 098 left it). Read-only; no file but the snapshot is opened.
+    // The switch is on unless the operator turns it off (spec 119 §14 item 3). A workspace that never set it and never imported the
+    // data is told so as a fact, not a warning: nothing the operator chose is failing. One that set it, or whose data is old, is warned.
     let st = delphi_engine::boot::settings_from(&root);
     if st.retractions {
         let line = delphi_engine::retractions::Policy::load(&home.join("library"), true).status_line(&delphi_core::time::now_rfc3339(), st.retractions_stale_days);
-        if line.contains("stale") || line.contains("none loaded") {
+        let chosen = root.get("research").and_then(|r| r.get("retractions")).is_some();
+        if line.contains("none loaded") && !chosen {
+            r.push(Level::Ok, CHECK, "", format!("{line}; retraction lookup is on by default and checks nothing until you import the Retraction Watch file with `delphi research retractions import <file>`"));
+        } else if line.contains("stale") || line.contains("none loaded") {
             r.warn(CHECK, "config.toml", format!("{line}; import the Retraction Watch file with `delphi research retractions import <file>`"));
         } else {
             r.push(Level::Ok, CHECK, "", line);
@@ -1384,8 +1389,14 @@ mod tests {
         let f = findings("");
         assert!(f.iter().all(|x| x.level == Level::Ok), "{f:?}");
         assert!(f[0].message.contains("search: parallel") && f[0].message.contains("(the default, keyless)"), "{}", f[0].message);
-        let last = &f.last().unwrap().message;
+        let last = &f.iter().find(|x| x.message.contains("trusted list:")).expect("the line of what research can reach").message;
         assert!(last.contains("trusted list:") && last.contains("host(s)") && last.contains("knowledge base:") && last.contains("fewer than 3 kept claims"), "{last}");
+        // specs/119 §14 item 3: retraction lookup is on by default. With no data imported and the key never set that is a fact, not
+        // a warning; a workspace that set the key is warned as before, and one that turned it off is told nothing.
+        assert!(f.last().unwrap().message.contains("retractions: none loaded; retraction lookup is on by default"), "{f:?}");
+        let chosen = findings("[research]\nretractions = true\n");
+        assert!(chosen.iter().any(|x| x.level == Level::Warn && x.message.contains("retractions: none loaded")), "{chosen:?}");
+        assert!(!findings("[research]\nretractions = false\n").iter().any(|x| x.message.contains("retractions:")));
         // A key from a variable that is not set, one that is, and one the doctor does not read.
         let f = findings("[search]\nproviders = [\"brave\", \"mojeek\", \"kagi\"]\n[search.brave]\ncredential = \"env:DELPHI_DOCTOR_TEST_KEY_NOT_SET\"\n[search.mojeek]\ncredential = \"env:PATH\"\n[search.kagi]\ncredential = \"keychain:delphi-kagi\"\n");
         let by = |name: &str| f.iter().find(|x| x.location == name).map(|x| x.message.clone()).unwrap_or_default();

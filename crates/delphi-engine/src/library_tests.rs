@@ -262,18 +262,49 @@ fn xo(locator: &str) -> excerpts::ExcerptOpts {
     excerpts::ExcerptOpts { locator: locator.into(), purpose: "analysis".into(), ..Default::default() }
 }
 
+// specs/119 §14 item 2: the rule is the same for the passages a research run keeps. Of a source over 10 KB the quotes kept may not
+// pass a tenth of its text; of a shorter one they may (the passage's own bounds and the 16 KiB cap hold).
+#[test]
+fn a_research_passage_is_held_to_a_tenth_of_the_work_only_when_the_work_is_over_ten_kb() {
+    let (d, l) = lib();
+    let pointer = |name: &str, bytes: usize| l.add_file(&file(d.path(), name, &"w".repeat(bytes)), &AddOpts { level: Some(Level::Pointer), ..open("all-rights-reserved") }, &Budgets::default()).unwrap();
+    let long = pointer("long.md", 20_000);
+    assert_eq!(l.read_meta(&long.id).unwrap()["work_bytes"], 20_000);
+    assert!(!l.source_dir(&long.id).join("source.md").exists(), "the source is not held whole");
+    let quote = |n: usize| format!("{:0>300}", n);
+    for n in 0..6 {
+        l.keep_research_passage(&long.id, &quote(n), "", "", &format!("passage {n}")).unwrap();
+    }
+    let e = l.keep_research_passage(&long.id, &quote(6), "", "", "passage 6").unwrap_err();
+    assert!(e.contains("10% of its text (2000 bytes)"), "{e}");
+    assert_eq!(l.excerpts(&long.id).len(), 6, "1,800 bytes of quotes of a 20,000-byte work, and no more");
+    let short = pointer("short.md", 1000);
+    for n in 0..3 {
+        l.keep_research_passage(&short.id, &quote(n), "", "", &format!("passage {n}")).unwrap();
+    }
+    assert_eq!(l.excerpts(&short.id).len(), 3, "900 bytes of a 1,000-byte work: more than a tenth, and kept");
+}
+
 #[test]
 fn excerpts_are_bounded_per_excerpt_per_restricted_source_and_per_page() {
     let (d, l) = lib();
-    // a restricted work of 1,000 bytes may keep 10% (100 bytes) in total; several excerpts are fine within it
-    let f = file(d.path(), "r.md", &"w".repeat(1000));
+    // a restricted work of 20,000 bytes may keep 10% (2,000 bytes) in total; several excerpts are fine within it
+    let f = file(d.path(), "r.md", &"w".repeat(20_000));
     let s = l.add_file(&f, &AddOpts { level: Some(Level::Excerpts), ..open("all-rights-reserved") }, &Budgets::default()).unwrap();
-    assert_eq!(l.read_meta(&s.id).unwrap()["work_bytes"], 1000);
-    l.add_excerpt(&s.id, &"a".repeat(60), &xo("p. 1")).unwrap();
-    l.add_excerpt(&s.id, &"b".repeat(30), &xo("p. 2")).unwrap();
-    let e = l.add_excerpt(&s.id, &"c".repeat(20), &xo("p. 3")).unwrap_err();
+    assert_eq!(l.read_meta(&s.id).unwrap()["work_bytes"], 20_000);
+    l.add_excerpt(&s.id, &"a".repeat(1200), &xo("p. 1")).unwrap();
+    l.add_excerpt(&s.id, &"b".repeat(600), &xo("p. 2")).unwrap();
+    let e = l.add_excerpt(&s.id, &"c".repeat(400), &xo("p. 3")).unwrap_err();
     assert!(e.contains("10% of the work or 16 KiB"), "{}", e);
     assert_eq!(l.excerpts(&s.id).len(), 2);
+    // specs/119 §14 item 2: the 10% bound applies only above 10 KB (10,240 bytes). A work of exactly that length, or shorter, is
+    // bounded by 16 KiB alone: a tenth of a short page is less than one quote.
+    assert_eq!((excerpts::total_allowed(10_240), excerpts::total_allowed(10_241), excerpts::total_allowed(1000), excerpts::total_allowed(1_000_000)), (16 * 1024, 1024, 16 * 1024, 16 * 1024));
+    let short = l.add_file(&file(d.path(), "short.md", &"w".repeat(1000)), &AddOpts { level: Some(Level::Excerpts), ..open("all-rights-reserved") }, &Budgets::default()).unwrap();
+    for i in 0..3 {
+        l.add_excerpt(&short.id, &"s".repeat(300), &xo(&format!("p. {}", i))).unwrap();
+    }
+    assert_eq!(l.excerpts(&short.id).len(), 3, "900 bytes of a 1,000-byte work: more than a tenth, and kept");
     // 16 KiB is the other bound: a 1 MB work allows 4 x 4 KiB and no more
     let big = file(d.path(), "big.md", &"w".repeat(1_000_000));
     let b = l.add_file(&big, &AddOpts { level: Some(Level::Excerpts), ..open("all-rights-reserved") }, &Budgets::default()).unwrap();

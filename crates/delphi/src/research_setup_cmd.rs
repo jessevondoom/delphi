@@ -16,10 +16,10 @@
 //! After the engine and before the summary, at a terminal only, it asks one question about how much text of a page of unknown
 //! licence research keeps (§2 item 5, §3; slice B2). The answer is written as `[library] unknown_licence` only when it changes it.
 //!
-//! Then, one question each, the defaults of §4 (slice B3): retraction lookup, archived copies, citation chaining and background
-//! validation, each with what it costs. Each answer defaults to what `config.toml` says now (the operator has not decided which are on,
-//! §12 item 2) and is written only when it changes it. Session summaries are not offered: no setting turns them on for host sessions
-//! yet (spec 113 H6).
+//! Then the one default of §4 that is still a question (§14 item 3, slice B10): background validation, with what it costs. Its answer
+//! defaults to what `config.toml` says now (off unless set) and is written only when it changes it. Retraction lookup, archived
+//! copies and citation chaining are on by default and are not asked about: setup says so in one line and names the keys that
+//! turn them off. Session summaries are not offered: no setting turns them on for host sessions yet (spec 113 H6).
 
 use crate::setup::{Env, Ui};
 use anyhow::{anyhow, bail, Result};
@@ -174,17 +174,21 @@ fn ask_kept_text(ui: &mut dyn Ui, doc: &mut DocumentMut) -> bool {
     }
 }
 
-/// The reviewed defaults of §4, one question each: the table and key, what it does, and what it costs.
-pub const DEFAULTS: [(&str, &str, &str); 4] = [
-    ("research", "retractions", "Check each source with a DOI against a local copy of the Retraction Watch data? A retracted work stops counting as an origin. No network call per source; you import the data file yourself (`delphi research retractions import`)."),
-    ("research", "archive_fallback", "When a page a claim rests on is gone, ask the Internet Archive for a copy? One request to archive.org per gone page, sending its public address only; the copy is labelled and adds no origin."),
-    ("research", "citation_chaining", "Ask a citation index (OpenCitations) what each run's best public works cite and what cites them? Up to 30 requests per run, sending public DOIs only; what it finds is kept as noted leads."),
+/// The defaults of §4 that setup still asks about (§14 item 3: background validation alone), one question each: the table and key,
+/// what it does, and what it costs.
+pub const DEFAULTS: [(&str, &str, &str); 1] = [
     ("validator", "background", "While Delphi is idle, check queued library claims with the validator (advisory: it never ratifies)? It spends model tokens (at most 100,000 a day and 10% of the week's) and sends claim text to your search engine to look for contradictions."),
 ];
 
-/// §2 item 5 and §4: the reviewed defaults, one yes or no each, defaulting to what `config.toml` says now. Returns whether `doc` changed.
+/// What setup says of the three features that are on with no question (§14 item 3), and how each is turned off.
+pub const ON_BY_DEFAULT: &str = "  On by default, each a key under [research] in config.toml that you can set to false: retractions (a source with a DOI is checked against a local copy of the Retraction Watch data that you import; no network call), archive_fallback (when a page a claim rests on is gone, one request to archive.org with its public address), citation_chaining (a run asks a citation index, OpenCitations, about its best public works, sending public DOIs only).";
+
+/// §2 item 5, §4 and §14 item 3: the one question left, a yes or no defaulting to what `config.toml` says now, after a line about
+/// the three features that are on with no question. Returns whether `doc` changed.
 fn ask_defaults(ui: &mut dyn Ui, doc: &mut DocumentMut) -> bool {
-    ui.say("\nA few research features are off unless you turn them on. Each makes network calls or spends tokens, said below.");
+    ui.say("");
+    ui.say(ON_BY_DEFAULT);
+    ui.say("  One research feature is off unless you turn it on. It spends tokens and sends claim text to your search engine, said below.");
     let mut changed = false;
     for (table, key, about) in DEFAULTS {
         let now = doc.get(table).and_then(|t| t.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
@@ -585,12 +589,24 @@ mod tests {
         assert!(!ui.said.iter().any(|l| l == "? Keep"), "without a terminal nothing is asked");
     }
 
-    // specs/119 §2 item 5 and §4: one question per reviewed default, each saying what it costs; an unanswered one keeps what the file
-    // says (off on a fresh home) and writes nothing; a yes is written; without a terminal nothing is asked.
+    // specs/119 §14 item 3 (it settles §4): retraction lookup, archived copies and citation chaining are on with no question, and
+    // setup says so and writes none of their keys; background validation is the one question, with what it costs: unanswered it
+    // stays off and nothing is written, a yes is written; without a terminal nothing is asked.
     #[test]
-    fn setup_offers_each_reviewed_default_with_its_cost_and_writes_only_what_changes() {
+    fn setup_asks_only_about_background_validation_and_says_what_is_on_by_default() {
+        assert_eq!(DEFAULTS.map(|(t, k, _)| (t, k)), [("validator", "background")]);
         let (_t, o) = workspace();
-        let mut ui = Script { lines: ["searxng", "https://searx.example"].map(String::from).into(), yes: [true, false, false, true].into(), ..Default::default() };
+        let mut ui = Script { lines: ["searxng", "https://searx.example"].map(String::from).into(), ..Default::default() };
+        run(&mut ui, &Keychain::default(), None, &o).unwrap();
+        assert!(ui.said.iter().any(|l| l == ON_BY_DEFAULT), "{:?}", ui.said);
+        assert!(!ui.said.iter().any(|l| l.starts_with("? ") && (l.contains("Retraction Watch") || l.contains("Internet Archive") || l.contains("citation index"))), "no question about the three: {:?}", ui.said);
+        let unanswered = std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap();
+        assert!(!delphi_adapter::config::Config::parse(&unanswered).unwrap().validator.background, "unanswered, background validation stays off");
+        let st = delphi_engine::boot::settings_from(&toml::from_str(&unanswered).unwrap());
+        assert!(st.retractions && st.archive.enabled && st.chain.enabled, "the three are on in the workspace setup leaves");
+
+        let (_t, o) = workspace();
+        let mut ui = Script { lines: ["searxng", "https://searx.example"].map(String::from).into(), yes: [true].into(), ..Default::default() };
         run(&mut ui, &Keychain::default(), None, &o).unwrap();
         for (_, _, about) in DEFAULTS {
             assert!(ui.said.iter().any(|l| *l == format!("? {about}")), "{about}: {:?}", ui.said);
@@ -599,7 +615,7 @@ mod tests {
         assert!(cfg.validator.background, "a yes is written");
         let text = std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap();
         let set = |k: &str| text.lines().any(|l| l.trim_start().starts_with(&format!("{k} =")));
-        assert!(set("retractions") && !set("archive_fallback") && !set("citation_chaining"), "{text}");
+        assert!(!set("retractions") && !set("archive_fallback") && !set("citation_chaining"), "{text}");
         let (_t, mut o) = workspace();
         o.from_flags = true;
         o.engine = Some("searxng".into());
