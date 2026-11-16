@@ -251,6 +251,8 @@ pub enum Pick {
     Note(crate::learn::LiveNote),
     /// A note of the provisional tier (`specs/116` §3 item 1).
     Provisional(Box<crate::provisional_notes::Note>),
+    /// A consolidation proposal (`specs/116` §6 item 3), already in the order of the use signals.
+    Consolidation(Box<crate::consolidate::Proposal>),
 }
 
 pub fn pick(mission: &str, lib: &Library, events: &[EventEnvelope], now: &str) -> Option<(Pick, usize)> {
@@ -259,7 +261,13 @@ pub fn pick(mission: &str, lib: &Library, events: &[EventEnvelope], now: &str) -
 
 /// [`pick`] under the operator's own daily limit (`[memory] digest_daily`), with the provisional notes that wait, already in the
 /// order of review (the most used first, then the oldest: `provisional_notes::for_digest`). They are shown after everything else.
-pub fn pick_within(mission: &str, lib: &Library, events: &[EventEnvelope], now: &str, daily: usize, mut notes: Vec<crate::provisional_notes::Note>) -> Option<(Pick, usize)> {
+pub fn pick_within(mission: &str, lib: &Library, events: &[EventEnvelope], now: &str, daily: usize, notes: Vec<crate::provisional_notes::Note>) -> Option<(Pick, usize)> {
+    pick_with(mission, lib, events, now, daily, notes, Vec::new())
+}
+
+/// [`pick_within`] with consolidation's open proposals (`consolidate::pending`), offered after the captured candidates and before
+/// the provisional notes, so a merge is seen before the notes it would merge.
+pub fn pick_with(mission: &str, lib: &Library, events: &[EventEnvelope], now: &str, daily: usize, mut notes: Vec<crate::provisional_notes::Note>, mut proposals: Vec<crate::consolidate::Proposal>) -> Option<(Pick, usize)> {
     let used = used_today(events, now);
     if used >= daily {
         return None;
@@ -267,7 +275,7 @@ pub fn pick_within(mission: &str, lib: &Library, events: &[EventEnvelope], now: 
     let mut reviews = items(lib, events, now);
     let note = crate::digest::next_within(mission, events, now, daily);
     let acq = acquire_item(lib, events);
-    let total = reviews.len() + usize::from(acq.is_some()) + note.as_ref().map_or(0, |(_, l)| l + 1) + notes.len();
+    let total = reviews.len() + usize::from(acq.is_some()) + note.as_ref().map_or(0, |(_, l)| l + 1) + proposals.len() + notes.len();
     if total == 0 {
         return None;
     }
@@ -280,6 +288,9 @@ pub fn pick_within(mission: &str, lib: &Library, events: &[EventEnvelope], now: 
     }
     if let Some((n, _)) = note {
         return Some((Pick::Note(n), left));
+    }
+    if !proposals.is_empty() {
+        return Some((Pick::Consolidation(Box::new(proposals.remove(0))), left));
     }
     (!notes.is_empty()).then(|| (Pick::Provisional(Box::new(notes.remove(0))), left))
 }
