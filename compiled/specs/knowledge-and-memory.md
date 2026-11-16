@@ -2,7 +2,7 @@
 
 # Knowledge and memory
 
-30 specs. [All groups](./index.md).
+31 specs. [All groups](./index.md).
 
 ## 004-memory-and-coaching
 
@@ -356,4 +356,14 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 | E-5 | Nothing shows the state of the knowledge loop in one place: how many sources have text, how many claims, how many notes wait, whose memory is empty. |
 | E-6 | Small faults found by the audit: the host result's licence is always "unknown"; `budget_used` lacks time; `freshness.last_checked` repeats `retrieved`; `want` and `context_pointers` of 066 §3 are read nowhere; the default depth is `survey` in code and `quick` in the spec; the validator's charter says the fetcher is not built, and it is; spec 052's frontmatter says nothing is built, and four slices are. |
 | E-7 | By the tracker's own notes, the research job has never been run against the live web with a real key and a real model. |
+```
+
+## 121-data-sensitivity-private-internal-and-confidential
+
+**121: Data sensitivity: private, internal and confidential** · draft (per source at `c28cb91193e6`) · tier 0 · [source](../../specs/121-data-sensitivity-private-internal-and-confidential.md)
+
+**source excerpt, untrusted** · `specs/121-data-sensitivity-private-internal-and-confidential.md` line 25
+
+```text
+The operator's words, in a host session on 2026-11-15, as typed:
 ```
