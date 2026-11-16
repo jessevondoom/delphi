@@ -463,6 +463,8 @@ pub struct Pictures {
     pub per_source: usize,
     /// How many more pictures this run may fetch.
     pub left: AtomicUsize,
+    /// `[research] svg` (`specs/118` §11): SVG pictures are drawn and kept only when this is on.
+    pub svg: bool,
 }
 
 impl KeepStep {
@@ -537,7 +539,7 @@ impl KeepStep {
         let left = p.left.load(Ordering::SeqCst);
         let url = snap.final_url.for_daemon();
         let body = String::from_utf8_lossy(snap.body_for_daemon()).into_owned();
-        let rules = crate::research_images::PictureRules { transport: p.transport.as_ref(), list: &r.list, per_source: p.per_source, left };
+        let rules = crate::research_images::PictureRules { transport: p.transport.as_ref(), list: &r.list, per_source: p.per_source, left, svg: p.svg };
         let out = blocking(|| crate::research_images::keep_for_source(lib, id, url, &body, &rules, None));
         // One run captures one page at a time, so nothing else moves the count between the load above and this store.
         p.left.store(left.saturating_sub(out.fetched), Ordering::SeqCst);
@@ -1408,7 +1410,7 @@ mod tests {
         let commons = "{\"query\":{\"pages\":{\"1\":{\"imageinfo\":[{\"extmetadata\":{\"LicenseShortName\":{\"value\":\"CC BY-SA 4.0\"},\"Artist\":{\"value\":\"Ann\"}}}]}}}}";
         let web = || Arc::new(PictureWeb(std::collections::HashMap::from([(img.to_string(), Response { status: 200, body: pic.clone(), ..Default::default() }), (api.clone(), Response { status: 200, body: commons.as_bytes().to_vec(), ..Default::default() })]), Default::default()));
         let figure = "Intro text. <a href=\"/wiki/File:Tree.png\"><img alt=\"A fault tree\" src=\"//upload.wikimedia.org/wikipedia/commons/a/ab/Tree.png\" width=\"200\" height=\"120\"></a> More text.";
-        let pictures = |w: &Arc<PictureWeb>, per_source: usize, per_run: usize| Some(Pictures { transport: w.clone(), per_source, left: AtomicUsize::new(per_run) });
+        let pictures = |w: &Arc<PictureWeb>, per_source: usize, per_run: usize| Some(Pictures { transport: w.clone(), per_source, left: AtomicUsize::new(per_run), svg: false });
         let home = tempfile::tempdir().unwrap();
         let l = crate::library::Library::in_home(home.path());
         let w = web();
@@ -1496,7 +1498,7 @@ mod tests {
         ];
         let home = tempfile::tempdir().unwrap();
         let l = crate::library::Library::in_home(home.path());
-        let keep = KeepStep::new(keep_rules(WeakSources::Label), Some(Pictures { transport: w.clone(), per_source: 6, left: AtomicUsize::new(24) }));
+        let keep = KeepStep::new(keep_rules(WeakSources::Label), Some(Pictures { transport: w.clone(), per_source: 6, left: AtomicUsize::new(24), svg: true }));
         let (lib, url, text) = kept_library(home.path(), keep, "https://en.wikipedia.org/wiki/Fault_tree", &[KEEP_PROSE, page[0], page[1], page[2]]);
         let id = lib.capture(&url, &text, true).await.unwrap();
 
@@ -1555,7 +1557,7 @@ mod tests {
         let other = "A second figure. <img alt=\"A chart of faults\" src=\"/static/chart.png\" width=\"200\" height=\"120\"> The end.";
         let home = tempfile::tempdir().unwrap();
         let topic = crate::research_record::Topic::begin(&home.path().join("ws"), &crate::research_record::Begin { question: "what is a fault tree", asked_by: crate::research_record::Asker::operator(), project: None, depth: delphi_core::research::Depth::Survey, run_id: "r-1" }).unwrap();
-        let keep = KeepStep::new(keep_rules(WeakSources::Label), Some(Pictures { transport: w.clone(), per_source: 6, left: AtomicUsize::new(24) })).recording(topic.clone(), "r-1");
+        let keep = KeepStep::new(keep_rules(WeakSources::Label), Some(Pictures { transport: w.clone(), per_source: 6, left: AtomicUsize::new(24), svg: false })).recording(topic.clone(), "r-1");
         let (lib, url, text) = kept_library(home.path(), keep, "https://en.wikipedia.org/wiki/Fault_tree", &[KEEP_PROSE, figure, other]);
         let id = lib.capture(&url, &text, true).await.unwrap();
         let l = crate::library::Library::in_home(home.path());
@@ -1571,7 +1573,7 @@ mod tests {
 
         // The named form, as `record_research` uses it: only the named picture is judged; a name the page does not show is refused.
         let snap = lib.held.as_ref().unwrap().read_as(&url, &text).unwrap();
-        let rules = crate::research_images::PictureRules { transport: w.as_ref(), list: &keep_rules(WeakSources::Label).list, per_source: 6, left: 24 };
+        let rules = crate::research_images::PictureRules { transport: w.as_ref(), list: &keep_rules(WeakSources::Label).list, per_source: 6, left: 24, svg: false };
         let named = [bare.to_string(), "https://en.wikipedia.org/static/elsewhere.png".to_string()];
         let got = blocking(|| crate::research_images::keep_for_source(&l, &id, &url, &String::from_utf8_lossy(snap.body_for_daemon()), &rules, Some(&named)));
         assert!(got.kept.is_empty(), "{got:?}");

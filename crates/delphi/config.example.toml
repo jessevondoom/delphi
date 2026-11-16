@@ -370,6 +370,10 @@ providers = ["parallel"]   # parallel | brave | mojeek | searxng | kagi | google
 # code (Creative Commons BY or BY-SA, CC0, public domain, or a trusted-list entry that says its pictures carry its licence). Each
 # kept picture has its licence record; a refused one is listed in the run's record with the reason. false fetches no picture.
 # images = true
+# SVG pictures (specs/118 section 11). An SVG is drawn to a PNG at capture by a renderer with strict bounds and kept beside it for
+# the record, never shown as SVG. Off until the drawing runs in a child process with memory and CPU limits: with svg = false an SVG
+# picture is refused (svg_off in the run's record) before it is parsed. WebP and the other formats are not affected.
+# svg = false
 # retractions_stale_days = 90
 #
 # The confidence ladder (specs/100 section 3.2). A claim's rung is derived by code from tags the daemon wrote: how many independent

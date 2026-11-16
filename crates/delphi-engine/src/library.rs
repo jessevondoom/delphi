@@ -125,6 +125,8 @@ pub struct AddOpts {
     pub raise_source: Option<u64>,
     /// Capture and decode licensed inline image assets into `assets/` for encyclopedia pages.
     pub save_images: bool,
+    /// `[research] svg` (`specs/118` §11): with `save_images`, an SVG picture is drawn and kept too. Off by default.
+    pub save_svg: bool,
     /// `[library] unknown_licence = "private_text"` (`specs/119` §3 item 2): a fetched page whose licence is unknown or closed, and
     /// whose text was read whole, is kept in full as a private source (`kept_privately`), never as a pointer. Set by the research
     /// run's keep step from the operator's setting, and only when the page shows no rights notice (§3 item 3).
@@ -814,7 +816,7 @@ impl Library {
         if opts.save_images && s.level == Level::Full && matches!(s.outcome, Outcome::Added | Outcome::NewVersion(_)) {
             let trusted = crate::research_setup::lists(&self.root, self.root.parent().unwrap_or(&self.root)).unwrap_or_else(|_| delphi_adapter::research::trusted::TrustedList::parse(include_str!("../../../context/sources/trusted.toml"), None).unwrap());
             if let Ok(transport) = delphi_adapter::research::transport::HttpTransport::new() {
-                let rules = crate::research_images::PictureRules { transport: &transport, list: &trusted, per_source: 3, left: 3 };
+                let rules = crate::research_images::PictureRules { transport: &transport, list: &trusted, per_source: 3, left: 3, svg: opts.save_svg };
                 let got = crate::research_images::keep_for_source(self, &s.id, canonical, &String::from_utf8_lossy(snap.body_for_daemon()), &rules, None);
                 if !got.kept.is_empty() {
                     notes.push(format!("{} picture(s) kept with their licence record", got.kept.len()));
