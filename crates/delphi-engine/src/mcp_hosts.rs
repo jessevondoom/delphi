@@ -467,9 +467,25 @@ pub fn worker_tools(role: &str) -> Vec<&'static str> {
     out
 }
 
-/// The tool list of a read-only Claude Code worker: the seats' read-only built-ins and the role's Delphi tools, under both server names.
+/// The roles whose worker file lists the host's own search and fetch tools (`specs/119` §2.1 item 8): the two that research.
+const HOST_SEARCH_ROLES: &[&str] = &["scout", "investigator"];
+
+/// The host's own web search and page fetch tools a worker of `role` on `host` may call (`specs/119` §2.1 item 8), from the host
+/// tool table ([`host_search_tools`]): both, either or none. Only the scout and the investigator get them. The host's permission
+/// rules decide whether each call runs; Delphi grants nothing by listing a tool's name.
+pub fn worker_host_tools(host: &str, role: &str) -> Vec<&'static str> {
+    if !HOST_SEARCH_ROLES.contains(&role) {
+        return Vec::new();
+    }
+    let (search, fetch) = host_search_tools(host);
+    search.into_iter().chain(fetch).collect()
+}
+
+/// The tool list of a read-only Claude Code worker: the seats' read-only built-ins, for the scout and the investigator the host's
+/// own search and fetch tools, and the role's Delphi tools, under both server names.
 fn claude_worker_tools(role: &str) -> String {
     let mut all: Vec<String> = vec!["Read".into(), "Grep".into(), "Glob".into()];
+    all.extend(worker_host_tools("claude-code", role).into_iter().map(String::from));
     let tools = worker_tools(role);
     all.extend(["mcp__plugin_delphi_delphi__", "mcp__delphi__"].iter().flat_map(|p| tools.iter().map(move |t| format!("{p}{t}"))));
     all.join(", ")
@@ -1189,6 +1205,40 @@ mod tests {
         have.sort();
         assert_eq!(have, want, "WORKER_ROLES drifted from the manifests (servable, locus host or either; inherits tools only with an @worktree/ write glob)");
         assert_eq!(WORKER_ROLES.iter().filter(|(_, i)| *i).map(|(r, _)| *r).collect::<Vec<_>>(), ["builder", "writer"]);
+    }
+
+    // specs/119 AC-2c (§2.1 items 2 and 8): the host tool table is read from the host adapters; the scout's and the investigator's
+    // worker files for Claude Code list its web search and web fetch tools, no other role's does, and a host whose row names
+    // neither gets neither. Naming a tool grants nothing: the host's own permission rules decide whether a call runs.
+    #[test]
+    fn the_scouts_and_the_investigators_worker_files_list_the_hosts_own_search_and_fetch_tools_from_the_table() {
+        assert_eq!(host_search_tools("claude-code"), (Some("WebSearch"), Some("WebFetch")));
+        assert_eq!(host_search_tools("copilot"), (None, Some("web_fetch")), "Copilot CLI listed a fetch tool and no search tool");
+        for none_listed in ["codex", "agy", "gemini", "no-such-host", ""] {
+            assert_eq!(host_search_tools(none_listed), (None, None), "{none_listed}: a host absent from the table has none");
+        }
+        // The table is the adapters' own rows, so the two cannot disagree.
+        for h in HOSTS {
+            let row = |cap: &str| adapter(h).and_then(|(_, caps)| caps.iter().find(|(c, _)| *c == cap).and_then(|(_, t)| *t));
+            assert_eq!(host_search_tools(h), (row("search_web"), row("fetch")), "{h}");
+        }
+        for (role, inherits) in WORKER_ROLES {
+            let research = matches!(*role, "scout" | "investigator");
+            assert_eq!(worker_host_tools("claude-code", role), if research { vec!["WebSearch", "WebFetch"] } else { Vec::new() }, "{role}");
+            assert!(worker_host_tools("codex", role).is_empty() && worker_host_tools("agy", role).is_empty(), "{role}");
+            let (_, t) = worker_file("claude-code", role, &none()).unwrap();
+            let listed = |name: &str| t.lines().find_map(|l| l.strip_prefix("tools: ")).is_some_and(|l| l.split(", ").any(|x| x == name));
+            assert_eq!((listed("WebSearch"), listed("WebFetch")), (research && !inherits, research && !inherits), "claude-code {role}");
+            if research {
+                let tools = t.lines().find_map(|l| l.strip_prefix("tools: ")).unwrap();
+                assert!(tools.starts_with("Read, Grep, Glob, WebSearch, WebFetch, mcp__") && !tools.contains("Bash") && !tools.contains("Edit") && !tools.contains("Write"), "{tools}");
+            }
+            // A host with no search tool in the table: its worker file names neither tool.
+            for h in ["codex", "agy", "copilot"] {
+                let (_, t) = worker_file(h, role, &none()).unwrap();
+                assert!(!t.contains("WebSearch") && !t.contains("WebFetch") && !t.contains("web_fetch") && !t.contains("web_search"), "{h} {role}");
+            }
+        }
     }
 
     #[test]
