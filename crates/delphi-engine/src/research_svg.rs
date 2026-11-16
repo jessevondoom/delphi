@@ -61,6 +61,10 @@ pub const GRADIENT_WEIGHT: f64 = 3.0;
 /// Dash segments over the whole file (a stroke's length over its dash pattern's length).
 pub const MAX_DASHES: f64 = 200_000.0;
 
+/// The drawing thread's stack: address space, mostly never touched. usvg converts by recursion; the audits refuse every deep
+/// recursion they know of, and this is the margin for one they do not.
+const SVG_STACK: usize = 256 << 20;
+
 /// The one slot a drawing runs in, for the whole process. The drawing's own thread holds it until the drawing ends, so a drawing
 /// that passed its time limit still holds it and no second one starts beside it: CPU spent on drawings is at most one core.
 static SLOT_BUSY: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
@@ -102,7 +106,7 @@ fn render_with(svg: &[u8], wait: Duration, limit: Duration) -> Result<Drawn, &'s
     let slot = Slot::acquire(wait).ok_or("another SVG is still being drawn")?;
     let bytes = svg.to_vec();
     let (tx, rx) = std::sync::mpsc::channel();
-    let spawned = std::thread::Builder::new().name("svg-render".into()).stack_size(8 << 20).spawn(move || {
+    let spawned = std::thread::Builder::new().name("svg-render".into()).stack_size(SVG_STACK).spawn(move || {
         let _slot = slot; // released when this drawing ends, not when its caller stops waiting
         let _ = tx.send(render_now(&bytes));
     });
@@ -273,8 +277,9 @@ fn audit_references<'a>(doc: &'a roxmltree::Document<'a>, ids: &HashMap<&str, ro
     if (clips && sheet.contains("clip-path")) || (markers && sheet.contains("marker")) {
         return Err("the SVG sets clip paths or markers from a style sheet, which is not read here");
     }
-    // Clip chains: the depth of each clip path, by what it and its contents name.
-    fn depth<'a>(c: roxmltree::Node<'a, 'a>, elem: &dyn Fn(&str) -> Option<roxmltree::Node<'a, 'a>>, memo: &mut HashMap<roxmltree::NodeId, usize>, busy: &mut Vec<roxmltree::NodeId>) -> Result<usize, &'static str> {
+    let mut work = 0usize;
+    // Clip chains: the depth of each clip path, by what it and everything drawn inside it (a `use` included) name.
+    fn depth<'a>(c: roxmltree::Node<'a, 'a>, elem: &dyn Fn(&str) -> Option<roxmltree::Node<'a, 'a>>, memo: &mut HashMap<roxmltree::NodeId, usize>, busy: &mut Vec<roxmltree::NodeId>, work: &mut usize) -> Result<usize, &'static str> {
         if let Some(d) = memo.get(&c.id()) {
             return Ok(*d);
         }
@@ -286,10 +291,10 @@ fn audit_references<'a>(doc: &'a roxmltree::Document<'a>, ids: &HashMap<&str, ro
         }
         busy.push(c.id());
         let mut d = 1;
-        for n in c.descendants().filter(|n| n.is_element()) {
+        for n in drawn(c, elem, work)? {
             for id in prop_ids(n, "clip-path") {
                 if let Some(t) = elem(id).filter(|t| t.is_element() && t.tag_name().name() == "clipPath") {
-                    d = d.max(1 + depth(t, elem, memo, busy)?);
+                    d = d.max(1 + depth(t, elem, memo, busy, work)?);
                 }
             }
         }
@@ -302,11 +307,13 @@ fn audit_references<'a>(doc: &'a roxmltree::Document<'a>, ids: &HashMap<&str, ro
     }
     let (mut memo, mut busy) = (HashMap::new(), Vec::new());
     for c in doc.descendants().filter(|n| named(*n, "clipPath")) {
-        depth(c, &elem, &mut memo, &mut busy)?;
+        depth(c, &elem, &mut memo, &mut busy, &mut work)?;
     }
-    // Markers inside markers: a marker, its contents and its ancestors (whose marker properties its contents inherit) name none.
+    // Markers inside markers: a marker, everything drawn inside it (a `use` included) and its ancestors (whose marker properties
+    // its contents inherit) name none.
     for m in doc.descendants().filter(|n| named(*n, "marker")) {
-        let around = m.descendants().chain(m.ancestors().skip(1)).filter(|n| n.is_element());
+        let inside = drawn(m, &elem, &mut work)?;
+        let around = inside.into_iter().chain(m.ancestors().skip(1).filter(|n| n.is_element()));
         for n in around {
             if MARKER_PROPS.iter().any(|p| prop_ids(n, p).iter().any(|id| elem(id).is_some_and(|t| t.is_element() && t.tag_name().name() == "marker"))) {
                 return Err("the SVG draws markers inside markers, which is not drawn here");
@@ -314,6 +321,34 @@ fn audit_references<'a>(doc: &'a roxmltree::Document<'a>, ids: &HashMap<&str, ro
         }
     }
     Ok(())
+}
+
+/// The work [`drawn`] may do over the whole file, in elements visited.
+const MAX_REFERENCE_WORK: usize = 1_000_000;
+
+/// Every element drawn when `start` is drawn: `start`, its descendants, and for each `use` among them what it names and that
+/// element's descendants, followed transitively (each element once). The renderer follows a `use` wherever it is, so a property
+/// the audit looks for may sit on a `use`'s target rather than inside `start`.
+fn drawn<'a>(start: roxmltree::Node<'a, 'a>, elem: &dyn Fn(&str) -> Option<roxmltree::Node<'a, 'a>>, work: &mut usize) -> Result<Vec<roxmltree::Node<'a, 'a>>, &'static str> {
+    let (mut out, mut seen, mut todo) = (Vec::new(), std::collections::HashSet::new(), vec![start]);
+    while let Some(root) = todo.pop() {
+        for n in root.descendants().filter(|n| n.is_element()) {
+            if !seen.insert(n.id()) {
+                continue;
+            }
+            *work += 1;
+            if *work > MAX_REFERENCE_WORK {
+                return Err("the SVG has too many parts to draw once its references are counted");
+            }
+            if n.tag_name().name() == "use" {
+                if let Some(t) = n.attributes().find(|a| a.name() == "href").and_then(|a| a.value().strip_prefix('#')).and_then(elem) {
+                    todo.push(t);
+                }
+            }
+            out.push(n);
+        }
+    }
+    Ok(out)
 }
 
 /// The elements `n` stands for when drawn: itself, its children, for a `use` what it names (a cycle is refused), and for a shape
@@ -595,6 +630,32 @@ mod tests {
         assert_eq!(render_with(&slow, Duration::from_secs(60), Duration::ZERO), Err("the SVG took too long to draw"));
         assert!(Slot::acquire(Duration::ZERO).is_none(), "the timed-out drawing still holds the slot");
         drop(Slot::acquire(Duration::from_secs(120)).expect("and gives it back when it ends"));
+    }
+
+    /// The red-team's second pass: a chain through `use`. Each clip path holds only a `use` of a rectangle that is itself clipped by
+    /// the next clip path, so no clip path names another directly; usvg follows it all the same, and 10,000 links (1.2 MB) aborted
+    /// the process. The audit follows a `use` to what it draws, so the chain is counted and refused.
+    #[test]
+    fn a_chain_of_clip_paths_through_use_is_refused_too() {
+        let n = 10_000;
+        let mut s = String::from("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"100\" height=\"100\"><defs>");
+        for i in 0..n {
+            s.push_str(&format!("<clipPath id=\"c{i}\"><use xlink:href=\"#r{}\"/></clipPath>", i + 1));
+            let clip = if i + 1 < n { format!(" clip-path=\"url(#c{})\"", i + 1) } else { String::new() };
+            s.push_str(&format!("<rect id=\"r{}\" width=\"100\" height=\"100\"{clip}/>", i + 1));
+        }
+        s.push_str("</defs><rect width=\"100\" height=\"100\" clip-path=\"url(#c0)\"/></svg>");
+        assert!(s.len() <= MAX_SVG_BYTES);
+        let started = std::time::Instant::now();
+        assert_eq!(render_now(s.as_bytes()), Err("the SVG chains clip paths too deeply to draw"));
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        assert_eq!(render(s.as_bytes()), Err("the SVG chains clip paths too deeply to draw"), "and through the drawing thread, no abort");
+        // A marker that draws, through a `use`, a shape with a marker.
+        let via_use = "<defs><path id=\"p\" d=\"M0 0 L4 4\" marker-end=\"url(#b)\"/><marker id=\"a\"><use href=\"#p\"/></marker><marker id=\"b\"><circle r=\"1\"/></marker></defs><path d=\"M0 0 L9 9\" marker-end=\"url(#a)\" stroke=\"black\"/>";
+        assert_eq!(render(&svg(via_use)), Err("the SVG draws markers inside markers, which is not drawn here"));
+        // A clip path that uses an unclipped shape is drawn.
+        let ok = "<defs><circle id=\"o\" cx=\"100\" cy=\"60\" r=\"40\"/><clipPath id=\"c\"><use href=\"#o\"/></clipPath></defs><rect width=\"200\" height=\"120\" fill=\"#00ff00\" clip-path=\"url(#c)\"/>";
+        assert_eq!(pixel(&render(&svg(ok)).unwrap(), 100, 60), [0, 255, 0, 255]);
     }
 
     #[test]
