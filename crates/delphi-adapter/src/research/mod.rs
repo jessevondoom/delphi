@@ -52,7 +52,9 @@ pub struct SearchConfig {
     pub providers: Vec<Provider>,
     pub settings: BTreeMap<String, ProviderSettings>,
     /// `providers` was written in config.toml. The default engine serves only what the operator starts (research, saved pages), never
-    /// the validator's background contradiction search, which sends claim text and so needs an explicit choice.
+    /// the validator's contradiction search, which sends claim text and so needs an explicit choice. `delphi init` and
+    /// `delphi research setup` write Parallel's keyless engine into the table (`specs/119` §13.3); the validator still asks it only
+    /// once background validation is turned on (`delphi_engine::research_setup::validator_engines`).
     pub explicit: bool,
 }
 

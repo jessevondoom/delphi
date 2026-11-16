@@ -20,6 +20,7 @@ pub const DEFAULT_GATES: &[&str] = &[
     "crates/delphi/tests/must_run.rs",
     "crates/delphi/tests/home_isolation.rs",
     "crates/delphi/tests/deny_policy.rs",
+    "crates/delphi/tests/app_grants.toml",
     "crates/delphi-engine/src/service_gates_tests.rs",
     "crates/delphi/src/merge/**",
 ];
@@ -124,6 +125,7 @@ mod tests {
             "crates/delphi/tests/must_run.rs",
             "crates/delphi/tests/home_isolation.rs",
             "crates/delphi/tests/deny_policy.rs",
+            "crates/delphi/tests/app_grants.toml",
             "crates/delphi-engine/src/service_gates_tests.rs",
             "crates/delphi/src/merge/mod.rs",
         ] {

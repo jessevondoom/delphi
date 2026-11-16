@@ -342,7 +342,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof
 
-**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `d5201096ff7e`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
+**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `7ba52aeddd81`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
 
 **source excerpt, untrusted** · `specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md` lines 26-34
 

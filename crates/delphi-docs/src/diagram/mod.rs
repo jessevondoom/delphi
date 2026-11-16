@@ -110,6 +110,19 @@ pub fn from_json(v: &Value) -> Result<DiagramSpec, DocError> {
     Ok(DiagramSpec { kind, title, subtitle, source, theme, body })
 }
 
+impl DiagramSpec {
+    /// Every node label in the diagram (flow nodes, tree nodes, sequence participants, timeline events, matrix row and column headers).
+    pub fn node_labels(&self) -> Vec<String> {
+        match &self.body {
+            Body::Flow(f) => f.nodes.iter().map(|n| n.label.clone()).collect(),
+            Body::Tree(t) => t.nodes.iter().map(|n| n.label.clone()).collect(),
+            Body::Sequence(s) => s.participants.iter().map(|p| p.label.clone()).collect(),
+            Body::Timeline(t) => t.events.iter().map(|e| e.label.clone()).collect(),
+            Body::Matrix(m) => m.rows.iter().chain(&m.cols).cloned().collect(),
+        }
+    }
+}
+
 /// Group names for the legend (flows colour nodes by group).
 fn groups(spec: &DiagramSpec) -> &[String] {
     match &spec.body {

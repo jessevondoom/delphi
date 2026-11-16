@@ -81,7 +81,7 @@ pub struct Read {
 
 /// Every file of this crate that returns, or can return, the text of a private entry. The inventory test below checks the table against
 /// the accessors it scans for; a reader of private text that is not here fails it.
-pub const READS: [Read; 29] = [
+pub const READS: [Read; 30] = [
     Read { file: "shared_research.rs", what: "`host_search` (`specs/115` §2 item 3): the `project_research` group of `host.search_kb` (and of `kb_retrieve`, which asks the daemon for it) returns a project's claim that rests on a private or internal source (its sentence, its quote and a pointer; the session's own project's or, where the operator shares research, another's), never the source's own record or text. `pull` (slice X4) hands the claim pull pointers to such claims (id, project and label only, `specs/115` §11 item 3), and `mark_task` marks the Delphi TASK handed one (its key `<mission>/<task>`, §11 item 2; the tasks it starts hold it by OD-5) for every reader of this row and of `retrieval.rs`, for the task that opens a pulled pointer (`opened_entry`, block 5) and for a follow-up handed a marked task's replies (`held_in_mission`). A host session is still marked as a whole, by `service.rs`", how: How::Marks },
     Read { file: "retrieval.rs", what: "`passages` (`specs/116` §4): reads, with `chunk_content`, the text of the chunks a search just returned, for a span's start context (`span_start`) and the agent's `kb_search`; since `specs/115` slice X4 both searches return the mission's project's claims and the claims the other projects share, an internal-source one among them (`Start::internal`, the `shared_research::GIVEN` event), and the engine marks the task that was handed it (§11 item 2)", how: How::Marks },
     Read { file: "service.rs", what: "`host.search_kb`: the `noted` layer returns entries a host left, with the preview; one the daemon stored private is private text handed to the host. (The same file's `kb.search` and `kb.get` serve the console and the narrator pane with `include_staged`: the operator's own view, not a seat; the per-method tables `HOST_SURFACE` and `MCP_SURFACE` name every method a host can call)", how: How::Marks },
@@ -110,6 +110,8 @@ pub const READS: [Read; 29] = [
     Read { file: "council.rs", what: "fences a noted entry in a seat's reading (`host_noted::fence`) and withdraws the seat's tools", how: How::NoReturn { why: "no path delivers a noted entry to a seat (`engine.rs` refuses with `READ_REFUSAL`); this is the tripwire for one added later" } },
     // ---- `specs/114` §3 (known first): what a research run reads of the library before and instead of a fetch ----
     Read { file: "library_recheck.rs", what: "`fresh_text_of_url` (`specs/114` §3 item 4): returns the kept text of the web page the daemon captured from an address, for a research run to read in place of fetching the page again; the scout's page-reading call (no tools) reads it as it would the fetched page", how: How::Withholds { proof_file: "delphi-engine/src/research_host.rs", proof_test: "a_held_page_stands_in_for_a_fetch_only_when_public_kept_whole_and_inside_its_recheck_window" } },
+    // ---- `specs/118` §5 (figures agents make) ----
+    Read { file: "library_figures.rs", what: "a page figure's number check (`specs/118` §5 item 3): `stored_text` of each source the figure's `from` names, to find the chart's numbers in it", how: How::NoReturn { why: "the markers resolve at the page's scope, so an external page refuses a private source; the text is reduced to its numbers and compared, and only the chart's own number and the marker ids reach the failure record, never record text" } },
     // ---- `specs/117` (the encyclopedia): topic pages ----
     Read { file: "topic_gather.rs", what: "a topic page's material (`specs/117` §2 item 4): one search of the index in the operator's view, and `chunk_content` to see whether a cited passage changed; the passages go into the page writer's prompt as records", how: How::NoReturn { why: "the index lists no private library source and the search sets neither `include_staged` nor provisional notes; a hit flagged `internal` (a claim on a private or internal source) and a hit of another project are skipped; the writer is a model with no tools and the page is a library record, not a send. The due check returns a reason, not text" } },
     Read { file: "library_topics.rs", what: "`source_view` (`specs/117` §3 item 3, the method `library.source`): a source's record and its kept text or excerpts, private sources included", how: How::OperatorOnly { why: "its one caller is `encyclopedia::library_source`, behind the method `library.source`, whose handler refuses every scope but the console and the paired app (`need_reader`); the app is the operator's window. A topic page itself is built at the external scope, so no private record reaches its writer" } },
@@ -138,7 +140,7 @@ const SEATS_CANNOT_READ: &str = "an answer written by seats that cannot read a n
 const MCP_OWN: &str = "runs in the MCP server's own process over files and the index; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`) and the index lists no private source";
 
 /// The methods of the host socket (`delphi_core::server::HOST_METHODS`).
-pub const HOST_SURFACE: [Surface; 31] = [
+pub const HOST_SURFACE: [Surface; 32] = [
     no_return("session.ping", "answers `pong`"),
     Surface { name: "host.search_kb", how: How::Marks },
     no_return("host.propose_note", WRITES),
@@ -165,6 +167,7 @@ pub const HOST_SURFACE: [Surface; 31] = [
     no_return("host.research_status", "fixed-form progress; no entry text"),
     no_return("host.research_result", "the answer of a run over the indexed KB (no private source, no staged note) and pages the run fetched; a claim resting on a private source is counted and kept out of outbound queries; NOT VALIDATED beyond reading the run's callers"),
     no_return("host.record_research", "a write: it returns a topic id, a research id, counts and fixed words, never the text of an entry"),
+    no_return("host.research_feed", "a write (`specs/119` §2.1 item 4): search results in (a query the run asked and addresses; no title or snippet is kept), counts and fixed words out, never an entry's text. Under the mark the daemon fetches none of the addresses"),
     no_return("host.cancel_job", WRITES),
     no_return("host.route_decided", WRITES),
     no_return("host.reads_seen", "a write to the daemon's in-memory tally of what a host session was shown (`specs/109` §13.1 item 3): ids and labels in, a count out, never an entry's text"),
@@ -173,7 +176,7 @@ pub const HOST_SURFACE: [Surface; 31] = [
 ];
 
 /// The tools of the MCP server (`mcp_host::tools()`).
-pub const MCP_SURFACE: [Surface; 45] = [
+pub const MCP_SURFACE: [Surface; 46] = [
     Surface { name: "search_kb", how: How::Marks },
     no_return("list_roles", PROJECT_FILES),
     no_return("delphi_roster", PROJECT_FILES),
@@ -217,6 +220,7 @@ pub const MCP_SURFACE: [Surface; 45] = [
     no_return("research_status", "fixed-form progress; no entry text"),
     no_return("research_result", "see `host.research_result`"),
     no_return("record_research", WRITES),
+    no_return("research_feed", "see `host.research_feed`"),
     no_return("cancel_job", WRITES),
     no_return("ask_family", "see `host.ask_family`"),
     no_return("ask_result", "see `host.ask_result`"),

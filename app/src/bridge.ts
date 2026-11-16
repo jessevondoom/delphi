@@ -3,6 +3,7 @@
 // the same interface is served from a fixture, so every screen runs as a plain web page (§3.3).
 import { BUILT_IN } from './avatar.ts';
 import type { EncyRead } from './ency.ts';
+import type { Asked, AskArg, AskWhat } from './requests.ts';
 import type { Conn, Envelope, Info, OState } from './types.ts';
 
 export type Listener = { event(e: Envelope): void; conn(c: Conn): void; resync(): void };
@@ -23,6 +24,12 @@ export interface Bridge {
    * the sentence to show. `quote` beside a `library.source` id names the cited passage, for a source shown only as that.
    */
   ency(read: EncyRead, arg?: Record<string, unknown>): Promise<unknown>;
+  /**
+   * One of the four requests of the daemon's `request` grant (spec 120 §4.2): ids and what the operator typed. The app
+   * sends it only when its key holds the grant; otherwise, and for anything the daemon refuses, the promise is rejected
+   * with the sentence to show. It is the window's only call that is not a read.
+   */
+  request(what: AskWhat, arg: AskArg): Promise<Asked>;
   /** The operator's own marks (spec 117 §5), as kept in the app's folder; never sent to the daemon. */
   marks(): Promise<unknown>;
   saveMarks(marks: unknown): Promise<void>;
@@ -132,6 +139,8 @@ export async function fixtureBridge(): Promise<Bridge> {
     session: async () => ({ mission_id: sim.state.mission_id, mode: 'default', budget: { cap_usd: 25, spent_usd: 3.4, reserved_usd: 0.5, available_usd: 21.1 }, solo_mode: false, running_tasks: [{}], pending_approvals: [{}], interactive_agents: ['orchestrator'], forbidden_agents: [] }),
     kb: fixtureKb,
     ency: fixtureEncy,
+    // Sample data has no daemon behind it, so there is nothing to ask; the window offers the clipboard commands.
+    request: async () => { throw new Error('sample data: there is no daemon to ask'); },
     ...fixtureMarks(),
     exportPage: download,
     print: async () => { globalThis.print?.(); },

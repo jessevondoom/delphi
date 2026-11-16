@@ -235,10 +235,12 @@ fn research_setup_needs_a_terminal_or_flags_writes_the_search_table_and_init_poi
     let o = delphi(&["init", "--non-interactive", "--workspace", "w"], false);
     assert!(o.status.success(), "{}", text(&o.stderr));
     let out = text(&o.stdout);
-    let last = out.lines().last().unwrap();
-    assert!(last.contains("research:") && last.contains("`delphi research setup`"), "init ends with the hint: {out}");
+    // specs/119 §13.3 item 11: init writes the table with Parallel's keyless engine, so a fresh workspace always has a working search
+    // table and there is no missing engine for init's last line to point at.
+    assert!(!out.contains("research:"), "init has an engine to name, so it says nothing about research: {out}");
     let cfg = home.join("workspaces/w/config.toml");
     let before = std::fs::read_to_string(&cfg).unwrap();
+    assert!(before.contains("[search]\nproviders = [\"parallel\"]"), "{before}");
 
     // No terminal and no flags: refused, and nothing is written.
     let o = delphi(&["research", "setup", "--workspace", "w"], false);
@@ -265,7 +267,8 @@ fn research_setup_needs_a_terminal_or_flags_writes_the_search_table_and_init_poi
     assert!(out.contains("Queries leave this machine for the engine chosen (brave). Check its terms and your employer's rules first."), "{out}");
     assert!(out.contains("Not ratified: that is yours to do") && out.contains("Test query: not run"), "{out}");
     let after = std::fs::read_to_string(&cfg).unwrap();
-    assert!(after.contains("[search]") && after.contains("providers = [\"brave\"]") && after.contains("credential = \"env:BRAVE_API_KEY\""), "{after}");
+    assert!(out.contains("Parallel stays the engine asked first") && out.contains("Parallel does not publish how long it keeps queries"), "{out}");
+    assert!(after.contains("[search]") && after.contains("providers = [\"parallel\", \"brave\"]") && after.contains("credential = \"env:BRAVE_API_KEY\""), "{after}");
 }
 
 // specs/119 §5 and AC-7: `delphi kb health` on a workspace with sources and no claims prints the stalled-loop line, the doctor

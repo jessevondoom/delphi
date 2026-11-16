@@ -10,6 +10,7 @@
 //! whatever the validator says. A validator that cannot run (no model, budget reached, an unreadable reply) is not a
 //! pass: the page falls back to its claims. Where the daemon cannot place a named record it fails closed.
 
+use super::figures::FigureFailure;
 use super::page_check::{shown_status, Checked, Cite, Rec, Scope};
 use super::pages::{claim_lines, render_body, slug, Page, PageParts, Stamp};
 use super::*;
@@ -98,6 +99,11 @@ pub trait PageWriter: Send + Sync {
     /// The role and model that write, for the cache key: a page is rebuilt when they change.
     fn identity(&self) -> String {
         "writer".into()
+    }
+
+    /// Role ID recorded on figures asked for by this writer (`specs/118` §5 item 2).
+    fn role(&self) -> &str {
+        "writer"
     }
 }
 
@@ -246,6 +252,7 @@ pub struct PageVerdict {
     pub tokens: u64,
     pub rewrites: u32,
     pub assertions: Vec<AssertionRecord>,
+    pub figure_failures: Vec<FigureFailure>,
     pub at: String,
 }
 
@@ -255,6 +262,7 @@ impl PageVerdict {
             "result": match self.outcome { Outcome::Pass => "pass", Outcome::PassContested => "pass_contested", Outcome::ClaimsOnly => "claims_only" },
             "reason": self.reason, "model": self.model, "family": self.family, "tokens": self.tokens, "rewrites": self.rewrites, "at": self.at,
             "assertions": self.assertions.iter().map(|a| json!({"text": a.text, "judgement": a.judgement.as_str(), "record": a.record, "result": a.result})).collect::<Vec<_>>(),
+            "figure_failures": self.figure_failures,
         })
     }
 }
@@ -326,9 +334,9 @@ fn reason_text(s: &str) -> String {
 }
 
 enum Attempt {
-    Pass { body: String, checked: Checked, classified: Classified, reply: ValidatorReply },
-    Fail { findings: Vec<String>, reply: Option<ValidatorReply>, records: Vec<AssertionRecord> },
-    Unavailable(String),
+    Pass { body: String, checked: Checked, classified: Classified, reply: ValidatorReply, figure_failures: Vec<FigureFailure> },
+    Fail { findings: Vec<String>, reply: Option<ValidatorReply>, records: Vec<AssertionRecord>, figure_failures: Vec<FigureFailure> },
+    Unavailable { why: String, figure_failures: Vec<FigureFailure> },
 }
 
 impl Library {
@@ -362,22 +370,23 @@ impl Library {
         out
     }
 
-    async fn attempt(&self, topic: &str, draft: &str, scope: Scope, validator: &dyn PageValidator, ledger: &TokenLedger) -> Attempt {
-        let checked = self.check_body(draft, scope);
+    async fn attempt(&self, topic: &str, draft: &str, scope: Scope, made_by: &str, validator: &dyn PageValidator, ledger: &TokenLedger) -> Attempt {
+        let resolved = self.resolve_figures(draft, scope, made_by);
+        let checked = self.check_body(&resolved.body, scope);
         if !checked.findings.is_empty() {
-            return Attempt::Fail { findings: checked.findings.iter().map(|f| f.to_string()).collect(), reply: None, records: Vec::new() };
+            return Attempt::Fail { findings: checked.findings.iter().map(|f| f.to_string()).collect(), reply: None, records: Vec::new(), figure_failures: resolved.failures };
         }
         let material = self.page_material(topic, &checked, scope);
-        let reply = match validate_budgeted(validator, ledger, &PageQuery { body: draft.to_string(), material: material.clone() }).await {
+        let reply = match validate_budgeted(validator, ledger, &PageQuery { body: resolved.body.clone(), material: material.clone() }).await {
             Ok(r) => r,
-            Err(JudgeError::BudgetReached) => return Attempt::Unavailable("the validator's token budget was reached".into()),
-            Err(JudgeError::Failed(e)) => return Attempt::Unavailable(format!("the validator could not run: {}", e)),
+            Err(JudgeError::BudgetReached) => return Attempt::Unavailable { why: "the validator's token budget was reached".into(), figure_failures: resolved.failures },
+            Err(JudgeError::Failed(e)) => return Attempt::Unavailable { why: format!("the validator could not run: {}", e), figure_failures: resolved.failures },
         };
         let classified = classify(&reply.assertions, &material);
         if !classified.hard.is_empty() {
-            return Attempt::Fail { findings: classified.hard.clone(), records: classified.records, reply: Some(reply) };
+            return Attempt::Fail { findings: classified.hard.clone(), records: classified.records, reply: Some(reply), figure_failures: resolved.failures };
         }
-        let mut body = draft.trim_end().to_string();
+        let mut body = resolved.body.trim_end().to_string();
         if !classified.contested.is_empty() {
             body.push_str("\n\n");
             body.push_str(&section_contested(&classified.contested));
@@ -389,9 +398,9 @@ impl Library {
         let final_check = self.check_body(&body, scope);
         if !final_check.findings.is_empty() {
             let findings = final_check.findings.iter().map(|f| f.to_string()).collect();
-            return Attempt::Fail { findings, records: classified.records, reply: Some(reply) };
+            return Attempt::Fail { findings, records: classified.records, reply: Some(reply), figure_failures: resolved.failures };
         }
-        Attempt::Pass { body, checked: final_check, classified, reply }
+        Attempt::Pass { body, checked: final_check, classified, reply, figure_failures: resolved.failures }
     }
 
     /// The whole of §3: mechanical check, validator pass, one rewrite on failure, then the claims-only page. The returned
@@ -403,28 +412,33 @@ impl Library {
         let mut draft = draft.trim().to_string();
         let mut last_reply: Option<ValidatorReply> = None;
         let mut records: Vec<AssertionRecord> = Vec::new();
+        // The figures of the latest attempt only: a rewrite asks for its figures again from its own figure blocks.
+        let mut figure_failures_now: Vec<FigureFailure>;
         let mut rewrites = 0;
         let reason;
         loop {
-            match self.attempt(&topic, &draft, scope, validator, ledger).await {
-                Attempt::Pass { body, checked, classified, reply } => {
+            match self.attempt(&topic, &draft, scope, writer.role(), validator, ledger).await {
+                Attempt::Pass { body, checked, classified, reply, figure_failures } => {
+                    figure_failures_now = figure_failures;
                     let outcome = if classified.contested.is_empty() { Outcome::Pass } else { Outcome::PassContested };
                     let at = delphi_core::time::now_rfc3339().chars().take(10).collect::<String>();
                     let mut result = if outcome == Outcome::Pass { "passed".to_string() } else { format!("passed with {} contested", classified.contested.len()) };
                     if !classified.unchecked.is_empty() {
                         result.push_str(&format!("; {} unchecked", classified.unchecked.len()));
                     }
-                    let verdict = PageVerdict { outcome, reason: None, model: reply.model, family: reply.family, tokens: reply.tokens, rewrites, assertions: classified.records, at };
+                    let verdict = PageVerdict { outcome, reason: None, model: reply.model, family: reply.family, tokens: reply.tokens, rewrites, assertions: classified.records, figure_failures: figure_failures_now.clone(), at };
                     let withheld = self.topic_claims(&topic).1;
                     let extra = json!({"validator": verdict.to_json()});
-                    let page = self.finish_page(PageParts { topic, body: body.clone(), lines: None, checked, hash_claims: None, hash_draft: Some(body), style, scope, withheld, stamp: Stamp::Validator { result }, extra, use_cache: false });
+                    let page = self.finish_page(PageParts { topic, body: body.clone(), lines: None, checked, hash_claims: None, hash_draft: Some(body), style, scope, withheld, stamp: Stamp::Validator { result }, extra, use_cache: false, figure_failures: figure_failures_now });
                     return Ok(CheckedPage { page, verdict });
                 }
-                Attempt::Unavailable(why) => {
+                Attempt::Unavailable { why, figure_failures } => {
+                    figure_failures_now = figure_failures;
                     reason = why;
                     break;
                 }
-                Attempt::Fail { findings, reply, records: r } => {
+                Attempt::Fail { findings, reply, records: r, figure_failures } => {
+                    figure_failures_now = figure_failures;
                     self.log("page_draft_failed", json!({"topic": topic, "attempt": rewrites + 1, "draft": draft, "findings": findings}));
                     if reply.is_some() {
                         last_reply = reply;
@@ -447,12 +461,17 @@ impl Library {
                 }
             }
         }
-        self.claims_only_page(&topic, &reason, last_reply.as_ref(), records, rewrites, style, scope)
+        self.claims_only_page_with_figures(&topic, &reason, last_reply.as_ref(), records, rewrites, style, scope, figure_failures_now)
     }
 
     /// The claims-only page (`specs/057` §3.4): one line per claim, the banner saying why nothing richer was built.
     #[allow(clippy::too_many_arguments)]
     pub fn claims_only_page(&self, topic: &str, reason: &str, last_reply: Option<&ValidatorReply>, records: Vec<AssertionRecord>, rewrites: u32, style: bib::Format, scope: Scope) -> Result<CheckedPage, String> {
+        self.claims_only_page_with_figures(topic, reason, last_reply, records, rewrites, style, scope, Vec::new())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn claims_only_page_with_figures(&self, topic: &str, reason: &str, last_reply: Option<&ValidatorReply>, records: Vec<AssertionRecord>, rewrites: u32, style: bib::Format, scope: Scope, figure_failures: Vec<FigureFailure>) -> Result<CheckedPage, String> {
         let topic = norm_ws(topic);
         let (claims, withheld) = self.topic_claims(&topic);
         let (validated, noted) = claim_lines(&claims);
@@ -465,10 +484,10 @@ impl Library {
         let note = format!("claims-only page: {}", reason);
         let ran = last_reply.is_some();
         let at = delphi_core::time::now_rfc3339().chars().take(10).collect::<String>();
-        let verdict = PageVerdict { outcome: Outcome::ClaimsOnly, reason: Some(reason), model: last_reply.map(|r| r.model.clone()).unwrap_or_default(), family: last_reply.map(|r| r.family.clone()).unwrap_or_default(), tokens: last_reply.map(|r| r.tokens).unwrap_or(0), rewrites, assertions: records, at };
+        let verdict = PageVerdict { outcome: Outcome::ClaimsOnly, reason: Some(reason), model: last_reply.map(|r| r.model.clone()).unwrap_or_default(), family: last_reply.map(|r| r.family.clone()).unwrap_or_default(), tokens: last_reply.map(|r| r.tokens).unwrap_or(0), rewrites, assertions: records, figure_failures: figure_failures.clone(), at };
         let stamp = if ran { Stamp::Validator { result: note } } else { Stamp::NotRun { note } };
         let extra = json!({"validator": verdict.to_json()});
-        let page = self.finish_page(PageParts { topic: topic.clone(), body, lines: Some((validated, noted)), checked, hash_claims: Some(&claims), hash_draft: Some(format!("claims-only fallback {}", slug(&topic))), style, scope, withheld, stamp, extra, use_cache: false });
+        let page = self.finish_page(PageParts { topic: topic.clone(), body, lines: Some((validated, noted)), checked, hash_claims: Some(&claims), hash_draft: Some(format!("claims-only fallback {}", slug(&topic))), style, scope, withheld, stamp, extra, use_cache: false, figure_failures });
         Ok(CheckedPage { page, verdict })
     }
 

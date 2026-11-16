@@ -79,7 +79,7 @@ export function Activity({ bridge, info, state, events, light }: Props) {
               <strong>{waits.length === 1 ? '1 decision is waiting on you' : `${waits.length} decisions are waiting on you`}</strong>
             </div>
             {waits.map((w) => <div key={w.id} className="stack" style={{ gap: 4, fontSize: 13 }}><Agent info={info} role={w.role} light={light} /><span>{w.summary}</span></div>)}
-            <div style={{ fontSize: 12, color: 'var(--text2)' }}>This app is read-only. Answer in the console:</div>
+            <div style={{ fontSize: 12, color: 'var(--text2)' }}>This window cannot answer a decision. Answer in the console:</div>
             <div className="code">delphi chat</div>
           </section>
         )}

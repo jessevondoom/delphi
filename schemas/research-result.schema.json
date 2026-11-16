@@ -47,6 +47,11 @@
     },
     "stopped": { "enum": ["covered", "no_new_claims", "step_budget", "page_budget", "no_more_queries", "plan_done"], "description": "Why the run stopped sending queries (specs/114 section 4 item 5)." },
     "rounds": { "type": "integer", "minimum": 0, "description": "How many rounds of queries the run sent." },
+    "sources": { "enum": ["host", "engines", "local"], "description": "Where the run's web results came from (specs/119 sections 13.1 and 13.2): `host`: the host's own search tool ran the planned queries and handed back what it found (the engines, when there are any, are asked only for what that left uncovered); the engines of [search]; or `local`: no query was sent to anyone, and the run read what Delphi holds and the addresses it already knew on the trusted list." },
+    "host_search": { "type": "object", "properties": { "asked": { "type": "integer", "minimum": 0, "maximum": 12 }, "fed": { "type": "integer", "minimum": 0, "maximum": 12 } }, "required": ["asked", "fed"], "additionalProperties": false, "description": "On a run whose source is the host (specs/119 section 2.1): how many queries the host was asked to search, and how many it handed back." },
+    "host_leads": { "type": "array", "maxItems": 40, "items": { "type": "string" }, "description": "On a run whose source is the host: the addresses the host handed back that are not on the trusted list. The daemon did not fetch them; the host may read them with its own tool and hand over what it found with record_research." },
+    "web_search": { "type": "boolean", "description": "Whether any web search answered in the run. When none did, the answer's label ends with `no web search`." },
+    "planned_under_mark": { "type": "boolean", "description": "The session or task that asked was under the private-read mark of specs/103 (specs/119 section 15). The run is the same as any other: each query was cleaned and passed the identifier guard, and the search log lists every query planned." },
     "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
     "citations": { "type": "array", "items": { "type": "string" } },
     "source_ids": { "type": "array", "items": { "type": "string" } },
@@ -140,10 +145,12 @@
         "hits": { "type": "integer", "minimum": 0 },
         "kept": { "type": "integer", "minimum": 0 },
         "duplicates": { "type": "integer", "minimum": 0 },
-        "not_kept": { "type": "object", "propertyNames": { "enum": ["page_cap", "budget", "refused", "fetch_failed", "capture_failed", "lead_not_stored", "not_followed"] }, "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "not_kept": { "type": "object", "propertyNames": { "enum": ["page_cap", "budget", "refused", "fetch_failed", "capture_failed", "lead_not_stored", "not_followed", "lead"] }, "additionalProperties": { "type": "integer", "minimum": 0 } },
         "via": { "type": "string", "description": "The provider that answered a trusted-list search." },
         "failed": { "enum": ["no_search_provider", "credential_unresolved", "no_results"], "description": "The search itself failed, in one word of the fixed list." },
-        "declared": { "const": true, "description": "Reported by the host, not made by the daemon. Its kept is 0 and it counts as nothing." }
+        "declared": { "const": true, "description": "Reported by the host, not made by the daemon. Its kept is 0 and it counts as nothing." },
+        "run_by_host": { "const": true, "description": "Run by the host with its own search tool, for a query the run asked of it, and handed back with research_feed (specs/119 section 2.1 item 4). Its results on the trusted list were read by the daemon; the others are counted under not_kept as `lead` and were not fetched." },
+        "local": { "const": true, "description": "Not a search: the addresses on the trusted list that a local run already knew for the question (specs/119 section 13.2). It has no query, and it is not counted in `searches`." }
       },
       "not": { "required": ["withheld", "query"] },
       "additionalProperties": false
@@ -154,7 +161,7 @@
       "required": ["found", "duplicates_removed", "kept", "not_kept", "searches", "withheld", "declared"],
       "properties": {
         "found": { "type": "integer", "minimum": 0 }, "duplicates_removed": { "type": "integer", "minimum": 0 }, "kept": { "type": "integer", "minimum": 0 },
-        "not_kept": { "type": "object", "propertyNames": { "enum": ["page_cap", "budget", "refused", "fetch_failed", "capture_failed", "lead_not_stored", "not_followed"] }, "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "not_kept": { "type": "object", "propertyNames": { "enum": ["page_cap", "budget", "refused", "fetch_failed", "capture_failed", "lead_not_stored", "not_followed", "lead"] }, "additionalProperties": { "type": "integer", "minimum": 0 } },
         "searches": { "type": "integer", "minimum": 0 }, "withheld": { "type": "integer", "minimum": 0 }, "declared": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false

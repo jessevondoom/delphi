@@ -133,25 +133,31 @@
       "line": 232,
       "number": "14",
       "title": "Amendment (operator, 2026-11-15): answers on private text, the 10% bound and the defaults"
+    },
+    {
+      "level": 2,
+      "line": 244,
+      "number": "15",
+      "title": "Amendment (operator, 2026-11-15): research under the private-read mark, chaining in a local run, the validator and Parallel, the live proof's engine"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md",
-    "sha256": "d5201096ff7e4d389092c72033faa32ce3565edd857c4dae125e6f8dfa3f257b"
+    "sha256": "7ba52aeddd81fe0b7e41a75bbe8c36939a05041f1814ebadd52b2adb8c56be17"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 1031,
+        "end": 1232,
         "end_line": 6,
         "line": 6,
         "start": 251
       },
-      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"119: let's make excerpts the default between pointers and full private text\". Section 3 was changed to that default after those words. Later the same day, on search engines: \"your choices sound good, but also add the host default tools as well, like claud's ewb search in a claude environment, etc.\" (the operator's words as typed: Claude's web search); section 2.1 was written after those words and has not been read. Section 13 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request. Section 14 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request."
+      "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"119: let's make excerpts the default between pointers and full private text\". Section 3 was changed to that default after those words. Later the same day, on search engines: \"your choices sound good, but also add the host default tools as well, like claud's ewb search in a claude environment, etc.\" (the operator's words as typed: Claude's web search); section 2.1 was written after those words and has not been read. Section 13 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request. Section 14 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request. Section 15 (2026-11-15) is an amendment written from the operator's words of that day, as relayed to the builder by the coordinating session; it takes effect when the operator merges its pull request."
     },
-    "sha256": "d5201096ff7e4d389092c72033faa32ce3565edd857c4dae125e6f8dfa3f257b",
+    "sha256": "7ba52aeddd81fe0b7e41a75bbe8c36939a05041f1814ebadd52b2adb8c56be17",
     "word": "approved"
   },
   "spec": {
@@ -166,10 +172,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 3999,
+      "end": 4200,
       "end_line": 34,
       "line": 26,
-      "start": 2351
+      "start": 2552
     },
     "text": "| # | Observation (2026-11-14) |\n| :-- | :-- |\n| E-1 | The audited workspace has no `[search]` table, so Delphi's research cannot search the web. Sessions asked for research 17 times. `delphi doctor` reports the missing engine as an ordinary line, not a warning, and nothing in a session says what to do. |\n| E-2 | A source whose licence is not known is kept as a pointer: address, title, hash, no text (`library.rs`, the capture level). The licence is worked out by code for a few kinds of site only. All 38 sources on the workspace are pointers, so none can be searched, quoted or gathered into a page. |\n| E-3 | Retraction lookup, archived copies, citation chaining, background validation and session summaries are built and off by default. A research run never asks for an archived copy. |\n| E-4 | The validator's contradiction search has no searcher without `[search]`, so every check ends in \"escalate\" and no claim can reach \"vetted\". |\n| E-5 | Nothing shows the state of the knowledge loop in one place: how many sources have text, how many claims, how many notes wait, whose memory is empty. |\n| E-6 | Small faults found by the audit: the host result's licence is always \"unknown\"; `budget_used` lacks time; `freshness.last_checked` repeats `retrieved`; `want` and `context_pointers` of 066 §3 are read nowhere; the default depth is `survey` in code and `quick` in the spec; the validator's charter says the fetcher is not built, and it is; spec 052's frontmatter says nothing is built, and four slices are. |\n| E-7 | By the tracker's own notes, the research job has never been run against the live web with a real key and a real model. |"
   }

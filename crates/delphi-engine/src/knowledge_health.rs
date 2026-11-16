@@ -40,6 +40,8 @@ pub struct Health {
     pub lessons: BTreeMap<String, usize>,
     pub research_asked: usize,
     pub research_ran: usize,
+    /// Of those, the requests that had no web search (`specs/119` §13.2).
+    pub research_no_web: usize,
     pub searches_found_nothing: usize,
     /// Research topics (`specs/112`): how many, when the store exists.
     pub topics: Option<usize>,
@@ -142,7 +144,7 @@ pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
 
     // Research asked for, and searches of the knowledge base that found nothing, in the last 30 days.
     let asks = crate::research_asks::counts_since(ws_dir, now - THIRTY_DAYS);
-    (h.research_asked, h.research_ran) = (asks.asked, asks.ran);
+    (h.research_asked, h.research_ran, h.research_no_web) = (asks.asked, asks.ran, asks.no_web);
     h.searches_found_nothing = std::fs::read_to_string(ws_dir.join("local/kb-misses.jsonl"))
         .unwrap_or_default()
         .lines()
@@ -183,7 +185,7 @@ impl Health {
         o.insert("summaries".into(), json!({"total": self.summaries, "no_source": self.summaries_without_source}));
         o.insert("staged_notes".into(), json!({"waiting": self.staged, "oldest": self.staged_oldest}));
         o.insert("lessons".into(), json!(self.lessons));
-        o.insert("research_30d".into(), json!({"asked": self.research_asked, "ran": self.research_ran}));
+        o.insert("research_30d".into(), json!({"asked": self.research_asked, "ran": self.research_ran, "no_web_search": self.research_no_web}));
         o.insert("searches_found_nothing_30d".into(), json!(self.searches_found_nothing));
         if let Some(n) = self.topics {
             o.insert("topics".into(), json!({"total": n}));
@@ -258,8 +260,10 @@ impl Health {
             fact(format!("lessons per role: {per_role}"))
         });
 
-        out.push(if self.research_asked > 0 && self.research_ran == 0 {
-            stalled(format!("{} research requests in 30 days, 0 ran: no search engine was set up. See {setup}.", self.research_asked))
+        out.push(if self.research_asked > 0 && self.research_no_web == self.research_asked {
+            stalled(format!("{} research requests in 30 days, none with a web search: no search engine was set up. See {setup}.", self.research_asked))
+        } else if self.research_no_web > 0 {
+            fact(format!("{} research requests in 30 days, {} ran, {} with no web search", self.research_asked, self.research_ran, self.research_no_web))
         } else {
             fact(format!("{} research requests in 30 days, {} ran", self.research_asked, self.research_ran))
         });
@@ -371,7 +375,7 @@ mod tests {
         fs::create_dir_all(ws.join("local/ratified/memory/agents/scout")).unwrap();
         fs::write(ws.join("local/ratified/memory/agents/scout/lessons.md"), "### [L-3] Three\n- c\n").unwrap();
         crate::research_asks::record(&ws, crate::research_asks::Outcome::Queued, NOW - 86_400);
-        crate::research_asks::record(&ws, crate::research_asks::Outcome::NoEngine, NOW - 3600);
+        crate::research_asks::record(&ws, crate::research_asks::Outcome::NoWebSearch, NOW - 3600);
         crate::research_asks::record(&ws, crate::research_asks::Outcome::Queued, NOW - 40 * 86_400);
         let misses: String = [(NOW - 100, false), (NOW - 200, false), (NOW - 50 * 86_400, false), (NOW - 10, true)].iter().map(|(t, c)| format!("{}\n", json!({"t": t.to_string(), "query": "q", "results": 0, "confirmed": c}))).collect();
         fs::write(ws.join("local/kb-misses.jsonl"), misses).unwrap();
@@ -381,7 +385,7 @@ mod tests {
         assert_eq!(h.claims_total(), 2);
         assert_eq!((h.pages, h.summaries, h.summaries_without_source), (1, 3, 2));
         assert_eq!(h.lessons, BTreeMap::from([("scout".to_string(), 3), ("writer".to_string(), 0)]));
-        assert_eq!((h.research_asked, h.research_ran, h.searches_found_nothing), (2, 1, 2));
+        assert_eq!((h.research_asked, h.research_ran, h.research_no_web, h.searches_found_nothing), (2, 2, 1, 2));
         assert_eq!((h.staged, h.topics, &h.provisional), (0, None, &None));
         let text = texts(&h).join("\n");
         for needle in [
@@ -391,14 +395,15 @@ mod tests {
             "3 imported summaries, 2 with no source listed: what they say cannot be traced. See delphi kb import",
             "0 staged notes waiting",
             "lessons per role: scout 3, writer 0",
-            "2 research requests in 30 days, 1 ran",
+            "2 research requests in 30 days, 2 ran, 1 with no web search",
             "2 searches of the knowledge base found nothing in 30 days",
         ] {
             assert!(text.contains(needle), "{needle}\n{text}");
         }
         assert!(!text.contains("topics") && !text.contains("provisional"), "a store that is not there is not reported: {text}");
         let j = h.to_json();
-        assert_eq!((j["sources"]["total"].as_u64(), j["claims"]["total"].as_u64(), j["summaries"]["no_source"].as_u64(), j["research_30d"]["ran"].as_u64()), (Some(5), Some(2), Some(2), Some(1)));
+        assert_eq!((j["sources"]["total"].as_u64(), j["claims"]["total"].as_u64(), j["summaries"]["no_source"].as_u64(), j["research_30d"]["ran"].as_u64()), (Some(5), Some(2), Some(2), Some(2)));
+        assert_eq!(j["research_30d"]["no_web_search"].as_u64(), Some(1));
         assert!(j.get("topics").is_none() && j.get("provisional_notes").is_none());
     }
 
@@ -423,7 +428,7 @@ mod tests {
     #[test]
     fn each_stalled_loop_says_so_in_words_and_names_a_command() {
         let (t, ws) = home();
-        crate::research_asks::record(&ws, crate::research_asks::Outcome::NoEngine, NOW - 60);
+        crate::research_asks::record(&ws, crate::research_asks::Outcome::NoWebSearch, NOW - 60);
         let h = gather(t.path(), &ws, NOW);
         let lines = h.lines(NOW);
         let stalled: Vec<&Line> = lines.iter().filter(|l| l.stalled).collect();
@@ -432,7 +437,7 @@ mod tests {
             "0 claims: research has kept no claim. See delphi research setup.",
             "0 pages: no page has been built from the library. See delphi pages search \"<question>\".",
             "0 lessons for any role (scout 0, writer 0): nothing learned has been kept. See delphi learn list.",
-            "1 research requests in 30 days, 0 ran: no search engine was set up. See delphi research setup.",
+            "1 research requests in 30 days, none with a web search: no search engine was set up. See delphi research setup.",
         ] {
             assert!(stalled.iter().any(|l| l.text == want), "{want}\n{:?}", lines);
         }

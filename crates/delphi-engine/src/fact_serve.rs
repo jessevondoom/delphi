@@ -126,11 +126,13 @@ impl Engine {
         let list = SourceList::new(cfg.validator.sources.clone());
         let judge = EngineJudge { engine: self.clone(), author_family: Some(author_family.to_string()).filter(|f| !f.is_empty()), author_model: None };
         let ledger = self.validator.ledger();
-        // The validator sends claim text, so it uses only engines the operator named, not the default (specs/028 §12.1).
-        let searcher: Option<Arc<dyn Searcher>> = if !cfg.search.explicit || cfg.search.providers.is_empty() {
+        // The validator sends claim text, so it uses only engines the operator named, not the default (specs/028 §12.1), and Parallel's
+        // keyless engine, which `delphi init` writes, only once the operator has turned background validation on (specs/119 §13.3 item 12).
+        let engines = crate::research_setup::validator_engines(crate::research_setup::engines(self), &cfg.search, cfg.validator.background);
+        let searcher: Option<Arc<dyn Searcher>> = if engines.is_empty() {
             None
         } else {
-            HttpTransport::new().ok().map(|t| Arc::new(TransportSearcher { transport: Arc::new(t), engines: crate::research_setup::engines(self), identifiers: crate::query_guard::identifiers(&self.ws.dir) }) as Arc<dyn Searcher>)
+            HttpTransport::new().ok().map(|t| Arc::new(TransportSearcher { transport: Arc::new(t), engines, identifiers: crate::query_guard::identifiers(&self.ws.dir) }) as Arc<dyn Searcher>)
         };
         let doi = HandleResolver::default();
         // The install's library, when there is one: its validated facts are read by the judge before any web search (`specs/100` §9.1).

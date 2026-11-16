@@ -41,7 +41,7 @@ const SLOW_WAIT: Duration = Duration::from_secs(80);
 fn socket_wait(method: &str) -> Duration {
     match method {
         // Spec 104 §2, §12 A1: `host.ask_family` hands back its id at once (the quick wait); `host.ask_result` may hold 25 s.
-        "host.ask_result" | "host.request_help" | "host.help_result" | "host.council_result" | "host.research_result" | "host.council_brief" | "host.council_status" | "host.record_research" => SLOW_WAIT,
+        "host.ask_result" | "host.request_help" | "host.help_result" | "host.council_result" | "host.research_result" | "host.council_brief" | "host.council_status" | "host.record_research" | "host.request_research" => SLOW_WAIT,
         _ => QUICK_WAIT,
     }
 }
@@ -767,6 +767,7 @@ pub fn tools() -> Value {
                     "note": {"type": "string", "maxLength": 120, "description": "With topic_id only: one line, in general terms, that narrows the continued search."},
                     "new": {"type": "boolean", "default": false, "description": "Before it searches, the run looks up what Delphi already holds on the question (the result reports it as known_before). When a research topic Delphi has overlaps your question strongly, the run continues that topic with the topic's own question, and the reply says so. Pass true to research your question as a topic of its own instead."},
                     "depth": {"type": "string", "enum": ["quick", "survey", "deep"], "default": "survey"},
+                    "runner": {"type": "string", "enum": ["daemon"], "description": "Leave it out: when your tool has a web search of its own, the reply asks you to run the planned queries with it and hand the results back with research_feed. Pass \"daemon\" to have Delphi's own runner search with the operator's engines instead."},
                     "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."},
                     "host_searches": {
                         "type": "array", "maxItems": 20,
@@ -817,6 +818,22 @@ pub fn tools() -> Value {
             "description": "Hand Delphi a finished piece of research you did with your own tools, before you answer: the question, your answer (Markdown, at most 24 KiB), the sources (a URL, or a description for one with no public address, with its title, the date you read it, its kind and whether it is private), the claims (each a sentence with the exact quote and the index of its source), the searches you ran (where, and the words) and the gaps. Delphi keeps it as a research topic. For a public web source it fetches the page itself, under its own rules, and looks for each quote: a quote it finds is an anchor; one it does not is kept as host-reported, not found. A source that is private, or internal, a file or a person, is never fetched: Delphi keeps only its locator, title and date, and its claims stay private. Everything is stored noted and not validated; anything you say about trust or status is ignored. At most 40 claims and 40 sources per call, 10 calls per session per hour. Pass topic_id to add to a topic Delphi gave you. Changes no file in your project.",
             "inputSchema": crate::host_research::input_schema(),
             "annotations": {"title": "Hand Delphi research you did", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
+        },
+        {
+            "name": "research_feed",
+            "title": "Hand back search results",
+            "description": "Hand back what your own web search tool found for ONE query that request_research asked you to search (its reply says host_search: \"asked\" and lists `queries`; research_status lists them too). Give the query exactly as it was given and at most 10 results, each with its url (title and snippet are optional and not kept); an empty list when the query found nothing. Each query is taken once, and only while the run waits. Delphi reads the results that are on the operator's trusted list itself. It never fetches any other address on your word: those are leads, listed in research_result as host_leads, which you may read with your own fetch tool and hand over with record_research under the run's topic_id. It grants nothing and approves nothing.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "research_id": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "query": {"type": "string", "minLength": 1, "maxLength": 400, "description": "One of the queries the run asked for, exactly as given."},
+                    "results": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"title": {"type": "string", "maxLength": 300}, "url": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "The result's http(s) address."}, "snippet": {"type": "string", "maxLength": 1000}}, "required": ["url"], "additionalProperties": false}}
+                },
+                "required": ["research_id", "query", "results"],
+                "additionalProperties": false
+            },
+            "annotations": {"title": "Hand back search results", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
         },
         {
             "name": "cancel_job",
@@ -1110,6 +1127,7 @@ impl Server {
             "research_status" => self.daemon("host.research_status", args),
             "research_result" => self.daemon("host.research_result", args),
             "record_research" => self.daemon("host.record_research", args),
+            "research_feed" => self.daemon("host.research_feed", args),
             "cancel_job" => self.daemon("host.cancel_job", args),
             "ask_family" => self.ask_family(args, job),
             "ask_result" => self.daemon("host.ask_result", args),
@@ -1952,14 +1970,15 @@ mod tests {
         let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "session_brief", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "flag_wrong", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "recall_sessions", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "record_research", "cancel_job", "ask_family", "ask_result"]);
+        assert_eq!(names, ["search_kb", "list_roles", "delphi_roster", "session_brief", "get_agent", "list_skills", "get_skill", "specs_status", "specs_show", "specs_list", "scaffold_status", "search_project", "search_memory", "query_memory", "kb_retrieve", "consult_orchestrator", "spawn_agent_pack", "route", "propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "flag_wrong", "propose_council_record", "record_session_summary", "handoff_put", "handoff_get", "recall_sessions", "request_help", "help_result", "council_frame", "council_open", "council_brief", "council_submit", "council_choose", "request_council", "council_status", "council_result", "request_research", "research_status", "research_result", "record_research", "research_feed", "cancel_job", "ask_family", "ask_result"]);
         assert_eq!(socket_wait("host.recall_sessions"), QUICK_WAIT, "recall is a quick read");
         for t in tools {
-            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "flag_wrong", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "record_research", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
+            let writes = ["propose_note", "request_test_authorization", "propose_kb_entry", "record_finding", "flag_wrong", "propose_council_record", "record_session_summary", "handoff_put", "request_help", "request_council", "request_research", "record_research", "research_feed", "council_open", "council_submit", "council_choose", "cancel_job", "ask_family"].contains(&t["name"].as_str().unwrap());
             assert_eq!(t["annotations"]["readOnlyHint"], !writes, "{}", t["name"]);
             assert_eq!(t["annotations"]["destructiveHint"], false, "{}", t["name"]);
             // `record_research` makes the daemon fetch the public pages the host names, under its runner's rules (`specs/113` §2 item 3).
-            assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research" || t["name"] == "record_research", "{}", t["name"]);
+            // `research_feed` makes the daemon read the handed-back results that are on the trusted list (`specs/119` §2.1 item 5).
+            assert_eq!(t["annotations"]["openWorldHint"], t["name"] == "request_research" || t["name"] == "record_research" || t["name"] == "research_feed", "{}", t["name"]);
             assert_eq!(t["inputSchema"]["additionalProperties"], false, "{}", t["name"]);
         }
         assert_eq!(call(&mut s, json!({"jsonrpc": "2.0", "id": 4, "method": "completion/complete"}))["error"]["code"], -32601);

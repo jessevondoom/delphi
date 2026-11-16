@@ -1,5 +1,6 @@
 //! The app's own client of the daemon (spec 111 §2, §3.2): newline-delimited JSON-RPC 2.0 over a Unix socket. It can send
-//! only the methods of [`Method`], so a method that acts cannot be named from here, let alone from the window.
+//! only the methods of [`Method`]: twenty reads and, since spec 120 K5, the four requests of the daemon's `request` grant
+//! ([`Method::REQUESTS`]). No other method that acts can be named from here, let alone from the window.
 //!
 //! It attaches in one of two ways, and each fixes what it attached as:
 //! * on the **narrator** socket, with the token that socket issues ([`Client::attach`]): scope `narrator` and nothing else;
@@ -22,11 +23,14 @@ pub const PROTOCOL_MAJOR: u64 = 1;
 /// A reply or notification longer than this is refused instead of read into memory without end.
 const MAX_LINE: usize = 64 * 1024 * 1024;
 
-/// Every daemon method the app may call. Two kinds, all reads:
+/// Every daemon method the app may call. Three kinds; the first two are reads:
 /// * the nine of spec 111 §2.2 ([`Method::NARRATOR`]), a subset of the daemon's narrator allowlist, sent on either socket;
 /// * the encyclopedia's eleven of spec 117 §3 ([`Method::PAIRED_ONLY`]): rows of the daemon's `read` grant that are **not**
 ///   narrator methods, because `library.source` returns a private source's text. They are sent only on a connection that
-///   proved a paired key: [`Client::call`] refuses them on any other, before a byte is written.
+///   proved a paired key: [`Client::call`] refuses them on any other, before a byte is written;
+/// * the four requests of spec 120 §4.2 ([`Method::REQUESTS`]): the daemon's `request` grant, each asking the daemon to
+///   start something the operator could start at a terminal. Sent only on a connection that proved a paired key, as the
+///   encyclopedia's reads are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     Ping,
@@ -49,9 +53,15 @@ pub enum Method {
     MemoryRoles,
     MemoryRole,
     ChangesSince,
+    ResearchContinue,
+    ResearchAsk,
+    PageRebuild,
+    PageDispute,
 }
 
 impl Method {
+    /// The requests of spec 120 §4.2 (`delphi_core::app_keys::REQUEST_METHODS`), in the daemon's order.
+    pub const REQUESTS: [Method; 4] = [Method::ResearchContinue, Method::ResearchAsk, Method::PageRebuild, Method::PageDispute];
     /// The reads of spec 111 §2.2: narrator methods.
     pub const NARRATOR: [Method; 9] = [Method::Ping, Method::Subscribe, Method::SessionSnapshot, Method::ObserveState, Method::ObserveSnapshot, Method::KbSearch, Method::KbGet, Method::UsageGet, Method::ApprovalList];
     /// The encyclopedia's reads (spec 117 §3 item 1; `delphi_core::app_keys::ENCYCLOPEDIA_READS`), in the daemon's order.
@@ -68,7 +78,7 @@ impl Method {
         Method::MemoryRole,
         Method::ChangesSince,
     ];
-    pub const ALL: [Method; 20] = [
+    pub const ALL: [Method; 24] = [
         Method::Ping,
         Method::Subscribe,
         Method::SessionSnapshot,
@@ -89,11 +99,20 @@ impl Method {
         Method::MemoryRoles,
         Method::MemoryRole,
         Method::ChangesSince,
+        Method::ResearchContinue,
+        Method::ResearchAsk,
+        Method::PageRebuild,
+        Method::PageDispute,
     ];
 
     /// Whether this read is sent only on a connection that proved a paired key.
     pub fn paired_only(self) -> bool {
         Method::PAIRED_ONLY.contains(&self)
+    }
+
+    /// Whether this is one of the four requests: a method that asks the daemon to start something.
+    pub fn asks(self) -> bool {
+        Method::REQUESTS.contains(&self)
     }
 
     pub fn name(self) -> &'static str {
@@ -118,6 +137,10 @@ impl Method {
             Method::MemoryRoles => "memory.roles",
             Method::MemoryRole => "memory.role",
             Method::ChangesSince => "changes.since",
+            Method::ResearchContinue => "app.research_continue",
+            Method::ResearchAsk => "app.research_ask",
+            Method::PageRebuild => "app.page_rebuild",
+            Method::PageDispute => "app.page_dispute",
         }
     }
 }
@@ -255,10 +278,11 @@ impl Client {
         self.proved
     }
 
-    /// One of the reads the app is allowed. A paired-only read (spec 117 §3) on a connection that proved no key is refused
-    /// here, with nothing written to the socket: the narrator socket is never asked for the encyclopedia.
+    /// One of the methods the app is allowed. A paired-only read (spec 117 §3) or a request (spec 120 §4.2) on a connection
+    /// that proved no key is refused here, with nothing written to the socket: the narrator socket is never asked for the
+    /// encyclopedia, and never asked to start anything.
     pub fn call(&mut self, method: Method, params: Value) -> Result<Value, Error> {
-        if method.paired_only() && !self.proved {
+        if (method.paired_only() || method.asks()) && !self.proved {
             return Err(Error::NotPaired);
         }
         self.raw(method.name(), params)
