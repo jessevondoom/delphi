@@ -10,7 +10,8 @@
 //!   so no font is looked up or read, and an SVG that has text is refused rather than kept without its words.
 //! - **Bounded work.** At most [`MAX_SVG_BYTES`] of input; no DTD (so no entity can expand); at most [`MAX_XML_NODES`] XML nodes and
 //!   [`MAX_DEPTH`] levels; at most [`MAX_EXPANDED`] elements once every `use` and marker is counted where it is drawn (a reference
-//!   cycle is refused); no `pattern`, `filter` or `mask` (each draws into a picture of its own whose size the file chooses); at most
+//!   cycle is refused); clip-path chains at most [`MAX_CLIP_CHAIN`] long and no marker inside a marker, checked before the renderer
+//!   follows either; no `pattern`, `filter` or `mask` (each draws into a picture of its own whose size the file chooses); at most
 //!   [`MAX_LAYERS`] groups that draw into a layer, none nested deeper than [`MAX_LAYER_DEPTH`] and none larger than [`MAX_LAYER_AREA`]
 //!   canvases; a canvas of at most [`MAX_SIDE`] pixels a side; and [`TIME_LIMIT`] for all of it, after which the picture is refused.
 //!
@@ -156,6 +157,7 @@ fn audit_xml(doc: &roxmltree::Document<'_>) -> Result<(), &'static str> {
             }
         }
     }
+    audit_references(doc, &ids)?;
     let mut memo: HashMap<roxmltree::NodeId, u64> = HashMap::new();
     let mut busy: Vec<roxmltree::NodeId> = Vec::new();
     let total = cost(doc.root_element(), &ids, &mut memo, &mut busy)?;
@@ -168,6 +170,100 @@ fn audit_xml(doc: &roxmltree::Document<'_>) -> Result<(), &'static str> {
     let drawn_markers = if markers && marker_style { marker_cost.saturating_mul(vertices) } else { 0 };
     if total.saturating_add(drawn_markers) > MAX_EXPANDED {
         return Err("the SVG has too many parts to draw once its references are counted");
+    }
+    Ok(())
+}
+
+/// The `#id`s a property value names with `url(#id)` (quoted or not, with spaces or not).
+fn url_ids(value: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = value;
+    while let Some(p) = rest.find("url(") {
+        let after = &rest[p + 4..];
+        let Some(close) = after.find(')') else { break };
+        let inner = after[..close].trim().trim_matches(|c| c == '"' || c == '\'').trim();
+        if let Some(id) = inner.strip_prefix('#') {
+            out.push(id);
+        }
+        rest = &after[close + 1..];
+    }
+    out
+}
+
+/// What element `n` names through property `prop`, set as an attribute or in its `style` attribute.
+fn prop_ids<'a>(n: roxmltree::Node<'a, 'a>, prop: &str) -> Vec<&'a str> {
+    let mut out: Vec<&'a str> = n.attributes().filter(|a| a.name() == prop).flat_map(|a| url_ids(a.value())).collect();
+    if let Some(style) = n.attribute("style") {
+        for decl in style.split(';') {
+            if let Some((k, v)) = decl.split_once(':') {
+                if k.trim() == prop {
+                    out.extend(url_ids(v));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// How long a chain of clip paths may be: a clip path clipped by another is drawn into a picture the size of the canvas for each
+/// link, held at once, and usvg follows the chain by recursion.
+pub const MAX_CLIP_CHAIN: usize = 4;
+const MARKER_PROPS: [&str; 4] = ["marker-start", "marker-mid", "marker-end", "marker"];
+
+/// The references the renderer follows recursively and allocates for at each step, checked before it sees them:
+///
+/// - a clip path's chain (its own `clip-path`, or one on anything inside it) is at most [`MAX_CLIP_CHAIN`] long, with no loop;
+/// - nothing inside a marker, and nothing a marker inherits, names a marker;
+/// - a style sheet (`<style>`) that could set either is refused when the file has clip paths or markers, since its selectors are
+///   not resolved here.
+fn audit_references<'a>(doc: &'a roxmltree::Document<'a>, ids: &HashMap<&str, roxmltree::NodeId>) -> Result<(), &'static str> {
+    let elem = |id: &str| ids.get(id).and_then(|n| doc.get_node(*n));
+    let named = |n: roxmltree::Node<'a, 'a>, tag: &str| n.is_element() && n.tag_name().name() == tag;
+    let has = |tag: &str| doc.descendants().any(|n| named(n, tag));
+    let (clips, markers) = (has("clipPath"), has("marker"));
+    let sheet: String = doc.descendants().filter(|n| named(*n, "style")).flat_map(|s| s.descendants().filter(|t| t.is_text()).map(|t| t.text().unwrap_or(""))).collect::<Vec<_>>().join(" ");
+    if (clips && sheet.contains("clip-path")) || (markers && sheet.contains("marker")) {
+        return Err("the SVG sets clip paths or markers from a style sheet, which is not read here");
+    }
+    // Clip chains: the depth of each clip path, by what it and its contents name.
+    fn depth<'a>(c: roxmltree::Node<'a, 'a>, elem: &dyn Fn(&str) -> Option<roxmltree::Node<'a, 'a>>, memo: &mut HashMap<roxmltree::NodeId, usize>, busy: &mut Vec<roxmltree::NodeId>) -> Result<usize, &'static str> {
+        if let Some(d) = memo.get(&c.id()) {
+            return Ok(*d);
+        }
+        if busy.contains(&c.id()) {
+            return Err("the SVG's clip paths refer to themselves in a loop");
+        }
+        if busy.len() >= MAX_CLIP_CHAIN {
+            return Err("the SVG chains clip paths too deeply to draw");
+        }
+        busy.push(c.id());
+        let mut d = 1;
+        for n in c.descendants().filter(|n| n.is_element()) {
+            for id in prop_ids(n, "clip-path") {
+                if let Some(t) = elem(id).filter(|t| t.is_element() && t.tag_name().name() == "clipPath") {
+                    d = d.max(1 + depth(t, elem, memo, busy)?);
+                }
+            }
+        }
+        busy.pop();
+        if d > MAX_CLIP_CHAIN {
+            return Err("the SVG chains clip paths too deeply to draw");
+        }
+        memo.insert(c.id(), d);
+        Ok(d)
+    }
+    let (mut memo, mut busy) = (HashMap::new(), Vec::new());
+    for c in doc.descendants().filter(|n| named(*n, "clipPath")) {
+        depth(c, &elem, &mut memo, &mut busy)?;
+    }
+    // Markers inside markers: a marker, its contents and its ancestors (whose marker properties its contents inherit) name none.
+    for m in doc.descendants().filter(|n| named(*n, "marker")) {
+        let around = m.descendants().chain(m.ancestors().skip(1)).filter(|n| n.is_element());
+        for n in around {
+            if MARKER_PROPS.iter().any(|p| prop_ids(n, p).iter().any(|id| elem(id).is_some_and(|t| t.is_element() && t.tag_name().name() == "marker"))) {
+                return Err("the SVG draws markers inside markers, which is not drawn here");
+            }
+        }
     }
     Ok(())
 }
@@ -222,8 +318,16 @@ fn audit_tree(tree: &usvg::Tree, scale: f64, canvas: f64) -> Result<(), &'static
                     return Err("the SVG has a layer too large to draw");
                 }
             }
-            if let Some(clip) = g.clip_path() {
-                walk(clip.root(), depth, scale, canvas, w)?;
+            // Each clip path of a chain is drawn into a canvas-sized picture of its own, all held at once: each is a layer.
+            let (mut clip, mut clip_depth) = (g.clip_path(), depth);
+            while let Some(c) = clip {
+                w.layers += 1;
+                clip_depth += 1;
+                if w.layers > MAX_LAYERS || clip_depth > MAX_LAYER_DEPTH {
+                    return Err("the SVG has too many layers to draw");
+                }
+                walk(c.root(), clip_depth, scale, canvas, w)?;
+                clip = c.clip_path();
             }
         }
         for c in g.children() {
@@ -315,6 +419,57 @@ mod tests {
         assert_eq!(render(&svg(&body)), Err("the SVG has too many parts to draw once its references are counted"));
         assert!(started.elapsed() < Duration::from_secs(2), "refused by counting, not by drawing: {:?}", started.elapsed());
         assert_eq!(render(&svg("<g id=\"a\"><use href=\"#b\"/></g><g id=\"b\"><use xlink:href=\"#a\"/></g>")), Err("the SVG refers to itself in a loop"));
+    }
+
+    /// A chain of clip paths, each clipped by the next: `n` links, the first used by a rectangle on a canvas `side` pixels square.
+    fn clip_chain(n: usize, side: u32, how: &str) -> Vec<u8> {
+        let mut s = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{side}\" height=\"{side}\"><defs>");
+        for i in 0..n {
+            let link = if i + 1 < n {
+                match how {
+                    "style" => format!(" style=\"fill:red; clip-path: url( '#c{}' )\"", i + 1),
+                    _ => format!(" clip-path=\"url(#c{})\"", i + 1),
+                }
+            } else {
+                String::new()
+            };
+            s.push_str(&format!("<clipPath id=\"c{i}\"{link}><rect width=\"{side}\" height=\"{side}\"/></clipPath>"));
+        }
+        s.push_str(&format!("</defs><rect width=\"{side}\" height=\"{side}\" clip-path=\"url(#c0)\"/></svg>"));
+        s.into_bytes()
+    }
+
+    #[test]
+    fn a_chain_of_clip_paths_is_refused_before_the_renderer_follows_it() {
+        // 10,000 links (about 850 KB): usvg follows a clip path's own clip path by recursion, which overflowed the stack and aborted
+        // the process. 200 links at 1,600 pixels: resvg holds a canvas-sized picture per link, 2 GB at once. Both are refused by the
+        // count of the chain, before the renderer sees the file, and so allocate nothing for it.
+        for (n, side) in [(10_000usize, 100u32), (200, 1_600)] {
+            let file = clip_chain(n, side, "attribute");
+            assert!(file.len() <= MAX_SVG_BYTES);
+            let started = std::time::Instant::now();
+            assert_eq!(render(&file), Err("the SVG chains clip paths too deeply to draw"), "{n} links");
+            assert!(started.elapsed() < Duration::from_secs(1), "{n} links: {:?}", started.elapsed());
+        }
+        assert_eq!(render(&clip_chain(6, 100, "style")), Err("the SVG chains clip paths too deeply to draw"), "named in a style attribute");
+        let sheet = "<style><![CDATA[ #c0 { fill: red } ]]><!-- split --> #c0 { clip-path: url(#c1) }</style><defs><clipPath id=\"c0\"><rect width=\"9\" height=\"9\"/></clipPath><clipPath id=\"c1\"><rect width=\"9\" height=\"9\"/></clipPath></defs><rect width=\"9\" height=\"9\" clip-path=\"url(#c0)\"/>";
+        assert_eq!(render(&svg(sheet)), Err("the SVG sets clip paths or markers from a style sheet, which is not read here"));
+        let looped = "<defs><clipPath id=\"a\" clip-path=\"url(#b)\"><rect width=\"9\" height=\"9\"/></clipPath><clipPath id=\"b\"><rect width=\"9\" height=\"9\" clip-path=\"url(#a)\"/></clipPath></defs><rect width=\"9\" height=\"9\" clip-path=\"url(#a)\"/>";
+        assert_eq!(render(&svg(looped)), Err("the SVG's clip paths refer to themselves in a loop"));
+        let one = "<defs><clipPath id=\"c\"><circle cx=\"100\" cy=\"60\" r=\"40\"/></clipPath></defs><rect width=\"200\" height=\"120\" fill=\"#00ff00\" clip-path=\"url(#c)\"/>";
+        let d = render(&svg(one)).expect("a single clip path is drawn");
+        assert_eq!((pixel(&d, 100, 60), pixel(&d, 5, 5)[3]), ([0, 255, 0, 255], 0));
+        // Each link of a chain counts as a layer on the renderer's own tree too.
+        assert_eq!(render(&clip_chain(4, 100, "attribute")), Err("the SVG has too many layers to draw"));
+        assert!(render(&clip_chain(2, 100, "attribute")).is_ok());
+    }
+
+    #[test]
+    fn markers_inside_markers_are_refused() {
+        let nested = "<defs><marker id=\"a\"><path d=\"M0 0 L4 4\" marker-end=\"url(#b)\"/></marker><marker id=\"b\"><circle r=\"1\"/></marker></defs><path d=\"M0 0 L9 9\" marker-end=\"url(#a)\" stroke=\"black\"/>";
+        assert_eq!(render(&svg(nested)), Err("the SVG draws markers inside markers, which is not drawn here"));
+        let inherited = "<g marker-end=\"url(#a)\"><defs><marker id=\"a\"><path d=\"M0 0 L4 4\"/></marker></defs><path d=\"M0 0 L9 9\" stroke=\"black\"/></g>";
+        assert_eq!(render(&svg(inherited)), Err("the SVG draws markers inside markers, which is not drawn here"));
     }
 
     #[test]
