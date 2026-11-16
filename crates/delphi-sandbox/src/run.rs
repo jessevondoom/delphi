@@ -310,7 +310,12 @@ mod tests {
         let Some(o) = go(&f, "ps -o pid=,pgid=,sess= -p $$", |_| {}, quick()) else { return };
         let cols: Vec<&str> = o.stdout.split_whitespace().collect();
         if cols.len() >= 2 {
-            assert_eq!(cols[0], cols[1], "the shell is its own process-group leader: {}", o.stdout);
+            // On Linux the command runs in bubblewrap's new pid namespace, whose pid 1 is bubblewrap itself, which the launcher started
+            // in a session of its own. The bubblewrap of ubuntu-26.04 leaves the shell in that pid 1's group (`2 1 1`); earlier releases
+            // made the shell its own leader. Either way the group is the sandbox's, never the daemon's, and the tests above prove the
+            // group is killed whole.
+            let own = cols[0] == cols[1] || (cfg!(target_os = "linux") && cols[1] == "1");
+            assert!(own, "the shell leads its own process group, or (Linux) the namespace's: {}", o.stdout);
         }
     }
 }
