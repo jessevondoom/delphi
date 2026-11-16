@@ -22,7 +22,11 @@ pub const PROTOCOL_MAJOR: u64 = 1;
 /// A reply or notification longer than this is refused instead of read into memory without end.
 const MAX_LINE: usize = 64 * 1024 * 1024;
 
-/// Every daemon method the app may call (spec 111 §2.2): a subset of the daemon's narrator allowlist, all reads.
+/// Every daemon method the app may call. Two kinds, all reads:
+/// * the nine of spec 111 §2.2 ([`Method::NARRATOR`]), a subset of the daemon's narrator allowlist, sent on either socket;
+/// * the encyclopedia's eleven of spec 117 §3 ([`Method::PAIRED_ONLY`]): rows of the daemon's `read` grant that are **not**
+///   narrator methods, because `library.source` returns a private source's text. They are sent only on a connection that
+///   proved a paired key: [`Client::call`] refuses them on any other, before a byte is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     Ping,
@@ -34,10 +38,63 @@ pub enum Method {
     KbGet,
     UsageGet,
     ApprovalList,
+    PagesList,
+    PagesGet,
+    PagesVersions,
+    PagesLinks,
+    TopicsList,
+    TopicsGet,
+    LibrarySource,
+    LibraryClaim,
+    MemoryRoles,
+    MemoryRole,
+    ChangesSince,
 }
 
 impl Method {
-    pub const ALL: [Method; 9] = [Method::Ping, Method::Subscribe, Method::SessionSnapshot, Method::ObserveState, Method::ObserveSnapshot, Method::KbSearch, Method::KbGet, Method::UsageGet, Method::ApprovalList];
+    /// The reads of spec 111 §2.2: narrator methods.
+    pub const NARRATOR: [Method; 9] = [Method::Ping, Method::Subscribe, Method::SessionSnapshot, Method::ObserveState, Method::ObserveSnapshot, Method::KbSearch, Method::KbGet, Method::UsageGet, Method::ApprovalList];
+    /// The encyclopedia's reads (spec 117 §3 item 1; `delphi_core::app_keys::ENCYCLOPEDIA_READS`), in the daemon's order.
+    pub const PAIRED_ONLY: [Method; 11] = [
+        Method::PagesList,
+        Method::PagesGet,
+        Method::PagesVersions,
+        Method::PagesLinks,
+        Method::TopicsList,
+        Method::TopicsGet,
+        Method::LibrarySource,
+        Method::LibraryClaim,
+        Method::MemoryRoles,
+        Method::MemoryRole,
+        Method::ChangesSince,
+    ];
+    pub const ALL: [Method; 20] = [
+        Method::Ping,
+        Method::Subscribe,
+        Method::SessionSnapshot,
+        Method::ObserveState,
+        Method::ObserveSnapshot,
+        Method::KbSearch,
+        Method::KbGet,
+        Method::UsageGet,
+        Method::ApprovalList,
+        Method::PagesList,
+        Method::PagesGet,
+        Method::PagesVersions,
+        Method::PagesLinks,
+        Method::TopicsList,
+        Method::TopicsGet,
+        Method::LibrarySource,
+        Method::LibraryClaim,
+        Method::MemoryRoles,
+        Method::MemoryRole,
+        Method::ChangesSince,
+    ];
+
+    /// Whether this read is sent only on a connection that proved a paired key.
+    pub fn paired_only(self) -> bool {
+        Method::PAIRED_ONLY.contains(&self)
+    }
 
     pub fn name(self) -> &'static str {
         match self {
@@ -50,9 +107,23 @@ impl Method {
             Method::KbGet => "kb.get",
             Method::UsageGet => "usage.get",
             Method::ApprovalList => "approval.list",
+            Method::PagesList => "pages.list",
+            Method::PagesGet => "pages.get",
+            Method::PagesVersions => "pages.versions",
+            Method::PagesLinks => "pages.links",
+            Method::TopicsList => "topics.list",
+            Method::TopicsGet => "topics.get",
+            Method::LibrarySource => "library.source",
+            Method::LibraryClaim => "library.claim",
+            Method::MemoryRoles => "memory.roles",
+            Method::MemoryRole => "memory.role",
+            Method::ChangesSince => "changes.since",
         }
     }
 }
+
+/// What the window is told when it asks for an encyclopedia read without a paired key.
+pub const NOT_PAIRED: &str = "the encyclopedia is read with a paired key: run `delphi app` in a terminal once";
 
 #[derive(Debug)]
 pub enum Error {
@@ -63,6 +134,8 @@ pub enum Error {
     Closed,
     /// Something on the wire was not the protocol.
     Protocol(String),
+    /// A paired-only read was asked for on a connection that proved no key. Nothing was sent.
+    NotPaired,
 }
 
 impl std::fmt::Display for Error {
@@ -72,6 +145,7 @@ impl std::fmt::Display for Error {
             Error::Rpc { code, message } => write!(f, "the daemon refused ({code}): {message}"),
             Error::Closed => write!(f, "the daemon closed the connection"),
             Error::Protocol(m) => write!(f, "{m}"),
+            Error::NotPaired => write!(f, "{NOT_PAIRED}"),
         }
     }
 }
@@ -98,12 +172,15 @@ pub struct Client {
     partial: Vec<u8>,
     /// Notifications that arrived while a call waited for its reply.
     pending: VecDeque<Value>,
+    /// Whether this connection proved a paired key (`app.hello` answered with scope `app` and the key's own name). Set only
+    /// by [`Client::prove`]; a narrator connection never has it.
+    proved: bool,
 }
 
 impl Client {
     pub fn connect(path: &Path) -> io::Result<Client> {
         let stream = UnixStream::connect(path)?;
-        Ok(Client { reader: BufReader::new(stream.try_clone()?), writer: stream, next_id: 1, partial: Vec::new(), pending: VecDeque::new() })
+        Ok(Client { reader: BufReader::new(stream.try_clone()?), writer: stream, next_id: 1, partial: Vec::new(), pending: VecDeque::new(), proved: false })
     }
 
     /// Connect and attach as a read-only client: ask the narrator socket for its token, then say hello with it.
@@ -158,6 +235,7 @@ impl Client {
         if hello["scope"].as_str() != Some("app") || hello["name"].as_str() != Some(key.name.as_str()) {
             return Err(Error::Protocol("attached as something other than this app's key; closing".into()));
         }
+        self.proved = true;
         Ok(hello["grants"].as_array().map(|g| g.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default())
     }
 
@@ -172,8 +250,17 @@ impl Client {
         let _ = self.reader.get_ref().set_read_timeout(t);
     }
 
-    /// One of the reads the app is allowed.
+    /// Whether this connection proved a paired key.
+    pub fn proved(&self) -> bool {
+        self.proved
+    }
+
+    /// One of the reads the app is allowed. A paired-only read (spec 117 §3) on a connection that proved no key is refused
+    /// here, with nothing written to the socket: the narrator socket is never asked for the encyclopedia.
     pub fn call(&mut self, method: Method, params: Value) -> Result<Value, Error> {
+        if method.paired_only() && !self.proved {
+            return Err(Error::NotPaired);
+        }
         self.raw(method.name(), params)
     }
 

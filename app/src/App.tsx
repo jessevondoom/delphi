@@ -4,7 +4,9 @@ import { openBridge, type Bridge } from './bridge.ts';
 import { load, save, type Prefs, type Screen } from './prefs.ts';
 import { Activity } from './screens/Activity.tsx';
 import { Council } from './screens/Council.tsx';
+import { Encyclopedia } from './screens/Encyclopedia.tsx';
 import { Knowledge } from './screens/Knowledge.tsx';
+import { Memory } from './screens/Memory.tsx';
 import { Output } from './screens/Output.tsx';
 import { Settings } from './screens/Settings.tsx';
 import { Team } from './screens/Team.tsx';
@@ -16,7 +18,9 @@ const REFETCH_MS = 300;
 const ITEMS: { key: Screen; label: string }[] = [
   { key: 'activity', label: 'Activity' },
   { key: 'council', label: 'Councils' },
+  { key: 'encyclopedia', label: 'Encyclopedia' },
   { key: 'knowledge', label: 'Knowledge base' },
+  { key: 'memory', label: 'Agent memory' },
   { key: 'output', label: 'Work output' },
   { key: 'agents', label: 'Agents and skills' },
   { key: 'settings', label: 'Settings' },
@@ -48,6 +52,8 @@ export function App() {
   const [councilPick, setCouncilPick] = useState<number | null>(null);
   // Counts the times a menu item was chosen: a screen showing a document goes back to its start when its item is chosen again.
   const [visit, setVisit] = useState(0);
+  // A search the encyclopedia handed to the knowledge base (spec 117 §4 item 1): the words, until the screen is left.
+  const [ask, setAsk] = useState('');
   const light = useLight(prefs.theme);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -114,7 +120,7 @@ export function App() {
           <nav className="menu" aria-label="Sections">
             <div className="menu-items">
               {ITEMS.map((it) => (
-                <button key={it.key} type="button" className="menu-item" aria-current={prefs.screen === it.key ? 'page' : undefined} onClick={() => { setVisit((v) => v + 1); update({ screen: it.key }); }}>
+                <button key={it.key} type="button" className="menu-item" aria-current={prefs.screen === it.key ? 'page' : undefined} onClick={() => { setVisit((v) => v + 1); setAsk(''); update({ screen: it.key }); }}>
                   <span>{it.label}</span>
                   {notes[it.key] && <small>{notes[it.key]}</small>}
                 </button>
@@ -144,7 +150,11 @@ export function App() {
         ) : prefs.screen === 'council' ? (
           <Council key={council} info={info} state={state} events={events} light={light} pick={council} />
         ) : prefs.screen === 'knowledge' ? (
-          <Knowledge key={visit} bridge={bridge} info={info} state={state} light={light} />
+          <Knowledge key={visit} bridge={bridge} info={info} state={state} light={light} ask={ask} />
+        ) : prefs.screen === 'encyclopedia' ? (
+          <Encyclopedia key={visit} bridge={bridge} info={info} light={light} searchKb={(q) => { setAsk(q); setVisit((v) => v + 1); update({ screen: 'knowledge' }); }} />
+        ) : prefs.screen === 'memory' ? (
+          <Memory key={visit} bridge={bridge} info={info} light={light} />
         ) : prefs.screen === 'output' ? (
           <Output key={visit} bridge={bridge} info={info} state={state} light={light} />
         ) : prefs.screen === 'agents' ? (

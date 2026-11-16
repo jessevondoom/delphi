@@ -9,6 +9,7 @@ import * as T from './theme.ts';
 import { sanitize } from './theme.ts';
 import type { Raster } from './image.ts';
 import { renderMarkdownLinks } from './markdown.ts';
+import { reverseSpan } from './links.ts';
 
 export type PHit = { kind: 'claim' | 'source'; id: string; title: string; status: T.KnowledgeStatus; private: boolean };
 export type PEntry = { key: string; query: string; pinned: boolean; outcome: string; stale: string; external: boolean; failed: boolean; created: number };
@@ -43,7 +44,11 @@ export type Pages = {
   open: Open | null; at: number; draft: string; note: string;
   /** The query whose page the operator cancelled: it is dropped if it still arrives. */
   drop: string | null;
+  /** Which of the open page's links has the focus (an index into `navOf`), or none (specs/117 §7). */
+  nav: number | null;
 };
+/** Something on a page that tab reaches and enter follows: a contents anchor, a `page:` link or a citation marker (specs/097 §4.6). */
+export type Nav = { k: 'anchor'; anchor: string; label: string } | { k: 'page'; slug: string; label: string } | { k: 'cite'; ids: string[]; label: string };
 export type PagesAction =
   | { t: 'none' }
   | { t: 'pages-search'; q: string; external: boolean }
@@ -55,9 +60,10 @@ export type PagesAction =
   | { t: 'pages-dispute'; claim: string; note: string }
   | { t: 'pages-promote'; page: string; statement: string }
   | { t: 'open-source'; id: string }
+  | { t: 'open-claim'; id: string }
   | { t: 'leave' };
 
-export const emptyPages = (): Pages => ({ q: '', ext: false, focus: 'box', hits: null, pages: [], sel: 0, busy: null, open: null, at: 0, draft: '', note: '', drop: null });
+export const emptyPages = (): Pages => ({ q: '', ext: false, focus: 'box', hits: null, pages: [], sel: 0, busy: null, open: null, at: 0, draft: '', note: '', drop: null, nav: null });
 
 const clean = (s: string, max: number): string => sanitize(s).slice(0, max);
 const str = (v: unknown, max = 400): string => (typeof v === 'string' ? sanitize(v).slice(0, max) : '');
@@ -79,6 +85,65 @@ export function idsIn(text: string): string[] {
   for (const m of text.matchAll(/\[([^\]]+)\]/g)) for (const seg of m[1]!.split(/[,;]/)) { const id = /^\s*([cs]-[^\s\]]+)/.exec(seg)?.[1]; if (id && !out.includes(id)) out.push(id); }
   return out;
 }
+
+/** The anchor a heading makes, by the daemon's rule (`library_page_check::slug_of`): what a page's `#section` links name. */
+export function anchorOf(heading: string): string {
+  let out = '';
+  for (const ch of heading.toLowerCase()) out += /[\p{L}\p{N}]/u.test(ch) ? ch : ch === ' ' || ch === '-' ? '-' : '';
+  return out;
+}
+
+const NAV = /\[([^\]\[]+)\]\(\s*(#[^)\s]+|page:[^)\s]+)\s*\)|\[([^\]\[]+)\](?!\()/g;
+const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * What tab reaches on a page, in reading order (specs/117 §7): its contents anchors (`[Section](#section)`), its links to
+ * other pages (`[Title](page:slug)`) and its citation markers (`[c-…]`, `[s-…]`). Read from the body only: the bibliography
+ * table is the daemon's and holds no link. Fenced code is skipped. A `page:` target that is not a slug is not followed.
+ */
+export function navOf(md: string): Nav[] {
+  const out: Nav[] = [];
+  let fence = false;
+  for (const line of md.split('\n')) {
+    if (/^##\s+Bibliography and citations\s*$/.test(line)) break;
+    if (/^ {0,3}(```|~~~)/.test(line)) { fence = !fence; continue; }
+    if (fence) continue;
+    for (const m of line.matchAll(NAV)) {
+      if (m[2] !== undefined) {
+        const label = clean(m[1]!, 200);
+        if (m[2].startsWith('#')) out.push({ k: 'anchor', anchor: clean(m[2].slice(1), 200), label });
+        else if (SLUG.test(m[2].slice(5))) out.push({ k: 'page', slug: m[2].slice(5), label });
+      } else {
+        const ids = idsIn(m[0]);
+        // Every part of the bracket must be a record: `[c-1, see below]` is prose.
+        if (ids.length && ids.length === m[3]!.split(/[,;]/).length) out.push({ k: 'cite', ids, label: clean(m[0], 200) });
+      }
+    }
+  }
+  return out;
+}
+
+/** The width a page is drawn at in a window `w` wide: beside the results when there is room, else across. */
+const pageWidth = (w: number): number => (w >= 100 ? w - Math.floor(w * 0.4) - 3 : w);
+/** Whether a page is drawn as Markdown (an encyclopedia page) or as its statements (an earlier search page). */
+const asMarkdown = (o: Open): boolean => !!o.markdown && !!(o.kind || o.depth || o.markdown.includes('# ') || o.markdown.includes('## Contents') || o.markdown.includes('!['));
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+/** Where each of `navs` was drawn in `lines`, by its words, in order; null for one a wrap split across rows. */
+export function navSpans(lines: string[], navs: Nav[]): ({ line: number; col: number; width: number } | null)[] {
+  const plain = lines.map((l) => l.replace(ANSI_RE, ''));
+  let row = 0, col = 0;
+  return navs.map((n) => {
+    for (let r = row; r < plain.length; r++) {
+      const at = plain[r]!.indexOf(n.label, r === row ? col : 0);
+      if (at >= 0) { row = r; col = at + n.label.length; return { line: r, col: T.width(plain[r]!.slice(0, at)), width: T.width(n.label) }; }
+    }
+    return null;
+  });
+}
+
+/** What following a link will do, in the words the note line shows. */
+const navWords = (n: Nav): string => (n.k === 'anchor' ? `enter goes to the section "${n.label}"` : n.k === 'page' ? `enter opens the page ${n.slug}` : n.ids[0]!.startsWith('s-') ? `enter opens the source ${n.ids[0]!.slice(2)}` : `enter opens the claim ${n.ids[0]}`);
 
 const cells = (l: string): string[] => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => sanitize(c.trim()));
 
@@ -143,8 +208,8 @@ export const gotResults = (p: Pages, q: string, body: any): Pages => (q === p.q.
 /** Stop waiting for the page; the raw results stay. A page that still arrives for this query is dropped. */
 export const cancel = (p: Pages): Pages => (p.busy ? { ...p, busy: null, drop: p.q.trim(), note: 'page cancelled' } : p);
 export const building = (p: Pages, searched: string | null): boolean => p.busy === 'page' && searched !== null && searched === p.q.trim();
-export const gotPage = (p: Pages, q: string, body: any): Pages => (q === p.q.trim() && p.drop === q ? { ...p, drop: null } : q === p.q.trim() ? { ...p, open: opened(body, body?.cached === true), at: 0, busy: null, focus: 'results', note: '' } : p);
-export const gotOpened = (p: Pages, body: any): Pages => ({ ...p, open: opened(body, true), at: 0, busy: null, focus: 'page', note: '' });
+export const gotPage = (p: Pages, q: string, body: any): Pages => (q === p.q.trim() && p.drop === q ? { ...p, drop: null } : q === p.q.trim() ? { ...p, open: opened(body, body?.cached === true), at: 0, nav: null, busy: null, focus: 'results', note: '' } : p);
+export const gotOpened = (p: Pages, body: any): Pages => ({ ...p, open: opened(body, true), at: 0, nav: null, busy: null, focus: 'page', note: '' });
 export const failed = (p: Pages, why: string): Pages => ({ ...p, busy: null, note: clean(why, 300) });
 export const withNote = (p: Pages, note: string): Pages => ({ ...p, note: clean(note, 300) });
 export const gotPinned = (p: Pages, body: any): Pages => {
@@ -161,8 +226,28 @@ const sourceOf = (s: Statement | undefined, o: Open) => {
 
 const none: PagesAction = { t: 'none' };
 
-/** One key in the Pages view. `used` is false for the keys the window keeps (← → change the view). */
-export function key(p: Pages, e: Ev, h: number): { p: Pages; action: PagesAction; used: boolean } {
+/**
+ * Following the focused link of a page (specs/117 §7, specs/097 §4.6): a contents anchor moves the page to its section, a
+ * `page:` link asks for that page, a citation opens the source it names or, for a claim, the claim's record.
+ */
+function follow(p: Pages, n: Nav, w: number): { p: Pages; action: PagesAction } {
+  const o = p.open!;
+  if (n.k === 'page') return { p: { ...p, note: 'opening page…', q: n.slug, busy: 'page', drop: null }, action: { t: 'pages-open-page', slug: n.slug } };
+  if (n.k === 'cite') {
+    const id = n.ids[0]!;
+    if (/^s-kb-[0-9a-f]{16}$/.test(id) || id.startsWith('f-')) return { p: { ...p, note: `${id} is a passage of this workspace; its row is in the bibliography` }, action: none };
+    return { p, action: id.startsWith('s-') ? { t: 'open-source', id: id.slice(2) } : { t: 'open-claim', id } };
+  }
+  if (asMarkdown(o)) {
+    const lines = renderMarkdownLinks(o.markdown!, Math.max(10, pageWidth(w) - 4), { images: o.images }).lines;
+    const row = lines.findIndex((l) => anchorOf(l.replace(ANSI_RE, '').trim()) === n.anchor);
+    return { p: row < 0 ? { ...p, note: `this page has no section "${n.anchor}"` } : { ...p, at: row, note: '' }, action: none };
+  }
+  return { p: { ...p, note: 'this page has no sections' }, action: none };
+}
+
+/** One key in the Pages view. `used` is false for the keys the window keeps (← → change the view). `w` is the window's width, for moving to a section. */
+export function key(p: Pages, e: Ev, h: number, w = 100): { p: Pages; action: PagesAction; used: boolean } {
   const used = (next: Pages, action: PagesAction = none) => ({ p: next, action, used: true });
   if (e.t === 'ctrl') return { p, action: none, used: false };
   if (p.focus === 'note') {
@@ -213,10 +298,17 @@ export function key(p: Pages, e: Ev, h: number): { p: Pages; action: PagesAction
   }
   if (p.focus === 'page') {
     const o = p.open;
+    // Tab and shift+tab move through the page's links; past either end they go back to the results, as tab always did.
+    const navs = o?.markdown ? navOf(o.markdown) : [];
+    const to = (i: number | null) => (i === null || i < 0 || i >= navs.length ? used({ ...p, nav: null, focus: 'results', note: '' }) : used({ ...p, nav: i, note: navWords(navs[i]!) }));
     switch (e.k) {
-      case 'down': return o ? used({ ...p, at: Math.min(o.body.length - 1, p.at + 1) }) : used(p);
+      // A Markdown page scrolls by rows and is clamped where it is drawn; a page of statements moves by statement.
+      case 'down': return o ? used({ ...p, at: Math.min((asMarkdown(o) ? renderMarkdownLinks(o.markdown!, Math.max(10, pageWidth(w) - 4), { images: o.images }).lines.length : o.body.length) - 1, p.at + 1) }) : used(p);
       case 'up': return used({ ...p, at: Math.max(0, p.at - 1) });
-      case 'tab': case 'esc': case 'shift-tab': return used({ ...p, focus: 'results' });
+      case 'tab': return to(p.nav === null ? (navs.length ? 0 : null) : p.nav + 1);
+      case 'shift-tab': return to(p.nav === null ? null : p.nav - 1);
+      case 'enter': { const n = p.nav === null ? undefined : navs[p.nav]; if (!n || !o) return used(p); const r = follow(p, n, w); return used(r.p, r.action); }
+      case 'esc': return used({ ...p, nav: null, focus: 'results', note: '' });
       case 'left': case 'right': return { p, action: none, used: false };
       default: return used(p);
     }
@@ -280,7 +372,7 @@ function glyphFor(o: Open, ids: string[]): string {
   return row?.[1]?.split(' ')[0] ?? '';
 }
 
-function pageLines(o: Open, at: number, focused: boolean, w: number, h: number): string[] {
+function pageLines(o: Open, at: number, focused: boolean, w: number, h: number, nav: number | null = null): string[] {
   const out: string[] = [];
   out.push(...wrap(o.banner, w - 2).map((l) => ' ' + T.dim(l)));
   const flags = [
@@ -295,11 +387,15 @@ function pageLines(o: Open, at: number, focused: boolean, w: number, h: number):
   if (flags) out.push(' ' + T.dim(flags));
   out.push(T.dim('─'.repeat(Math.max(0, w))));
 
-  if (o.markdown && (o.kind || o.depth || o.markdown.includes('# ') || o.markdown.includes('## Contents') || o.markdown.includes('!['))) {
-    const rendered = renderMarkdownLinks(o.markdown, Math.max(10, w - 4), { images: o.images });
+  if (asMarkdown(o)) {
+    const rendered = renderMarkdownLinks(o.markdown!, Math.max(10, w - 4), { images: o.images });
     const room = Math.max(1, h - out.length - 1);
-    const first = Math.max(0, Math.min(at, Math.max(0, rendered.lines.length - room)));
-    out.push(...rendered.lines.slice(first, first + room));
+    // The focused link is drawn reversed, and the page is moved just far enough to show it.
+    const span = focused && nav !== null ? navSpans(rendered.lines, navOf(o.markdown!))[nav] ?? null : null;
+    const lines = span ? rendered.lines.map((l, i) => (i === span.line ? reverseSpan(l, span.col, span.width) : l)) : rendered.lines;
+    let first = Math.max(0, Math.min(at, Math.max(0, lines.length - room)));
+    if (span && (span.line < first || span.line >= first + room)) first = Math.max(0, Math.min(span.line - Math.floor(room / 3), Math.max(0, lines.length - room)));
+    out.push(...lines.slice(first, first + room));
     return out;
   }
 
@@ -340,15 +436,15 @@ export function view(p: Pages, w: number, h: number, now: number, still: boolean
   }
   const waiting = p.busy === 'page' ? [T.dim(` ${spinner(now, still)} writing the page, then checking it… · esc cancels`)] : [];
   if (wide && p.open) {
-    const page = pageLines(p.open, p.at, p.focus === 'page', w - left - 3, room);
+    const page = pageLines(p.open, p.at, p.focus === 'page', w - left - 3, room, p.nav);
     for (let i = 0; i < room; i++) lines.push(T.spread(T.clip(results[i] ?? '', left), T.dim('│ ') + (page[i] ?? ''), w));
   } else if (p.open) {
-    lines.push(...pageLines(p.open, p.at, p.focus === 'page', w, room));
+    lines.push(...pageLines(p.open, p.at, p.focus === 'page', w, room, p.nav));
   } else lines.push(...results.slice(0, room), ...waiting);
   const out = [...top, ...lines.slice(0, room)];
   while (out.length < h - 2) out.push('');
   const note = p.focus === 'note' ? ` ${T.accent('what is wrong?')} ${p.draft}${T.accent('▏')}` : p.note ? T.dim(' ' + sanitize(p.note)) : p.open?.notes.length ? T.dim(' ' + p.open.notes[0]) : p.open?.outcome === 'claims_only' ? T.dim(' the draft did not pass its checks: these are the claims alone') : '';
   out.push(note);
-  out.push(hint(p.focus === 'note' ? 'enter file it · esc cancel' : p.focus === 'page' ? '↑ ↓ scroll · e expand · r refresh · s save/pin · d dispute · p promote to claim · o open source · tab back' : p.focus === 'box' ? 'enter ask · tab internal/external · ↓ results · esc back' : '↑ ↓ pick · enter open · tab page · esc ask again'));
+  out.push(hint(p.focus === 'note' ? 'enter file it · esc cancel' : p.focus === 'page' ? '↑ ↓ scroll · tab next link · enter follow · e expand · r refresh · s save/pin · d dispute · p promote · o source · esc back' : p.focus === 'box' ? 'enter ask · tab internal/external · ↓ results · esc back' : '↑ ↓ pick · enter open · tab page · esc ask again'));
   return out.slice(0, h).map((s) => T.clip(s, w));
 }

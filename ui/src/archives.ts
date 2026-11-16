@@ -92,7 +92,7 @@ export type Action =
   | { t: 'research'; topic: string }
   | { t: 'research-cancel' }
   | { t: 'library'; what: L.LibKind; open?: string }
-  | Exclude<P.PagesAction, { t: 'none' | 'leave' | 'open-source' }>
+  | Exclude<P.PagesAction, { t: 'none' | 'leave' | 'open-source' | 'open-claim' }>
   | { t: 'pages-list' }
   | { t: 'excerpts'; id: string }
   | { t: 'open'; target: Extract<Target, { k: 'doc' | 'pointer' }> }
@@ -248,7 +248,7 @@ export function key(a: Arch, e: Ev, w: number, h: number): { a: Arch; action: Ac
   if (a.at >= 0) return reader(a, e, w, h, used);
   const list = rows(a);
   if (a.mode === 'expand') return expandKey(a, e, used);
-  if (a.mode === 'pages') return pagesKey(a, e, h, used);
+  if (a.mode === 'pages') return pagesKey(a, e, w, h, used);
   if (a.mode === 'sources' || a.mode === 'claims') return libraryKey(a, a.mode, e, h, used);
   if (e.t === 'ctrl' && e.c === 'l') return a.pins ? goLibrary(a, 'sources', used) : used({ ...a, note: 'the library views are in the console: this window only reads' });
   if (e.t === 'text' && e.s === 'f' && a.focus === 'list' && a.pg.open) {
@@ -328,17 +328,19 @@ function libraryKey(a: Arch, what: L.LibKind, e: Ev, h: number, used: (n: Arch, 
   return used({ ...a, lib: r.l }, r.action.t === 'none' ? none : r.action);
 }
 
-function pagesKey(a: Arch, e: Ev, h: number, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
+function pagesKey(a: Arch, e: Ev, w: number, h: number, used: (n: Arch, act?: Action) => ReturnType<typeof key>) {
   if (e.t === 'text' && e.s === 'f' && a.pg.focus !== 'box' && a.pg.focus !== 'note') {
     return used({ ...a, mode: 'search', focus: 'list', rawChosen: true, note: 'raw file results (f to return to encyclopedia page)' }, a.searched ? none : (a.pg.q ? { t: 'search', q: a.pg.q } : none));
   }
   if (e.t === 'ctrl' && e.c === 'l') return used({ ...a, mode: 'search', note: '' }, a.shelf ? none : { t: 'reload' });
-  const r = P.key(a.pg, e, h - 7);
+  const r = P.key(a.pg, e, h - 7, w);
   if (!r.used) return NOT_USED(a);
   const act = r.action;
   if (act.t === 'leave') return used({ ...a, mode: 'search', note: '' }, a.shelf ? none : { t: 'reload' });
   // Opening a cited source goes to the Sources view with that source's detail, once the list is read.
   if (act.t === 'open-source') return used({ ...a, mode: 'sources', pg: r.p, lib: { ...a.lib, sel: 0, detail: null, want: act.id, note: 'reading…' } }, { t: 'library', what: 'sources', open: act.id });
+  // Following a claim's citation goes to the Claims view with that claim's record (specs/097 §4.6), once the list is read.
+  if (act.t === 'open-claim') return used({ ...a, mode: 'claims', pg: r.p, lib: { ...a.lib, sel: 0, detail: null, want: act.id, note: 'reading…' } }, { t: 'library', what: 'claims' });
   return used({ ...a, pg: r.p }, act.t === 'none' ? none : act);
 }
 
