@@ -2,8 +2,10 @@
 //! the daemon, attaches on the read-only narrator scope, and gives the window a few named reads and the daemon's notifications.
 //! When a terminal has paired it (spec 120), it attaches on the app socket instead, proving its key on every connection; the
 //! window is given the same reads either way, and a paired window the encyclopedia's reads as well (spec 117 §3; `ency`).
+//! A paired window whose key holds `request` may also ask for four things to be started (spec 120 §4.2; `ask`).
 //! The operator's own marks on the encyclopedia (spec 117 §5; `marks`) are kept in the app's folder and never sent anywhere.
 
+pub mod ask;
 pub mod bridge;
 pub mod client;
 pub mod ency;
@@ -86,6 +88,19 @@ fn encyclopedia(bridge: State<'_, Arc<Bridge>>, read: String, arg: Option<Value>
         return Err("that is not an encyclopedia read this app makes".into());
     };
     bridge.call(method, params).map(|reply| ency::shown(method, &arg, reply))
+}
+
+/// One of the four requests of the daemon's `request` grant (spec 120 §4.2, §6 item 1): continue a research topic, ask a
+/// follow-up question, rebuild a topic page, dispute a claim. The window names the request and hands over ids and what
+/// the operator typed; `ask::request` picks the method and builds the parameters from those fields alone. Sent only when
+/// this app proved a paired key that holds `request`: otherwise the answer is the sentence that says so, and the daemon
+/// is not asked.
+#[tauri::command(async)]
+fn request(bridge: State<'_, Arc<Bridge>>, what: String, arg: Option<Value>) -> Result<Value, String> {
+    let Some((method, params)) = ask::request(&what, &arg.unwrap_or(Value::Null)) else {
+        return Err("that is not a request this app makes, or one of its fields is not of the shape it takes".into());
+    };
+    bridge.request(method, params)
 }
 
 fn home() -> Result<std::path::PathBuf, String> {
@@ -191,7 +206,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, kb, encyclopedia, marks_load, marks_save, export_page, print_page, reveal, open_file, open_url])
+        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, kb, encyclopedia, request, marks_load, marks_save, export_page, print_page, reveal, open_file, open_url])
         .run(tauri::generate_context!())
         .expect("the Delphi window could not start");
 }

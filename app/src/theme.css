@@ -76,6 +76,7 @@ h1, h2, h3, p, dl, dd, ol, ul { margin: 0; padding: 0; }
 .where span { overflow: hidden; text-overflow: ellipsis; }
 .spacer { flex: 1 1 120px; }
 .conn { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.conn-why { color: var(--text2); max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .dot.on { background: var(--live); }
 .dot.off { background: #ef4444; }

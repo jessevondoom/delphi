@@ -2,6 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Bridge, KbReply, Listener } from './bridge.ts';
+import type { Asked } from './requests.ts';
 import type { Conn, Envelope, Info, OState } from './types.ts';
 
 /** A command the bridge refused says why in a sentence; the window shows it. */
@@ -17,6 +18,8 @@ export function appBridge(): Bridge {
     kb: (target: string) => invoke<KbReply>('kb', { target }),
     // The bridge names the daemon's method from `read` and builds its parameters from `arg` (`src-tauri/src/ency.rs`).
     ency: (read, arg) => invoke<unknown>('encyclopedia', { read, arg: arg ?? {} }).catch(said),
+    // The bridge names the daemon's method from `what` and builds its parameters from `arg`'s known fields (`src-tauri/src/ask.rs`).
+    request: (what, arg) => invoke<Asked>('request', { what, arg }).catch(said),
     marks: () => invoke<unknown>('marks_load').catch(said),
     saveMarks: (marks) => invoke<void>('marks_save', { marks }).catch(said),
     exportPage: (name, text) => invoke<string>('export_page', { name, text }).catch(said),

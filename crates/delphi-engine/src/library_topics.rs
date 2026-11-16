@@ -45,6 +45,12 @@ pub const SCOPE: Scope = Scope::External;
 /// How many versions a topic keeps; the oldest goes first.
 pub const MAX_VERSIONS: usize = 50;
 
+/// The anchor a section's heading makes, as the page check makes it for a page's own `#section` links: what the app names
+/// a section by (`specs/120` §4.2).
+pub fn section_anchor(heading: &str) -> String {
+    super::page_check::slug_of(heading)
+}
+
 /// A topic slug as this module makes and accepts them: lowercase letters, digits and single hyphens, at most [`MAX_SLUG`]. A
 /// search page's key (24 hex characters), the mechanical page's `<slug>-<16 hex>` and the folder and file names of
 /// `library/pages/` are refused, so a topic's files can never be another page's.
@@ -386,6 +392,16 @@ impl Library {
             }
         }
         made
+    }
+
+    /// Does a topic page that follows the research topic `research_topic` have a section whose anchor is `anchor`
+    /// (`specs/120` §4.2: the daemon looks up what an id refers to)? The anchor is the page check's own
+    /// ([`crate::library_page_check::slug_of`]). Reads only.
+    pub fn topic_has_section(&self, research_topic: &str, anchor: &str) -> bool {
+        self.topic_sides().into_iter().filter(|(_, side)| side["research_topics"].as_array().into_iter().flatten().any(|t| t == research_topic)).any(|(slug, _)| {
+            let md = std::fs::read_to_string(self.topic_file(&slug)).unwrap_or_default();
+            page_meta::strip(&md).lines().filter_map(|l| l.strip_prefix("## ").or_else(|| l.strip_prefix("### "))).any(|h| section_anchor(h.trim()) == anchor)
+        })
     }
 
     fn topic_sides(&self) -> Vec<(String, Value)> {
