@@ -55,12 +55,14 @@ A reader should know what the subject is after the first sentence, and be able t
    ```markdown
    1. [Section](#section-slug)
    ```
-6. **Sections**: `##` and `###` headings. Put a figure where it helps: the image on its own line:
-   ```markdown
-   ![what it shows](lib:<source-id>/<file>)
-   *Figure 1: what to notice [s-id].*
-   ```
-   Use only assets listed in the records, and cite the source the asset belongs to.
+6. **Sections**: `##` and `###` headings. Put a figure where it helps:
+   - From ASSETS in the records, put the image on its own line:
+     ```markdown
+     ![what it shows](lib:<source-id>/<file>)
+     *Figure 1: what to notice [s-id].*
+     ```
+     Use only assets listed in the records, and cite the source the asset belongs to.
+   - Or ask Delphi to render a chart or diagram from cited records with a fenced ` ```figure ` block holding one JSON object with `"type"` (`bar`, `line`, `pie`, `flow`, `tree`, `sequence`, `timeline`, `matrix`, etc.), `"title"`, inline `"data"` (charts) or `"nodes"`/`"edges"` (diagrams), and `"from": ["c-...", "s-..."]`. Every number in a chart's data must appear in a record named in `"from"`, and every diagram node label must appear in your page text. Never write `Figure made by ...` or picture credits; the daemon writes those lines.
 7. **Citations**: `[c-id]` for a claim and `[s-id]` for a source, after the sentence or paragraph they support, using only ids you were given.
 8. Do not write the banner or a bibliography table. The daemon adds them; its table is the page's References.
 

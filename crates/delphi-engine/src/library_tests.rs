@@ -2309,3 +2309,235 @@ fn purging_private_text_keeps_the_pointer_and_marks_its_anchors_text_removed() {
     assert!(l.source_dir(&own).join("source.md").exists(), "a source the operator flagged private is not purged here");
     assert!(l.private_texts().is_empty());
 }
+
+mod page_figures {
+    use super::*;
+    use crate::fact_judge::TokenLedger;
+    use crate::library::bib::Format;
+    use crate::library::claims::{AnchorSpec, ClaimOpts, Validator};
+    use crate::library::page_check::{Finding, Scope};
+    use crate::library::page_validate::{Assertion, CheckedPage, Judgement, Outcome, PageValidator, PageWriter, ValidatorFuture, ValidatorReply, WriterFuture};
+    use std::sync::Mutex;
+
+    struct PassValidator;
+    impl PageValidator for PassValidator {
+        fn validate<'a>(&'a self, _q: &'a crate::library::page_validate::PageQuery) -> ValidatorFuture<'a> {
+            Box::pin(async { Ok(ValidatorReply { model: "m".into(), family: "f".into(), tokens: 5, assertions: vec![Assertion { text: "ok".into(), judgement: Judgement::Supported, record: None }] }) })
+        }
+    }
+
+    struct RoleWriter {
+        role_name: &'static str,
+        rewrites: Mutex<Vec<Vec<String>>>,
+    }
+    impl PageWriter for RoleWriter {
+        fn rewrite<'a>(&'a self, draft: &'a str, findings: &'a [String]) -> WriterFuture<'a> {
+            self.rewrites.lock().unwrap().push(findings.to_vec());
+            let d = draft.to_string();
+            Box::pin(async move { Ok(d) })
+        }
+        fn role(&self) -> &str {
+            self.role_name
+        }
+    }
+
+    fn seed_metrics_library() -> (tempfile::TempDir, Library, String, String, String) {
+        let (d, l) = lib();
+        let src_text = "Pipeline throughput reached 120 requests per second in 2025, with 34.5 ms median latency across Fetch, Check, and Publish stages.";
+        let sid = l.add_file(&file(d.path(), "metrics.md", src_text), &open("CC0-1.0"), &Budgets::default()).unwrap().id;
+        let quote1 = "Pipeline throughput reached 120 requests per second in 2025";
+        let c1 = l.add_claim("Pipeline throughput reached 120 requests per second in 2025.", &ClaimOpts::default(), &[AnchorSpec { source_id: sid.clone(), locator: Some("p1".into()), quote: quote1.into(), ..Default::default() }]).unwrap()["id"].as_str().unwrap().to_string();
+        l.validate_claim(&c1, Validator::Operator).unwrap();
+        let quote2 = "with 34.5 ms median latency across Fetch, Check, and Publish stages.";
+        let c2 = l.add_claim("Median latency is 34.5 ms across Fetch, Check, and Publish stages.", &ClaimOpts::default(), &[AnchorSpec { source_id: sid.clone(), locator: Some("p1".into()), quote: quote2.into(), ..Default::default() }]).unwrap()["id"].as_str().unwrap().to_string();
+        l.validate_claim(&c2, Validator::Operator).unwrap();
+        (d, l, sid, c1, c2)
+    }
+
+    fn run_checked(l: &Library, topic: &str, draft: &str, scope: Scope, role: &'static str) -> CheckedPage {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let w = RoleWriter { role_name: role, rewrites: Mutex::new(vec![]) };
+        rt.block_on(l.build_page_checked(topic, draft, Format::Plain, scope, &PassValidator, &w, &TokenLedger::new(100_000))).unwrap()
+    }
+
+    #[test]
+    fn passing_chart_and_diagram_get_generated_licence_exact_label_and_pass_checks() {
+        let (_d, l, sid, c1, c2) = seed_metrics_library();
+        let draft = format!(
+            "# Latency and Stages\n\n\
+            Throughput and latency are tracked across Fetch, Check, and Publish [{c1}; {c2}].\n\n\
+            ```figure\n\
+            {{\"kind\": \"chart\", \"type\": \"bar\", \"title\": \"Throughput\", \"data\": {{\"columns\": [\"Year\", \"RPS\"], \"rows\": [[\"2025\", 120], [\"Latency\", 34.5]]}}, \"from\": [\"{c1}\", \"{c2}\"]}}\n\
+            ```\n\n\
+            ```figure\n\
+            {{\"type\": \"flow\", \"title\": \"Pipeline Stages\", \"nodes\": [{{\"id\": \"a\", \"label\": \"Fetch\"}}, {{\"id\": \"b\", \"label\": \"Check\"}}, {{\"id\": \"c\", \"label\": \"Publish\"}}], \"edges\": [{{\"from\": \"a\", \"to\": \"b\"}}, {{\"from\": \"b\", \"to\": \"c\"}}], \"from\": [\"s-{sid}\"]}}\n\
+            ```\n"
+        );
+        let p = run_checked(&l, "latency", &draft, Scope::External, "writer");
+        assert_eq!(p.verdict.outcome, Outcome::Pass);
+        assert!(p.page.figure_failures.is_empty(), "{:?}", p.page.figure_failures);
+        assert!(p.verdict.figure_failures.is_empty(), "{:?}", p.verdict.figure_failures);
+
+        let pics = assets::lib_pictures(&p.page.markdown);
+        assert_eq!(pics.len(), 2, "{}", p.page.markdown);
+        assert!(pics.iter().all(|(s, _)| s == assets::FIGURES_BUCKET), "{pics:?}");
+        for (bucket, file) in &pics {
+            let png = l.asset_file(bucket, file).expect("rendered figure PNG on disk");
+            assert!(png.is_file());
+            let bytes = std::fs::read(&png).unwrap();
+            assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+            let rec = l.asset_record(bucket, file).expect("generated licence record");
+            assert_eq!(rec["licence"], "generated");
+            assert_eq!(rec["made_by"], "writer");
+            let markers: Vec<&str> = rec["markers"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            assert!(markers == [c1.as_str(), c2.as_str()] || markers == [format!("s-{sid}").as_str()], "{rec}");
+            assert!(rec["width"].as_u64().unwrap_or(0) > 0);
+            assert!(rec["height"].as_u64().unwrap_or(0) > 0);
+        }
+
+        let chart_label = format!("Figure made by writer from [{c1}, {c2}]. Not from a source.");
+        let diagram_label = format!("Figure made by writer from [s-{sid}]. Not from a source.");
+        assert!(p.page.markdown.contains(&chart_label), "{}", p.page.markdown);
+        assert!(p.page.markdown.contains(&diagram_label), "{}", p.page.markdown);
+        assert!(p.page.markdown.contains(&format!("| s-{sid} |")), "figure markers appear in bibliography: {}", p.page.markdown);
+        assert!(l.check_page_text(&p.page.markdown, Scope::External).findings.is_empty());
+
+        // Removing or changing the daemon's figure label line fails the page check (`FigureLabelMissing`).
+        let altered = p.page.markdown.replace(&chart_label, "Figure made by writer from somewhere. Not from a source.");
+        let findings = l.check_page_text(&altered, Scope::External).findings;
+        assert!(findings.iter().any(|f| matches!(f, Finding::FigureLabelMissing(_))), "{findings:?}");
+
+        // A writer may not spoof a figure label line directly in a draft (`FigureLabelInBody`).
+        let spoof = format!("# Latency\n\nFetch happened [{c1}].\nFigure made by writer from [{c1}]. Not from a source.\n");
+        let err = l.build_page_scoped("latency", Some(&spoof), Format::Plain, Scope::External).unwrap_err();
+        assert!(err.contains(&Finding::FigureLabelInBody), "{err:?}");
+    }
+
+    /// `specs/118` §6 AC-6: a chart whose data holds a number found in no cited record is dropped and the failure recorded.
+    #[test]
+    fn ac6_chart_with_uncited_number_is_dropped_and_failure_recorded() {
+        let (_d, l, _sid, c1, c2) = seed_metrics_library();
+        // `c1` contains `120` and `2025`; `c2` contains `34.5`. Neither `20` (a substring of `120`!) nor `99` appears in `c1`.
+        let draft = format!(
+            "# Latency\n\n\
+            Throughput was 120 requests per second in 2025 with 34.5 ms latency [{c1}; {c2}].\n\n\
+            ```figure\n\
+            {{\"type\": \"bar\", \"title\": \"Good Chart\", \"data\": {{\"columns\": [\"Metric\", \"Value\"], \"rows\": [[\"RPS\", 120], [\"Latency\", 34.5]]}}, \"from\": [\"{c1}\", \"{c2}\"]}}\n\
+            ```\n\n\
+            ```figure\n\
+            {{\"type\": \"bar\", \"title\": \"Substring Trap Chart\", \"data\": {{\"columns\": [\"Metric\", \"Value\"], \"rows\": [[\"Actual\", 120], [\"Trap\", 20]]}}, \"from\": [\"{c1}\"]}}\n\
+            ```\n\n\
+            ```figure\n\
+            {{\"type\": \"bar\", \"title\": \"Invented Number Chart\", \"data\": {{\"columns\": [\"Metric\", \"Value\"], \"rows\": [[\"Actual\", 120], [\"Guess\", 99]]}}, \"from\": [\"{c1}\"]}}\n\
+            ```\n"
+        );
+        let p = run_checked(&l, "latency", &draft, Scope::External, "writer");
+        assert_eq!(p.verdict.outcome, Outcome::Pass);
+        assert_eq!(assets::lib_pictures(&p.page.markdown).len(), 1, "only the valid chart stays: {}", p.page.markdown);
+        assert!(p.page.markdown.contains("![Good Chart](lib:_figures/"));
+        assert!(!p.page.markdown.contains("Substring Trap Chart") && !p.page.markdown.contains("Invented Number Chart"));
+        assert_eq!(p.page.figure_failures.len(), 2, "{:?}", p.page.figure_failures);
+        assert_eq!(p.verdict.figure_failures.len(), 2);
+        assert!(p.page.figure_failures.iter().any(|f| f.title == "Substring Trap Chart" && f.reason.contains("20")));
+        assert!(p.page.figure_failures.iter().any(|f| f.title == "Invented Number Chart" && f.reason.contains("99")));
+
+        let side: Value = serde_json::from_slice(&std::fs::read(l.root().join("pages").join(format!("latency-{}.json", p.page.hash))).unwrap()).unwrap();
+        assert_eq!(side["figure_failures"].as_array().map(Vec::len), Some(2), "{side}");
+        assert_eq!(side["validator"]["figure_failures"].as_array().map(Vec::len), Some(2), "{side}");
+        let log = std::fs::read_to_string(l.root().join("log.jsonl")).unwrap();
+        assert!(log.contains("figure_dropped"), "{log}");
+    }
+
+    /// `specs/118` §5 item 3: every node label of a diagram must appear in the page text.
+    #[test]
+    fn diagram_with_node_label_absent_from_page_text_is_dropped() {
+        let (_d, l, _sid, c1, _) = seed_metrics_library();
+        let src_extra = l.add_file(&file(_d.path(), "extra.md", "Flow passes through AlphaStage and GhostNode before completion."), &open("CC0-1.0"), &Budgets::default()).unwrap().id;
+        // `GhostNode` IS in the cited source (`src_extra`), NOT in the page prose: page text check must still drop it.
+        let draft = format!(
+            "# Pipeline\n\n\
+            Data flows through AlphaStage into completion [{c1}; s-{src_extra}].\n\n\
+            ```figure\n\
+            {{\"type\": \"flow\", \"title\": \"Missing Label Diagram\", \"nodes\": [{{\"id\": \"a\", \"label\": \"AlphaStage\"}}, {{\"id\": \"b\", \"label\": \"GhostNode\"}}], \"edges\": [{{\"from\": \"a\", \"to\": \"b\"}}], \"from\": [\"s-{src_extra}\"]}}\n\
+            ```\n"
+        );
+        let p = l.build_page_scoped("pipeline", Some(&draft), Format::Plain, Scope::External).unwrap();
+        assert!(assets::lib_pictures(&p.markdown).is_empty(), "{}", p.markdown);
+        assert_eq!(p.figure_failures.len(), 1, "{:?}", p.figure_failures);
+        assert_eq!(p.figure_failures[0].kind, "diagram");
+        assert!(p.figure_failures[0].reason.contains("GhostNode"), "{:?}", p.figure_failures[0]);
+    }
+
+    #[test]
+    fn external_private_marker_data_from_and_unlicensed_figure_file_are_rejected() {
+        let (_d, l, sid, c1, _c2) = seed_metrics_library();
+        let snap = crate::fact_fetch::test_snapshot("https://priv.example/n", "Private", &["Private count is 77."]);
+        let priv_src = l.add_fetched("https://priv.example/n", &snap, &AddOpts { keep_closed_privately: true, ..Default::default() }, &Budgets::default()).unwrap().id;
+
+        // Private source in `from` fails on External scope; `data.from` is rejected; neither renders.
+        let draft = format!(
+            "# Figures\n\n\
+            Throughput was 120 [{c1}].\n\n\
+            ```figure\n\
+            {{\"type\": \"bar\", \"title\": \"Private Count\", \"data\": {{\"columns\": [\"K\", \"V\"], \"rows\": [[\"x\", 77]]}}, \"from\": [\"s-{priv_src}\"]}}\n\
+            ```\n\n\
+            ```figure\n\
+            {{\"type\": \"bar\", \"title\": \"File Read Attempt\", \"data\": {{\"from\": \"/etc/passwd\"}}, \"from\": [\"s-{sid}\"]}}\n\
+            ```\n"
+        );
+        let p = l.build_page_scoped("figures", Some(&draft), Format::Plain, Scope::External).unwrap();
+        assert!(assets::lib_pictures(&p.markdown).is_empty());
+        assert_eq!(p.figure_failures.len(), 2, "{:?}", p.figure_failures);
+        assert!(p.figure_failures.iter().any(|f| f.title == "Private Count"), "{:?}", p.figure_failures);
+        assert!(p.figure_failures.iter().any(|f| f.title == "File Read Attempt" && f.reason.contains("data.from")), "{:?}", p.figure_failures);
+
+        // An unrecorded PNG placed in `library/figures/` fails `assets_check` and is moved to `unlicensed/`.
+        let rogue = l.figures_dir().join("rogue.png");
+        std::fs::create_dir_all(l.figures_dir()).unwrap();
+        std::fs::write(&rogue, b"\x89PNG\r\n\x1a\n").unwrap();
+        let bad = l.assets_check(true);
+        assert!(bad.iter().any(|u| u.source_id == assets::FIGURES_BUCKET && u.file == "rogue.png" && u.moved), "{bad:?}");
+        assert!(!rogue.exists() && l.figures_dir().join("unlicensed").join("rogue.png").exists());
+
+        // Referencing an existing figure PNG without its `.json` record fails `check_body` with `ImageUnlicensed`.
+        let unrec = l.figures_dir().join("orphan.png");
+        std::fs::write(&unrec, b"\x89PNG\r\n\x1a\n").unwrap();
+        let body = format!("# Figures\n\nSee [x](page:other) and ![Orphan](lib:_figures/orphan.png) [{c1}].");
+        let chk = l.check_body(&body, Scope::External);
+        assert!(chk.findings.iter().any(|f| matches!(f, Finding::ImageUnlicensed(t) if t == "lib:_figures/orphan.png")), "{:?}", chk.findings);
+    }
+
+    /// A number the chart draws outside its data (here its title) is held to the same rule; a figure the writer points
+    /// at by its address instead of asking for it is dropped, so a figure checked against one page is never reused on another.
+    #[test]
+    fn a_number_in_a_chart_title_and_a_typed_figure_address_are_dropped() {
+        let (_d, l, _sid, c1, c2) = seed_metrics_library();
+        let first = format!("# One\n\nThroughput was 120 in 2025 [{c1}].\n\n```figure\n{{\"type\": \"bar\", \"title\": \"Throughput\", \"data\": {{\"columns\": [\"Year\", \"RPS\"], \"rows\": [[\"2025\", 120], [\"Latency\", 34.5]]}}, \"from\": [\"{c1}\", \"{c2}\"]}}\n```\n");
+        let made = l.resolve_figures(&first, Scope::External, "writer");
+        assert!(made.failures.is_empty() && made.assets.len() == 1, "{:?}", made.failures);
+        let uri = made.assets[0].clone();
+
+        let draft = format!(
+            "# Two\n\nThroughput was 120 in 2025 [{c1}].\n\n![Reused]({uri})\n\n\
+            ```figure\n{{\"type\": \"bar\", \"title\": \"Throughput tripled to 360\", \"data\": {{\"columns\": [\"Year\", \"RPS\"], \"rows\": [[\"2025\", 120], [\"Latency\", 34.5]]}}, \"from\": [\"{c1}\", \"{c2}\"]}}\n```\n"
+        );
+        let p = l.build_page_scoped("two", Some(&draft), Format::Plain, Scope::External).unwrap();
+        assert!(assets::lib_pictures(&p.markdown).is_empty(), "{}", p.markdown);
+        assert!(!p.markdown.contains("Figure made by"), "{}", p.markdown);
+        assert_eq!(p.figure_failures.len(), 2, "{:?}", p.figure_failures);
+        assert!(p.figure_failures.iter().any(|f| f.reason.contains("360") && f.reason.contains("title")), "{:?}", p.figure_failures);
+        assert!(p.figure_failures.iter().any(|f| f.reason.contains("figure block")), "{:?}", p.figure_failures);
+    }
+
+    /// A failure's title is the writer's words: it reaches the log, the sidecar and the terminal as one plain line.
+    #[test]
+    fn a_failed_figure_title_reaches_the_record_as_one_plain_line() {
+        let (_d, l, _sid, c1, _c2) = seed_metrics_library();
+        let draft = format!("# T\n\nThroughput was 120 [{c1}].\n\n```figure\n{{\"type\": \"bar\", \"title\": \"Bad\\u001b[31m\\nNext [x](http://e.example)\", \"data\": {{\"columns\": [\"K\", \"V\"], \"rows\": [[\"a\", 7]]}}, \"from\": [\"{c1}\"]}}\n```\n");
+        let r = l.resolve_figures(&draft, Scope::External, "writer");
+        assert_eq!(r.failures.len(), 1, "{:?}", r.failures);
+        let t = &r.failures[0].title;
+        assert!(!t.chars().any(char::is_control) && !t.contains(['[', ']']), "{t:?}");
+    }
+}
