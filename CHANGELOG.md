@@ -6,7 +6,37 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
-## Unreleased
+## 0.6.3 — 2026-11-16
+
+A summary by spec; the pull requests are listed on the releases page. This release brings the knowledge loop (specs 112 to 121). The tests ran on scratch homes with fakes, and **most of the knowledge loop has not been run against the real web or a real model**:
+- One live proof ran against the real web, through Parallel's keyless engine: five research runs, with real searches and real page reads, keeping topic records, search logs and six sources (#750).
+- The model half of that proof did not run: no claims were drawn, and no topic page was built and read.
+- That run found five faults that are not fixed in this release, among them run ids that restart in every MCP session and a run stopped mid-way that stays `running`. They are listed in the tracker's 119 B6 row.
+
+- **Research is one record and one runner** (spec 112, #724). A research run writes a topic record as it goes (`delphi research topics`, `show`, `continue`, due topics), its claims become library claims, merged by fingerprint, and the console, inside agents and hosts all use one runner and one limits table.
+- **Host-led research** (spec 113, #724, #725): `record_research` hands a host's own research to Delphi, which checks the public quotes; `delphi research ingest` turns files on disk into topics; a session-end note and the next session's brief.
+- **A methodical scout** (spec 114, #724, #726, #735): what Delphi already holds is looked up first (`known_before`), a plan of sub-questions guides the queries, coverage and stopping rules are explicit, the scout writes an answer from the claims that code checks, and each run leaves a note. Misses are logged, and `delphi research suggest` proposes what to research next.
+- **Recall across projects** (spec 115, #724, #727, #730, #732, #738): research is shared across a workspace's projects by default, with a private flag per project (`delphi project private`). Claims from private or internal sources are shared only under three guards. A task that is handed shared research is marked, and the mark stays with the task.
+- **Memory that grows** (spec 116, #724, #736, #742): a provisional tier for notes agents keep, findings (`record_finding`), consolidation, read counts that feed back into ranking, `delphi learn wrong`, and the investigator's throwaway shell, its host worker and `verify_source`.
+- **The encyclopedia in the desktop app** (spec 117, #733, #739): topic pages with versions, gathered over the whole corpus; source and claim pages; agent memory; the operator's marks; asking a question by clipboard.
+- **Pictures and figures** (spec 118, #741, #747, #748): every picture carries a licence record, and one without a licence is refused. Research runs capture pictures. WebP is kept as it is. SVG capture is **off by default** (`[research] svg`) until a render backstop lands. Pages can carry figures, with their numbers and labels checked.
+- **Research readiness** (spec 119, #724, #734, #744, #750):
+  - `delphi research setup`, and `delphi kb health`.
+  - **Research is never refused for want of an engine.** In a host session the host's own search tools come first; with no engine, a run uses what Delphi holds and the trusted sites.
+  - Parallel's keyless engine is the default; Brave is offered second.
+  - A page of unknown licence keeps the passages it was quoted for (`[library] unknown_licence = "excerpts"`). `private_text` keeps the whole page as a private source, and `delphi sources private list|purge` manages it.
+  - Retraction lookup, archived copies and citation chaining are on by default; background validation is offered and off.
+- **The desktop app scope** (spec 120, #731, #743, #745):
+  - The app pairs with a key from a terminal; grants widen one at a time, from a gate file.
+  - The `request` grant gives the app its four methods and its buttons.
+  - The unsigned app keeps its key in a file.
+  - `delphi app` starting the app is compiled for tests only until its gate change lands.
+- **Data sensitivity** (spec 121, #740, #746): three handling traits, `personal` (shown as private), `internal` and `confidential`, assigned by the daemon and carried to the records derived from them, with `delphi handling status|set|clear|reconcile`. Labelling what leaves the install and the reader grant are later slices. Exits (bundles, the federation) are not changed yet.
+- Work output: every item has a picture, and each document says who made it (#723).
+- Council seats and the other role gates follow the fleet dispatch rule (spec 063, #703). The desktop app lists every agent and skill (#704).
+- CI: the tests hold on the ubuntu-26.04 runner (git 2.56, its bubblewrap) (#751, #752).
+
+Host plugins (spec 074, #705, #706, #707, #715):
 
 - **Added: install the plugin from a fork or your organization's copy** (spec 074 §11, F1; the operator's decision of 2026-11-15, not yet reviewed by a Council or Panel). `delphi connect claude-code|copilot --source owner/repo[#branch]` installs the plugin from another GitHub repository's marketplace. The source is accepted only as that typed argument, only as `owner/repo` with an optional branch, and the plan warns that the skill text and hooks will come from it; the record of that connect then serves `--update`, `--remove` and `--status`. `DELPHI_MARKETPLACE_REPO` at build time changes a fork's default, and `DELPHI_REPO` makes `install.sh` install a fork's releases. This is for organizations that allow plugin marketplaces only from their own GitHub organization, where the plugin otherwise fails to load. Not run against a host with a non-default source. `delphi update` still looks in the project's repository unless `DELPHI_RELEASES_URL` is set.
 
