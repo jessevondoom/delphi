@@ -324,7 +324,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures
 
-**118: Pictures and figures: a stored licence, capture in research, full size, and figures agents make** · approved (per source at `38655f832e6f`) · tier 0 · [source](../../specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md)
+**118: Pictures and figures: a stored licence, capture in research, full size, and figures agents make** · approved (per source at `665d920d0a0b`) · tier 0 · [source](../../specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md)
 
 **source excerpt, untrusted** · `specs/118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md` lines 26-34
 

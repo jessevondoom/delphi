@@ -180,7 +180,7 @@ impl Engine {
             if ids.len() >= EXTERNAL_REPUTABLE_CAPTURES {
                 break;
             }
-            match lib.add_url(&policy, &url, &AddOpts { save_images: true, ..AddOpts::default() }, &Budgets::default()).await {
+            match lib.add_url(&policy, &url, &AddOpts { save_images: true, save_svg: self.settings.research_svg, ..AddOpts::default() }, &Budgets::default()).await {
                 Ok(s) => {
                     if !ids.contains(&s.id) {
                         ids.push(s.id);

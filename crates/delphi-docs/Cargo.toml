@@ -19,6 +19,9 @@ toml = "1.1"
 # SQLite reading (from memory, read-only) and the extraction cache key; both already in the workspace.
 rusqlite = { version = "0.41.1", features = ["bundled", "serialize"] }
 blake3 = "1.5"
+# WebP pictures (`specs/118` §4 item 1): the one decoder here that is not written in this crate; a pure-Rust decoder from the
+# image-rs project, MIT OR Apache-2.0, with two small dependencies. Its dimensions are checked before anything is allocated.
+image-webp = "0.2.4"
 
 [features]
 # Test-only: archive builders for other crates' tests. The real writers arrive with slice C0.

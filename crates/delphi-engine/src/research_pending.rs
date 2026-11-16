@@ -66,7 +66,7 @@ fn image_files(text: &str) -> Vec<String> {
     head.lines()
         .filter_map(|l| l.trim_start().strip_prefix("- file: ").or_else(|| l.trim_start().strip_prefix("file: ")))
         .filter_map(|v| serde_json::from_str::<String>(v).ok())
-        .filter(|f| f.strip_prefix("images/").and_then(|n| n.split_once('.')).is_some_and(|(h, ext)| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()) && matches!(ext, "png" | "jpg" | "jpeg" | "gif")))
+        .filter(|f| f.strip_prefix("images/").and_then(|n| n.split_once('.')).is_some_and(|(h, ext)| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()) && matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "webp")))
         .collect()
 }
 

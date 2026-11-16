@@ -183,6 +183,7 @@ pub mod research;
 pub mod research_asks;
 pub mod role_call;
 pub mod research_images;
+pub mod research_svg;
 pub mod research_index;
 pub mod research_ingest;
 pub mod research_chain;

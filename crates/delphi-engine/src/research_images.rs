@@ -38,6 +38,17 @@ pub struct Saved {
     pub evidence_url: String,
     pub width: usize,
     pub height: usize,
+    /// When the picture was an SVG: the PNG above is its drawing, and this is the SVG, kept beside it for the record and never
+    /// served (`specs/118` §4 item 2).
+    pub svg: Option<SvgOriginal>,
+}
+
+/// The SVG a kept PNG was drawn from: `images/<the SVG's own blake3>.svg`, and that hash. Two SVGs that draw to the same PNG are
+/// two files, each named by its own bytes, so a record's hash is always the hash of the file it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SvgOriginal {
+    pub file: String,
+    pub blake3: String,
 }
 
 /// What became of one page's pictures.
@@ -75,7 +86,7 @@ fn inside_link(before: &str) -> bool {
 
 /// Everything that decides whether one picture is kept, and keeping it. `Err` is the reason it was not.
 #[allow(clippy::too_many_arguments)]
-fn keep(transport: &dyn Transport, list: &TrustedList, dir: &Path, host: &str, page_url: &str, tok: &ImageTok, r: &ImageRef, fetched: &mut usize, may_fetch: bool) -> Result<Saved, String> {
+fn keep(transport: &dyn Transport, list: &TrustedList, dir: &Path, host: &str, page_url: &str, tok: &ImageTok, r: &ImageRef, fetched: &mut usize, may_fetch: bool, svg_on: bool) -> Result<Saved, String> {
     let entry = list.allows_url(&tok.url).ok_or_else(|| format!("the picture's host ({}) is not on the trusted lists", images_host(&tok.url)))?;
     if tok.alt.trim().is_empty() {
         return Err("no description, so it is taken as decoration".into());
@@ -88,8 +99,22 @@ fn keep(transport: &dyn Transport, list: &TrustedList, dir: &Path, host: &str, p
         return Err("past the limit on pictures".into());
     }
     *fetched += 1;
-    let bytes = images::get_bytes(transport, list, &tok.url, "image/png, image/jpeg, image/gif", MAX_IMAGE_BYTES).map_err(why)?;
-    let ext = images::sniff(&bytes).ok_or("not a PNG, JPEG or GIF (SVG and WebP are not kept)")?;
+    let accept = if svg_on { "image/png, image/jpeg, image/gif, image/webp, image/svg+xml" } else { "image/png, image/jpeg, image/gif, image/webp" };
+    let fetched_bytes = images::get_bytes(transport, list, &tok.url, accept, MAX_IMAGE_BYTES).map_err(why)?;
+    let ext = images::sniff(&fetched_bytes).ok_or("not a PNG, JPEG, GIF, WebP or SVG picture")?;
+    // `[research] svg` (`specs/118` §11): SVG capture is off until the drawing has a child-process backstop. Off, an SVG is
+    // known by its bytes and refused before it is parsed.
+    if ext == "svg" && !svg_on {
+        return Err("SVG capture is off ([research] svg = false)".into());
+    }
+    // An SVG is never kept to be shown as SVG (`specs/118` §4 item 2): it is drawn to a PNG here, under the bounds of
+    // `research_svg`, and the SVG is kept beside the PNG for the record only. A WebP is kept as it is (§4 item 1).
+    let (bytes, ext, svg) = if ext == "svg" {
+        let drawn = crate::research_svg::render(&fetched_bytes).map_err(|w| format!("the SVG could not be drawn: {}", w))?;
+        (drawn.png, "png", Some(fetched_bytes))
+    } else {
+        (fetched_bytes, ext, None)
+    };
     let pic = delphi_docs::pixels::decode(&bytes).map_err(|_| "the file could not be decoded as a picture".to_string())?;
     if pic.width < MIN_SIDE || pic.height < MIN_SIDE {
         return Err("too small to be a picture (an icon or a logo)".into());
@@ -107,6 +132,17 @@ fn keep(transport: &dyn Transport, list: &TrustedList, dir: &Path, host: &str, p
         std::fs::create_dir_all(&folder).map_err(|e| format!("could not create the folder: {}", e))?;
         std::fs::write(&path, &bytes).map_err(|e| format!("could not write the picture: {}", e))?;
     }
+    let svg = match svg {
+        Some(s) => {
+            let svg_hash = blake3::hash(&s).to_hex().to_string();
+            let svg_path = folder.join(format!("{}.svg", svg_hash));
+            if !svg_path.exists() {
+                std::fs::write(&svg_path, &s).map_err(|e| format!("could not write the picture: {}", e))?;
+            }
+            Some(SvgOriginal { file: format!("images/{}.svg", svg_hash), blake3: svg_hash })
+        }
+        None => None,
+    };
     let licence = if resolved.licence.spdx == "public-domain" { "public domain".to_string() } else { resolved.licence.spdx.clone() };
     let author = text(&resolved.author, 200);
     let attribution = format!("Image: {}, {}, {}", if author.is_empty() { "author not stated" } else { author.as_str() }, licence, text(&resolved.credit_url, 300));
@@ -119,11 +155,12 @@ fn keep(transport: &dyn Transport, list: &TrustedList, dir: &Path, host: &str, p
         attribution,
         blake3: hash,
         new_file,
-        credit_url: text(&resolved.credit_url, 300),
+        credit_url: crate::observe::sanitize(&resolved.credit_url).chars().take(500).collect(),
         evidence: resolved.evidence,
-        evidence_url: text(&resolved.evidence_url, 500),
+        evidence_url: crate::observe::sanitize(&resolved.evidence_url).chars().take(500).collect(),
         width: pic.width,
         height: pic.height,
+        svg,
     })
 }
 
@@ -136,13 +173,13 @@ fn images_host(url: &str) -> String {
 /// `root` is the folder the entries live in; pictures go beside them. Blocking: it makes requests.
 #[allow(clippy::too_many_arguments)]
 pub fn process(transport: &dyn Transport, list: &TrustedList, root: &Path, host: &str, page_url: &str, html_body: &str, md: &str, per_entry: usize, job_left: usize) -> Outcome {
-    process_some(transport, list, root, host, page_url, html_body, md, per_entry, job_left, None)
+    process_some(transport, list, root, host, page_url, html_body, md, per_entry, job_left, None, false)
 }
 
 /// [`process`], judging only the pictures whose addresses are in `named` when it is given (a host's `record_research` names the
 /// pictures of a source it wants kept, `specs/118` §3 item 3): any other picture is its alt text, judged not at all and fetched never.
 #[allow(clippy::too_many_arguments)]
-fn process_some(transport: &dyn Transport, list: &TrustedList, root: &Path, host: &str, page_url: &str, html_body: &str, md: &str, per_entry: usize, job_left: usize, named: Option<&[String]>) -> Outcome {
+fn process_some(transport: &dyn Transport, list: &TrustedList, root: &Path, host: &str, page_url: &str, html_body: &str, md: &str, per_entry: usize, job_left: usize, named: Option<&[String]>, svg_on: bool) -> Outcome {
     let toks: Vec<ImageTok> = html::find_images(md);
     let refs: HashMap<String, ImageRef> = images::extract(html_body, page_url).into_iter().map(|r| (r.url.clone(), r)).collect();
     let mut out = Outcome::default();
@@ -163,7 +200,7 @@ fn process_some(transport: &dyn Transport, list: &TrustedList, root: &Path, host
                     Some(_) if inside_link(&md[..tok.start]) => Err("the picture is inside a link with other words".to_string()),
                     Some(r) => {
                         let may_fetch = out.fetched < per_entry && out.fetched < job_left;
-                        keep(transport, list, root, host, page_url, tok, r, &mut out.fetched, may_fetch)
+                        keep(transport, list, root, host, page_url, tok, r, &mut out.fetched, may_fetch, svg_on)
                     }
                 };
                 let s = match verdict {
@@ -199,7 +236,10 @@ fn process_some(transport: &dyn Transport, list: &TrustedList, root: &Path, host
 /// words of the page (a licence name as Commons states it, a host); the record keeps only the word, chosen here by code.
 pub fn refusal_word(why: &str) -> &'static str {
     let w = why.to_ascii_lowercase();
-    let table: [(&str, &'static str); 15] = [
+    let table: [(&str, &'static str); 17] = [
+        // First: the renderer's sentences can hold words ("too many", "text") that other rows look for.
+        ("the svg could not be drawn", "svg_not_drawn"),
+        ("svg capture is off", "svg_off"),
         ("not on the trusted lists", "host_not_listed"),
         ("no description", "no_description"),
         ("too small", "too_small"),
@@ -207,7 +247,7 @@ pub fn refusal_word(why: &str) -> &'static str {
         ("no licence is declared", "no_licence"),
         ("non-free", "licence_refused"),
         ("licence", "licence_refused"),
-        ("svg and webp", "format_not_kept"),
+        ("not a png, jpeg, gif, webp or svg", "format_not_kept"),
         ("could not be decoded", "not_decoded"),
         ("inside a link", "inside_link"),
         ("not among the page's pictures", "not_on_page"),
@@ -236,6 +276,9 @@ pub struct PictureRules<'a> {
     pub list: &'a TrustedList,
     pub per_source: usize,
     pub left: usize,
+    /// `[research] svg` (`specs/118` §11): an SVG picture is drawn and kept only when this is on. Off, the default, refuses it
+    /// before it is parsed, with the fixed word `svg_off`.
+    pub svg: bool,
 }
 
 /// Keep the pictures of a page whose text the library holds as source `id` (`specs/118` §3): each is judged by [`process`]'s gates and
@@ -254,7 +297,7 @@ pub fn keep_for_source(lib: &crate::library::Library, id: &str, page_url: &str, 
     let md = html::to_markdown_with_images(html_body, page_url, 200_000).markdown;
     let stage = lib.root().join(".staging").join(format!("pictures-{}-{}", id, std::process::id()));
     let _ = std::fs::remove_dir_all(&stage);
-    let done = process_some(rules.transport, rules.list, &stage, &host, page_url, html_body, &md, rules.per_source, rules.left, named);
+    let done = process_some(rules.transport, rules.list, &stage, &host, page_url, html_body, &md, rules.per_source, rules.left, named, rules.svg);
     out.fetched = done.fetched;
     let retrieved = delphi_core::time::now_rfc3339();
     let records: Vec<serde_json::Value> = done
@@ -262,7 +305,7 @@ pub fn keep_for_source(lib: &crate::library::Library, id: &str, page_url: &str, 
         .iter()
         .filter_map(|s| {
             let file = s.file.strip_prefix("images/")?;
-            Some(crate::library::assets::picture_record(&crate::library::assets::PictureFacts {
+            let mut rec = crate::library::assets::picture_record(&crate::library::assets::PictureFacts {
                 file,
                 source_id: id,
                 source_url: &s.source_url,
@@ -276,7 +319,11 @@ pub fn keep_for_source(lib: &crate::library::Library, id: &str, page_url: &str, 
                 blake3: &s.blake3,
                 width: s.width,
                 height: s.height,
-            }))
+            });
+            if let Some(svg) = &s.svg {
+                rec[crate::library::assets::RENDERED_FROM] = serde_json::json!({"format": "svg", "file": svg.file.strip_prefix("images/")?, "blake3": svg.blake3});
+            }
+            Some(rec)
         })
         .collect();
     out.refused = done.not_saved.iter().map(|(u, w)| (u.clone(), refusal_word(w))).collect();
@@ -343,7 +390,8 @@ mod tests {
     }
     fn run_with(web: &Web, html: &str, dir: &Path, list: &str, per: usize, job: usize) -> Outcome {
         let md = html::to_markdown_with_images(&format!("<html><body>{}</body></html>", html), BASE, 100_000).markdown;
-        process(web, &TrustedList::parse(list, None).unwrap(), &dir.join(crate::research::DIR), "en.wikipedia.org", BASE, html, &md, per, job)
+        // With SVG capture on: the tests of the SVG path; `svg_capture_is_off_unless_asked_for` tests the default.
+        process_some(web, &TrustedList::parse(list, None).unwrap(), &dir.join(crate::research::DIR), "en.wikipedia.org", BASE, html, &md, per, job, None, true)
     }
     fn files(dir: &Path) -> Vec<String> {
         fn walk(p: &Path, out: &mut Vec<String>) {
@@ -405,8 +453,9 @@ mod tests {
         let case = |name: &str, bytes: Response| (u(name), bytes, api(&format!("File:{}", name)));
         let cases = vec![
             case("nc.png", ok(pic())),
-            case("svg.png", ok(b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>".to_vec())),
+            case("svg.png", ok(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"><text x=\"1\" y=\"9\">a label</text></svg>".to_vec())),
             case("webp.png", ok(b"RIFF\0\0\0\0WEBPVP8 xxxxxxxxxxxxxxxx".to_vec())),
+            case("svgbig.png", ok({ let mut s = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\">".to_vec(); s.resize(3 << 20, b' '); s.extend_from_slice(b"</svg>"); s })),
             case("html.png", ok(b"<!doctype html><title>not a picture</title>".to_vec())),
             case("big.png", big),
             case("cut.png", ok({ let g = pic(); g[..g.len() / 2].to_vec() })),
@@ -421,15 +470,19 @@ mod tests {
             html.push_str(&format!("<a href=\"/wiki/File:{n}\"><img alt=\"pic {n}\" src=\"{u}\" width=\"200\" height=\"100\"></a>", n = name, u = url));
         }
         let w = Web { pages: pages.into_iter().collect(), asked: Mutex::new(Vec::new()) };
-        let o = run(&w, &html, dir.path());
+        let o = run_with(&w, &html, dir.path(), LIST, 10, 24);
         assert!(o.saved.is_empty(), "{:?}", o.saved);
         let reasons: HashMap<&str, &str> = o.not_saved.iter().map(|(u, w)| (u.rsplit('/').next().unwrap(), w.as_str())).collect();
         assert!(reasons["nc.png"].contains("non-commercial"), "{:?}", reasons);
-        assert!(reasons["svg.png"].contains("not a PNG, JPEG or GIF") && reasons["webp.png"].contains("not a PNG, JPEG or GIF") && reasons["html.png"].contains("not a PNG, JPEG or GIF"), "{:?}", reasons);
+        assert_eq!(reasons["svg.png"], "the SVG could not be drawn: the SVG has text, and text is not drawn here", "{:?}", reasons);
+        assert_eq!(reasons["svgbig.png"], "the SVG could not be drawn: an SVG larger than 2 MiB is not drawn", "{:?}", reasons);
+        assert!(reasons["webp.png"].contains("could not be decoded") && reasons["html.png"].contains("not a PNG, JPEG, GIF, WebP or SVG"), "{:?}", reasons);
         assert!(reasons["big.png"].contains("larger than 8 MiB"), "{:?}", reasons);
         assert!(reasons["cut.png"].contains("could not be decoded"), "{:?}", reasons);
         assert!(reasons["gone.png"].contains("404"), "{:?}", reasons);
-        assert_eq!(o.not_saved.len(), 7);
+        assert_eq!(o.not_saved.len(), 8);
+        let words: HashMap<&str, &str> = o.not_saved.iter().map(|(u, w)| (u.rsplit('/').next().unwrap(), refusal_word(w))).collect();
+        assert_eq!((words["svg.png"], words["svgbig.png"], words["webp.png"], words["html.png"]), ("svg_not_drawn", "svg_not_drawn", "not_decoded", "format_not_kept"), "{:?}", words);
         assert!(o.markdown.starts_with("Text.") && o.markdown.contains("pic svg.png") && !o.markdown.contains("!["), "{}", o.markdown);
         assert_eq!(files(dir.path()), Vec::<String>::new(), "nothing was written");
     }
@@ -471,6 +524,60 @@ mod tests {
         assert!(why.iter().any(|w| w.contains("too small")) && why.iter().any(|w| w.contains("decoration")) && why.iter().any(|w| w.contains("inside a link")), "{:?}", why);
         let o2 = run_with(&w, &html, dir.path(), LIST, 6, 1);
         assert_eq!(o2.fetched, 1, "the job's limit stops it too");
+    }
+
+    /// `specs/118` §11 decision 1: SVG capture is off unless `[research] svg = true`. Off, an SVG on a licensed figure is fetched (it
+    /// is known only by its bytes), refused with `svg_off` and never parsed, and nothing is written; a WebP beside it is kept. On, the
+    /// same SVG is drawn and kept.
+    #[test]
+    fn svg_capture_is_off_unless_asked_for() {
+        let svg_body = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"80\"><rect width=\"100\" height=\"80\" fill=\"#336699\"/></svg>".to_vec();
+        let webp = {
+            let rgba: Vec<u8> = (0..64 * 64).flat_map(|i| [(i % 64 * 4) as u8, 40, 90, 255]).collect();
+            let mut out = Vec::new();
+            image_webp::WebPEncoder::new(&mut out).encode(&rgba, 64, 64, image_webp::ColorType::Rgba8).unwrap();
+            out
+        };
+        let w = web(vec![("https://en.wikipedia.org/img/d.svg", ok(svg_body)), ("https://en.wikipedia.org/img/m.webp", ok(webp))]);
+        let fig = |f: &str| format!("<figure><img alt=\"picture {f}\" src=\"/img/{f}\"><a rel=\"license\" href=\"https://creativecommons.org/publicdomain/zero/1.0/\">CC0</a></figure>");
+        let html = format!("{}{}", fig("d.svg"), fig("m.webp"));
+        let md = html::to_markdown_with_images(&format!("<html><body>{}</body></html>", html), BASE, 100_000).markdown;
+        let list = TrustedList::parse(LIST, None).unwrap();
+        let off_dir = tempfile::tempdir().unwrap();
+        let off = process(&w, &list, &off_dir.path().join(crate::research::DIR), "en.wikipedia.org", BASE, &html, &md, 6, 24);
+        assert_eq!(off.not_saved.iter().map(|(u, why)| (u.as_str(), refusal_word(why))).collect::<Vec<_>>(), vec![("https://en.wikipedia.org/img/d.svg", "svg_off")]);
+        assert_eq!((off.saved.len(), off.saved[0].file.ends_with(".webp")), (1, true), "the WebP is kept with SVG capture off");
+        assert!(!files(off_dir.path()).iter().any(|f| f.ends_with(".svg") || f.ends_with(".png")), "nothing of the SVG is written: {:?}", files(off_dir.path()));
+        let on_dir = tempfile::tempdir().unwrap();
+        let on = run(&w, &html, on_dir.path());
+        assert!(on.not_saved.is_empty(), "{:?}", on.not_saved);
+        assert_eq!(on.saved.len(), 2);
+        assert!(on.saved.iter().any(|s| s.svg.is_some() && s.file.ends_with(".png")), "with SVG capture on, the SVG is drawn to a PNG");
+    }
+
+    /// The red-team's P2-2: two SVGs that differ only in a comment draw the same PNG. Each is kept under its own hash, so each
+    /// record's hash is the hash of the file it names (the SVG was named by the PNG's hash, and the second was not written).
+    #[test]
+    fn two_svgs_that_draw_the_same_png_are_each_kept_under_their_own_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"80\"><rect width=\"100\" height=\"80\" fill=\"#336699\"/></svg>";
+        let (a, b) = (body.to_string(), body.replace("<rect", "<!-- another file --><rect"));
+        let u = |n: &str| format!("https://en.wikipedia.org/img/{}.svg", n);
+        let w = web(vec![(&u("a"), ok(a.clone().into_bytes())), (&u("b"), ok(b.clone().into_bytes()))]);
+        let fig = |n: &str| format!("<figure><img alt=\"diagram {n}\" src=\"/img/{n}.svg\"><a rel=\"license\" href=\"https://creativecommons.org/publicdomain/zero/1.0/\">CC0</a></figure>");
+        let o = run(&w, &format!("{}{}", fig("a"), fig("b")), dir.path());
+        assert_eq!(o.saved.len(), 1, "one PNG: {:?}", o.not_saved);
+        let host = dir.path().join(crate::research::DIR).join("en.wikipedia.org");
+        let mut originals = Vec::new();
+        for bytes in [&a, &b] {
+            let hash = blake3::hash(bytes.as_bytes()).to_hex().to_string();
+            let file = host.join("images").join(format!("{hash}.svg"));
+            assert_eq!(std::fs::read(&file).unwrap(), bytes.as_bytes(), "each SVG is kept under its own hash");
+            originals.push(hash);
+        }
+        let s = o.saved[0].svg.as_ref().unwrap();
+        assert!(originals.contains(&s.blake3) && s.file == format!("images/{}.svg", s.blake3));
+        assert_eq!(blake3::hash(&std::fs::read(host.join(&s.file)).unwrap()).to_hex().to_string(), s.blake3, "the record's hash is the file's");
     }
 
     #[test]
