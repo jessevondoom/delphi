@@ -43,7 +43,8 @@ pub struct Saved {
     pub svg: Option<SvgOriginal>,
 }
 
-/// The SVG a kept PNG was drawn from: `images/<the PNG's blake3>.svg`, and the SVG's own hash.
+/// The SVG a kept PNG was drawn from: `images/<the SVG's own blake3>.svg`, and that hash. Two SVGs that draw to the same PNG are
+/// two files, each named by its own bytes, so a record's hash is always the hash of the file it names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SvgOriginal {
     pub file: String,
@@ -127,11 +128,12 @@ fn keep(transport: &dyn Transport, list: &TrustedList, dir: &Path, host: &str, p
     }
     let svg = match svg {
         Some(s) => {
-            let svg_path = folder.join(format!("{}.svg", hash));
+            let svg_hash = blake3::hash(&s).to_hex().to_string();
+            let svg_path = folder.join(format!("{}.svg", svg_hash));
             if !svg_path.exists() {
                 std::fs::write(&svg_path, &s).map_err(|e| format!("could not write the picture: {}", e))?;
             }
-            Some(SvgOriginal { file: format!("images/{}.svg", hash), blake3: blake3::hash(&s).to_hex().to_string() })
+            Some(SvgOriginal { file: format!("images/{}.svg", svg_hash), blake3: svg_hash })
         }
         None => None,
     };
@@ -511,6 +513,31 @@ mod tests {
         assert!(why.iter().any(|w| w.contains("too small")) && why.iter().any(|w| w.contains("decoration")) && why.iter().any(|w| w.contains("inside a link")), "{:?}", why);
         let o2 = run_with(&w, &html, dir.path(), LIST, 6, 1);
         assert_eq!(o2.fetched, 1, "the job's limit stops it too");
+    }
+
+    /// The red-team's P2-2: two SVGs that differ only in a comment draw the same PNG. Each is kept under its own hash, so each
+    /// record's hash is the hash of the file it names (the SVG was named by the PNG's hash, and the second was not written).
+    #[test]
+    fn two_svgs_that_draw_the_same_png_are_each_kept_under_their_own_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"80\"><rect width=\"100\" height=\"80\" fill=\"#336699\"/></svg>";
+        let (a, b) = (body.to_string(), body.replace("<rect", "<!-- another file --><rect"));
+        let u = |n: &str| format!("https://en.wikipedia.org/img/{}.svg", n);
+        let w = web(vec![(&u("a"), ok(a.clone().into_bytes())), (&u("b"), ok(b.clone().into_bytes()))]);
+        let fig = |n: &str| format!("<figure><img alt=\"diagram {n}\" src=\"/img/{n}.svg\"><a rel=\"license\" href=\"https://creativecommons.org/publicdomain/zero/1.0/\">CC0</a></figure>");
+        let o = run(&w, &format!("{}{}", fig("a"), fig("b")), dir.path());
+        assert_eq!(o.saved.len(), 1, "one PNG: {:?}", o.not_saved);
+        let host = dir.path().join(crate::research::DIR).join("en.wikipedia.org");
+        let mut originals = Vec::new();
+        for bytes in [&a, &b] {
+            let hash = blake3::hash(bytes.as_bytes()).to_hex().to_string();
+            let file = host.join("images").join(format!("{hash}.svg"));
+            assert_eq!(std::fs::read(&file).unwrap(), bytes.as_bytes(), "each SVG is kept under its own hash");
+            originals.push(hash);
+        }
+        let s = o.saved[0].svg.as_ref().unwrap();
+        assert!(originals.contains(&s.blake3) && s.file == format!("images/{}.svg", s.blake3));
+        assert_eq!(blake3::hash(&std::fs::read(host.join(&s.file)).unwrap()).to_hex().to_string(), s.blake3, "the record's hash is the file's");
     }
 
     #[test]

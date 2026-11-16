@@ -1518,7 +1518,7 @@ mod tests {
         assert_eq!(px.pixel(225, 75), [255, 255, 255, 255], "the local file was not drawn");
         assert_eq!((px.pixel(150, 75)[2], px.pixel(150, 75)[0]), (255, 0), "the SVG's own shapes were");
         let original = drawn["rendered_from"]["file"].as_str().unwrap();
-        assert_eq!((drawn["rendered_from"]["format"].as_str(), original), (Some("svg"), format!("{}.svg", blake3::hash(&png).to_hex()).as_str()));
+        assert_eq!((drawn["rendered_from"]["format"].as_str(), original), (Some("svg"), format!("{}.svg", blake3::hash(svg.as_bytes()).to_hex()).as_str()), "named by its own hash");
         assert_eq!(std::fs::read(assets.join(original)).unwrap(), svg.as_bytes(), "the SVG is kept beside its PNG, as fetched");
         assert_eq!(drawn["rendered_from"]["blake3"].as_str().map(String::from), Some(blake3::hash(svg.as_bytes()).to_hex().to_string()));
         assert!(l.asset_record(&id, original).is_none(), "the SVG has no record of its own, so nothing serves it");
