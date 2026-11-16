@@ -142,6 +142,12 @@ async fn a_push_a_network_request_and_a_write_outside_the_copy_are_each_refused(
     let p = proj.display();
     let hidden_push = format!("g=git; $g push {p} HEAD:refs/heads/planted 2>&1; echo \"push rc=$?\"; $g push file://{p} HEAD:refs/heads/planted2 2>&1; echo \"push2 rc=$?\"");
     let net = format!("(exec 3<>/dev/tcp/127.0.0.1/{port}) 2>&1 && echo CONN\"\"ECTED; echo \"net rc=$?\"; curl -s -m 3 http://127.0.0.1:{port}/ ; echo \"curl rc=$?\"");
+    // A unix socket outside the copy (a short path: `sun_path` holds about 100 bytes), as a local daemon's would be.
+    let sock_dir = tempfile::Builder::new().prefix("dsk").tempdir_in("/tmp").unwrap();
+    let sock = fs::canonicalize(sock_dir.path()).unwrap().join("s");
+    let unix = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    unix.set_nonblocking(true).unwrap();
+    let unix_line = format!("echo hello | nc -U -w 2 {s} 2>&1 && echo UNIX-\"\"REACHED; echo \"unix rc=$?\"", s = sock.display());
     let outside = format!("echo x > {p}/planted.txt; echo \"write rc=$?\"; echo x >> {p}/.git/config; echo \"gitcfg rc=$?\"; cat {p}/src/lib.rs; echo \"read rc=$?\"; echo x > .git; echo \"gitfile rc=$?\"; echo x > ../../../../planted-ws; echo \"ws rc=$?\"; cat .git");
     let script = std::sync::Mutex::new(std::collections::VecDeque::from(vec![
         Step::tool("c1", "shell", json!({"command": "ls && git push origin HEAD"})),
@@ -150,6 +156,7 @@ async fn a_push_a_network_request_and_a_write_outside_the_copy_are_each_refused(
         Step::tool("c4", "shell", json!({"command": hidden_push})),
         Step::tool("c5", "shell", json!({"command": net})),
         Step::tool("c6", "shell", json!({"command": outside})),
+        Step::tool("c7", "shell", json!({"command": unix_line})),
         Step::text("Nothing left the copy."),
     ]));
     f.model.respond_with(move |_| script.lock().unwrap().pop_front().unwrap_or_else(|| Step::text("done")));
@@ -160,11 +167,14 @@ async fn a_push_a_network_request_and_a_write_outside_the_copy_are_each_refused(
     for (n, word) in [(0, "git push"), (1, "git fetch"), (2, "git pull")] {
         assert!(got[n].1 && got[n].0.contains("refused by policy") && got[n].0.contains(word), "call {n}: {}", got[n].0);
     }
-    assert_eq!(events(&f, "action.intent").len(), 3, "the three refused calls never started a process");
+    assert_eq!(events(&f, "action.intent").len(), 4, "the three refused calls never started a process (the four that ran are c4 to c7)");
     // Hidden from the text rule: it runs, and the sandbox refuses it.
     assert!(got[3].0.contains("push rc=") && !got[3].0.contains("push rc=0") && !got[3].0.contains("push2 rc=0"), "a push to the project by path fails: {}", got[3].0);
     assert!(!got[4].0.contains("CONNECTED") && !got[4].0.contains("curl rc=0"), "no network, not even loopback: {}", got[4].0);
     assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "nothing reached the listener");
+    // Red-team P2-5: a unix socket outside the copy is the network too.
+    assert!(got[6].0.contains("unix rc=") && !got[6].0.contains("unix rc=0") && !got[6].0.contains("UNIX-REACHED"), "a unix socket outside the copy is refused: {}", got[6].0);
+    assert!(matches!(unix.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "nothing reached the unix listener");
     let o = &got[5].0;
     for rc in ["write rc=", "gitcfg rc=", "read rc=", "gitfile rc=", "ws rc="] {
         assert!(o.contains(rc) && !o.contains(&format!("{rc}0")), "{rc}: {o}");
@@ -394,4 +404,28 @@ async fn a_similar_yes_in_a_task_never_crosses_between_the_builder_and_the_inves
         assert_eq!(shell_cards[0].task_id, shell_cards[1].task_id, "one task");
         assert_ne!(shell_cards[0].pattern, shell_cards[1].pattern);
     }
+}
+
+/// Red-team P2-2: the copy's git config and hooks are writable by the sandboxed command, and that is safe only because the daemon
+/// never runs git in the copy after it made it. A command plants `core.fsmonitor` and hooks that would create a marker file outside
+/// the copy if git ran them unsandboxed; the span ends, the copy is deleted, and the marker was never made.
+#[tokio::test]
+async fn a_planted_fsmonitor_and_hooks_in_the_copy_never_run_outside_the_sandbox() {
+    if Sandbox::detect().is_err() {
+        return;
+    }
+    let (f, _) = fixture(vec![], SandboxMode::Prefer);
+    let marker = fs::canonicalize(&f.root).unwrap().join("fsmonitor-ran");
+    let plant = format!(
+        "printf '#!/bin/sh\\ntouch {m}\\n' > mon.sh && chmod +x mon.sh && git config core.fsmonitor \"$PWD/mon.sh\" && h=$(git rev-parse --git-path hooks) && mkdir -p \"$h\" && for n in post-checkout post-index-change reference-transaction pre-auto-gc; do cp mon.sh \"$h/$n\"; done && echo \"fsmonitor=$(git config core.fsmonitor)\" && ls \"$h\"",
+        m = marker.display()
+    );
+    let script = std::sync::Mutex::new(std::collections::VecDeque::from(vec![Step::tool("c1", "shell", json!({"command": plant})), Step::text("planted")]));
+    f.model.respond_with(move |_| script.lock().unwrap().pop_front().unwrap_or_else(|| Step::text("done")));
+    assert_eq!(f.engine.run_task(&f.m, "investigator", PROMPT).await.unwrap().status, Status::Done);
+    let got = results(&f);
+    assert!(!got[0].1 && got[0].0.contains("fsmonitor=") && got[0].0.contains("mon.sh") && got[0].0.contains("post-checkout"), "the plant took: {}", got[0].0);
+    assert_eq!(events(&f, "investigation.worktree_removed").len(), 1);
+    assert!(copies(&f).is_empty());
+    assert!(!marker.exists(), "the daemon ran git in the copy: the planted fsmonitor or a hook ran");
 }
