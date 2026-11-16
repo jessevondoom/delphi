@@ -135,6 +135,7 @@ mod xenia_scope_tests;
 #[cfg(test)]
 mod service_gates_tests;
 pub mod vecext;
+pub mod verify_source;
 pub mod mission;
 pub mod grades;
 pub mod models;

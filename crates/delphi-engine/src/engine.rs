@@ -1999,6 +1999,10 @@ impl Engine {
         if sc.manifest.execute.iter().any(|e| e == "settings") {
             defs.push(crate::settings_run::def());
         }
+        // Spec 116 §8.2: the investigator checks a quotation against its page; the daemon fetches, behind the validator's guards.
+        if sc.manifest.execute.iter().any(|e| e == crate::verify_source::SCOPE) {
+            defs.push(crate::verify_source::def());
+        }
         // A granted run has no worktree (see `attach_worktree`'s caller): the command is offered anyway, and the daemon check
         // (`granted_run_command`) is what decides each call; `shell` is stripped below by the allowlist.
         if (sc.guard.zones.worktree.is_some() || granted) && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped") {
@@ -2155,6 +2159,9 @@ impl Engine {
                 return Ok(tool_result_error("this role's manifest does not authorize changing settings"));
             }
             return self.exec_settings(sc, args).await;
+        }
+        if name == crate::verify_source::TOOL {
+            return self.exec_verify_source(sc, args).await;
         }
         if name == "timer" {
             // As with dispatch: the schema is only offered to roles that may set timers; a forged call is refused here.
