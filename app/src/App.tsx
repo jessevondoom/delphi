@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Asking, type Asker } from './EncyParts.tsx';
 import { MARK_ROLES, fillOf } from './avatar.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { load, save, type Prefs, type Screen } from './prefs.ts';
+import { canAsk, connWords, requestStates } from './requests.ts';
 import { Activity } from './screens/Activity.tsx';
 import { Council } from './screens/Council.tsx';
 import { Encyclopedia } from './screens/Encyclopedia.tsx';
@@ -83,6 +85,14 @@ export function App() {
   }, []);
 
   const waits = state ? waiting(state).length : 0;
+  const said = connWords(conn, bridge?.kind === 'fixture');
+  // What a page needs in order to ask (spec 120 §6): only a window whose key holds `request` asks; the rest copy commands.
+  const asker: Asker = useMemo(() => ({
+    can: !!bridge && bridge.kind === 'app' && canAsk(conn),
+    send: (r) => (bridge ? bridge.request(r.what, r.arg) : Promise.reject(new Error('not connected to the daemon'))),
+    states: requestStates(events),
+    waits,
+  }), [bridge, conn, events, waits]);
   const live = state?.councils.filter((c) => !isDecided(c)).length ?? 0;
   const notes: Partial<Record<Screen, string>> = {
     activity: waits ? `${waits} waiting on you` : '',
@@ -113,7 +123,8 @@ export function App() {
           {info?.version && <span>delphi {info.version}</span>}
         </span>
         <span className="spacer" />
-        <span className="conn"><span className={conn.connected ? 'dot on' : 'dot off'} />{conn.connected ? (bridge?.kind === 'fixture' ? conn.detail : 'daemon connected · read-only') : conn.detail}</span>
+        {/* Spec 120 §6 item 2: read-only or paired, and the grants held; a key that was not accepted says why. */}
+        <span className="conn" role="status"><span className={conn.connected ? 'dot on' : 'dot off'} />{said.text}{said.why && <span className="conn-why">{said.why}</span>}</span>
       </header>
       <div className="body">
         {prefs.menu && (
@@ -143,7 +154,7 @@ export function App() {
         {!conn.connected && !state ? (
           <main className="main">
             <h1 className="title">No daemon to show</h1>
-            <div className="empty">{conn.detail}. Start Delphi in a terminal with <span className="mono">delphi chat</span>, and this window attaches by itself. It only reads; it never starts or stops anything.</div>
+            <div className="empty">{conn.detail}. Start Delphi in a terminal with <span className="mono">delphi chat</span>, and this window attaches by itself. Without a key paired from a terminal it only reads.</div>
           </main>
         ) : prefs.screen === 'activity' ? (
           <Activity bridge={bridge} info={info} state={state} events={events} light={light} />
@@ -152,7 +163,9 @@ export function App() {
         ) : prefs.screen === 'knowledge' ? (
           <Knowledge key={visit} bridge={bridge} info={info} state={state} light={light} ask={ask} />
         ) : prefs.screen === 'encyclopedia' ? (
-          <Encyclopedia key={visit} bridge={bridge} info={info} light={light} searchKb={(q) => { setAsk(q); setVisit((v) => v + 1); update({ screen: 'knowledge' }); }} />
+          <Asking.Provider value={asker}>
+            <Encyclopedia key={visit} bridge={bridge} info={info} light={light} searchKb={(q) => { setAsk(q); setVisit((v) => v + 1); update({ screen: 'knowledge' }); }} />
+          </Asking.Provider>
         ) : prefs.screen === 'memory' ? (
           <Memory key={visit} bridge={bridge} info={info} light={light} />
         ) : prefs.screen === 'output' ? (

@@ -10,9 +10,13 @@ import {
 } from '../ency.ts';
 import { EMPTY, annotate, arrive, editNote, exportMarkdown, fresh, lastHere, markRead, newSince, parseMarks, passageKey, pinned, placed, togglePin, type Annotation, type Marks } from '../marks.ts';
 import { blockText, type Block } from '../md.ts';
+import { QUESTION_MAX, againRequest, disputeRequest, followUpRequest, rebuildRequest, sectionNoteRoom, sectionRequest } from '../requests.ts';
 import type { Info } from '../types.ts';
 
 type Props = { bridge: Bridge | null; info: Info | null; light: boolean; searchKb: (q: string) => void };
+
+/** "Ask a follow-up" in a window that may ask: a question of its own, where the clipboard command takes a narrowing note. */
+const FOLLOW_UP = { prompt: `A follow-up question, one line of at most ${QUESTION_MAX} characters. The daemon researches it in this topic's project; a question it already holds a topic on continues that topic.`, max: QUESTION_MAX };
 
 type Go = (r: Route) => void;
 type Mark = (f: (m: Marks) => Marks) => void;
@@ -33,8 +37,10 @@ const statusChip = (shown: string): string => (shown.includes('validated') && !s
 
 /**
  * The encyclopedia (spec 117 §4 items 1 to 3 and 5): a home page, and from it a topic page, a source, a claim, a
- * research topic and the list of changes, one at a time across the full width. It reads; the few things that need an
- * act put a command on the clipboard (§6). The operator's marks (§5) are loaded once and kept through the bridge.
+ * research topic and the list of changes, one at a time across the full width. It reads; the four things a page offers
+ * to start (§6) are asked of the daemon when this window's key holds `request` (spec 120 §6) and are otherwise commands
+ * for the clipboard. A request carries ids and what was typed, never a page's words: "Research this section further"
+ * sends the section's anchor, not its heading. The operator's marks (§5) are loaded once and kept through the bridge.
  */
 export function Encyclopedia({ bridge, info, light, searchKb }: Props) {
   // A page named in the address opens over the home page, so the way back is there.
@@ -173,7 +179,7 @@ function Home({ go, topics, marksSaid, problem, loaded, research, marks, mark, s
                 {due.map((t) => (
                   <div key={t.slug} className="stack" style={{ gap: 6 }}>
                     <TopicCard t={t} go={go} marks={marks} note={<span style={{ fontSize: 13, color: 'var(--text2)' }}>{t.due}</span>} />
-                    <CopyCommand small label="Rebuild now: copy the command" command={rebuildCommand(t.slug)} />
+                    <CopyCommand small label="Rebuild now" command={rebuildCommand(t.slug)} request={rebuildRequest(t.slug)} />
                   </div>
                 ))}
               </section>
@@ -275,7 +281,7 @@ function ClaimBody({ view, go, full }: { view: ClaimView; go: Go; full?: boolean
       <p style={{ fontSize: 13, color: 'var(--text2)' }}>{statusWhy(view.status, c)}</p>
       <h3 className="caps">Anchors</h3>
       <Anchors anchors={c.anchors ?? []} sources={view.sources} go={go} />
-      <Ask small label="Dispute this statement" prompt="What is wrong with it? One line; it goes on the claim's record as your dispute." max={500} build={(w) => disputeCommand(c.id, w)} />
+      <Ask small label="Dispute this statement" prompt="What is wrong with it? One line; it goes on the claim's record as your dispute." max={500} build={(w) => disputeCommand(c.id, w)} request={(typed) => disputeRequest(c.id, typed)} />
     </div>
   );
 }
@@ -438,13 +444,13 @@ function TopicView({ bridge, go, way, topics, marksSaid, slug, version, research
           <button type="button" className="btn small" aria-pressed={pinned(marks, slug)} onClick={() => mark((m) => togglePin(m, slug))}>{pinned(marks, slug) ? 'Unpin from the home page' : 'Pin to the home page'}</button>
           {page.markdown && <button type="button" className="btn small" onClick={out}>Export as Markdown</button>}
           {page.markdown && <button type="button" className="btn small" onClick={() => { void bridge?.print().catch((e: unknown) => setSaid(e instanceof Error ? e.message : String(e))); }}>Print or save as PDF</button>}
-          {!version && <CopyCommand small label="Rebuild now: copy the command" command={rebuildCommand(slug)} />}
-          {topicId && <Ask small label="Ask a follow-up" prompt={`One line that narrows the next research run on this topic (at most ${NOTE_MAX} characters).`} max={NOTE_MAX} build={(w) => (w.trim() ? continueCommand(topicId, w) : '')} />}
+          {!version && <CopyCommand small label="Rebuild now" command={rebuildCommand(slug)} request={rebuildRequest(slug)} />}
+          {topicId && <Ask small label="Ask a follow-up" prompt={`One line that narrows the next research run on this topic (at most ${NOTE_MAX} characters).`} max={NOTE_MAX} build={(w) => (w.trim() ? continueCommand(topicId, w) : '')} request={(typed) => followUpRequest(topicId, typed)} asking={FOLLOW_UP} />}
         </div>
         {(said || marksSaid) && <div className="muted no-print" style={{ fontSize: 12 }} role="status">{[said, marksSaid].filter(Boolean).join(' ')}</div>}
 
         {!page.markdown ? (
-          <div className="empty">This topic has no page yet. {page.due ?? ''} The daemon builds it while idle; "Rebuild now" copies the command that asks for it at once.</div>
+          <div className="empty">This topic has no page yet. {page.due ?? ''} The daemon builds it while idle; "Rebuild now" asks for it at once.</div>
         ) : (
           <div className="page-text">
             {p.banner && <p className="banner">{p.banner}</p>}
@@ -469,7 +475,7 @@ function TopicView({ bridge, go, way, topics, marksSaid, slug, version, research
             {p.sections.map((s) => (
               <section key={s.anchor} className="stack">
                 <div className="said doc"><Rich text={`## ${s.heading}\n\n${s.text}`} ctx={ctx} /></div>
-                {topicId && !version && <div className="no-print"><Ask small label="Research this section further" prompt={`What should the next run look for in "${s.heading}"? It may be left empty.`} max={NOTE_MAX - 20} build={(w) => continueCommand(topicId, sectionNote(s.heading, w))} /></div>}
+                {topicId && !version && <div className="no-print"><Ask small label="Research this section further" prompt={`What should the next run look for in "${s.heading}"? It may be left empty.`} max={NOTE_MAX - 20} build={(w) => continueCommand(topicId, sectionNote(s.heading, w))} request={(typed) => sectionRequest(topicId, s.anchor, typed)} asking={{ prompt: `What should the next run look for in this section? It may be left empty (at most ${sectionNoteRoom(s.anchor)} characters).`, max: Math.max(1, sectionNoteRoom(s.anchor)) }} /></div>}
               </section>
             ))}
 
@@ -669,8 +675,8 @@ function ResearchPage({ bridge, go, way, id }: Shared & { id: string }) {
       <p className="banner">{v.label}</p>
       <div className="row">
         {v.page && <button type="button" className="btn small" onClick={() => go({ v: 'topic', slug: v.page! })}>Open its topic page</button>}
-        <Ask small label="Ask a follow-up" prompt={`One line that narrows the next research run on this topic (at most ${NOTE_MAX} characters).`} max={NOTE_MAX} build={(w) => (w.trim() ? continueCommand(v.id, w) : '')} />
-        <CopyCommand small label="Run it again: copy the command" command={continueCommand(v.id, '')} />
+        <Ask small label="Ask a follow-up" prompt={`One line that narrows the next research run on this topic (at most ${NOTE_MAX} characters).`} max={NOTE_MAX} build={(w) => (w.trim() ? continueCommand(v.id, w) : '')} request={(typed) => followUpRequest(v.id, typed)} asking={FOLLOW_UP} />
+        <CopyCommand small label="Run it again" command={continueCommand(v.id, '')} request={againRequest(v.id)} />
       </div>
       <dl className="facts">
         <div><dt>Runs</dt><dd>{runs}</dd></div>
