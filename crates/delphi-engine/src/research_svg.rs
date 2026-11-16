@@ -57,7 +57,11 @@ pub struct Drawn {
 /// The painting one SVG may cost, in canvases: the area of every shape's fill and stroke (clipped to the canvas, a gradient counted
 /// [`GRADIENT_WEIGHT`] times) and of every layer, summed.
 pub const MAX_PAINT_CANVASES: f64 = 200.0;
+/// A gradient's weight per pixel: this, plus one for every [`STOPS_PER_WEIGHT`] stops (the painter searches the stops per pixel).
 pub const GRADIENT_WEIGHT: f64 = 3.0;
+pub const STOPS_PER_WEIGHT: f64 = 8.0;
+/// The most stops one gradient may have.
+pub const MAX_STOPS: usize = 64;
 /// Dash segments over the whole file (a stroke's length over its dash pattern's length).
 pub const MAX_DASHES: f64 = 200_000.0;
 
@@ -67,28 +71,36 @@ const SVG_STACK: usize = 256 << 20;
 
 /// The one slot a drawing runs in, for the whole process. The drawing's own thread holds it until the drawing ends, so a drawing
 /// that passed its time limit still holds it and no second one starts beside it: CPU spent on drawings is at most one core.
-static SLOT_BUSY: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+/// It holds when the drawing that has it began.
+static SLOT_BUSY: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 static SLOT_FREED: std::sync::Condvar = std::sync::Condvar::new();
 
 struct Slot;
 
 impl Slot {
-    /// The slot, waiting at most `wait` for the drawing that holds it to end.
+    /// The slot, waiting at most `wait` for the drawing that holds it to end. A drawing already past [`TIME_LIMIT`] will not end
+    /// soon, so a caller is refused at once rather than waiting for it.
     fn acquire(wait: Duration) -> Option<Slot> {
+        Self::acquire_from(wait, std::time::Instant::now())
+    }
+
+    /// [`Slot::acquire`], the drawing that takes the slot counted as begun at `began` (a test sets an earlier time).
+    fn acquire_from(wait: Duration, began: std::time::Instant) -> Option<Slot> {
         let deadline = std::time::Instant::now() + wait;
         let mut busy = SLOT_BUSY.lock().unwrap_or_else(|e| e.into_inner());
-        while *busy {
+        while let Some(since) = *busy {
+            let overdue = TIME_LIMIT.checked_sub(since.elapsed()).filter(|d| !d.is_zero())?;
             let left = deadline.checked_duration_since(std::time::Instant::now()).filter(|d| !d.is_zero())?;
-            busy = SLOT_FREED.wait_timeout(busy, left).unwrap_or_else(|e| e.into_inner()).0;
+            busy = SLOT_FREED.wait_timeout(busy, left.min(overdue)).unwrap_or_else(|e| e.into_inner()).0;
         }
-        *busy = true;
+        *busy = Some(began);
         Some(Slot)
     }
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        *SLOT_BUSY.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        *SLOT_BUSY.lock().unwrap_or_else(|e| e.into_inner()) = None;
         SLOT_FREED.notify_all();
     }
 }
@@ -180,6 +192,9 @@ fn audit_xml(doc: &roxmltree::Document<'_>) -> Result<(), &'static str> {
         let name = n.tag_name().name();
         if REFUSED_ELEMENTS.contains(&name) {
             return Err("the SVG uses a pattern, a filter or a mask, which are not drawn here");
+        }
+        if matches!(name, "linearGradient" | "radialGradient") && n.children().filter(|c| c.is_element() && c.tag_name().name() == "stop").count() > MAX_STOPS {
+            return Err("the SVG has a gradient with too many stops to draw");
         }
         if matches!(name, "text" | "textPath" | "tspan") && n.descendants().any(|t| t.is_text() && !t.text().unwrap_or("").trim().is_empty()) {
             return Err("the SVG has text, and text is not drawn here");
@@ -391,9 +406,12 @@ fn on_canvas(r: usvg::Rect, size: (f64, f64), scale: f64) -> f64 {
 
 /// What painting with `paint` costs, per pixel, against a flat colour.
 fn paint_weight(paint: &usvg::Paint) -> f64 {
+    let stops = |n: usize| GRADIENT_WEIGHT + n as f64 / STOPS_PER_WEIGHT;
     match paint {
         usvg::Paint::Color(_) => 1.0,
-        _ => GRADIENT_WEIGHT,
+        usvg::Paint::LinearGradient(g) => stops(g.stops().len()),
+        usvg::Paint::RadialGradient(g) => stops(g.stops().len()),
+        usvg::Paint::Pattern(_) => f64::INFINITY,
     }
 }
 
@@ -656,6 +674,42 @@ mod tests {
         // A clip path that uses an unclipped shape is drawn.
         let ok = "<defs><circle id=\"o\" cx=\"100\" cy=\"60\" r=\"40\"/><clipPath id=\"c\"><use href=\"#o\"/></clipPath></defs><rect width=\"200\" height=\"120\" fill=\"#00ff00\" clip-path=\"url(#c)\"/>";
         assert_eq!(pixel(&render(&svg(ok)).unwrap(), 100, 60), [0, 255, 0, 255]);
+    }
+
+    /// A full-canvas rectangle filled with a gradient of `stops` stops, drawn `uses` more times through `use`.
+    fn stops(stops: usize, uses: usize) -> Vec<u8> {
+        let s: String = (0..stops).map(|i| format!("<stop offset=\"0.{:02}\" stop-color=\"#{:03x}\"/>", i * 100 / stops.max(1), i * 977 % 0xfff)).collect();
+        let u: String = (0..uses).map(|_| "<use href=\"#r\"/>".to_string()).collect();
+        format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1600\" height=\"1600\"><defs><linearGradient id=\"g\">{s}</linearGradient></defs><rect id=\"r\" width=\"1600\" height=\"1600\" fill=\"url(#g)\"/>{u}</svg>").into_bytes()
+    }
+
+    /// The red-team's second pass: the painter searches a gradient's stops for every pixel, so one full-canvas rectangle with 45,000
+    /// stops took 4.8 s, and 60 more of it (under the paint budget, which counted every gradient alike) held the one slot for minutes.
+    #[test]
+    fn a_gradient_with_many_stops_is_refused_and_stops_weigh_on_the_budget() {
+        for file in [stops(44_000, 60), stops(45_000, 0), stops(MAX_STOPS + 1, 0)] {
+            assert!(file.len() <= MAX_SVG_BYTES);
+            let started = std::time::Instant::now();
+            assert_eq!(render_now(&file), Err("the SVG has a gradient with too many stops to draw"));
+            assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        }
+        // Within the cap, stops still weigh: 64 stops weigh 11 a pixel, so 60 canvases of them are over the budget.
+        let started = std::time::Instant::now();
+        assert_eq!(render_now(&stops(MAX_STOPS, 60)), Err("the SVG would take too long to draw"));
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        assert!(render_now(&stops(8, 2)).is_ok(), "an ordinary gradient is drawn");
+    }
+
+    #[test]
+    fn a_caller_is_refused_at_once_when_the_drawing_in_the_slot_is_past_its_time_limit() {
+        let small = svg("<rect width=\"10\" height=\"10\"/>");
+        let long_ago = std::time::Instant::now().checked_sub(TIME_LIMIT + Duration::from_secs(1)).expect("the clock goes back that far");
+        let held = Slot::acquire_from(Duration::from_secs(60), long_ago).expect("the slot comes free");
+        let started = std::time::Instant::now();
+        assert_eq!(render_with(&small, TIME_LIMIT, TIME_LIMIT), Err("another SVG is still being drawn"));
+        assert!(started.elapsed() < Duration::from_secs(1), "no wait for an overdue drawing: {:?}", started.elapsed());
+        drop(held);
+        assert!(render_with(&small, Duration::from_secs(60), TIME_LIMIT).is_ok());
     }
 
     #[test]
