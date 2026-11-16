@@ -1,11 +1,11 @@
 // The window's own preferences (spec 111 §2.4): which theme, whether the menu shows, which sections are folded, which screen.
 // Local storage only; it can be empty or refuse, and the window draws the same without it.
-export type Screen = 'activity' | 'council' | 'encyclopedia' | 'knowledge' | 'output' | 'agents' | 'settings';
+export type Screen = 'activity' | 'council' | 'encyclopedia' | 'knowledge' | 'memory' | 'output' | 'agents' | 'settings';
 export type Prefs = { theme: 'system' | 'dark' | 'light'; menu: boolean; folded: Record<string, boolean>; screen: Screen };
 
 export const DEFAULTS: Prefs = { theme: 'system', menu: true, folded: {}, screen: 'activity' };
 const KEY = 'delphi.prefs.v1';
-const SCREENS: Screen[] = ['activity', 'council', 'encyclopedia', 'knowledge', 'output', 'agents', 'settings'];
+const SCREENS: Screen[] = ['activity', 'council', 'encyclopedia', 'knowledge', 'memory', 'output', 'agents', 'settings'];
 
 /** Whatever was stored, made into valid preferences: an unknown or damaged value falls back to its default. */
 export function parse(raw: string | null): Prefs {

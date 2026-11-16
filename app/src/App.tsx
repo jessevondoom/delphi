@@ -6,6 +6,7 @@ import { Activity } from './screens/Activity.tsx';
 import { Council } from './screens/Council.tsx';
 import { Encyclopedia } from './screens/Encyclopedia.tsx';
 import { Knowledge } from './screens/Knowledge.tsx';
+import { Memory } from './screens/Memory.tsx';
 import { Output } from './screens/Output.tsx';
 import { Settings } from './screens/Settings.tsx';
 import { Team } from './screens/Team.tsx';
@@ -19,6 +20,7 @@ const ITEMS: { key: Screen; label: string }[] = [
   { key: 'council', label: 'Councils' },
   { key: 'encyclopedia', label: 'Encyclopedia' },
   { key: 'knowledge', label: 'Knowledge base' },
+  { key: 'memory', label: 'Agent memory' },
   { key: 'output', label: 'Work output' },
   { key: 'agents', label: 'Agents and skills' },
   { key: 'settings', label: 'Settings' },
@@ -151,6 +153,8 @@ export function App() {
           <Knowledge key={visit} bridge={bridge} info={info} state={state} light={light} ask={ask} />
         ) : prefs.screen === 'encyclopedia' ? (
           <Encyclopedia key={visit} bridge={bridge} info={info} light={light} searchKb={(q) => { setAsk(q); setVisit((v) => v + 1); update({ screen: 'knowledge' }); }} />
+        ) : prefs.screen === 'memory' ? (
+          <Memory key={visit} bridge={bridge} info={info} light={light} />
         ) : prefs.screen === 'output' ? (
           <Output key={visit} bridge={bridge} info={info} state={state} light={light} />
         ) : prefs.screen === 'agents' ? (
