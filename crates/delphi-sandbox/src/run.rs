@@ -309,13 +309,13 @@ mod tests {
         let f = fx();
         let Some(o) = go(&f, "ps -o pid=,pgid=,sess= -p $$", |_| {}, quick()) else { return };
         let cols: Vec<&str> = o.stdout.split_whitespace().collect();
-        if cols.len() >= 2 {
-            // On Linux the command runs in bubblewrap's new pid namespace, whose pid 1 is bubblewrap itself, which the launcher started
-            // in a session of its own. The bubblewrap of ubuntu-26.04 leaves the shell in that pid 1's group (`2 1 1`); earlier releases
-            // made the shell its own leader. Either way the group is the sandbox's, never the daemon's, and the tests above prove the
-            // group is killed whole.
-            let own = cols[0] == cols[1] || (cfg!(target_os = "linux") && cols[1] == "1");
-            assert!(own, "the shell leads its own process group, or (Linux) the namespace's: {}", o.stdout);
+        if cols.len() >= 3 && matches!(Sandbox::detect().map(|s| s.mode()), Ok(crate::Mode::Bwrap)) {
+            // bubblewrap runs the shell in a pid namespace of its own, under bwrap's init (pid 1 there), which has called
+            // `setsid` (`--new-session`): the shell is in init's group and session. The namespace ends with that init, and the
+            // kernel kills everything in it (`the_timeout_kills_the_command_and_everything_it_started` holds this on Linux).
+            assert_eq!((cols[1], cols[2]), ("1", "1"), "the shell is in the session the namespace's init leads: {}", o.stdout);
+        } else if cols.len() >= 2 {
+            assert_eq!(cols[0], cols[1], "the shell is its own process-group leader: {}", o.stdout);
         }
     }
 }
