@@ -303,3 +303,95 @@ fn an_investigation_command_never_runs_without_the_os_sandbox() {
     }
     assert!(ExecEnv::investigation_denied(&argv(&["git", "--no-pager", "push"])).is_some() && ExecEnv::investigation_denied(&argv(&["git", "stash", "push"])).is_none());
 }
+
+const BUILD_PROMPT: &str = "Implement @specs/011-retry.md in @project/app/src/lib.rs";
+
+/// The next card a running task raises, or `None` when the task ended without asking.
+async fn card_unless_done<T>(f: &Fx, task: &tokio::task::JoinHandle<T>) -> Option<crate::approval::Request> {
+    for _ in 0..1000 {
+        if let Some(r) = f.engine.broker.pending().into_iter().next() {
+            return Some(r);
+        }
+        if task.is_finished() {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the task neither asked nor ended");
+}
+
+/// Red-team P1-1: "allow for this session" on an investigator's command (always sandboxed, in a throwaway copy) must not cover
+/// a Builder's command of the same shape (unsandboxed, in the task's worktree, with `[exec] sandbox = "off"`), and the reverse.
+#[tokio::test]
+async fn a_session_yes_to_an_investigators_command_never_covers_a_builders_and_the_reverse() {
+    if Sandbox::detect().is_err() {
+        return;
+    }
+    for investigator_first in [true, false] {
+        let (f, _) = fixture(vec![Step::tool("c1", "shell", json!({"command": "touch a.txt"})), Step::text("one"), Step::tool("c2", "shell", json!({"command": "touch b.txt"})), Step::text("two")], SandboxMode::Off);
+        crate::testkit::ratify_spec(&f);
+        let order = if investigator_first { [("investigator", PROMPT), ("builder", BUILD_PROMPT)] } else { [("builder", BUILD_PROMPT), ("investigator", PROMPT)] };
+        let spawn = |role: &'static str, prompt: &'static str| {
+            let (e, m) = (f.engine.clone(), f.m.clone());
+            tokio::spawn(async move { e.run_task(&m, role, prompt).await.unwrap().status })
+        };
+        let first = spawn(order[0].0, order[0].1);
+        let card = card_unless_done(&f, &first).await.expect("the first command asks");
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::AllowSession, "console-1").unwrap();
+        assert_eq!(first.await.unwrap(), Status::Done);
+        assert_eq!(f.engine.broker.session_grants().len(), 1);
+        let second = spawn(order[1].0, order[1].1);
+        let Some(card2) = card_unless_done(&f, &second).await else {
+            panic!("{} first: the {}'s `touch b.txt` ran on the {}'s session grant {:?}", order[0].0, order[1].0, order[0].0, f.engine.broker.session_grants());
+        };
+        assert_ne!(card.pattern, card2.pattern, "the two places never share a pattern");
+        f.engine.broker.resolve(&card2.approval_id, &card2.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+        assert_eq!(second.await.unwrap(), Status::Done);
+    }
+}
+
+/// Red-team P1-1: "allow similar" in a task covers the Builder's command shape in that task, not the same shape run by an
+/// investigator the orchestrator dispatches in the same task, and the reverse.
+#[tokio::test]
+async fn a_similar_yes_in_a_task_never_crosses_between_the_builder_and_the_investigator() {
+    if Sandbox::detect().is_err() {
+        return;
+    }
+    let project = json!([{"uri": "@project/app/src/lib.rs", "reason": "the code"}]);
+    for builder_first in [true, false] {
+        let roles = if builder_first { ["builder", "investigator"] } else { ["investigator", "builder"] };
+        let (f, _) = fixture(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": roles[0], "objective": "Work on @project/app/src/lib.rs", "pointers": project})),
+                Step::tool("c1", "shell", json!({"command": "touch a.txt"})),
+                Step::text("first done"),
+                Step::tool("d2", "dispatch_agent", json!({"role": roles[1], "objective": "Work on @project/app/src/lib.rs", "pointers": project})),
+                Step::tool("c2", "shell", json!({"command": "touch b.txt"})),
+                Step::text("second done"),
+                Step::text("all done"),
+            ],
+            SandboxMode::Off,
+        );
+        let task = {
+            let (e, m) = (f.engine.clone(), f.m.clone());
+            tokio::spawn(async move { e.run_task(&m, "orchestrator", "Fix @project/app/src/lib.rs").await.unwrap().status })
+        };
+        // The dispatched Builder's worktree has no spec: the bounded exemption's card is answered yes wherever it comes.
+        let mut shell_cards = vec![];
+        while let Some(c) = card_unless_done(&f, &task).await {
+            if c.tool == "build_without_spec" {
+                f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Allow, "console-1").unwrap();
+                continue;
+            }
+            let answer = if shell_cards.is_empty() { Answer::AllowSimilar } else { Answer::Deny { reason: "no".into() } };
+            f.engine.broker.resolve(&c.approval_id, &c.payload_blake3, answer, "console-1").unwrap();
+            shell_cards.push(c);
+        }
+        assert_eq!(task.await.unwrap(), Status::Done);
+        let seen: Vec<(String, String)> = shell_cards.iter().map(|c| (c.role.clone(), c.pattern.clone())).collect();
+        assert_eq!(shell_cards.len(), 2, "{} first: the {}'s `touch b.txt` ran on the {}'s allow-similar: {seen:?} {:?}", roles[0], roles[1], roles[0], results(&f));
+        assert_eq!((shell_cards[0].role.as_str(), shell_cards[1].role.as_str()), (roles[0], roles[1]));
+        assert_eq!(shell_cards[0].task_id, shell_cards[1].task_id, "one task");
+        assert_ne!(shell_cards[0].pattern, shell_cards[1].pattern);
+    }
+}

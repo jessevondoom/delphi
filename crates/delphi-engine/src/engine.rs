@@ -578,6 +578,16 @@ impl Place {
     fn refuses_line(&self, line: &str) -> Option<String> {
         matches!(self, Place::Investigate(_)).then(|| exec::ExecEnv::investigation_denied_line(line)).flatten()
     }
+
+    /// The pattern a card's "allow similar" and "allow for this session" are keyed on. An investigation's command always runs
+    /// sandboxed in a throwaway copy; a Builder's may run unsandboxed in the task's worktree. A yes to one must never cover the
+    /// other, so an investigation's pattern carries its place (the broker keys session grants on tool and pattern only).
+    fn grant_pattern(&self, pattern: String) -> String {
+        match self {
+            Place::Build(_) => pattern,
+            Place::Investigate(_) => format!("@investigation {pattern}"),
+        }
+    }
 }
 
 pub(crate) fn tool_result_error(msg: impl Into<String>) -> tools::ToolResult {
@@ -2512,7 +2522,7 @@ impl Engine {
             exec::Verdict::Ask => {
                 // "Allow similar" covers the program, and its subcommand for tools that have them (`cargo test`, `git log`).
                 let has_sub = ["cargo", "git", "npm", "pnpm", "yarn", "go", "make", "pip", "uv", "bundle", "gradle", "mvn"].contains(&argv[0].rsplit('/').next().unwrap_or(""));
-                let pattern = format!("run_command {}", argv.iter().take(if has_sub && argv.len() > 1 && !argv[1].starts_with('-') { 2 } else { 1 }).cloned().collect::<Vec<_>>().join(" "));
+                let pattern = place.grant_pattern(format!("run_command {}", argv.iter().take(if has_sub && argv.len() > 1 && !argv[1].starts_with('-') { 2 } else { 1 }).cloned().collect::<Vec<_>>().join(" ")));
                 let c = tools::Classified {
                     tool: "run_command".into(),
                     tier: tools::ToolTier::Amber,
@@ -2604,7 +2614,7 @@ impl Engine {
                     kind: if safe { tools::ActionKind::SafeShell } else { tools::ActionKind::UnsandboxedExec },
                     summary: format!("run `{}` {}{}", shown, where_, if boxed { "" } else { " (not sandboxed)" }),
                     payload: json!({"tool": "shell", "command": line, "cwd": cwd, "sandboxed": boxed, "danger": if safe { "safe" } else { "caution" }, "timeout_secs": args["timeout_secs"]}),
-                    pattern: crate::shellsafe::pattern(&line),
+                    pattern: place.grant_pattern(crate::shellsafe::pattern(&line)),
                 };
                 if let Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
                     if let Some(denied) = self.ask(sc, tier, &c.tool, &c.pattern, &c.summary, &c.payload).await? {
