@@ -149,6 +149,10 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_knowledge_health(home, ws, &mut r);
     // 22. Research recall across projects (specs/115 §4 item 3): the setting and the private projects.
     check_research_sharing(ws, &cfg, &mut r);
+    // 23. Handling traits (specs/121 §3 item 5): what is labelled, what is not, and markings seen on paths not configured. A fact.
+    if let Some(line) = delphi_engine::handling_reconcile::doctor_line(&ws.dir, home) {
+        r.push(Level::Ok, "23 handling", "", line);
+    }
     // 18. Settings that were removed because their features are always on (specs/098 §13.2): one line per key an old config still carries.
     check_removed_settings(&cfg, &mut r);
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);

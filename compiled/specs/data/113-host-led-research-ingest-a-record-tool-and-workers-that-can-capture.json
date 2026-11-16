@@ -34,43 +34,43 @@
     },
     {
       "level": 2,
-      "line": 56,
+      "line": 58,
       "number": "3",
       "title": "Ingest: files that already exist"
     },
     {
       "level": 2,
-      "line": 65,
+      "line": 67,
       "number": "4",
       "title": "Workers that can capture"
     },
     {
       "level": 2,
-      "line": 72,
+      "line": 74,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 81,
+      "line": 83,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 88,
+      "line": 90,
       "number": "7",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 103,
+      "line": 105,
       "number": "8",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 109,
+      "line": 111,
       "number": "9",
       "title": "Open questions (the operator decides)"
     }
@@ -78,7 +78,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md",
-    "sha256": "a3aa91a67fe66491c8df5ea93edca42ece0513bc786535f47e0be91d8f3ded68"
+    "sha256": "5093e6d15534c813eb5ac5bc6f034125cc6f85002fa402f585bac31469f3ec65"
   },
   "source_status_at_hash": {
     "line": {
@@ -91,7 +91,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"all other specs are approved\", after the drafts and their slice tables were shown."
     },
-    "sha256": "a3aa91a67fe66491c8df5ea93edca42ece0513bc786535f47e0be91d8f3ded68",
+    "sha256": "5093e6d15534c813eb5ac5bc6f034125cc6f85002fa402f585bac31469f3ec65",
     "word": "approved"
   },
   "spec": {

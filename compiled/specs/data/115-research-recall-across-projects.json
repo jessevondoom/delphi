@@ -34,79 +34,79 @@
     },
     {
       "level": 2,
-      "line": 57,
+      "line": 59,
       "number": "3",
       "title": "What a search returns"
     },
     {
       "level": 2,
-      "line": 67,
+      "line": 69,
       "number": "4",
       "title": "What the operator sees"
     },
     {
       "level": 2,
-      "line": 73,
+      "line": 75,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 82,
+      "line": 84,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 89,
+      "line": 91,
       "number": "7",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 103,
+      "line": 105,
       "number": "8",
       "title": "Authority and trust: the decision the operator made"
     },
     {
       "level": 2,
-      "line": 109,
+      "line": 111,
       "number": "9",
       "title": "Open questions (the operator decides)"
     },
     {
       "level": 2,
-      "line": 115,
+      "line": 117,
       "number": "10",
       "title": "Amendment (operator, 2026-11-15): a session with no project is given shared research"
     },
     {
       "level": 2,
-      "line": 125,
+      "line": 127,
       "number": "11",
       "title": "Amendment (operator, 2026-11-15): the mark held by the task, internal confirmation that does not spread, and the operator sees everything"
     },
     {
       "level": 3,
-      "line": 129,
+      "line": 131,
       "number": "11.1",
       "title": "The mark is held by the task that was handed the claim"
     },
     {
       "level": 3,
-      "line": 136,
+      "line": 138,
       "number": "11.2",
       "title": "An internal source confirms its own claim, and nothing else"
     },
     {
       "level": 3,
-      "line": 142,
+      "line": 146,
       "number": "11.3",
       "title": "The operator sees everything"
     },
     {
       "level": 3,
-      "line": 146,
+      "line": 150,
       "number": "11.4",
       "title": "Slice"
     }
@@ -114,7 +114,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/115-research-recall-across-projects.md",
-    "sha256": "a7ba4b1da713e90ea568d2cda5b0f87d63d41d62fa42e1e4b006979408390aa7"
+    "sha256": "6729f8f7095e938292dcd415178eeb17b2c6017928bd8839ca219895e2facdb2"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +127,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"115: your suggestions are approved\" (the default `workspace` and the private flag of section 8). Open question 2 was settled later the same day (\"1. follow your direction\"): claims from private and internal sources are shared under the three guards of section 2.3. Section 10 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request. Section 11 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request."
     },
-    "sha256": "a7ba4b1da713e90ea568d2cda5b0f87d63d41d62fa42e1e4b006979408390aa7",
+    "sha256": "6729f8f7095e938292dcd415178eeb17b2c6017928bd8839ca219895e2facdb2",
     "word": "approved"
   },
   "spec": {

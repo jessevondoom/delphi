@@ -332,10 +332,40 @@ impl Library {
         out
     }
 
+    /// Every write of a claim. The claim takes the handling traits of the sources it is anchored to (`specs/121` §4 item 1, as
+    /// `derived`), and its `handling` field is set to the record's view: the field is never read back as authority, and one an
+    /// earlier write dropped is put back here. A failure to record the traits never fails the write.
     pub(super) fn save_claim(&self, c: &Value) -> Result<(), String> {
         let id = c["id"].as_str().ok_or("a claim has an id")?;
         self.ensure().map_err(|e| e.to_string())?;
-        self.write_json(&self.claims_dir().join(format!("{}.json", id)), c)
+        let used: Vec<String> = anchors_of(c).iter().filter_map(|a| a["source_id"].as_str()).map(crate::handling::source_item).collect();
+        let mut c = c.clone();
+        match crate::handling::Handling::in_library(self.root()).derive(&crate::handling::claim_item(id), None, &used, &[]) {
+            Ok(d) => match crate::handling::json_view(&d) {
+                Value::Null => {
+                    if let Some(m) = c.as_object_mut() {
+                        m.remove(crate::handling::VIEW_KEY);
+                    }
+                }
+                view => c[crate::handling::VIEW_KEY] = view,
+            },
+            Err(e) => delphi_core::elog::warn("handling", "claim_not_labelled", &e, json!({"claim": id})),
+        }
+        self.write_json(&self.claims_dir().join(format!("{}.json", id)), &c)
+    }
+
+    /// Bring a claim's `handling` field back in line with the record (`delphi handling reconcile`). Writes the field only.
+    pub fn set_handling_view(&self, id: &str, view: &Value) -> Result<(), String> {
+        let Some(mut c) = self.claim(id) else { return Ok(()) };
+        match view {
+            Value::Null => {
+                if let Some(m) = c.as_object_mut() {
+                    m.remove(crate::handling::VIEW_KEY);
+                }
+            }
+            v => c[crate::handling::VIEW_KEY] = v.clone(),
+        }
+        self.write_json(&self.claims_dir().join(format!("{}.json", id)), &c)
     }
 
     /// Record a claim: a statement, its kind and scope, and anchors into sources. Status is derived, so a new claim reads
