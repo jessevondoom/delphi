@@ -261,8 +261,9 @@ impl MissionState {
     }
 
     /// Count the uses a finished task earned for the notes its spans retrieved (`specs/116` §2 item 6), off the task's path.
+    /// The tap also records what spans that ended well were handed (`specs/116` §7 item 3), whether or not the tier is on.
     fn count_note_uses(&self, task: String) {
-        let Some(tap) = self.notes_tap() else { return };
+        let Some(tap) = self.notes.lock().unwrap().clone() else { return };
         let dir = self.dir.clone();
         let run = move || tap.task_ended(&dir, &task);
         match tokio::runtime::Handle::try_current() {
