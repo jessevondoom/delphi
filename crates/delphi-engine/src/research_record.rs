@@ -470,6 +470,28 @@ impl Topic {
         })
     }
 
+    /// What became of the pictures of one page the run kept (`specs/118` §3 item 4): one entry for each picture kept (its address,
+    /// the source and file it became, its licence) and one for each left out (its address and the fixed word for why), so the operator
+    /// can see what was left out and why. At most [`LIST_CAP`] entries in all.
+    pub fn pictures(&self, run_id: &str, page: &str, got: &crate::research_images::SourcePictures) -> Result<(), String> {
+        if got.kept.is_empty() && got.refused.is_empty() {
+            return Ok(());
+        }
+        self.update(|rec| {
+            if !rec["pictures"].is_array() {
+                rec["pictures"] = json!([]);
+            }
+            let page = clip(page, TEXT_CAP);
+            for k in &got.kept {
+                let item = json!({"run": run_id, "page": page, "url": clip(k["source_url"].as_str().unwrap_or(""), TEXT_CAP), "kept": true, "source_id": clip(k["source_id"].as_str().unwrap_or(""), 80), "file": clip(k["file"].as_str().unwrap_or(""), 80), "licence": clip(k["licence"].as_str().unwrap_or(""), 40)});
+                Self::push(rec, "pictures", item);
+            }
+            for (url, why) in &got.refused {
+                Self::push(rec, "pictures", json!({"run": run_id, "page": page, "url": clip(url, TEXT_CAP), "kept": false, "reason": clip(why, 40)}));
+            }
+        })
+    }
+
     /// One page the run did not read, and the fixed word for why.
     pub fn refused(&self, run_id: &str, url: &str, why: &str) -> Result<(), String> {
         self.update(|rec| Self::push(rec, "refused", json!({"run": run_id, "url": clip(url, TEXT_CAP), "reason": clip(why, 40)})))

@@ -28,6 +28,8 @@ pub const MAX_ANSWER: usize = 24 * 1024;
 pub const MAX_QUESTION: usize = 2000;
 pub const MAX_SEARCHES: usize = 40;
 pub const MAX_GAPS: usize = 20;
+/// The picture addresses a host may name on one source (`specs/118` §3 item 3).
+pub const MAX_PICTURES: usize = 6;
 const MAX_CLAIM_TEXT: usize = 500;
 const MAX_QUOTE: usize = 400;
 const MAX_LOCATOR: usize = 500;
@@ -48,6 +50,9 @@ pub struct Source {
     pub retrieved: String,
     pub kind: String,
     pub private: bool,
+    /// Picture addresses on the source the host would have kept (`specs/118` §3 item 3): https only, at most [`MAX_PICTURES`]. The
+    /// daemon judges each by its own gates and licence decision on the page it read; the host hands over no picture.
+    pub pictures: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,7 +93,8 @@ pub fn input_schema() -> Value {
                 "title": {"type": "string", "maxLength": MAX_TITLE},
                 "retrieved": {"type": "string", "maxLength": 40, "description": "When you read it."},
                 "kind": {"type": "string", "enum": KINDS, "default": "web"},
-                "private": {"type": "boolean", "default": false, "description": "True for anything not public: Delphi then never fetches it and keeps only its locator, title and date."}
+                "private": {"type": "boolean", "default": false, "description": "True for anything not public: Delphi then never fetches it and keeps only its locator, title and date."},
+                "pictures": {"type": "array", "maxItems": MAX_PICTURES, "items": {"type": "string", "maxLength": MAX_LOCATOR}, "description": "Addresses (https) of pictures on this page worth keeping. Delphi keeps one only if the page it reads shows it and its own rules allow it (trusted host, a description, a licence that allows keeping it); you cannot hand over a picture."}
             }, "required": ["locator"], "additionalProperties": false}},
             "claims": {"type": "array", "maxItems": MAX_CLAIMS, "items": {"type": "object", "properties": {
                 "text": {"type": "string", "minLength": 1, "maxLength": MAX_CLAIM_TEXT, "description": "One sentence."},
@@ -159,7 +165,12 @@ pub fn parse(p: &Value, redact: &dyn Fn(&str) -> String) -> Result<Parsed, HostE
         if !KINDS.contains(&kind.as_str()) {
             return bad(format!("`sources[].kind` is one of {}", KINDS.join(", ")));
         }
-        sources.push(Source { locator, title: redact(&capped(&s["title"], "sources[].title", MAX_TITLE)?), retrieved: capped(&s["retrieved"], "sources[].retrieved", 40)?, kind, private: s["private"].as_bool() == Some(true) });
+        let pictures = list(s, "pictures", MAX_PICTURES, "picture addresses")?
+            .iter()
+            .map(|u| u.as_str().map(str::trim).filter(|u| u.len() <= MAX_LOCATOR && crate::host_noted::https_host(u).is_some() && !u.chars().any(char::is_whitespace)).map(String::from).ok_or(()))
+            .collect::<Result<Vec<_>, _>>()
+            .or_else(|_| bad("`sources[].pictures` holds https addresses of at most 500 characters"))?;
+        sources.push(Source { locator, title: redact(&capped(&s["title"], "sources[].title", MAX_TITLE)?), retrieved: capped(&s["retrieved"], "sources[].retrieved", 40)?, kind, private: s["private"].as_bool() == Some(true), pictures });
     }
     let mut claims = Vec::new();
     for c in claims_in {
@@ -218,6 +229,9 @@ pub fn quote_in(page: &str, quote: &str) -> bool {
 pub type Fetched = (String, crate::fact_fetch::Snapshot);
 /// A fetcher: the daemon's own (`research_host::LiveWeb`), or a test's fake web.
 pub type FetchFn<'a> = &'a dyn Fn(&str) -> Result<Fetched, String>;
+/// The picture step (`specs/118` §3 item 3): for the library source a page became, the page the daemon read and the addresses the
+/// host named, what was kept and what was refused. The daemon's is `research_images::keep_for_source` on its own transport.
+pub type PicturesFn<'a> = &'a dyn Fn(&Library, &str, &crate::fact_fetch::Snapshot, &[String]) -> crate::research_images::SourcePictures;
 
 /// Where and for whom a call is recorded.
 pub struct Ctx<'a> {
@@ -235,6 +249,8 @@ pub struct Ctx<'a> {
     pub read_marked: bool,
     /// The workspace's `[privacy] identifiers` (`query_guard::identifiers`), applied to what is stored (§8).
     pub identifiers: &'a [String],
+    /// The picture step, when `[research] images` is on and the daemon fetches for this call; `None` keeps no picture.
+    pub pictures: Option<PicturesFn<'a>>,
 }
 
 /// The mark a claim that rests on a private source carries (§2 item 4).
@@ -279,7 +295,8 @@ fn masked(p: &Parsed, ids: &[String]) -> Parsed {
     Parsed {
         question: m(&p.question),
         answer: m(&p.answer),
-        sources: p.sources.iter().map(|s| Source { locator: m(&s.locator), title: m(&s.title), ..s.clone() }).collect(),
+        // A picture address that carries a private identifier is dropped: it is never fetched and never kept.
+        sources: p.sources.iter().map(|s| Source { locator: m(&s.locator), title: m(&s.title), pictures: s.pictures.iter().filter(|u| m(u) == **u).cloned().collect(), ..s.clone() }).collect(),
         claims: p.claims.iter().map(|c| Claim { text: m(&c.text), ..c.clone() }).collect(),
         searches: p.searches.iter().map(|s| Search { place: m(&s.place), words: m(&s.words) }).collect(),
         gaps: p.gaps.iter().map(|g| m(g)).collect(),
@@ -349,13 +366,25 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
         let got = fetch(url).and_then(|(at, snap)| {
             let text = snap.text.for_daemon().clone();
             let stored = lib.add_fetched(&at, &snap, &crate::library::AddOpts::default(), &crate::library::Budgets::default()).map_err(|_| "capture_failed".to_string())?;
-            Ok((stored.id, at, text))
+            Ok((stored, at, text, snap))
         });
         match got {
-            Ok((sid, at, text)) => {
+            Ok((stored, at, text, snap)) => {
+                let sid = stored.id.clone();
                 let hash = lib.read_meta(&sid).and_then(|m| m["content_hash"].as_str().map(String::from));
                 topic.page(run, &at, &sid, hash.as_deref())?;
-                sources_out.push(json!({"index": i, "kind": s.kind, "fetched": true, "url": at, "source_id": sid}));
+                let mut out = json!({"index": i, "kind": s.kind, "fetched": true, "url": at, "source_id": sid});
+                // The pictures the host named (`specs/118` §3 item 3): judged by the daemon on the page it read, under its own gates.
+                if !s.pictures.is_empty() {
+                    let pics = match ctx.pictures {
+                        Some(step) if stored.level == crate::library::Level::Full => step(&lib, &sid, &snap, &s.pictures),
+                        Some(_) => refuse_all(&s.pictures, "text_not_kept"),
+                        None => refuse_all(&s.pictures, "pictures_off"),
+                    };
+                    topic.pictures(run, &at, &pics)?;
+                    out["pictures"] = json!({"kept": pics.kept.len(), "refused": pics.refused.iter().map(|(u, w)| json!({"url": u, "reason": w})).collect::<Vec<_>>()});
+                }
+                sources_out.push(out);
                 read.push(Read::Page(sid, at, text));
             }
             Err(e) => {
@@ -415,6 +444,11 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
         "quotes_found": found, "quotes_not_found": not_found, "private_sources": private_sources, "private_claims": private_claims, "fetched_nothing": ctx.read_marked, "status": NOT_VALIDATED,
         "note": "not validated. Delphi fetched each public source itself and looked for each quote in what it read: a quote it found is an anchor into the page it keeps; one it did not find (or could not look for) is kept as `host-reported, not found`. A private, internal, file or person source was not fetched: only its locator, title and date are kept, and its claims stay private and count for no corroboration. Read it back with research_result and this research_id, or find it with search_kb.",
     }))
+}
+
+/// Every named picture refused for one reason.
+fn refuse_all(urls: &[String], why: &'static str) -> crate::research_images::SourcePictures {
+    crate::research_images::SourcePictures { refused: urls.iter().map(|u| (u.clone(), why)).collect(), ..Default::default() }
 }
 
 /// What the daemon has of one source of a call.
@@ -487,7 +521,66 @@ mod tests {
     }
 
     fn ctx<'a>(f: &'a Fx, run: &'a str) -> Ctx<'a> {
-        Ctx { home: &f.home, root: &f.ws, project: None, label: "host:claude-code/opus", run_id: run, read_marked: false, identifiers: &[] }
+        Ctx { home: &f.home, root: &f.ws, project: None, label: "host:claude-code/opus", run_id: run, read_marked: false, identifiers: &[], pictures: None }
+    }
+
+    /// `specs/118` §3 item 3: a host may name picture addresses on a public source; the daemon's picture step is handed exactly the
+    /// names, for the page it read and kept whole, and what it kept and refused goes into the reply and the run's record. A source
+    /// whose text is not kept, a call with the step off, and a private source hand nothing to the step.
+    #[test]
+    fn named_pictures_go_to_the_daemons_picture_step_and_their_refusals_are_recorded() {
+        let f = fx();
+        let mut c = call();
+        // A Wikipedia page: its licence is read by code, so its text is kept whole and its pictures may be judged.
+        c["sources"][0]["locator"] = json!("https://en.wikipedia.org/wiki/Zebrafish");
+        c["sources"][0]["pictures"] = json!(["https://fish.example.org/tank.png", "https://fish.example.org/logo.png"]);
+        c["sources"][1]["pictures"] = json!(["https://fish.example.org/b.png"]);
+        fn wiki(fetched: &RefCell<Vec<String>>) -> impl Fn(&str) -> Result<Fetched, String> + '_ {
+            let inner = web(fetched);
+            move |url: &str| -> Result<Fetched, String> {
+                if url == "https://en.wikipedia.org/wiki/Zebrafish" {
+                    fetched.borrow_mut().push(url.to_string());
+                    return Ok((url.to_string(), crate::fact_fetch::test_text_snapshot(url, PAGE_A)));
+                }
+                inner(url)
+            }
+        }
+        let asked: RefCell<Vec<(String, Vec<String>)>> = RefCell::new(Vec::new());
+        let step = |_: &Library, sid: &str, _: &crate::fact_fetch::Snapshot, named: &[String]| {
+            asked.borrow_mut().push((sid.to_string(), named.to_vec()));
+            crate::research_images::SourcePictures { kept: vec![json!({"source_url": "https://fish.example.org/tank.png", "source_id": sid, "file": "ab.png", "licence": "CC0-1.0"})], refused: vec![("https://fish.example.org/logo.png".to_string(), "no_licence")], fetched: 1 }
+        };
+        let fetched = RefCell::new(Vec::new());
+        let reply = record(&Ctx { pictures: Some(&step), ..ctx(&f, "h-9") }, &parse(&c, &id).unwrap(), &wiki(&fetched)).unwrap();
+        let calls = asked.borrow().clone();
+        assert_eq!(calls.len(), 1, "only the source whose text is kept: {calls:?}");
+        assert_eq!(calls[0].1, vec!["https://fish.example.org/tank.png".to_string(), "https://fish.example.org/logo.png".to_string()]);
+        let topic = Topic::at(&f.ws, reply["topic_id"].as_str().unwrap()).unwrap();
+        let rows = topic.read().unwrap()["pictures"].as_array().cloned().unwrap();
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert!(rows.iter().any(|r| r["kept"] == false && r["reason"] == "no_licence" && r["url"] == "https://fish.example.org/logo.png"));
+        assert!(rows.iter().any(|r| r["kept"] == true && r["url"] == "https://fish.example.org/tank.png"));
+        assert!(rows.iter().any(|r| r["reason"] == "text_not_kept" && r["url"] == "https://fish.example.org/b.png"), "a page kept as a pointer takes no picture: {rows:?}");
+        assert_eq!(reply["claims"], 4);
+        assert!(fetched.borrow().iter().all(|u| !u.ends_with(".png")), "the call's fetcher never asks for a picture: {:?}", fetched.borrow());
+        // The step off: every named picture is refused, `pictures_off`, and nothing is judged.
+        let reply = record(&ctx(&f, "h-10"), &parse(&c, &id).unwrap(), &wiki(&RefCell::new(Vec::new()))).unwrap();
+        let topic = Topic::at(&f.ws, reply["topic_id"].as_str().unwrap()).unwrap();
+        assert!(topic.read().unwrap()["pictures"].as_array().unwrap().iter().filter(|r| r["run"] == "h-10").all(|r| r["reason"] == "pictures_off"));
+        // A picture address must be https; one that names a private identifier is dropped before anything is fetched.
+        let mut bad = call();
+        bad["sources"][0]["pictures"] = json!(["http://fish.example.org/a.png"]);
+        assert!(parse(&bad, &id).is_err());
+        bad["sources"][0]["pictures"] = json!(["https://fish.example.org/heron-lab.png"]);
+        let p = masked(&parse(&bad, &id).unwrap(), &["heron".to_string()]);
+        assert!(p.sources[0].pictures.is_empty(), "{:?}", p.sources[0].pictures);
+        // A private source's pictures are never handed to the step.
+        let mut private = call();
+        private["sources"][0]["private"] = json!(true);
+        private["sources"][0]["pictures"] = json!(["https://fish.example.org/tank.png"]);
+        asked.borrow_mut().clear();
+        record(&Ctx { pictures: Some(&step), ..ctx(&f, "h-11") }, &parse(&private, &id).unwrap(), &web(&RefCell::new(Vec::new()))).unwrap();
+        assert!(asked.borrow().is_empty());
     }
 
     fn private_call() -> Value {

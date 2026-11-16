@@ -424,7 +424,8 @@ impl crate::research_chain::Cites for LiveCites {
 ///   holding a page outside the index was (`specs/058` §13). **An excluded address** (a shortener, a cache, a mirror, an archive)
 ///   is not kept.
 /// * **Pictures** come with a source whose text is kept, each on a licence of its own, inside the two caps of the limits table,
-///   and only when the run was given a transport for them: a run from the console or an inside agent, as before.
+///   and only when the run was given a transport for them: any run while `[research] images` is on (`specs/118` §3 item 1). What
+///   became of each picture, kept or refused with the fixed word for why, goes into the run's record.
 ///
 /// The step grants nothing: every source is still `not validated`, and the rules above only ever keep less.
 #[derive(Default)]
@@ -433,6 +434,8 @@ pub struct KeepStep {
     pub pictures: Option<Pictures>,
     /// What the library kept of each source this run captured: `(level, outcome)` by source id.
     kept: std::sync::Mutex<BTreeMap<String, (String, String)>>,
+    /// The run's record and id, where what became of each page's pictures is written (`specs/118` §3 item 4).
+    record: Option<(crate::research_record::Topic, String)>,
 }
 
 pub struct KeepRules {
@@ -451,7 +454,13 @@ pub struct Pictures {
 
 impl KeepStep {
     pub fn new(rules: KeepRules, pictures: Option<Pictures>) -> KeepStep {
-        KeepStep { rules: Some(rules), pictures, kept: Default::default() }
+        KeepStep { rules: Some(rules), pictures, kept: Default::default(), record: None }
+    }
+
+    /// The step, writing what became of each page's pictures into the run's record (`specs/118` §3 item 4).
+    pub fn recording(mut self, topic: crate::research_record::Topic, run_id: &str) -> KeepStep {
+        self.record = Some((topic, run_id.to_string()));
+        self
     }
 
     /// The options one page is captured with, or the fixed word for why it is not kept.
@@ -494,6 +503,9 @@ impl KeepStep {
         let out = blocking(|| crate::research_images::keep_for_source(lib, id, url, &body, &rules, None));
         // One run captures one page at a time, so nothing else moves the count between the load above and this store.
         p.left.store(left.saturating_sub(out.fetched), Ordering::SeqCst);
+        if let Some((topic, run)) = &self.record {
+            let _ = topic.pictures(run, url, &out);
+        }
         out
     }
 
@@ -1370,6 +1382,51 @@ mod tests {
         let id4 = lib.capture(&url, &text, true).await.unwrap();
         assert!(l.image_assets(&id4).is_empty() && w4.1.lock().unwrap().is_empty());
         assert!(l.attach_pictures(&id4, home.path(), &[json!({"file": "x.png"})], &crate::library::Budgets::default()).is_err(), "the library refuses pictures for a source it holds no text of");
+    }
+
+    /// `specs/118` AC-3 and §3 item 4: a run on a page with one openly licensed picture and one with no licence of its own keeps the
+    /// first with its record, refuses the second without fetching it, and writes both into the run's record, the refusal under its
+    /// fixed word. A host's `record_research` names pictures: only the named ones are judged, and a name the page does not show is
+    /// refused `not_on_page`.
+    #[tokio::test]
+    async fn a_run_keeps_the_licensed_picture_refuses_the_other_and_records_why() {
+        use delphi_adapter::config::WeakSources;
+        use delphi_adapter::research::transport::Response;
+        let pic = {
+            let rgba = (0..64 * 64).flat_map(|i| [(i % 64 * 4) as u8, 90, (i / 64 * 4) as u8, 255]).collect();
+            delphi_docs::png::encode(&delphi_docs::png::Image { width: 64, height: 64, rgba }, &[])
+        };
+        let img = "https://upload.wikimedia.org/wikipedia/commons/a/ab/Tree.png";
+        let bare = "https://en.wikipedia.org/static/chart.png";
+        let api = delphi_adapter::research::images::commons_api_url("File:Tree.png").unwrap();
+        let commons = "{\"query\":{\"pages\":{\"1\":{\"imageinfo\":[{\"extmetadata\":{\"LicenseShortName\":{\"value\":\"CC BY 4.0\"},\"Artist\":{\"value\":\"Ann\"}}}]}}}}";
+        let w = Arc::new(PictureWeb(std::collections::HashMap::from([(img.to_string(), Response { status: 200, body: pic.clone(), ..Default::default() }), (bare.to_string(), Response { status: 200, body: pic.clone(), ..Default::default() }), (api.clone(), Response { status: 200, body: commons.as_bytes().to_vec(), ..Default::default() })]), Default::default()));
+        let figure = "Intro text. <a href=\"/wiki/File:Tree.png\"><img alt=\"A fault tree\" src=\"//upload.wikimedia.org/wikipedia/commons/a/ab/Tree.png\" width=\"200\" height=\"120\"></a> More text.";
+        let other = "A second figure. <img alt=\"A chart of faults\" src=\"/static/chart.png\" width=\"200\" height=\"120\"> The end.";
+        let home = tempfile::tempdir().unwrap();
+        let topic = crate::research_record::Topic::begin(&home.path().join("ws"), &crate::research_record::Begin { question: "what is a fault tree", asked_by: crate::research_record::Asker::operator(), project: None, depth: delphi_core::research::Depth::Survey, run_id: "r-1" }).unwrap();
+        let keep = KeepStep::new(keep_rules(WeakSources::Label), Some(Pictures { transport: w.clone(), per_source: 6, left: AtomicUsize::new(24) })).recording(topic.clone(), "r-1");
+        let (lib, url, text) = kept_library(home.path(), keep, "https://en.wikipedia.org/wiki/Fault_tree", &[KEEP_PROSE, figure, other]);
+        let id = lib.capture(&url, &text, true).await.unwrap();
+        let l = crate::library::Library::in_home(home.path());
+        let images = l.read_meta(&id).unwrap()["images"].as_array().cloned().unwrap();
+        assert_eq!((images.len(), images[0]["source_url"].as_str(), images[0]["licence"].as_str()), (1, Some(img), Some("CC-BY-4.0")), "{images:?}");
+        assert!(!w.1.lock().unwrap().iter().any(|u| u == bare), "no bytes are fetched for a picture with no licence of its own");
+        let rec = topic.read().unwrap();
+        let rows = rec["pictures"].as_array().expect("the run's record lists the pictures");
+        let kept = rows.iter().find(|r| r["kept"] == true).unwrap();
+        assert_eq!((kept["url"].as_str(), kept["source_id"].as_str(), kept["licence"].as_str(), kept["run"].as_str()), (Some(img), Some(id.as_str()), Some("CC-BY-4.0"), Some("r-1")), "{rows:?}");
+        let refused = rows.iter().find(|r| r["kept"] == false).unwrap();
+        assert_eq!((refused["url"].as_str(), refused["reason"].as_str(), refused["page"].as_str()), (Some(bare), Some("no_licence"), Some(url.as_str())), "{rows:?}");
+
+        // The named form, as `record_research` uses it: only the named picture is judged; a name the page does not show is refused.
+        let snap = lib.held.as_ref().unwrap().read_as(&url, &text).unwrap();
+        let rules = crate::research_images::PictureRules { transport: w.as_ref(), list: &keep_rules(WeakSources::Label).list, per_source: 6, left: 24 };
+        let named = [bare.to_string(), "https://en.wikipedia.org/static/elsewhere.png".to_string()];
+        let got = blocking(|| crate::research_images::keep_for_source(&l, &id, &url, &String::from_utf8_lossy(snap.body_for_daemon()), &rules, Some(&named)));
+        assert!(got.kept.is_empty(), "{got:?}");
+        assert_eq!(got.refused, vec![(bare.to_string(), "no_licence"), ("https://en.wikipedia.org/static/elsewhere.png".to_string(), "not_on_page")]);
+        assert_eq!(l.read_meta(&id).unwrap()["images"].as_array().unwrap().len(), 1, "the picture kept before is still listed");
     }
 
     // ---- `specs/112` R2: a run's kept claims are library claims; the same claim found again gains an anchor ----

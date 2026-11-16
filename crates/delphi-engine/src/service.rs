@@ -822,7 +822,7 @@ impl EngineService {
         let host_searches = crate::search_log::parse_declared(&p["host_searches"]);
         let web = self.run_web(RunWeb { list, engines, transport: Arc::new(transport), identifiers });
         let asked = offered.then(|| question.clone());
-        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: false, after: None, resume, known: Some(known) }, web);
+        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: self.engine.settings.research_images, after: None, resume, known: Some(known) }, web);
         let mut reply = json!({"research_id": research_id, "status": "queued", "depth": depth, "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."});
         if let Some(id) = continued {
             reply["continued"] = json!(true);
@@ -897,7 +897,11 @@ impl EngineService {
             let limits = &engine.settings.research_limits;
             let rules = crate::research_host::KeepRules { list: web.list.clone(), classes: crate::fact_sources::SourceList::new(engine.cfg.get().validator.sources.clone()), weak: engine.cfg.get().validator.weak_sources };
             let pics = pictures.then(|| crate::research_host::Pictures { transport: transport.clone(), per_source: limits.pictures_per_source, left: std::sync::atomic::AtomicUsize::new(limits.pictures_per_run) });
-            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()), topic: claims_topic, project: claims_project, keep: crate::research_host::KeepStep::new(rules, pics) };
+            let mut keep = crate::research_host::KeepStep::new(rules, pics);
+            if let Some(r) = &recorder {
+                keep = keep.recording(r.topic.clone(), &r.run_id);
+            }
+            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()), topic: claims_topic, project: claims_project, keep };
             let redactor = delphi_core::redact::Redactor::new();
             // Citation chaining (`specs/101` §6): the index exists only when the switch is on; off, nothing is ever sent to it.
             let cites = engine.settings.chain.enabled.then(|| crate::research_host::LiveCites::new(crate::fact_fetch::FetchPolicy::default(), engine.settings.chain.endpoint.clone()).with_doi_endpoint(engine.settings.chain.doi_endpoint.clone()));
@@ -975,9 +979,22 @@ impl EngineService {
         let (reply, topic_id) = tokio::task::spawn_blocking(move || -> Result<(Value, String), String> {
             let root = project.as_ref().map(|(_, r)| r.clone()).unwrap_or_else(|| wsd.clone());
             let identifiers = crate::query_guard::identifiers(&wsd);
-            let ctx = hr::Ctx { home: &home, root: &root, project: project.as_ref().map(|(n, _)| n.as_str()), label: &lab, run_id: &rid, read_marked: private_read, identifiers: &identifiers };
+            let ctx = hr::Ctx { home: &home, root: &root, project: project.as_ref().map(|(n, _)| n.as_str()), label: &lab, run_id: &rid, read_marked: private_read, identifiers: &identifiers, pictures: None };
             let reply = if any_public {
-                let web = crate::research_host::LiveWeb::new(Arc::new(delphi_adapter::research::transport::HttpTransport::new()?), Arc::new(crate::research_setup::lists(&wsd, &home)?), crate::research_setup::engines(&e), wider);
+                let transport = Arc::new(delphi_adapter::research::transport::HttpTransport::new()?);
+                let list = Arc::new(crate::research_setup::lists(&wsd, &home)?);
+                let web = crate::research_host::LiveWeb::new(transport.clone(), list.clone(), crate::research_setup::engines(&e), wider);
+                // `specs/118` §3 item 3: the pictures the host named are judged by the daemon's own gates and licence decision, on the
+                // daemon's transport, inside the run limits of `[research.limits]`. Off with `[research] images = false`.
+                let limits = e.settings.research_limits.clone();
+                let left = std::sync::atomic::AtomicUsize::new(limits.pictures_per_run);
+                let step = |lib: &crate::library::Library, sid: &str, snap: &crate::fact_fetch::Snapshot, named: &[String]| {
+                    let rules = crate::research_images::PictureRules { transport: transport.as_ref(), list: &list, per_source: limits.pictures_per_source, left: left.load(std::sync::atomic::Ordering::SeqCst) };
+                    let got = crate::research_images::keep_for_source(lib, sid, snap.final_url.for_daemon(), &String::from_utf8_lossy(snap.body_for_daemon()), &rules, Some(named));
+                    left.fetch_sub(got.fetched.min(rules.left), std::sync::atomic::Ordering::SeqCst);
+                    got
+                };
+                let ctx = hr::Ctx { pictures: e.settings.research_images.then_some(&step as hr::PicturesFn<'_>), ..ctx };
                 web.observed.restore(observed);
                 let fetch = |u: &str| -> Result<hr::Fetched, String> {
                     use crate::research_run::Web;
@@ -3797,7 +3814,7 @@ impl EngineService {
                 }
             }
         });
-        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: true, after: Some(after), resume, known: Some(known) }, web);
+        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: self.engine.settings.research_images, after: Some(after), resume, known: Some(known) }, web);
         Ok(json!({"started": true, "research_id": run_id, "topic_id": topic_id, "topic": topic, "continued": again.is_some(), "offered": offered}))
     }
 

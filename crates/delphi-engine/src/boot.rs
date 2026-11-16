@@ -195,6 +195,10 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(b) = root.get("research").and_then(|r| r.get("retractions")).and_then(|v| v.as_bool()) {
         s.retractions = b;
     }
+    // `[research] images` (`specs/118` §3 item 1): a boolean, on unless exactly `false`. A value of the wrong kind keeps the default.
+    if let Some(b) = root.get("research").and_then(|r| r.get("images")).and_then(|v| v.as_bool()) {
+        s.research_images = b;
+    }
     if let Some(n) = root.get("research").and_then(|r| r.get("retractions_stale_days")).and_then(|v| v.as_integer()).filter(|v| (1..=3650).contains(v)) {
         s.retractions_stale_days = n;
     }
@@ -605,6 +609,16 @@ mod tests {
         for bad in ["pages_quick = 0", "pages_deep = 500", "steps_quick = \"many\"", "job_secs = 5", "concurrent = 0", "concurrent = 99", "page_chars = 10", "depth = \"forever\"", "pictures_per_run = -1"] {
             assert_eq!(settings_from(&toml::from_str(&format!("[research.limits]\n{bad}\n")).unwrap()).research_limits, Limits::default(), "{bad}");
         }
+    }
+
+    // `specs/118` §3 item 1: research keeps pictures unless `[research] images = false`; a value of the wrong kind keeps the default.
+    #[test]
+    fn research_keeps_pictures_unless_images_is_false() {
+        let of = |text: &str| settings_from(&toml::from_str(text).unwrap()).research_images;
+        assert!(of(""));
+        assert!(!of("[research]\nimages = false\n"));
+        assert!(of("[research]\nimages = true\n"));
+        assert!(of("[research]\nimages = \"no\"\n"), "a string is not a boolean: the default");
     }
 
     // `specs/112` §5.2: when a research topic is due. Ninety days unless set; a bad value keeps the default.
