@@ -127,7 +127,7 @@ fn options() -> usvg::Options<'static> {
 /// elements once `use` and markers are expanded.
 fn audit_xml(doc: &roxmltree::Document<'_>) -> Result<(), &'static str> {
     let mut ids: HashMap<&str, roxmltree::NodeId> = HashMap::new();
-    let (mut markers, mut marker_cost, mut vertices, mut marker_style) = (false, 0u64, 0u64, false);
+    let mut markers = false;
     for n in doc.descendants().filter(|n| n.is_element()) {
         let name = n.tag_name().name();
         if REFUSED_ELEMENTS.contains(&name) {
@@ -145,33 +145,37 @@ fn audit_xml(doc: &roxmltree::Document<'_>) -> Result<(), &'static str> {
         if name == "marker" {
             markers = true;
         }
-        if name == "style" && n.text().unwrap_or("").contains("marker") {
-            marker_style = true;
-        }
-        for a in n.attributes() {
-            match a.name() {
-                "d" | "points" => vertices += a.value().split(|c: char| !(c.is_ascii_digit() || c == '.')).filter(|s| !s.is_empty()).count() as u64,
-                "style" if a.value().contains("marker") => marker_style = true,
-                n if n.starts_with("marker") => marker_style = true,
-                _ => {}
-            }
-        }
     }
     audit_references(doc, &ids)?;
-    let mut memo: HashMap<roxmltree::NodeId, u64> = HashMap::new();
-    let mut busy: Vec<roxmltree::NodeId> = Vec::new();
-    let total = cost(doc.root_element(), &ids, &mut memo, &mut busy)?;
-    if markers {
+    // What one vertex of a shape costs when markers may be drawn on it: every marker of the file, as if each were drawn at every
+    // vertex of every shape, whatever names them (an attribute, a style, inheritance). Markers inside markers are refused above.
+    let marker_cost = if markers {
+        let (mut memo, mut busy) = (HashMap::new(), Vec::new());
+        let mut c = 0u64;
         for n in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "marker") {
-            marker_cost = marker_cost.saturating_add(cost(n, &ids, &mut memo, &mut busy)?);
+            c = c.saturating_add(cost(n, &ids, 0, &mut memo, &mut busy)?);
         }
-    }
-    // A marker is drawn at every vertex of a path that names it; counting every number of every path is an upper bound on that.
-    let drawn_markers = if markers && marker_style { marker_cost.saturating_mul(vertices) } else { 0 };
-    if total.saturating_add(drawn_markers) > MAX_EXPANDED {
+        c
+    } else {
+        0
+    };
+    let (mut memo, mut busy) = (HashMap::new(), Vec::new());
+    if cost(doc.root_element(), &ids, marker_cost, &mut memo, &mut busy)? > MAX_EXPANDED {
         return Err("the SVG has too many parts to draw once its references are counted");
     }
     Ok(())
+}
+
+/// The vertices of a shape, as the renderer will find them: a path's segments and a polyline's points read by resvg's own parsers
+/// (so `l.5.5.5.5` is two segments, not one number), two for a line, and an upper bound of ten for the closed shapes.
+fn vertices(n: roxmltree::Node<'_, '_>) -> u64 {
+    match n.tag_name().name() {
+        "path" => svgtypes::PathParser::from(n.attribute("d").unwrap_or("")).take_while(|s| s.is_ok()).count() as u64,
+        "polyline" | "polygon" => svgtypes::PointsParser::from(n.attribute("points").unwrap_or("")).count() as u64 + 1,
+        "line" => 2,
+        "rect" | "circle" | "ellipse" => 10,
+        _ => 0,
+    }
 }
 
 /// The `#id`s a property value names with `url(#id)` (quoted or not, with spaces or not).
@@ -268,8 +272,9 @@ fn audit_references<'a>(doc: &'a roxmltree::Document<'a>, ids: &HashMap<&str, ro
     Ok(())
 }
 
-/// The elements `n` stands for when drawn: itself, its children, and for a `use`, what it names (a cycle is refused).
-fn cost<'a>(n: roxmltree::Node<'a, 'a>, ids: &HashMap<&str, roxmltree::NodeId>, memo: &mut HashMap<roxmltree::NodeId, u64>, busy: &mut Vec<roxmltree::NodeId>) -> Result<u64, &'static str> {
+/// The elements `n` stands for when drawn: itself, its children, for a `use` what it names (a cycle is refused), and for a shape
+/// `marker` elements at each of its vertices.
+fn cost<'a>(n: roxmltree::Node<'a, 'a>, ids: &HashMap<&str, roxmltree::NodeId>, marker: u64, memo: &mut HashMap<roxmltree::NodeId, u64>, busy: &mut Vec<roxmltree::NodeId>) -> Result<u64, &'static str> {
     if let Some(c) = memo.get(&n.id()) {
         return Ok(*c);
     }
@@ -280,9 +285,9 @@ fn cost<'a>(n: roxmltree::Node<'a, 'a>, ids: &HashMap<&str, roxmltree::NodeId>, 
         return Err("the SVG nests too deeply to draw");
     }
     busy.push(n.id());
-    let mut total: u64 = 1;
+    let mut total: u64 = 1u64.saturating_add(if marker > 0 { vertices(n).saturating_mul(marker) } else { 0 });
     for c in n.children().filter(|c| c.is_element()) {
-        total = total.saturating_add(cost(c, ids, memo, busy)?);
+        total = total.saturating_add(cost(c, ids, marker, memo, busy)?);
         if total > MAX_EXPANDED {
             break;
         }
@@ -290,7 +295,7 @@ fn cost<'a>(n: roxmltree::Node<'a, 'a>, ids: &HashMap<&str, roxmltree::NodeId>, 
     if n.tag_name().name() == "use" {
         let href = n.attributes().find(|a| a.name() == "href").map(|a| a.value()).unwrap_or("");
         if let Some(target) = href.strip_prefix('#').and_then(|id| ids.get(id)).and_then(|id| n.document().get_node(*id)) {
-            total = total.saturating_add(cost(target, ids, memo, busy)?);
+            total = total.saturating_add(cost(target, ids, marker, memo, busy)?);
         }
     }
     busy.pop();
@@ -484,6 +489,28 @@ mod tests {
         assert_eq!(render(&svg(&body)), Err("the SVG has too many parts to draw once its references are counted"));
         let small = "<defs><marker id=\"m\"><path d=\"M0 0 L4 2 L0 4z\"/></marker></defs><path d=\"M10 10 L190 110\" marker-end=\"url(#m)\" stroke=\"black\"/>";
         assert!(render(&svg(small)).is_ok(), "an arrow head on a line is drawn");
+    }
+
+    /// The red-team's bypasses of the first count, each of which reached 1.6 to 1.7 GB before it was refused: markers on `<line>`
+    /// elements (no `d` or `points` to count), a compact path whose numbers run together (`l.5.5.5.5` read as one number), and markers
+    /// set by a style sheet split by a comment. Each is now refused by the count before the renderer expands anything.
+    #[test]
+    fn markers_on_lines_compact_paths_and_through_style_sheets_are_counted() {
+        let arrow = "<defs><marker id=\"m\" markerWidth=\"4\" markerHeight=\"4\"><path d=\"M0 0 L4 2 L0 4z\"/></marker></defs>";
+        let lines: String = (0..20_000).map(|i| format!("<line x1=\"{}\" y1=\"0\" x2=\"0\" y2=\"{}\" marker-end=\"url(#m)\"/>", i % 200, i % 120)).collect();
+        let compact = format!("<path stroke=\"black\" marker-mid=\"url(#m)\" d=\"M0 0{}\"/>", "l.5.5".repeat(32_000));
+        let inherited = format!("<g marker-mid=\"url(#m)\"><path stroke=\"black\" d=\"M0 0{}\"/></g>", "l.5.5".repeat(32_000));
+        for (what, body) in [("lines", format!("{arrow}{lines}")), ("compact path", format!("{arrow}{compact}")), ("inherited", format!("{arrow}{inherited}"))] {
+            let file = svg(&body);
+            assert!(file.len() <= MAX_SVG_BYTES, "{what}");
+            let started = std::time::Instant::now();
+            assert_eq!(render(&file), Err("the SVG has too many parts to draw once its references are counted"), "{what}");
+            assert!(started.elapsed() < Duration::from_secs(2), "{what}: refused by counting, not by drawing: {:?}", started.elapsed());
+        }
+        let sheet = format!("<style>path {{ stroke: black }}<!-- a comment splits the text --> path {{ marker-mid: url(#m) }}</style>{arrow}<path d=\"M0 0 L9 9\"/>");
+        assert_eq!(render(&svg(&sheet)), Err("the SVG sets clip paths or markers from a style sheet, which is not read here"));
+        assert_eq!(vertices(roxmltree::Document::parse("<path d=\"M0 0l.5.5.5.5.5.5\"/>").unwrap().root_element()), 4);
+        assert_eq!(vertices(roxmltree::Document::parse("<polyline points=\"0,0 1,1 2,2\"/>").unwrap().root_element()), 4);
     }
 
     #[test]
