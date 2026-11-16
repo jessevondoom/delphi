@@ -4,7 +4,7 @@ import type { Bridge } from '../bridge.ts';
 import { dayOf, docInAddress, headingOf, listTarget, searchTarget, sourceWords, titleOf, type Collection, type DocRow, type Hit, type SearchBody } from '../kb.ts';
 import type { Info, OState } from '../types.ts';
 
-type Props = { bridge: Bridge | null; info: Info | null; state: OState | null; light: boolean };
+type Props = { bridge: Bridge | null; info: Info | null; state: OState | null; light: boolean; /** A search handed over from another screen: it runs at once. */ ask?: string };
 
 /** Ask the bridge for one read and take its body when the daemon said 200; anything else is a sentence for the screen. */
 async function read<T>(bridge: Bridge, target: string): Promise<T> {
@@ -17,9 +17,9 @@ async function read<T>(bridge: Bridge, target: string): Promise<T> {
  * Screen 3 (spec 111 §5.3): a start page (search, what is on the shelf, what changed last), a page of results, and a document
  * across the full width with a way back. One of the three shows at a time; there is no column beside a document.
  */
-export function Knowledge({ bridge, info, state, light }: Props) {
+export function Knowledge({ bridge, info, state, light, ask }: Props) {
   // A search named in the address (`?q=`) runs at once: a link to a search, for a browser and for looking at the page.
-  const asked = typeof location !== 'undefined' ? (new URLSearchParams(location.search).get('q') ?? '').trim() : '';
+  const asked = ask?.trim() || (typeof location !== 'undefined' ? (new URLSearchParams(location.search).get('q') ?? '').trim() : '');
   const [text, setText] = useState(asked);
   const [query, setQuery] = useState(asked);
   const [kind, setKind] = useState('');

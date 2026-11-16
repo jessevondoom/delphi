@@ -1,10 +1,11 @@
 //! Delphi desktop (spec 111): a window that shows what the daemon knows and changes nothing. This crate is the bridge: it finds
 //! the daemon, attaches on the read-only narrator scope, and gives the window a few named reads and the daemon's notifications.
 //! When a terminal has paired it (spec 120), it attaches on the app socket instead, proving its key on every connection; the
-//! window is given the same reads either way.
+//! window is given the same reads either way, and a paired window the encyclopedia's reads as well (spec 117 §3; `ency`).
 
 pub mod bridge;
 pub mod client;
+pub mod ency;
 pub mod key;
 pub mod locate;
 
@@ -70,6 +71,19 @@ fn kb(bridge: State<'_, Arc<Bridge>>, target: String) -> Result<Value, String> {
         return Err("that is not a knowledge base read this app makes".into());
     };
     bridge.call(Method::KbGet, json!({ "target": target }))
+}
+
+/// One of the encyclopedia's eleven reads (spec 117 §3 item 1): topic pages, their versions and links, research topics,
+/// one source, one claim, agent memory, what changed. The window names the read and its arguments; `ency::read` picks the
+/// method and builds the parameters. Sent only when this app proved a paired key (spec 120): otherwise the answer is the
+/// sentence that says so, and the daemon is not asked.
+#[tauri::command(async)]
+fn encyclopedia(bridge: State<'_, Arc<Bridge>>, read: String, arg: Option<Value>) -> Result<Value, String> {
+    let arg = arg.unwrap_or(Value::Null);
+    let Some((method, params)) = ency::read(&read, &arg) else {
+        return Err("that is not an encyclopedia read this app makes".into());
+    };
+    bridge.call(method, params).map(|reply| ency::shown(method, &arg, reply))
 }
 
 fn handed_over(done: std::io::Result<std::process::ExitStatus>, what: &str) -> Result<(), String> {
@@ -141,7 +155,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, kb, reveal, open_file, open_url])
+        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, kb, encyclopedia, reveal, open_file, open_url])
         .run(tauri::generate_context!())
         .expect("the Delphi window could not start");
 }

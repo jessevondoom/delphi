@@ -209,3 +209,60 @@ button.menu-row:hover, button.menu-row.on { background: var(--sel); }
 .verdicts { display: flex; flex-wrap: wrap; gap: 14px; }
 .verdict { flex: 2 1 380px; min-width: 0; padding: 18px 20px; border-radius: 12px; }
 .dissent { flex: 1 1 260px; min-width: 0; padding: 18px 20px; border-radius: 12px; }
+
+/* The encyclopedia (spec 117 §4). Nothing here moves: no transition, no animation, and a jump to a section or a quoted
+   passage is made at once, so there is nothing for the reduce-motion setting to still. */
+.group-head { font-size: 13px; font-weight: 600; color: var(--text2); padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.topic-list { list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.topic-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 36px; font-size: 14px; }
+.topic-list .pin { margin-left: auto; }
+.pin { min-height: 28px; padding: 0 8px; border-radius: 6px; border: 1px solid transparent; background: none; color: var(--muted); font-size: 12px; cursor: pointer; }
+.pin:hover, .pin[aria-pressed='true'] { border-color: var(--line2); color: var(--text); }
+.notice { padding: 10px 14px; border-radius: 8px; background: var(--note-bg); color: var(--note-fg); font-size: 13px; line-height: 1.5; }
+.plain-list { padding-left: 1.4em; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.55; max-width: 860px; }
+.quoted { display: block; padding: 2px 0 2px 12px; border-left: 3px solid var(--line2); color: var(--text2); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.banner { max-width: 860px; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); color: var(--text2); font-size: 12px; line-height: 1.5; }
+.changed { max-width: 860px; font-size: 14px; color: var(--text2); }
+.changed .caps { margin-right: 8px; }
+.cite { display: inline; margin: 0 1px; padding: 0 5px; border-radius: 5px; border: 1px solid var(--line2); background: var(--inset); color: var(--text2); font: 400 .8em/1.5 var(--mono); cursor: pointer; white-space: nowrap; }
+.cite:hover { background: var(--sel); color: var(--text); }
+.page-text { display: flex; flex-direction: column; gap: 18px; }
+.page-text .said.doc { max-width: none; }
+.page-text .rich > :not(.passage) { max-width: 860px; }
+.page-text .under { margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--line); }
+.under > .md-h { font-size: 17px; font-weight: 600; }
+.passage { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 20px; }
+.passage-text { flex: 1 1 520px; max-width: 860px; min-width: 0; display: flex; flex-direction: column; gap: .6em; }
+.passage-notes { flex: 0 1 240px; min-width: 180px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.note { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: 8px; background: var(--note-bg); color: var(--note-fg); font: 400 12px/1.45 var(--sans); white-space: pre-wrap; overflow-wrap: anywhere; }
+.note.orphan { max-width: 860px; font-size: 13px; }
+.note-field { display: block; height: 96px; margin-top: 4px; padding: 8px 10px; font-size: 13px; resize: vertical; }
+/* The way to add a note is quiet until the passage is pointed at or the keyboard reaches it. */
+.note-add { align-self: flex-start; opacity: .45; }
+.passage:hover .note-add, .note-add:focus-visible { opacity: 1; }
+.terms { display: flex; flex-direction: column; gap: 8px; max-width: 860px; font-size: 14px; line-height: 1.55; }
+.terms dt { font-weight: 600; display: inline; }
+.terms dt::after { content: ': '; }
+.terms dd { display: inline; }
+.toc { max-width: 860px; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.toc ol { list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.toc li.deep { padding-left: 18px; font-size: 13px; }
+.cite-panel { max-width: 400px; flex-basis: 320px; align-self: flex-start; position: sticky; top: 0; max-height: 100vh; overflow-y: auto; }
+.cite-panel section { padding-top: 14px; border-top: 1px solid var(--line); }
+.ask { display: inline-flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ask.open { display: flex; width: 100%; max-width: 860px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); }
+.copied { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text2); }
+.copied code { padding: 6px 8px; border-radius: 6px; background: var(--inset); border: 1px solid var(--line); overflow-wrap: anywhere; user-select: all; }
+.source-text { max-width: 860px; padding: 14px 16px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+mark.quote { background: color-mix(in srgb, var(--gold) 38%, transparent); color: inherit; padding: 1px 0; border-radius: 2px; outline: 1px solid var(--gold); }
+details.card > summary { cursor: pointer; }
+.page-end { height: 1px; }
+
+/* Printing a page (spec 117 §5 item 4): the page alone, with its banner and its bibliography; the window's own furniture stays off the paper. */
+@media print {
+  .titlebar, .menu, .aside, .no-print, .passage-notes { display: none !important; }
+  html, body, #root { height: auto; }
+  body { background: #fff; color: #000; }
+  .main { padding: 0; }
+  .cite { border: none; background: none; padding: 0; color: inherit; }
+}
