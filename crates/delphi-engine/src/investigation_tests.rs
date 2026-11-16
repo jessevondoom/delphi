@@ -93,7 +93,8 @@ async fn an_investigator_bisects_in_a_throwaway_copy_and_the_project_is_byte_ide
     if Sandbox::detect().is_err() {
         return;
     }
-    let bisect = "git bisect start HEAD HEAD~3 >/dev/null && git bisect run sh -c '! grep -q BUG src/lib.rs' 2>&1 | grep 'first bad commit'; echo scratch > notes.tmp; git log --oneline | wc -l";
+    // git 2.56 quotes the term in its verdict (`<sha> is the first 'bad' commit`); earlier versions do not.
+    let bisect = "git bisect start HEAD HEAD~3 >/dev/null && git bisect run sh -c '! grep -q BUG src/lib.rs' 2>&1 | grep -E \"is the first '?bad'? commit\"; echo scratch > notes.tmp; git log --oneline | wc -l";
     let (f, shas) = fixture(vec![Step::tool("c1", "shell", json!({"command": bisect})), Step::tool("c2", "run_command", json!({"argv": ["git", "status", "--short"]})), Step::text("The third commit introduced it.")], SandboxMode::Prefer);
     let proj = f.root.join("proj");
     // The operator's own uncommitted work is in the project while the investigation runs.
@@ -104,7 +105,8 @@ async fn an_investigator_bisects_in_a_throwaway_copy_and_the_project_is_byte_ide
     let tools = offered(&f);
     assert!(tools.contains(&"shell".to_string()) && tools.contains(&"run_command".to_string()), "{tools:?}");
     let got = results(&f);
-    assert!(!got[0].1 && got[0].0.contains(&format!("{} is the first bad commit", shas[2])), "the bisect named the commit: {}", got[0].0);
+    let named = [format!("{} is the first bad commit", shas[2]), format!("{} is the first 'bad' commit", shas[2])];
+    assert!(!got[0].1 && named.iter().any(|n| got[0].0.contains(n.as_str())), "the bisect named the commit: {}", got[0].0);
     assert!(got[0].0.contains("sandboxed, no network"), "{}", got[0].0);
     assert!(!got[1].1 && got[1].0.contains("notes.tmp"), "the second command ran in the same copy: {}", got[1].0);
     assert!(events(&f, "approval.requested").is_empty(), "under an active sandbox the builder is not asked, so the investigator is not");
@@ -179,12 +181,22 @@ async fn a_push_a_network_request_and_a_write_outside_the_copy_are_each_refused(
     assert!(got[6].0.contains("unix rc=") && !got[6].0.contains("unix rc=0") && !got[6].0.contains("UNIX-REACHED"), "a unix socket outside the copy is refused: {}", got[6].0);
     assert!(matches!(unix.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "nothing reached the unix listener");
     let o = &got[5].0;
-    for rc in ["write rc=", "gitcfg rc=", "read rc=", "gitfile rc=", "ws rc="] {
+    for rc in ["write rc=", "gitcfg rc=", "read rc=", "gitfile rc="] {
         assert!(o.contains(rc) && !o.contains(&format!("{rc}0")), "{rc}: {o}");
+    }
+    // A write to a path above the copy that names nothing granted. macOS refuses it. bubblewrap's root is a private tmpfs that
+    // holds only the mount points it made for the granted paths and is gone when the command ends, so on Linux the write may
+    // succeed there; what holds on both is the assertion below that nothing reached the real folder.
+    assert!(o.contains("ws rc="), "{o}");
+    if cfg!(target_os = "macos") {
+        assert!(!o.contains("ws rc=0"), "ws rc=: {o}");
     }
     assert!(!o.contains("pub fn needle"), "the project's files cannot even be read: {o}");
     assert!(o.contains("gitdir: "), "the copy's pointer file is intact: {o}");
-    assert!(!proj.join("planted.txt").exists() && !f.root.join("workspaces/w/planted-ws").exists() && !f.root.join("workspaces/planted-ws").exists());
+    assert!(!proj.join("planted.txt").exists(), "nothing was written into the project");
+    for p in ["workspaces/w/planted-ws", "workspaces/planted-ws", "workspaces/w/worktrees/planted-ws", "workspaces/w/worktrees/.investigations/planted-ws"] {
+        assert!(!f.root.join(p).exists(), "the write above the copy never reached the real folder: {p}");
+    }
     assert!(copies(&f).is_empty());
     assert_eq!(tree_bytes(&proj), before, "the project is byte-identical: no ref, no object, no config line, no file");
 }
