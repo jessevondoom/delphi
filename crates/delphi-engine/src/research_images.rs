@@ -31,6 +31,13 @@ pub struct Saved {
     pub blake3: String,
     /// The file did not exist before this run wrote it.
     pub new_file: bool,
+    /// Where the licence is stated, for the credit line.
+    pub credit_url: String,
+    /// Which check decided the licence and where its evidence is (`specs/118` §2 item 1).
+    pub evidence: &'static str,
+    pub evidence_url: String,
+    pub width: usize,
+    pub height: usize,
 }
 
 /// What became of one page's pictures.
@@ -103,7 +110,21 @@ fn keep(transport: &dyn Transport, list: &TrustedList, dir: &Path, host: &str, p
     let licence = if resolved.licence.spdx == "public-domain" { "public domain".to_string() } else { resolved.licence.spdx.clone() };
     let author = text(&resolved.author, 200);
     let attribution = format!("Image: {}, {}, {}", if author.is_empty() { "author not stated" } else { author.as_str() }, licence, text(&resolved.credit_url, 300));
-    Ok(Saved { file, source_url: tok.url.clone(), licence: resolved.licence.spdx, share_alike: resolved.licence.share_alike, author, attribution, blake3: hash, new_file })
+    Ok(Saved {
+        file,
+        source_url: tok.url.clone(),
+        licence: resolved.licence.spdx,
+        share_alike: resolved.licence.share_alike,
+        author,
+        attribution,
+        blake3: hash,
+        new_file,
+        credit_url: text(&resolved.credit_url, 300),
+        evidence: resolved.evidence,
+        evidence_url: text(&resolved.evidence_url, 500),
+        width: pic.width,
+        height: pic.height,
+    })
 }
 
 fn images_host(url: &str) -> String {
@@ -115,7 +136,14 @@ fn images_host(url: &str) -> String {
 /// `root` is the folder the entries live in; pictures go beside them. Blocking: it makes requests.
 #[allow(clippy::too_many_arguments)]
 pub fn process(transport: &dyn Transport, list: &TrustedList, root: &Path, host: &str, page_url: &str, html_body: &str, md: &str, per_entry: usize, job_left: usize) -> Outcome {
-    let toks = html::find_images(md);
+    process_some(transport, list, root, host, page_url, html_body, md, per_entry, job_left, None)
+}
+
+/// [`process`], judging only the pictures whose addresses are in `named` when it is given (a host's `record_research` names the
+/// pictures of a source it wants kept, `specs/118` §3 item 3): any other picture is its alt text, judged not at all and fetched never.
+#[allow(clippy::too_many_arguments)]
+fn process_some(transport: &dyn Transport, list: &TrustedList, root: &Path, host: &str, page_url: &str, html_body: &str, md: &str, per_entry: usize, job_left: usize, named: Option<&[String]>) -> Outcome {
+    let toks: Vec<ImageTok> = html::find_images(md);
     let refs: HashMap<String, ImageRef> = images::extract(html_body, page_url).into_iter().map(|r| (r.url.clone(), r)).collect();
     let mut out = Outcome::default();
     let (mut text_out, mut at) = (String::with_capacity(md.len()), 0usize);
@@ -123,6 +151,10 @@ pub fn process(transport: &dyn Transport, list: &TrustedList, root: &Path, host:
     for tok in &toks {
         text_out.push_str(&md[at..tok.start]);
         at = tok.end;
+        if named.is_some_and(|n| !n.contains(&tok.url)) {
+            text_out.push_str(&tok.alt);
+            continue;
+        }
         let kept = match done.get(&tok.url) {
             Some(s) => s.clone(),
             None => {
@@ -160,6 +192,112 @@ pub fn process(transport: &dyn Transport, list: &TrustedList, root: &Path, host:
         text_out = text_out.replace("\n\n\n", "\n\n");
     }
     out.markdown = text_out.trim().to_string();
+    out
+}
+
+/// The fixed word a picture's refusal is recorded under (`specs/118` §3 item 4). The sentences [`keep`] and the adapter give can carry
+/// words of the page (a licence name as Commons states it, a host); the record keeps only the word, chosen here by code.
+pub fn refusal_word(why: &str) -> &'static str {
+    let w = why.to_ascii_lowercase();
+    let table: [(&str, &'static str); 15] = [
+        ("not on the trusted lists", "host_not_listed"),
+        ("no description", "no_description"),
+        ("too small", "too_small"),
+        ("past the limit", "past_limit"),
+        ("no licence is declared", "no_licence"),
+        ("non-free", "licence_refused"),
+        ("licence", "licence_refused"),
+        ("svg and webp", "format_not_kept"),
+        ("could not be decoded", "not_decoded"),
+        ("inside a link", "inside_link"),
+        ("not among the page's pictures", "not_on_page"),
+        ("redirect", "fetch_failed"),
+        ("mib", "too_large"),
+        ("answered", "fetch_failed"),
+        ("cannot be stored", "not_stored"),
+    ];
+    table.iter().find(|(k, _)| w.contains(k)).map(|(_, v)| *v).unwrap_or("fetch_failed")
+}
+
+/// What became of the pictures of one library source (`specs/118` §3): the licence records kept, and each picture left out with the
+/// fixed word for why.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SourcePictures {
+    pub kept: Vec<serde_json::Value>,
+    pub refused: Vec<(String, &'static str)>,
+    /// Requests made for pictures, counted against a run's limit.
+    pub fetched: usize,
+}
+
+/// The rules one capture of pictures runs under: the transport (the daemon's own, or a test's fake web), the trusted lists, how many
+/// pictures one source may take, and how many the run has left.
+pub struct PictureRules<'a> {
+    pub transport: &'a dyn Transport,
+    pub list: &'a TrustedList,
+    pub per_source: usize,
+    pub left: usize,
+}
+
+/// Keep the pictures of a page whose text the library holds as source `id` (`specs/118` §3): each is judged by [`process`]'s gates and
+/// licence decision, fetched under the trusted-list rules, and handed to the library with its licence record (`specs/118` §2 item 1).
+/// `named`, when given, limits the pictures judged to those addresses (a host's call names them); a named address the page does not
+/// show is refused `not_on_page`. The one capture path of the research runner, `record_research` and page expansion. Blocking.
+pub fn keep_for_source(lib: &crate::library::Library, id: &str, page_url: &str, html_body: &str, rules: &PictureRules<'_>, named: Option<&[String]>) -> SourcePictures {
+    let mut out = SourcePictures::default();
+    let host = crate::research_run::host_of(page_url);
+    if rules.per_source == 0 || rules.left == 0 || host.is_empty() || host.contains("..") || host.contains('/') {
+        if let Some(n) = named {
+            out.refused = n.iter().map(|u| (u.clone(), "past_limit")).collect();
+        }
+        return out;
+    }
+    let md = html::to_markdown_with_images(html_body, page_url, 200_000).markdown;
+    let stage = lib.root().join(".staging").join(format!("pictures-{}-{}", id, std::process::id()));
+    let _ = std::fs::remove_dir_all(&stage);
+    let done = process_some(rules.transport, rules.list, &stage, &host, page_url, html_body, &md, rules.per_source, rules.left, named);
+    out.fetched = done.fetched;
+    let retrieved = delphi_core::time::now_rfc3339();
+    let records: Vec<serde_json::Value> = done
+        .saved
+        .iter()
+        .filter_map(|s| {
+            let file = s.file.strip_prefix("images/")?;
+            Some(crate::library::assets::picture_record(&crate::library::assets::PictureFacts {
+                file,
+                source_id: id,
+                source_url: &s.source_url,
+                licence: &s.licence,
+                evidence: s.evidence,
+                evidence_url: &s.evidence_url,
+                author: &s.author,
+                credit_url: &s.credit_url,
+                share_alike: s.share_alike,
+                retrieved: &retrieved,
+                blake3: &s.blake3,
+                width: s.width,
+                height: s.height,
+            }))
+        })
+        .collect();
+    out.refused = done.not_saved.iter().map(|(u, w)| (u.clone(), refusal_word(w))).collect();
+    if !records.is_empty() {
+        match lib.attach_pictures(id, &stage.join(&host).join("images"), &records, &crate::library::Budgets::default()) {
+            Ok(_) => out.kept = records,
+            Err(e) => {
+                let word = if e.contains("budget") { "over_budget" } else { "text_not_kept" };
+                out.refused.extend(records.iter().map(|r| (r["source_url"].as_str().unwrap_or("").to_string(), word)));
+            }
+        }
+    }
+    if let Some(n) = named {
+        for u in n {
+            let seen = out.refused.iter().any(|(r, _)| r == u) || out.kept.iter().any(|k| k["source_url"].as_str() == Some(u.as_str()));
+            if !seen {
+                out.refused.push((u.clone(), "not_on_page"));
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&stage);
     out
 }
 

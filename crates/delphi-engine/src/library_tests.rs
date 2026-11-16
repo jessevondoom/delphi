@@ -2,6 +2,26 @@ use super::*;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
 
+/// A licence record for picture `file` of source `sid`, as a capture writes one (`specs/118` §2 item 1).
+fn licensed(l: &Library, sid: &str, file: &str) {
+    let r = assets::picture_record(&assets::PictureFacts {
+        file,
+        source_id: sid,
+        source_url: "https://upload.example.org/c.png",
+        licence: "CC-BY-4.0",
+        evidence: "figure_link",
+        evidence_url: "https://creativecommons.org/licenses/by/4.0/",
+        author: "Ann [Bo](x)",
+        credit_url: "https://example.org/tides",
+        share_alike: false,
+        retrieved: "2026-11-15T00:00:00Z",
+        blake3: "x",
+        width: 64,
+        height: 64,
+    });
+    l.set_asset_records(sid, &[r]).unwrap();
+}
+
 fn lib() -> (tempfile::TempDir, Library) {
     let home = tempfile::tempdir().unwrap();
     let l = Library::in_home(home.path());
@@ -1208,7 +1228,21 @@ mod pages {
         std::fs::write(assets.join("chart.png"), b"png").unwrap();
         std::fs::create_dir_all(l.source_dir(&s).join("assets")).unwrap();
         std::fs::copy(assets.join("chart.png"), l.source_dir(&s).join("assets").join("chart.png")).unwrap();
-        l.build_page("tides", Some(&format!("![Tide chart](lib:{s}/chart.png)\n\nFigure: tide chart. [s-{s}]")), Format::Plain).unwrap();
+        // `specs/118` §2 item 2: a picture with no licence record may not be shown.
+        let draft = format!("![Tide chart](lib:{s}/chart.png)\n\nFigure: tide chart. [s-{s}]");
+        assert_eq!(err(&draft), vec![Finding::ImageUnlicensed(format!("lib:{s}/chart.png"))]);
+        licensed(&l, &s, "chart.png");
+        let page = l.build_page("tides", Some(&draft), Format::Plain).unwrap();
+        // §2 item 4: the daemon writes the credit line under the picture, from the record, with nothing of the author's that could
+        // make a link; the whole page checks clean, and fails without the line, with it changed, or with one the writer wrote.
+        let credit = "*Picture credit: Ann Bo (x), CC-BY-4.0, https://example.org/tides*";
+        assert!(page.markdown.contains(&format!("![Tide chart](lib:{s}/chart.png)\n{credit}\n")), "{}", page.markdown);
+        assert!(l.check_page_text(&page.markdown, Scope::External).findings.is_empty(), "{:?}", l.check_page_text(&page.markdown, Scope::External).findings);
+        let missing = l.check_page_text(&page.markdown.replace(&format!("{credit}\n"), ""), Scope::External).findings;
+        assert_eq!(missing, vec![Finding::CreditMissing(format!("lib:{s}/chart.png"))]);
+        let changed = l.check_page_text(&page.markdown.replace("CC-BY-4.0, https", "CC0-1.0, https"), Scope::External).findings;
+        assert!(changed.contains(&Finding::CreditMissing(format!("lib:{s}/chart.png"))) && changed.contains(&Finding::CreditInBody), "{changed:?}");
+        assert!(err(&format!("{draft}\n{credit}")).contains(&Finding::CreditInBody), "only the daemon writes a credit line");
         assert_eq!(err(&format!("![Tide chart](lib:{s}/chart.png) [{a}]")), vec![Finding::ImageUncited(s.clone())]);
         assert_eq!(err(&format!("![x](lib:{s}/../meta.json) [s-{s}]")), vec![Finding::UnknownImage(format!("lib:{s}/../meta.json"))]);
         assert_eq!(err(&format!("See [the tides](https://example.org/tides). [s-{s}]")), vec![Finding::UnknownLink("https://example.org/tides".into())]);
@@ -2015,6 +2049,9 @@ mod page_search_cache {
         std::fs::write(l.source_dir(&sid).join("assets/chart.png"), png()).unwrap();
         std::fs::write(l.source_dir(&sid).join("assets/notes.txt"), "not a picture").unwrap();
         std::fs::write(l.source_dir(&sid).join("assets/has space.png"), png()).unwrap();
+        std::fs::write(l.source_dir(&sid).join("assets/unrecorded.png"), png()).unwrap();
+        licensed(&l, &sid, "chart.png");
+        licensed(&l, &sid, "has space.png");
         let g = l.gather("tides", Scope::Internal, &[]);
         assert_eq!(g.assets.iter().map(|a| a.uri.clone()).collect::<Vec<_>>(), vec![format!("lib:{sid}/chart.png")]);
         let brief = crate::library::page_search::brief_for("tides", &g, 3000, Default::default());
@@ -2043,6 +2080,9 @@ mod page_search_cache {
         let m = l.read_meta(&s.id).unwrap();
         assert_eq!((m["status"].as_str(), m["licence"].as_str(), m["title"].as_str(), m["workspace_path"].as_str()), (Some("not validated"), Some("internal"), Some("Harbour tides"), Some("docs/spec.md")));
         assert!(l.asset_file(&s.id, "chart.png").is_some());
+        // Its licence record (`specs/118` §2 item 1): the operator's own material, decided by where it is.
+        let rec = l.asset_record(&s.id, "chart.png").expect("a workspace picture has a record");
+        assert_eq!((rec["licence"].as_str(), rec["licence_evidence"]["check"].as_str(), rec["source_url"].as_str(), rec["width"].as_u64()), (Some("internal"), Some("workspace"), Some("workspace:docs/img/chart.png"), Some(64)), "{rec}");
         assert!(l.asset_file(&s.id, "../meta.json").is_none() && l.asset_file(&s.id, "nope.png").is_none() && l.asset_file("no-such", "chart.png").is_none());
         assert_eq!(l.capture_workspace_doc(&ws, &ws.join("docs/spec.md"), "docs/spec.md", &b).unwrap().outcome, crate::library::Outcome::Unchanged);
         let outside = file(d.path(), "o.md", "# Outside");
@@ -2057,6 +2097,11 @@ mod page_search_cache {
         let get = |operator: bool, src: &str| crate::kbserve::Reader { kb: &kb, ws: &ws, operator, home: Some(d.path()) }.get(&format!("/v1/image?src={src}"));
         let ok = get(true, &format!("lib:{}/chart.png", s.id));
         assert_eq!((ok.status, ok.body["width"].as_u64()), (200, Some(64)), "{}", ok.body);
+        assert_eq!(ok.body["credit"]["line"], "author not stated, internal, workspace:docs/img/chart.png", "the picture comes with its credit");
+        // AC-2: a picture with no record is refused, and `assets check` lists it.
+        std::fs::write(l.source_dir(&s.id).join("assets/stray.png"), png()).unwrap();
+        let no = get(true, &format!("lib:{}/stray.png", s.id));
+        assert_eq!((no.status, no.body["error"].as_str()), (403, Some("no licence record")), "{}", no.body);
         assert_eq!(get(false, &format!("lib:{}/chart.png", s.id)).status, 403);
         assert_eq!(get(true, &format!("lib:{}/../meta.json", s.id)).status, 404);
         assert_eq!(get(true, &format!("lib:{}/source.md", s.id)).status, 404);
@@ -2081,6 +2126,7 @@ mod page_search_cache {
         let sid = l.list().into_iter().find(|(_, m)| m["title"] == "t.md").map(|(id, _)| id).unwrap();
         std::fs::create_dir_all(l.source_dir(&sid).join("assets")).unwrap();
         std::fs::write(l.source_dir(&sid).join("assets/chart.png"), png()).unwrap();
+        licensed(&l, &sid, "chart.png");
         let cfg = PagesConfig::default();
         let w = W {
             draft: format!(
@@ -2107,7 +2153,63 @@ mod page_search_cache {
         assert!(on_disk.contains("depth: expanded"));
         assert!(on_disk.contains("volatility: low"));
         assert!(res.markdown.contains("![A tide chart](lib:"));
+        assert!(res.markdown.contains(&format!("![A tide chart](lib:{sid}/chart.png)\n*Picture credit: ")), "the expanded page carries the daemon's credit line: {}", res.markdown);
     }
+}
+
+/// `specs/118` §2 item 3 and AC-2: `assets check` lists the pictures with no licence record and, with `--apply`, moves them to
+/// `assets/unlicensed/`, which is never served. Nothing is deleted, and a picture with a record is left alone.
+#[test]
+fn assets_check_lists_pictures_with_no_record_and_moves_them_aside_without_deleting() {
+    let (d, l) = lib();
+    let id = l.add_file(&file(d.path(), "tides.md", "# Tides\n\nTides rise twice a day.\n"), &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
+    let assets = l.source_dir(&id).join("assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    for f in ["kept.png", "stray.jpg", "notes.csv"] {
+        std::fs::write(assets.join(f), b"bytes").unwrap();
+    }
+    licensed(&l, &id, "kept.png");
+    let listed = l.assets_check(false);
+    assert_eq!(listed, vec![assets::Unrecorded { source_id: id.clone(), file: "stray.jpg".into(), moved: false }], "a picture only; a csv is not a picture");
+    assert!(assets.join("stray.jpg").is_file(), "listing moves nothing");
+    let moved = l.assets_check(true);
+    assert!(moved[0].moved && assets.join("unlicensed/stray.jpg").is_file() && !assets.join("stray.jpg").exists());
+    assert!(l.assets_check(false).is_empty(), "the folder aside is not listed again");
+    assert!(l.asset_file(&id, "unlicensed/stray.jpg").is_none() && l.asset_file(&id, "stray.jpg").is_none(), "nothing aside is served");
+    assert!(assets.join("kept.png").is_file() && assets.join("notes.csv").is_file());
+}
+
+/// `specs/118` §2 item 1 at `bundle add`: a picture an added bundle brings takes its record from the source's licence when that licence
+/// is one a picture may be kept under; the bundle's own record of a picture is kept only when its licence passes the same decision;
+/// anything else stays without one. An export carries the records of the pictures it carries, and leaves an unrecorded picture behind.
+#[test]
+fn a_bundles_pictures_are_recorded_only_under_a_licence_a_picture_may_be_kept_under() {
+    let (d, l) = lib();
+    let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev/bundles/acme-platform");
+    l.import_bundle(&golden, "acme/acme-platform@1.4.0", &origin("h1"), &Budgets::default());
+    let rec = l.asset_record("oecd-2024-report", "figure-1.png").expect("a CC BY source's picture is recorded");
+    assert_eq!((rec["licence"].as_str(), rec["licence_evidence"]["check"].as_str(), rec["licence_evidence"]["url"].as_str()), (Some("CC-BY-4.0"), Some("bundle"), Some("bundle:acme/acme-platform@1.4.0")), "{rec}");
+
+    let dir = d.path().join("b2");
+    for (id, licence, images) in [("nc-report", "CC-BY-NC-4.0", json!([])), ("nc-claims-cc0", "CC-BY-NC-4.0", json!([{"file": "a.png", "licence": "CC0-1.0", "author": "Ann", "credit_url": "https://x.example/a"}])), ("nc-claims-nd", "CC-BY-NC-4.0", json!([{"file": "a.png", "licence": "CC-BY-ND-4.0"}]))] {
+        let src = dir.join("sources").join(id);
+        std::fs::create_dir_all(src.join("assets")).unwrap();
+        std::fs::write(src.join("meta.json"), json!({"type": "report", "title": "T", "licence": licence, "capture_level": "full", "images": images}).to_string()).unwrap();
+        std::fs::write(src.join("source.md"), "# T\n\nText.\n").unwrap();
+        std::fs::write(src.join("assets/a.png"), b"png").unwrap();
+    }
+    l.import_bundle(&dir, "acme/b2@1.0.0", &origin("h2"), &Budgets::default());
+    assert!(l.asset_record("nc-report", "a.png").is_none(), "a non-commercial source's picture is not recorded");
+    assert_eq!(l.asset_record("nc-claims-cc0", "a.png").unwrap()["licence"], "CC0-1.0", "the bundle's own record, under a licence that passes");
+    assert!(l.asset_record("nc-claims-nd", "a.png").is_none(), "a bundle's record under a licence that does not pass is not kept");
+
+    let out = d.path().join("out");
+    let r = l.export_to_bundle(&out, &["oecd-2024-report".to_string(), "nc-report".to_string()], false);
+    assert!(r.iter().all(|(_, x)| x.is_ok()), "{r:?}");
+    let m: Value = serde_json::from_slice(&std::fs::read(out.join("sources/oecd-2024-report/meta.json")).unwrap()).unwrap();
+    assert_eq!(m["images"][0]["file"], "figure-1.png");
+    assert!(out.join("sources/oecd-2024-report/assets/figure-1.png").is_file());
+    assert!(!out.join("sources/nc-report/assets/a.png").exists(), "a picture with no record does not travel");
 }
 
 // specs/109 §13.3 (defect 3): a source added from a local file is not named by its absolute path, so no home directory or user name is in

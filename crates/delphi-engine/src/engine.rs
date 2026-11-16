@@ -142,6 +142,9 @@ pub struct Settings {
     /// `[research] retractions` (`specs/101` §4, §8): check a source's DOI against the local Retraction Watch snapshot at capture and re-check.
     /// Default off until slice B's exit criterion passes; off is spec 098 as merged. Nothing is ever sent to a service.
     pub retractions: bool,
+    /// `[research] images` (`specs/118` §3 item 1): a research run, from the console, an inside agent or a host, and `record_research`
+    /// keep the pictures of the pages they keep, under the picture licence decision. Default on; off fetches no picture.
+    pub research_images: bool,
     /// `[research] retractions_stale_days` (`specs/101` §4 item 4): a snapshot older than this many days is called stale. Default 90.
     pub retractions_stale_days: i64,
     /// `[research] young_domain_days`, `burst_hours`, `similar_above`, `unfamiliar_counts` (`specs/098` §7.6, §18): the numbers the corroboration
@@ -229,6 +232,7 @@ impl Default for Settings {
             research_limits: Default::default(),
             research_refresh: Default::default(),
             retractions: false,
+            research_images: true,
             retractions_stale_days: crate::retractions::DEFAULT_STALE_DAYS,
             support: crate::corroboration::Params::default(),
             tiers: Default::default(),

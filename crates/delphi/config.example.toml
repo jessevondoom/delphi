@@ -363,6 +363,13 @@ providers = ["parallel"]   # parallel | brave | mojeek | searxng | kagi | google
 # gitlab.com/crossref/retraction-watch-data) with `delphi research retractions import <file>`. Delphi makes no call to a service about a
 # DOI, ever: a DOI would tell a third party what you are reading. A snapshot older than retractions_stale_days is called stale.
 # retractions = true
+#
+# Pictures (specs/118 section 3). A research run (from the console, an inside agent or a host) and record_research keep the pictures
+# of a page whose text they keep, by the same gates as before: a host on the trusted lists, a description (alternative text), at
+# least 48 pixels a side, the size cap, pictures_per_source and pictures_per_run in [research.limits], and a licence decided by
+# code (Creative Commons BY or BY-SA, CC0, public domain, or a trusted-list entry that says its pictures carry its licence). Each
+# kept picture has its licence record; a refused one is listed in the run's record with the reason. false fetches no picture.
+# images = true
 # retractions_stale_days = 90
 #
 # The confidence ladder (specs/100 section 3.2). A claim's rung is derived by code from tags the daemon wrote: how many independent

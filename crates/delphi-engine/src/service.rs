@@ -878,7 +878,7 @@ impl EngineService {
         let host_searches = crate::search_log::parse_declared(&p["host_searches"]);
         let web = self.run_web(RunWeb { list, engines, transport: Arc::new(transport), identifiers });
         let asked = offered.then(|| question.clone());
-        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: false, after: None, resume, known: Some(known), sources, marked, host }, web);
+        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: self.engine.settings.research_images, after: None, resume, known: Some(known), sources, marked, host }, web);
         let mut reply = json!({"research_id": research_id, "status": "queued", "depth": depth, "sources": sources.as_str(), "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."});
         if sources == crate::research_run::Sources::Local {
             reply["sources_note"] = json!(crate::research_setup::local_note());
@@ -1003,7 +1003,11 @@ impl EngineService {
             let limits = &engine.settings.research_limits;
             let rules = crate::research_host::KeepRules { list: web.list.clone(), classes: crate::fact_sources::SourceList::new(engine.cfg.get().validator.sources.clone()), weak: engine.cfg.get().validator.weak_sources };
             let pics = pictures.then(|| crate::research_host::Pictures { transport: transport.clone(), per_source: limits.pictures_per_source, left: std::sync::atomic::AtomicUsize::new(limits.pictures_per_run) });
-            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()), topic: claims_topic, project: claims_project, keep: crate::research_host::KeepStep::new(rules, pics).with_unknown_licence(engine.cfg.get().library.unknown_licence, engine.cfg.get().library.private_text_max_mib).with_archive(engine.settings.archive.clone()) };
+            let mut keep = crate::research_host::KeepStep::new(rules, pics).with_unknown_licence(engine.cfg.get().library.unknown_licence, engine.cfg.get().library.private_text_max_mib).with_archive(engine.settings.archive.clone());
+            if let Some(r) = &recorder {
+                keep = keep.recording(r.topic.clone(), &r.run_id);
+            }
+            let library = crate::research_host::LiveLibrary { home, ledger: wsd.join("research/host-claims.jsonl"), label, retractions, held: Some(web.held.clone()), topic: claims_topic, project: claims_project, keep };
             let redactor = delphi_core::redact::Redactor::new();
             // Citation chaining (`specs/101` §6): the index exists only when the switch is on; off, nothing is ever sent to it.
             let cites = engine.settings.chain.enabled.then(|| crate::research_host::LiveCites::new(crate::fact_fetch::FetchPolicy::default(), engine.settings.chain.endpoint.clone()).with_doi_endpoint(engine.settings.chain.doi_endpoint.clone()));
@@ -1018,11 +1022,21 @@ impl EngineService {
                 let _ = tokio::task::spawn_blocking(move || crate::research_method::KnownFirst::find(k.as_ref(), &question)).await;
             }
             let deps = crate::research_run::Deps { sources, marked, host: host.as_ref(), web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain, record: recorder.as_ref().map(|r| r as &dyn crate::research_run::Recorder), limits, resume: resume.as_ref(), known: known.as_deref().map(|k| k as &dyn crate::research_method::KnownFirst) };
-            let out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
+            let mut out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
+            // What the run teaches (`specs/114` §6 item 1) leaves the result here: no reader of a result sees it.
+            let teaches = match &mut out {
+                Ok(crate::research_jobs::Finish::Done(v) | crate::research_jobs::Finish::Partial(v)) => v.as_object_mut().and_then(|o| o.remove(crate::research_run::RUN_NOTE)),
+                _ => None,
+            };
             if let Some(m) = &mission {
                 let urls: Vec<Value> = web.observed.snapshot().into_iter().map(|(url, via)| json!({"url": url, "via": via})).collect();
                 if !urls.is_empty() {
                     let _ = m.append(EventEnvelope::new(&m.id, crate::research_observed::OBSERVED_EVENT, json!({"research_id": rid, "urls": urls}))).await;
+                }
+                // The run note: one note for the scout's memory, staged untrusted in the log of the mission the run belongs to, where the
+                // provisional tier keeps it (`research_note`). A failure to stage it is not the run's.
+                if let Some(note) = teaches.as_ref().and_then(|t| crate::research_note::staged(&m.id, &rid, t)) {
+                    let _ = m.append(note).await;
                 }
             }
             // Spec 101 §3: the search log is kept with the result so `delphi research log <id>` can print it after the job is gone. Since
@@ -1081,9 +1095,22 @@ impl EngineService {
         let (reply, topic_id) = tokio::task::spawn_blocking(move || -> Result<(Value, String), String> {
             let root = project.as_ref().map(|(_, r)| r.clone()).unwrap_or_else(|| wsd.clone());
             let identifiers = crate::query_guard::identifiers(&wsd);
-            let ctx = hr::Ctx { home: &home, root: &root, project: project.as_ref().map(|(n, _)| n.as_str()), label: &lab, run_id: &rid, read_marked: private_read, identifiers: &identifiers };
+            let ctx = hr::Ctx { home: &home, root: &root, project: project.as_ref().map(|(n, _)| n.as_str()), label: &lab, run_id: &rid, read_marked: private_read, identifiers: &identifiers, pictures: None };
             let reply = if any_public {
-                let web = crate::research_host::LiveWeb::new(Arc::new(delphi_adapter::research::transport::HttpTransport::new()?), Arc::new(crate::research_setup::lists(&wsd, &home)?), crate::research_setup::engines(&e), wider);
+                let transport = Arc::new(delphi_adapter::research::transport::HttpTransport::new()?);
+                let list = Arc::new(crate::research_setup::lists(&wsd, &home)?);
+                let web = crate::research_host::LiveWeb::new(transport.clone(), list.clone(), crate::research_setup::engines(&e), wider);
+                // `specs/118` §3 item 3: the pictures the host named are judged by the daemon's own gates and licence decision, on the
+                // daemon's transport, inside the run limits of `[research.limits]`. Off with `[research] images = false`.
+                let limits = e.settings.research_limits.clone();
+                let left = std::sync::atomic::AtomicUsize::new(limits.pictures_per_run);
+                let step = |lib: &crate::library::Library, sid: &str, snap: &crate::fact_fetch::Snapshot, named: &[String]| {
+                    let rules = crate::research_images::PictureRules { transport: transport.as_ref(), list: &list, per_source: limits.pictures_per_source, left: left.load(std::sync::atomic::Ordering::SeqCst) };
+                    let got = crate::research_images::keep_for_source(lib, sid, snap.final_url.for_daemon(), &String::from_utf8_lossy(snap.body_for_daemon()), &rules, Some(named));
+                    left.fetch_sub(got.fetched.min(rules.left), std::sync::atomic::Ordering::SeqCst);
+                    got
+                };
+                let ctx = hr::Ctx { pictures: e.settings.research_images.then_some(&step as hr::PicturesFn<'_>), ..ctx };
                 web.observed.restore(observed);
                 let fetch = |u: &str| -> Result<hr::Fetched, String> {
                     use crate::research_run::Web;
@@ -2018,6 +2045,7 @@ impl EngineService {
         };
         let (mark_key, mark_cwd) = (c.mission(), c.cwd.to_string_lossy().to_string());
         let mission_id = mark_key.clone();
+        let searcher = c.label(p["model"].as_str());
         let out = tokio::task::spawn_blocking(move || -> Result<(Value, Vec<String>), String> {
             // Spec 103 M1 (observe only): the entries of this answer that the daemon stored private. They change nothing in the answer.
             let mut private_seen: Vec<String> = Vec::new();
@@ -2151,6 +2179,8 @@ impl EngineService {
                 out["hint"] = json!("the knowledge base has not been indexed yet, so nothing can be found: ask the operator to run `delphi kb index` (or open the Delphi console, which indexes it)");
             } else if ["core", "release", "findings", "noted", "kept", "project_results", "project_research", "third_party"].iter().all(|g| out[*g].as_array().is_none_or(|a| a.is_empty())) {
                 out["hint"] = json!("nothing found: request_research asks Delphi's scout to look it up in trusted sources and keep what it finds");
+                // `specs/114` §6 item 2: logged with the console's misses, marked with the host that searched. Nothing is researched from it.
+                crate::kb::log_miss(&ws.dir, &query, crate::kb::Searcher::Host(&searcher), 0);
             }
             Ok((out, private_seen))
         })
@@ -4062,7 +4092,7 @@ impl EngineService {
                 }
             }
         });
-        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: true, after: Some(after), resume, known: Some(known), sources, marked, host: None }, web);
+        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: self.engine.settings.research_images, after: Some(after), resume, known: Some(known), sources, marked, host: None }, web);
         Ok(json!({"started": true, "research_id": run_id, "topic_id": topic_id, "topic": topic, "continued": again.is_some(), "offered": offered, "sources": sources.as_str()}))
     }
 
@@ -5294,6 +5324,29 @@ mod tests {
         let hint = r["hint"].as_str().unwrap_or("");
         assert!(hint.contains("indexed") && hint.contains("delphi kb index"), "the hint says what to do about it: {r}");
         assert_eq!(r["index"], "none", "with no index there is nothing to refresh: {r}");
+    }
+
+    /// `specs/114` §6 item 2: a host's search that finds nothing is logged with the console's misses, marked with the host that
+    /// searched; one that finds something, and one before any index exists, is not.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_search_that_finds_nothing_is_logged_with_the_consoles_misses_by_the_host() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (ws, home) = (f.engine.ws.dir.clone(), f.engine.ws.home.clone());
+        let page = ws.join("local/knowledge/heron-wading.md");
+        std::fs::create_dir_all(page.parent().unwrap()).unwrap();
+        std::fs::write(&page, "# Heron wading\n\nThe quokkaheron wades in shallow water at dawn.\n").unwrap();
+        refresh_kb(&ws, &home).unwrap();
+        let misses = ws.join("local/kb-misses.jsonl");
+        assert!(host_search(&f, &s, "quokkaheron").await.unwrap()["hint"].is_null());
+        assert!(!misses.exists(), "a search that found something is not a miss");
+        let r = host_search(&f, &s, "zebrafish salinity").await.unwrap();
+        assert!(r["hint"].as_str().unwrap_or("").starts_with("nothing found"), "{r}");
+        let rows: Vec<Value> = std::fs::read_to_string(&misses).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!((rows[0]["query"].as_str(), rows[0]["by"].as_str(), rows[0]["host"].as_str()), (Some("zebrafish salinity"), Some("host"), Some("host:claude-code/unknown")), "{rows:?}");
+        // The console's own count reads the same file.
+        assert_eq!(crate::kb::miss_counts(&ws), (1, 0));
     }
 
     /// `specs/109` §3.1: a host's `search_kb` indexes a source newer than the index before it searches, and says the index is fresh.
@@ -8801,6 +8854,43 @@ mod tests {
             crate::research_host::canned::PAGES.lock().unwrap().push((u.to_string(), format!("The trial found aspirin lowers fever in adults. Read at {u}.")));
         }
         *svc.research_web.lock().unwrap() = Some((Arc::new(crate::research_host::canned::Engine(urls.iter().map(|u| u.to_string()).collect())), vec![crate::research_host::canned::engine_spec()], R4_LIST.to_string()));
+    }
+
+    /// `specs/114` §6 item 1: a finished run stages one note for the scout, in the log of the mission the run belongs to, saying which
+    /// queries and hosts produced kept claims and which produced none. It is kept in the provisional tier under `scout` as its own
+    /// practice, untrusted (`specs/116` §2 item 4): never given to an agent automatically, found only by an explicit search with its
+    /// label, and never in a result.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_research_run_stages_one_untrusted_note_for_the_scout_that_no_agent_is_given_automatically() {
+        let f = setup((0..12).map(|_| Step::text(R4_CLAIM)).collect(), 5.0, |_| {});
+        let s = serve(&f).await;
+        let svc = s.svc.clone();
+        let ws = f.engine.ws.dir.clone();
+        f.m.set_provisional_notes(crate::provisional_notes::Tap::new(ws.clone()));
+        svc.adopt(f.m.clone());
+        r4_web(&svc, &["https://r4-note.example/study"]);
+        svc.agent_research("m1", "does aspirin lower fever in adults", "architect").await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !events_of(&f, "research.finished").iter().any(|e| e.payload["by"] == "architect") {
+            assert!(std::time::Instant::now() < deadline, "the agent's run never wrote its outcome");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let notes: Vec<EventEnvelope> = events_of(&f, "learn.staged").into_iter().filter(|e| e.payload["trigger"] == "run_note").collect();
+        assert_eq!(notes.len(), 1, "one note per run: {notes:?}");
+        let e = &notes[0];
+        let summary = e.payload["summary"].as_str().unwrap();
+        assert_eq!((e.agent.as_deref(), e.payload["tier"].as_str(), e.payload["note_kind"].as_str()), (Some("scout"), Some("L0"), Some("practice")));
+        assert!(summary.contains("hosts that produced kept claims: r4-note.example (1)") && summary.contains("queries that produced kept claims: \"") && summary.contains("queries that produced none: \""), "{summary}");
+        // The provisional tier kept it, under the scout, untrusted: never retrieved automatically, and labelled when searched for.
+        let n = crate::provisional_notes::find(&ws, "m1", e.payload["id"].as_str().unwrap()).expect("the tier kept the run note");
+        assert!(n.role == "scout" && n.kind == "practice" && n.tier == delphi_core::provenance::Tier::L0 && n.tainted(), "{n:?}");
+        assert!(n.label().ends_with("from untrusted content"), "{}", n.label());
+        // Kept once. (Other notes the run's events stage, such as a capture on contact, may be kept beside it.)
+        assert_eq!(events_of(&f, crate::provisional_notes::EVENT).iter().filter(|k| k.payload["id"] == e.payload["id"]).count(), 1);
+        // The result is as before: what the run teaches is not in it.
+        let run_id = svc.research.lock().unwrap().as_ref().unwrap().run_id.clone();
+        let result = svc.research_jobs.result(&run_id, crate::research_console::SESSION).expect("the job's result");
+        assert!(result.to_string().contains("aspirin lowers fever") && !result.to_string().contains(&format!("\"{}\"", crate::research_run::RUN_NOTE)), "{result}");
     }
 
     /// Wait for the console's run to end and return its last status.

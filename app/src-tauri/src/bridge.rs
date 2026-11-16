@@ -67,9 +67,10 @@ pub const IMAGE_SIDE_MAX: u64 = 1600;
 /// The `kb.get` target the bridge sends for a target the window asked for, or `None` when the window may not make that
 /// read. Every target must pass [`kb_target_ok`]. A picture's size, `max`, is clamped to 1 to [`IMAGE_SIDE_MAX`] here,
 /// read the way the daemon reads it (percent-decoded name and value, the last one given counts); a `max` that is not a
-/// number is dropped, so the daemon's default applies. A library picture (`src=lib:...`) is refused: the app may ask for
-/// one only once it has a licence record (spec 118 §4 item 4, which needs slice P1's record); that form of the read goes
-/// here when it does.
+/// number is dropped, so the daemon's default applies. A library picture is one more form of the image read (spec 118 §4
+/// item 4), and only that form: `src=lib:<source>/<file>` given once, with `max` and nothing else, a plain source id and a
+/// plain picture name. It is sent rebuilt from those two parts; the daemon serves it only with its licence record, and
+/// refuses one without (`no licence record`, spec 118 §2 item 2).
 pub fn kb_target(target: &str) -> Option<String> {
     if !kb_target_ok(target) {
         return None;
@@ -77,18 +78,47 @@ pub fn kb_target(target: &str) -> Option<String> {
     let Some(("/v1/image", query)) = target.split_once('?') else { return Some(target.to_string()) };
     let mut kept: Vec<String> = Vec::new();
     let mut max = None;
+    let (mut lib, mut srcs, mut others) = (None, 0, 0);
     for part in query.split('&').filter(|p| !p.is_empty()) {
         let (k, v) = part.split_once('=').unwrap_or((part, ""));
-        match query_decode(k).as_str() {
+        let key = query_decode(k);
+        match key.as_str() {
             "max" => max = Some(query_decode(v)),
-            "src" if query_decode(v).starts_with("lib:") => return None,
-            _ => kept.push(part.to_string()),
+            _ => {
+                if key == "src" {
+                    srcs += 1;
+                    if let Some(r) = query_decode(v).strip_prefix("lib:") {
+                        lib = Some(r.to_string());
+                    }
+                } else {
+                    others += 1;
+                }
+                kept.push(part.to_string());
+            }
         }
     }
-    if let Some(n) = max.and_then(|v| v.parse::<u64>().ok()) {
-        kept.push(format!("max={}", n.clamp(1, IMAGE_SIDE_MAX)));
+    let max = max.and_then(|v| v.parse::<u64>().ok()).map(|n| format!("max={}", n.clamp(1, IMAGE_SIDE_MAX)));
+    if let Some(r) = lib {
+        // The library form: one `src`, no other name, a plain `<source>/<file>`.
+        let (sid, file) = r.split_once('/')?;
+        if srcs != 1 || others != 0 || !lib_part(sid) || !lib_part(file) || !is_picture(file) {
+            return None;
+        }
+        return Some(format!("/v1/image?src=lib:{}/{}{}", sid, file, max.map(|m| format!("&{m}")).unwrap_or_default()));
     }
+    kept.extend(max);
     Some(format!("/v1/image?{}", kept.join("&")))
+}
+
+/// A source id or a picture's file name as the library writes them: letters, digits, `.`, `_` and `-`, never `.` or `..`.
+fn lib_part(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 200 && s != "." && s != ".." && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// A picture the daemon decodes: PNG, JPEG or GIF.
+fn is_picture(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    [".png", ".jpg", ".jpeg", ".gif"].iter().any(|e| l.ends_with(e))
 }
 
 /// A query name or value decoded as the daemon decodes it (`kbserve::parse_query`): `+` is a space, `%XX` a byte.
@@ -559,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pictures_size_is_clamped_by_the_bridge_and_library_pictures_wait_for_their_licence_record() {
+    fn a_pictures_size_is_clamped_by_the_bridge_and_a_library_picture_is_one_plain_form() {
         let t = |s: &str| kb_target(s);
         // Not a picture: sent as written; not a listed read: refused as before.
         assert_eq!(t("/v1/doc?path=a.md&max=99999").as_deref(), Some("/v1/doc?path=a.md&max=99999"));
@@ -575,8 +605,28 @@ mod tests {
         for not_a_number in ["-5", "1e9", "+5", "12px", ""] {
             assert_eq!(t(&format!("/v1/image?path=a.md&src=x.png&max={not_a_number}")).as_deref(), Some("/v1/image?path=a.md&src=x.png"), "{not_a_number}");
         }
-        // A library picture is not a read the app makes until it has a licence record (spec 118 §4 item 4).
-        for lib in ["/v1/image?src=lib:src1/a.png", "/v1/image?src=lib%3Asrc1/a.png&max=400", "/v1/image?path=a.md&src=x.png&src=lib:s/a.png"] {
+        // A library picture (spec 118 §4 item 4): the one form, rebuilt from its parts, with `max` clamped; the daemon serves it
+        // only with its licence record.
+        assert_eq!(t("/v1/image?src=lib:src1/a.png").as_deref(), Some("/v1/image?src=lib:src1/a.png"));
+        assert_eq!(t("/v1/image?src=lib%3Asrc1/a.png&max=400").as_deref(), Some("/v1/image?src=lib:src1/a.png&max=400"));
+        assert_eq!(t("/v1/image?max=99999&src=lib:s-1_x.y/0f.JPG").as_deref(), Some("/v1/image?src=lib:s-1_x.y/0f.JPG&max=1600"));
+        // Anything else that names the library is refused: a second `src`, a `path`, another name, a path in the name, a file
+        // that is not a picture, a part that is not plain.
+        for lib in [
+            "/v1/image?path=a.md&src=x.png&src=lib:s/a.png",
+            "/v1/image?src=lib:s/a.png&src=lib:s/b.png",
+            "/v1/image?src=lib:s/a.png&path=a.md",
+            "/v1/image?src=lib:s/a.png&trusted_only=0",
+            "/v1/image?src=lib:s/../meta.json",
+            "/v1/image?src=lib:s/sub/a.png",
+            "/v1/image?src=lib:../s/a.png",
+            "/v1/image?src=lib:s/meta.json",
+            "/v1/image?src=lib:s/source.md",
+            "/v1/image?src=lib:s/a%20b.png",
+            "/v1/image?src=lib:s",
+            "/v1/image?src=lib:/a.png",
+            "/v1/image?src=lib:s/.png%00.png",
+        ] {
             assert_eq!(t(lib), None, "{lib}");
         }
     }

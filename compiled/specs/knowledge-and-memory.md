@@ -253,7 +253,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis
 
-**114: A methodical scout: known first, a plan from the gaps, the role in every call, and a written synthesis** · approved (per source at `c97aa3b97e68`) · tier 0 · [source](../../specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md)
+**114: A methodical scout: known first, a plan from the gaps, the role in every call, and a written synthesis** · approved (per source at `173e9643fe70`) · tier 0 · [source](../../specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md)
 
 **source excerpt, untrusted** · `specs/114-a-methodical-scout-known-first-a-plan-from-the-gaps-the-role-in-every-call-and-a-written-synthesis.md` lines 25-33
 
