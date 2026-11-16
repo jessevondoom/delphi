@@ -32,11 +32,11 @@
 //! or the like reach a model-chosen command. Placeholders `{scratch}` and
 //! `{worktree}` expand to absolute paths.
 
-use crate::worktree::{GitError, Worktree, Worktrees};
+use crate::worktree::{GitError, Investigation, Worktree, Worktrees};
 use delphi_sandbox::{plain_command, run_bounded, Network, RunOptions, RunOutcome, Sandbox, SandboxSpec};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// What approving a finished build does.
@@ -510,12 +510,35 @@ pub struct ExecEnv {
     pub worktrees: Worktrees,
     scratch_root: PathBuf,
     live: Mutex<HashMap<String, Worktree>>,
+    /// The investigation copies that belong to a running span (`specs/116` §8.1); any other is a leftover and is swept.
+    investigating: Arc<Mutex<HashSet<String>>>,
 }
+
+/// An investigation copy and its scratch space, for as long as its span runs. Dropping it deletes both, however the span ended
+/// (finished, escalated, failed or cancelled): no git and no process is involved, only the files.
+pub struct InvestigationGuard {
+    pub inv: Investigation,
+    scratch: PathBuf,
+    live: Arc<Mutex<HashSet<String>>>,
+}
+
+impl Drop for InvestigationGuard {
+    fn drop(&mut self) {
+        self.inv.remove();
+        crate::worktree::force_remove(&self.scratch);
+        self.live.lock().unwrap().remove(&self.inv.key);
+    }
+}
+
+/// Git commands an investigation is refused whatever the operator's deny rules say (`specs/116` §8.1 item 5): they talk to a
+/// remote or to another repository. The copy has no remote and its sandbox has no network and no path outside itself, so each
+/// would fail anyway; the refusal says why instead.
+const INVESTIGATION_DENY: [&str; 7] = ["git push*", "git fetch*", "git pull*", "git clone*", "git remote*", "git submodule*", "git ls-remote*"];
 
 impl ExecEnv {
     /// `ws_dir` is the workspace home; worktrees live in `<ws>/worktrees`, scratch space in `<ws>/scratch`.
     pub fn new(ws_dir: &Path, cfg: ExecConfig, sandbox: Option<Sandbox>) -> ExecEnv {
-        ExecEnv { sandbox, cfg, worktrees: Worktrees::new(&ws_dir.join("worktrees")), scratch_root: ws_dir.join("scratch"), live: Mutex::new(HashMap::new()) }
+        ExecEnv { sandbox, cfg, worktrees: Worktrees::new(&ws_dir.join("worktrees")), scratch_root: ws_dir.join("scratch"), live: Mutex::new(HashMap::new()), investigating: Default::default() }
     }
 
     /// The worktree for a task: already known, or re-adopted after a restart, or created from `project`.
@@ -546,6 +569,62 @@ impl ExecEnv {
 
     pub fn scratch_for(&self, task_id: &str) -> PathBuf {
         self.scratch_root.join(task_id)
+    }
+
+    /// A new investigation copy of `project` named `key` (`specs/116` §8.1). Copies no running span owns are deleted first.
+    /// Blocking: it runs the daemon's git.
+    pub fn open_investigation(&self, key: &str, project: &Path) -> Result<InvestigationGuard, GitError> {
+        // Named as live before it exists, so a sweep for another span cannot take a copy that is being made.
+        let fresh = self.investigating.lock().unwrap().insert(key.to_string());
+        if !fresh {
+            return Err(GitError::Exists(self.worktrees.investigations_root().join(key)));
+        }
+        {
+            let live = self.investigating.lock().unwrap().clone();
+            self.worktrees.sweep_investigations(&|k| live.contains(k));
+        }
+        match self.worktrees.create_investigation(project, key) {
+            Ok(inv) => Ok(InvestigationGuard { inv, scratch: self.scratch_for(key), live: self.investigating.clone() }),
+            Err(e) => {
+                self.investigating.lock().unwrap().remove(key);
+                Err(e)
+            }
+        }
+    }
+
+    /// The rule of [`INVESTIGATION_DENY`] one command of an investigation runs into, in any of the spellings a deny rule catches.
+    pub fn investigation_denied(argv: &[String]) -> Option<String> {
+        let raw = argv.join(" ");
+        let forms = Self::deny_forms(argv, &raw);
+        let d = INVESTIGATION_DENY.iter().find(|d| forms.iter().any(|f| glob_match(d, f) || glob_match(d, &f.to_lowercase())))?;
+        Some(format!("`{}` matches `{}`: an investigation's worktree has no remote and its sandbox has no network; nothing leaves it", raw.chars().take(120).collect::<String>(), d))
+    }
+
+    /// As [`ExecEnv::investigation_denied`], for a shell line: every place the word `git` stands, inside quotes and after any
+    /// separator, is read as the start of a git command. Text can be written to slip past this; the sandbox is what holds.
+    pub fn investigation_denied_line(line: &str) -> Option<String> {
+        let words: Vec<String> = line.split(|c: char| c.is_whitespace() || ";|&()<>`$'\"{}".contains(c)).filter(|w| !w.is_empty()).map(String::from).collect();
+        (0..words.len()).filter(|i| base(&words[*i]).eq_ignore_ascii_case("git")).find_map(|i| Self::investigation_denied(&words[i..]))
+    }
+
+    /// Run `argv` in an investigation copy (`specs/116` §8.1): ALWAYS under the OS sandbox, whatever `[exec] sandbox` says, with
+    /// no network and nothing writable but the copy and its scratch space. With no sandbox on the machine nothing runs.
+    /// Blocking; approval is the caller's business, by the same verdicts as a Builder's command.
+    pub fn run_investigation(&self, inv: &Investigation, argv: &[String], timeout: Option<Duration>) -> Result<CommandReport, ExecError> {
+        let Some(sb) = self.sandbox.as_ref() else { return Err(ExecError::NoSandbox) };
+        let scratch = self.scratch_for(&inv.key);
+        let mut spec = self.spec(&inv.tree, &scratch)?;
+        // The copy's own git directory: writable so a checkout, a bisect and a commit work. The project's is not in the spec at all.
+        spec.scratch.push(inv.git_dir.clone());
+        let mut cmd = sb.command(&spec, &argv[0], &argv[1..]).map_err(|e| ExecError::Io(e.to_string()))?;
+        cmd.current_dir(&inv.tree);
+        let before = snapshot(&inv.tree);
+        let started = std::time::Instant::now();
+        let scratch = std::fs::canonicalize(&scratch).unwrap_or(scratch);
+        let opts = RunOptions { timeout: timeout.unwrap_or(self.cfg.timeout).min(self.cfg.timeout), max_output_bytes: self.cfg.max_output_bytes, quota: vec![(scratch, self.cfg.scratch_quota_bytes), (inv.root.clone(), self.cfg.scratch_quota_bytes)], kill_over_quota: false };
+        let outcome = run_bounded(cmd, &opts).map_err(|e| ExecError::Io(format!("could not start `{}`: {}", argv[0], e)))?;
+        let after = snapshot(&inv.tree);
+        Ok(CommandReport { outcome, sandboxed: true, tampered: vec![], changed: changed(&before, &after), elapsed: started.elapsed() })
     }
 
     /// The sandbox commands will actually use, per the configured mode.

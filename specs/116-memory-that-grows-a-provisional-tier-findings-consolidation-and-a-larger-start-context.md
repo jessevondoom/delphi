@@ -3,7 +3,7 @@ id: spec-116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-l
 title: "116: Memory that grows: a provisional tier, findings, consolidation, and a larger start context"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "116: on by default, and empower the investigator however you can". Section 8 was rewritten after those words; the operator has not read the new text.
+status: approved   # by the operator, 2026-11-14, in a host session: "116: on by default, and empower the investigator however you can". Section 8 was rewritten after those words; the operator has not read the new text. Section 14 (2026-11-16) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -189,3 +189,11 @@ G3, G4 and G8 stand alone. G5 stands alone. G1 comes before G2, G6 and G7. G9 an
 1. *Decided 2026-11-14:* the provisional tier is on by default.
 2. *Decided 2026-11-14:* the investigator is empowered as §8 sets out.
 3. Start budget: six passages and 4,000 characters, or more?
+
+## 14. Amendment, 2026-11-16: `verify_source` after a command
+
+The operator, 2026-11-16, in a host session, on the red-team's question about pull request 742: "follow your recommendation on your 742 question and merge the PR please". The recommendation was the rule below.
+
+1. Once an investigator span has run a command (`run_command` or `shell`; a process was started, the write-ahead `action.intent` is in the log), its `verify_source` raises the research request's card (the card of §8.2 for an address off the trusted list) for every address, a trusted host included. Nothing is fetched before the answer, and a denial fetches nothing.
+2. A span that ran no command keeps §8.2 as built: a trusted host needs no card.
+3. Why: the copy of §8.1 holds the project's whole history, which the command can read; an address is a way out, and a trusted host is still a host that logs what it is sent.

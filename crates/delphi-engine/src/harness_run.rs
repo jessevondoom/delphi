@@ -545,7 +545,9 @@ impl Engine {
         };
         let Some(model) = self.cfg.get().resolve_model(ep, &sc.tier) else { return Ok(Err(HarnessErr::retry(format!("endpoint `{}` has no model for the `{}` tier", ep.id, sc.tier)))) };
         let wt: Option<Worktree> = self.exec.known_worktree(&sc.task_id);
-        let builder = wt.is_some() && sc.manifest.execute.iter().any(|e| e == "shell-worktree-scoped");
+        // A Builder: the shell scope AND a write scope in the worktree. A role that holds the scope to investigate (`specs/116` §8.1)
+        // is not one: it never gets the CLI's own tools in the task's worktree.
+        let builder = wt.is_some() && crate::engine::builds(&sc.manifest);
         match cli {
             Cli::Claude => {
                 // A host-raised span (`specs/062` §6.3) starts at L0 by design, so it would never launch. It is let through because it
