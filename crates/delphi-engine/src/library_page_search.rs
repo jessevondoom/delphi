@@ -286,7 +286,7 @@ impl Library {
                 let ext = name.rsplit_once('.')?.1.to_lowercase();
                 let plain = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
                 let meta = e.metadata().ok()?;
-                (plain && meta.is_file() && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif") && self.asset_record(id, &name).is_some()).then(|| GatheredAsset { uri: format!("lib:{}/{}", id, name), source_id: id.to_string(), file: name, bytes: meta.len() })
+                (plain && meta.is_file() && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp") && self.asset_record(id, &name).is_some()).then(|| GatheredAsset { uri: format!("lib:{}/{}", id, name), source_id: id.to_string(), file: name, bytes: meta.len() })
             })
             .collect();
         out.sort_by(|a, b| a.file.cmp(&b.file));

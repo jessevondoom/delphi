@@ -205,6 +205,10 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(b) = root.get("research").and_then(|r| r.get("images")).and_then(|v| v.as_bool()) {
         s.research_images = b;
     }
+    // `[research] svg` (`specs/118` §11 decision 1): a boolean, off unless exactly `true`. A value of the wrong kind keeps the default.
+    if let Some(b) = root.get("research").and_then(|r| r.get("svg")).and_then(|v| v.as_bool()) {
+        s.research_svg = b;
+    }
     if let Some(n) = root.get("research").and_then(|r| r.get("retractions_stale_days")).and_then(|v| v.as_integer()).filter(|v| (1..=3650).contains(v)) {
         s.retractions_stale_days = n;
     }
@@ -625,6 +629,16 @@ mod tests {
         assert!(!of("[research]\nimages = false\n"));
         assert!(of("[research]\nimages = true\n"));
         assert!(of("[research]\nimages = \"no\"\n"), "a string is not a boolean: the default");
+    }
+
+    // `specs/118` §11 decision 1: SVG capture is off unless `[research] svg = true`; a value of the wrong kind keeps the default.
+    #[test]
+    fn research_draws_svg_pictures_only_when_svg_is_true() {
+        let of = |text: &str| settings_from(&toml::from_str(text).unwrap()).research_svg;
+        assert!(!of(""));
+        assert!(of("[research]\nsvg = true\n"));
+        assert!(!of("[research]\nsvg = false\n"));
+        assert!(!of("[research]\nsvg = \"yes\"\n"), "a string is not a boolean: the default");
     }
 
     // `specs/112` §5.2: when a research topic is due. Ninety days unless set; a bad value keeps the default.

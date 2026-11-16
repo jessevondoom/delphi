@@ -147,7 +147,7 @@ impl Library {
     /// serves nothing else out of the library.
     pub fn asset_file(&self, id: &str, file: &str) -> Option<PathBuf> {
         let plain = !file.is_empty() && file != "." && file != ".." && file.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-        if !plain || !is_picture(file) {
+        if !plain || !(is_picture(file) || file.to_ascii_lowercase().ends_with(".webp")) {
             return None;
         }
         if id == super::assets::FIGURES_BUCKET {

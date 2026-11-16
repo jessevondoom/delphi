@@ -31,10 +31,21 @@ pub const EVIDENCE_WORKSPACE: &str = "workspace";
 /// The check that decided the licence of a picture adopted with a bundle's source: that source's licence.
 pub const EVIDENCE_BUNDLE: &str = "bundle";
 
-/// Is this file name one of a picture (the formats a capture may keep, and the two P4 will add)?
+/// The field of a PNG's record that names the SVG it was drawn from (`specs/118` §4 item 2): `{"format": "svg", "file", "blake3"}`.
+/// That SVG is kept beside the PNG for the record. It has no record of its own, so nothing serves it.
+pub const RENDERED_FROM: &str = "rendered_from";
+
+/// Is this file name one of a picture (the formats a capture may keep: PNG, JPEG, GIF, WebP, and the SVG a PNG was drawn from)?
 pub fn is_picture_name(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
     [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].iter().any(|e| l.ends_with(e))
+}
+
+/// The SVG file a record says its PNG was drawn from, when its name is a plain one (`<hex>.svg`).
+pub fn svg_original(rec: &Value) -> Option<&str> {
+    let f = rec[RENDERED_FROM]["file"].as_str()?;
+    let stem = f.strip_suffix(".svg")?;
+    (!stem.is_empty() && stem.len() <= 96 && stem.chars().all(|c| c.is_ascii_hexdigit())).then_some(f)
 }
 
 /// The facts of one picture's licence record, as a capture knows them.
@@ -63,16 +74,32 @@ pub(super) fn one_line(s: &str, n: usize) -> String {
     s.chars().map(|c| if c.is_control() || matches!(c, '*' | '_' | '[' | ']' | '`' | '<' | '>' | '!' | '|') { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect()
 }
 
+/// An address for a record or the credit line, kept exactly as it is when it is one: `https://`, `http://`, `workspace:` or
+/// `bundle:`, at most `n` characters, with no control character, no white space and none of the characters that could make a
+/// link, an emphasis or a picture of it (`< > * [ ] ` | ! "`). An `_` stays, so Wikipedia and Commons addresses are not broken.
+/// Anything else is made [`one_line`].
+fn one_url(s: &str, n: usize) -> String {
+    let t = s.trim();
+    let scheme = ["https://", "http://", "workspace:", "bundle:"].iter().any(|p| t.to_ascii_lowercase().starts_with(p));
+    let plain = t.chars().all(|c| !c.is_control() && !c.is_whitespace() && !matches!(c, '<' | '>' | '*' | '[' | ']' | '`' | '|' | '!' | '"'));
+    if scheme && plain && t.chars().count() <= n { t.to_string() } else { one_line(s, n) }
+}
+
+/// A fixed word chosen by code (the check that decided a licence): letters, digits, `_` and `-` only.
+fn one_word(s: &str, n: usize) -> String {
+    s.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')).take(n).collect()
+}
+
 /// The record of §2 item 1, as it is kept in the source's `images`.
 pub fn picture_record(f: &PictureFacts<'_>) -> Value {
     let mut r = json!({
         "file": f.file,
         "source_id": f.source_id,
-        "source_url": one_line(f.source_url, 500),
+        "source_url": one_url(f.source_url, 500),
         "licence": one_line(f.licence, 60),
-        "licence_evidence": {"check": one_line(f.evidence, 40), "url": one_line(f.evidence_url, 500)},
+        "licence_evidence": {"check": one_word(f.evidence, 40), "url": one_url(f.evidence_url, 500)},
         "author": one_line(f.author, 200),
-        "credit_url": one_line(f.credit_url, 500),
+        "credit_url": one_url(f.credit_url, 500),
         "share_alike": f.share_alike,
         "retrieved": f.retrieved,
         "blake3": f.blake3,
@@ -93,13 +120,14 @@ fn licence_name(licence: &str) -> String {
 fn credit_text(rec: &Value) -> String {
     let author = one_line(rec["author"].as_str().unwrap_or(""), 200);
     let credit = rec["credit_url"].as_str().filter(|c| !c.trim().is_empty()).or(rec["source_url"].as_str()).unwrap_or("");
-    format!("{}, {}, {}", if author.is_empty() { "author not stated" } else { author.as_str() }, licence_name(&one_line(rec["licence"].as_str().unwrap_or(""), 60)), one_line(credit, 500))
+    format!("{}, {}, {}", if author.is_empty() { "author not stated" } else { author.as_str() }, licence_name(&one_line(rec["licence"].as_str().unwrap_or(""), 60)), one_url(credit, 500))
 }
 
-/// Is `rec` a licence record of `file` in source `id`: it names the file, it names no other source, and it states a licence?
+/// Is `rec` a licence record of `file` in source `id`: it names the file, it names no other source, and it states a licence? An SVG
+/// never has one, whatever a record says: it is never shown as SVG (`specs/118` §4 item 2), only drawn to a PNG at capture.
 fn is_record_of(rec: &Value, id: &str, file: &str) -> bool {
     let licence = rec["licence"].as_str().map(str::trim).unwrap_or("");
-    rec["file"].as_str() == Some(file) && rec["source_id"].as_str().is_none_or(|s| s == id) && !licence.is_empty() && !matches!(licence.to_ascii_lowercase().as_str(), "unknown" | "none")
+    !file.to_ascii_lowercase().ends_with(".svg") && rec["file"].as_str() == Some(file) && rec["source_id"].as_str().is_none_or(|s| s == id) && !licence.is_empty() && !matches!(licence.to_ascii_lowercase().as_str(), "unknown" | "none")
 }
 
 /// One file of a source's `assets/` that has no licence record.
@@ -160,8 +188,10 @@ impl Library {
             let Ok(rd) = std::fs::read_dir(&dir) else { return };
             let mut files: Vec<String> = rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())).filter_map(|e| e.file_name().to_str().map(String::from)).filter(|n| is_picture_name(n)).collect();
             files.sort();
+            // The SVGs pictures were drawn from belong to their PNG's record; they are not served and are not unrecorded.
+            let originals: Vec<String> = self.read_meta(source_id).and_then(|m| m["images"].as_array().map(|a| a.iter().filter(|r| r["file"].as_str().is_some_and(|f| is_record_of(r, source_id, f))).filter_map(|r| svg_original(r).map(String::from)).collect())).unwrap_or_default();
             for file in files {
-                if self.asset_record(source_id, &file).is_some() {
+                if self.asset_record(source_id, &file).is_some() || originals.contains(&file) {
                     continue;
                 }
                 let moved = apply && {
@@ -201,7 +231,8 @@ impl Library {
         let retrieved = delphi_core::time::now_rfc3339();
         let mut records = Vec::new();
         for e in rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())) {
-            let Some(file) = e.file_name().to_str().map(String::from).filter(|n| is_picture_name(n)) else { continue };
+            // An SVG is never shown as SVG (`specs/118` §4 item 2), so a bundle's SVG gets no record and is never served.
+            let Some(file) = e.file_name().to_str().map(String::from).filter(|n| is_picture_name(n) && !n.to_ascii_lowercase().ends_with(".svg")) else { continue };
             let bytes = std::fs::read(e.path()).unwrap_or_default();
             let (w, h) = delphi_docs::pixels::decode(&bytes).map(|p| (p.width, p.height)).unwrap_or((0, 0));
             let own = given.iter().find(|r| r["file"].as_str() == Some(file.as_str()));

@@ -1010,7 +1010,7 @@ impl EngineService {
             // licence lets the library keep whole is kept as `[library] unknown_licence` says (`specs/119` §3).
             let limits = &engine.settings.research_limits;
             let rules = crate::research_host::KeepRules { list: web.list.clone(), classes: crate::fact_sources::SourceList::new(engine.cfg.get().validator.sources.clone()), weak: engine.cfg.get().validator.weak_sources };
-            let pics = pictures.then(|| crate::research_host::Pictures { transport: transport.clone(), per_source: limits.pictures_per_source, left: std::sync::atomic::AtomicUsize::new(limits.pictures_per_run) });
+            let pics = pictures.then(|| crate::research_host::Pictures { transport: transport.clone(), per_source: limits.pictures_per_source, left: std::sync::atomic::AtomicUsize::new(limits.pictures_per_run), svg: engine.settings.research_svg });
             let mut keep = crate::research_host::KeepStep::new(rules, pics).with_unknown_licence(engine.cfg.get().library.unknown_licence, engine.cfg.get().library.private_text_max_mib).with_archive(engine.settings.archive.clone());
             if let Some(r) = &recorder {
                 keep = keep.recording(r.topic.clone(), &r.run_id);
@@ -1113,7 +1113,7 @@ impl EngineService {
                 let limits = e.settings.research_limits.clone();
                 let left = std::sync::atomic::AtomicUsize::new(limits.pictures_per_run);
                 let step = |lib: &crate::library::Library, sid: &str, snap: &crate::fact_fetch::Snapshot, named: &[String]| {
-                    let rules = crate::research_images::PictureRules { transport: transport.as_ref(), list: &list, per_source: limits.pictures_per_source, left: left.load(std::sync::atomic::Ordering::SeqCst) };
+                    let rules = crate::research_images::PictureRules { transport: transport.as_ref(), list: &list, per_source: limits.pictures_per_source, left: left.load(std::sync::atomic::Ordering::SeqCst), svg: e.settings.research_svg };
                     let got = crate::research_images::keep_for_source(lib, sid, snap.final_url.for_daemon(), &String::from_utf8_lossy(snap.body_for_daemon()), &rules, Some(named));
                     left.fetch_sub(got.fetched.min(rules.left), std::sync::atomic::Ordering::SeqCst);
                     got

@@ -3,7 +3,7 @@ id: spec-118-pictures-and-figures-stored-licence-capture-in-research-full-size-a
 title: "118: Pictures and figures: a stored licence, capture in research, full size, and figures agents make"
 author: architect
 timestamp: 2026-11-14T00:00:00Z
-status: approved   # by the operator, 2026-11-14, in a host session: "all other specs are approved", after the drafts and their slice tables were shown.
+status: approved   # by the operator, 2026-11-14, in a host session: "all other specs are approved", after the drafts and their slice tables were shown. Section 11 (2026-11-16) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request.
 approved_by: operator (2026-11-14)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -119,3 +119,19 @@ P1 and P3 stand alone. P2 needs 112 R4. P5 needs 117 E1.
 
 1. Capture pictures in research by default, or only when asked?
 2. Is 1,600 pixels the right ceiling for the app?
+
+## 11. Amendment (2026-11-16): the operator's decisions on SVG capture, text in SVGs, and P5's choices
+
+On 2026-11-16 the operator answered the questions that the builds of P4 and P5 raised. Their words, verbatim:
+
+> questions: 1&2: follow your recommendation. 3: keep as-is. 4: yes. 5: yes except for copilot web_fetch — keep that in or test live — there's a logged in copilot session on this machine
+
+For this spec they decide:
+
+1. **SVG capture is off by default.** P4 ships with a setting, `[research] svg`, whose default is `false`. While it is off, an SVG picture is refused at capture, before it is parsed, and recorded with the fixed word `svg_off`. WebP and the other formats are not affected. The setting stays off by default until the drawing runs in a child process with memory and CPU limits. That backstop starts a new process, so it changes a gate path (`crates/delphi/tests/spawn_sites.*`); it is a later pull request of its own, merged by the operator. Until then §4 item 2 holds only when the operator turns the setting on.
+2. **SVGs with text stay refused.** No font stack is added: an SVG that has text is refused rather than drawn without its words.
+3. **P5's choices stay as built:**
+   - numbers in a chart's title, subtitle, column names and annotations must appear in the cited records;
+   - a source marker is checked against the source's whole text;
+   - `pages show --draft` records `made_by` as the writer;
+   - figures from failed drafts are not swept for now.
