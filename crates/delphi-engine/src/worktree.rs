@@ -637,19 +637,64 @@ pub(crate) fn force_remove(dir: &Path) {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fn open_up(p: &Path) {
-            let Ok(meta) = std::fs::symlink_metadata(p) else { return };
-            if meta.file_type().is_dir() {
-                let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700));
-                for e in std::fs::read_dir(p).into_iter().flatten().flatten() {
-                    open_up(&e.path());
-                }
-            }
+        use std::os::unix::ffi::OsStrExt;
+        if let Ok(c) = std::ffi::CString::new(dir.as_os_str().as_bytes()) {
+            open_up_at(libc::AT_FDCWD, &c, 0);
         }
-        open_up(dir);
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Make the directory `name` (relative to the open directory `parent`) and everything under it searchable and writable by its
+/// owner, so it can be removed. A process that outlived its command may still be swapping entries for symlinks while this runs,
+/// so nothing here follows one or acts on a path twice: the mode is set with `AT_SYMLINK_NOFOLLOW` (on a symlink it touches the
+/// link, or fails), the directory is then opened `O_NOFOLLOW | O_DIRECTORY` and set again through that descriptor, and its entries
+/// are read from the descriptor and opened relative to it. A swap can only make an entry fail to open, never redirect a change
+/// outside the tree.
+#[cfg(unix)]
+fn open_up_at(parent: libc::c_int, name: &std::ffi::CStr, depth: usize) {
+    if depth > 256 {
+        return;
+    }
+    // SAFETY: plain syscalls on a NUL-terminated name and descriptors this function owns; each descriptor is closed once.
+    unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        if libc::fstatat(parent, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) != 0 || st.st_mode & libc::S_IFMT != libc::S_IFDIR {
+            return;
+        }
+        // A directory a moment ago. Swapped since for a symlink, this touches the link; for a hard link to a file, the command
+        // could have changed that file through the link itself, since its sandbox allows writes by path inside the copy.
+        libc::fchmodat(parent, name.as_ptr(), 0o700, libc::AT_SYMLINK_NOFOLLOW);
+        let fd = libc::openat(parent, name.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        if fd < 0 {
+            return;
+        }
+        libc::fchmod(fd, 0o700);
+        let mut names = Vec::new();
+        let dup = libc::dup(fd);
+        if dup >= 0 {
+            let d = libc::fdopendir(dup);
+            if d.is_null() {
+                libc::close(dup);
+            } else {
+                loop {
+                    let ent = libc::readdir(d);
+                    if ent.is_null() {
+                        break;
+                    }
+                    let n = std::ffi::CStr::from_ptr((*ent).d_name.as_ptr());
+                    if n.to_bytes() != b"." && n.to_bytes() != b".." {
+                        names.push(n.to_owned());
+                    }
+                }
+                libc::closedir(d);
+            }
+        }
+        for n in names {
+            open_up_at(fd, &n, depth + 1);
+        }
+        libc::close(fd);
+    }
 }
 
 #[cfg(test)]
@@ -1034,5 +1079,82 @@ pub(crate) mod tests {
         run(c, "config").unwrap();
         assert!(matches!(w.create_investigation(&p, "i_unsafe"), Err(GitError::UnsafeConfig(_))));
         assert!(!w.investigations_root().join("i_unsafe").exists());
+    }
+
+    /// Red-team P1-2: removing a locked-down copy opens its directories up to delete them. A symlink in the copy to a directory
+    /// outside, there from the start or swapped in for a directory while the removal runs (a process that outlived its command),
+    /// never has the outside directory's mode changed.
+    #[cfg(unix)]
+    #[test]
+    fn removing_a_locked_copy_never_changes_the_mode_of_a_directory_a_symlink_points_at() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let d = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(d.path()).unwrap();
+        let outside = root.join("outside");
+        fs::create_dir_all(outside.join("inner")).unwrap();
+        fs::set_permissions(outside.join("inner"), fs::Permissions::from_mode(0o500)).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o555)).unwrap();
+        let mode = |p: &Path| fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
+        let copy = root.join("copy");
+        let locked = |with_links: bool| {
+            fs::create_dir_all(copy.join("tree/locked/deep")).unwrap();
+            fs::write(copy.join("tree/locked/deep/f"), "x").unwrap();
+            if with_links {
+                symlink(&outside, copy.join("tree/link")).unwrap();
+                symlink(&outside, copy.join("tree/locked/link")).unwrap();
+            }
+            fs::set_permissions(copy.join("tree/locked/deep"), fs::Permissions::from_mode(0o000)).unwrap();
+            fs::set_permissions(copy.join("tree/locked"), fs::Permissions::from_mode(0o000)).unwrap();
+        };
+        // There from the start.
+        locked(true);
+        force_remove(&copy);
+        assert!(!copy.exists(), "the locked copy is removed");
+        assert_eq!((mode(&outside), mode(&outside.join("inner"))), (0o555, 0o500));
+        // Swapped in while the removal runs: a directory and a symlink to the outside exchanged atomically at one name, over and
+        // over, so the name is always there and is a directory one moment and the symlink the next.
+        fn exchange(a: &Path, b: &Path) {
+            use std::os::unix::ffi::OsStrExt;
+            let (a, b) = (std::ffi::CString::new(a.as_os_str().as_bytes()).unwrap(), std::ffi::CString::new(b.as_os_str().as_bytes()).unwrap());
+            // SAFETY: two NUL-terminated paths.
+            #[cfg(target_os = "macos")]
+            unsafe {
+                libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP);
+            }
+            #[cfg(target_os = "linux")]
+            unsafe {
+                libc::syscall(libc::SYS_renameat2, libc::AT_FDCWD, a.as_ptr(), libc::AT_FDCWD, b.as_ptr(), 2 /* RENAME_EXCHANGE */);
+            }
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let swapper = {
+            let (stop, tree, outside) = (stop.clone(), copy.join("tree"), outside.clone());
+            std::thread::spawn(move || {
+                let (swap, other) = (tree.join("swap"), tree.join("other"));
+                while !stop.load(Ordering::Relaxed) {
+                    if fs::symlink_metadata(&swap).is_err() || fs::symlink_metadata(&other).is_err() {
+                        let _ = fs::remove_dir(&swap).or_else(|_| fs::remove_file(&swap));
+                        let _ = fs::remove_dir(&other).or_else(|_| fs::remove_file(&other));
+                        let _ = fs::create_dir(&swap);
+                        let _ = symlink(&outside, &other);
+                    }
+                    exchange(&swap, &other);
+                }
+            })
+        };
+        for round in 0..1000 {
+            locked(false);
+            force_remove(&copy);
+            assert_eq!(mode(&outside), 0o555, "round {round}: the outside directory's mode was changed through a swapped-in symlink");
+        }
+        stop.store(true, Ordering::Relaxed);
+        swapper.join().unwrap();
+        force_remove(&copy);
+        assert!(!copy.exists());
+        assert_eq!((mode(&outside), mode(&outside.join("inner"))), (0o555, 0o500));
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(outside.join("inner"), fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
