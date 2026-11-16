@@ -214,19 +214,47 @@ fn audit_xml(doc: &roxmltree::Document<'_>) -> Result<(), &'static str> {
     // vertex of every shape, whatever names them (an attribute, a style, inheritance). Markers inside markers are refused above.
     let marker_cost = if markers {
         let (mut memo, mut busy) = (HashMap::new(), Vec::new());
-        let mut c = 0u64;
+        let mut c = Cost::default();
         for n in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "marker") {
-            c = c.saturating_add(cost(n, &ids, 0, &mut memo, &mut busy)?);
+            c = c.plus(cost(n, &ids, Cost::default(), &mut memo, &mut busy)?);
         }
         c
     } else {
-        0
+        Cost::default()
     };
     let (mut memo, mut busy) = (HashMap::new(), Vec::new());
-    if cost(doc.root_element(), &ids, marker_cost, &mut memo, &mut busy)? > MAX_EXPANDED {
+    let total = cost(doc.root_element(), &ids, marker_cost, &mut memo, &mut busy)?;
+    if total.over() {
         return Err("the SVG has too many parts to draw once its references are counted");
     }
     Ok(())
+}
+
+/// Path segments (and polyline points) the renderer may build once every `use` is expanded and every marker drawn, over the whole
+/// file. usvg builds each `use` instance's path anew, at about 470 bytes a segment, so this bounds the tree's memory before it is
+/// built: 1,000,000 segments is about 470 MB.
+pub const MAX_SEGMENTS: u64 = 1_000_000;
+
+/// Points (a segment is one to three) on the renderer's built tree, checked before it draws.
+pub const MAX_TREE_POINTS: u64 = 3 * MAX_SEGMENTS;
+
+/// What drawing an element costs, with every `use` expanded: elements, and path segments.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Cost {
+    elements: u64,
+    segments: u64,
+}
+
+impl Cost {
+    fn plus(self, o: Cost) -> Cost {
+        Cost { elements: self.elements.saturating_add(o.elements), segments: self.segments.saturating_add(o.segments) }
+    }
+    fn times(self, k: u64) -> Cost {
+        Cost { elements: self.elements.saturating_mul(k), segments: self.segments.saturating_mul(k) }
+    }
+    fn over(self) -> bool {
+        self.elements > MAX_EXPANDED || self.segments > MAX_SEGMENTS
+    }
 }
 
 /// The vertices of a shape, as the renderer will find them: a path's segments and a polyline's points read by resvg's own parsers
@@ -368,7 +396,7 @@ fn drawn<'a>(start: roxmltree::Node<'a, 'a>, elem: &dyn Fn(&str) -> Option<roxml
 
 /// The elements `n` stands for when drawn: itself, its children, for a `use` what it names (a cycle is refused), and for a shape
 /// `marker` elements at each of its vertices.
-fn cost<'a>(n: roxmltree::Node<'a, 'a>, ids: &HashMap<&str, roxmltree::NodeId>, marker: u64, memo: &mut HashMap<roxmltree::NodeId, u64>, busy: &mut Vec<roxmltree::NodeId>) -> Result<u64, &'static str> {
+fn cost<'a>(n: roxmltree::Node<'a, 'a>, ids: &HashMap<&str, roxmltree::NodeId>, marker: Cost, memo: &mut HashMap<roxmltree::NodeId, Cost>, busy: &mut Vec<roxmltree::NodeId>) -> Result<Cost, &'static str> {
     if let Some(c) = memo.get(&n.id()) {
         return Ok(*c);
     }
@@ -379,17 +407,19 @@ fn cost<'a>(n: roxmltree::Node<'a, 'a>, ids: &HashMap<&str, roxmltree::NodeId>, 
         return Err("the SVG nests too deeply to draw");
     }
     busy.push(n.id());
-    let mut total: u64 = 1u64.saturating_add(if marker > 0 { vertices(n).saturating_mul(marker) } else { 0 });
+    // Every shape costs its segments (each `use` of it builds them again), and when the file has markers, every marker at each.
+    let v = vertices(n);
+    let mut total = Cost { elements: 1, segments: v }.plus(marker.times(v));
     for c in n.children().filter(|c| c.is_element()) {
-        total = total.saturating_add(cost(c, ids, marker, memo, busy)?);
-        if total > MAX_EXPANDED {
+        total = total.plus(cost(c, ids, marker, memo, busy)?);
+        if total.over() {
             break;
         }
     }
     if n.tag_name().name() == "use" {
         let href = n.attributes().find(|a| a.name() == "href").map(|a| a.value()).unwrap_or("");
         if let Some(target) = href.strip_prefix('#').and_then(|id| ids.get(id)).and_then(|id| n.document().get_node(*id)) {
-            total = total.saturating_add(cost(target, ids, marker, memo, busy)?);
+            total = total.plus(cost(target, ids, marker, memo, busy)?);
         }
     }
     busy.pop();
@@ -428,6 +458,7 @@ fn audit_tree(tree: &usvg::Tree, scale: f64, size: (f64, f64)) -> Result<(), &'s
         layers: usize,
         painted: f64,
         dashes: f64,
+        points: u64,
     }
     let canvas = (size.0 * scale).max(1.0) * (size.1 * scale).max(1.0);
     fn walk(g: &usvg::Group, depth: usize, scale: f64, size: (f64, f64), canvas: f64, w: &mut Walk) -> Result<(), &'static str> {
@@ -463,6 +494,13 @@ fn audit_tree(tree: &usvg::Tree, scale: f64, size: (f64, f64)) -> Result<(), &'s
             if w.nodes > MAX_EXPANDED {
                 return Err("the SVG has too many parts to draw once its references are counted");
             }
+            if let usvg::Node::Path(p) = c {
+                // The built tree's own size, checked again before drawing: every point of every path, invisible ones included.
+                w.points += p.data().points().len() as u64;
+                if w.points > MAX_TREE_POINTS {
+                    return Err("the SVG has too many parts to draw once its references are counted");
+                }
+            }
             match c {
                 usvg::Node::Group(cg) => walk(cg, depth, scale, size, canvas, w)?,
                 usvg::Node::Path(p) if p.is_visible() => {
@@ -491,7 +529,7 @@ fn audit_tree(tree: &usvg::Tree, scale: f64, size: (f64, f64)) -> Result<(), &'s
         }
         Ok(())
     }
-    walk(tree.root(), 0, scale, size, canvas, &mut Walk { nodes: 0, layers: 0, painted: 0.0, dashes: 0.0 })
+    walk(tree.root(), 0, scale, size, canvas, &mut Walk { nodes: 0, layers: 0, painted: 0.0, dashes: 0.0, points: 0 })
 }
 
 #[cfg(test)]
@@ -710,6 +748,37 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1), "no wait for an overdue drawing: {:?}", started.elapsed());
         drop(held);
         assert!(render_with(&small, Duration::from_secs(60), TIME_LIMIT).is_ok());
+    }
+
+    /// One long path drawn many times through levels of `use`: `levels` levels, each of `fan` uses of the level below.
+    fn long_path_uses(segments: usize, levels: usize, fan: usize) -> Vec<u8> {
+        let mut s = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"200\"><defs><path id=\"l0\" stroke=\"black\" d=\"M0 0{}\"/>", "l.1.1".repeat(segments));
+        for l in 1..=levels {
+            s.push_str(&format!("<g id=\"l{l}\">"));
+            for _ in 0..fan {
+                s.push_str(&format!("<use href=\"#l{}\"/>", l - 1));
+            }
+            s.push_str("</g>");
+        }
+        s.push_str(&format!("</defs><use href=\"#l{levels}\"/></svg>"));
+        s.into_bytes()
+    }
+
+    /// The red-team's third pass: usvg builds every `use` instance's path anew, so one 50,000-segment path drawn 10,000 times
+    /// through four levels of ten uses (11,110 elements, 251 KB) took 4.7 GB. Each shape's segments now count wherever it is drawn.
+    #[test]
+    fn a_long_path_drawn_many_times_is_counted_by_its_segments() {
+        for (levels, fan) in [(4usize, 10usize), (2, 200)] {
+            let file = long_path_uses(50_000, levels, fan);
+            assert!(file.len() <= MAX_SVG_BYTES);
+            let started = std::time::Instant::now();
+            assert_eq!(render_now(&file), Err("the SVG has too many parts to draw once its references are counted"), "{levels} levels of {fan}");
+            assert!(started.elapsed() < Duration::from_secs(1), "{levels} levels of {fan}: {:?}", started.elapsed());
+        }
+        assert!(render_now(&long_path_uses(1_000, 2, 10)).is_ok(), "a 1,000-segment path drawn 100 times is drawn");
+        let one = roxmltree::Document::parse("<g><path d=\"M0 0l1 1 2 2\"/><polyline points=\"0,0 1,1\"/><use href=\"#x\"/></g>").unwrap();
+        let ids = HashMap::new();
+        assert_eq!(cost(one.root_element(), &ids, Cost::default(), &mut HashMap::new(), &mut Vec::new()).unwrap(), Cost { elements: 4, segments: 6 });
     }
 
     #[test]
