@@ -27,7 +27,7 @@ const QUERY_CHARS: usize = 200;
 const ID_CHARS: usize = 40;
 
 /// The closed list of reasons a result found by a search was not kept. Nothing else can appear in `not_kept`.
-pub const NOT_KEPT: [&str; 7] = ["page_cap", "budget", "refused", "fetch_failed", "capture_failed", "lead_not_stored", "not_followed"];
+pub const NOT_KEPT: [&str; 8] = ["page_cap", "budget", "refused", "fetch_failed", "capture_failed", "lead_not_stored", "not_followed", "lead"];
 
 /// Of whom a search was made. The ids after the colon are lower-case words from `[a-z0-9._-]`, at most 40 characters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,11 +142,13 @@ pub struct Line {
     pub declared: bool,
     /// Not a search: the addresses a local run already knew on the trusted list (`specs/119` §13.2). Nothing was sent to anyone.
     pub local: bool,
+    /// Run by the host with its own search tool, for a query the run asked of it, and handed back (`specs/119` §2.1 item 4).
+    pub host_run: bool,
 }
 
 impl Line {
     fn new(rung: &'static str, source: Source, purpose: Purpose) -> Line {
-        Line { rung, source, purpose, query: None, withheld: false, identifier: false, at: delphi_core::time::now_rfc3339(), hits: 0, kept: 0, duplicates: 0, not_kept: BTreeMap::new(), via: None, failed: None, declared: false, local: false }
+        Line { rung, source, purpose, query: None, withheld: false, identifier: false, at: delphi_core::time::now_rfc3339(), hits: 0, kept: 0, duplicates: 0, not_kept: BTreeMap::new(), via: None, failed: None, declared: false, local: false, host_run: false }
     }
 
     /// Does the line account for every result it found? A declared line, a withheld one and the knowledge-base line are not searches the
@@ -186,6 +188,9 @@ impl Line {
         }
         if self.local {
             o.insert("local".into(), json!(true));
+        }
+        if self.host_run {
+            o.insert("run_by_host".into(), json!(true));
         }
         Value::Object(o)
     }
@@ -288,6 +293,16 @@ impl SearchLog {
         let mut l = Line::new(rung, source, purpose);
         l.withheld = true;
         l.identifier = true;
+        self.push(l)
+    }
+
+    /// A search the host ran for the run and handed back (`specs/119` §2.1 item 4): the query as the run asked it, and how many
+    /// results came back. The line is marked as run by the host. It counts as a search: its results on the trusted list are read.
+    pub fn host_ran(&mut self, rung: &'static str, tool: &str, purpose: Purpose, query: &str, hits: usize) -> usize {
+        let mut l = Line::new(rung, Source::Host(clean_id(tool).unwrap_or_else(|| "host".into())), purpose);
+        l.query = Some(query.chars().take(QUERY_CHARS).collect());
+        l.host_run = true;
+        l.hits = hits;
         self.push(l)
     }
 
@@ -454,7 +469,13 @@ pub fn render(log: &Value, research_id: &str) -> String {
             (None, None) if l["local"] == true => "(no query: addresses Delphi already knew, read locally; nothing was sent)".to_string(),
             (None, None) => "(no query)".to_string(),
         };
-        let tag = if l["declared"] == true { "  [declared by the host; counts as nothing]" } else { "" };
+        let tag = if l["declared"] == true {
+            "  [declared by the host; counts as nothing]"
+        } else if l["run_by_host"] == true {
+            "  [run by the host]"
+        } else {
+            ""
+        };
         let failed = l["failed"].as_str().map(|f| format!("  failed: {f}")).unwrap_or_default();
         out.push_str(&format!("  {} {:<22} {:<13} {}  hits {} kept {}{}{}\n", l["at"].as_str().unwrap_or("").get(..19).unwrap_or(""), src, l["purpose"].as_str().unwrap_or(""), what, l["hits"], l["kept"], failed, tag));
     }
@@ -529,7 +550,7 @@ mod tests {
         log.dropped(i, "because I said so", 2);
         assert_eq!(log.flow().not_kept.get("refused"), Some(&2));
         assert!(log.flow().balanced());
-        assert!(NOT_KEPT.contains(&"page_cap") && NOT_KEPT.len() == 7);
+        assert!(NOT_KEPT.contains(&"page_cap") && NOT_KEPT.contains(&"lead") && NOT_KEPT.len() == 8);
     }
 
     // specs/119 §2 item 7: a query withheld for a privacy identifier is listed as withheld, says why, and carries no text.

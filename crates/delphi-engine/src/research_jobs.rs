@@ -113,6 +113,35 @@ struct Activity {
     recent: VecDeque<(i64, &'static str)>,
 }
 
+/// The most queries a run asks a host to search, and the most results a host may hand back for one (`specs/119` §2.1 item 4).
+pub const FEED_QUERIES: usize = 12;
+pub const FEED_RESULTS: usize = 10;
+
+/// What a host handed back for one query the run asked it to search (`specs/119` §2.1 item 4): the query, as the run asked it, and
+/// the results. `leads_only` is a feed from a session under the private-read mark: the daemon fetches none of its addresses.
+#[derive(Debug, Clone)]
+pub struct Fed {
+    pub query: String,
+    pub rows: Vec<delphi_adapter::research::search::Row>,
+    pub leads_only: bool,
+}
+
+/// What a feed was refused for, in fixed words. None of them carries the host's text.
+pub const FEED_NOT_ASKED: &str = "this run asked the host for no search, or is not waiting for one yet: read research_status";
+pub const FEED_CLOSED: &str = "this run is no longer taking search results";
+pub const FEED_UNKNOWN_QUERY: &str = "that query is not one this run asked for: hand back each query exactly as it was given";
+pub const FEED_TWICE: &str = "that query was already handed back";
+
+/// The feed board of a run that asked its host to search (`specs/119` §2.1 items 3 and 4). The run posts the queries it planned,
+/// already cleaned and guarded; the host hands back results for those queries and no other, once each, while the board is open.
+#[derive(Default)]
+struct Board {
+    asked: Vec<String>,
+    fed: Vec<Fed>,
+    open: bool,
+    closed: bool,
+}
+
 /// What a runner holds while it works.
 pub struct JobCtx {
     max_steps: u32,
@@ -124,11 +153,14 @@ pub struct JobCtx {
     activity: Mutex<Activity>,
     /// The workspace's `[privacy] identifiers` (`specs/119` §2 item 7), set once by whoever starts the runner; unset means none.
     identifiers: std::sync::OnceLock<Vec<String>>,
+    /// The queries asked of the host and what it handed back (`specs/119` §2.1).
+    board: Mutex<Board>,
+    fed_signal: Notify,
 }
 
 impl JobCtx {
     pub fn with_budget(max_steps: u32) -> JobCtx {
-        JobCtx { max_steps, steps: AtomicU32::new(0), check_max: check_budget(max_steps), check_steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()), activity: Mutex::new(Activity { last: Instant::now(), recent: VecDeque::new() }), identifiers: Default::default() }
+        JobCtx { max_steps, steps: AtomicU32::new(0), check_max: check_budget(max_steps), check_steps: AtomicU32::new(0), trail: Mutex::new(Trail::default()), activity: Mutex::new(Activity { last: Instant::now(), recent: VecDeque::new() }), identifiers: Default::default(), board: Default::default(), fed_signal: Notify::new() }
     }
 
     /// Give the job the workspace's privacy identifiers. The first call wins.
@@ -139,6 +171,69 @@ impl JobCtx {
     /// The identifier guard for a query this job is about to send to an engine or hand to a host (`specs/119` §2 item 7).
     pub fn guard(&self, query: &str) -> crate::query_guard::Guarded {
         crate::query_guard::guard(query, self.identifiers.get().map(Vec::as_slice).unwrap_or(&[]))
+    }
+
+    /// Ask the host to search (`specs/119` §2.1 item 3): post the run's queries, at most [`FEED_QUERIES`], and open the board. The
+    /// caller has cleaned and guarded each. Asking twice is the first ask.
+    pub fn ask_host(&self, queries: &[String]) {
+        let mut b = self.board.lock().unwrap();
+        if b.open || b.closed {
+            return;
+        }
+        b.asked = queries.iter().take(FEED_QUERIES).cloned().collect();
+        b.open = true;
+    }
+
+    /// What the board holds, for a status call: the queries asked, how many were handed back, and whether the run still waits.
+    /// `None` when the run asked the host for nothing.
+    pub fn host_asked(&self) -> Option<(Vec<String>, usize, bool)> {
+        let b = self.board.lock().unwrap();
+        (b.open || b.closed).then(|| (b.asked.clone(), b.fed.len(), b.open))
+    }
+
+    /// A host hands back the results of one query (`specs/119` §2.1 item 4). Taken only while the board is open, only for a query
+    /// the run asked, exactly as it was asked, and once for each; at most [`FEED_RESULTS`] results are kept. Returns how many
+    /// results were taken and how many queries still wait.
+    pub fn feed(&self, query: &str, mut rows: Vec<delphi_adapter::research::search::Row>, leads_only: bool) -> Result<(usize, usize), &'static str> {
+        let mut b = self.board.lock().unwrap();
+        if b.closed {
+            return Err(FEED_CLOSED);
+        }
+        if !b.open {
+            return Err(FEED_NOT_ASKED);
+        }
+        let query = query.trim();
+        if !b.asked.iter().any(|q| q == query) {
+            return Err(FEED_UNKNOWN_QUERY);
+        }
+        if b.fed.iter().any(|f| f.query == query) {
+            return Err(FEED_TWICE);
+        }
+        rows.truncate(FEED_RESULTS);
+        let taken = rows.len();
+        b.fed.push(Fed { query: query.to_string(), rows, leads_only });
+        let left = b.asked.len() - b.fed.len();
+        drop(b);
+        self.note("feed");
+        self.fed_signal.notify_one();
+        Ok((taken, left))
+    }
+
+    /// Wait until the host has handed back every query asked, or for `wait`, then close the board and return what was handed
+    /// back. A feed that arrives after this is refused.
+    pub async fn fed(&self, wait: Duration) -> Vec<Fed> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            {
+                let mut b = self.board.lock().unwrap();
+                if b.fed.len() >= b.asked.len() || tokio::time::Instant::now() >= deadline {
+                    b.open = false;
+                    b.closed = true;
+                    return b.fed.clone();
+                }
+            }
+            let _ = tokio::time::timeout_at(deadline, self.fed_signal.notified()).await;
+        }
     }
 
     /// Note that the job just made a call of this kind.
@@ -383,7 +478,35 @@ impl Jobs {
             "queries": t.queries, "fetched": t.fetched, "refused": t.refused,
             "fetched_via": t.fetched_via.iter().map(|(u, v)| json!({"url": u, "via": v})).collect::<Vec<_>>(),
             "error": j.error,
+            "host_search": j.ctx.host_asked().map(|(asked, fed, open)| json!({"queries": asked, "fed": fed, "waiting": open})),
         }))
+    }
+
+    /// A host hands back the results of one query its run asked it to search (`specs/119` §2.1 item 4). `None` when the job is not
+    /// this session's (no such job and another session's are not told apart).
+    pub fn feed(&self, id: &str, session: &str, query: &str, rows: Vec<delphi_adapter::research::search::Row>, leads_only: bool) -> Option<Result<(usize, usize), &'static str>> {
+        let ctx = self.jobs.lock().unwrap().get(id).filter(|j| j.session == session).map(|j| j.ctx.clone())?;
+        Some(ctx.feed(query, rows, leads_only))
+    }
+
+    /// Wait, for at most `wait`, until the run has posted the queries it asks its host to search; `None` when it has not by then,
+    /// has ended, or is not this session's.
+    pub async fn host_asked(&self, id: &str, session: &str, wait: Duration) -> Option<Vec<String>> {
+        let deadline = Instant::now() + wait;
+        loop {
+            let (asked, finished) = {
+                let jobs = self.jobs.lock().unwrap();
+                let j = jobs.get(id).filter(|j| j.session == session)?;
+                (j.ctx.host_asked(), j.state.finished())
+            };
+            if let Some((queries, _, _)) = asked {
+                return Some(queries);
+            }
+            if finished || Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
     /// What a status call adds for a job (`specs/098` §19): one worker, its last calls as a fixed-form tail, and a stall flag.
@@ -459,6 +582,43 @@ pub fn audit_payload(research_id: &str, depth: Depth, source: &str, question_cha
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `specs/119` §2.1 item 4: what a host may hand back, and when. Only for a query the run asked, exactly as asked, once each, at
+    // most ten results, and only while the run waits.
+    #[tokio::test]
+    async fn a_feed_is_taken_only_for_a_query_the_run_asked_once_each_and_only_while_it_waits() {
+        use delphi_adapter::research::search::Row;
+        let row = |n: usize| Row { title: String::new(), url: format!("https://example.org/{n}"), snippet: String::new() };
+        let c = JobCtx::with_budget(10);
+        assert_eq!(c.host_asked(), None);
+        assert_eq!(c.feed("aspirin fever", vec![row(1)], false), Err(FEED_NOT_ASKED), "nothing was asked yet");
+        let many: Vec<String> = (0..20).map(|n| format!("query {n}")).collect();
+        c.ask_host(&many);
+        let (asked, fed, waiting) = c.host_asked().unwrap();
+        assert_eq!((asked.len(), fed, waiting), (FEED_QUERIES, 0, true), "at most twelve queries a run");
+        c.ask_host(&["another".to_string()]);
+        assert_eq!(c.host_asked().unwrap().0, asked, "asking twice is the first ask");
+        assert_eq!(c.feed("a query of the host's own", vec![row(1)], false), Err(FEED_UNKNOWN_QUERY));
+        assert_eq!(c.feed("query 12", vec![row(1)], false), Err(FEED_UNKNOWN_QUERY), "a query past the twelve was not asked");
+        assert_eq!(c.feed(" query 0 ", (0..25).map(row).collect(), false), Ok((FEED_RESULTS, FEED_QUERIES - 1)), "at most ten results are taken");
+        assert_eq!(c.feed("query 0", vec![row(1)], false), Err(FEED_TWICE));
+        // The wait ends at its deadline with what was handed back, and the board closes.
+        let got = c.fed(Duration::from_millis(20)).await;
+        assert_eq!((got.len(), got[0].query.as_str(), got[0].rows.len(), got[0].leads_only), (1, "query 0", FEED_RESULTS, false));
+        assert_eq!(c.feed("query 1", vec![row(1)], false), Err(FEED_CLOSED));
+        assert_eq!(c.host_asked().unwrap().2, false);
+        // The wait ends early once every query is handed back.
+        let c = Arc::new(JobCtx::with_budget(10));
+        c.ask_host(&["one".to_string(), "two".to_string()]);
+        let feeder = c.clone();
+        tokio::spawn(async move {
+            feeder.feed("one", vec![], true).unwrap();
+            feeder.feed("two", vec![], true).unwrap();
+        });
+        let started = Instant::now();
+        let got = c.fed(Duration::from_secs(30)).await;
+        assert!(got.len() == 2 && got.iter().all(|f| f.leads_only) && started.elapsed() < Duration::from_secs(10));
+    }
     use tokio::sync::oneshot;
 
     fn done(v: Value) -> Result<Finish, String> {

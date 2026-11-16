@@ -277,6 +277,9 @@ impl Limits {
 /// Where a run's web results come from (`specs/119` §13.2). The result and the record say which.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sources {
+    /// The host's own search tool (`specs/119` §13.1): the run plans, the host searches and hands back what it found, and the engines
+    /// of `[search]`, when there are any, are asked only for what the host's results left uncovered.
+    Host,
     /// The engines of `[search]`, in the operator's order.
     #[default]
     Engines,
@@ -288,6 +291,7 @@ pub enum Sources {
 impl Sources {
     pub fn as_str(self) -> &'static str {
         match self {
+            Sources::Host => "host",
             Sources::Engines => "engines",
             Sources::Local => "local",
         }
@@ -295,7 +299,24 @@ impl Sources {
 }
 
 /// The words of [`Sources`], for the record.
-pub const SOURCES: [&str; 2] = ["engines", "local"];
+pub const SOURCES: [&str; 3] = ["host", "engines", "local"];
+
+/// How long a run waits for its host to hand back the searches it asked for (`specs/119` §2.1 item 4). What has not come by then
+/// is not waited for: the engines are asked for it when there are any, and the run goes on with what it has otherwise.
+pub const HOST_WAIT: std::time::Duration = std::time::Duration::from_secs(240);
+/// The most addresses off the trusted list a result lists as leads for the host to read itself.
+pub const HOST_LEADS: usize = 40;
+
+/// The host's turn of a run whose source is the host (`specs/119` §13.1).
+#[derive(Debug, Clone)]
+pub struct HostTurn {
+    /// The host's name, for the search log's lines (`host:<tool>`).
+    pub tool: String,
+    /// Whether the engines of `[search]` may be asked for what the host's results left uncovered. False with `providers = []`.
+    pub engines: bool,
+    /// How long to wait for the host ([`HOST_WAIT`]).
+    pub wait: std::time::Duration,
+}
 
 pub struct Deps<'a> {
     pub web: &'a dyn Web,
@@ -304,6 +325,8 @@ pub struct Deps<'a> {
     /// Whoever asked is under the private-read mark of `specs/103` (`specs/119` §15). Nothing the run does differs: every query is
     /// cleaned and guarded as always. The result says the run was planned under the mark.
     pub marked: bool,
+    /// The host's turn, for a run whose source is the host ([`Sources::Host`]).
+    pub host: Option<&'a HostTurn>,
     pub scout: &'a dyn Scout,
     pub validator: &'a dyn Validator,
     pub library: &'a dyn Library,
@@ -979,6 +1002,50 @@ async fn local_round(ctx: &JobCtx, deps: &Deps<'_>, question: &str, depth: Depth
     Stop::PlanDone
 }
 
+/// The host's round (`specs/119` §2.1 items 3 to 5, §13.1): the run's first-round queries, already cleaned and guarded, are posted
+/// for the host to search with its own tool, and the run waits for what the host hands back. For each query handed back the search
+/// log gains a line marked as run by the host. A result whose address is on the trusted list is fetched and read by the daemon as
+/// if its own search had found it. Any other address is never fetched on a host's word: it is listed as a lead for the host to
+/// read with its own tool. Nothing a host hands back enters the set of addresses a search of this run returned, so no feed widens
+/// what the daemon's fetcher reaches, and no title or snippet a host wrote is kept. Returns why sending must stop (a budget), the
+/// queries the host did not answer, and the leads.
+async fn host_round(ctx: &JobCtx, deps: &Deps<'_>, turn: &HostTurn, question: &str, depth: Depth, st: &mut State, round: &[Sending]) -> (Option<Stop>, Vec<Sending>, Vec<String>) {
+    ctx.ask_host(&round.iter().map(|q| q.text.clone()).collect::<Vec<_>>());
+    let fed = ctx.fed(turn.wait).await;
+    let unanswered: Vec<Sending> = round.iter().filter(|q| !fed.iter().any(|f| f.query == q.text)).cloned().collect();
+    let mut leads = Vec::<String>::new();
+    for q in round {
+        let Some(f) = fed.iter().find(|f| f.query == q.text) else { continue };
+        st.cov.answered += 1;
+        if q.kind != QueryKind::Trusted {
+            st.cov.web_searched = true;
+        }
+        note(deps, |r| r.query(&q.text, kind_word(q.kind), Some("host"), Ok(f.rows.len())));
+        let (rung, _, purpose) = log_source(q.kind, None);
+        let li = st.log.host_ran(rung, &turn.tool, purpose, &q.text, f.rows.len());
+        let total = f.rows.len();
+        for (i, row) in f.rows.iter().enumerate() {
+            if f.leads_only || !deps.web.is_trusted(&row.url) {
+                st.log.dropped(li, "lead", 1);
+                if leads.len() < HOST_LEADS && !leads.contains(&row.url) {
+                    leads.push(row.url.clone());
+                }
+                continue;
+            }
+            if st.pages_read >= deps.limits.pages_at(depth) {
+                st.log.dropped(li, "page_cap", total - i);
+                return (Some(Stop::PageBudget), unanswered, leads);
+            }
+            // The address alone goes on: a host's title and snippet are its own words and are not kept.
+            let row = Row { title: String::new(), url: row.url.clone(), snippet: String::new() };
+            if read_row(ctx, deps, question, st, li, &row, true, total - i, q.tag).await {
+                return (Some(Stop::StepBudget), unanswered, leads);
+            }
+        }
+    }
+    (None, unanswered, leads)
+}
+
 /// Send one round's queries and read what they return. Within one search's results pages are read trusted and primary first, then
 /// trusted, then those on a host a kept claim's source is on, then the rest, newer first where the address states a date
 /// (`specs/114` §4 item 6). `Some` when sending must stop: the step budget or the page cap.
@@ -1297,12 +1364,48 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // sub-questions still uncovered. The run stops sending when every sub-question is covered, when two rounds in a row added no
     // claim, when no uncovered sub-question has a query left, or on a budget. The fixed plan has no sub-questions and one round.
     let (mut rounds, mut barren) = (0usize, 0usize);
+    // The host's turn (`specs/119` §13.1): the first round goes to the host. What it did not answer goes to the engines when there
+    // are any, and so do the later rounds, for the sub-questions its results left uncovered. With no engine the run ends here.
+    let host_turn = deps.host.filter(|_| deps.sources == Sources::Host);
+    let engines_asked = match deps.sources {
+        Sources::Engines => true,
+        Sources::Local => false,
+        Sources::Host => host_turn.is_some_and(|t| t.engines),
+    };
+    let (mut host_asked, mut host_fed, mut host_leads, mut host_stop, mut after_host) = (0usize, 0usize, Vec::<String>::new(), None::<Stop>, false);
+    if let Some(turn) = host_turn {
+        rounds = 1;
+        round.truncate(crate::research_jobs::FEED_QUERIES);
+        host_asked = round.len();
+        let (stop, unanswered, leads) = host_round(ctx, deps, turn, question, depth, &mut st, &round).await;
+        host_leads = leads;
+        host_fed = host_asked - unanswered.len();
+        host_stop = stop.or_else(|| {
+            (!turn.engines).then(|| {
+                if st.subs.is_empty() {
+                    Stop::PlanDone
+                } else if coverage(&st.subs, &tagged(&st)).iter().all(|c| c.covered) {
+                    Stop::Covered
+                } else {
+                    Stop::NoMoreQueries
+                }
+            })
+        });
+        round = unanswered;
+        after_host = true;
+    }
     let stopped: Stop = if deps.sources == Sources::Local {
         rounds = 1;
         local_round(ctx, deps, question, depth, &mut st, &known).await
+    } else if let Some(stop) = host_stop {
+        stop
     } else {
         loop {
-        rounds += 1;
+        // The host answered every query of the first round: nothing is sent to the engines for it, and it is not a round of theirs.
+        let nothing_left = std::mem::take(&mut after_host) && round.is_empty();
+        if !nothing_left {
+            rounds += 1;
+        }
         let before = st.claims.len() + st.found_again.len();
         if let Some(stop) = send_round(ctx, deps, question, depth, &mut st, &round).await {
             break stop;
@@ -1313,7 +1416,9 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         if coverage(&st.subs, &tagged(&st)).iter().all(|c| c.covered) {
             break Stop::Covered;
         }
-        barren = if st.claims.len() + st.found_again.len() == before { barren + 1 } else { 0 };
+        if !nothing_left {
+            barren = if st.claims.len() + st.found_again.len() == before { barren + 1 } else { 0 };
+        }
         if barren >= 2 {
             break Stop::NoNewClaims;
         }
@@ -1336,8 +1441,8 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // independent origins gets one query for independent support and one for contradiction. A claim that rests on a private source is
     // never put in an outbound query. Every search and fetch still goes through `ctx.egress`, so the depth's step budget bounds it.
     let mut pass = (0usize, 0usize);
-    // A local run sends no query, so it has no pass.
-    if pass_claims(depth) > 0 && !st.spent && deps.sources != Sources::Local {
+    // A run that may ask no engine (a local run, a host's run with no engine) sends no query, so it has no pass.
+    if pass_claims(depth) > 0 && !st.spent && engines_asked {
         // A claim that rests on a private source gets no outbound query; the log says so, without any text of the claim
         // (`specs/101` §3 item 3). At most as many lines as the pass would have run.
         let private_claims = st.claims.iter().filter(|c| c.source_ids.iter().any(|s| deps.library.is_private(s))).count();
@@ -1496,6 +1601,12 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "budget_used": {"steps": ctx.steps(), "check_steps": ctx.check_steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
     });
+    // The host's turn (`specs/119` §2.1): how many queries it was asked and handed back, and the addresses off the trusted list,
+    // which the daemon did not fetch and the host may read with its own tool.
+    if host_turn.is_some() {
+        result["host_search"] = json!({"asked": host_asked, "fed": host_fed});
+        result["host_leads"] = json!(host_leads);
+    }
     result["search_log"] = log.to_json();
     Ok(if spent || check_spent { Finish::Partial(result) } else { Finish::Done(result) })
 }
@@ -1875,6 +1986,7 @@ mod tests {
         /// What the caller's search finds before the run, when the run looks.
         known: Option<FakeKnown>,
         sources: Sources,
+        host: Option<HostTurn>,
     }
 
     impl Fixture {
@@ -1889,10 +2001,10 @@ mod tests {
                 ("https://nih.gov/b".to_string(), vec![x("fever")]),
                 ("https://blog.example/a".to_string(), vec![x("headaches")]),
             ]));
-            Fixture { sources: Sources::Engines, record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new(), limits: Limits::default(), resume: None, known: None }
+            Fixture { sources: Sources::Engines, host: None, record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new(), limits: Limits::default(), resume: None, known: None }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { sources: self.sources, marked: false, web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder), limits: &self.limits, resume: self.resume.as_ref(), known: self.known.as_ref().map(|k| k as &dyn KnownFirst) }
+            Deps { sources: self.sources, marked: false, host: self.host.as_ref(), web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder), limits: &self.limits, resume: self.resume.as_ref(), known: self.known.as_ref().map(|k| k as &dyn KnownFirst) }
         }
     }
 
@@ -3782,6 +3894,135 @@ mod tests {
         assert_eq!(chain_calls(&f), [("10.1000/who".into(), "references"), ("10.1000/who".into(), "citations")], "{v}");
         assert!(f.web.searched.lock().unwrap().is_empty(), "{:?}", f.web.searched.lock().unwrap());
         assert_eq!((v["sources"].as_str(), v["web_search"].as_bool()), (Some("local"), Some(false)), "{v}");
+    }
+
+    // ---- `specs/119` §2.1 and §13.1 (B7): the host's own search tool is the run's source ----
+
+    fn host_fixture(engines: bool, wait_ms: u64) -> Fixture {
+        let mut f = Fixture::new(Verdict::Supports);
+        f.sources = Sources::Host;
+        f.host = Some(HostTurn { tool: "claude-code".into(), engines, wait: Duration::from_millis(wait_ms) });
+        f
+    }
+
+    /// A scripted host: it waits for the run to ask, then hands back `rows` for the first query asked and nothing for the others.
+    /// Returns the queries it was asked.
+    fn scripted_host(c: Arc<JobCtx>, rows: Vec<Row>, leads_only: bool) -> tokio::task::JoinHandle<Vec<String>> {
+        tokio::spawn(async move {
+            let asked = loop {
+                if let Some((asked, _, _)) = c.host_asked() {
+                    break asked;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            };
+            for (i, q) in asked.iter().enumerate() {
+                c.feed(q, if i == 0 { rows.clone() } else { Vec::new() }, leads_only).unwrap();
+            }
+            asked
+        })
+    }
+
+    fn host_lines(v: &Value) -> Vec<Value> {
+        log_lines(v).into_iter().filter(|l| l["run_by_host"] == true).collect()
+    }
+
+    /// AC-2a: with no engine, the run hands its planned queries to the host and sends none itself. A result the host hands back on
+    /// the trusted list is fetched and read by the daemon; one off the list is never fetched (the fake's fetcher would have served
+    /// it) and is listed as a lead. Each fed search is a log line marked as run by the host, and the record says `sources: host`.
+    #[tokio::test]
+    async fn the_host_searches_a_trusted_result_is_read_and_one_off_the_list_is_a_lead_that_is_never_fetched() {
+        let f = host_fixture(false, 5_000);
+        let c = Arc::new(ctx(Depth::Survey));
+        let host = scripted_host(c.clone(), vec![row("https://who.int/a"), row("https://blog.example/a"), row("https://who.int/a")], false);
+        let (partial, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        let asked = host.await.unwrap();
+        assert!(!partial && !asked.is_empty() && asked.len() <= crate::research_jobs::FEED_QUERIES, "{asked:?}");
+        assert!(f.web.searched.lock().unwrap().is_empty(), "the daemon searched: {:?}", f.web.searched.lock().unwrap());
+        assert_eq!(*f.web.fetched.lock().unwrap(), ["https://who.int/a"], "only the fed address on the trusted list is fetched");
+        assert_eq!((v["sources"].as_str(), v["web_search"].as_bool()), (Some("host"), Some(true)), "{v}");
+        assert_eq!(v["host_search"], json!({"asked": asked.len(), "fed": asked.len()}));
+        assert_eq!(v["host_leads"], json!(["https://blog.example/a"]));
+        assert_eq!(v["claims"].as_array().unwrap().len(), 1, "{v}");
+        assert!(!v["answer"].as_str().unwrap().contains("no web search"), "{}", v["answer"]);
+        assert_eq!(v["corroboration_pass"], json!({"claims": 0, "queries": 0}), "no engine, so no pass");
+        // The log: one line a fed query, marked, with the query as it was asked; the lead and the repeated address are accounted for.
+        let lines = host_lines(&v);
+        assert_eq!(lines.iter().map(|l| l["query"].as_str().unwrap().to_string()).collect::<Vec<_>>(), asked, "{lines:?}");
+        assert!(lines.iter().all(|l| l["source"] == "host:claude-code"), "{lines:?}");
+        assert_eq!((lines[0]["hits"].as_u64(), lines[0]["kept"].as_u64(), lines[0]["duplicates"].as_u64(), lines[0]["not_kept"]["lead"].as_u64()), (Some(3), Some(1), Some(1), Some(1)), "{}", lines[0]);
+        assert_balanced(&v);
+        // Nothing a host wrote but the address went on: the library was offered no lead of the host's.
+        assert!(f.lib.leads.lock().unwrap().is_empty(), "{:?}", f.lib.leads.lock().unwrap());
+        // The board is closed: a late feed is refused.
+        assert_eq!(c.feed(&asked[0], vec![], false), Err(crate::research_jobs::FEED_CLOSED));
+    }
+
+    /// A feed from a session under the private-read mark is leads only: the daemon fetches nothing on it, trusted or not.
+    #[tokio::test]
+    async fn a_marked_sessions_feed_is_leads_only() {
+        let f = host_fixture(false, 5_000);
+        let c = Arc::new(ctx(Depth::Survey));
+        let host = scripted_host(c.clone(), vec![row("https://who.int/a")], true);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps()).await.unwrap());
+        host.await.unwrap();
+        assert!(f.web.fetched.lock().unwrap().is_empty() && f.web.searched.lock().unwrap().is_empty());
+        assert_eq!(v["host_leads"], json!(["https://who.int/a"]));
+        assert!(v["claims"].as_array().unwrap().is_empty());
+        assert_balanced(&v);
+    }
+
+    /// A host that hands nothing back does not stall the run or fail it. With no engine the run ends with what Delphi holds and
+    /// says no web search answered; with an engine the queries the host left are sent to it.
+    #[tokio::test]
+    async fn a_host_that_hands_nothing_back_leaves_the_queries_to_the_engines_or_the_run_to_what_delphi_holds() {
+        let f = host_fixture(false, 30);
+        let (partial, v) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert!(!partial && f.web.searched.lock().unwrap().is_empty() && f.web.fetched.lock().unwrap().is_empty(), "{v}");
+        assert_eq!((v["sources"].as_str(), v["web_search"].as_bool(), v["host_search"]["fed"].as_u64()), (Some("host"), Some(false), Some(0)), "{v}");
+        assert!(host_lines(&v).is_empty());
+
+        let g = host_fixture(true, 30);
+        let (_, v) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &g.deps()).await.unwrap());
+        assert!(!g.web.searched.lock().unwrap().is_empty(), "the engines were asked what the host left");
+        assert_eq!((v["sources"].as_str(), v["web_search"].as_bool(), v["host_search"]["fed"].as_u64()), (Some("host"), Some(true), Some(0)), "{v}");
+        assert!(!v["claims"].as_array().unwrap().is_empty(), "{v}");
+        assert_balanced(&v);
+    }
+
+    /// With an engine and a host that answered every query, the engines are not asked the same thing: under the fixed plan (no
+    /// sub-question left uncovered) nothing is sent to them for the round.
+    #[tokio::test]
+    async fn what_the_host_answered_is_not_asked_of_the_engines_again() {
+        let f = host_fixture(true, 5_000);
+        let c = Arc::new(ctx(Depth::Quick));
+        let host = scripted_host(c.clone(), vec![row("https://who.int/a")], false);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        let asked = host.await.unwrap();
+        assert!(f.web.searched.lock().unwrap().iter().all(|q| !asked.contains(q)), "{:?}", f.web.searched.lock().unwrap());
+        assert_eq!((v["rounds"].as_u64(), v["stopped"].as_str()), (Some(1), Some("plan_done")), "{v}");
+    }
+
+    /// AC-2b for the host: a planned query that names a privacy identifier is not handed to the host as written. With enough left
+    /// it is handed over without the identifier; with too little nothing is handed over and the log lists it as withheld.
+    #[tokio::test]
+    async fn a_query_naming_a_privacy_identifier_is_not_handed_to_the_host() {
+        let f = host_fixture(false, 5_000);
+        let c = Arc::new(ctx(Depth::Survey));
+        c.set_identifiers(vec!["heron".into()]);
+        let host = scripted_host(c.clone(), vec![], false);
+        value(run_research(&c, "does aspirin reduce fever in Project-Heron trials", Depth::Survey, &f.deps()).await.unwrap());
+        let asked = host.await.unwrap();
+        assert!(!asked.is_empty() && asked.iter().all(|q| !q.to_lowercase().contains("heron")), "{asked:?}");
+
+        let f = host_fixture(false, 5_000);
+        let c = Arc::new(ctx(Depth::Survey));
+        c.set_identifiers(vec!["heron".into()]);
+        let host = scripted_host(c.clone(), vec![], false);
+        let (_, v) = value(run_research(&c, "heron rollout plan", Depth::Survey, &f.deps()).await.unwrap());
+        assert!(host.await.unwrap().is_empty(), "nothing is handed to the host");
+        assert!(log_lines(&v).iter().any(|l| l["withheld"] == "identifier") && host_lines(&v).is_empty(), "{v}");
+        // The knowledge-base line is the local search, which leaves nothing: no other line names the identifier.
+        assert!(log_lines(&v).iter().filter(|l| l["source"] != "kb").all(|l| !l.to_string().to_lowercase().contains("heron")), "{v}");
     }
 
     /// An engine run in which every search fails used no web search either, and its label says so; one that was answered does not.

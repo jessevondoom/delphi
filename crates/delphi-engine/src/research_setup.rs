@@ -45,8 +45,13 @@ pub fn engine_state_in(config_text: &str) -> Option<EngineState> {
 /// Where a research run gets its web results (`specs/119` §13.2 items 6 and 7). With no engine (`providers = []`) the run is local. A
 /// request is never refused for want of a source. The private-read mark of `specs/103` does not change the answer (`specs/119` §15):
 /// a marked session researches as any other, and what keeps private text in is the cleaning of each query and the identifier guard.
-pub fn sources(search: &delphi_adapter::research::SearchConfig) -> crate::research_run::Sources {
-    if engine_state(search) == EngineState::None {
+///
+/// `host_searches` is a run raised in a host whose row of the host tool table names a search tool, and that did not ask for the
+/// daemon's runner (`specs/119` §13.1): the host's own tools are then the source, whatever `[search]` says.
+pub fn sources(search: &delphi_adapter::research::SearchConfig, host_searches: bool) -> crate::research_run::Sources {
+    if host_searches {
+        crate::research_run::Sources::Host
+    } else if engine_state(search) == EngineState::None {
         crate::research_run::Sources::Local
     } else {
         crate::research_run::Sources::Engines
@@ -55,6 +60,12 @@ pub fn sources(search: &delphi_adapter::research::SearchConfig) -> crate::resear
 
 /// What the reply to a request says when the session that asked is under the private-read mark (`specs/119` §15): fixed words.
 pub const MARK_NOTE: &str = "this session has read private material. The research runs as usual: every query is cleaned of secrets, paths and private addresses and passes the identifier guard, and the search log of the result lists each query the run planned, so the operator can see what left this machine.";
+
+/// What the reply to a request says when the host is asked to search (`specs/119` §2.1 item 3, §13.1): one instruction, fixed words.
+pub const HOST_SEARCH_NOTE: &str = "run each of `queries` with your own web search tool and hand back what each found with research_feed {research_id, query, results} (the query exactly as given; title, url and snippet per result; at most 10 results; an empty list when a query found nothing). Delphi reads the results that are on the operator's trusted list itself. It never fetches any other address on your word: read those with your own fetch tool and hand over what you found with record_research under this run's topic_id. Then read research_result. When `queries` is empty the plan is still being made: research_status lists the queries under `host_search`. To have Delphi's own runner search instead, ask again with runner: \"daemon\".";
+
+/// What the reply to a feed says: fixed words.
+pub const FEED_NOTE: &str = "taken. Delphi reads the results that are on the operator's trusted list; the others are leads it does not fetch (research_result lists them as `host_leads`). Hand back each remaining query, then read research_result.";
 
 /// What the reply to a request says when its run is local (`specs/119` §13.2 item 6): fixed words.
 pub fn local_note() -> String {
@@ -139,9 +150,12 @@ mod tests {
         // specs/119 §13.2: no engine is a local run; nothing is a refusal.
         use crate::research_run::Sources;
         let cfg = |t: &str| delphi_adapter::research::SearchConfig::parse(&toml::from_str::<toml::Value>(t).unwrap()["search"], false).unwrap();
-        assert_eq!(sources(&cfg("[search]\nproviders = []\n")), Sources::Local);
-        assert_eq!(sources(&cfg("[search]\nproviders = [\"parallel\"]\n")), Sources::Engines);
-        assert_eq!(sources(&delphi_adapter::research::SearchConfig::default()), Sources::Engines);
+        assert_eq!(sources(&cfg("[search]\nproviders = []\n"), false), Sources::Local);
+        assert_eq!(sources(&cfg("[search]\nproviders = [\"parallel\"]\n"), false), Sources::Engines);
+        assert_eq!(sources(&delphi_adapter::research::SearchConfig::default(), false), Sources::Engines);
+        // specs/119 §13.1: in a host with a search tool the host is the source, with an engine or without one.
+        assert_eq!(sources(&cfg("[search]\nproviders = []\n"), true), Sources::Host);
+        assert_eq!(sources(&cfg("[search]\nproviders = [\"parallel\"]\n"), true), Sources::Host);
     }
 
     #[test]

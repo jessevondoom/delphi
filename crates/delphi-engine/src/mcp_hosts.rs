@@ -146,7 +146,7 @@ Delphi is connected as the MCP server `delphi` (read-only, this machine only).
    - Give it its own context (the `<role>-worker` subagent; `delphi-<role>-worker` outside Claude Code) for a long task, or for a second opinion that should not see this conversation.
 3. **For background**, call `search_project` and `search_memory` (name the role you are acting as), then read files with `resources/read`.
 4. **To pick a specialist**, call `route` with the task. It dispatches nothing.
-5. **When `search_kb` finds nothing and you need sourced facts**, call `request_research` (then `research_status` and `research_result`). It searches the operator's trusted sources first and keeps what it finds in Delphi's knowledge base. Print a Delphi answer's `display` line first (a badge, a name, the role and `via delphi`), keep each claim's `knowledge_status`, and read the `delphi-attribution` skill with `get_skill` for how.
+5. **When `search_kb` finds nothing and you need sourced facts**, call `request_research` (then `research_status` and `research_result`). It searches the operator's trusted sources first and keeps what it finds in Delphi's knowledge base. When its reply says `host_search: \"asked\"`, run each of its `queries` with your own web search tool and hand each back with `research_feed`: Delphi reads the results on the operator's trusted list itself and never fetches another address on your word. Print a Delphi answer's `display` line first (a badge, a name, the role and `via delphi`), keep each claim's `knowledge_status`, and read the `delphi-attribution` skill with `get_skill` for how.
 6. **When the user wants several specialists to weigh a decision** (a Council, a Panel, a red-team review, a second opinion), use the `delphi-council` skill: it frames the question with `council_frame`, asks before spending tokens, and shows one ruling card.
 7. **While a Council, help request or research job runs**, its status call lists the `seats` or `workers` (state, `idle_s`, `calls`), a `tail` of recent events and `stalled`. Read them before you decide it is stuck, and do not start a second Council while any seat shows activity. `cancel_job` stops a job you raised, with a short reason, when it has stalled or you no longer want it.
 8. **If `request_council` answers `council_unavailable`**, the answer is terminal. Show the operator its first sentence and its `offer` (a Panel, or starting Delphi), then stop. Do not run an agenda of your own and present it as a Council, do not retry quietly, and do not simulate the seats.
@@ -726,6 +726,14 @@ pub fn adapter(host: &str) -> Option<(u32, AdapterMap)> {
         )),
         _ => None,
     }
+}
+
+/// The host tool table of `specs/119` §2.1 item 2: a host's own web search tool and its page fetch tool, or `None` for each it
+/// lacks. It is read from the host's adapter above, so the two cannot disagree. A host with no adapter has neither.
+pub fn host_search_tools(host: &str) -> (Option<&'static str>, Option<&'static str>) {
+    let Some((_, caps)) = adapter(host) else { return (None, None) };
+    let tool = |cap: &str| caps.iter().find(|(c, _)| *c == cap).and_then(|(_, t)| *t);
+    (tool("search_web"), tool("fetch"))
 }
 
 /// A host's adapter as its `adapter.json` (the Claude Code plugin's for Claude Code), or `None` for a host with no adapter.
