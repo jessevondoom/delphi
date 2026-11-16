@@ -429,3 +429,55 @@ async fn a_planted_fsmonitor_and_hooks_in_the_copy_never_run_outside_the_sandbox
     assert!(copies(&f).is_empty());
     assert!(!marker.exists(), "the daemon ran git in the copy: the planted fsmonitor or a hook ran");
 }
+
+/// A loopback page for `verify_source`, counting its requests.
+fn page_server() -> (std::net::SocketAddr, std::sync::Arc<std::sync::Mutex<usize>>) {
+    use std::io::{Read, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let hits = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let h = hits.clone();
+    std::thread::spawn(move || {
+        const BODY: &str = "<html><body><p>The quick brown fox jumps over the lazy dog.</p></body></html>";
+        for s in l.incoming() {
+            let Ok(mut s) = s else { break };
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf);
+            *h.lock().unwrap() += 1;
+            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", BODY.len(), BODY);
+        }
+    });
+    (addr, hits)
+}
+
+/// Spec 116 §14 (red-team P2-1, the operator's words of 2026-11-16): an investigator span that has run a command has read the
+/// project's whole history in its copy, so its `verify_source` raises the card even for a trusted host, and nothing is fetched
+/// before the answer. A span that ran no command keeps the no-card path.
+#[tokio::test]
+async fn a_span_that_ran_a_command_is_asked_before_verify_source_fetches_a_trusted_host() {
+    if Sandbox::detect().is_err() {
+        return;
+    }
+    let (addr, hits) = page_server();
+    crate::verify_source::FIXTURE.with(|x| *x.borrow_mut() = Some((crate::fact_fetch::FetchPolicy::default().with_fixture_addrs([addr]), true)));
+    let url = format!("http://{addr}/page");
+    let verify = |n: &str| Step::tool(n, crate::verify_source::TOOL, json!({"url": url, "quote": "the quick brown fox"}));
+    let (f, _) = fixture(vec![Step::tool("c1", "shell", json!({"command": "git log --oneline | head -n 1"})), verify("c2"), Step::text("checked"), verify("c3"), Step::text("done")], SandboxMode::Prefer);
+    // A command first: the trusted host asks, and nothing is fetched while the card waits or after a denial.
+    let task = { let (e, m) = (f.engine.clone(), f.m.clone()); tokio::spawn(async move { e.run_task(&m, "investigator", PROMPT).await.unwrap().status }) };
+    let Some(card) = card_unless_done(&f, &task).await else { panic!("the span ran a command, so verify_source asks: {:?}", results(&f)) };
+    assert_eq!((card.tool.as_str(), card.tier), (crate::verify_source::TOOL, ApprovalTier::Amber));
+    assert!(card.summary.contains(&url) && card.summary.contains("has run commands"), "{}", card.summary);
+    assert!(!results(&f)[0].1 && results(&f)[0].0.contains("sandboxed"), "the command ran: {:?}", results(&f));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(*hits.lock().unwrap(), 0, "nothing is fetched while the card waits");
+    f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+    assert_eq!(task.await.unwrap(), Status::Done);
+    assert_eq!(*hits.lock().unwrap(), 0, "a denial fetched nothing");
+    // No command in the span: the same trusted host is fetched with no card.
+    assert_eq!(f.engine.run_task(&f.m, "investigator", PROMPT).await.unwrap().status, Status::Done);
+    assert_eq!(events(&f, "approval.requested").len(), 1, "only the first span was asked");
+    assert!(!results(&f)[2].1 && results(&f)[2].0.contains("\"found\":true"), "{:?}", results(&f));
+    assert!(*hits.lock().unwrap() > 0);
+    crate::verify_source::FIXTURE.with(|x| *x.borrow_mut() = None);
+}

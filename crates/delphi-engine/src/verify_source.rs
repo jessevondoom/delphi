@@ -184,6 +184,11 @@ pub async fn check(policy: &FetchPolicy, store: &SnapshotStore, req: &Request) -
     Ok(answer(&snap, &req.quote))
 }
 
+/// Whether this span started a `run_command` or `shell` process (its write-ahead `action.intent`): spec 116 §14.
+fn ran_a_command(events: &[delphi_core::event::EventEnvelope], span_id: &str) -> bool {
+    events.iter().any(|e| e.kind == "action.intent" && e.span_id.as_deref() == Some(span_id) && matches!(e.payload["tool"].as_str(), Some("run_command" | "shell")))
+}
+
 /// The card an inside agent's research request raises (`tools::classify_request_research`), for one address.
 pub fn card(url: &str, why: &str) -> Classified {
     Classified {
@@ -244,8 +249,17 @@ impl Engine {
             }
         } else {
             let names_identifier = crate::query_guard::names_identifier(&req.url, &crate::query_guard::identifiers(&self.ws.dir));
-            if !trusted || names_identifier {
-                let c = card(&req.url, if !trusted { "its host is not on the trusted list" } else { "the address names one of the workspace's private identifiers" });
+            // Spec 116 §14 (the operator, 2026-11-16): a span that has run a command has read the project's whole history in its
+            // copy; what it puts in an address could carry that out, so its `verify_source` asks even for a trusted host.
+            if !trusted || names_identifier || ran_a_command(&sc.m.replay()?, &sc.span_id) {
+                let why = if !trusted {
+                    "its host is not on the trusted list"
+                } else if names_identifier {
+                    "the address names one of the workspace's private identifiers"
+                } else {
+                    "this span has run commands in its copy of the project"
+                };
+                let c = card(&req.url, why);
                 if let crate::approval::Need::Yes(tier) = self.broker.need(&sc.task_id, None, &c) {
                     if let Some(denied) = self.ask_classified(sc, tier, &c).await? {
                         sc.m.append(sc.ev(EVENT, log("denied"))).await?;

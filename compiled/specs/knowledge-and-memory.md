@@ -286,7 +286,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context
 
-**116: Memory that grows: a provisional tier, findings, consolidation, and a larger start context** · approved (per source at `441456c5d815`) · tier 0 · [source](../../specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md)
+**116: Memory that grows: a provisional tier, findings, consolidation, and a larger start context** · approved (per source at `529d3dfe7608`) · tier 0 · [source](../../specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md)
 
 **source excerpt, untrusted** · `specs/116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md` lines 25-35
 
