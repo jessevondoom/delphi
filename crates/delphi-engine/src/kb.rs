@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS kb_documents (
     size            INTEGER NOT NULL DEFAULT 0,
     web_corroborated INTEGER NOT NULL DEFAULT 0,
     kind            TEXT,
-    valid_until     TEXT
+    valid_until     TEXT,
+    confirmed       TEXT
 );
 CREATE TABLE IF NOT EXISTS kb_chunks (
     chunk_id        INTEGER PRIMARY KEY,
@@ -602,12 +603,16 @@ impl Kb {
         xenia::ensure(&conn)?;
         // An index made before files were compared by modification time gains the columns; 0 means "read it once".
         let columns: Vec<String> = conn.prepare("PRAGMA table_info(kb_documents)")?.query_map([], |r| r.get::<_, String>(1))?.flatten().collect();
-        for (name, ddl) in [("mtime_ns", "ALTER TABLE kb_documents ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0"), ("size", "ALTER TABLE kb_documents ADD COLUMN size INTEGER NOT NULL DEFAULT 0"), ("web_corroborated", "ALTER TABLE kb_documents ADD COLUMN web_corroborated INTEGER NOT NULL DEFAULT 0"), ("kind", "ALTER TABLE kb_documents ADD COLUMN kind TEXT"), ("valid_until", "ALTER TABLE kb_documents ADD COLUMN valid_until TEXT")] {
+        for (name, ddl) in [("mtime_ns", "ALTER TABLE kb_documents ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0"), ("size", "ALTER TABLE kb_documents ADD COLUMN size INTEGER NOT NULL DEFAULT 0"), ("web_corroborated", "ALTER TABLE kb_documents ADD COLUMN web_corroborated INTEGER NOT NULL DEFAULT 0"), ("kind", "ALTER TABLE kb_documents ADD COLUMN kind TEXT"), ("valid_until", "ALTER TABLE kb_documents ADD COLUMN valid_until TEXT"), ("confirmed", "ALTER TABLE kb_documents ADD COLUMN confirmed TEXT")] {
             if !columns.iter().any(|c| c == name) {
                 conn.execute(ddl, [])?;
                 // Documents indexed before the column existed are read once more, so it is filled in.
                 if matches!(name, "kind" | "valid_until") {
                     conn.execute("UPDATE kb_documents SET content_blake3 = '', mtime_ns = 0", [])?;
+                }
+                // `specs/115` §11: only zone `research` carries a confirmation, so only its documents are read again.
+                if name == "confirmed" {
+                    conn.execute("UPDATE kb_documents SET content_blake3 = '', mtime_ns = 0 WHERE zone = 'research'", [])?;
                 }
             }
         }
@@ -673,7 +678,15 @@ impl Kb {
         } else {
             (None, None)
         };
-        tx.execute("INSERT INTO kb_documents(rel_path, zone, content_blake3, author, source_type, confidence, status, updated_at, web_corroborated, kind, valid_until) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", params![rel_path, zone, hash, author, source_type, confidence, status, now, web_corroborated as i64, kind, valid_until])?;
+        // `specs/115` §11 item 5: a claim an internal source confirms, filed under a project's `internal/` folder (the folder is chosen by
+        // `research_index::files` from the library's own records, and the field written by `research_index::claim_text_with`). A label
+        // only, read nowhere else; one line of at most 80 characters with no control characters.
+        let confirmed = (zone == crate::research_index::ZONE && rel_path.strip_prefix("research/projects/").is_some_and(|r| r.split('/').nth(1) == Some(crate::research_index::INTERNAL_DIR)))
+            .then(|| frontmatter_field(text, "internal_confirmation"))
+            .flatten()
+            .map(|p| p.chars().map(|c| if c.is_control() { ' ' } else { c }).take(80).collect::<String>().trim().to_string())
+            .filter(|p| !p.is_empty());
+        tx.execute("INSERT INTO kb_documents(rel_path, zone, content_blake3, author, source_type, confidence, status, updated_at, web_corroborated, kind, valid_until, confirmed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)", params![rel_path, zone, hash, author, source_type, confidence, status, now, web_corroborated as i64, kind, valid_until, confirmed])?;
         let doc_id = tx.last_insert_rowid();
         let (ep_role, ep_outcome, ep_tools, ep_skills, ep_errors, ep_files, ep_supersedes) = if zone == "episodes" {
             (
@@ -1889,6 +1902,8 @@ pub struct Hit {
     /// A project's claim that rests on a private or internal source (`specs/115` §2 item 3), the session's own project's or
     /// another's. **Whoever hands this hit to a session marks that session** (`private_read::mark`).
     pub internal: bool,
+    /// `specs/115` §11 item 5: the internal source states this claim directly, and this is its project's name. A label only.
+    pub confirmed_by: Option<String>,
     /// Who disputed the item since the operator last reviewed it (`specs/116` §7 item 2): role ids, `host`, `operator`. Empty for
     /// most. Shown with the label; it never hides the item from an explicit search.
     pub disputed: Vec<String>,
@@ -1907,6 +1922,11 @@ impl Hit {
         // items 3 and 4), from where the index filed it and the tier it holds.
         if self.zone == crate::provisional_notes::ZONE {
             return crate::provisional_notes::label(&self.rel_path, &self.source_type).unwrap_or_else(|| self.label.to_string());
+        }
+        // `specs/115` §11 item 5: `confirmed by an internal source` with the project's name (the shared project's display name when it
+        // crossed, else the name the claim carries).
+        if let (true, Some(p)) = (self.internal, &self.confirmed_by) {
+            return crate::shared_research::confirmed_label(self.label, self.project.as_deref().unwrap_or(p));
         }
         match &self.vouched_by {
             Some(org) if self.status == "validated" => format!("validated · vouched by {}", org),
@@ -2245,7 +2265,15 @@ impl Kb {
                 crate::research_index::status_of(word.as_deref())
             } else if rel_path.starts_with("context/facts/") { delphi_core::knowledge_status::derive_fact(&tier_name, &doc_status, web_corroborated) } else { delphi_core::knowledge_status::derive(&zone, &tier_name, &doc_status, vouched_by.as_deref()) };
             let vouched_by = vouched_by.filter(|_| ks == delphi_core::knowledge_status::Status::Validated);
-            let label = if internal && shared_from.is_some() {
+            // `specs/115` §11 item 5: the confirmation the index recorded for this claim (a label; `ks` above does not read it).
+            let confirmed_by: Option<String> = if internal { self.conn.query_row("SELECT confirmed FROM kb_documents WHERE rel_path = ?1 AND zone = 'research'", [&rel_path], |r| r.get(0)).ok().flatten() } else { None };
+            let label = if internal && confirmed_by.is_some() {
+                if shared_from.is_some() {
+                    crate::shared_research::CONFIRMED_LABEL
+                } else {
+                    crate::shared_research::OWN_CONFIRMED_LABEL
+                }
+            } else if internal && shared_from.is_some() {
                 // `specs/115` §2 item 3: the label wins over every status.
                 crate::shared_research::INTERNAL_LABEL
             } else if internal {
@@ -2267,7 +2295,7 @@ impl Kb {
                 ks.label()
             };
             let disputed = disputes.get(&rel_path).map(|d| d.by.clone()).unwrap_or_default();
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author, shared: shared_from.is_some(), project: shared_from, internal, disputed });
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author, shared: shared_from.is_some(), project: shared_from, internal, confirmed_by, disputed });
         }
         Ok(Found { hits, best_rerank, withheld })
     }

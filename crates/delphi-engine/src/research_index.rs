@@ -131,17 +131,35 @@ pub fn text_of(path: &Path) -> Option<String> {
     if path.file_name().is_some_and(|n| n == "record.json") {
         record_text(&v)
     } else {
-        claim_text(&v)
+        // `specs/115` §11 item 5: whether an internal source states the claim is asked of the library the claim file lives in
+        // (`<home>/library/claims/<id>.json`), from its own source records; a claim file anywhere else is never confirmed.
+        let lib = path.parent().filter(|d| d.file_name().is_some_and(|n| n == "claims")).and_then(Path::parent).filter(|d| d.file_name().is_some_and(|n| n == "library")).and_then(Path::parent).map(crate::library::Library::in_home);
+        let confirmed = lib.and_then(|l| l.internal_confirmation(&v));
+        claim_text_with(&v, confirmed.as_deref())
     }
 }
 
 /// A library claim as the index holds it: the statement, its derived status, and where it is anchored. The frontmatter's
 /// `claim_status` is the derived status; the index reads it for this zone only (`kb.rs`), and only as one of [`STATUSES`].
 pub fn claim_text(c: &Value) -> Option<String> {
+    claim_text_with(c, None)
+}
+
+/// [`claim_text`] for a claim an internal source confirms (`specs/115` §11 item 5): `confirmed` is the project's name the library gave
+/// (`Library::internal_confirmation`). It goes in the frontmatter as `internal_confirmation`, which the index reads for a claim filed
+/// under a project's `internal/` folder only, as a label; a disagreement (a contested mark) is said beside it.
+pub fn claim_text_with(c: &Value, confirmed: Option<&str>) -> Option<String> {
     let (id, text) = (c["id"].as_str()?, c["text"].as_str()?);
     let status = crate::library::claims::status(c);
-    let mut out = format!("---\ntitle: {}\nclaim: {}\nclaim_status: {}\nauthor: scout\nconfidence: low\n---\n\n# Claim: {}\n\n", yaml(text), clip(id, 40), status.as_str(), clip(text, LINE));
+    let confirmation = confirmed.map(|p| format!("internal_confirmation: {}\n", yaml(p))).unwrap_or_default();
+    let mut out = format!("---\ntitle: {}\nclaim: {}\nclaim_status: {}\n{confirmation}author: scout\nconfidence: low\n---\n\n# Claim: {}\n\n", yaml(text), clip(id, 40), status.as_str(), clip(text, LINE));
     out.push_str(&format!("- status: {} ({})\n", status.as_str(), status.label()));
+    if let Some(p) = confirmed {
+        out.push_str(&format!("- confirmed by an internal source ({}); it lends no weight to any other claim\n", clip(p, 80)));
+        if c["contested_by"].as_array().is_some_and(|m| !m.is_empty()) {
+            out.push_str("- a public source disagrees; the confirmation stands for this claim, and the operator sees both\n");
+        }
+    }
     out.push_str(&format!("- kind: {}; scope: {}\n", clip(c["kind"].as_str().unwrap_or("fact"), 20), clip(c["scope"].as_str().unwrap_or("team"), 20)));
     let topics: Vec<String> = c["topics"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(|t| clip(t, 60))).take(LIST).collect();
     if !topics.is_empty() {

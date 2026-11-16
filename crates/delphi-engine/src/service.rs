@@ -5954,7 +5954,7 @@ mod tests {
         }
         let got = host_search_as(&s, "bbbbbbbb33333333", &b, "wallabyvault code rotates monthly").await;
         let hit = got["project_research"].as_array().unwrap().iter().find(|r| r["pointer"].as_str().is_some_and(|p| p.contains(&claim))).cloned().unwrap_or_else(|| panic!("A's claim is returned to B: {got}"));
-        assert_eq!((hit["project"].as_str(), hit["shared"].as_bool(), hit["internal_source"].as_bool(), hit["label"].as_str()), (Some(PROJ_A), Some(true), Some(true), Some(crate::shared_research::INTERNAL_LABEL)), "{hit}");
+        assert_eq!((hit["project"].as_str(), hit["shared"].as_bool(), hit["internal_source"].as_bool(), hit["label"].as_str()), (Some(PROJ_A), Some(true), Some(true), Some(crate::shared_research::confirmed_label(crate::shared_research::CONFIRMED_LABEL, PROJ_A).as_str())), "{hit}");
         assert!(!got.to_string().contains("strongroomword") && got["shared_withheld"] == 0, "the source's own text is not readable from B: {got}");
         match crate::private_read::state(&ws_dir, "host-bbbbbbbb33333333") {
             crate::private_read::State::Marked { entries, .. } => assert_eq!(entries, [format!("shared-claim/{claim}")], "the mark names the claim, never its text"),
@@ -5964,7 +5964,7 @@ mod tests {
         // operator, 2026-11-15: "a session with no project should get full shared research").
         let outside = host_search_as(&s, "dddddddd55555555", &f.root, "wallabyvault code rotates monthly").await;
         let hit = outside["project_research"].as_array().unwrap().iter().find(|r| r["pointer"].as_str().is_some_and(|p| p.contains(&claim))).cloned().unwrap_or_else(|| panic!("A's claim is returned to a host in no project: {outside}"));
-        assert_eq!((hit["shared"].as_bool(), hit["internal_source"].as_bool(), hit["label"].as_str()), (Some(true), Some(true), Some(crate::shared_research::INTERNAL_LABEL)), "{hit}");
+        assert_eq!((hit["shared"].as_bool(), hit["internal_source"].as_bool(), hit["label"].as_str()), (Some(true), Some(true), Some(crate::shared_research::confirmed_label(crate::shared_research::CONFIRMED_LABEL, PROJ_A).as_str())), "{hit}");
         match crate::private_read::state(&ws_dir, "host-dddddddd55555555") {
             crate::private_read::State::Marked { entries, .. } => assert_eq!(entries, [format!("shared-claim/{claim}")]),
             other => panic!("a host in no project was given an internal-source claim and is not marked: {other:?}"),

@@ -221,3 +221,6 @@ mod timer_tests;
 
 #[cfg(test)]
 mod ingress_origin_tests;
+
+#[cfg(test)]
+mod internal_confirmation_tests;
