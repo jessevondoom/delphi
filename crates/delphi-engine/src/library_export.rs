@@ -5,7 +5,7 @@
 //! later, at `validate`, `package` and `publish`. The one refusal is a source flagged `private` (§10.1), decided here in
 //! code from the library record. What is written is `meta.json` rebuilt from a list of citation and licence fields (so no
 //! status, origin, reliance count or operator note travels), `source.md` when the capture is whole, the excerpts without
-//! their purpose notes, and the assets of a recognised type.
+//! their purpose notes, and the assets of a recognised type (a picture only with its licence record, which goes with it as `images`).
 
 use super::*;
 
@@ -72,7 +72,13 @@ impl Library {
         };
         let level = if text.is_some() { Level::Full } else if !excerpts.is_empty() { Level::Excerpts } else { Level::Pointer };
         out.insert("capture_level".into(), json!(level.as_str()));
-        let assets: Vec<PathBuf> = if held && text.is_some() { Self::asset_files(&src.join("assets")) } else { Vec::new() };
+        // A picture travels only with its licence record, which travels with it (`specs/118` §2 items 1 and 2); other assets as before.
+        let named = |a: &PathBuf| a.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        let assets: Vec<PathBuf> = if held && text.is_some() { Self::asset_files(&src.join("assets")).into_iter().filter(|a| !assets::is_picture_name(&named(a)) || self.asset_record(id, &named(a)).is_some()).collect() } else { Vec::new() };
+        let records: Vec<Value> = assets.iter().filter_map(|a| self.asset_record(id, &named(a))).collect();
+        if !records.is_empty() {
+            out.insert("images".into(), Value::Array(records));
+        }
         if replace && dest.exists() {
             std::fs::remove_dir_all(&dest).map_err(|e| format!("{}: {}", dest.display(), e))?;
         }

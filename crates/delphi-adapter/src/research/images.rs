@@ -320,7 +320,19 @@ pub struct Resolved {
     pub author: String,
     /// Where the licence is stated: the Commons file page, the page that shows the picture, or the picture's own address.
     pub credit_url: String,
+    /// Which of the three checks decided the licence ([`EVIDENCE_COMMONS`], [`EVIDENCE_FIGURE_LINK`] or [`EVIDENCE_HOST_ENTRY`]), and
+    /// where that evidence is: the Commons API address, the licence link on the figure, or `trusted-list:<host>` for the list entry
+    /// (`specs/118` §2 item 1).
+    pub evidence: &'static str,
+    pub evidence_url: String,
 }
+
+/// The Commons record of the picture's file decided its licence.
+pub const EVIDENCE_COMMONS: &str = "commons";
+/// A Creative Commons link on the picture's figure decided it.
+pub const EVIDENCE_FIGURE_LINK: &str = "figure_link";
+/// The trusted-list entry of the picture's host, which says its pictures carry its licence, decided it.
+pub const EVIDENCE_HOST_ENTRY: &str = "host_entry";
 
 /// The licence of `img`, from the first evidence there is (`specs/028` §11.1): the Commons record of its file (when the Commons API host is
 /// on the list), a Creative Commons link on its figure, or the list entry of the picture's host when that entry says its pictures carry
@@ -334,7 +346,7 @@ pub fn resolve(transport: &dyn Transport, list: &TrustedList, img: &ImageRef, ho
                         return Err("Commons marks the file non-free".into());
                     }
                     return match judge_name(&c.licence) {
-                        Verdict::Allowed(licence) => Ok(Resolved { licence, author: c.author, credit_url: format!("https://commons.wikimedia.org/wiki/{}", title.replace(' ', "_")) }),
+                        Verdict::Allowed(licence) => Ok(Resolved { licence, author: c.author, credit_url: format!("https://commons.wikimedia.org/wiki/{}", title.replace(' ', "_")), evidence: EVIDENCE_COMMONS, evidence_url: api }),
                         Verdict::Refused(why) => Err(why),
                     };
                 }
@@ -343,13 +355,13 @@ pub fn resolve(transport: &dyn Transport, list: &TrustedList, img: &ImageRef, ho
     }
     if let Some(link) = &img.declared {
         return match judge_url(link) {
-            Verdict::Allowed(licence) => Ok(Resolved { licence, author: String::new(), credit_url: page_url.to_string() }),
+            Verdict::Allowed(licence) => Ok(Resolved { licence, author: String::new(), credit_url: page_url.to_string(), evidence: EVIDENCE_FIGURE_LINK, evidence_url: link.clone() }),
             Verdict::Refused(why) => Err(why),
         };
     }
     if host_entry.images {
         return match judge_name(&host_entry.licence) {
-            Verdict::Allowed(licence) => Ok(Resolved { licence, author: host_entry.publisher.clone(), credit_url: img.url.clone() }),
+            Verdict::Allowed(licence) => Ok(Resolved { licence, author: host_entry.publisher.clone(), credit_url: img.url.clone(), evidence: EVIDENCE_HOST_ENTRY, evidence_url: format!("trusted-list:{}", host_entry.host) }),
             Verdict::Refused(why) => Err(why),
         };
     }
@@ -494,15 +506,16 @@ mod tests {
         a.file_title = Some("File:X.png".into());
         let r = resolve(&t, &l, &a, en, "https://en.wikipedia.org/wiki/P").unwrap();
         assert_eq!((r.licence.spdx.as_str(), r.licence.share_alike, r.author.as_str(), r.credit_url.as_str()), ("CC-BY-SA-4.0", true, "Ann", "https://commons.wikimedia.org/wiki/File:X.png"));
+        assert_eq!((r.evidence, r.evidence_url.starts_with("https://commons.wikimedia.org/w/api.php?")), (EVIDENCE_COMMONS, true), "the record says which check decided it");
 
         let mut b = img("https://en.wikipedia.org/b.jpg");
         b.declared = Some("https://creativecommons.org/licenses/by/4.0/".into());
         let r = resolve(&t, &l, &b, en, "https://en.wikipedia.org/wiki/P").unwrap();
-        assert_eq!((r.licence.spdx.as_str(), r.credit_url.as_str()), ("CC-BY-4.0", "https://en.wikipedia.org/wiki/P"));
+        assert_eq!((r.licence.spdx.as_str(), r.credit_url.as_str(), r.evidence), ("CC-BY-4.0", "https://en.wikipedia.org/wiki/P", EVIDENCE_FIGURE_LINK));
 
         let gov = l.lookup("nasa.gov").unwrap();
         let r = resolve(&t, &l, &img("https://www.nasa.gov/p.jpg"), gov, "https://www.nasa.gov/x").unwrap();
-        assert_eq!((r.licence.spdx.as_str(), r.author.as_str()), ("public-domain", "US government"));
+        assert_eq!((r.licence.spdx.as_str(), r.author.as_str(), r.evidence, r.evidence_url.as_str()), ("public-domain", "US government", EVIDENCE_HOST_ENTRY, "trusted-list:*.gov"));
 
         assert_eq!(resolve(&t, &l, &img("https://en.wikipedia.org/c.png"), en, "p").unwrap_err(), "no licence is declared for the picture itself", "the page's own licence is not the picture's");
     }

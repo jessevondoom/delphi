@@ -85,6 +85,7 @@ impl Library {
         let stage = self.root.join(".staging").join(format!("ws-assets-{}-{}", id, std::process::id()));
         let _ = std::fs::remove_dir_all(&stage);
         let mut kept = 0;
+        let mut copied: Vec<(String, String)> = Vec::new();
         for href in image_hrefs(&text) {
             if kept >= MAX_PICTURES {
                 break;
@@ -101,10 +102,42 @@ impl Library {
             if stage.join(&name).exists() || std::fs::create_dir_all(&stage).is_err() || std::fs::copy(&file, stage.join(&name)).is_err() {
                 continue;
             }
+            let at = file.strip_prefix(&root).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+            copied.push((name, at));
             kept += 1;
         }
         let assets = (kept > 0).then(|| stage.clone());
         let stored = self.store(Prepared { id, meta, text: Some(text), assets, requested: Some(Level::Full), excerpts: None, imported: false }, budgets);
+        // Each picture's licence record (`specs/118` §2 item 1): the operator's own material, `internal`, decided by where it is.
+        if let Ok(s) = &stored {
+            let retrieved = delphi_core::time::now_rfc3339();
+            let records: Vec<Value> = copied
+                .iter()
+                .map(|(name, at)| {
+                    let bytes = std::fs::read(stage.join(name)).unwrap_or_default();
+                    let (width, height) = delphi_docs::pixels::decode(&bytes).map(|p| (p.width, p.height)).unwrap_or((0, 0));
+                    let place = format!("workspace:{}", at);
+                    super::assets::picture_record(&super::assets::PictureFacts {
+                        file: name,
+                        source_id: &s.id,
+                        source_url: &place,
+                        licence: "internal",
+                        evidence: super::assets::EVIDENCE_WORKSPACE,
+                        evidence_url: &place,
+                        author: "",
+                        credit_url: &place,
+                        share_alike: false,
+                        retrieved: &retrieved,
+                        blake3: &blake3::hash(&bytes).to_hex(),
+                        width,
+                        height,
+                    })
+                })
+                .collect();
+            if !records.is_empty() && s.level == Level::Full {
+                let _ = self.set_asset_records(&s.id, &records);
+            }
+        }
         let _ = std::fs::remove_dir_all(&stage);
         stored
     }
