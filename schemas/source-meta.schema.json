@@ -32,6 +32,11 @@
     "private": { "const": false, "description": "`true` fails validation: a private source never ships (specs/023 section 2.1)." },
     "rights_holder": { "type": "string" },
     "attribution_text": { "type": "string" },
+    "images": {
+      "type": "array",
+      "description": "The licence record of each picture in the source's assets/ (specs/118 section 2): file, the picture's own address, licence, which check decided it and where, author, credit address, share-alike, when it was retrieved, hash, width and height. At bundle add a record is kept only when its licence is one a picture may be kept under; a picture with no record is not served.",
+      "items": { "type": "object", "required": ["file", "licence"], "properties": { "file": { "type": "string" }, "licence": { "type": "string" } } }
+    },
     "share_alike": { "type": "boolean" },
     "capture_level": { "enum": ["full", "excerpts", "pointer"] },
     "retrieved": { "$ref": "#/$defs/date" },

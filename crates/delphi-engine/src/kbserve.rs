@@ -327,13 +327,19 @@ impl Reader<'_> {
         let side = image_side(q);
         // A picture of the library, named by the page that shows it (`specs/097` §4.3): `src=lib:<source>/<file>`. Only the
         // operator's view reads the library; the file must be a plain-named picture in that source's own `assets/`.
-        // `max` applies here too. The refusal of an asset with no licence record (`specs/118` §2 item 2) belongs here,
-        // with slice P1's record; until then the app's bridge does not pass this form (`app/src-tauri/src/bridge.rs`).
+        // `max` applies here too. A picture with no licence record is refused, `no licence record` (`specs/118` §2 item 2);
+        // one with a record comes with its credit (author, licence, credit address), which the reader shows under it.
         if let Some(r) = q.get("src").and_then(|s| s.strip_prefix("lib:")) {
             let (Some(home), true) = (self.home, self.operator) else { return Ok(fail(403, "the library's pictures are served to the operator's console only")) };
-            let Some((sid, file)) = r.split_once('/') else { return Ok(fail(400, "`src` must be lib:<source>/<file>")) };
-            let Some(file) = crate::library::Library::in_home(home).asset_file(sid, file) else { return Ok(fail(404, "no such picture in the library")) };
-            return self.picture(&file, side);
+            let Some((sid, name)) = r.split_once('/') else { return Ok(fail(400, "`src` must be lib:<source>/<file>")) };
+            let lib = crate::library::Library::in_home(home);
+            let Some(file) = lib.asset_file(sid, name) else { return Ok(fail(404, "no such picture in the library")) };
+            let Some(record) = lib.asset_record(sid, name) else { return Ok(fail(403, crate::library::assets::NO_RECORD)) };
+            let mut got = self.picture(&file, side)?;
+            if got.status == 200 {
+                got.body["credit"] = crate::library::Library::credit_of(&record);
+            }
+            return Ok(got);
         }
         // `src=kb:<document>#<picture>` names a document's own picture in one value, the way a page writes it.
         let kb_form = q.get("src").and_then(|s| s.strip_prefix("kb:")).and_then(|s| s.split_once('#'));

@@ -482,38 +482,19 @@ impl KeepStep {
         Ok(opts)
     }
 
-    /// The pictures of one page whose text was just kept (`research_images::process`, the console job's own picture step): each is
-    /// judged by code, fetched under the trusted-list rules, written to a staging folder, and handed to the library with its record.
-    /// Returns how many the source now lists. A failure keeps no picture and is not the capture's failure.
-    fn pictures(&self, lib: &crate::library::Library, id: &str, snap: &crate::fact_fetch::Snapshot) -> usize {
-        let (Some(r), Some(p)) = (&self.rules, &self.pictures) else { return 0 };
+    /// The pictures of one page whose text was just kept (`research_images::keep_for_source`, the one capture path of `specs/118` §3):
+    /// each is judged by code, fetched under the trusted-list rules, and handed to the library with its licence record. Returns what
+    /// became of them. A failure keeps no picture and is not the capture's failure.
+    fn pictures(&self, lib: &crate::library::Library, id: &str, snap: &crate::fact_fetch::Snapshot) -> crate::research_images::SourcePictures {
+        let (Some(r), Some(p)) = (&self.rules, &self.pictures) else { return Default::default() };
         let left = p.left.load(Ordering::SeqCst);
-        if p.per_source == 0 || left == 0 {
-            return 0;
-        }
         let url = snap.final_url.for_daemon();
-        let host = crate::research_run::host_of(url);
-        if host.is_empty() || host.contains("..") || host.contains('/') {
-            return 0;
-        }
         let body = String::from_utf8_lossy(snap.body_for_daemon()).into_owned();
-        let md = delphi_adapter::research::html::to_markdown_with_images(&body, url, 200_000).markdown;
-        let stage = lib.root().join(".staging").join(format!("pictures-{}-{}", id, std::process::id()));
-        let _ = std::fs::remove_dir_all(&stage);
-        let out = blocking(|| crate::research_images::process(p.transport.as_ref(), &r.list, &stage, &host, url, &body, &md, p.per_source, left));
+        let rules = crate::research_images::PictureRules { transport: p.transport.as_ref(), list: &r.list, per_source: p.per_source, left };
+        let out = blocking(|| crate::research_images::keep_for_source(lib, id, url, &body, &rules, None));
         // One run captures one page at a time, so nothing else moves the count between the load above and this store.
         p.left.store(left.saturating_sub(out.fetched), Ordering::SeqCst);
-        let records: Vec<Value> = out
-            .saved
-            .iter()
-            .filter_map(|s| {
-                let file = s.file.strip_prefix("images/")?;
-                Some(json!({"file": file, "source_url": s.source_url, "licence": s.licence, "share_alike": s.share_alike, "author": s.author, "attribution": s.attribution, "blake3": s.blake3}))
-            })
-            .collect();
-        let n = if records.is_empty() { 0 } else { lib.attach_pictures(id, &stage.join(&host).join("images"), &records, &crate::library::Budgets::default()).unwrap_or(0) };
-        let _ = std::fs::remove_dir_all(&stage);
-        n
+        out
     }
 
     fn remember(&self, stored: &crate::library::Stored) {
@@ -1360,7 +1341,11 @@ mod tests {
         let file = rec["file"].as_str().unwrap();
         assert_eq!(file, format!("{}.png", blake3::hash(&pic).to_hex()));
         assert_eq!((rec["licence"].as_str(), rec["share_alike"].as_bool(), rec["author"].as_str(), rec["source_url"].as_str()), (Some("CC-BY-SA-4.0"), Some(true), Some("Ann"), Some(img)), "{rec}");
-        assert_eq!(rec["attribution"], "Image: Ann, CC-BY-SA-4.0, https://commons.wikimedia.org/wiki/File:Tree.png");
+        assert_eq!(rec["attribution"], "Ann, CC-BY-SA-4.0, https://commons.wikimedia.org/wiki/File:Tree.png");
+        // The licence record of `specs/118` §2 item 1: which check decided it and where, the credit address, the size, the source.
+        assert_eq!((rec["source_id"].as_str(), rec["licence_evidence"]["check"].as_str(), rec["credit_url"].as_str()), (Some(id.as_str()), Some("commons"), Some("https://commons.wikimedia.org/wiki/File:Tree.png")), "{rec}");
+        assert!(rec["licence_evidence"]["url"].as_str().unwrap().starts_with("https://commons.wikimedia.org/w/api.php?") && rec["width"].as_u64().unwrap() >= 48 && rec["retrieved"].is_string() && rec["blake3"].is_string(), "{rec}");
+        assert_eq!(l.credit_line(&id, file).as_deref(), Some("*Picture credit: Ann, CC-BY-SA-4.0, https://commons.wikimedia.org/wiki/File:Tree.png*"));
         assert_eq!(std::fs::read(l.source_dir(&id).join("assets").join(file)).unwrap(), pic, "the file is the bytes that were fetched");
         assert_eq!(l.image_assets(&id).len(), 1, "a page that gathers the source finds its picture");
         assert_eq!(lib.keep.pictures.as_ref().unwrap().left.load(Ordering::SeqCst), 23, "one fetch against the run's cap");

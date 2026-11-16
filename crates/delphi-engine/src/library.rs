@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 #[path = "library_acquire.rs"]
 pub mod acquire;
+#[path = "library_assets.rs"]
+pub mod assets;
 #[path = "library_bib.rs"]
 pub mod bib;
 #[path = "library_claims.rs"]
@@ -661,7 +663,7 @@ impl Library {
     /// Capture a page the daemon has already fetched (`specs/112` §4.3): the snapshot a research run read is the one that is kept and
     /// hashed, so the page is not fetched a second time. Everything else is what [`Library::add_url`] does with the snapshot it fetches
     /// itself: the same record, the same licence reading, the same cloaking and size rules. No request leaves from here (unless
-    /// `opts.save_images` asks for the page's images, which a research run never does).
+    /// `opts.save_images` asks for the page's images, which a research run never does: its pictures are its keep step's).
     pub fn add_fetched(&self, url: &str, snap: &crate::fact_fetch::Snapshot, opts: &AddOpts, budgets: &Budgets) -> Result<Stored, String> {
         let b = Budgets { text: opts.raise_text.unwrap_or(budgets.text), source: opts.raise_source.unwrap_or(budgets.source), ..*budgets };
         let (canonical, id, meta) = Self::url_record(url, opts)?;
@@ -671,11 +673,11 @@ impl Library {
     /// Keep the pictures a research run saved for a source whose text is kept (`specs/112` §4 item 1; the picture step is
     /// `research_images`, which decided each picture's licence by code and wrote the files into `dir`). The files go to the
     /// source's `assets/`, where pages find them, and each one's record (file, address, licence, author, attribution line) goes into
-    /// the source's own record as `images`: what the console job's entry kept in its frontmatter. Only a source held in full, not
-    /// purged, takes pictures; a file whose name is not a plain picture name is left out; the per-source and library budgets hold.
+    /// the source's own record as `images` (the licence record of `specs/118` §2 item 1, merged with the records it already lists by
+    /// file). Only a source held in full, not purged, takes pictures; a file whose name is not a plain picture name is left out; the per-source and library budgets hold.
     /// Returns how many pictures the source now lists.
     pub fn attach_pictures(&self, id: &str, dir: &Path, records: &[Value], budgets: &Budgets) -> Result<usize, String> {
-        let mut meta = self.read_meta(id).ok_or("no such source")?;
+        let meta = self.read_meta(id).ok_or("no such source")?;
         if meta["capture_level"] != "full" || !meta["purged"].is_null() {
             return Err("pictures are kept only with a source whose text is kept".into());
         }
@@ -692,10 +694,11 @@ impl Library {
             let f = r["file"].as_str().unwrap_or_default();
             std::fs::copy(dir.join(f), assets.join(f)).map_err(|e| format!("{}: {}", f, e))?;
         }
-        meta["images"] = Value::Array(kept.iter().map(|r| (*r).clone()).collect());
-        self.write_json(&self.source_dir(id).join("meta.json"), &meta)?;
+        drop(meta);
+        let records: Vec<Value> = kept.iter().map(|r| (*r).clone()).collect();
+        let listed = self.set_asset_records(id, &records)?;
         self.log("pictures", json!({"id": id, "count": kept.len(), "bytes": bytes}));
-        Ok(kept.len())
+        Ok(listed)
     }
 
     /// Keep one snapshot as a source. `limit` is the byte cap the snapshot was fetched under, for the note a truncated page gets.
@@ -741,47 +744,18 @@ impl Library {
             notes.push(format!("the page is over the {}-byte text limit; kept as a pointer", limit));
             requested = Some(Level::Pointer);
         }
-        let mut temp_assets = None;
-        if opts.save_images {
-            let html = String::from_utf8_lossy(snap.body_for_daemon());
-            let refs = delphi_adapter::research::images::extract(&html, canonical);
-            if !refs.is_empty() {
-                let stage_assets = self.root.join(".staging").join(format!("assets-{}-{}", id, std::process::id()));
-                let _ = std::fs::remove_dir_all(&stage_assets);
-                if std::fs::create_dir_all(&stage_assets).is_ok() {
-                    let trusted = crate::research_setup::lists(&self.root, self.root.parent().unwrap_or(&self.root)).unwrap_or_else(|_| delphi_adapter::research::trusted::TrustedList::parse(include_str!("../../../context/sources/trusted.toml"), None).unwrap());
-                    if let Ok(transport) = delphi_adapter::research::transport::HttpTransport::new() {
-                        let mut count = 0;
-                        for r in refs {
-                            if count >= 3 { break; }
-                            if let Some(entry) = trusted.allows_url(&r.url) {
-                                if delphi_adapter::research::images::resolve(&transport, &trusted, &r, entry, canonical).is_ok() {
-                                    if let Ok(bytes) = delphi_adapter::research::images::get_bytes(&transport, &trusted, &r.url, "image/png, image/jpeg, image/gif", delphi_adapter::research::images::MAX_IMAGE_BYTES) {
-                                        if let Some(ext) = delphi_adapter::research::images::sniff(&bytes) {
-                                            if let Ok(pic) = delphi_docs::pixels::decode(&bytes) {
-                                                if pic.width >= 48 && pic.height >= 48 {
-                                                    let hash = blake3::hash(&bytes).to_hex().to_string();
-                                                    let fname = format!("{}.{}", hash, ext);
-                                                    if std::fs::write(stage_assets.join(&fname), &bytes).is_ok() {
-                                                        count += 1;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if count > 0 {
-                            temp_assets = Some(stage_assets);
-                        }
-                    }
+        let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None, imported: false }, b)?;
+        // A page expanded with its pictures (`specs/118` §1 E-3): the same gates, licence decision and record as a research run's
+        // pictures (`research_images::keep_for_source`), so a picture kept here has its licence record. At most three a page.
+        if opts.save_images && s.level == Level::Full && matches!(s.outcome, Outcome::Added | Outcome::NewVersion(_)) {
+            let trusted = crate::research_setup::lists(&self.root, self.root.parent().unwrap_or(&self.root)).unwrap_or_else(|_| delphi_adapter::research::trusted::TrustedList::parse(include_str!("../../../context/sources/trusted.toml"), None).unwrap());
+            if let Ok(transport) = delphi_adapter::research::transport::HttpTransport::new() {
+                let rules = crate::research_images::PictureRules { transport: &transport, list: &trusted, per_source: 3, left: 3 };
+                let got = crate::research_images::keep_for_source(self, &s.id, canonical, &String::from_utf8_lossy(snap.body_for_daemon()), &rules, None);
+                if !got.kept.is_empty() {
+                    notes.push(format!("{} picture(s) kept with their licence record", got.kept.len()));
                 }
             }
-        }
-        let mut s = self.store(Prepared { id, meta, text, assets: temp_assets.as_deref().map(Path::to_path_buf), requested, excerpts: None, imported: false }, b)?;
-        if let Some(a) = &temp_assets {
-            let _ = std::fs::remove_dir_all(a);
         }
         notes.append(&mut s.notes);
         s.notes = notes;
@@ -897,6 +871,9 @@ impl Library {
         for k in ["status", "bundle_origin", "cited_by", "purged"] {
             meta.remove(k);
         }
+        // The bundle's records of its pictures are read only through `record_bundle_pictures`, which keeps one only when its licence
+        // passes the picture licence decision (`specs/118` §2 item 1).
+        let given: Vec<Value> = meta.remove("images").and_then(|v| v.as_array().cloned()).unwrap_or_default();
         let text = std::fs::read_to_string(dir.join("source.md")).ok();
         let level = meta.get("capture_level").and_then(Value::as_str).and_then(Level::parse).unwrap_or(if text.is_some() { Level::Full } else { Level::Pointer });
         if !meta.get("content_hash").is_some_and(Value::is_string) {
@@ -906,7 +883,11 @@ impl Library {
         }
         meta.insert("imported_from".into(), json!(label));
         let assets = dir.join("assets");
-        self.store(Prepared { id: id.to_string(), meta, text, assets: assets.is_dir().then_some(assets), requested: Some(level), excerpts: std::fs::read(dir.join("excerpts.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()), imported: true }, budgets)
+        let stored = self.store(Prepared { id: id.to_string(), meta, text, assets: assets.is_dir().then_some(assets), requested: Some(level), excerpts: std::fs::read(dir.join("excerpts.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()), imported: true }, budgets)?;
+        if matches!(stored.outcome, Outcome::Added | Outcome::NewVersion(_)) {
+            self.record_bundle_pictures(id, label, &given);
+        }
+        Ok(stored)
     }
 
     fn excerpts_hash(&self, id: &str) -> String {

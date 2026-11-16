@@ -51,6 +51,12 @@ pub enum Finding {
     UnknownLink(String),
     UnknownImage(String),
     ImageUncited(String),
+    /// A library picture with no licence record (`specs/118` §2 item 2): it may not be shown.
+    ImageUnlicensed(String),
+    /// A library picture on a whole page without the daemon's credit line under it (`specs/118` §2 item 4).
+    CreditMissing(String),
+    /// The text carries a credit line of its own; only the daemon writes one, under the picture it credits.
+    CreditInBody,
     /// A `#section` link that names no heading on the page.
     UnknownAnchor(String),
     /// A `page:` link whose slug is not a plain lowercase-hyphen slug.
@@ -75,6 +81,9 @@ impl std::fmt::Display for Finding {
             Finding::SourceAltered(id) => write!(f, "the stored text of `{}` no longer matches its recorded hash; its quotations cannot be checked", id),
             Finding::UnknownLink(u) => write!(f, "link not in any cited source's record: {}", short(u)),
             Finding::UnknownImage(r) => write!(f, "image is not an asset of a library source: {}", short(r)),
+            Finding::ImageUnlicensed(r) => write!(f, "image has no licence record, so it may not be shown: {}", short(r)),
+            Finding::CreditMissing(r) => write!(f, "image is missing the credit line the daemon writes under it: {}", short(r)),
+            Finding::CreditInBody => write!(f, "the text contains a picture credit line; only the daemon writes them"),
             Finding::ImageUncited(id) => write!(f, "image from `{}`, which the page does not cite", id),
             Finding::UnknownAnchor(a) => write!(f, "the link `#{}` names no heading on the page", short(a)),
             Finding::BadPageLink(l) => write!(f, "a `page:` link must name a slug of lowercase letters, digits and hyphens: {}", short(l)),
@@ -283,7 +292,9 @@ fn urls_of(meta: &Value, out: &mut BTreeSet<String>) {
             out.insert(normalise_url(s));
         }
         Value::Array(a) => a.iter().for_each(|v| urls_of(v, out)),
-        Value::Object(o) => o.values().for_each(|v| urls_of(v, out)),
+        // A picture's licence record (`specs/118` §2 item 1) is not a source of links a page may carry: its addresses are the
+        // credit line's, which the daemon writes.
+        Value::Object(o) => o.iter().filter(|(k, _)| k.as_str() != "images").for_each(|(_, v)| urls_of(v, out)),
         _ => {}
     }
     if let Some(d) = meta["DOI"].as_str() {
@@ -530,6 +541,9 @@ impl Library {
         if body.lines().any(|l| is_banner_line(l) || l.trim() == table_heading_line()) {
             push(Finding::BannerInBody, &mut out.findings);
         }
+        if body.lines().any(|l| l.trim_start().starts_with(super::assets::CREDIT_PREFIX.trim_end())) {
+            push(Finding::CreditInBody, &mut out.findings);
+        }
         out.cited = markers(body);
         let mut recs: BTreeMap<String, Rec> = BTreeMap::new();
         for c in &out.cited {
@@ -604,7 +618,10 @@ impl Library {
                     });
                 if !ok {
                     push(Finding::UnknownImage(target), &mut out.findings);
-                } else if let Some((sid, _)) = r.split_once('/') {
+                } else if let Some((sid, file)) = r.split_once('/') {
+                    if self.asset_record(sid, file).is_none() {
+                        push(Finding::ImageUnlicensed(target.clone()), &mut out.findings);
+                    }
                     if !direct.contains(sid) {
                         push(Finding::ImageUncited(sid.to_string()), &mut out.findings);
                     }
@@ -667,6 +684,8 @@ impl Library {
             Some(i) => (rest[..i].join("\n"), Some(rest[i + 1..].join("\n"))),
             None => (rest.join("\n"), None),
         };
+        let (body, mut credits) = self.take_credits(&body);
+        found.append(&mut credits);
         let mut checked = self.check_body(&body, scope);
         found.append(&mut checked.findings);
         match table {
@@ -693,6 +712,28 @@ impl Library {
         }
         checked.findings = found;
         checked
+    }
+
+    /// A whole page's body without the daemon's credit lines (`specs/118` §2 item 4), and a finding for each library picture with a
+    /// licence record whose line is not directly under it, word for word as the record gives it now. A credit line anywhere else is
+    /// left in the body, where the body check refuses it.
+    fn take_credits(&self, body: &str) -> (String, Vec<Finding>) {
+        let lines: Vec<&str> = body.lines().collect();
+        let (mut kept, mut found) = (Vec::with_capacity(lines.len()), Vec::new());
+        let mut i = 0;
+        while i < lines.len() {
+            kept.push(lines[i]);
+            for (sid, file) in super::assets::lib_pictures(lines[i]) {
+                let Some(want) = self.credit_line(&sid, &file) else { continue };
+                if lines.get(i + 1).is_some_and(|l| l.trim() == want) {
+                    i += 1;
+                } else {
+                    found.push(Finding::CreditMissing(format!("lib:{}/{}", sid, file)));
+                }
+            }
+            i += 1;
+        }
+        (kept.join("\n"), found)
     }
 
     /// The table of §3.1: one row per cited record, or the single "no sources cited" row.
