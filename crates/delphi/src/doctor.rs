@@ -1291,6 +1291,10 @@ fn check_hygiene(ws: &Workspace, home: &Path, r: &mut Report) {
     }
     if let Ok(entries) = fs::read_dir(ws.dir.join("worktrees")) {
         for e in entries.flatten() {
+            // `.investigations` holds the investigator's throwaway copies (`specs/116` §8.1): the daemon sweeps their leftovers.
+            if e.file_name() == ".investigations" {
+                continue;
+            }
             if !e.path().join(".git").exists() {
                 problems += 1;
                 r.warn("8 hygiene", e.path().display().to_string(), "orphaned worktree directory");
@@ -1334,6 +1338,23 @@ mod tests {
         Command::new("git").args(["init", "-q"]).current_dir(&proj).status().unwrap();
         let ws = init(&InitOptions { home: home.clone(), workspace: "w".into(), projects: vec![proj.clone()], theme: "greek".into() }).unwrap();
         (t, home, ws, proj)
+    }
+
+    /// The investigator's copies live in `worktrees/.investigations` (`specs/116` §8.1); it is not an orphaned worktree, and a
+    /// real orphan next to it still is.
+    #[test]
+    fn the_investigations_folder_is_not_an_orphaned_worktree() {
+        let (_t, home, ws, _p) = setup();
+        fs::create_dir_all(ws.dir.join("worktrees/.investigations/i_x/tree")).unwrap();
+        let orphans = |home: &Path| {
+            let mut r = Report::default();
+            check_hygiene(&ws, home, &mut r);
+            r.findings.iter().filter(|f| f.message == "orphaned worktree directory").map(|f| f.location.clone()).collect::<Vec<_>>()
+        };
+        assert!(orphans(&home).is_empty(), "{:?}", orphans(&home));
+        fs::create_dir_all(ws.dir.join("worktrees/t_gone")).unwrap();
+        let got = orphans(&home);
+        assert!(got.len() == 1 && got[0].ends_with("t_gone"), "{got:?}");
     }
 
     // specs/046 §6: a CLI whose --help shows something the manifest does not know is a warning; a CLI not installed is check 10's business.

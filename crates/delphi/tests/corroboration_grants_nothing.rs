@@ -868,6 +868,10 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
         // spec 115 X4, X6: the marker for a Delphi task (its start passages, an opened claim pointer, an agent's `kb_search`) that is handed a
         // project claim from an internal source; it only ever sets a mark, which holds sends and grants nothing
         "crates/delphi-engine/src/shared_research.rs",
+        // spec 116 G10: `verify_source` sends an address out, so it is a third sender: it reads the task's mark through the one egress
+        // check (channel Outbound) and, when the check refuses, holds the fetch for the operator on the Outbound card (Red, console
+        // only); it sets no mark and clears none
+        "crates/delphi-engine/src/verify_source.rs",
         "crates/delphi/src/doctor.rs",
         "crates/delphi/src/private_read_cmd.rs",
         "crates/delphi/src/main.rs",
@@ -925,9 +929,10 @@ fn the_private_read_mark_is_named_only_where_it_is_set_observed_cleared_and_show
     let mc_prod = production_last(&mc);
     let line = mc_prod.lines().find(|l| !l.trim_start().starts_with("//") && l.contains("private_read")).unwrap();
     assert!(line.contains("=> Some("), "that line only refuses: {line}");
-    let senders = vec!["crates/delphi-engine/src/connector_run.rs".to_string(), "crates/delphi-engine/src/harness_run.rs".to_string()];
-    assert_eq!(record_callers, senders, "the mark is read for a send by the two senders only");
-    assert_eq!(held_callers, senders, "a held send is counted by the two senders only");
+    // spec 116 G10 added the third: `verify_source`, whose address is a send on the Outbound channel
+    let senders = vec!["crates/delphi-engine/src/connector_run.rs".to_string(), "crates/delphi-engine/src/harness_run.rs".to_string(), "crates/delphi-engine/src/verify_source.rs".to_string()];
+    assert_eq!(record_callers, senders, "the mark is read for a send by the three senders only");
+    assert_eq!(held_callers, senders, "a held send is counted by the three senders only");
     // slice M4: the engine's one mention of the module is the call that notes a raised card's mission; it reads no mark, sets none, and decides nothing
     let engine = std::fs::read_to_string(root.join("crates/delphi-engine/src/engine.rs")).unwrap();
     let engine_lines: Vec<&str> = production_last(&engine).lines().filter(|l| !l.trim_start().starts_with("//")).filter(|l| l.contains("private_read")).map(|_| "x").collect();
