@@ -4482,7 +4482,7 @@ kind: episode
 source_type: internal_empirical
 confidence: high
 status: active
-valid_until: 2026-11-15
+valid_until: 2099-12-31
 mission: 2026-11-01-core-engine-refactor
 session_id: s_0042
 task_id: t_0089
@@ -4546,7 +4546,7 @@ Close connection handles before directory clean.
         assert!(i_hits[0].rel_path.contains("investigator-t0089.md"));
 
         // 5. Expiry via valid_until: when today is past valid_until, episode is excluded
-        let expired = kb.search("EMFILE", &SearchOpts { include_episodes: true, today: Some("2026-11-20".into()), legs: Legs::LexicalOnly, ..Default::default() }).unwrap();
+        let expired = kb.search("EMFILE", &SearchOpts { include_episodes: true, today: Some("2100-01-01".into()), legs: Legs::LexicalOnly, ..Default::default() }).unwrap();
         assert!(expired.is_empty(), "episode past valid_until must be excluded from search: {:?}", expired);
     }
 
