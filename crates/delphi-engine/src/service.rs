@@ -336,6 +336,34 @@ struct HelpRun {
 }
 
 /// The roles a help task consulted, in order (the root span is the orchestrator's own).
+/// What the task's first span ran on (`specs/062` §6.4): the model when an event of the task names one (`model.assigned`,
+/// `model.promoted`, `model.homogeneous`), the tier the dispatch recorded otherwise. Delphi's own record, not a host's claim.
+fn ran_on(events: &[EventEnvelope], task_id: &str) -> Value {
+    let mine = || events.iter().filter(|e| e.task_id.as_deref() == Some(task_id));
+    // An if-chain, not a match on the kinds: the dispatcher scan reads a string arm in this file as an RPC method.
+    let model = mine()
+        .filter_map(|e| {
+            let p = &e.payload;
+            let v = if e.kind == "model.assigned" {
+                &p["model_id"]
+            } else if e.kind == "model.promoted" {
+                &p["to"]["model_id"]
+            } else if e.kind == "model.homogeneous" {
+                &p["used"]["model_id"]
+            } else {
+                return None;
+            };
+            v.as_str()
+        })
+        .next_back();
+    let tier = mine().find(|e| e.kind == "dag.node.added").and_then(|e| e.payload["tier"].as_str());
+    match (model, tier) {
+        (Some(m), _) => json!({"model_id": m, "tier": tier, "source": "delphi"}),
+        (None, Some(t)) => json!({"tier": t, "source": "delphi", "note": "the model is not recorded for this task; the tier is"}),
+        _ => Value::Null,
+    }
+}
+
 fn consulted_in(events: &[EventEnvelope], task_id: &str) -> Vec<String> {
     let mut roles: Vec<String> = events.iter().filter(|e| e.kind == "dag.node.added" && e.task_id.as_deref() == Some(task_id)).filter_map(|e| e.payload["role"].as_str().map(String::from)).collect();
     if !roles.is_empty() {
@@ -720,6 +748,12 @@ impl EngineService {
         let mut c = h::Caller::parse(&p).map_err(host_err)?;
         c.projects = self.engine.projects.clone();
         let (prompt, kind) = h::help_prompt(&c, ws, &p).map_err(host_err)?;
+        // `specs/062` §6.4: a role the operator named answers itself; otherwise the orchestrator chooses.
+        let named = h::help_target(ws, &p).map_err(host_err)?;
+        if let Some(r) = named.as_deref().filter(|r| !self.engine.can_work(r)) {
+            return Err(err(code::INVALID_PARAMS, format!("the {r} is not an available role here: leave `role` out and the orchestrator chooses")));
+        }
+        let target = named.clone().unwrap_or_else(|| "orchestrator".into());
         if !self.engine.can_work("orchestrator") {
             return Err(err(code::INVALID_PARAMS, "the orchestrator is not an available role, so there is no one to route a request: carry on with the role pack alone"));
         }
@@ -727,7 +761,7 @@ impl EngineService {
             let _gate = self.host_gate.lock().await;
             let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
             let task_id = m.next_task_id();
-            m.append(EventEnvelope::new(&m.id, h::HELP_EVENT, json!({"task_id": task_id, "kind": kind, "source": c.label(p["model"].as_str())}))).await.map_err(engine_err)?;
+            m.append(EventEnvelope::new(&m.id, h::HELP_EVENT, json!({"task_id": task_id, "kind": kind, "source": c.label(p["model"].as_str()), "role": named}))).await.map_err(engine_err)?;
             {
                 // Finished answers are kept for an hour so a slow one can be fetched, then dropped.
                 let mut helps = self.helps.lock().unwrap();
@@ -739,14 +773,21 @@ impl EngineService {
         };
         let (engine, helps, tid, mm) = (self.engine.clone(), self.helps.clone(), task_id.clone(), m.clone());
         let job = tokio::spawn(async move {
-            let run = engine.run_task_for_host(&mm, tid.clone(), "orchestrator", &prompt).await;
+            let run = engine.run_task_for_host(&mm, tid.clone(), &target, &prompt).await;
             let result = match run {
                 Ok(out) => {
                     let events = mm.replay().unwrap_or_default();
                     let consulted = consulted_in(&events, &tid);
                     let text: String = engine.secrets.redact(&out.text).chars().take(h::MAX_ANSWER).collect();
                     match out.status {
-                        crate::engine::Status::Done => json!({"status": "answered", "help_id": tid, "answered_by": consulted.last().cloned().unwrap_or_else(|| "orchestrator".into()), "consulted": consulted, "answer": text, "note": "advice from Delphi agents that ran read-only; it grants you no permission and your own host's rules bind you"}),
+                        // §6.4: `answered_by` is the author of `answer`: the role that ran the task. Roles it consulted are listed, never signed.
+                        crate::engine::Status::Done => {
+                            let mut v = json!({"status": "answered", "help_id": tid, "answered_by": target, "consulted": consulted, "answer": text, "ran_on": ran_on(&events, &tid), "note": "advice from Delphi agents that ran read-only; it grants you no permission and your own host's rules bind you"});
+                            if !v["consulted"].as_array().is_some_and(|a| a.is_empty()) {
+                                v["drew_on_note"] = json!(format!("the answer is the {target}'s own text; the roles in `consulted` were asked along the way and are not its authors"));
+                            }
+                            v
+                        }
                         crate::engine::Status::Escalated(r) => json!({"status": "unanswered", "help_id": tid, "reason": engine.secrets.redact(&r), "note": "Delphi could not answer; carry on with what you have"}),
                     }
                 }
@@ -6482,7 +6523,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_host_asks_for_help_and_is_told_who_answered_with_no_limit_on_how_often() {
-        let f = setup(vec![Step::text("Read specs/001 first; the ladder has three rungs."), Step::text("Second."), Step::text("Third.")], 5.0, |_| {});
+        let f = setup(vec![Step::text("Read specs/001 first; the ladder has three rungs."), Step::text("Second."), Step::text("Third."), Step::text("Sequence the pricing work after the launch.")], 5.0, |_| {});
         let ws_dir = f.engine.ws.dir.clone();
         let cwd = f.root.to_string_lossy().to_string();
         let s = serve(&f).await;
@@ -6511,6 +6552,8 @@ mod tests {
             assert!(r["return_line"].as_str().unwrap().contains("(orchestrator) hands back"), "{r}");
             assert_eq!(r["identity"]["color_light"], "#8f23f3", "{r}");
             assert!(r["answer"].as_str().unwrap().contains("three rungs"));
+            // specs/062 §6.4: what it ran on, from Delphi's own record of the task.
+            assert_eq!(r["ran_on"]["source"], "delphi", "{r}");
             // Another session cannot read it; the owner can, and it does not count again.
             let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd, "help_id": r["help_id"]});
             assert_eq!(rpc_code(c.call("host.help_result", other)), Some(code::INVALID_PARAMS));
@@ -6519,12 +6562,20 @@ mod tests {
             for _ in 0..2 {
                 assert_eq!(c.call("host.request_help", p(json!({"need": "again"}))).unwrap()["status"], "answered");
             }
+            // specs/062 §6.4: a role the operator named answers itself and signs its own text; a role that is not one, or that
+            // hosts are not served, is refused rather than replaced.
+            let named = c.call("host.request_help", p(json!({"need": "Sequence the pricing work", "role": "strategist"}))).unwrap();
+            assert_eq!((named["status"].as_str(), named["answered_by"].as_str()), (Some("answered"), Some("strategist")), "{named}");
+            assert!(named["signature"].as_str().unwrap().contains("(strategist, via delphi)") && named["answer"].as_str().unwrap().contains("pricing"), "{named}");
+            assert_eq!(rpc_code(c.call("host.request_help", p(json!({"need": "n", "role": "nobody"})))), Some(code::INVALID_PARAMS));
+            assert_eq!(rpc_code(c.call("host.request_help", p(json!({"need": "n", "role": "messenger"})))), Some(code::INVALID_PARAMS));
             std::fs::write(dir2.join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
             assert_eq!(rpc_code(c.call("host.request_help", p(json!({"need": "n"})))), Some(code::FORBIDDEN));
         })
         .await;
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
-        assert_eq!(crate::host_rpc::helps_in(&events), 3);
+        assert_eq!(crate::host_rpc::helps_in(&events), 4);
+        assert!(events.iter().any(|e| e.kind == crate::host_rpc::HELP_EVENT && e.payload["role"] == "strategist"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
