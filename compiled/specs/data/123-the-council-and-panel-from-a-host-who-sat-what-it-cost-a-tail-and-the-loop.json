@@ -78,7 +78,7 @@
       "level": 2,
       "line": 129,
       "number": "12",
-      "title": "Open questions for the operator"
+      "title": "Open questions for the operator (answered in §15, 2026-11-17)"
     },
     {
       "level": 2,
@@ -91,25 +91,37 @@
       "line": 146,
       "number": "14",
       "title": "Acceptance"
+    },
+    {
+      "level": 2,
+      "line": 157,
+      "number": "15",
+      "title": "Amendment (operator, 2026-11-17): the answers to §12"
+    },
+    {
+      "level": 2,
+      "line": 174,
+      "number": "16",
+      "title": "Corrections from the build (2026-11-17)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop.md",
-    "sha256": "b71c7269dd6abb9646d75d84a0555f840c8561bb1a53ab831f68cdabe84e2264"
+    "sha256": "c87ba06714fae50c2cdf2202c82b294686bc481a67b147a830a7ce5b97f99121"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 860,
+        "end": 1010,
         "end_line": 6,
         "line": 6,
         "start": 239
       },
-      "text": "status: approved   # by the operator, 2026-11-16, in a host session: \"yeah build it in a branch and target fewer independent PRs to make merging easier\", said of a ranked list of sixteen changes that was shown to them, after \"i like the council/panel split as it stands today. im curious about the experience of both really\". The approval was given to the list BEFORE this text was written; the operator has not read the text. It takes effect when the operator merges the pull request that carries it. Items of the list that are not builds (a live check, an experiment, two policy questions) are in section 10, not built."
+      "text": "status: approved   # Section 15 (2026-11-17) is an amendment written from the operator's answers to section 12; it takes effect when the operator merges its pull request. By the operator, 2026-11-16, in a host session: \"yeah build it in a branch and target fewer independent PRs to make merging easier\", said of a ranked list of sixteen changes that was shown to them, after \"i like the council/panel split as it stands today. im curious about the experience of both really\". The approval was given to the list BEFORE this text was written; the operator has not read the text. It takes effect when the operator merges the pull request that carries it. Items of the list that are not builds (a live check, an experiment, two policy questions) are in section 10, not built."
     },
-    "sha256": "b71c7269dd6abb9646d75d84a0555f840c8561bb1a53ab831f68cdabe84e2264",
+    "sha256": "c87ba06714fae50c2cdf2202c82b294686bc481a67b147a830a7ce5b97f99121",
     "word": "approved"
   },
   "spec": {
@@ -124,10 +136,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2751,
+      "end": 2901,
       "end_line": 25,
       "line": 25,
-      "start": 2242
+      "start": 2392
     },
     "text": "The operator asked, on 2026-11-16, for \"the council experience in the host environment\" to be \"the best experience for the operator with things like better tailing to show activity, really getting better output via mixed families responding from delphi, and learning loop or knowledge base integration\". A read-only assessment of the code followed; the operator then said \"i like the council/panel split as it stands today. im curious about the experience of both really\", and, of the ranked list, \"build it\"."
   }
