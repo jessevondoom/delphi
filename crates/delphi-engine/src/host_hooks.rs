@@ -477,6 +477,46 @@ pub fn mention_lines(ws_dir: &Path, text: &str, host: &str) -> Vec<String> {
     out
 }
 
+/// `specs/107` §8.2 items 5 and 6: one line per role the prompt names in words (not by an `@`, which [`mention_lines`] answers).
+/// The rule first runs in memory over the IDs of the roles a host may be served ([`crate::mcp_hosts::WORKER_ROLES`]); only when one is
+/// named are the workspace's packs opened, so a prompt that names no role opens nothing. The line is conditional, because a role's
+/// word can mean something else ("the builder pattern"), and like every hook line it echoes nothing of the prompt.
+pub fn named_lines(ws_dir: &Path, text: &str, host: &str) -> Vec<String> {
+    let ids: Vec<&str> = crate::mcp_hosts::WORKER_ROLES.iter().map(|(r, _)| *r).collect();
+    let mut found = crate::named_role::named(text, &crate::named_role::names(&ids, None));
+    // §8.2 item 8: a research prompt that names no role (in words or by `@`) goes to the scout by default.
+    let research = found.is_empty() && !text.contains('@') && crate::route_any::trigger_of(text) == "research";
+    if research {
+        found.push("scout".into());
+    }
+    if found.is_empty() {
+        return vec![];
+    }
+    let Some(packs) = packs_of(ws_dir) else { return vec![] };
+    let Ok(roles) = packs.roles() else { return vec![] };
+    let resolver = packs.theme_resolver();
+    let mentioned: Vec<String> = mentions(text).iter().map(|w| resolver.resolve(w)).collect();
+    let task = if get_agent_takes_task() { " and the operator's request as task" } else { "" };
+    let mut out = Vec::new();
+    for id in found {
+        let Some(r) = roles.iter().find(|r| r.id == id && r.servable) else { continue };
+        if mentioned.contains(&id) {
+            continue;
+        }
+        let display = packs.identity(&id, Some(host)).display("plain", false);
+        let how = match crate::briefing::worker_of(&id, &r.locus, r.servable) {
+            Some(w) => format!("the {w} subagent for its own context, or get_agent with role \"{id}\"{task} for a short answer"),
+            None => format!("get_agent with role \"{id}\"{task}"),
+        };
+        if research {
+            out.push(format!("The operator's prompt asks for research and names no role. By default {display} (role {id}) takes research when Delphi is present: unless the request is not research, use it here, as the {id}-worker subagent or by adopting its pack with get_agent with role \"{id}\"{task}, and print its display line before what it writes."));
+        } else {
+            out.push(format!("The operator's prompt names {display} (role {id}) in words. If they mean Delphi's {id}, the {id} answers, not the orchestrator: hand it the work ({how}) and print its display line before what it writes."));
+        }
+    }
+    out
+}
+
 // ---- Spec 106 §11 G2: a Delphi worker gets its role's pack at subagent start ----
 
 /// The role a starting subagent works as, when (and only when) its type is exactly one of the release's worker names: `<role>-worker`
@@ -1347,6 +1387,27 @@ mod tests {
         for k in kept {
             assert!(mention_lines(&dir, &format!("@{k} hi"), "claude-code").is_empty(), "a role kept from hosts: {k}");
         }
+    }
+
+    /// `specs/107` §8.2 items 5 and 6: a role named in words gets a conditional line that names its worker; an `@` mention of the
+    /// same role gets only the `@` line; a prompt that names no role gets nothing; nothing of the prompt is echoed.
+    #[test]
+    fn a_role_named_in_words_gets_a_conditional_line_and_nothing_else_does() {
+        let (_t, dir) = ws();
+        let l = named_lines(&dir, "get a strategist review of the SECRET-PLAN", "claude-code");
+        assert_eq!(l.len(), 1, "{l:?}");
+        assert!(l[0].contains("(role strategist) in words") && l[0].contains("If they mean Delphi's strategist") && l[0].contains("strategist-worker") && l[0].contains("not the orchestrator"), "{}", l[0]);
+        assert!(!l[0].contains("SECRET"), "nothing of the prompt is echoed");
+        assert!(named_lines(&dir, "@strategist strategist review", "claude-code").is_empty(), "the @ line answers a mentioned role");
+        assert!(named_lines(&dir, "use the builder pattern for the config", "claude-code").is_empty());
+        assert!(named_lines(&dir, "ask the orchestrator who should do this", "claude-code").is_empty(), "the orchestrator is the default");
+        assert!(named_lines(&dir, "hello there", "claude-code").is_empty());
+        // §8.2 item 8: research goes to the scout by default; a named role or an `@` mention takes precedence.
+        let r = named_lines(&dir, "research churn benchmarks for SECRET-CO", "claude-code");
+        assert!(r.len() == 1 && r[0].contains("asks for research") && r[0].contains("(role scout)") && r[0].contains("scout-worker") && !r[0].contains("SECRET"), "{r:?}");
+        let s = named_lines(&dir, "ask the strategist to research pricing", "claude-code");
+        assert!(s.len() == 1 && s[0].contains("(role strategist)"), "{s:?}");
+        assert!(named_lines(&dir, "@builder research why the build is slow", "claude-code").is_empty());
     }
 
     /// §2 budgets (400 ms for the brief, 150 ms for a prompt with a mention) are for a warm disk; a debug build under a loaded

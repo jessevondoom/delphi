@@ -5,6 +5,7 @@
 pub mod agent_pool;
 pub mod app_audit;
 pub mod agent_registry;
+pub mod named_role;
 pub mod route_any;
 pub mod host_guidance;
 pub mod host_install;

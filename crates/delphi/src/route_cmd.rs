@@ -69,7 +69,8 @@ pub fn run(args: &[String], home: &std::path::Path, ws_dir: &std::path::Path) ->
     let domain = flag("--domain");
     let role = flag("--role");
     let q = Query { text: &task, domain: domain.as_deref(), role: role.as_deref(), limit };
-    let found = ra::route(&reg.entries, &roles, &q, threshold, emb.as_deref());
+    let mut found = ra::route(&reg.entries, &roles, &q, threshold, emb.as_deref());
+    ra::name_roles(&mut found, &roles, &ra::named_in(&task, &roles, Some(&packs.theme_resolver())));
     if json {
         let mut out = ra::to_json(&found, &settings, reg.entries.len());
         let parts: Vec<Value> = found.candidates.iter().map(|c| serde_json::json!({"target": c.target, "lexical": c.lexical, "vector": c.vector, "penalty": c.penalty})).collect();
@@ -88,7 +89,7 @@ pub fn run(args: &[String], home: &std::path::Path, ws_dir: &std::path::Path) ->
         return 0;
     }
     for (i, c) in found.candidates.iter().enumerate() {
-        println!("{}. {}  (runs as {}, {}; locus {})  confidence {:.2}{}  [score {:.2}; lexical {:.2}, vector {}, penalty {:.2}]", i + 1, c.target, c.role, c.domain, c.locus, c.confidence, if c.adopt { " adopt" } else { "" }, c.score, c.lexical, c.vector.map_or("-".into(), |v| format!("{:.2}", v)), c.penalty);
+        println!("{}. {}  (runs as {}, {}; locus {})  confidence {:.2}{}  [score {:.2}; lexical {:.2}, vector {}, penalty {:.2}]", i + 1, c.target, c.role, c.domain, c.locus, c.confidence, if c.named { " adopt (named)" } else if c.adopt { " adopt" } else { "" }, c.score, c.lexical, c.vector.map_or("-".into(), |v| format!("{:.2}", v)), c.penalty);
         println!("   {}", c.summary.chars().take(200).collect::<String>());
     }
     0

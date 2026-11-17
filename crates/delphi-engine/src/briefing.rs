@@ -95,6 +95,10 @@ pub struct Seat {
     pub locus: String,
     pub confidence: f32,
     pub servable: bool,
+    /// The operator named this role (`specs/107` §8.2): it answers.
+    pub named: bool,
+    /// The scout, taking a research task by default (§8.2 item 8).
+    pub research: bool,
 }
 
 /// The worker subagent of `specs/106` for a role: `<role>-worker` when the role is servable and runs on the host (locus host or either).
@@ -102,8 +106,8 @@ pub fn worker_of(role: &str, locus: &str, servable: bool) -> Option<String> {
     (servable && matches!(locus, "host" | "either")).then(|| format!("{role}-worker"))
 }
 
-/// The roster (§2 item 1): the canonical roles at or above the adopt threshold, best first, at most five; the orchestrator alone
-/// when none reaches it.
+/// The roster (§2 item 1): the canonical roles at or above the adopt threshold, best first, at most five, with the roles the task
+/// names leading (§8.2 item 4); the orchestrator alone when none reaches it and none is named.
 pub fn roster(routed: &crate::route_any::Routed, roles: &[crate::mcp_packs::RoleInfo]) -> (Vec<Seat>, bool) {
     let mut out: Vec<Seat> = Vec::new();
     for c in routed.candidates.iter().filter(|c| c.kind == "role" && c.adopt) {
@@ -111,13 +115,13 @@ pub fn roster(routed: &crate::route_any::Routed, roles: &[crate::mcp_packs::Role
             continue;
         }
         let info = roles.iter().find(|r| r.id == c.role);
-        out.push(Seat { role: c.role.clone(), why: info.map(|r| r.purpose.clone()).unwrap_or_default(), locus: c.locus.clone(), confidence: c.confidence, servable: info.is_some_and(|r| r.servable) });
+        out.push(Seat { role: c.role.clone(), why: info.map(|r| r.purpose.clone()).unwrap_or_default(), locus: c.locus.clone(), confidence: c.confidence, servable: info.is_some_and(|r| r.servable), named: c.named, research: c.research });
     }
     if !out.is_empty() {
         return (out, false);
     }
     let o = roles.iter().find(|r| r.id == "orchestrator");
-    (vec![Seat { role: "orchestrator".into(), why: "no role reached the adopt threshold for this task, so the orchestrator carries it alone".into(), locus: o.map(|r| r.locus.clone()).unwrap_or_else(|| "either".into()), confidence: 0.0, servable: o.is_some_and(|r| r.servable) }], true)
+    (vec![Seat { role: "orchestrator".into(), why: "no role reached the adopt threshold for this task, so the orchestrator carries it alone".into(), locus: o.map(|r| r.locus.clone()).unwrap_or_else(|| "either".into()), confidence: 0.0, servable: o.is_some_and(|r| r.servable), named: false, research: false }], true)
 }
 
 /// Does the task ask who should do it or how (§2 item 9)?
@@ -126,10 +130,31 @@ fn asks_who_or_how(task: &str) -> bool {
     w.iter().any(|x| x == "who" || x == "whom") || w.first().is_some_and(|x| x == "how") || task.to_lowercase().contains(" how ")
 }
 
-/// The fixed-form suggestions (§2 item 9), at most three, each naming a tool and why.
+/// The suggestion that hands the top role the work (§8.3 item 1): its worker or its pack on the host, or `request_help` with it as the
+/// target when it runs only inside Delphi.
+fn hand_on(top: &Seat) -> Value {
+    let who = if top.named {
+        format!("the operator named the {}: the {} answers, not the orchestrator", top.role, top.role)
+    } else if top.research {
+        return json!({"tool": "get_agent", "role": top.role, "worker": worker_of(&top.role, &top.locus, top.servable), "why": format!("the task asks for research: the {} takes it by default, in this host. Start the {}-worker subagent, or adopt its pack with get_agent; it answers under its own display line", top.role, top.role)});
+    } else {
+        format!("the {} fits this task best: it does the work, not the orchestrator", top.role)
+    };
+    match worker_of(&top.role, &top.locus, top.servable) {
+        Some(w) => json!({"tool": "get_agent", "role": top.role, "worker": w, "why": format!("{who}. Start the {w} subagent for its own context (a review, a second opinion, a long task), or adopt its pack with get_agent for a short answer; it answers under its own display line")}),
+        None => json!({"tool": "request_help", "role": top.role, "suggested_target": top.role, "why": format!("{who}. It runs only inside Delphi: ask with request_help and suggested_target {}", top.role)}),
+    }
+}
+
+/// The fixed-form suggestions (§2 item 9, as amended by §8.3 item 1), at most three, each naming a tool and why. When the roster is not
+/// the orchestrator alone, the first hands the top role the work.
 pub fn next(task: &str, seats: &[Seat], alone: bool, trigger: &str, pointers_above_floor: bool) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
-    let tie = !alone && seats.len() >= 2 && seats.windows(2).any(|p| (p[0].confidence - p[1].confidence).abs() <= TIE);
+    if let Some(top) = seats.first().filter(|_| !alone) {
+        out.push(hand_on(top));
+    }
+    let named = seats.iter().any(|s| s.named || s.research);
+    let tie = !alone && !named && seats.len() >= 2 && seats.windows(2).any(|p| (p[0].confidence - p[1].confidence).abs() <= TIE);
     if tie || asks_who_or_how(task) {
         out.push(json!({"tool": "request_help", "why": if tie { "two roles fit this task almost equally: ask Delphi's own orchestrator who should do it" } else { "the task asks who should do it or how: Delphi's own orchestrator can answer that, on the operator's Delphi tokens" }}));
     }
@@ -229,6 +254,12 @@ pub fn roster_json(seats: &[Seat], alone: bool) -> Vec<Value> {
             if alone {
                 v["alone"] = json!(true);
             }
+            if s.named {
+                v["named"] = json!(true);
+            }
+            if s.research {
+                v["research_default"] = json!(true);
+            }
             v
         })
         .collect()
@@ -293,11 +324,27 @@ mod tests {
         assert_eq!(worker_of("builder", "either", true).as_deref(), Some("builder-worker"));
         assert_eq!(worker_of("validator", "inside", true), None);
         assert_eq!(worker_of("x", "host", false), None);
-        let s = |r: &str, c: f32| Seat { role: r.into(), why: String::new(), locus: "either".into(), confidence: c, servable: true };
+        let s = |r: &str, c: f32| Seat { role: r.into(), why: String::new(), locus: "either".into(), confidence: c, servable: true, named: false, research: false };
         let tools = |v: Vec<Value>| v.iter().map(|x| x["tool"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(tools(next("Tune the cache", &[s("builder", 0.7), s("architect", 0.68)], false, "none", true)), ["request_help"]);
-        assert_eq!(tools(next("Who should own the cache?", &[s("builder", 0.9)], false, "panel", false)), ["request_help", "council_open", "request_research"]);
-        assert!(next("Tune the cache", &[s("builder", 0.9)], false, "none", true).is_empty());
+        assert_eq!(tools(next("Tune the cache", &[s("builder", 0.7), s("architect", 0.68)], false, "none", true)), ["get_agent", "request_help"]);
+        assert_eq!(tools(next("Who should own the cache?", &[s("builder", 0.9)], false, "panel", false)), ["get_agent", "request_help", "council_open"]);
+        assert_eq!(tools(next("Tune the cache", &[s("builder", 0.9)], false, "none", true)), ["get_agent"]);
+        assert!(next("Tune the cache", &[s("orchestrator", 0.0)], true, "none", true).is_empty(), "alone: the orchestrator carries it");
+        // §8.3 item 1: the hand-on names the worker; a named role says so and suppresses the tie rule; an inside role goes by request_help.
+        let first = &next("Tune the cache", &[s("builder", 0.9)], false, "none", true)[0];
+        assert_eq!((first["role"].as_str(), first["worker"].as_str()), (Some("builder"), Some("builder-worker")));
+        let mut named = s("strategist", 0.3);
+        named.named = true;
+        let n = next("strategist review", &[named, s("architect", 0.31)], false, "none", true);
+        assert_eq!(tools(n.clone()), ["get_agent"]);
+        assert!(n[0]["why"].as_str().unwrap().contains("the operator named the strategist"), "{}", n[0]);
+        let inside = Seat { role: "validator".into(), why: String::new(), locus: "inside".into(), confidence: 0.8, servable: true, named: false, research: false };
+        let mut scout = s("scout", 0.2);
+        scout.research = true;
+        let r = &next("research churn benchmarks", &[scout], false, "research", true)[0];
+        assert!(r["worker"] == "scout-worker" && r["why"].as_str().unwrap().contains("asks for research"), "{r}");
+        let v = &next("Check the claims", &[inside], false, "none", true)[0];
+        assert_eq!((v["tool"].as_str(), v["suggested_target"].as_str()), (Some("request_help"), Some("validator")));
         assert_eq!(query_of("Fix the flaky test in the pager and the pager's cache"), "fix flaky test pager cache");
     }
 }

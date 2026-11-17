@@ -124,7 +124,7 @@ fn install_hint_for(host: &str) -> Option<&'static str> {
 /// The skill that tells a host when to consult Delphi. Guidance for the host, not a grant of anything.
 pub const SKILL_MD: &str = "---
 name: delphi
-description: Triggers whenever the user mentions @delphi or a Delphi specialist role (@orchestrator, @architect, @red-team, @builder, @strategist, @investigator, @scout, @writer, @messenger, @validator, @administrator, @assistant, @advocate) or their active workspace themed alias. Connects Claude Code to Delphi's MCP server to adopt specialist agent personas, query specs, and access workspace memory.
+description: Triggers whenever the user mentions @delphi or a Delphi specialist role (@orchestrator, @architect, @red-team, @builder, @strategist, @investigator, @scout, @writer, @messenger, @validator, @administrator, @assistant, @advocate) or their active workspace themed alias, or asks for one in words (a strategist review, ask the red team, the architect's view), or asks for research (the scout takes research by default). Connects Claude Code to Delphi's MCP server to adopt specialist agent personas, query specs, and access workspace memory.
 ---
 
 # Working with Delphi
@@ -134,8 +134,8 @@ At the start of a session, call `session_brief` once (Delphi's tool, no argument
 Delphi is connected as the MCP server `delphi` (read-only, this machine only).
 
 ## Mention Routing & Specialist Personas
-- **`@delphi` (the orchestrator)**: On `@delphi` or the orchestrator's alias, call `consult_orchestrator` with the task (one call), adopt the orchestrator's pack with `get_agent` if you do not hold it, and print its display line. The briefing names the roles that fit, the project's matching specs and context, and what to call next; carry on as the orchestrator with it. Call `request_help` instead when the briefing's `next` names it, when the operator asks for Delphi's view or a second opinion on the plan, or when you are unsure which role should do the work: Delphi's own orchestrator answers, and its answer is advice, signed by who answered.
-- **`@<name>` or `@<role>` (Specialist Summoning)**: Dual-key mentions resolve dynamically per the active workspace theme (e.g. `@<display_name>` and `@<role_id>` both work). Call `get_agent(role: \"<name_or_role>\")` to inspect the agent pack and adopt their persona, cognitive posture, and heuristics.
+- **`@delphi` (the orchestrator)**: On `@delphi` or the orchestrator's alias, call `consult_orchestrator` with the task (one call), adopt the orchestrator's pack with `get_agent` if you do not hold it, and print its display line. When the briefing's roster names a role other than the orchestrator, hand that role the work, as `next` says, and let it answer under its own display line; answer as the orchestrator yourself only when the roster is the orchestrator alone, or for triage, a lookup or a status question. The briefing names the roles that fit (a role the operator named comes first, marked `named`), the project's matching specs and context, and what to call next. Call `request_help` instead when the briefing's `next` names it, when the operator asks for Delphi's view or a second opinion on the plan, or when you are unsure which role should do the work: Delphi's own orchestrator answers, and its answer is advice, signed by who answered.
+- **A role the operator names** (`@<name>`, `@<role>`, or in words: \"ask the strategist\", \"a red-team review\", \"the architect's view\")**: that role answers, not the orchestrator.** Mentions resolve per the active workspace theme (`@<display_name>` and `@<role_id>` both work). Start its `<role>-worker` subagent for its own context (a review, a second opinion, a long task), or call `get_agent(role: \"<name_or_role>\")` and adopt the pack for a short answer, and print its display line before what it writes. When the prompt hook says a prompt names a role in words, do the same if the operator means that role. Say in one line who is answering and why.
 - **Roster & Discovery**: Call `delphi_roster` (or `@delphi roster`) to view the complete catalog of active specialists, display names, badges, aliases, and cognitive duties.
 
 ## Guidelines
@@ -1323,6 +1323,13 @@ mod tests {
         let files = role_agent_files("claude-code", &none()).unwrap();
         assert_eq!(files.len(), COUNCIL_ROLES.len() + WORKER_ROLES.len());
         assert_eq!(files[0], role_agent_file("claude-code", "architect", &none()).unwrap());
+    }
+
+    #[test]
+    fn the_delphi_skill_says_a_named_role_answers_and_triggers_on_a_role_asked_for_in_words() {
+        assert!(SKILL_MD.contains("that role answers, not the orchestrator") && SKILL_MD.contains("in words"));
+        assert!(SKILL_MD.lines().find(|l| l.starts_with("description:")).unwrap().contains("asks for one in words"));
+        assert!(!SKILL_MD.contains("carry on as the orchestrator with it"), "the old wording that kept every task with the orchestrator is gone");
     }
 
     #[test]
