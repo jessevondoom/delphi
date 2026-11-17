@@ -9,6 +9,7 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 ## Unreleased
 
 - **Who sat on a Council** (spec 123 S1): `council_status` names each seat's model family (from its receipt, else the plan), where that came from, and its model, and says while it deliberates whether the plan has one family only. A daemon Council's card now names its families in the header and lists each seat from the receipts (model, family, carrier, tokens), as a Panel's does; a one-family Council or Panel says so on its own line under the header.
+- **A Council's ceiling is in tokens** (spec 123 S2): `[budget] council_budget_tokens` (default 400,000; 0 turns it off) stops a Council that reaches it after Round 1, with a sentence that names the ceiling. `council_budget_usd` is kept and still checked, and is now read from `config.toml` (it was ignored before). `council_status` shows `tokens: {spent, ceiling}` and each seat's tokens, the progress line ends "; 62k of 400k tokens", and the card's Cost line names the ceiling.
 
 ## 0.6.3 — 2026-11-16
 

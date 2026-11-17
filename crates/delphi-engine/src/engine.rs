@@ -101,6 +101,8 @@ pub struct Settings {
     pub connector_settle: Duration,
     /// `council_budget_usd` (D-10): a separate ceiling for one Council.
     pub council_budget_usd: f64,
+    /// `[budget] council_budget_tokens` (`specs/123` §4): the input plus output tokens one Council may use; 0 turns it off.
+    pub council_budget_tokens: u64,
     /// A Council seat that has not answered by then abstains.
     pub council_seat_timeout: Duration,
     /// `[council] stall_secs` (`specs/098` §19): a status call flags a Council `stalled` when every seat still working has been
@@ -221,6 +223,7 @@ impl Default for Settings {
             history: Default::default(),
             connector_settle: Duration::from_secs(10),
             council_budget_usd: 20.0,
+            council_budget_tokens: 400_000,
             council_seat_timeout: Duration::from_secs(600),
             council_stall_secs: 120,
             require_families: None,

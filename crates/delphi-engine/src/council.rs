@@ -745,6 +745,38 @@ pub fn decide(round2: &Round2) -> Decision {
 
 /// The body of `## Accepted Risks & Minority Report (Red-Team / Dissent)`: every unresolved P0/P1 verbatim,
 /// or the exact unanimous sentence, which needs Red-Team's explicit `concur`.
+/// The input plus output tokens of every `agent.usage` event of a Council task (`specs/123` §4 item 1). With `role`, that seat's only.
+pub fn council_tokens_of(events: &[EventEnvelope], task_id: &str, role: Option<&str>) -> u64 {
+    events
+        .iter()
+        .filter(|e| e.kind == "agent.usage" && e.task_id.as_deref() == Some(task_id) && role.is_none_or(|r| e.agent.as_deref() == Some(r)))
+        .map(|e| e.payload["input_tokens"].as_u64().unwrap_or(0) + e.payload["output_tokens"].as_u64().unwrap_or(0))
+        .sum()
+}
+
+/// [`council_tokens_of`] for the whole Council.
+pub fn council_tokens(events: &[EventEnvelope], task_id: &str) -> u64 {
+    council_tokens_of(events, task_id, None)
+}
+
+/// `300000` as `300,000`.
+pub fn thousands(n: u64) -> String {
+    let d = n.to_string();
+    let mut out = String::new();
+    for (i, c) in d.chars().enumerate() {
+        if i > 0 && (d.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// `62000` as `62k` (rounded), and below 1,000 as it is: the progress line's form (`specs/123` §4 item 3).
+pub fn kilo(n: u64) -> String {
+    if n < 1000 { n.to_string() } else { format!("{}k", (n + 500) / 1000) }
+}
+
 pub fn minority_report(round2: &Round2, d: &Decision, homogeneous: bool) -> String {
     let mut s = String::new();
     let red_concurs = matches!(round2.get("red-team"), Some(Some(c)) if c.concur == Some(true));
@@ -1194,6 +1226,20 @@ impl Engine {
         m.replay().map(|evs| evs.iter().filter(|e| e.kind == "agent.usage" && e.task_id.as_deref() == Some(task_id)).filter_map(|e| e.payload["cost_usd"].as_f64()).sum()).unwrap_or(0.0)
     }
 
+    /// Why a Council must stop spending after `step`, or `None` (`specs/123` §4): the token ceiling first, then the money ceiling
+    /// it keeps for workspaces that set one. Fixed text that names the ceiling.
+    fn council_over(&self, m: &MissionState, task_id: &str, step: &str) -> Option<String> {
+        let cap = self.settings.council_budget_tokens;
+        if cap > 0 {
+            let spent = m.replay().map(|evs| council_tokens(&evs, task_id)).unwrap_or(0);
+            if spent >= cap {
+                return Some(format!("the Council token ceiling ({} tokens) was reached after {step}; nothing was decided", thousands(cap)));
+            }
+        }
+        let usd = self.settings.council_budget_usd;
+        (self.council_spent(m, task_id) >= usd).then(|| format!("the Council budget (${usd:.2}) was reached after {step}; nothing was decided"))
+    }
+
     fn next_council_number(m: &MissionState) -> u32 {
         std::fs::read_dir(m.dir.join("councils"))
             .map(|rd| rd.flatten().filter_map(|e| e.file_name().to_string_lossy().get(..3).and_then(|n| n.parse::<u32>().ok())).max().unwrap_or(0) + 1)
@@ -1412,7 +1458,8 @@ impl Engine {
             }
         }
         let ceiling = self.settings.council_budget_usd;
-        let over_budget = |this: &Engine| this.council_spent(m, task_id) >= ceiling;
+        let over_budget = |this: &Engine, step: &str| this.council_over(m, task_id, step);
+        let budget_tokens = Some(self.settings.council_budget_tokens).filter(|n| *n > 0);
 
         let cfg = self.cfg.get();
         let available = self.available_families();
@@ -1439,7 +1486,7 @@ impl Engine {
                 });
             }
         }
-        m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling}))).await?;
+        m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling, "budget_tokens": budget_tokens}))).await?;
 
         // Lenses are assigned once, before Round 1, and each seat is shown only its own (`specs/026` §4).
         let lens_plan = if opts.lenses {
@@ -1485,8 +1532,8 @@ impl Engine {
         if answered.len() < 2 {
             return Ok((Status::Escalated(format!("only {} seat(s) answered Round 1, too few to deliberate; nothing was decided", answered.len())), String::new()));
         }
-        if over_budget(self) {
-            return Ok((Status::Escalated(format!("the Council budget (${:.2}) was reached after Round 1; nothing was decided", ceiling)), String::new()));
+        if let Some(why) = over_budget(self, "Round 1") {
+            return Ok((Status::Escalated(why), String::new()));
         }
 
         // ── Round 2: every answering seat reads every stance and gives a structured critique.
@@ -1518,7 +1565,7 @@ impl Engine {
         // text. It runs inside the Council budget and timeout, and a seat that declined or abstained is never asked again.
         let mut repair: BTreeMap<String, &'static str> = BTreeMap::new();
         let to_repair: Vec<String> = round2.iter().filter(|(r, c)| c.is_none() && round2_text.get(*r).is_some_and(|t| !t.starts_with("(no Round 2:") && crate::refusal::declines(t).is_none())).map(|(r, _)| r.clone()).collect();
-        if !to_repair.is_empty() && !over_budget(self) {
+        if !to_repair.is_empty() && over_budget(self, "Round 2").is_none() {
             let mut rset = tokio::task::JoinSet::new();
             for seat in plan.seats.iter().filter(|s| to_repair.contains(&s.role)) {
                 let mut sl = slices.clone();
@@ -1556,7 +1603,7 @@ impl Engine {
 
         // ── Synthesis: the Orchestrator writes the prose; the daemon writes the Minority Report.
         let mut synthesis = String::from("(The Orchestrator wrote no synthesis; the structured record above and below is complete.)");
-        if !over_budget(self) {
+        if over_budget(self, "Round 2").is_none() {
             let arbiter = SeatPlan { role: "orchestrator".into(), family: self.cfg.get().family_for_role("orchestrator").to_string(), avoid: vec![], tier: None };
             let mut sl = slices.clone();
             for (r, t) in &round2_text {
@@ -2619,7 +2666,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn the_council_budget_is_its_own_ceiling() {
         let (f, _, _) = {
-            let f = crate::testkit::setup(vec![], 50.0, |s| s.council_budget_usd = 0.0001);
+            let f = crate::testkit::setup(vec![], 50.0, |s| {
+                s.council_budget_usd = 0.0001;
+                s.council_budget_tokens = 0;
+            });
             two_families(&f);
             f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 1") { Step::text("OPTION: x\nstance") } else { Step::text("RECOMMENDATION: PROCEED\nROUND 2 COMPLETE") });
             (f, (), ())
@@ -2627,6 +2677,22 @@ pub(crate) mod tests {
         let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(w) if w.contains("Council budget")), "{:?}", out.status);
         assert!(events_of(&f, "council.critique").is_empty(), "it halts before Round 2 rather than downscaling");
+    }
+
+    /// Spec 123 §4 (AC-3): over `council_budget_tokens` a Council escalates with the token sentence after Round 1 and decides nothing;
+    /// `council.started` carries the ceiling, so a status call can show it.
+    #[tokio::test]
+    async fn a_council_over_its_token_ceiling_escalates_with_the_token_sentence_and_decides_nothing() {
+        let f = crate::testkit::setup(vec![], 50.0, |s| s.council_budget_tokens = 2_000);
+        two_families(&f);
+        f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 1") { Step::text("OPTION: x\nstance") } else { Step::text("RECOMMENDATION: PROCEED\nROUND 2 COMPLETE") });
+        let tid = f.m.next_task_id();
+        let out = f.engine.run_council(&f.m, tid.clone(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(w) if w == "the Council token ceiling (2,000 tokens) was reached after Round 1; nothing was decided"), "{:?}", out.status);
+        assert!(events_of(&f, "council.critique").is_empty() && events_of(&f, "council.verdict").is_empty(), "nothing was decided");
+        assert_eq!(events_of(&f, "council.started")[0].payload["budget_tokens"], 2_000);
+        assert!(council_tokens(&f.m.replay().unwrap(), &tid) >= 2_000);
+        assert_eq!((thousands(300_000), thousands(999), kilo(62_000), kilo(62_499), kilo(850)), ("300,000".to_string(), "999".to_string(), "62k".to_string(), "62k".to_string(), "850".to_string()));
     }
 
     /// A real Council through the Claude CLI (Architect, Strategist) and `agy` (Red-Team, on Gemini): a few

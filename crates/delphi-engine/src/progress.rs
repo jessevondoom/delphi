@@ -93,6 +93,8 @@ pub struct SeatProgress {
     pub family_source: Option<&'static str>,
     /// The served model of the seat's latest usage event or receipt; a checked identifier.
     pub model: Option<String>,
+    /// Input plus output tokens of the seat's own spans (`specs/123` §4 item 3).
+    pub tokens: u64,
 }
 
 /// What a status call adds: the seats, the tail, a stall flag and a phase line.
@@ -110,7 +112,7 @@ impl Progress {
     /// The fields a status answer gains. `phase` is returned separately by [`Progress::phase`]; the caller decides whether to use it.
     pub fn to_json(&self) -> Value {
         json!({
-            "seats": self.seats.iter().map(|s| json!({"role": s.role, "state": s.state, "elapsed_s": s.elapsed_s, "idle_s": s.idle_s, "calls": s.calls, "last_call": s.last_call, "family": s.family, "family_source": s.family_source, "model": s.model})).collect::<Vec<_>>(),
+            "seats": self.seats.iter().map(|s| json!({"role": s.role, "state": s.state, "elapsed_s": s.elapsed_s, "idle_s": s.idle_s, "calls": s.calls, "last_call": s.last_call, "family": s.family, "family_source": s.family_source, "model": s.model, "tokens": s.tokens})).collect::<Vec<_>>(),
             "tail": self.tail,
             "stalled": self.stalled.is_some(),
             "stalled_seat": self.stalled,
@@ -205,6 +207,7 @@ pub fn progress(events: &[EventEnvelope], task_id: &str, now_ms: i64, stall_secs
             family,
             family_source,
             model,
+            tokens: ev.iter().filter(mine).filter(|e| e.kind == "agent.usage").map(|e| e.payload["input_tokens"].as_u64().unwrap_or(0) + e.payload["output_tokens"].as_u64().unwrap_or(0)).sum(),
         });
     }
 

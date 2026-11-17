@@ -742,7 +742,14 @@ pub fn council_view_at(events: &[delphi_core::event::EventEnvelope], mission_dir
             into.extend(extra);
         }
         if let Some(phase) = &p.phase {
-            v["phase"] = json!(phase);
+            // Spec 123 §4 item 3: the line ends with the tokens, against the ceiling when one is set.
+            let (spent, ceiling) = (v["tokens"]["spent"].as_u64().unwrap_or(0), v["tokens"]["ceiling"].as_u64());
+            let cost = match ceiling {
+                Some(c) => format!("; {} of {} tokens", crate::council::kilo(spent), crate::council::kilo(c)),
+                None if spent > 0 => format!("; {} tokens", crate::council::kilo(spent)),
+                None => String::new(),
+            };
+            v["phase"] = json!(format!("{phase}{cost}"));
         }
         v["round"] = json!(p.round);
         // Spec 123 §3 item 3: the plan's one-family label, so a host can say so before the card.
@@ -823,6 +830,12 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
     }
     if panel {
         v["counts_as_independent_review"] = json!(started.map(|e| e.payload["counts_as_independent_review"] != false).unwrap_or(true));
+    }
+    // Spec 123 §4 item 3: what it has cost in tokens, against its ceiling (null when off). A Panel's count is only the seats Delphi ran.
+    let spent = crate::council::council_tokens(events, task_id);
+    v["tokens"] = json!({"spent": spent, "ceiling": started.and_then(|e| e.payload["budget_tokens"].as_u64())});
+    if panel {
+        v["tokens"]["scope"] = json!("delphi_seats");
     }
     // Host-reported claims, shown as such on the card; they raise no trust and satisfy no gate (spec 089 F2).
     if let Some(o) = started.map(|e| e.payload["operator_confirmed"].clone()).filter(|o| o.is_boolean()) {
@@ -951,8 +964,7 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
             v["ruling"]["finding_groups"] = json!(groups);
             v["ruling"]["single_family"] = json!(homogeneous == json!(true));
         }
-        let tokens: u64 = of("agent.usage").iter().map(|e| e.payload["input_tokens"].as_u64().unwrap_or(0) + e.payload["output_tokens"].as_u64().unwrap_or(0)).sum();
-        let mut card = ruling_card(&v, tokens);
+        let mut card = ruling_card(&v, spent);
         if v["ruling"]["kind"] == "red_team" {
             card = format!("{}{card}", findings_card(&v["ruling"]));
         }
@@ -1179,7 +1191,10 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
     let cost = if v["venue"] == "panel" {
         if v["foreign_seat"].is_object() { format!("{tokens} tokens on the seat Delphi ran; the other seats ran on your host's tokens (not measured here)") } else { "seats ran on your host's tokens (not measured here); Delphi spent none".to_string() }
     } else {
-        format!("{tokens} tokens on Delphi's seats")
+        match v["tokens"]["ceiling"].as_u64() {
+            Some(c) => format!("{} of {} tokens on Delphi's seats", crate::council::thousands(tokens), crate::council::thousands(c)),
+            None => format!("{} tokens on Delphi's seats", crate::council::thousands(tokens)),
+        }
     };
     s.push_str(&format!("**Cost:** {cost}. **Record:** `{}`.\n", text(&r["record"])));
     s
@@ -1653,6 +1668,42 @@ mod tests {
         let card = council_view(&panel, dir.path(), "t-1").unwrap()["display"].as_str().unwrap().to_string();
         assert!(card.starts_with("**Panel ruling**"), "{card}");
         assert_eq!(card.split("\n\n").nth(1), Some("**One model family only** (`claude`): every seat ran on the host's family. Treat a unanimous ruling as a quick check, not an independent review."), "{card}");
+    }
+
+    /// Spec 123 §4 items 3 and 4 (AC-3): status shows the tokens spent against the ceiling, per seat too, the progress line ends with
+    /// them, and the card's Cost line names the ceiling. A Panel's count is scoped to Delphi's seats.
+    #[test]
+    fn a_council_status_and_card_show_the_tokens_against_the_ceiling() {
+        let dir = tempfile::tempdir().unwrap();
+        let ev = |kind: &str, agent: Option<&str>, payload: Value| {
+            let mut e = EventEnvelope::new("m", kind, payload);
+            e.timestamp = "2026-11-10T14:00:10.000Z".into();
+            e.task_id = Some("t-1".into());
+            e.agent = agent.map(String::from);
+            e.span_id = agent.map(|a| format!("sp_{a}"));
+            e
+        };
+        let mut log = vec![EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1"})), ev("council.started", None, json!({"seats": [{"role": "architect", "family": "claude"}, {"role": "red-team", "family": "gemini"}], "budget_tokens": 400_000}))];
+        for (r, n) in [("architect", 40_000), ("red-team", 22_000)] {
+            log.push(ev("dag.node.added", Some(r), json!({})));
+            log.push(ev("agent.usage", Some(r), json!({"input_tokens": n - 1000, "output_tokens": 1000})));
+        }
+        let at = crate::progress::parse_ts_ms("2026-11-10T14:01:00.000Z").unwrap();
+        let s = council_view_at(&log, dir.path(), "t-1", at, 120, 8).unwrap();
+        assert_eq!(s["tokens"], json!({"spent": 62_000, "ceiling": 400_000}));
+        assert!(s["phase"].as_str().unwrap().ends_with("; 62k of 400k tokens"), "{}", s["phase"]);
+        assert_eq!(s["seats"].as_array().unwrap().iter().map(|x| x["tokens"].as_u64().unwrap()).collect::<Vec<_>>(), vec![40_000, 22_000]);
+        log.push(ev("council.verdict", None, json!({"decision": "d", "path": "x.md", "options": [], "steps": []})));
+        log.push(ev("task.completed", None, json!({"status": "done"})));
+        let card = council_view(&log, dir.path(), "t-1").unwrap()["display"].as_str().unwrap().to_string();
+        assert!(card.contains("**Cost:** 62,000 of 400,000 tokens on Delphi's seats."), "{card}");
+        // No ceiling: the line ends with the tokens alone. A Panel says its count is Delphi's seats only.
+        log[1] = ev("council.started", None, json!({"seats": [{"role": "architect", "family": "claude"}, {"role": "red-team", "family": "gemini"}]}));
+        log.truncate(log.len() - 2);
+        let s = council_view_at(&log, dir.path(), "t-1", at, 120, 8).unwrap();
+        assert!(s["phase"].as_str().unwrap().ends_with("; 62k tokens") && s["tokens"]["ceiling"].is_null(), "{s}");
+        log[0] = EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1", "venue": "panel"}));
+        assert_eq!(council_view(&log, dir.path(), "t-1").unwrap()["tokens"]["scope"], "delphi_seats");
     }
 
     #[test]
