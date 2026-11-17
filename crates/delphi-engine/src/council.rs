@@ -745,6 +745,25 @@ pub fn decide(round2: &Round2) -> Decision {
 
 /// The body of `## Accepted Risks & Minority Report (Red-Team / Dissent)`: every unresolved P0/P1 verbatim,
 /// or the exact unanimous sentence, which needs Red-Team's explicit `concur`.
+/// How much of a failed seat's error its stance keeps (`specs/123` §5 item 1).
+pub const ABSTENTION_MAX: usize = 300;
+
+/// ` (family F, endpoint E)` for an abstention, each part only when known and each a checked identifier; and the endpoint alone.
+pub fn seat_where(family: Option<&str>, endpoint: Option<&str>) -> (String, Option<String>) {
+    let endpoint = endpoint.filter(|e| !e.is_empty()).map(crate::progress::ident);
+    let parts: Vec<String> = [family.filter(|f| !f.is_empty()).map(|f| format!("family {}", crate::progress::ident(f))), endpoint.as_ref().map(|e| format!("endpoint {e}"))].into_iter().flatten().collect();
+    (if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }, endpoint)
+}
+
+/// A redacted reason cut to [`ABSTENTION_MAX`] characters; a cut one ends by saying where the whole error is.
+pub fn abstention_reason(text: &str, mission: &str) -> String {
+    if text.chars().count() <= ABSTENTION_MAX {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(ABSTENTION_MAX).collect();
+    format!("{} (cut; the whole error is in `delphi logs --mission {mission}`)", kept.trim_end())
+}
+
 /// The input plus output tokens of every `agent.usage` event of a Council task (`specs/123` §4 item 1). With `role`, that seat's only.
 pub fn council_tokens_of(events: &[EventEnvelope], task_id: &str, role: Option<&str>) -> u64 {
     events
@@ -1199,6 +1218,7 @@ impl Engine {
     /// blocks the others.
     pub(crate) async fn run_seat(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, h: HandoffEnvelope, slices: Vec<ContextSlice>, schema: Option<String>, timeout: Duration) -> Stance {
         let handoff_id = h.handoff_id.clone();
+        let (role, family) = (h.target_agent.clone(), h.routing_directive.model_family.clone());
         if let Some(s) = schema {
             self.schemas.lock().unwrap().insert(handoff_id.clone(), s);
         }
@@ -1210,14 +1230,30 @@ impl Engine {
         self.seat_deadlines.lock().unwrap().remove(&handoff_id);
         self.injected.lock().unwrap().remove(&handoff_id);
         self.schemas.lock().unwrap().remove(&handoff_id);
+        // Spec 123 §5: a seat that times out or fails says which family and endpoint it was on (the endpoint from the seat's last event
+        // in this task that names one: a receipt, a usage event, or the budget reservation or harness start made before a call), keeps
+        // at most 300 characters of the redacted error, and the whole error goes to the error log.
+        let on = || {
+            let endpoint = m.replay().ok().and_then(|evs| evs.iter().rev().find(|e| e.task_id.as_deref() == Some(task_id) && e.agent.as_deref() == Some(role.as_str()) && e.endpoint_id.is_some()).and_then(|e| e.endpoint_id.clone()));
+            seat_where(family.as_deref(), endpoint.as_deref())
+        };
+        // A span whose calls all failed ends escalated with the error as its reason, so an escalation is treated as an error too.
+        let failed = |word: &str, msg: &str| {
+            let whole = self.secrets.redact(msg);
+            let (fam_ep, endpoint) = on();
+            if delphi_core::elog::enabled(delphi_core::elog::Level::Error) {
+                delphi_core::elog::error("engine", "council_seat_failed", &whole, json!({"mission": m.id, "task": task_id, "role": role, "provider": endpoint, "kind": word}));
+            }
+            Stance::Abstained(abstention_reason(&format!("{word}{fam_ep}: {whole}"), &m.id))
+        };
         match out {
             Ok(Ok(o)) => match o.status {
                 Status::Done if !o.text.trim().is_empty() => Stance::Said(o.text),
                 Status::Done => Stance::Abstained("an empty answer".into()),
-                Status::Escalated(why) => Stance::Abstained(why.chars().take(160).collect()),
+                Status::Escalated(why) => failed("escalated", &why),
             },
-            Ok(Err(e)) => Stance::Abstained(self.secrets.redact(&e.to_string()).chars().take(160).collect()),
-            Err(_) => Stance::Abstained(format!("no answer within {}s", timeout.as_secs())),
+            Ok(Err(e)) => failed("failed", &e.to_string()),
+            Err(_) => Stance::Abstained(format!("no answer within {}s{}", timeout.as_secs(), on().0)),
         }
     }
 
@@ -2621,6 +2657,65 @@ pub(crate) mod tests {
         let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(w) if w.contains("too few")), "{:?}", out.status);
         assert!(!f.m.dir.join("councils").exists());
+    }
+
+    /// Spec 123 §5 (AC-4): a timed-out seat names its family and endpoint; a failed one keeps at most 300 characters of its redacted
+    /// error with the pointer to the error log, where the whole error is.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_abstention_names_family_and_endpoint_and_a_long_error_is_cut_with_the_whole_in_the_error_log() {
+        assert_eq!(seat_where(Some("gemini"), Some("gem")), (" (family gemini, endpoint gem)".to_string(), Some("gem".to_string())));
+        assert_eq!(seat_where(Some("claude"), None).0, " (family claude)");
+        assert_eq!(seat_where(None, Some("a b")).0, " (endpoint other)", "an endpoint that is not an identifier is not copied");
+        assert_eq!(abstention_reason("short", "m1"), "short");
+        let cut = abstention_reason(&"e".repeat(400), "m1");
+        assert!(cut.starts_with(&"e".repeat(300)) && !cut.contains(&"e".repeat(301)) && cut.ends_with(" (cut; the whole error is in `delphi logs --mission m1`)"), "{cut}");
+
+        // A seat that hangs past the timeout.
+        let f = crate::testkit::setup(vec![], 50.0, |s| s.council_seat_timeout = Duration::from_secs(2));
+        two_families(&f);
+        f.model.respond_with(|body| {
+            let t = body.to_string();
+            if t.contains("COUNCIL, ROUND 1") && who(body) == "strategist" {
+                Step::Hang
+            } else if t.contains("COUNCIL, ROUND 1") {
+                Step::text("OPTION: x\nstance")
+            } else {
+                Step::text("RECOMMENDATION: PROCEED\nROUND 2 COMPLETE")
+            }
+        });
+        f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        let stances = events_of(&f, "council.stance");
+        let strat = stances.iter().find(|e| e.payload["role"] == "strategist").unwrap();
+        let why = strat.payload["text"].as_str().unwrap();
+        assert!(strat.payload["status"] == "abstained" && why.starts_with("no answer within 2s (family ") && why.contains(", endpoint "), "{why}");
+
+        // A seat whose every call fails with a long error.
+        use delphi_core::elog::{self, Level, Logger};
+        let d = tempfile::tempdir().unwrap();
+        let mut st = elog::settings_with(d.path(), None, None);
+        st.level = Level::Error;
+        elog::install(Logger::new(d.path(), "daemon", "t", st));
+        let long: &'static str = Box::leak(format!("upstream said: {} END-OF-ERROR", "x".repeat(400)).into_boxed_str());
+        let f = crate::testkit::setup(vec![], 50.0, |_| {});
+        two_families(&f);
+        f.model.respond_with(move |body| {
+            let t = body.to_string();
+            if t.contains("COUNCIL, ROUND 1") && who(body) == "strategist" {
+                Step::Fail(long)
+            } else if t.contains("COUNCIL, ROUND 1") {
+                Step::text("OPTION: x\nstance")
+            } else {
+                Step::text("RECOMMENDATION: PROCEED\nROUND 2 COMPLETE")
+            }
+        });
+        f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        let text = std::fs::read_to_string(d.path().join("logs").join(elog::FILE)).unwrap_or_default();
+        elog::uninstall();
+        let stances = events_of(&f, "council.stance");
+        let why = stances.iter().find(|e| e.payload["role"] == "strategist").unwrap().payload["text"].as_str().unwrap().to_string();
+        assert!((why.starts_with("failed (family ") || why.starts_with("escalated (family ")) && why.contains(", endpoint ") && why.ends_with(&format!(" (cut; the whole error is in `delphi logs --mission {}`)", f.m.id)) && !why.contains("END-OF-ERROR"), "{why}");
+        let rec = text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).find(|r| r["slug"] == "council_seat_failed" && r["context"]["mission"] == f.m.id.as_str()).unwrap_or_else(|| panic!("no record: {text}"));
+        assert!(rec["message"].as_str().unwrap().contains("END-OF-ERROR") && rec["context"]["role"] == "strategist" && rec["level"] == "error", "{rec}");
     }
 
     #[tokio::test]
