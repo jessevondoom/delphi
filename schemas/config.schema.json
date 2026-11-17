@@ -79,7 +79,8 @@
       "type": "object",
       "properties": {
         "mission_budget_usd": { "type": "number", "minimum": 0 },
-        "council_budget_usd": { "type": "number", "minimum": 0 },
+        "council_budget_tokens": { "type": "integer", "minimum": 0, "description": "Input plus output tokens one Council may use (default 400000); 0 turns it off (spec 123 section 4)." },
+        "council_budget_usd": { "type": "number", "minimum": 0, "description": "Kept for compatibility: still checked; council_budget_tokens is the ceiling to set." },
         "on_budget_exhausted": { "type": "string" },
         "per_watch_max_wakes_per_day": { "type": "integer", "minimum": 0 }
       }
