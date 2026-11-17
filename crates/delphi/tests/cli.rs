@@ -38,7 +38,7 @@ fn help_is_stdout_exit_zero_and_touches_nothing() {
 
 #[test]
 fn every_command_answers_help_with_only_its_own_usage() {
-    for cmd in ["update", "setup", "init", "doctor", "lint", "check", "decisions", "timers", "relay", "run", "chat", "models", "auth", "connectors", "needs", "kb", "daemon", "xenia", "endpoints", "status", "missions", "changelog", "tools", "skills", "hooks", "capabilities"] {
+    for cmd in ["update", "setup", "init", "doctor", "lint", "check", "decisions", "timers", "relay", "run", "chat", "models", "auth", "connectors", "needs", "kb", "daemon", "xenia", "endpoints", "status", "missions", "changelog", "tools", "skills", "hooks", "capabilities", "council"] {
         for flag in ["--help", "-h"] {
             let (o, touched) = run(&[cmd, flag]);
             assert_eq!(o.status.code(), Some(0), "{} {}", cmd, flag);
@@ -51,6 +51,16 @@ fn every_command_answers_help_with_only_its_own_usage() {
             assert!(lines.iter().all(|l| l.chars().count() < 120), "{} {}: a line is too long:\n{}", cmd, flag, out);
             assert!(!touched, "{} {} wrote to the home", cmd, flag);
         }
+    }
+}
+
+// specs/123 §7: `delphi council watch` reads; on a home with no workspace it says so and creates nothing.
+#[test]
+fn council_watch_without_a_workspace_creates_nothing() {
+    for args in [&["council", "watch", "--once"][..], &["council", "watch", "t_0001", "--workspace", "w"], &["council"]] {
+        let (o, touched) = run(args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", text(&o.stderr));
+        assert!(!touched, "{args:?} wrote to the home");
     }
 }
 
