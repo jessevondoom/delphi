@@ -136,6 +136,7 @@ Delphi is connected as the MCP server `delphi` (read-only, this machine only).
 ## Mention Routing & Specialist Personas
 - **`@delphi` (the orchestrator)**: On `@delphi` or the orchestrator's alias, call `consult_orchestrator` with the task (one call), adopt the orchestrator's pack with `get_agent` if you do not hold it, and print its display line. When the briefing's roster names a role other than the orchestrator, hand that role the work, as `next` says, and let it answer under its own display line; answer as the orchestrator yourself only when the roster is the orchestrator alone, or for triage, a lookup or a status question. The briefing names the roles that fit (a role the operator named comes first, marked `named`), the project's matching specs and context, and what to call next. Call `request_help` instead when the briefing's `next` names it, when the operator asks for Delphi's view or a second opinion on the plan, or when you are unsure which role should do the work: Delphi's own orchestrator answers, and its answer is advice, signed by who answered.
 - **A role the operator names** (`@<name>`, `@<role>`, or in words: \"ask the strategist\", \"a red-team review\", \"the architect's view\")**: that role answers, not the orchestrator.** Mentions resolve per the active workspace theme (`@<display_name>` and `@<role_id>` both work). Start its `<role>-worker` subagent for its own context (a review, a second opinion, a long task), or call `get_agent(role: \"<name_or_role>\")` and adopt the pack for a short answer, and print its display line before what it writes. When the prompt hook says a prompt names a role in words, do the same if the operator means that role. Say in one line who is answering and why.
+- **Steering the experts** (the operator in the loop): \"`@<role>` again\" asks the same role afresh (its worker, a new context); \"dissent from `@<role>`\" or \"argue against the strategist\" starts another role, or the same role's worker on another model, told to find where the first answer is wrong (`ask_family` reaches another model family where Delphi has one); \"use a stronger model\" starts the worker one tier up (the briefing's `tier_note` names the tiers). Before a specialist answers, say in one line who is answering, why that role, and the model it runs on as your host reports it, so the operator can redirect it.
 - **Roster & Discovery**: Call `delphi_roster` (or `@delphi roster`) to view the complete catalog of active specialists, display names, badges, aliases, and cognitive duties.
 
 ## Guidelines
@@ -1323,6 +1324,11 @@ mod tests {
         let files = role_agent_files("claude-code", &none()).unwrap();
         assert_eq!(files.len(), COUNCIL_ROLES.len() + WORKER_ROLES.len());
         assert_eq!(files[0], role_agent_file("claude-code", "architect", &none()).unwrap());
+    }
+
+    #[test]
+    fn the_delphi_skill_gives_the_operator_verbs_to_steer_the_experts() {
+        assert!(SKILL_MD.contains("again") && SKILL_MD.contains("dissent from") && SKILL_MD.contains("use a stronger model") && SKILL_MD.contains("the model it runs on as your host reports it"));
     }
 
     #[test]

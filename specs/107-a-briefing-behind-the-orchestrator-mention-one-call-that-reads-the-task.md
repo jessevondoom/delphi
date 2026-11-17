@@ -147,6 +147,7 @@ The operator's words, in a host session on 2026-11-16: "i've seen many instances
 | Slice | Content | Hours |
 | :-- | :-- | --: |
 | B3 | §8.2 and §8.3: the rule, the research default, `route` and the briefing, the hook, the second labeled set, `next`, the routing passage, the skill, the orchestrator's manifest | 6-9 |
+| B5 | §8.7: `answering`, the tier per seat and `tier_note`, the operator's verbs in the skill | 2 |
 
 §8.2 and §8.3 are one slice: they change the same files (the briefing, the skill, the hook) and neither is useful alone. It goes in one pull request with this section (the same-spec trial of `AGENTS.md`), each its own commit and tracker row.
 
@@ -154,3 +155,12 @@ The operator's words, in a host session on 2026-11-16: "i've seen many instances
 
 - A name chooses which role's advice the host is pointed at. It dispatches nothing, raises no score, and grants nothing; `request_help` stays read-only at L0. A name in untrusted text that reaches the task can point at a role, which is no more than the operator could do by typing it.
 - Not verified: how operators phrase a request (the lists are the author's), whether a host model follows the conditional hook line, and the frames in languages other than English. The audit's fixes 4 to 8 (the role map and `advocate`'s constant score, an honest `request_help`, tiers and models shown on hosts, routing feedback, operator verbs) are not part of this amendment.
+
+### 8.7 B5: who answers, at what tier, and the operator's verbs
+
+The audit's fixes 6 (in part) and 8, which the operator asked for with the rest ("try to get all 8 fixes done locally before opening a PR").
+
+1. **`answering`**: the briefing adds one line, who answers and why: the role the operator named; the scout for research; the best fit, with its confidence; or the orchestrator, because no role reached the threshold and none was named.
+2. **Tier per seat**: each roster seat carries `tier` and `tier_reason` by a fixed rule: the role manifest's `default_tier` (`fast`, `workhorse`, `frontier`; `workhorse` when absent), one step up for `ambiguity: high`, `blast_radius: system-wide` or a `council` or `red_team` trigger, one step down for `ambiguity: low` with `blast_radius: isolated` and no trigger, never outside the three. The briefing's `tier_note` names the tiers on the hosts that fix their names (Claude Code `haiku`, `sonnet`, `opus` or `fable`; agy `flash`, `pro`) and says a tier is a share of tokens, never money. The tier is advice: the host chooses its model, and Delphi records nothing about it.
+3. **The operator's verbs** (the skill): "`@<role>` again" asks the same role afresh in its worker; "dissent from `@<role>`" (or "argue against the strategist") starts another role, or the same role's worker on another model, told to find where the first answer is wrong, with `ask_family` for another family where Delphi has one; "use a stronger model" starts the worker a tier up. Before a specialist answers, the host says in one line who answers, why that role, and the model it runs on as the host reports it (the display line itself is unchanged, 087 §5.3).
+4. Not verified: whether a host model follows the verbs, and whether the tier rule's steps are the right size; the eval of fix 7 (a correction count) is the place to learn it.

@@ -396,7 +396,7 @@ mod tests {
     #[test]
     fn how_often_each_briefing_suggestion_fires_on_the_labeled_set() {
         let roles = real_roles();
-        let infos: Vec<crate::mcp_packs::RoleInfo> = roles.iter().map(|r| crate::mcp_packs::RoleInfo { id: r.id.clone(), title: r.title.clone(), purpose: r.purpose.clone(), servable: r.locus != "inside", locus: r.locus.clone(), skills: r.skills.clone(), display_name: String::new(), aliases: vec![], badge: String::new() }).collect();
+        let infos: Vec<crate::mcp_packs::RoleInfo> = roles.iter().map(|r| crate::mcp_packs::RoleInfo { id: r.id.clone(), title: r.title.clone(), purpose: r.purpose.clone(), servable: r.locus != "inside", locus: r.locus.clone(), skills: r.skills.clone(), display_name: String::new(), aliases: vec![], badge: String::new(), default_tier: "workhorse".into() }).collect();
         let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
         let cases = labeled();
         for l in &cases {

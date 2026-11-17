@@ -38,6 +38,8 @@ pub struct RoleInfo {
     pub display_name: String,
     pub aliases: Vec<String>,
     pub badge: String,
+    /// The manifest's `default_tier` (`fast`, `workhorse` or `frontier`); `workhorse` when it says nothing usable.
+    pub default_tier: String,
 }
 
 /// What `list_skills` says about one release skill.
@@ -369,6 +371,7 @@ impl Packs {
                 display_name,
                 aliases,
                 badge,
+                default_tier: fm_str(&fm, "default_tier").filter(|t| crate::briefing::TIERS.contains(&t.as_str())).unwrap_or_else(|| "workhorse".into()),
                 id,
             });
         }

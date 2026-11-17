@@ -100,15 +100,21 @@
     },
     {
       "level": 3,
-      "line": 153,
+      "line": 154,
       "number": "8.6",
       "title": "Authority and not verified"
+    },
+    {
+      "level": 3,
+      "line": 159,
+      "number": "8.7",
+      "title": "B5: who answers, at what tier, and the operator's verbs"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md",
-    "sha256": "585aa395be3fe6077b959ec4362c12634b5d8dacd84d9ec175ce670d0ccd892d"
+    "sha256": "59d35a00aa0c21f18c274f8f718c41e6cf6822ade8dbf757a89c10a3a703fd3d"
   },
   "source_status_at_hash": {
     "line": {
@@ -121,7 +127,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 3: route the orchestrator mention to `request_help`, make `consult_orchestrator` read the task, fix the skill text) BEFORE this text was written; the operator has not read the text. Section 8 (2026-11-16) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request."
     },
-    "sha256": "585aa395be3fe6077b959ec4362c12634b5d8dacd84d9ec175ce670d0ccd892d",
+    "sha256": "59d35a00aa0c21f18c274f8f718c41e6cf6822ade8dbf757a89c10a3a703fd3d",
     "word": "approved"
   },
   "spec": {
