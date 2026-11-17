@@ -125,6 +125,82 @@ pub fn assign(roles: &[String], preferred: &dyn Fn(&str) -> String, available: &
     Assignment { seats, homogeneous, notes }
 }
 
+/// `require_families` (`specs/123` §6): move seats onto families the plan does not use yet until it seats `want` families or no family
+/// is left. A seat moves only off a family another seat also holds (the architect last), and a critic is never moved onto the author's
+/// family. Deterministic; it never lowers a tier.
+pub fn spread_families(plan: &mut Assignment, available: &[String], want: usize, author: Option<&str>) {
+    let used = |p: &Assignment| {
+        let mut f: Vec<String> = p.seats.iter().map(|s| s.family.clone()).collect();
+        f.sort();
+        f.dedup();
+        f
+    };
+    let mut fams = available.to_vec();
+    fams.sort();
+    fams.dedup();
+    for target in fams {
+        let now = used(plan);
+        if now.len() >= want {
+            break;
+        }
+        if now.contains(&target) {
+            continue;
+        }
+        let critic = |r: &str| r == "red-team" || r == "strategist";
+        let shared = |s: &SeatPlan| plan.seats.iter().filter(|o| o.family == s.family).count() > 1;
+        let pick = plan.seats.iter().rposition(|s| s.role != "architect" && shared(s) && !(critic(&s.role) && author == Some(target.as_str()))).or_else(|| plan.seats.iter().position(|s| s.role == "architect" && shared(s)));
+        if let Some(i) = pick {
+            plan.notes.push(format!("{} moved from {} to {} (require_families = {want})", plan.seats[i].role, plan.seats[i].family, target));
+            plan.seats[i].family = target;
+        }
+    }
+    plan.homogeneous = used(plan).len() < 2;
+}
+
+/// A host's `request_council` arguments as `CouncilOpts` (`specs/123` §6), judged before anything is recorded or spent. `configured` is the
+/// families of the allowed endpoints, `usable` how many can answer now, `default_of` a role's default tier. An unmeetable
+/// `require_families` is a `seats_unavailable:` error, which the MCP process turns into the terminal `council_unavailable` answer.
+pub fn host_council_opts(p: &Value, configured: &[String], usable: usize, default_of: &dyn Fn(&str) -> String) -> Result<CouncilOpts, String> {
+    let mut o = CouncilOpts::default();
+    match p.get("tier") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(t)) => match tier_refusal(&DEFAULT_SEATS, t, default_of) {
+            Some(why) => return Err(why.replace("--tier", "`tier`")),
+            None => o.tier = Some(t.clone()),
+        },
+        Some(_) => return Err("`tier` is fast, workhorse or frontier".into()),
+    }
+    match p.get("author_family") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(f)) if configured.iter().any(|c| c == f) => o.author_family = Some(f.clone()),
+        Some(_) => return Err(format!("`author_family` names a configured model family: {}", if configured.is_empty() { "none is configured".to_string() } else { configured.join(", ") })),
+    }
+    match p.get("require_families") {
+        None | Some(Value::Null) => {}
+        Some(v) => match v.as_u64() {
+            Some(n @ 1..=4) if n as usize > usable => return Err(format!("seats_unavailable: only {usable} model famil{} usable now; require_families asked for {n}", if usable == 1 { "y" } else { "ies" })),
+            Some(n @ 1..=4) if n as usize > DEFAULT_SEATS.len() => return Err(format!("seats_unavailable: a Council from a host has {} seats, so it cannot seat {n} model families; require_families asked for {n}", DEFAULT_SEATS.len())),
+            Some(n @ 1..=4) => o.require_families = Some(n as u32),
+            _ => return Err("`require_families` is a whole number from 1 to 4 (leave it out to run labelled homogeneous when one family sits)".into()),
+        },
+    }
+    Ok(o)
+}
+
+/// The console's `--tier` sentences (`specs/003` §4.2), for a host's `tier` judged before anything is recorded (`specs/123` §6):
+/// `None` when `want` is a tier that raises or keeps every seat.
+pub fn tier_refusal(roles: &[&str], want: &str, default_of: &dyn Fn(&str) -> String) -> Option<String> {
+    let rank = |t: &str| match t {
+        "fast" => 0,
+        "workhorse" => 1,
+        _ => 2,
+    };
+    if !matches!(want, "fast" | "workhorse" | "frontier") {
+        return Some("--tier must be fast, workhorse or frontier".into());
+    }
+    roles.iter().map(|r| (r, default_of(r))).find(|(_, d)| rank(want) < rank(d)).map(|(r, d)| format!("a Council is raised on demand, never lowered: `{}` starts on {}, so --tier {} is not used. A seat steps down only when the model it needs is unavailable", r, d, want))
+}
+
 // ── the blind barrier ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1157,6 +1233,8 @@ pub struct CouncilOpts {
     /// `--tier`: raise every seat to this tier for this Council (`specs/003` §4.2). A Council is raised on demand and never lowered to save cost;
     /// a seat steps down only when the model it needs is unavailable, as any task does.
     pub tier: Option<String>,
+    /// A host's `require_families` (`specs/123` §6): the plan seats at least this many families or the Council is not convened.
+    pub require_families: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -1182,10 +1260,7 @@ impl Engine {
     }
 
     fn available_families(&self) -> Vec<String> {
-        let cfg = self.cfg.get();
-        let mut f: Vec<String> = cfg.endpoints.iter().filter(|e| cfg.is_allowed(&e.id)).map(|e| e.family.clone()).collect();
-        f.sort();
-        f.dedup();
+        let mut f = self.configured_families();
         f.retain(|fam| self.family_usable(fam, false));
         f
     }
@@ -1201,6 +1276,20 @@ impl Engine {
             return Err("no model family is usable right now, so no Council seat can be seated".to_string());
         }
         Ok(())
+    }
+
+    /// The families of the allowed endpoints, usable now or not: what a host's `author_family` may name (`specs/123` §6).
+    pub(crate) fn configured_families(&self) -> Vec<String> {
+        let cfg = self.cfg.get();
+        let mut f: Vec<String> = cfg.endpoints.iter().filter(|e| cfg.is_allowed(&e.id)).map(|e| e.family.clone()).collect();
+        f.sort();
+        f.dedup();
+        f
+    }
+
+    /// How many model families can answer right now (`specs/123` §6: `require_families` is judged against it before anything is spent).
+    pub(crate) fn usable_family_count(&self) -> usize {
+        self.available_families().len()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1522,7 +1611,16 @@ impl Engine {
                 });
             }
         }
-        m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling, "budget_tokens": budget_tokens}))).await?;
+        // `specs/123` §6: a host's `require_families`. The daemon refused it at once when too few families were usable; a family that
+        // stopped answering since then is refused here, still before anything is recorded or spent.
+        if let Some(n) = opts.require_families {
+            spread_families(&mut plan, &available, n as usize, opts.author_family.as_deref());
+            let seated = plan.seats.iter().map(|s| s.family.as_str()).collect::<std::collections::BTreeSet<_>>().len();
+            if seated < n as usize {
+                return Ok((Status::Escalated(format!("seats_unavailable: the plan seats only {seated} model famil{}; require_families asked for {n}. Nothing was spent", if seated == 1 { "y" } else { "ies" })), String::new()));
+            }
+        }
+        m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling, "budget_tokens": budget_tokens, "require_families": opts.require_families}))).await?;
 
         // Lenses are assigned once, before Round 1, and each seat is shown only its own (`specs/026` §4).
         let lens_plan = if opts.lenses {
@@ -2722,7 +2820,7 @@ pub(crate) mod tests {
     async fn bad_councils_are_refused_before_any_model_call() {
         let f = crate::testkit::setup(vec![], 50.0, |_| {});
         for (seats, why) in [(vec!["architect", "red-team"], "3 to 5"), (vec!["architect", "red-team", "red-team"], "3 to 5"), (vec!["architect", "red-team", "orchestrator"], "arbiter"), (vec!["architect", "red-team", "poet"], "available role")] {
-            let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts { seats: seats.iter().map(|s| s.to_string()).collect(), author_family: None, lenses: false, tier: None }).await.unwrap();
+            let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts { seats: seats.iter().map(|s| s.to_string()).collect(), ..Default::default() }).await.unwrap();
             assert!(matches!(&out.status, Status::Escalated(w) if w.contains(why)), "{:?}: {:?}", seats, out.status);
         }
         let out = f.engine.run_council(&f.m, f.m.next_task_id(), "   ", CouncilOpts::default()).await.unwrap();
@@ -2818,5 +2916,82 @@ pub(crate) mod tests {
         let doc = std::fs::read_dir(f.m.dir.join("councils")).unwrap().flatten().next().map(|e| std::fs::read_to_string(e.path()).unwrap()).unwrap_or_default();
         println!("ARTIFACT\n{}", doc);
         assert!(lint_artifact(&doc).is_empty(), "{:?}", lint_artifact(&doc));
+    }
+
+    // specs/123 §6, AC-5: a host's tier, author_family and require_families become CouncilOpts, judged before anything is recorded.
+    #[test]
+    fn a_hosts_council_options_are_checked_and_reach_the_council_opts() {
+        let fams = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let configured = fams(&["claude", "gemini", "openai"]);
+        let workhorse = |_: &str| "workhorse".to_string();
+        let o = host_council_opts(&json!({"tier": "frontier", "author_family": "gemini", "require_families": 3}), &configured, 3, &workhorse).unwrap();
+        assert_eq!((o.tier.as_deref(), o.author_family.as_deref(), o.require_families), (Some("frontier"), Some("gemini"), Some(3)));
+        assert!(o.seats.is_empty() && !o.lenses, "nothing else is opened to a host");
+        let none = host_council_opts(&json!({"question": "q"}), &configured, 3, &workhorse).unwrap();
+        assert_eq!((none.tier, none.author_family, none.require_families), (None, None, None));
+        let refused = |p: Value, usable: usize| host_council_opts(&p, &configured, usable, &workhorse).unwrap_err();
+        assert!(refused(json!({"tier": "fast"}), 3).starts_with("a Council is raised on demand, never lowered: `architect` starts on workhorse, so `tier` fast"));
+        assert!(refused(json!({"tier": "huge"}), 3).contains("must be fast, workhorse or frontier"));
+        assert!(refused(json!({"tier": 2}), 3).contains("`tier` is fast"));
+        assert_eq!(refused(json!({"author_family": "mistral"}), 3), "`author_family` names a configured model family: claude, gemini, openai");
+        assert_eq!(refused(json!({"require_families": 2}), 1), "seats_unavailable: only 1 model family usable now; require_families asked for 2");
+        assert_eq!(refused(json!({"require_families": 3}), 2), "seats_unavailable: only 2 model families usable now; require_families asked for 3");
+        assert!(refused(json!({"require_families": 4}), 4).starts_with("seats_unavailable: a Council from a host has 3 seats"));
+        for bad in [json!(0), json!(5), json!("two"), json!(-1)] {
+            assert!(refused(json!({"require_families": bad}), 4).contains("from 1 to 4"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn require_families_spreads_the_plan_without_moving_a_critic_onto_the_authors_family() {
+        let fams = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let roles = fams(&["architect", "strategist", "red-team"]);
+        let available = fams(&["claude", "gemini", "openai"]);
+        let mut plan = assign(&roles, &|_| "claude".to_string(), &available, &|_| "workhorse".to_string(), None);
+        let before: std::collections::BTreeSet<String> = plan.seats.iter().map(|s| s.family.clone()).collect();
+        assert_eq!(before.len(), 2, "assign spans two families on its own: {plan:?}");
+        spread_families(&mut plan, &available, 3, None);
+        let after: std::collections::BTreeSet<String> = plan.seats.iter().map(|s| s.family.clone()).collect();
+        assert_eq!(after.len(), 3, "{plan:?}");
+        assert_eq!(plan.seats.iter().find(|s| s.role == "architect").unwrap().family, "claude", "the architect keeps its family when another seat can move");
+        assert!(!plan.homogeneous && plan.notes.iter().any(|n| n.contains("require_families = 3")));
+        // Asking for no more than the plan seats changes nothing.
+        let mut same = assign(&roles, &|_| "claude".to_string(), &available, &|_| "workhorse".to_string(), None);
+        let copy = same.clone();
+        spread_families(&mut same, &available, 2, None);
+        assert_eq!(same, copy);
+        // The only unused family is the author's: a critic is not moved onto it, and the architect may be.
+        let two = fams(&["claude", "gemini"]);
+        let mut p = Assignment { seats: roles.iter().map(|r| SeatPlan { role: r.clone(), family: if r == "red-team" { "claude".into() } else { "openai".into() }, avoid: vec![], tier: None }).collect(), homogeneous: false, notes: vec![] };
+        spread_families(&mut p, &two, 3, Some("gemini"));
+        assert!(p.seats.iter().all(|s| s.role == "architect" || s.family != "gemini"), "{p:?}");
+    }
+
+    // specs/123 §6: the daemon Council's card says whether the receipts met require_families.
+    #[test]
+    fn a_daemon_council_card_says_require_families_met_or_not_from_the_receipts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("councils")).unwrap();
+        std::fs::write(dir.path().join("councils/001-x.md"), "## Decision\n\nx\n").unwrap();
+        let ev = |kind: &str, payload: Value, agent: Option<&str>| {
+            let mut e = EventEnvelope::new("m", kind, payload);
+            e.task_id = Some("t-1".into());
+            e.agent = agent.map(String::from);
+            e
+        };
+        let receipt = |family: &str| json!({"served": {"family": family}, "tokens_in": 1, "tokens_out": 1, "outcome": "ok"});
+        let card = |second: &str| {
+            let log = vec![
+                EventEnvelope::new("m", crate::host_rpc::COUNCIL_EVENT, json!({"task_id": "t-1"})),
+                ev("council.started", json!({"seats": [], "homogeneous": false, "require_families": 2}), None),
+                ev(crate::seat::RECEIPT_KIND, receipt("claude"), Some("architect")),
+                ev(crate::seat::RECEIPT_KIND, receipt(second), Some("red-team")),
+                ev("council.verdict", json!({"decision": "d", "path": "missions/m/councils/001-x.md", "options": [], "steps": [], "homogeneous": false}), None),
+                ev("task.completed", json!({"status": "done", "reason": ""}), None),
+            ];
+            crate::host_rpc::council_view(&log, dir.path(), "t-1").unwrap()["display"].as_str().unwrap().to_string()
+        };
+        assert!(card("gemini").contains("**require_families = 2: met** (by the receipts)"), "{}", card("gemini"));
+        assert!(card("claude").contains("**require_families = 2: NOT met** (by the receipts)"), "{}", card("claude"));
     }
 }

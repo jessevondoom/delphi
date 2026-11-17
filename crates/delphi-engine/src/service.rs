@@ -1292,6 +1292,8 @@ impl EngineService {
         if let Err(why) = self.engine.council_seatable() {
             return Err(err(code::INVALID_PARAMS, format!("seats_unavailable: {why}")));
         }
+        // Spec 123 §6: `tier`, `author_family`, `require_families`, judged before the Council is raised.
+        let opts = crate::council::host_council_opts(&p, &self.engine.configured_families(), self.engine.usable_family_count(), &|r| self.engine.role_default_tier(r)).map_err(|why| err(code::INVALID_PARAMS, why))?;
         let (task_id, m) = {
             let _gate = self.host_gate.lock().await;
             let m = self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?;
@@ -1301,7 +1303,7 @@ impl EngineService {
         };
         let (engine, tid, mm) = (self.engine.clone(), task_id.clone(), m.clone());
         let job = tokio::spawn(async move {
-            if let Err(e) = engine.run_council(&mm, tid.clone(), &proposition, crate::council::CouncilOpts::default()).await {
+            if let Err(e) = engine.run_council(&mm, tid.clone(), &proposition, opts).await {
                 elog_task_failed(&mm.id, &tid, &e);
                 let mut ev = EventEnvelope::new(&mm.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
@@ -3437,7 +3439,7 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "`proposition` must be 1 to 20,000 characters"));
         }
         let seats: Vec<String> = p["seats"].as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default();
-        let opts = crate::council::CouncilOpts { seats, author_family: p["author_family"].as_str().map(String::from), lenses: p["lenses"].as_bool().unwrap_or(false), tier: p["tier"].as_str().map(String::from) };
+        let opts = crate::council::CouncilOpts { seats, author_family: p["author_family"].as_str().map(String::from), lenses: p["lenses"].as_bool().unwrap_or(false), tier: p["tier"].as_str().map(String::from), require_families: None };
         let task_id = m.next_task_id();
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: "council".into(), prompt: proposition.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
@@ -6664,6 +6666,57 @@ mod tests {
         let mut found = Vec::new();
         files_mentioning(&ws_dir, "council_format", &mut found);
         assert!(found.is_empty(), "no host call wrote a Council label: {found:?}");
+    }
+
+    // Spec 123 §6, AC-5: tier, author_family and require_families reach the Council; a bad or unmeetable one is refused before any event
+    // of the Council is written.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hosts_council_options_reach_the_council_and_an_unmeetable_one_writes_nothing() {
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let mission_dir = delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789");
+        let md = mission_dir.clone();
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "question": "Table or file?"});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            let raised = || delphi_core::log::replay(&md).map(|evs| evs.iter().filter(|e| e.kind == crate::host_rpc::COUNCIL_EVENT).count()).unwrap_or(0);
+            // The test workspace has one family (claude): two cannot be met, and the host is told so as `seats_unavailable`.
+            let (code_, message) = rpc_error(c.call("host.request_council", p(json!({"require_families": 2}))));
+            assert_eq!((code_, message.as_deref()), (Some(code::INVALID_PARAMS), Some("seats_unavailable: only 1 model family usable now; require_families asked for 2")));
+            assert!(crate::mcp_host::council_unavailable_for(message.as_deref().unwrap()).is_some_and(|a| a.starts_with("seats_unavailable: only 1 model family") && a.contains("\"reason\":\"seats_unavailable\"")));
+            for bad in [json!({"tier": "huge"}), json!({"tier": "fast"}), json!({"author_family": "mistral"}), json!({"require_families": 9})] {
+                let (code_, message) = rpc_error(c.call("host.request_council", p(bad.clone())));
+                assert_eq!(code_, Some(code::INVALID_PARAMS), "{bad}: {message:?}");
+            }
+            assert_eq!(raised(), 0, "nothing of a Council was written for a refused request");
+            let r = c.call("host.request_council", p(json!({"tier": "frontier", "author_family": "claude", "require_families": 1}))).unwrap();
+            let id = r["council_id"].as_str().unwrap().to_string();
+            let _ = c.call("host.council_result", p(json!({"council_id": id, "wait": true})));
+            assert_eq!(raised(), 1);
+        })
+        .await;
+        let mut events = replay_log(&mission_dir);
+        for _ in 0..200 {
+            if events.iter().any(|e| e.kind == "council.started") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            events = replay_log(&mission_dir);
+        }
+        let started = events.iter().find(|e| e.kind == "council.started").expect("the Council started");
+        assert_eq!(started.payload["require_families"], 1, "{}", started.payload);
+        assert!(started.payload["seats"].as_array().unwrap().iter().all(|s| s["tier"] == "frontier"), "{}", started.payload);
     }
 
     // Spec 098 section 9 and section 12 item 4: a generated pack is task work only; the daemon refuses its id as a Council, Panel or
