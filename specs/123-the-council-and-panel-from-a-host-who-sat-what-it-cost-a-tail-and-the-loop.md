@@ -3,7 +3,7 @@ id: spec-123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-t
 title: "123: The Council and the Panel from a host: who sat, what it cost, a tail, and the loop"
 author: architect
 timestamp: 2026-11-16T00:00:00Z
-status: approved   # by the operator, 2026-11-16, in a host session: "yeah build it in a branch and target fewer independent PRs to make merging easier", said of a ranked list of sixteen changes that was shown to them, after "i like the council/panel split as it stands today. im curious about the experience of both really". The approval was given to the list BEFORE this text was written; the operator has not read the text. It takes effect when the operator merges the pull request that carries it. Items of the list that are not builds (a live check, an experiment, two policy questions) are in section 10, not built.
+status: approved   # Section 15 (2026-11-17) is an amendment written from the operator's answers to section 12; it takes effect when the operator merges its pull request. By the operator, 2026-11-16, in a host session: "yeah build it in a branch and target fewer independent PRs to make merging easier", said of a ranked list of sixteen changes that was shown to them, after "i like the council/panel split as it stands today. im curious about the experience of both really". The approval was given to the list BEFORE this text was written; the operator has not read the text. It takes effect when the operator merges the pull request that carries it. Items of the list that are not builds (a live check, an experiment, two policy questions) are in section 10, not built.
 approved_by: operator (2026-11-16, in advance, on the list)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
@@ -126,7 +126,7 @@ Nothing else of `CouncilOpts` (seats, lenses) is opened to a host here. The argu
 - `require_families` can only refuse or label; it never lowers a tier or spends anything before the refusal.
 - `delphi council watch` reads files and prints fixed forms; it writes nothing.
 
-## 12. Open questions for the operator
+## 12. Open questions for the operator (answered in §15, 2026-11-17)
 
 1. Should a host-reported choice ever resolve a decision (today: never)?
 2. Should Council records be promoted to a zone agents retrieve from at span start, and at what tier?
@@ -153,3 +153,20 @@ Three pull requests, each one spec's slices (the same-spec trial of `CONTRIBUTIN
 - AC-6: `delphi council watch --once` on a fixture prints the header, tail and state; with a live log it exits 0 when the Council ends; it prints no seat text (a seat text containing a marker never appears).
 - AC-7: an escalated host Council raises one `council` decision with the ruling's options; `council_choose` adds the host-reported choice to it and leaves it open; only `decision.resolve` closes it.
 - AC-8: a Council whose headline matches an earlier record's gets that record's Decision and Minority Report in Round 2 and the synthesis, never in Round 1, and lists it in its record.
+
+## 15. Amendment (operator, 2026-11-17): the answers to §12
+
+The operator's words, in the host session, as typed:
+
+> "decisions: host reported choice if it's relayed from a delphi-orchestrated agent can resolve a decision but in a same family panel it should be framed as an operator choice or a recommendation. council records being searchable by agents is smart. accomplish how you feel best. calling up previous decisions when similar circumstances are present is a smart learning step. single-family should continue to run and be labelled. we can't assume access to multiple families. 300K feels like a good cieling but maybe raise it to 400K just in case."
+
+This section replaces §8 item 2, amends §4 item 1, §9 and §11, and closes §12.
+
+1. **§12 question 1, a choice the host relays (replaces §8 item 2).** `council_choose` on a Council whose raised decision is still open:
+   - **Delphi-orchestrated** (a daemon Council, or a Panel in which Delphi ran at least one seat on a family other than the host's, by the receipts): the choice **resolves** the decision. `decision.resolved` is written with `by: "host-relayed"`, `surface: "host"` and the host session, so the record says the answer came through the host and not from a console. The effect is still only `record` (044 §4.4): nothing starts.
+   - **Same-family Panel** (every seat on the host's family): the choice does **not** resolve the decision. It is put on the decision as the operator's choice as the host reported it, shown as its recommendation ("the host reported the operator chose <label> after a same-family Panel"), and the decision stays open for the operator to confirm in one step in the decisions pane.
+   - The answer of `council_choose` says which of the two happened and where the decision is.
+   This narrows 044 §4.4 ("only `decision.resolve` from a console") for this one kind and these conditions only; no other raised decision can be resolved from a host.
+2. **§12 question 2, records agents can search.** Council records stay untrusted and stay out of the span-start zones (`retrieval::START_ZONES`), so Round 1 stays blind and no span starts on model-written text. They are made findable on purpose: the knowledge search an agent calls (`kb_search`, and `search_kb` for a host) returns Council records with a label naming them as a Council record (venue, number, date, decided or escalated) and their tier. §9 is the automatic half: a later Council is shown earlier rulings that match it.
+3. **§12 question 3, a single family.** Unchanged: a Council of one family runs and is labelled (§3 item 3). No refusal is added; a host that wants more asks with `require_families` (§6).
+4. **§12 question 4, the ceiling.** The default of `[budget] council_budget_tokens` is **400,000** (amends §4 item 1).
