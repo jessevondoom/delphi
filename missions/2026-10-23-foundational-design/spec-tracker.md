@@ -147,6 +147,7 @@ Council 011 (Haiku + two Gemini 3.8 Flash High): build with changes. Approved by
 | S3 | `[extends.<role>]`: skills, guidance, team | not started |
 | S4 | evidence run against the flat list; default-on decision | not started |
 | S5 | domain leads (spec 042) | only if the gate in §7 trips |
+| §13 | amendment (operator, 2026-11-16): `delphi route` reads the whole task, and a count of corrections | built (pull request open): `task_of` no longer skips the first argument (it dropped a task's first word and, after `--home`, read the home's path as the task: the audit's "advocate constant"); `route.decided` also records `named`, `research_default` and `ranked`; `delphi route --corrections` counts named-versus-ranked pairs over every mission, printing no task and changing nothing |
 
 ## Harness and OpenAI coverage (spec 046, approved 2026-10-28)
 

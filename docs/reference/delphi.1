@@ -339,8 +339,10 @@ which role or agent fits a task (a dry run).
   delphi route "<task>" [\-\-domain <d>] [\-\-role <role>] [\-\-limit <1\-5>] [\-\-threshold <0\-1>] [\-\-json] [\-\-workspace <name>] [\-\-home <dir>]
   delphi route \-\-adopt\-eval <labeled.json> [\-\-threshold <0\-1>] [\-\-json] [\-\-workspace <name>] [\-\-home <dir>]
   delphi route \-\-eval <labeled.json> [\-\-json] [\-\-workspace <name>] [\-\-home <dir>]
+  delphi route \-\-corrections [\-\-json] [\-\-workspace <name>] [\-\-home <dir>]
 .fi
 .PP
+\-\-corrections counts, from the route records of every mission, how often the operator named a role other than the one the ranking chose (pairs, most frequent first); it prints no task and changes nothing.
 Ranks Delphi's canonical roles and the agents of the added bundles together for a task, by name, tags, domain and summary, plus the
 local embedding model when one is installed. Each candidate says which role it runs as, where that runs (`locus`: host, inside or either), what
 the task looks like it wants (`trigger`: none, research, panel, council or red_team, from a fixed table of words; research puts the scout first when no role is named), how sure the ranking is

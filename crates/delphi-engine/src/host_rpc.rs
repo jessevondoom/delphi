@@ -354,7 +354,8 @@ pub const MAX_ANSWER: usize = 8000;
 pub const ROUTE_EVENT: &str = "route.decided";
 
 /// The facts of `route.decided`, checked: the length of the task (never the task), the best target, its confidence, whether it
-/// was adopted and the threshold in force. Anything else a caller sends is dropped.
+/// was adopted and the threshold in force, and (`specs/041` §13 item 2) whether it was named or the research default and what the
+/// ranking chose before that. Anything else a caller sends is dropped.
 pub fn route_decided_facts(p: &Value) -> Result<Value, HostErr> {
     let Some(task_chars) = p["task_chars"].as_u64().filter(|n| *n <= 100_000) else { return bad("`task_chars` is a whole number up to 100000") };
     let unit = |k: &str| -> Result<Option<f64>, HostErr> {
@@ -369,7 +370,12 @@ pub fn route_decided_facts(p: &Value) -> Result<Value, HostErr> {
     };
     let Some(adopt) = p["adopt"].as_bool() else { return bad("`adopt` is true or false") };
     let Some(threshold) = unit("threshold")? else { return bad("`threshold` is a number from 0 to 1") };
-    Ok(json!({"task_chars": task_chars, "target": target, "confidence": unit("confidence")?, "adopt": adopt, "threshold": threshold}))
+    let ranked = match p["ranked"].as_str() {
+        Some(t) => Some(clean("ranked", t, 200)?),
+        None => None,
+    };
+    let flag = |k: &str| p[k].as_bool().unwrap_or(false);
+    Ok(json!({"task_chars": task_chars, "target": target, "confidence": unit("confidence")?, "adopt": adopt, "threshold": threshold, "named": flag("named"), "research_default": flag("research_default"), "ranked": ranked}))
 }
 
 /// How many help requests a host session's log already holds.
@@ -1225,7 +1231,11 @@ mod tests {
     #[test]
     fn the_route_facts_are_checked_and_anything_else_a_caller_sends_is_dropped() {
         let ok = route_decided_facts(&json!({"task_chars": 42, "target": "role:red-team", "confidence": 0.7, "adopt": true, "threshold": 0.55, "task": "SECRET-TASK-TEXT", "extra": 1})).unwrap();
-        assert_eq!(ok, json!({"task_chars": 42, "target": "role:red-team", "confidence": 0.7, "adopt": true, "threshold": 0.55}));
+        assert_eq!(ok, json!({"task_chars": 42, "target": "role:red-team", "confidence": 0.7, "adopt": true, "threshold": 0.55, "named": false, "research_default": false, "ranked": null}));
+        // specs/041 §13 item 2: whether the role was named or the research default, and what the ranking chose before it.
+        let named = route_decided_facts(&json!({"task_chars": 9, "target": "role:strategist", "adopt": true, "threshold": 0.55, "named": true, "ranked": "role:advocate"})).unwrap();
+        assert_eq!((named["named"].clone(), named["ranked"].clone()), (json!(true), json!("role:advocate")));
+        assert!(route_decided_facts(&json!({"task_chars": 1, "adopt": true, "threshold": 0.5, "ranked": "x".repeat(201)})).is_err());
         assert!(!ok.to_string().contains("SECRET"));
         // No candidate at all: a null target and confidence are fine.
         let none = route_decided_facts(&json!({"task_chars": 3, "target": null, "confidence": null, "adopt": false, "threshold": 0.55})).unwrap();

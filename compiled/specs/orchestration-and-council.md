@@ -19,7 +19,7 @@ This specification defines how the 9 agent specialists collaborate under **Orche
 
 ## 041-agent-registry-routing-and-role-extensions
 
-**041: Agent Registry, Routing and Role Extensions: Scaling the Fleet Without Taxing the Orchestrator** · approved (per source at `8f811d911902`) · tier 0 · [source](../../specs/041-agent-registry-routing-and-role-extensions.md)
+**041: Agent Registry, Routing and Role Extensions: Scaling the Fleet Without Taxing the Orchestrator** · approved (per source at `e25f4a39ebfc`) · tier 0 · [source](../../specs/041-agent-registry-routing-and-role-extensions.md)
 
 **source excerpt, untrusted** · `specs/041-agent-registry-routing-and-role-extensions.md` lines 20-22
 

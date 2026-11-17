@@ -282,10 +282,12 @@ pub fn to_json(r: &Routed, _settings: &Settings, bundle_agents: usize) -> Value 
     })
 }
 
-/// The facts logged when the daemon is reachable (`route.decided`): the length of the task, never its text.
-pub fn decided_facts(task: &str, r: &Routed) -> Value {
+/// The facts logged when the daemon is reachable (`route.decided`): the length of the task, never its text, and (`specs/041`
+/// §13 item 2) the target the ranking chose before a name or the research default moved another to the top.
+pub fn decided_facts(task: &str, r: &Routed, ranked: Option<&str>) -> Value {
     let top = r.candidates.first();
     json!({
+        "ranked": ranked,
         "task_chars": task.chars().count(),
         "target": top.map(|c| c.target.clone()),
         "confidence": top.map(|c| round2(c.confidence)),
@@ -294,6 +296,46 @@ pub fn decided_facts(task: &str, r: &Routed) -> Value {
         "research_default": top.is_some_and(|c| c.research),
         "threshold": round2(r.threshold),
     })
+}
+
+/// The ranking's own top target, before [`name_roles`] moves anything.
+pub fn ranked_top(r: &Routed) -> Option<String> {
+    r.candidates.first().map(|c| c.target.clone())
+}
+
+/// What the `route.decided` records say about corrections (`specs/041` §13 item 2).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Corrections {
+    pub decided: usize,
+    pub named: usize,
+    pub research: usize,
+    /// `(ranked, named, count)` where the named target differed from the ranking's, most frequent first, then by name.
+    pub pairs: Vec<(String, String, usize)>,
+}
+
+pub fn corrections(events: &[delphi_core::event::EventEnvelope]) -> Corrections {
+    let mut c = Corrections::default();
+    let mut pairs: std::collections::BTreeMap<(String, String), usize> = std::collections::BTreeMap::new();
+    for e in events.iter().filter(|e| e.kind == "route.decided") {
+        c.decided += 1;
+        let p = &e.payload;
+        if p["research_default"] == true {
+            c.research += 1;
+        }
+        if p["named"] != true {
+            continue;
+        }
+        c.named += 1;
+        if let (Some(r), Some(t)) = (p["ranked"].as_str(), p["target"].as_str()) {
+            if r != t {
+                *pairs.entry((r.to_string(), t.to_string())).or_default() += 1;
+            }
+        }
+    }
+    let mut v: Vec<(String, String, usize)> = pairs.into_iter().map(|((r, t), k)| (r, t, k)).collect();
+    v.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)).then_with(|| a.1.cmp(&b.1)));
+    c.pairs = v;
+    c
 }
 
 // ── the labeled set ──────────────────────────────────────────────────────────
@@ -582,7 +624,7 @@ mod tests {
         let roles = real_roles();
         let task = "threat model the SECRET-PROJECT-NAME webhook";
         let r = route(&[], &roles, &q(task), 0.45, None);
-        let f = decided_facts(task, &r).to_string();
+        let f = decided_facts(task, &r, ranked_top(&r).as_deref()).to_string();
         assert!(!f.contains("SECRET") && f.contains(&format!("\"task_chars\":{}", task.chars().count())), "{f}");
     }
 }
