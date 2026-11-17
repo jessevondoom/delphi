@@ -3,6 +3,8 @@ name: release
 # Push a tag like v0.2.0 (it must match the version in crates/delphi/Cargo.toml and be a commit on main) to build,
 # publish and attest binaries for macOS (arm64, x86_64) and Linux (x86_64, arm64). A separate job then updates the
 # Homebrew formula on main, and another moves the `stable` branch, which host plugin marketplaces follow, to the tag. Actions are pinned to commit SHAs; the Rust toolchain is pinned by rust-toolchain.toml.
+# On the two macOS targets the desktop app (Delphi.app) is checked, built and packed into the same tarball (specs/122 section 2);
+# this workflow is the only place it is built: CI and the dev channel never build it.
 #
 # Run it by hand (Actions > release > Run workflow) for a dry run: the models are fetched and packed, the preloaded
 # vectors are made and checked, all four executables are built with the models compiled in and smoke-tested where
@@ -156,12 +158,49 @@ jobs:
           # of another release refuses to run beside this delphi.
           dev/build.sh "${{ steps.ver.outputs.version }}" dist/delphi-ui ${{ matrix.bun }}
           test -x dist/delphi-ui
+      # The desktop app (specs/122 section 2), on macOS only. Node at the version CI's console job pins.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: runner.os == 'macOS'
+        with:
+          node-version: 26.4.0
+      - name: Check and build the desktop app
+        if: runner.os == 'macOS'
+        working-directory: app
+        run: |
+          set -eu
+          # No install script runs, as in app/dev/build.sh. The check is the dependency gate, the type check, the window's
+          # tests and the page's build; the bridge's tests and clippy run once, on the runner's own architecture. The
+          # headless-Chrome diagram check and the smoke test of the built app stay local (app/dev/build.sh).
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          if [ "${{ matrix.native }}" = true ]; then
+            (cd src-tauri && cargo test --locked && cargo clippy --locked --all-targets -- -D warnings)
+          fi
+          npx tauri build --target "${{ matrix.target }}" --bundles app --config '{"version":"${{ steps.ver.outputs.version }}"}'
+          app="../target/app/${{ matrix.target }}/release/bundle/macos/Delphi.app"
+          # The build leaves only the executable signed (by the linker). An ad-hoc signature over the whole bundle is not a
+          # developer certificate; it makes the bundle verify, so a copy a browser downloaded is "unidentified", not "damaged".
+          codesign --force --sign - --timestamp=none "$app"
+          codesign --verify --strict "$app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "${{ steps.ver.outputs.version }}"
+          test -x "$app/Contents/MacOS/delphi-app"
       - name: Package
         run: |
           name="delphi-${{ steps.ver.outputs.tag }}-${{ matrix.target }}"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/delphi" ui/dist/delphi-ui LICENSE README.md "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          if [ "$RUNNER_OS" = macOS ]; then
+            cp -R "target/app/${{ matrix.target }}/release/bundle/macos/Delphi.app" "dist/$name/"
+            # Nothing in the bundle may be a link: install.sh and `delphi update` refuse one.
+            test -z "$(find "dist/$name/Delphi.app" ! -type f ! -type d)"
+          fi
+          # No `._` metadata files from macOS's tar inside the bundle.
+          COPYFILE_DISABLE=1 tar -C dist -czf "dist/$name.tar.gz" "$name"
+          if [ "$RUNNER_OS" = macOS ]; then
+            tar -tzf "dist/$name.tar.gz" > "$RUNNER_TEMP/listing.txt"
+            grep -qx "$name/Delphi.app/Contents/MacOS/delphi-app" "$RUNNER_TEMP/listing.txt" || { echo "the tarball has no Delphi.app"; exit 1; }
+            if grep -q '/\._' "$RUNNER_TEMP/listing.txt"; then echo "the tarball holds macOS metadata files"; exit 1; fi
+          fi
           (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
           rm -rf "dist/$name"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -243,14 +282,23 @@ jobs:
             echo
             echo '  def install'
             echo '    bin.install "delphi", "delphi-ui"'
+            echo '    # The desktop app (specs/122), on macOS: kept in the prefix; the caveats say how to link it.'
+            echo '    prefix.install "Delphi.app" if OS.mac? && File.directory?("Delphi.app")'
             echo '  end'
             echo
             echo '  def caveats'
-            echo '    <<~EOS'
+            echo '    s = <<~EOS'
             echo '      The Delphi plugin for Claude Code and Copilot CLI runs ~/.local/bin/delphi.'
             echo '      Link it once (`delphi connect claude-code` offers to do this for you):'
             echo '        mkdir -p ~/.local/bin && ln -s #{HOMEBREW_PREFIX}/bin/delphi ~/.local/bin/delphi'
             echo '    EOS'
+            echo '    if OS.mac?'
+            echo '      s += <<~EOS'
+            echo '        The desktop app is in #{opt_prefix}/Delphi.app. Link it where `delphi app` looks:'
+            echo '          mkdir -p ~/Applications && ln -sfn #{opt_prefix}/Delphi.app ~/Applications/Delphi.app'
+            echo '      EOS'
+            echo '    end'
+            echo '    s'
             echo '  end'
             echo
             echo '  test do'
