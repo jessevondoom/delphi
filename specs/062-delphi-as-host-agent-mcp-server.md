@@ -3,7 +3,7 @@ id: spec-062-delphi-as-host-agent-mcp-server
 title: "062: Delphi for host agents: roles, project knowledge, help and Councils over MCP, and learning back"
 author: architect
 timestamp: 2026-10-31T00:00:00Z
-status: approved   # by the operator, 2026-10-31 ("approve the spec if it was built on the rules you showed"): D-1..D-5 ratified; D-6..D-9 follow the architect's recommendations; Q-1..Q-5 stay open and each blocks only the slice named in §12. The text as written is approved when this pull request merges.
+status: approved   # §6.4 (2026-11-16) is an amendment written from the operator's words of that day and takes effect when the operator merges its pull request; by the operator, 2026-10-31 ("approve the spec if it was built on the rules you showed"): D-1..D-5 ratified; D-6..D-9 follow the architect's recommendations; Q-1..Q-5 stay open and each blocks only the slice named in §12. The text as written is approved when this pull request merges.
 approved_by: operator (2026-10-31)
 amendments: "2026-10-31, approved by the operator ('approve the spec changes as needed'): `builder` servable (D-6, §4.3, invariant 8); `route` moves from S2 to S3 (§11); 2026-11-01, asked for by the operator ('i'd like to work around this issue in the code ... since it's visible i'd rather it just work'): a host-raised span may launch in the Claude CLI harness (§6.3); 2026-11-07, approved by the operator ('approve the items in 3', after a Council review of Anthropic's context-engineering posts): search results say what they left out, and a `detail` choice (S12, §11)"
 governed_by: "GOVERNANCE.md"
@@ -141,6 +141,18 @@ For a host-originated request, the dispatched agent runs under its own role scop
 **How (S6).** The engine marks the task ID as host-raised (`Engine::run_task_for_host`); every span of that task, the orchestrator's and any it dispatches, has its write globs and write tools removed, its `execute` list cut to `agent-dispatch` and `org-context` (no commands, timers, settings or worktree), and no connector tools. `exec_tool` also refuses any tool the span was not offered, so the narrowing does not rely on the model. Nothing limits how often a host may ask (§9); each request is logged as `host.help.requested` in the host session's mission.
 
 **Harness seats (amended 2026-11-01).** Working from another harness is a primary use, so a host request must reach the operator's Claude CLI seat like any other task. The launch refusal for a span at `L1` or lower (020 §3, 009) existed because a harness runs its own loop; a host-raised span's loop cannot act, so the refusal does not apply to it: it runs with no native tools, no claude.ai connectors and no auto-approval, and is offered only the read-only tools above. Nothing else moves: the ceiling stays `L0`, the answer stays untrusted, no per-session approval is asked (the operator can see every request in the host session's mission, and `/mcp off` stops them), and an ordinary span at `L1` or lower is still refused.
+
+
+### 6.4 Amendment (operator, 2026-11-16): the operator's role answers, and the answer is signed by its author
+
+The operator's words, in a host session on 2026-11-16: "i've seen many instances when working in a claude host where i ask for a strategist review but get to orchestrator replying instead", and, after an audit listed eight fixes (fix 5: "make `request_help` honest and steerable"): "execute on the changes above". The operator approves this section by merging the pull request that adds it. It amends §6.1 and §6.2 where they differ.
+
+1. **Found.** Every request ran as the orchestrator, with `suggested_target` advisory only, so a role the operator asked for by name looked the same as a host's guess. And `answered_by` was the last role consulted while `answer` was always the orchestrator's own text: an orchestrator summary could carry a strategist's badge.
+2. **`role`**: an optional argument, a canonical role ID that the operator named. When it names a role of the workspace that hosts are served (and that the engine can run), that role runs the task itself, told that the operator asked for it by name and not to hand the question on. A `role` that names no such role is refused with a fixed sentence, so the operator's choice is never quietly replaced. Without `role` the orchestrator chooses, as before. `suggested_target` is unchanged.
+3. **`answered_by` is the author of `answer`**: the role that ran the task (the named role, or the orchestrator). `consulted` still lists every role asked along the way; when it is not empty, `drew_on_note` says the answer is the author's own text and the consulted roles are not its authors. The display line is signed by `answered_by`, so it is always the author's.
+4. **`ran_on`**: what the task ran on, from Delphi's own events for the task: the model when an event names one (`model.assigned`, `model.promoted`, `model.homogeneous`) and the tier from the dispatch record, with `source: delphi`. When no event names a model it says so and gives the tier.
+5. **Authority.** Unchanged: the task runs read-only at L0, whichever role runs it; every span is narrowed as §6.3 says; a host still cannot choose an inside-only role (one that hosts are not served). The named role is the operator's choice relayed by the host, and it raises nothing.
+6. Not verified: run end to end against a live daemon with a real model. A test of the result's shape (author, `ran_on`) is the evidence.
 
 ## 7. Councils
 

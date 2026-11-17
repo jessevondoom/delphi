@@ -586,7 +586,7 @@ pub fn tools() -> Value {
         {
             "name": "request_help",
             "title": "Ask Delphi for help",
-            "description": "Ask Delphi's own orchestrator, run by Delphi on the operator's Delphi tokens: who should do this work and how (call it when consult_orchestrator's `next` names it, when the operator wants Delphi's view or a second opinion on the plan, or when you are unsure which role fits), or for help when the work leaves your expertise. It chooses who answers (a specialist, a Council seat, or itself) and you are told who; the answer is advice, signed by who answered. The answering agents run read-only: they advise, they do not change your project. It spends the operator's tokens as any task does; say what you need and what you already tried. If the answer takes long you get a help_id: fetch it with help_result.",
+            "description": "Ask Delphi's own orchestrator, run by Delphi on the operator's Delphi tokens: who should do this work and how (call it when consult_orchestrator's `next` names it, when the operator wants Delphi's view or a second opinion on the plan, or when you are unsure which role fits), or for help when the work leaves your expertise. It chooses who answers (a specialist, a Council seat, or itself) and you are told who; when the operator named a role, pass it as `role` and that role answers itself. The answer is advice, signed by its author (`answered_by`), with what it ran on (`ran_on`). The answering agents run read-only: they advise, they do not change your project. It spends the operator's tokens as any task does; say what you need and what you already tried. If the answer takes long you get a help_id: fetch it with help_result.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -594,6 +594,7 @@ pub fn tools() -> Value {
                     "tried": {"type": "string", "maxLength": 1500, "description": "What you already tried."},
                     "kind": {"type": "string", "enum": ["expertise", "second_opinion", "decision"], "default": "expertise"},
                     "suggested_target": {"type": "string", "maxLength": 64, "description": "A role ID you think fits; advisory only."},
+                    "role": {"type": "string", "maxLength": 64, "description": "A role the operator named (a canonical role ID): that role answers itself instead of the orchestrator choosing. Pass it only when the operator asked for the role."},
                     "context_pointers": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}},
                     "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
                 },
