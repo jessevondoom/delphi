@@ -6,6 +6,10 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
+## Unreleased
+
+- **A host may ask for the Council the console can** (spec 123 S4): `request_council` takes `tier` (raises, never lowers), `author_family` (a configured family) and `require_families` (1 to 4; refused at once as `seats_unavailable` when too few families are usable, and the card says met or NOT met from the receipts).
+
 ## 0.6.3 — 2026-11-16
 
 A summary by spec; the pull requests are listed on the releases page. This release brings the knowledge loop (specs 112 to 121). The tests ran on scratch homes with fakes, and **most of the knowledge loop has not been run against the real web or a real model**:

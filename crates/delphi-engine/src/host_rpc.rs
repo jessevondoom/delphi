@@ -1048,6 +1048,10 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
             if homog { "one model family (homogeneous: the diversity guarantee did not hold)" } else { "seats span more than one model family" }
         ));
     }
+    // Spec 123 §6: a host's require_families on a daemon Council, judged from the receipts.
+    if let (false, Some(n), Some(met)) = (v["venue"] == "panel", r["require_families"].as_u64(), r["require_families_met"].as_bool()) {
+        s.push_str(&format!("**require_families = {n}: {}** (by the receipts)\n\n", if met { "met" } else { "NOT met" }));
+    }
     s.push_str(&format!("**Decision:** {}\n\n", text(&r["decision"])));
     if let Some(steps) = r["next_steps"].as_array().filter(|a| !a.is_empty()) {
         s.push_str("**Next steps**\n");
