@@ -1222,9 +1222,10 @@ impl Server {
         let roles = ra::role_rows(packs)?;
         let settings = self.config_path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).map(|t| ra::settings_in(&t)).unwrap_or_default();
         let mut routed = ra::route(&reg.entries, &roles, &ar::Query { text: task, domain, role, limit }, settings.adopt_threshold, None);
+        let ranked = ra::ranked_top(&routed);
         ra::name_roles(&mut routed, &roles, &ra::named_in(task, &roles, Some(&packs.theme_resolver())));
         if let Some(link) = &self.link {
-            let _ = link.call("host.route_decided", &ra::decided_facts(task, &routed));
+            let _ = link.call("host.route_decided", &ra::decided_facts(task, &routed, ranked.as_deref()));
         }
         Ok(ra::to_json(&routed, &settings, reg.entries.len()).to_string())
     }

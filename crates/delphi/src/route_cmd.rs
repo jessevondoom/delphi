@@ -9,10 +9,12 @@ use serde_json::Value;
 
 const VALUE_FLAGS: [&str; 8] = ["--workspace", "--home", "--domain", "--role", "--limit", "--eval", "--adopt-eval", "--threshold"];
 
-pub fn run(args: &[String], home: &std::path::Path, ws_dir: &std::path::Path) -> i32 {
-    let flag = |n: &str| args.iter().position(|a| a == n).and_then(|i| args.get(i + 1)).cloned();
+/// The task in the arguments: every word that is neither a flag nor a flag's value. `main` has already taken the command word
+/// out, so nothing is skipped (`specs/041` §13 item 1: skipping the first word dropped a task's first word and, after `--home`, read the
+/// home's path as the task).
+fn task_of(args: &[String]) -> String {
     let mut task = Vec::new();
-    let mut it = args.iter().skip(1);
+    let mut it = args.iter();
     while let Some(a) = it.next() {
         if VALUE_FLAGS.contains(&a.as_str()) {
             it.next();
@@ -20,7 +22,15 @@ pub fn run(args: &[String], home: &std::path::Path, ws_dir: &std::path::Path) ->
             task.push(a.clone());
         }
     }
-    let task = task.join(" ");
+    task.join(" ")
+}
+
+pub fn run(args: &[String], home: &std::path::Path, ws_dir: &std::path::Path) -> i32 {
+    let flag = |n: &str| args.iter().position(|a| a == n).and_then(|i| args.get(i + 1)).cloned();
+    let task = task_of(args);
+    if args.iter().any(|a| a == "--corrections") {
+        return corrections(ws_dir, args.iter().any(|a| a == "--json"));
+    }
     let ws = WorkspacePaths { home: home.to_path_buf(), dir: ws_dir.to_path_buf() };
     let reg = ar::registry(&ws);
     let emb = match delphi_engine::embed::open_default(Some(home)) {
@@ -166,4 +176,69 @@ fn eval(reg: &ar::Registry, path: &str, emb: Option<&dyn delphi_engine::embed::E
         println!("miss: \"{}\" wanted {} got [{}]", task, want, got.join(", "));
     }
     0
+}
+
+/// `delphi route --corrections` (`specs/041` §13 item 2): how often the operator named a role other than the one the ranking chose, read
+/// from the `route.decided` records of every mission. Read-only; it prints counts and role names, never a task, and proposes
+/// nothing on its own: the operator decides what, if anything, to change.
+fn corrections(ws_dir: &std::path::Path, json: bool) -> i32 {
+    let mut events = Vec::new();
+    for base in [ws_dir.join("missions"), ws_dir.join("local/missions")] {
+        let Ok(rd) = std::fs::read_dir(&base) else { continue };
+        for e in rd.flatten() {
+            if let Ok(evs) = delphi_core::log::replay(&e.path()) {
+                events.extend(evs.into_iter().filter(|x| x.kind == delphi_engine::host_rpc::ROUTE_EVENT));
+            }
+        }
+    }
+    let c = delphi_engine::route_any::corrections(&events);
+    if json {
+        let pairs: Vec<Value> = c.pairs.iter().map(|(r, n, k)| serde_json::json!({"ranked": r, "named": n, "count": k})).collect();
+        println!("{}", serde_json::json!({"decided": c.decided, "named": c.named, "research_default": c.research, "corrections": pairs}));
+        return 0;
+    }
+    println!("{} routing decisions logged; the operator named a role in {}; research went to the scout by default in {}.", c.decided, c.named, c.research);
+    if c.pairs.is_empty() {
+        println!("no named role differed from the ranking's choice.");
+    }
+    for (ranked, named, k) in &c.pairs {
+        println!("{k:>4}  the ranking chose {ranked}, the operator named {named}");
+    }
+    if !c.pairs.is_empty() {
+        println!("A pair that recurs suggests the named role's skills do not describe tasks like these. Any change is yours to make (a skill description, a bundle agent's tags, [routing] adopt_threshold); nothing here changes routing.");
+    }
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(a: &[&str]) -> Vec<String> {
+        a.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// `specs/041` §13 item 1: no word of the task is lost and no flag's value becomes one.
+    #[test]
+    fn the_task_is_every_word_that_is_not_a_flag_or_its_value() {
+        assert_eq!(task_of(&v(&["summarize", "this", "file"])), "summarize this file");
+        assert_eq!(task_of(&v(&["--home", "/tmp/jobs/x", "--json", "zzqx"])), "zzqx");
+        assert_eq!(task_of(&v(&["review", "the", "plan", "--limit", "3", "--workspace", "w"])), "review the plan");
+        assert_eq!(task_of(&v(&["--corrections"])), "");
+    }
+
+    #[test]
+    fn corrections_count_a_named_role_that_differs_from_the_ranking_and_print_no_task() {
+        let ev = |facts: serde_json::Value| delphi_core::event::EventEnvelope::new("m", delphi_engine::host_rpc::ROUTE_EVENT, facts);
+        let events = vec![
+            ev(serde_json::json!({"task_chars": 9, "target": "role:strategist", "named": true, "ranked": "role:advocate", "adopt": true, "threshold": 0.55})),
+            ev(serde_json::json!({"task_chars": 9, "target": "role:strategist", "named": true, "ranked": "role:advocate", "adopt": true, "threshold": 0.55})),
+            ev(serde_json::json!({"task_chars": 9, "target": "role:architect", "named": true, "ranked": "role:architect", "adopt": true, "threshold": 0.55})),
+            ev(serde_json::json!({"task_chars": 9, "target": "role:builder", "adopt": true, "threshold": 0.55})),
+            ev(serde_json::json!({"task_chars": 9, "target": "role:scout", "research_default": true, "ranked": "role:writer", "adopt": true, "threshold": 0.55})),
+        ];
+        let c = delphi_engine::route_any::corrections(&events);
+        assert_eq!((c.decided, c.named, c.research), (5, 3, 1));
+        assert_eq!(c.pairs, vec![("role:advocate".to_string(), "role:strategist".to_string(), 2)]);
+    }
 }

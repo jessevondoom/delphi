@@ -181,25 +181,31 @@
       "line": 220,
       "number": "12",
       "title": "Open Decisions for the Operator"
+    },
+    {
+      "level": 2,
+      "line": 228,
+      "number": "13",
+      "title": "Amendment (operator, 2026-11-16): `delphi route` reads the whole task, and a count of corrections"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/041-agent-registry-routing-and-role-extensions.md",
-    "sha256": "8f811d911902fd5f4a8663b7b5e375abda39b1c04da2a92a4ba99c46405678e5"
+    "sha256": "e25f4a39ebfcb231e54d249b5fcd5046d529869a8658b8063f1fdd22882be73b"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 392,
+        "end": 539,
         "end_line": 6,
         "line": 6,
         "start": 219
       },
-      "text": "status: approved   # by the operator, 2026-10-27: OD-1 accepted; OD-2..OD-5 follow the recommendations in §12; the text as written is approved when this pull request merges"
+      "text": "status: approved   # by the operator, 2026-10-27: OD-1 accepted; OD-2..OD-5 follow the recommendations in §12; the text as written is approved when this pull request merges. Section 13 (2026-11-16) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request."
     },
-    "sha256": "8f811d911902fd5f4a8663b7b5e375abda39b1c04da2a92a4ba99c46405678e5",
+    "sha256": "e25f4a39ebfcb231e54d249b5fcd5046d529869a8658b8063f1fdd22882be73b",
     "word": "approved"
   },
   "spec": {
@@ -214,10 +220,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2162,
+      "end": 2309,
       "end_line": 22,
       "line": 20,
-      "start": 1535
+      "start": 1682
     },
     "text": "Two operator goals, one mechanism:\n1. **Scale the fleet.** An organization may define hundreds of specialist agents in bundles. The orchestrator's context must not grow with them, and no agent may become undispatchable by silent truncation (§3, §4).\n2. **Extend a role.** A bundle teaches a built-in role its own craft (`builder` learns a company's C++ stack; the same role in an art collective learns sculpture practice): more **skills**, more **guidance**, and a **team** of specialists attached to the role (§5). Extensions travel in bundles, so they inherit Xenia's signing, provenance, trust, update and rollback (§8)."
   }
