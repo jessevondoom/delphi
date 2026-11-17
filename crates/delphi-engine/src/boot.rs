@@ -58,6 +58,13 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(v) = root.get("budget").and_then(|b| b.get("mission_budget_usd")).and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))) {
         s.mission_budget_usd = v;
     }
+    // Spec 123 §4: a Council's token ceiling (0 turns it off), and the money ceiling it keeps for workspaces that set one.
+    if let Some(v) = root.get("budget").and_then(|b| b.get("council_budget_tokens")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+        s.council_budget_tokens = v as u64;
+    }
+    if let Some(v) = root.get("budget").and_then(|b| b.get("council_budget_usd")).and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))).filter(|v| *v >= 0.0) {
+        s.council_budget_usd = v;
+    }
     if let Some(v) = root.get("hitl").and_then(|b| b.get("approval_timeout_sec")).and_then(|v| v.as_integer()).filter(|v| *v > 0) {
         s.approval_timeout = Duration::from_secs(v as u64);
     }
@@ -582,6 +589,15 @@ mod tests {
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 0\n").unwrap()).council_stall_secs, 0);
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = -5\n").unwrap()).council_stall_secs, 120, "a negative value is ignored");
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 99999999\n").unwrap()).council_stall_secs, 86_400, "and a huge one is capped at a day");
+    }
+
+    #[test]
+    fn a_council_token_ceiling_defaults_to_400k_and_the_money_ceiling_is_still_read() {
+        let s = settings_from(&toml::from_str("").unwrap());
+        assert_eq!((s.council_budget_tokens, s.council_budget_usd), (400_000, 20.0));
+        let s = settings_from(&toml::from_str("[budget]\ncouncil_budget_tokens = 0\ncouncil_budget_usd = 7\n").unwrap());
+        assert_eq!((s.council_budget_tokens, s.council_budget_usd), (0, 7.0), "0 turns the token ceiling off");
+        assert_eq!(settings_from(&toml::from_str("[budget]\ncouncil_budget_tokens = -1\n").unwrap()).council_budget_tokens, 400_000, "a negative value is ignored");
     }
 
     #[test]
