@@ -150,7 +150,7 @@ pub fn council_unavailable(reason: &str, sentence: &str) -> String {
 
 /// The `council_unavailable` answer for an error from the daemon, or `None` when the error is something else (a bad argument stays a
 /// bad argument). `daemon_not_running` is `daemon_down`; the daemon's own `seats_unavailable: …` and `disabled_by_operator: …` keep their names.
-fn council_unavailable_for(error: &str) -> Option<String> {
+pub(crate) fn council_unavailable_for(error: &str) -> Option<String> {
     let reason = if error.starts_with("daemon_not_running") {
         "daemon_down"
     } else if error.starts_with("disabled_by_operator") {
@@ -717,7 +717,7 @@ pub fn tools() -> Value {
         {
             "name": "request_council",
             "title": "Ask Delphi's Council to rule",
-            "description": "Put a question to Delphi's Council: seats argue it blind, critique each other, and the Orchestrator rules, with the dissent kept. Returns a council_id at once; the Council takes a few minutes, so check it with council_status and read the ruling with council_result. The ruling is advice and binds nothing in your project. It spends the operator's tokens as any Council does: state the question and the options plainly. When a Council cannot be convened (Delphi's daemon is not running, the server is switched off, or no seats can be seated) it answers `council_unavailable`: a terminal answer, so show it to the operator and stop.",
+            "description": "Put a question to Delphi's Council: seats argue it blind, critique each other, and the Orchestrator rules, with the dissent kept. Returns a council_id at once; the Council takes a few minutes, so check it with council_status and read the ruling with council_result. The ruling is advice and binds nothing in your project. It spends the operator's tokens as any Council does: state the question and the options plainly. Optional, only when the operator asks: `tier` raises every seat (never lowers it), `author_family` names the configured family that drafted the material so the critics sit elsewhere, and `require_families` refuses the Council at once, before anything is spent, unless that many model families can sit. When a Council cannot be convened (Delphi's daemon is not running, the server is switched off, or no seats can be seated, including an unmeetable require_families) it answers `council_unavailable`: a terminal answer, so show it to the operator and stop.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -725,7 +725,10 @@ pub fn tools() -> Value {
                     "options": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 200}, "description": "The choices you are weighing, if any."},
                     "stakes": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
                     "context_pointers": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}, "description": "Project-relative files the Council should look at."},
-                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
+                    "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."},
+                    "tier": {"type": "string", "enum": ["fast", "workhorse", "frontier"], "description": "Optional: raise every seat to this tier, as the console's --tier. A tier below a seat's own is refused; a Council is never lowered."},
+                    "author_family": {"type": "string", "maxLength": 64, "description": "Optional: the configured model family that drafted the material under review; red-team and strategist are kept off it. An unknown family is refused."},
+                    "require_families": {"type": "integer", "minimum": 1, "maximum": 4, "description": "Optional: refuse the Council at once, before anything is spent, unless its seats can span this many model families; the ruling says whether the receipts met it. Leave it out to run labelled homogeneous when one family sits."}
                 },
                 "required": ["question"],
                 "additionalProperties": false
@@ -735,7 +738,7 @@ pub fn tools() -> Value {
         {
             "name": "council_status",
             "title": "Check a Council",
-            "description": "The state of a Council this session raised: convening, deliberating (with the round), decided, needs_operator, not_decided or failed. For a Panel it also gives waiting_on (delphi_seat, host_seats or null) and the state of the seat Delphi runs (running, answered, abstained) in phase. While only Delphi's seat is outstanding it waits up to 25 seconds (wait, default true) and then answers with do_not_end_your_turn: true: keep calling council_status until the state is decided, needs_operator, not_decided or failed; never end your turn, never write the verdict early, never answer for that seat. While it deliberates the reply also lists the `seats` (role, state: starting|reading|thinking|waiting_on_barrier|submitted|abstained, elapsed_s, idle_s, calls, last_call), a `tail` of the last few events (`HH:MM:SS role kind name`, fixed forms, no model text) and `stalled` with `stalled_seat`: a seat that is reading or thinking is working, so read `idle_s` and `stalled` before you decide it is stuck, and do not convene a second Council while any seat is active. A job you no longer want is stopped with cancel_job.",
+            "description": "The state of a Council this session raised: convening, deliberating (with the round), decided, needs_operator, not_decided or failed. For a Panel it also gives waiting_on (delphi_seat, host_seats or null) and the state of the seat Delphi runs (running, answered, abstained) in phase. While only Delphi's seat is outstanding it waits up to 25 seconds (wait, default true) and then answers with do_not_end_your_turn: true: keep calling council_status until the state is decided, needs_operator, not_decided or failed; never end your turn, never write the verdict early, never answer for that seat. While it deliberates the reply also lists the `seats` (role, state: starting|reading|thinking|waiting_on_barrier|submitted|abstained, elapsed_s, idle_s, calls, last_call, family, family_source: receipt|plan|host-reported, model, tokens), `tokens` ({spent, ceiling}; ceiling null when off; for a Panel only the seats Delphi ran, scope delphi_seats), `homogeneous` (the plan has one model family only: say so), a `tail` of the last few events (`HH:MM:SS role kind name`, fixed forms, no model text) and `stalled` with `stalled_seat`: a seat that is reading or thinking is working, so read `idle_s` and `stalled` before you decide it is stuck, and do not convene a second Council while any seat is active. A job you no longer want is stopped with cancel_job.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"council_id": {"type": "string", "minLength": 1, "maxLength": 64}, "wait": {"type": "boolean", "default": true, "description": "Panel with a seat run by Delphi: wait up to 25 seconds while that seat is the only one outstanding. Default true."}, "lines": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8, "description": "How many lines of the tail to return."}},

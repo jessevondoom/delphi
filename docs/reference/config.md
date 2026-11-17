@@ -51,7 +51,8 @@ Defaults are those of the template; "—" means no default.
 | `[routing.pool] reprobe_first_secs`, `reprobe_max_secs` | `900`, `14400` | when an exhausted model with no known reset time is probed again, doubling up to the maximum |
 | `[routing.targets] <role>` | — | a target model per role; a similar model is substituted if it is unavailable, a weaker one only with your confirmation |
 | `[budget] mission_budget_usd` | `5.0` | ceiling for L1-L3 work, enforced by reserving cost before each call |
-| `[budget] council_budget_usd` | `20.0` | ceiling for a Council |
+| `[budget] council_budget_tokens` | `400000` | ceiling for one Council: the input plus output tokens of every model call of the task, checked after Round 1, before the repair turn and before the synthesis; reaching it after Round 1 escalates and decides nothing. `0` turns it off ([`specs/123`](../../specs/123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop.md) §4) |
+| `[budget] council_budget_usd` | `20.0` | kept for compatibility: a money ceiling for a Council, still checked at the same points; set the token ceiling instead |
 | `[budget] on_budget_exhausted` | `escalate` | halt the node and ask you; never silently downscale |
 | `[budget] per_watch_max_wakes_per_day` | `10` | |
 | `[council] stall_secs` | `120` | a status call flags a Council `stalled`, and names the seat idle longest, when every seat still working has been idle this many seconds. `0` turns the flag off (spec 098 section 19) |

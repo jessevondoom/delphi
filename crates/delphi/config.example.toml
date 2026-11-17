@@ -121,7 +121,8 @@ max_parallel_agents = 4
 
 [budget]
 mission_budget_usd = 5.0             # D-10: L1–L3 work (enforced with pre-dispatch cost reservations)
-council_budget_usd = 20.0            # D-10: Council Mode
+council_budget_tokens = 400000      # spec 123: input plus output tokens one Council may use; 0 turns it off
+council_budget_usd = 20.0            # kept for compatibility (D-10): still checked; the token ceiling above is the one to set
 on_budget_exhausted = "escalate"     # halt node and ask the operator; never silently downscale
 per_watch_max_wakes_per_day = 10
 
