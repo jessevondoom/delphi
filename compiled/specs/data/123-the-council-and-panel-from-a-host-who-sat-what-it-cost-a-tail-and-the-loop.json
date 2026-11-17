@@ -1,0 +1,134 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 123: The Council and the Panel from a host: who sat, what it cost, a tail, and the loop"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 2,
+      "line": 43,
+      "number": "2",
+      "title": "Terms"
+    },
+    {
+      "level": 2,
+      "line": 49,
+      "number": "3",
+      "title": "Who sat: family and model per seat (slice S1)"
+    },
+    {
+      "level": 2,
+      "line": 59,
+      "number": "4",
+      "title": "What it cost, in tokens (slice S2)"
+    },
+    {
+      "level": 2,
+      "line": 66,
+      "number": "5",
+      "title": "Clearer failures (slice S3)"
+    },
+    {
+      "level": 2,
+      "line": 72,
+      "number": "6",
+      "title": "What a host may ask for (slice S4)"
+    },
+    {
+      "level": 2,
+      "line": 84,
+      "number": "7",
+      "title": "A tail from a terminal (slice S5)"
+    },
+    {
+      "level": 2,
+      "line": 94,
+      "number": "8",
+      "title": "An escalation reaches the decisions pane (slice S6)"
+    },
+    {
+      "level": 2,
+      "line": 101,
+      "number": "9",
+      "title": "Earlier rulings reach the rounds that may see them (slice S7)"
+    },
+    {
+      "level": 2,
+      "line": 109,
+      "number": "10",
+      "title": "Not built here, and why"
+    },
+    {
+      "level": 2,
+      "line": 121,
+      "number": "11",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "12",
+      "title": "Open questions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "13",
+      "title": "Slices and pull requests"
+    },
+    {
+      "level": 2,
+      "line": 146,
+      "number": "14",
+      "title": "Acceptance"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop.md",
+    "sha256": "b71c7269dd6abb9646d75d84a0555f840c8561bb1a53ab831f68cdabe84e2264"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 860,
+        "end_line": 6,
+        "line": 6,
+        "start": 239
+      },
+      "text": "status: approved   # by the operator, 2026-11-16, in a host session: \"yeah build it in a branch and target fewer independent PRs to make merging easier\", said of a ranked list of sixteen changes that was shown to them, after \"i like the council/panel split as it stands today. im curious about the experience of both really\". The approval was given to the list BEFORE this text was written; the operator has not read the text. It takes effect when the operator merges the pull request that carries it. Items of the list that are not builds (a live check, an experiment, two policy questions) are in section 10, not built."
+    },
+    "sha256": "b71c7269dd6abb9646d75d84a0555f840c8561bb1a53ab831f68cdabe84e2264",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "hosts-and-mcp",
+    "number": "123",
+    "stem": "123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "123: The Council and the Panel from a host: who sat, what it cost, a tail, and the loop"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2751,
+      "end_line": 25,
+      "line": 25,
+      "start": 2242
+    },
+    "text": "The operator asked, on 2026-11-16, for \"the council experience in the host environment\" to be \"the best experience for the operator with things like better tailing to show activity, really getting better output via mixed families responding from delphi, and learning loop or knowledge base integration\". A read-only assessment of the code followed; the operator then said \"i like the council/panel split as it stands today. im curious about the experience of both really\", and, of the ranked list, \"build it\"."
+  }
+}

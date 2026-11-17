@@ -2,7 +2,7 @@
 
 # Hosts and MCP
 
-13 specs. [All groups](./index.md).
+14 specs. [All groups](./index.md).
 
 ## 025-plugin-skill-and-tool-compatibility
 
@@ -140,4 +140,14 @@ Today everything that makes a host session a Delphi session depends on the host'
 | E-2 | Copilot and Codex install the Claude Code plugin unchanged, with Claude tool names in its agent files. Gemini CLI rejects that directory; it has only a config snippet marked unverified. The code folds Gemini CLI and Antigravity into one host ID, `agy`, though 071 says they are different hosts. |
 | E-3 | No host but Claude Code is given an instruction file, a hook or a transcript reader. |
 | E-4 | Every claim about these hosts in 086 §3 and 098 §17 is from vendor documents; none was run. |
+```
+
+## 123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop
+
+**123: The Council and the Panel from a host: who sat, what it cost, a tail, and the loop** · approved (per source at `b71c7269dd6a`) · tier 0 · [source](../../specs/123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop.md)
+
+**source excerpt, untrusted** · `specs/123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop.md` line 25
+
+```text
+The operator asked, on 2026-11-16, for "the council experience in the host environment" to be "the best experience for the operator with things like better tailing to show activity, really getting better output via mixed families responding from delphi, and learning loop or knowledge base integration". A read-only assessment of the code followed; the operator then said "i like the council/panel split as it stands today. im curious about the experience of both really", and, of the ranked list, "build it".
 ```
