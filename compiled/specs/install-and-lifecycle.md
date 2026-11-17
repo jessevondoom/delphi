@@ -2,7 +2,7 @@
 
 # Install and lifecycle
 
-8 specs. [All groups](./index.md).
+9 specs. [All groups](./index.md).
 
 ## 006-installer-and-updater
 
@@ -59,3 +59,13 @@ _No standard scope section; open the spec._
 **076: Installing and updating Delphi from a private repository** · approved (per source at `30a07c689a8c`) · tier 0 · [source](../../specs/076-private-repo-distribution.md)
 
 _No standard scope section; open the spec._
+
+## 122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program
+
+**122: The desktop app in the release: built on macOS, installed and updated with the program** · approved (per source at `841589a1a1f5`) · tier 0 · [source](../../specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md)
+
+**source excerpt, untrusted** · `specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md` line 23
+
+```text
+Today `Delphi.app` exists only where someone ran `app/dev/build.sh`. The program (`delphi`) and its console (`delphi-ui`) are built by the release workflow, published with a checksum and an attestation, installed by `install.sh` and replaced by `delphi update`. This spec puts the app on the same path, on macOS:
+```

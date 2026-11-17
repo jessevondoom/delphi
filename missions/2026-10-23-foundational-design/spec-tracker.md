@@ -1157,6 +1157,16 @@ The operator asked on 2026-11-15 to clarify the private and internal concepts an
 | 121 | S1 (left) | what S1 did not build | no meeting or mail connector imports anything yet, so the meeting and recipient rules are tested on `assign` only; handoffs, session summaries kept only as events, Council evidence, advice and decision briefs are not labelled (`handling::NOT_LABELLED`, `WRITES`); the given list is per mission and role, not per span; `Library::internal_confirmation` (115 §11.2) is not narrowed to `has_weight` yet; no console set/clear; the §9 item 2 query log is not built; the live dry-run read on the operator's workspace (§14) is the operator's. S2 and S3 not built |
 | 121 | amendment | §17: the operator's words of 2026-11-16 ("4: yes") confirm two S1 choices: an email whose recipients are not known is `personal`; `delphi handling set` is refused inside an agent seat and without a terminal, as `clear` is | amendment written 2026-11-16 (pull request open, #746); approved when the operator merges it. S1 already builds both; the §16 questions stay open |
 
+## The desktop app in the release: spec 122 (2026-11-16, approved)
+
+The operator asked on 2026-11-16 for the shortest path to shipping the desktop app as the console is shipped, was shown a two-step plan and its estimate, and answered "do step one and step two, but macos only and only on release".
+
+| Spec | Slice | Content | State |
+| :-- | :-- | :-- | :-- |
+| 122 | R0 | the spec: `Delphi.app` built by the release workflow on macOS only, in the same tarball as `delphi`; installed by `install.sh` and replaced by `delphi update` at `~/Applications/Delphi.app`, the previous one kept, `--rollback`; Linux, signing, CI and dev builds out of scope | approved 2026-11-16 ("do step one and step two, but macos only and only on release") |
+| 122 | R1 | the release workflow: the app's checks and build on the two macOS targets, the tarball, the Homebrew formula | not built |
+| 122 | R2 | `install.sh` and `delphi update`: install, replace, keep, roll back; the guide | not built |
+
 ## The Council and the Panel from a host: spec 123 (2026-11-16)
 
 The operator asked on 2026-11-16 for a better Council and Panel experience in the host: seeing activity, getting value from mixed families, and the learning loop. A read-only assessment ranked sixteen changes; the operator kept the Council/Panel split and said "build it". Section 10 of the spec lists the items that are not builds.

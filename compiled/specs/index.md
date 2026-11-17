@@ -2,7 +2,7 @@
 
 # Specs
 
-129 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
+130 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
 
 | Spec | Title | Status | Group | Supersedes / superseded by | Summary | Source |
 | :-- | :-- | :-- | :-- | :-- | :-- | :-- |
@@ -135,3 +135,4 @@
 | [059-operator-lifecycle-experience](./install-and-lifecycle.md#059-operator-lifecycle-experience) | 059: A smooth operator lifecycle from install through everyday use | approved (per source at `a9c3bc6d8fb9`) | [Install and lifecycle](./install-and-lifecycle.md) |  | none | [source](../../specs/059-operator-lifecycle-experience.md) |
 | [069-workspace-administration-and-operator-assistance](./install-and-lifecycle.md#069-workspace-administration-and-operator-assistance) | 069: Workspace Administration, Diagnostic Inspection, and Governed Operator Assistance | approved (per source at `aed7e2629dff`) | [Install and lifecycle](./install-and-lifecycle.md) |  | none | [source](../../specs/069-workspace-administration-and-operator-assistance.md) |
 | [076-private-repo-distribution](./install-and-lifecycle.md#076-private-repo-distribution) | 076: Installing and updating Delphi from a private repository | approved (per source at `30a07c689a8c`) | [Install and lifecycle](./install-and-lifecycle.md) |  | none | [source](../../specs/076-private-repo-distribution.md) |
+| [122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program](./install-and-lifecycle.md#122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program) | 122: The desktop app in the release: built on macOS, installed and updated with the program | approved (per source at `841589a1a1f5`) | [Install and lifecycle](./install-and-lifecycle.md) |  | yes | [source](../../specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md) |

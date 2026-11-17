@@ -1,0 +1,116 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 122: The desktop app in the release"
+    },
+    {
+      "level": 2,
+      "line": 21,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 29,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 37,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 41,
+      "number": "2",
+      "title": "Built only in the release (slice R1)"
+    },
+    {
+      "level": 2,
+      "line": 57,
+      "number": "3",
+      "title": "Installed with the program (slice R2)"
+    },
+    {
+      "level": 2,
+      "line": 69,
+      "number": "4",
+      "title": "Updated with the program (slice R2)"
+    },
+    {
+      "level": 2,
+      "line": 80,
+      "number": "5",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 88,
+      "number": "6",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 96,
+      "number": "7",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 101,
+      "number": "8",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 111,
+      "number": "9",
+      "title": "Open questions (the operator decides)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md",
+    "sha256": "841589a1a1f5bf66bede329a0d16c8caa942d1d4ec8bf40744a3d0b29da2791e"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 776,
+        "end_line": 6,
+        "line": 6,
+        "start": 253
+      },
+      "text": "status: approved   # by the operator, 2026-11-16, in a host session. Asked \"what's the shortest path to distributing a compiled binary for mac and linux, just like we are for the TUI?\", shown a two-step plan (step 1: build and publish the app in the release; step 2: install and update it like the console) and its estimate in hours, the operator answered \"do step one and step two, but macos only and only on release\". The spec was written from those words; the operator was shown the plan and the estimate, not this text."
+    },
+    "sha256": "841589a1a1f5bf66bede329a0d16c8caa942d1d4ec8bf40744a3d0b29da2791e",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "install-and-lifecycle",
+    "number": "122",
+    "stem": "122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "122: The desktop app in the release: built on macOS, installed and updated with the program"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2175,
+      "end_line": 23,
+      "line": 23,
+      "start": 1863
+    },
+    "text": "Today `Delphi.app` exists only where someone ran `app/dev/build.sh`. The program (`delphi`) and its console (`delphi-ui`) are built by the release workflow, published with a checksum and an attestation, installed by `install.sh` and replaced by `delphi update`. This spec puts the app on the same path, on macOS:"
+  }
+}
