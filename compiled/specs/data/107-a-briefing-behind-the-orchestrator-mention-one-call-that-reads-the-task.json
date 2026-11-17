@@ -61,25 +61,67 @@
       "line": 93,
       "number": "7",
       "title": "Amendments from review (2026-11-13)"
+    },
+    {
+      "level": 2,
+      "line": 102,
+      "number": "8",
+      "title": "Amendment (operator, 2026-11-16): a role the operator names answers, and the orchestrator hands work on"
+    },
+    {
+      "level": 3,
+      "line": 106,
+      "number": "8.1",
+      "title": "Found (audit of `main` at 78dab113, 2026-11-16)"
+    },
+    {
+      "level": 3,
+      "line": 114,
+      "number": "8.2",
+      "title": "B3: a named role is chosen by a fixed rule"
+    },
+    {
+      "level": 3,
+      "line": 132,
+      "number": "8.3",
+      "title": "B3 (continued): the orchestrator hands the work on"
+    },
+    {
+      "level": 3,
+      "line": 139,
+      "number": "8.4",
+      "title": "Measured when built (2026-11-16)"
+    },
+    {
+      "level": 3,
+      "line": 145,
+      "number": "8.5",
+      "title": "Slices"
+    },
+    {
+      "level": 3,
+      "line": 153,
+      "number": "8.6",
+      "title": "Authority and not verified"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md",
-    "sha256": "ad318722f2ef4c262b656a7bd33bf99184dd7e2f4d62d5a0172dce6285f2825b"
+    "sha256": "585aa395be3fe6077b959ec4362c12634b5d8dacd84d9ec175ce670d0ccd892d"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 636,
+        "end": 781,
         "end_line": 6,
         "line": 6,
         "start": 267
       },
-      "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 3: route the orchestrator mention to `request_help`, make `consult_orchestrator` read the task, fix the skill text) BEFORE this text was written; the operator has not read the text."
+      "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 3: route the orchestrator mention to `request_help`, make `consult_orchestrator` read the task, fix the skill text) BEFORE this text was written; the operator has not read the text. Section 8 (2026-11-16) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request."
     },
-    "sha256": "ad318722f2ef4c262b656a7bd33bf99184dd7e2f4d62d5a0172dce6285f2825b",
+    "sha256": "585aa395be3fe6077b959ec4362c12634b5d8dacd84d9ec175ce670d0ccd892d",
     "word": "approved"
   },
   "spec": {
@@ -94,10 +136,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2582,
+      "end": 2727,
       "end_line": 30,
       "line": 25,
-      "start": 1748
+      "start": 1893
     },
     "text": "| # | Observation (code on `main`, 2026-11-13) |\n| :-- | :-- |\n| E-1 | `consult_orchestrator` checks the task's length and otherwise ignores it. Its level comes from two enums, its pointers are `AGENTS.md`, `specs/` and the first three specs in listing order, and its constraints name this repository's Rust gates for every project. A report with no code was told to convene five roles and run `cargo test`. |\n| E-2 | Neither shipped skill mentions `consult_orchestrator`; 077 routes `@delphi` to it. |\n| E-3 | An orchestrator working in a host must make five calls (`specs_status`, `route`, `search_project`, `search_memory`, `delphi_roster`) to learn what one call could tell it. |\n| E-4 | A model answers as the orchestrator only through `request_help`, which the skill presents as help for when work leaves the host's expertise. |"
   }

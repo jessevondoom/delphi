@@ -114,7 +114,7 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 ## 107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task
 
-**107: A briefing behind the orchestrator mention: one call that reads the task, and a model when the question needs one** · approved (per source at `ad318722f2ef`) · tier 0 · [source](../../specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md)
+**107: A briefing behind the orchestrator mention: one call that reads the task, and a model when the question needs one** · approved (per source at `585aa395be3f`) · tier 0 · [source](../../specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md)
 
 **source excerpt, untrusted** · `specs/107-a-briefing-behind-the-orchestrator-mention-one-call-that-reads-the-task.md` lines 25-30
 
