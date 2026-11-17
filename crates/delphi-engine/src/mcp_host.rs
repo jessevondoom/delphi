@@ -1221,7 +1221,8 @@ impl Server {
         let reg = ar::registry(packs.workspace());
         let roles = ra::role_rows(packs)?;
         let settings = self.config_path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).map(|t| ra::settings_in(&t)).unwrap_or_default();
-        let routed = ra::route(&reg.entries, &roles, &ar::Query { text: task, domain, role, limit }, settings.adopt_threshold, None);
+        let mut routed = ra::route(&reg.entries, &roles, &ar::Query { text: task, domain, role, limit }, settings.adopt_threshold, None);
+        ra::name_roles(&mut routed, &roles, &ra::named_in(task, &roles, Some(&packs.theme_resolver())));
         if let Some(link) = &self.link {
             let _ = link.call("host.route_decided", &ra::decided_facts(task, &routed));
         }
@@ -1301,7 +1302,12 @@ impl Server {
         let routed = packs
             .as_ref()
             .and_then(|p| Some((ar::registry(p.workspace()), ra::role_rows(p).ok()?)))
-            .map(|(reg, rows)| ra::route(&reg.entries, &rows, &ar::Query { text: &text, domain: None, role: None, limit: 10 }, threshold, None))
+            .map(|(reg, rows)| {
+                let mut r = ra::route(&reg.entries, &rows, &ar::Query { text: &text, domain: None, role: None, limit: 10 }, threshold, None);
+                let resolver = packs.as_ref().map(|p| p.theme_resolver());
+                ra::name_roles(&mut r, &rows, &ra::named_in(&text, &rows, resolver.as_ref()));
+                r
+            })
             .unwrap_or(ra::Routed { status: "no_specialist", trigger: ra::trigger_of(&text), threshold, candidates: vec![], fallback: None });
         let (seats, alone) = b::roster(&routed, &roles);
         let (escalation, rationale) = b::level(kind, routed.trigger, ambiguity, blast_radius);
@@ -1344,7 +1350,9 @@ impl Server {
             "rationale": rationale,
             "kind": kind,
             "kind_inferred": inferred,
-            "suggested_roster": b::roster_json(&seats, alone),
+            "suggested_roster": b::roster_json(&seats, alone, ambiguity, blast_radius, routed.trigger),
+            "answering": b::answering(&seats, alone),
+            "tier_note": b::TIER_NOTE,
             "trigger": routed.trigger,
             "trigger_note": "advice only: a trigger starts nothing",
             "memory": memory,

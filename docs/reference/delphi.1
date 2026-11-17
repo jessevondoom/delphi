@@ -343,7 +343,7 @@ which role or agent fits a task (a dry run).
 .PP
 Ranks Delphi's canonical roles and the agents of the added bundles together for a task, by name, tags, domain and summary, plus the
 local embedding model when one is installed. Each candidate says which role it runs as, where that runs (`locus`: host, inside or either), what
-the task looks like it wants (`trigger`: none, panel, council or red_team, from a fixed table of words), how sure the ranking is
+the task looks like it wants (`trigger`: none, research, panel, council or red_team, from a fixed table of words; research puts the scout first when no role is named), how sure the ranking is
 (`confidence`: the score, less what a close rival takes away) and whether that reaches `[routing] adopt_threshold` (`adopt`). Below it, adopt no role.
 The default threshold is provisional, set on a small labeled set; `adopt` is a recommendation, never an order.
 Nothing is dispatched, no model is called, nothing is created and no daemon is started. `\-\-adopt\-eval` takes a JSON list of {"task", "expect"}

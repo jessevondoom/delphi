@@ -49,6 +49,8 @@ pub fn hook_output(args: &[String], event: &str, host: &str, stdin: impl std::io
                     host_hooks::record_role(&ws, &role, Some((host, id)), None);
                 }
             }
+            // Spec 107 §8.2 item 5: a role named in words; the rule runs in memory and opens packs only when a role is named.
+            lines.extend(host_hooks::named_lines(&ws, input.prompt.as_deref().unwrap_or(""), host));
             lines.join("\n")
         }
         // Spec 106 §11 G2: only a starting subagent whose type is exactly one of the release's worker names gets a pack; any other

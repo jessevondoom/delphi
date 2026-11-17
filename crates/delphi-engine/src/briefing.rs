@@ -11,6 +11,37 @@ pub const KINDS: [&str; 3] = ["software", "analysis", "document"];
 /// The build verbs of the fixed rule (A2). A task with one of them, or a path or a source file, is software.
 pub const BUILD_VERBS: [&str; 8] = ["build", "implement", "fix", "refactor", "add", "write code", "patch", "migrate"];
 const SOURCE_EXTS: [&str; 24] = ["rs", "ts", "tsx", "js", "jsx", "mjs", "py", "go", "java", "kt", "c", "h", "cc", "cpp", "hpp", "cs", "rb", "php", "swift", "scala", "sh", "sql", "toml", "lua"];
+/// The model tiers of `dynamic-model-scaling`, lowest first (§8.7 item 2).
+pub const TIERS: [&str; 3] = ["fast", "workhorse", "frontier"];
+/// What the tiers are called on the hosts that fix their own model names (§8.7 item 2).
+pub const TIER_NOTE: &str = "tiers, lowest first: fast, workhorse, frontier. On Claude Code: haiku, sonnet, opus (or fable); on agy: flash, pro (pro for frontier). Start a worker on its tier where your host lets you choose the model. A tier is a share of the operator's tokens, never money.";
+
+/// The tier for a seat (§8.7 item 2): the role's default, one step up for high ambiguity, a system-wide blast radius or a Council
+/// or red-team trigger, one step down for low ambiguity on an isolated change with no trigger, kept within the three tiers.
+pub fn seat_tier(default: &str, ambiguity: &str, blast: &str, trigger: &str) -> (&'static str, &'static str) {
+    let base = TIERS.iter().position(|t| *t == default).unwrap_or(1) as i32;
+    let (step, why) = if ambiguity == "high" || blast == "system-wide" || matches!(trigger, "council" | "red_team") {
+        (1, "one step above the role's default: high ambiguity, a system-wide blast radius or high stakes")
+    } else if ambiguity == "low" && blast == "isolated" && trigger == "none" {
+        (-1, "one step below the role's default: low ambiguity on an isolated change")
+    } else {
+        (0, "the role's default tier")
+    };
+    let i = (base + step).clamp(0, 2) as usize;
+    (TIERS[i], if i as i32 == base { "the role's default tier" } else { why })
+}
+
+/// Who answers and why, in one line (§8.7 item 1).
+pub fn answering(seats: &[Seat], alone: bool) -> String {
+    match seats.first() {
+        Some(s) if alone => format!("{}: no role reached the adopt threshold and none was named, so the orchestrator answers", s.role),
+        Some(s) if s.named => format!("{}: the operator named it", s.role),
+        Some(s) if s.research => format!("{}: the task asks for research, which the scout takes by default", s.role),
+        Some(s) => format!("{}: it fits the task best (confidence {:.2})", s.role, s.confidence),
+        None => "orchestrator: no roster".into(),
+    }
+}
+
 /// Two roster roles closer than this in confidence are a toss-up, and the orchestrator run by Delphi is worth asking (§2 item 9).
 pub const TIE: f32 = 0.05;
 const MAX_ROSTER: usize = 5;
@@ -95,6 +126,12 @@ pub struct Seat {
     pub locus: String,
     pub confidence: f32,
     pub servable: bool,
+    /// The operator named this role (`specs/107` §8.2): it answers.
+    pub named: bool,
+    /// The scout, taking a research task by default (§8.2 item 8).
+    pub research: bool,
+    /// The role's default tier from its manifest; [`seat_tier`] gives the one to use.
+    pub default_tier: String,
 }
 
 /// The worker subagent of `specs/106` for a role: `<role>-worker` when the role is servable and runs on the host (locus host or either).
@@ -102,8 +139,8 @@ pub fn worker_of(role: &str, locus: &str, servable: bool) -> Option<String> {
     (servable && matches!(locus, "host" | "either")).then(|| format!("{role}-worker"))
 }
 
-/// The roster (§2 item 1): the canonical roles at or above the adopt threshold, best first, at most five; the orchestrator alone
-/// when none reaches it.
+/// The roster (§2 item 1): the canonical roles at or above the adopt threshold, best first, at most five, with the roles the task
+/// names leading (§8.2 item 4); the orchestrator alone when none reaches it and none is named.
 pub fn roster(routed: &crate::route_any::Routed, roles: &[crate::mcp_packs::RoleInfo]) -> (Vec<Seat>, bool) {
     let mut out: Vec<Seat> = Vec::new();
     for c in routed.candidates.iter().filter(|c| c.kind == "role" && c.adopt) {
@@ -111,13 +148,13 @@ pub fn roster(routed: &crate::route_any::Routed, roles: &[crate::mcp_packs::Role
             continue;
         }
         let info = roles.iter().find(|r| r.id == c.role);
-        out.push(Seat { role: c.role.clone(), why: info.map(|r| r.purpose.clone()).unwrap_or_default(), locus: c.locus.clone(), confidence: c.confidence, servable: info.is_some_and(|r| r.servable) });
+        out.push(Seat { role: c.role.clone(), why: info.map(|r| r.purpose.clone()).unwrap_or_default(), locus: c.locus.clone(), confidence: c.confidence, servable: info.is_some_and(|r| r.servable), named: c.named, research: c.research, default_tier: info.map(|r| r.default_tier.clone()).unwrap_or_else(|| "workhorse".into()) });
     }
     if !out.is_empty() {
         return (out, false);
     }
     let o = roles.iter().find(|r| r.id == "orchestrator");
-    (vec![Seat { role: "orchestrator".into(), why: "no role reached the adopt threshold for this task, so the orchestrator carries it alone".into(), locus: o.map(|r| r.locus.clone()).unwrap_or_else(|| "either".into()), confidence: 0.0, servable: o.is_some_and(|r| r.servable) }], true)
+    (vec![Seat { role: "orchestrator".into(), why: "no role reached the adopt threshold for this task, so the orchestrator carries it alone".into(), locus: o.map(|r| r.locus.clone()).unwrap_or_else(|| "either".into()), confidence: 0.0, servable: o.is_some_and(|r| r.servable), named: false, research: false, default_tier: o.map(|r| r.default_tier.clone()).unwrap_or_else(|| "workhorse".into()) }], true)
 }
 
 /// Does the task ask who should do it or how (§2 item 9)?
@@ -126,10 +163,31 @@ fn asks_who_or_how(task: &str) -> bool {
     w.iter().any(|x| x == "who" || x == "whom") || w.first().is_some_and(|x| x == "how") || task.to_lowercase().contains(" how ")
 }
 
-/// The fixed-form suggestions (§2 item 9), at most three, each naming a tool and why.
+/// The suggestion that hands the top role the work (§8.3 item 1): its worker or its pack on the host, or `request_help` with it as the
+/// target when it runs only inside Delphi.
+fn hand_on(top: &Seat) -> Value {
+    let who = if top.named {
+        format!("the operator named the {}: the {} answers, not the orchestrator", top.role, top.role)
+    } else if top.research {
+        return json!({"tool": "get_agent", "role": top.role, "worker": worker_of(&top.role, &top.locus, top.servable), "why": format!("the task asks for research: the {} takes it by default, in this host. Start the {}-worker subagent, or adopt its pack with get_agent; it answers under its own display line", top.role, top.role)});
+    } else {
+        format!("the {} fits this task best: it does the work, not the orchestrator", top.role)
+    };
+    match worker_of(&top.role, &top.locus, top.servable) {
+        Some(w) => json!({"tool": "get_agent", "role": top.role, "worker": w, "why": format!("{who}. Start the {w} subagent for its own context (a review, a second opinion, a long task), or adopt its pack with get_agent for a short answer; it answers under its own display line")}),
+        None => json!({"tool": "request_help", "role": top.role, "suggested_target": top.role, "why": format!("{who}. It runs only inside Delphi: ask with request_help and suggested_target {}", top.role)}),
+    }
+}
+
+/// The fixed-form suggestions (§2 item 9, as amended by §8.3 item 1), at most three, each naming a tool and why. When the roster is not
+/// the orchestrator alone, the first hands the top role the work.
 pub fn next(task: &str, seats: &[Seat], alone: bool, trigger: &str, pointers_above_floor: bool) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
-    let tie = !alone && seats.len() >= 2 && seats.windows(2).any(|p| (p[0].confidence - p[1].confidence).abs() <= TIE);
+    if let Some(top) = seats.first().filter(|_| !alone) {
+        out.push(hand_on(top));
+    }
+    let named = seats.iter().any(|s| s.named || s.research);
+    let tie = !alone && !named && seats.len() >= 2 && seats.windows(2).any(|p| (p[0].confidence - p[1].confidence).abs() <= TIE);
     if tie || asks_who_or_how(task) {
         out.push(json!({"tool": "request_help", "why": if tie { "two roles fit this task almost equally: ask Delphi's own orchestrator who should do it" } else { "the task asks who should do it or how: Delphi's own orchestrator can answer that, on the operator's Delphi tokens" }}));
     }
@@ -220,14 +278,21 @@ pub fn fit(out: &mut Value) {
     }
 }
 
-/// The roster as JSON.
-pub fn roster_json(seats: &[Seat], alone: bool) -> Vec<Value> {
+/// The roster as JSON, each seat with its tier (§8.7 item 2).
+pub fn roster_json(seats: &[Seat], alone: bool, ambiguity: &str, blast: &str, trigger: &str) -> Vec<Value> {
     seats
         .iter()
         .map(|s| {
-            let mut v = json!({"role": s.role, "why": flat(&s.why, 200), "locus": s.locus, "confidence": ((s.confidence * 100.0).round() / 100.0) as f64, "worker": worker_of(&s.role, &s.locus, s.servable)});
+            let (tier, tier_reason) = seat_tier(&s.default_tier, ambiguity, blast, trigger);
+            let mut v = json!({"role": s.role, "why": flat(&s.why, 200), "locus": s.locus, "confidence": ((s.confidence * 100.0).round() / 100.0) as f64, "worker": worker_of(&s.role, &s.locus, s.servable), "tier": tier, "tier_reason": tier_reason});
             if alone {
                 v["alone"] = json!(true);
+            }
+            if s.named {
+                v["named"] = json!(true);
+            }
+            if s.research {
+                v["research_default"] = json!(true);
             }
             v
         })
@@ -293,11 +358,45 @@ mod tests {
         assert_eq!(worker_of("builder", "either", true).as_deref(), Some("builder-worker"));
         assert_eq!(worker_of("validator", "inside", true), None);
         assert_eq!(worker_of("x", "host", false), None);
-        let s = |r: &str, c: f32| Seat { role: r.into(), why: String::new(), locus: "either".into(), confidence: c, servable: true };
+        let s = |r: &str, c: f32| Seat { role: r.into(), why: String::new(), locus: "either".into(), confidence: c, servable: true, named: false, research: false, default_tier: "workhorse".into() };
         let tools = |v: Vec<Value>| v.iter().map(|x| x["tool"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(tools(next("Tune the cache", &[s("builder", 0.7), s("architect", 0.68)], false, "none", true)), ["request_help"]);
-        assert_eq!(tools(next("Who should own the cache?", &[s("builder", 0.9)], false, "panel", false)), ["request_help", "council_open", "request_research"]);
-        assert!(next("Tune the cache", &[s("builder", 0.9)], false, "none", true).is_empty());
+        assert_eq!(tools(next("Tune the cache", &[s("builder", 0.7), s("architect", 0.68)], false, "none", true)), ["get_agent", "request_help"]);
+        assert_eq!(tools(next("Who should own the cache?", &[s("builder", 0.9)], false, "panel", false)), ["get_agent", "request_help", "council_open"]);
+        assert_eq!(tools(next("Tune the cache", &[s("builder", 0.9)], false, "none", true)), ["get_agent"]);
+        assert!(next("Tune the cache", &[s("orchestrator", 0.0)], true, "none", true).is_empty(), "alone: the orchestrator carries it");
+        // §8.3 item 1: the hand-on names the worker; a named role says so and suppresses the tie rule; an inside role goes by request_help.
+        let first = &next("Tune the cache", &[s("builder", 0.9)], false, "none", true)[0];
+        assert_eq!((first["role"].as_str(), first["worker"].as_str()), (Some("builder"), Some("builder-worker")));
+        let mut named = s("strategist", 0.3);
+        named.named = true;
+        let n = next("strategist review", &[named, s("architect", 0.31)], false, "none", true);
+        assert_eq!(tools(n.clone()), ["get_agent"]);
+        assert!(n[0]["why"].as_str().unwrap().contains("the operator named the strategist"), "{}", n[0]);
+        let inside = Seat { role: "validator".into(), why: String::new(), locus: "inside".into(), confidence: 0.8, servable: true, named: false, research: false, default_tier: "workhorse".into() };
+        let mut scout = s("scout", 0.2);
+        scout.research = true;
+        let r = &next("research churn benchmarks", &[scout], false, "research", true)[0];
+        assert!(r["worker"] == "scout-worker" && r["why"].as_str().unwrap().contains("asks for research"), "{r}");
+        let v = &next("Check the claims", &[inside], false, "none", true)[0];
+        assert_eq!((v["tool"].as_str(), v["suggested_target"].as_str()), (Some("request_help"), Some("validator")));
         assert_eq!(query_of("Fix the flaky test in the pager and the pager's cache"), "fix flaky test pager cache");
+    }
+
+    /// §8.7: the tier rule, its bounds, and the one line that says who answers.
+    #[test]
+    fn the_tier_follows_the_role_default_and_the_stakes_and_the_answering_line_says_why() {
+        assert_eq!(seat_tier("workhorse", "medium", "module", "none").0, "workhorse");
+        assert_eq!(seat_tier("workhorse", "high", "module", "none").0, "frontier");
+        assert_eq!(seat_tier("fast", "medium", "module", "red_team").0, "workhorse");
+        assert_eq!(seat_tier("frontier", "high", "system-wide", "council").0, "frontier", "never above frontier");
+        assert_eq!(seat_tier("workhorse", "low", "isolated", "none").0, "fast");
+        assert_eq!(seat_tier("fast", "low", "isolated", "none"), ("fast", "the role's default tier"), "never below fast");
+        assert_eq!(seat_tier("nonsense", "medium", "module", "none").0, "workhorse");
+        let mut seat = Seat { role: "strategist".into(), why: String::new(), locus: "either".into(), confidence: 0.3, servable: true, named: true, research: false, default_tier: "workhorse".into() };
+        assert_eq!(answering(std::slice::from_ref(&seat), false), "strategist: the operator named it");
+        seat.named = false;
+        assert!(answering(std::slice::from_ref(&seat), false).contains("fits the task best (confidence 0.30)"));
+        let v = roster_json(&[seat], false, "high", "module", "none");
+        assert_eq!((v[0]["tier"].as_str(), v[0]["worker"].as_str()), (Some("frontier"), Some("strategist-worker")));
     }
 }
