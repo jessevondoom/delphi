@@ -357,6 +357,26 @@ pub fn served_for_task(events: &[delphi_core::event::EventEnvelope], task_id: &s
     (fams, tokens)
 }
 
+/// The receipts of `task_id`, kept only for the roles in `seats` (every role when `seats` is empty). A daemon Council passes its
+/// planned seats, so the ruling orchestrator's synthesis receipt is not counted as a seat (`specs/123` §3). Read only.
+pub fn seat_receipts(events: &[delphi_core::event::EventEnvelope], task_id: &str, seats: &[&str]) -> Vec<delphi_core::event::EventEnvelope> {
+    events
+        .iter()
+        .filter(|e| e.kind == RECEIPT_KIND && e.task_id.as_deref() == Some(task_id) && (seats.is_empty() || e.agent.as_deref().is_some_and(|a| seats.contains(&a))))
+        .cloned()
+        .collect()
+}
+
+/// A receipt event for tests of the modules that read receipts and must not name the kind (see the test below).
+#[cfg(test)]
+pub(crate) fn test_receipt(task_id: &str, role: &str, model: &str, family: &str, tokens: u64) -> delphi_core::event::EventEnvelope {
+    let mut e = delphi_core::event::EventEnvelope::new("m", RECEIPT_KIND, json!({"served": {"model": model, "family": family}, "carrier": {"kind": "api", "tools_offered": []}, "tokens_in": tokens, "tokens_out": 0, "outcome": "ok"}));
+    e.timestamp = "2026-11-10T14:00:00.000Z".into();
+    e.task_id = Some(task_id.into());
+    e.agent = Some(role.into());
+    e
+}
+
 /// The label a seat's verdict carries when no receipt of it shows a tool that could read the repo (`specs/086` §7).
 pub const UNVERIFIED_AGAINST_REPO: &str = "unverified-against-repo";
 

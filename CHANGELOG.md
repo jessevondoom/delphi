@@ -6,6 +6,10 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
+## Unreleased
+
+- **Who sat on a Council** (spec 123 S1): `council_status` names each seat's model family (from its receipt, else the plan), where that came from, and its model, and says while it deliberates whether the plan has one family only. A daemon Council's card now names its families in the header and lists each seat from the receipts (model, family, carrier, tokens), as a Panel's does; a one-family Council or Panel says so on its own line under the header.
+
 ## 0.6.3 — 2026-11-16
 
 A summary by spec; the pull requests are listed on the releases page. This release brings the knowledge loop (specs 112 to 121). The tests ran on scratch homes with fakes, and **most of the knowledge loop has not been run against the real web or a real model**:
