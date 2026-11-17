@@ -89,7 +89,8 @@
       "type": "object",
       "description": "Councils, Panels and the progress a status call reports (spec 098 section 19).",
       "properties": {
-        "stall_secs": { "type": "integer", "minimum": 0, "description": "A status call flags a Council stalled when every seat still working has been idle this many seconds (default 120). 0 turns the flag off." }
+        "stall_secs": { "type": "integer", "minimum": 0, "description": "A status call flags a Council stalled when every seat still working has been idle this many seconds (default 120). 0 turns the flag off." },
+        "earlier_rulings": { "type": "boolean", "description": "Show a Council's Round 2, repair turn and synthesis (a Panel's verdict brief) up to two earlier Council records whose proposition headline matches, as fenced untrusted context; never Round 1 (default true; spec 123 section 9)." }
       }
     },
     "hosts": {

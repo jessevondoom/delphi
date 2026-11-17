@@ -1011,7 +1011,9 @@ pub fn render_artifact(a: &ArtifactInput) -> String {
             s.push_str(&format!("\n{}\n", n));
         }
     }
-    s.push_str("\n## Round 1 stances (blind)\n\n");
+    s.push('\n');
+    s.push_str(&crate::council_earlier::record_section(&crate::council_earlier::from_front(a.front)));
+    s.push_str("## Round 1 stances (blind)\n\n");
     for (role, st) in a.stances {
         match st {
             Stance::Said(t) => s.push_str(&format!("### {}\n\n{}\n\n", role, quote(t))),
@@ -1539,6 +1541,7 @@ impl Engine {
             front.push_str(&format!("isolation: host-reported, relayed\nblind_round_1: host-reported\nindependence: {}\n", crate::council_panel::one_line(relay["independence"].as_str().unwrap_or("not witnessed"))));
         }
         front.push_str(&format!("counts_as_independent_review: {}\n", relay["counts_as_independent_review"] == true));
+        front.push_str(&crate::council_earlier::front_line(&panel.earlier.iter().map(|e| e.path.clone()).collect::<Vec<_>>()));
         // The label travels with the verdict (`specs/086` §7): seats whose receipts show no tool that could read the repo.
         let unverified: Vec<String> = m.replay().map(|evs| crate::seat::seat_summaries(&evs, &task_id)).unwrap_or_default().into_iter().filter(|s| s.unverified_against_repo).map(|s| s.role).collect();
         if !unverified.is_empty() {
@@ -1620,7 +1623,10 @@ impl Engine {
                 return Ok((Status::Escalated(format!("seats_unavailable: the plan seats only {seated} model famil{}; require_families asked for {n}. Nothing was spent", if seated == 1 { "y" } else { "ies" })), String::new()));
             }
         }
-        m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling, "budget_tokens": budget_tokens, "require_families": opts.require_families}))).await?;
+        // `specs/123` §9: earlier rulings whose headline matches, for Round 2, the repair turn and the synthesis; never Round 1.
+        let earlier = if self.settings.council_earlier_rulings { crate::council_earlier::pick(&self.ws.dir, &m.dir, headline(proposition)) } else { Vec::new() };
+        let earlier_paths: Vec<String> = earlier.iter().map(|e| e.path.clone()).collect();
+        m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling, "budget_tokens": budget_tokens, "require_families": opts.require_families, "earlier": earlier_paths}))).await?;
 
         // Lenses are assigned once, before Round 1, and each seat is shown only its own (`specs/026` §4).
         let lens_plan = if opts.lenses {
@@ -1671,7 +1677,8 @@ impl Engine {
         }
 
         // ── Round 2: every answering seat reads every stance and gives a structured critique.
-        let slices: Vec<ContextSlice> = stances.iter().filter_map(|(r, s)| s.text().map(|t| ContextSlice { label: format!("council/round1/{}", r), tier: "L3".into(), text: t.chars().take(6000).collect() })).collect();
+        let mut slices: Vec<ContextSlice> = stances.iter().filter_map(|(r, s)| s.text().map(|t| ContextSlice { label: format!("council/round1/{}", r), tier: "L3".into(), text: t.chars().take(6000).collect() })).collect();
+        slices.extend(crate::council_earlier::slices(&earlier));
         let mut set = tokio::task::JoinSet::new();
         for seat in plan.seats.iter().filter(|s| answered.contains(&&s.role)) {
             let (engine, m2, tid) = (self.clone(), m.clone(), task_id.to_string());
@@ -1749,7 +1756,7 @@ impl Engine {
                 synthesis = t;
             }
         }
-        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), &format!("venue: daemon\ncouncil_id: {task_id}\n"), synthesis).await
+        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), &format!("venue: daemon\ncouncil_id: {task_id}\n{}", crate::council_earlier::front_line(&earlier_paths)), synthesis).await
     }
 
     /// From the deterministic decision to the record: the steps that follow, the Council record on disk, the `council.verdict` event
@@ -1783,6 +1790,8 @@ impl Engine {
         let rel = format!("missions/{}/councils/{}", m.id, artifact_name(n, &slug));
         std::fs::write(dir.join(artifact_name(n, &slug)), self.secrets.redact(&doc)).map_err(|e| EngineError::Invalid(e.to_string()))?;
         m.append(emit("council.verdict", json!({"venue": if front.lines().any(|l| l == "venue: panel") { "panel" } else { "daemon" }, "n": n, "decision": follow.decision, "steps": crate::council_next::steps_json(&follow.steps), "from_findings": follow.from_findings, "path": rel, "escalated": decision.escalation, "homogeneous": plan.homogeneous, "unresolved": decision.unresolved.iter().map(|(s, r, t)| json!({"severity": s, "seat": r, "title": t})).collect::<Vec<_>>(), "options": decision.options.iter().map(|(l, s)| json!({"label": l, "seats": s})).collect::<Vec<_>>(), "claims": stances.iter().filter_map(|(r, s)| s.text().map(|t| json!({"seat": r, "claim": crate::learn::first_sentence(t)}))).collect::<Vec<_>>()}))).await?;
+        // `specs/123` §8: an escalated host Council or Panel reaches the decisions pane.
+        crate::council_decision::raise_for_host(m, task_id).await?;
 
         let mut text = String::new();
         match &decision.escalation {
@@ -2594,6 +2603,45 @@ pub(crate) mod tests {
         assert!(lint_artifact(&doc).is_empty(), "{:?}", lint_artifact(&doc));
         assert!(doc.contains("- [P1] red-team: Needs idempotency keys") && doc.contains("Heterogeneous"), "{}", doc);
         assert!(out.text.contains("Minority report:") && out.text.contains("Saved: missions/"), "{}", out.text);
+    }
+
+    // specs/123 §9, AC-8: a Council whose headline matches an earlier record's is shown its Decision and Minority Report in Round 2 and the
+    // synthesis, never in Round 1, and lists it in its record and in `council.started`.
+    #[tokio::test]
+    async fn an_earlier_ruling_reaches_round_two_and_the_synthesis_but_never_round_one() {
+        let (f, _, _) = fixture(RED_OK, None);
+        let prop = "Should the retry queue be a table or a file?";
+        f.engine.run_council(&f.m, f.m.next_task_id(), prop, CouncilOpts::default()).await.unwrap();
+        let before = f.model.requests().len();
+        assert!(events_of(&f, "council.started")[0].payload["earlier"].as_array().is_some_and(|a| a.is_empty()), "the first Council had none");
+        f.engine.run_council(&f.m, f.m.next_task_id(), prop, CouncilOpts::default()).await.unwrap();
+        let mut files: Vec<String> = std::fs::read_dir(f.m.dir.join("councils")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        files.sort();
+        assert_eq!(files.len(), 2);
+        let first = format!("missions/{}/councils/{}", f.m.id, files[0]);
+        let started = events_of(&f, "council.started");
+        assert_eq!(started[1].payload["earlier"], json!([first]), "{}", started[1].payload);
+        let later: Vec<String> = f.model.requests()[before..].iter().map(|r| r.body.to_string()).collect();
+        let (r1, rest): (Vec<&String>, Vec<&String>) = later.iter().partition(|t| t.contains("COUNCIL, ROUND 1"));
+        assert_eq!(r1.len(), 3);
+        assert!(r1.iter().all(|t| !t.contains("council/earlier/") && !t.contains("Needs idempotency keys")), "Round 1 stays blind");
+        assert!(rest.len() >= 4 && rest.iter().all(|t| t.contains(&format!("council/earlier/{}", files[0])) && t.contains("[P1] red-team: Needs idempotency keys")), "Round 2 and the synthesis see it");
+        let doc = std::fs::read_to_string(f.m.dir.join("councils").join(&files[1])).unwrap();
+        assert!(doc.contains(&format!("## Earlier rulings shown\n\nShown to Round 2 and the synthesis, never to Round 1:\n\n- `{first}`")) && doc.contains(&format!("earlier_rulings: {first}")), "{doc}");
+        assert!(lint_artifact(&doc).is_empty(), "{:?}", lint_artifact(&doc));
+    }
+
+    // specs/123 §9 item 5: `[council] earlier_rulings = false` shows nothing.
+    #[tokio::test]
+    async fn earlier_rulings_can_be_turned_off() {
+        let f = crate::testkit::setup(vec![], 50.0, |s| s.council_earlier_rulings = false);
+        two_families(&f);
+        f.model.respond_with(|body| Step::text(if body.to_string().contains("COUNCIL, ROUND 2") { "RECOMMENDATION: PROCEED\nCONCUR: yes\nROUND 2 COMPLETE" } else { "OPTION: queue" }));
+        for _ in 0..2 {
+            f.engine.run_council(&f.m, f.m.next_task_id(), "Should the retry queue be a table or a file?", CouncilOpts::default()).await.unwrap();
+        }
+        assert!(events_of(&f, "council.started").iter().all(|e| e.payload["earlier"].as_array().is_some_and(|a| a.is_empty())));
+        assert!(f.model.requests().iter().all(|r| !r.body.to_string().contains("council/earlier/")));
     }
 
     // specs/003 §4.2: a verdict ends in a decision and the steps that follow, in the record, the event and what the operator reads.

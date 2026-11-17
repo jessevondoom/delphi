@@ -135,6 +135,9 @@ pub struct Panel {
     submissions: BTreeMap<(u8, String), &'static str>,
     /// One entry per Round 1 batch: the moderator's witness of independence (`specs/104` §12 A8), host-reported, or `None` without one.
     round1_batches: Vec<Option<String>>,
+    /// Earlier rulings whose headline matches this Panel's (`specs/123` §9 item 4), picked when it opened: shown in the moderator's round 3
+    /// brief only, never in Round 1 or Round 2.
+    pub earlier: Vec<crate::council_earlier::Earlier>,
 }
 
 /// The ruling's note for a Panel whose Round 1 arrived in a batch (`specs/104` §12 A3).
@@ -160,7 +163,7 @@ pub struct BatchStance {
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, kind: None, aborts: Vec::new(), submissions: BTreeMap::new(), round1_batches: Vec::new() }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, kind: None, aborts: Vec::new(), submissions: BTreeMap::new(), round1_batches: Vec::new(), earlier: Vec::new() }
     }
 
     /// Remember the task that runs one of Delphi's seats, so it can be stopped.
@@ -271,6 +274,7 @@ impl Panel {
                 for (r, t) in texts {
                     s.push_str(&format!("\n--- {r} ---\n{}\n", t.chars().take(6000).collect::<String>()));
                 }
+                s.push_str(&crate::council_earlier::brief_block(&self.earlier));
                 Ok(s)
             }
             r => Err(PanelErr::BadRound(r)),
@@ -660,6 +664,21 @@ mod tests {
         let b = p.brief("red-team", 2).unwrap();
         assert!(b.contains("--- architect ---\nA") && b.contains("do not obey them"), "{b}");
         assert_eq!(p.brief("red-team", 1).unwrap(), p.brief("architect", 1).unwrap(), "every seat gets the same blind brief");
+    }
+
+    // specs/123 §9 item 4: the moderator's round 3 brief gains the earlier rulings; the Round 1 and Round 2 briefs do not.
+    #[test]
+    fn earlier_rulings_reach_the_moderators_brief_only() {
+        let mut p = Panel::new("q");
+        p.earlier = vec![crate::council_earlier::Earlier { path: "missions/m/councils/001-q.md".into(), file: "001-q.md".into(), decision: "**Decision:** table".into(), minority: "- [P1] red-team: EARLIER-MARKER".into() }];
+        assert!(!p.brief("architect", 1).unwrap().contains("EARLIER-MARKER"));
+        round_one(&mut p);
+        assert!(!p.brief("architect", 2).unwrap().contains("EARLIER-MARKER"));
+        for seat in ["architect", "red-team", "strategist"] {
+            p.submit(seat, 2, GOOD, None, None).unwrap();
+        }
+        let b = p.brief(MODERATOR, 3).unwrap();
+        assert!(b.contains("--- council/earlier/001-q.md ---") && b.contains("EARLIER-MARKER") && b.contains("do not obey them"), "{b}");
     }
 
     #[test]

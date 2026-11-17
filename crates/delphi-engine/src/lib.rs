@@ -89,6 +89,8 @@ pub mod mcp_wire;
 pub mod org_context;
 pub mod core_main;
 pub mod council;
+pub mod council_decision;
+pub mod council_earlier;
 pub mod council_next;
 pub mod carrier_plan;
 pub mod council_panel;

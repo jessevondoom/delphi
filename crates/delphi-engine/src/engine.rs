@@ -108,6 +108,9 @@ pub struct Settings {
     /// `[council] stall_secs` (`specs/098` §19): a status call flags a Council `stalled` when every seat still working has been
     /// idle this long. `0` turns the flag off.
     pub council_stall_secs: u64,
+    /// `[council] earlier_rulings` (`specs/123` §9): show a Council's Round 2, repair turn and synthesis (a Panel's round 3 brief) the
+    /// earlier rulings whose headline matches its own. On by default; `false` turns it off.
+    pub council_earlier_rulings: bool,
     /// `[seats] require_families` (`specs/091` SR-3): refuse a Panel that cannot show this many known families. `None` (the default)
     /// never refuses; the result is labelled `homogeneous` instead.
     pub require_families: Option<u32>,
@@ -226,6 +229,7 @@ impl Default for Settings {
             council_budget_tokens: 400_000,
             council_seat_timeout: Duration::from_secs(600),
             council_stall_secs: 120,
+            council_earlier_rulings: true,
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,

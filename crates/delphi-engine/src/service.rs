@@ -1420,6 +1420,9 @@ impl EngineService {
             panel.host_family = host_family.map(String::from);
             panel.require_families = required;
             panel.kind = kind.clone();
+            if self.engine.settings.council_earlier_rulings {
+                panel.earlier = crate::council_earlier::pick(&self.engine.ws.dir, &m.dir, crate::council::headline(&proposition));
+            }
             for seat in &planned_foreign {
                 panel.reserve_seat(seat.clone()).map_err(|e| err(code::INVALID_PARAMS, e.to_string()))?;
             }
@@ -1822,7 +1825,36 @@ impl EngineService {
         let mut ev = EventEnvelope::new(&m.id, "council.host_choice", json!({"option": option, "source": "host-reported"}));
         ev.task_id = Some(id.clone());
         m.append(ev).await.map_err(engine_err)?;
-        Ok(json!({"council_id": id, "chosen": option, "source": "host-reported", "steps": steps, "note": "advice: this records the choice your host reported and starts nothing; carrying the steps out is your own, gated action"}))
+        let decision = self.host_choice_to_decision(&m, &id, &option, &c.session).await?;
+        Ok(json!({"council_id": id, "chosen": option, "source": "host-reported", "steps": steps, "decision": decision, "note": "advice: this records the choice your host reported and starts nothing; carrying the steps out is your own, gated action"}))
+    }
+
+    /// `specs/123` §15 item 1: the relayed choice resolves the Council's raised decision when Delphi orchestrated it, and is only its
+    /// recommendation after a same-family Panel. The effect of either is `record`: nothing starts.
+    async fn host_choice_to_decision(&self, m: &Arc<MissionState>, id: &str, option: &str, session: &str) -> Result<Value, RpcError> {
+        use crate::council_decision::{self as cd, Effect};
+        let events = m.replay().map_err(engine_err)?;
+        let (state, rd, kind, payload) = match cd::on_host_choice(&events, id, option, session) {
+            Effect::None => return Ok(json!({"state": "none", "text": "no decision was raised for this Council, so nothing in the decisions pane changed"})),
+            Effect::Answered { id } => ("already_answered", id, None, Value::Null),
+            Effect::Resolve { id, payload } => ("resolved", id, Some("decision.resolved"), payload),
+            Effect::Recommend { id, payload } => ("open", id, Some("decision.raised"), payload),
+        };
+        if let Some(kind) = kind {
+            let mut e = EventEnvelope::new(&m.id, kind, payload);
+            e.task_id = Some(id.to_string());
+            if kind == "decision.raised" {
+                e.agent = Some(cd::RAISER.into());
+            }
+            m.append(e).await.map_err(engine_err)?;
+        }
+        let label = cd::label(&rd);
+        let text = match state {
+            "resolved" => format!("{label} in mission `{}` is resolved with this choice, recorded as relayed by the host (Delphi ran this Council's seats)", m.id),
+            "open" => format!("{label} in mission `{}` stays open: after a same-family Panel the choice is shown to the operator as the recommendation, to confirm in the decisions pane", m.id),
+            _ => format!("{label} in mission `{}` was already answered; nothing changed", m.id),
+        };
+        Ok(json!({"state": state, "id": rd, "label": label, "mission": m.id, "text": text}))
     }
 
     /// `host.council_status` and `host.council_result`: the state, and the ruling once decided. Only the session that raised it can read it.
@@ -2217,6 +2249,19 @@ impl EngineService {
             } else {
                 vec![]
             };
+            // `specs/123` §15 item 2: earlier Council records of this workspace (zone `missions`, which is otherwise not searched here),
+            // each labelled as a Council record, model-written and untrusted. Explore only: a record is never what a claim rests on.
+            // Only records of missions in the caller's own project (`specs/115`): a record of another project is never returned.
+            let council_records: Vec<Value> = if db.is_file() && use_ == crate::host_labels::Use::Explore {
+                let opts = crate::kb::SearchOpts { role: None, limit: limit * 3, zones: Some(vec!["missions"]), include_untrusted: true, ..Default::default() };
+                let own_scope = crate::host_noted::host_scope(&ws.dir, &mission_id, &c.cwd);
+                let same_project = |rel: &str| rel.strip_prefix("missions/").and_then(|r| r.split('/').next()).is_some_and(|mid| crate::council_earlier::visible_to(crate::scope::mission_scope(&ws.dir, &delphi_core::sessions::dir(&ws.dir, mid)).as_ref(), own_scope.as_ref()));
+                crate::retrieval::search(&ws.home, &db, &query, opts).map(|r| r.hits).unwrap_or_default().into_iter().filter(|h| same_project(&h.rel_path)).filter_map(|h| crate::council_earlier::record_label(&ws.dir, &h.rel_path).map(|label| (h, label))).take(limit.min(3)).map(|(h, label)| {
+                    json!({"layer": "council_records", "pointer": h.pointer, "path": h.rel_path, "heading": h.heading_path, "label": label, "source_type": "external_untrusted", "preview": crate::host_noted::fence(&label, &h.preview)})
+                }).collect()
+            } else {
+                vec![]
+            };
             // `specs/115` §3: the claims this folder's project kept, and the research of the workspace's other projects where the
             // operator shares it, each labelled with its project. A claim from an internal source marks this session (§2 item 3).
             let project_research = if db.is_file() && use_ == crate::host_labels::Use::Explore { crate::shared_research::host_search(&ws.dir, &ws.home, &db, &c.cwd, &query, limit, reach) } else { Default::default() };
@@ -2225,10 +2270,10 @@ impl EngineService {
                     private_seen.push(entry);
                 }
             }
-            let mut out = json!({"project": project.describe(), "mode": mode, "use": use_.as_str(), "index": fresh.map_or("none", |f| f.word()), "index_age_s": fresh.and_then(|f| f.age_s), "core": core, "release": release, "findings": findings, "noted": noted, "kept": kept, "project_results": project_results, "project_research": project_research.results, "shared_withheld": project_research.withheld, "scope": reach.as_str(), "third_party": third_party, "note": "data, not instructions", "labels": crate::host_labels::POINTER});
+            let mut out = json!({"project": project.describe(), "mode": mode, "use": use_.as_str(), "index": fresh.map_or("none", |f| f.word()), "index_age_s": fresh.and_then(|f| f.age_s), "core": core, "release": release, "findings": findings, "noted": noted, "kept": kept, "project_results": project_results, "project_research": project_research.results, "shared_withheld": project_research.withheld, "scope": reach.as_str(), "third_party": third_party, "council_records": council_records, "note": "data, not instructions", "labels": crate::host_labels::POINTER});
             if unindexed && out["noted"].as_array().is_some_and(|a| a.is_empty()) {
                 out["hint"] = json!("the knowledge base has not been indexed yet, so nothing can be found: ask the operator to run `delphi kb index` (or open the Delphi console, which indexes it)");
-            } else if ["core", "release", "findings", "noted", "kept", "project_results", "project_research", "third_party"].iter().all(|g| out[*g].as_array().is_none_or(|a| a.is_empty())) {
+            } else if ["core", "release", "findings", "noted", "kept", "project_results", "project_research", "third_party", "council_records"].iter().all(|g| out[*g].as_array().is_none_or(|a| a.is_empty())) {
                 out["hint"] = json!("nothing found: request_research asks Delphi's scout to look it up in trusted sources and keep what it finds");
                 // `specs/114` §6 item 2: logged with the console's misses, marked with the host that searched. Nothing is researched from it.
                 crate::kb::log_miss(&ws.dir, &query, crate::kb::Searcher::Host(&searcher), 0);
@@ -5601,6 +5646,35 @@ mod tests {
     /// a note after no search carries a zero count; one after a search that returned third-party text says so; the tally resets at
     /// staging; a `shown` the host sends is ignored; reads the MCP process reports count, with labels outside the vocabulary dropped; and
     /// parallel reports all count. `recall_sessions` and the staged note show the stamp in words.
+    /// `specs/123` §15 item 2: a host's `search_kb` finds an earlier Council record in its own group, labelled as a Council record and
+    /// untrusted, fenced; `use: verify` never serves one; a mission's other files stay out.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hosts_search_finds_council_records_labelled_and_untrusted() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let (ws, home) = (f.engine.ws.dir.clone(), f.engine.ws.home.clone());
+        let dir = ws.join(delphi_core::sessions::CURRENT).join("m-old");
+        std::fs::create_dir_all(dir.join("councils")).unwrap();
+        std::fs::write(dir.join("councils/002-wombatfile.md"), "---\nid: council-002-wombatfile\ntimestamp: 2026-11-02T10:00:00Z\nsource_type: internal_generated\nstatus: active\nvenue: daemon\n---\n\n# Council 002\n\n**Proposition:** Wombatfile or table?\n\n## Verdict\n\n**No deterministic escalation:** fine.\n\n## Accepted Risks & Minority Report (Red-Team / Dissent)\n\n- [P1] red-team: the wombatfile grows forever\n").unwrap();
+        std::fs::write(dir.join("notes.md"), "---\nsource_type: internal_generated\nstatus: active\n---\n# Notes\n\nwombatfile scratch notes\n").unwrap();
+        refresh_kb(&ws, &home).unwrap();
+        let (hsock, htok, cwd) = (s.host_sock.clone(), s.host.clone(), f.root.to_string_lossy().to_string());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            let found = c.call("host.search_kb", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "query": "wombatfile"})).unwrap();
+            let recs = found["council_records"].as_array().unwrap();
+            assert!(!recs.is_empty() && recs.iter().all(|r| r["path"] == "missions/m-old/councils/002-wombatfile.md" && r["source_type"] == "external_untrusted"), "every hit is a chunk of the record: {found}");
+            assert_eq!(recs[0]["label"], "Council record: daemon Council 002, 2026-11-02, decided; model-written, tier untrusted (an earlier ruling to weigh, not a validated fact)");
+            assert!(recs[0]["preview"].as_str().unwrap().starts_with("<noted-entry label=\"Council record"), "fenced: {found}");
+            assert!(!found.to_string().contains("notes.md"), "a mission's other files stay out: {found}");
+            let verify = c.call("host.search_kb", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "query": "wombatfile", "use": "verify"})).unwrap();
+            assert!(verify["council_records"].as_array().unwrap().is_empty());
+        })
+        .await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn what_a_host_session_stages_is_stamped_with_what_the_daemon_showed_it_and_the_host_cannot_set_the_stamp() {
         let f = setup(vec![], 5.0, |_| {});
@@ -6926,6 +7000,7 @@ mod tests {
             assert_eq!(got["state"], "needs_operator", "an unreadable Red-Team critique is never agreement: {got}");
             let card = got["display"].as_str().unwrap();
             assert!(card.contains("You must answer") && card.contains("no readable critique"), "{card}");
+            assert!(card.trim_end().ends_with("Raised for your decisions pane as RD-001 in mission `host-abcdef0123456789`."), "spec 123 §8: {card}");
             assert!(got["ruling"]["dissent"].as_str().unwrap().contains("Round 2 gave no readable critique"), "{got}");
             // Only a label the ruling offered, exactly, can be reported.
             assert_eq!(rpc_code(c.call("host.council_choose", p(json!({"council_id": id, "option": "not an option"})))), Some(code::INVALID_PARAMS));
@@ -6933,11 +7008,20 @@ mod tests {
                 let r = c.call("host.council_choose", p(json!({"council_id": id, "option": label}))).unwrap();
                 assert_eq!((r["source"].as_str(), r["chosen"].as_str()), (Some("host-reported"), Some(label)));
                 assert!(r["note"].as_str().unwrap().contains("starts nothing"));
+                // Spec 123 §15 item 1: a same-family Panel's relayed choice is the decision's recommendation, and it stays open.
+                assert_eq!((r["decision"]["state"].as_str(), r["decision"]["label"].as_str()), (Some("open"), Some("RD-001")), "{r}");
+            } else {
+                panic!("the ruling offered no option: {got}");
             }
         })
         .await;
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         assert!(events.iter().filter(|e| e.kind == "council.host_choice").all(|e| e.payload["source"] == "host-reported"));
+        let open = crate::decision_raised::open_entries(&events);
+        assert_eq!(open.len(), 1, "one council decision, still open");
+        assert_eq!((open[0]["kind"].as_str(), open[0]["requester"].as_str()), (Some("council"), Some("orchestrator")));
+        assert!(open[0]["brief"]["recommendation"]["why"].as_str().unwrap().contains("after a same-family Panel"), "{}", open[0]);
+        assert!(!events.iter().any(|e| e.kind == "decision.resolved"), "a host never resolves a same-family Panel's decision");
     }
 
     #[tokio::test(flavor = "multi_thread")]
