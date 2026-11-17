@@ -2,11 +2,19 @@
 
 A window on what your Delphi team is doing: who is working, a council as it deliberates, the knowledge base, and what was produced. Until you pair it from a terminal it only reads. Paired, it can also ask for four things you could start at a terminal without being asked anything: a research topic continued, a follow-up question researched, a topic page rebuilt, a statement disputed (below). It cannot approve anything, change a setting, edit an agent or a skill, stop work or start any other, and it never starts a daemon. For any of those, use the console (`delphi chat`). The design and its rules are in [`specs/111`](../../specs/111-the-desktop-app-a-read-only-window-on-the-daemon.md).
 
-It is not in a release yet. You build it from this repository.
+## Install it
+
+On macOS, a release carries the app ([`specs/122`](../../specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md); releases made before that spec do not). It is in the same archive as `delphi`, so it passes the same checksum and attestation:
+
+- **`install.sh`** puts it at `~/Applications/Delphi.app` (`--no-app`, or `DELPHI_NO_APP=1`, leaves it out).
+- **`delphi update`** replaces it there with the release's, keeps the one it replaced as `~/Applications/.delphi-app.prev`, and `delphi update --rollback` puts that back. It installs the app there if it is missing; `DELPHI_NO_APP=1` leaves the app alone. A running window keeps running; the next start is the new build.
+- **Homebrew** keeps it inside the formula; `brew info delphi` gives the one line that links it into `~/Applications`. `install.sh` and `delphi update` leave such a link alone.
+
+Nothing installs or updates it on Linux yet: build it yourself (below). If `/Applications/Delphi.app` is also there, `delphi app` starts that one first; remove it, or set `DELPHI_APP`.
 
 ## Build it
 
-You need Node 22.12 or newer, Rust with `cargo` on your `PATH`, `python3`, and Chrome or Chromium (for the diagram check; `CHROME=<path>` names one). macOS only for now.
+To build it yourself, you need Node 22.12 or newer, Rust with `cargo` on your `PATH`, `python3`, and Chrome or Chromium (for the diagram check; `CHROME=<path>` names one). macOS only for now.
 
 ```sh
 app/dev/build.sh
@@ -16,7 +24,7 @@ That installs the window's pinned dependencies without running their install scr
 
 The app is at `target/app/release/bundle/macos/Delphi.app`. Copy it where you keep applications.
 
-It is not signed. An app you build yourself opens normally. One copied from another machine is stopped by macOS the first time: open it from the Finder with a right-click and **Open**.
+It is not signed with a developer certificate. An app you build yourself, or one `install.sh` or `delphi update` wrote, opens normally. One downloaded in a browser or copied from another machine is stopped by macOS the first time: open it from the Finder with a right-click and **Open**.
 
 ## What it needs
 

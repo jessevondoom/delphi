@@ -8,6 +8,7 @@
 #   --version vX.Y.Z   (DELPHI_VERSION)      install that release instead of the latest
 #   --dir DIR          (DELPHI_INSTALL_DIR)  install into DIR (default: ~/.local/bin)
 #   --no-setup                               do not offer to run `delphi setup` afterwards
+#   --no-app           (DELPHI_NO_APP=1)     on macOS, do not install the desktop app in ~/Applications
 # Maintainers / mirrors: DELPHI_API (releases API base) and DELPHI_DOWNLOAD (asset base URL) override the defaults.
 # A fork: DELPHI_REPO=owner/repo installs that GitHub repository's releases instead (specs/074 section 11). The checksum and
 # the build attestation are then that repository's, so you are trusting it and not the project.
@@ -50,6 +51,8 @@ HINT='if the repository is private, run `gh auth login` (or set GH_TOKEN); in an
 VERSION="${DELPHI_VERSION:-}"
 DIR="${DELPHI_INSTALL_DIR:-$HOME/.local/bin}"
 SETUP=1
+APP=1
+[ "${DELPHI_NO_APP:-0}" != "1" ] || APP=0
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
@@ -59,7 +62,8 @@ while [ $# -gt 0 ]; do
     --version) [ $# -ge 2 ] || die "--version needs a value"; VERSION="$2"; shift 2 ;;
     --dir) [ $# -ge 2 ] || die "--dir needs a value"; DIR="$2"; shift 2 ;;
     --no-setup) SETUP=0; shift ;;
-    -h|--help) sed -n '2,21p' "$0" 2>/dev/null || true; exit 0 ;;
+    --no-app) APP=0; shift ;;
+    -h|--help) sed -n '2,22p' "$0" 2>/dev/null || true; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
@@ -159,6 +163,35 @@ if [ -n "$ui" ]; then
   cp "$ui" "$stage_ui" && chmod 755 "$stage_ui" && mv -f "$stage_ui" "$DIR/delphi-ui" || die "could not install delphi-ui into $DIR"
 fi
 say "Installed $("$DIR/delphi" --version) to $DIR/delphi"
+
+# The desktop app (specs/122 section 3), on macOS only: from the same archive, so it passed the same checks. A release from
+# before it has none. It goes to ~/Applications, where `delphi app` and `delphi update` look; nothing here starts it.
+if [ "$os" = Darwin ] && [ "$APP" -eq 1 ]; then
+  top="delphi-$VERSION-$target"
+  if tar -tzf "$tmp/$name" "$top/Delphi.app/Contents/MacOS/delphi-app" >/dev/null 2>&1; then
+    tar -xzf "$tmp/$name" -C "$tmp" "$top/Delphi.app" || die "could not unpack the desktop app (the program is installed)"
+    src="$tmp/$top/Delphi.app"
+    [ -d "$src" ] && [ ! -L "$src" ] || die "the archive's Delphi.app is not a folder; the app was not installed (the program is)"
+    [ -z "$(find "$src" ! -type f ! -type d)" ] || die "the archive's Delphi.app holds something that is neither a file nor a folder; the app was not installed (the program is)"
+    exe="$src/Contents/MacOS/delphi-app"
+    [ -f "$exe" ] && [ ! -L "$exe" ] && [ -x "$exe" ] || die "the archive's Delphi.app has no runnable delphi-app; the app was not installed (the program is)"
+    apps="$HOME/Applications"
+    if [ -L "$apps/Delphi.app" ] || { [ -e "$apps/Delphi.app" ] && [ ! -d "$apps/Delphi.app" ]; }; then
+      say "$apps/Delphi.app is not a folder (a link?), so the desktop app there was left as it is."
+    else
+      mkdir -p "$apps" || die "could not make $apps for the desktop app (the program is installed)"
+      stage_app="$apps/.delphi-app-new.$$"; old_app="$apps/.delphi-app-old.$$"
+      trap 'rm -rf "$tmp" "$stage_app"; rm -f "$stage" "${stage_ui:-}"' EXIT INT TERM
+      rm -rf "$stage_app" "$old_app"
+      cp -R "$src" "$stage_app" && chmod -R go-w "$stage_app" || die "could not copy the desktop app into $apps (the program is installed)"
+      if [ -d "$apps/Delphi.app" ]; then mv "$apps/Delphi.app" "$old_app" || die "could not move the installed desktop app aside"; fi
+      mv "$stage_app" "$apps/Delphi.app" || { [ ! -d "$old_app" ] || mv "$old_app" "$apps/Delphi.app"; die "could not move the desktop app into place; the installed one was left"; }
+      rm -rf "$old_app"
+      say "Installed the desktop app to $apps/Delphi.app (\`delphi app\`, in a terminal, starts it)."
+      [ ! -e /Applications/Delphi.app ] || say "Note: /Applications/Delphi.app is also installed and \`delphi app\` starts it first; remove it, or set DELPHI_APP=$apps/Delphi.app/Contents/MacOS/delphi-app"
+    fi
+  fi
+fi
 
 case ":$PATH:" in
   *":$DIR:"*) ;;
