@@ -170,3 +170,13 @@ This section replaces §8 item 2, amends §4 item 1, §9 and §11, and closes §
 2. **§12 question 2, records agents can search.** Council records stay untrusted and stay out of the span-start zones (`retrieval::START_ZONES`), so Round 1 stays blind and no span starts on model-written text. They are made findable on purpose: the knowledge search an agent calls (`kb_search`, and `search_kb` for a host) returns Council records with a label naming them as a Council record (venue, number, date, decided or escalated) and their tier. §9 is the automatic half: a later Council is shown earlier rulings that match it.
 3. **§12 question 3, a single family.** Unchanged: a Council of one family runs and is labelled (§3 item 3). No refusal is added; a host that wants more asks with `require_families` (§6).
 4. **§12 question 4, the ceiling.** The default of `[budget] council_budget_tokens` is **400,000** (amends §4 item 1).
+
+## 16. Corrections from the build (2026-11-17)
+
+What building S1 to S5 showed the text above got wrong or left open. Each is the closest safe reading of the section it corrects; none widens what a host may do.
+
+1. **§6, `require_families`.** A Council from a host always has the three default seats, so at most 3 families can sit: the range is 1 to 3, and 4 is refused with a sentence that says why. Seating M families moves seats onto unused usable families before Round 1; it never puts a critic on the author's family and never lowers a tier. `[seats] require_families` in the config applies to the Panel only, as before.
+2. **§5 item 1, the endpoint of a failed seat.** A seat that times out on its first call has no receipt, so the endpoint is taken from the seat's last event in the task that names one (a budget reservation or a harness start included). A seat whose calls all fail comes back escalated with the error as its reason; it is cut and logged as an error is. A timeout writes no error-log entry, since it has no error text.
+3. **§3, the orchestrator is not a seat.** The synthesis span writes a receipt too; on the daemon venue only the planned seats' receipts count for the families, the per-seat block and diversity.
+4. **§4 item 2, the money ceiling.** `council_budget_usd` was never read from `config.toml` before (the 20.0 default always applied); it is now read, so a workspace that sets it gets the value it set.
+5. **§7, what the tail prints at the end.** Only the state and the record's path, never the escalation or error reason, which may be model text.
