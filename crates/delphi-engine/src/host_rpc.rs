@@ -742,9 +742,20 @@ pub fn council_view_at(events: &[delphi_core::event::EventEnvelope], mission_dir
             into.extend(extra);
         }
         if let Some(phase) = &p.phase {
-            v["phase"] = json!(phase);
+            // Spec 123 §4 item 3: the line ends with the tokens, against the ceiling when one is set.
+            let (spent, ceiling) = (v["tokens"]["spent"].as_u64().unwrap_or(0), v["tokens"]["ceiling"].as_u64());
+            let cost = match ceiling {
+                Some(c) => format!("; {} of {} tokens", crate::council::kilo(spent), crate::council::kilo(c)),
+                None if spent > 0 => format!("; {} tokens", crate::council::kilo(spent)),
+                None => String::new(),
+            };
+            v["phase"] = json!(format!("{phase}{cost}"));
         }
         v["round"] = json!(p.round);
+        // Spec 123 §3 item 3: the plan's one-family label, so a host can say so before the card.
+        if let Some(h) = events.iter().find(|e| e.kind == "council.started" && e.task_id.as_deref() == Some(task_id)).and_then(|e| e.payload["homogeneous"].as_bool()) {
+            v["homogeneous"] = json!(h);
+        }
     } else if matches!(v["state"].as_str(), Some("decided" | "needs_operator" | "not_decided")) {
         // Spec 098 §6 and §13 (S9): a finished Council, Panel or red-team review expects a host summary. The daemon says so and says whether it
         // has seen one since, from its own log; it never holds the result back for it.
@@ -820,6 +831,12 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
     if panel {
         v["counts_as_independent_review"] = json!(started.map(|e| e.payload["counts_as_independent_review"] != false).unwrap_or(true));
     }
+    // Spec 123 §4 item 3: what it has cost in tokens, against its ceiling (null when off). A Panel's count is only the seats Delphi ran.
+    let spent = crate::council::council_tokens(events, task_id);
+    v["tokens"] = json!({"spent": spent, "ceiling": started.and_then(|e| e.payload["budget_tokens"].as_u64())});
+    if panel {
+        v["tokens"]["scope"] = json!("delphi_seats");
+    }
     // Host-reported claims, shown as such on the card; they raise no trust and satisfy no gate (spec 089 F2).
     if let Some(o) = started.map(|e| e.payload["operator_confirmed"].clone()).filter(|o| o.is_boolean()) {
         v["operator_confirmed"] = o;
@@ -870,36 +887,46 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
         let critiques: Vec<Value> = of("council.critique").iter().map(|e| json!({"seat": e.payload["role"], "recommendation": e.payload["recommendation"], "concur": e.payload["concur"], "findings": e.payload["findings"], "cause": e.payload["cause"], "kept": e.payload["kept"]})).collect();
         // The families that actually sat, from the receipts' served family (`specs/091` SR-3). A Panel adds the host's own, host-reported.
         // A log without receipts keeps the plan's label.
-        let (served, _) = crate::seat::served_for_task(events, task_id);
+        // A daemon Council's synthesis span (the orchestrator, who rules) writes a receipt too, but it is not a seat: only the planned
+        // seats' receipts count for who sat (`specs/123` §3). A Panel keeps every receipt.
+        let planned: Vec<&str> = started.and_then(|e| e.payload["seats"].as_array()).into_iter().flatten().filter_map(|s| s["role"].as_str()).collect();
+        let receipts = crate::seat::seat_receipts(events, task_id, if panel { &[][..] } else { &planned[..] });
+        let (served, _) = crate::seat::served_for_task(&receipts, task_id);
         let host_fam = started.and_then(|e| e.payload["host_family"].as_str());
         let div = crate::seat::Diversity::of(if panel { host_fam } else { None }, &served);
         let have = !served.is_empty() || (panel && host_fam.is_some());
         let homogeneous = if have && panel { json!(div.homogeneous()) } else if have { json!(ve.payload["homogeneous"].as_bool().unwrap_or(false) || div.homogeneous()) } else { ve.payload["homogeneous"].clone() };
-        let required = started.and_then(|e| e.payload["require_families"].as_u64());
-        // Each seat Delphi ran, from its receipts (`specs/086` §6.4, §7): served model, family, carrier, tools, and the parse and
-        // refusal diagnostics of its own words (C1c). Diagnostics only; nothing here ranks a seat.
-        let ran: Vec<Value> = if panel {
-            let stances = of("council.stance");
-            let crits = of("council.critique");
-            crate::seat::seat_summaries(events, task_id)
-                .into_iter()
-                .map(|s| {
-                    let st = stances.iter().find(|e| e.payload["role"] == s.role.as_str());
-                    let cr = crits.iter().find(|e| e.payload["role"] == s.role.as_str());
-                    let mut d = s.to_value();
-                    d["round1_parsed"] = st.map(|e| e.payload["parsed"].clone()).unwrap_or(Value::Null);
-                    d["round2_readable"] = cr.map(|e| e.payload["readable"].clone()).unwrap_or(Value::Null);
-                    d["declined"] = json!(st.is_some_and(|e| e.payload["declined"] == true) || cr.is_some_and(|e| e.payload["declined"] == true));
-                    d
-                })
-                .collect()
+        // The families named on the card: the served ones, or for a daemon Council with no receipt yet, the plan's.
+        let (families, families_source) = if have || panel {
+            (div.families.clone(), "receipt")
         } else {
-            Vec::new()
+            let mut fs: Vec<String> = started.and_then(|e| e.payload["seats"].as_array()).into_iter().flatten().filter_map(|s| s["family"].as_str()).filter(|f| !f.is_empty() && *f != crate::seat::UNKNOWN).map(crate::progress::ident).collect();
+            fs.sort();
+            fs.dedup();
+            (fs, "plan")
         };
-        let unverified: Vec<&str> = ran.iter().filter(|d| d["unverified_against_repo"] == true).filter_map(|d| d["seat"].as_str()).collect();
+        let required = started.and_then(|e| e.payload["require_families"].as_u64());
+        // Each seat Delphi ran, from its receipts (`specs/086` §6.4, §7; for a daemon Council too, `specs/123` §3 item 2): served model,
+        // family, carrier, tools, and the parse and refusal diagnostics of its own words (C1c). Diagnostics only; nothing here ranks a seat.
+        let stances = of("council.stance");
+        let crits = of("council.critique");
+        let ran: Vec<Value> = crate::seat::seat_summaries(&receipts, task_id)
+            .into_iter()
+            .map(|s| {
+                let st = stances.iter().find(|e| e.payload["role"] == s.role.as_str());
+                let cr = crits.iter().find(|e| e.payload["role"] == s.role.as_str());
+                let mut d = s.to_value();
+                d["round1_parsed"] = st.map(|e| e.payload["parsed"].clone()).unwrap_or(Value::Null);
+                d["round2_readable"] = cr.map(|e| e.payload["readable"].clone()).unwrap_or(Value::Null);
+                d["declined"] = json!(st.is_some_and(|e| e.payload["declined"] == true) || cr.is_some_and(|e| e.payload["declined"] == true));
+                d
+            })
+            .collect();
+        // The repo label is a Panel's (`specs/086` §7); a daemon Council's card did not carry it and still does not.
+        let unverified: Vec<&str> = if panel { ran.iter().filter(|d| d["unverified_against_repo"] == true).filter_map(|d| d["seat"].as_str()).collect() } else { Vec::new() };
         v["ruling"] = json!({
             "seats_run_by_delphi": ran, "unverified_against_repo": unverified,
-            "families": div.families, "families_unknown": div.unknown, "require_families": required,
+            "families": families, "families_source": families_source, "families_unknown": div.unknown, "require_families": required,
             "require_families_met": required.map(|n| div.families.len() as u64 >= n),
             "decision": ve.payload["decision"], "next_steps": ve.payload["steps"], "options_considered": ve.payload["options"], "escalated": ve.payload["escalated"],
             "unresolved": ve.payload["unresolved"], "homogeneous": homogeneous, "seat_positions": positions, "critiques": critiques,
@@ -937,8 +964,7 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
             v["ruling"]["finding_groups"] = json!(groups);
             v["ruling"]["single_family"] = json!(homogeneous == json!(true));
         }
-        let tokens: u64 = of("agent.usage").iter().map(|e| e.payload["input_tokens"].as_u64().unwrap_or(0) + e.payload["output_tokens"].as_u64().unwrap_or(0)).sum();
-        let mut card = ruling_card(&v, tokens);
+        let mut card = ruling_card(&v, spent);
         if v["ruling"]["kind"] == "red_team" {
             card = format!("{}{card}", findings_card(&v["ruling"]));
         }
@@ -987,6 +1013,21 @@ pub fn findings_card(r: &Value) -> String {
     s
 }
 
+/// The line a one-family Council or Panel carries directly under its header (`specs/123` §3 item 3): when the ruling is labelled
+/// homogeneous and at most one known family sat (by receipts; by plan while there are none). The family is a checked identifier.
+fn one_family_line(r: &Value, homog: bool, panel: bool) -> Option<String> {
+    let fams: Vec<&str> = r["families"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if !homog || fams.len() > 1 {
+        return None;
+    }
+    let family = crate::progress::ident(fams.first().copied().unwrap_or(crate::seat::UNKNOWN));
+    Some(if panel {
+        format!("**One model family only** (`{family}`): every seat ran on the host's family. Treat a unanimous ruling as a quick check, not an independent review.\n\n")
+    } else {
+        format!("**One model family only** (`{family}`): the seats may share blind spots, and the diversity guarantee did not hold.\n\n")
+    })
+}
+
 /// A decided Council as one block of markdown for the operator (spec 086 §7), built from the structured ruling only, so every
 /// host shows the same thing. Dissent is the record's text unchanged; nothing here is summarised by a model. The host is told to
 /// show it as it stands.
@@ -1032,6 +1073,9 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
                 n => format!("{n} model(s): {}", models.into_iter().collect::<Vec<_>>().join(", ")),
             }
         ));
+        if let Some(line) = one_family_line(r, homog, true) {
+            s.push_str(&line);
+        }
         if let Some(ind) = v["independence"].as_str() {
             s.push_str(&format!("**independence:** {} · {}\n\n", crate::council_panel::one_line(ind), crate::council_panel::RELAYED_NOTE));
         }
@@ -1043,10 +1087,19 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
             s.push_str("**Foreign seat confirmed by the operator:** yes (host-reported)\n\n");
         }
     } else {
+        // Spec 123 §3 item 2: the one-phrase summary, then the families by name (served, or planned while no receipt exists).
+        let names: Vec<&str> = r["families"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        let named = match names.len() {
+            0 => String::new(),
+            n => format!(" · seats on {n} famil{}: {}", if n == 1 { "y" } else { "ies" }, names.join(", ")),
+        };
         s.push_str(&format!(
-            "**Council ruling** · daemon Council · blind barrier held by Delphi · {}\n\n",
+            "**Council ruling** · daemon Council · blind barrier held by Delphi · {}{named}\n\n",
             if homog { "one model family (homogeneous: the diversity guarantee did not hold)" } else { "seats span more than one model family" }
         ));
+        if let Some(line) = one_family_line(r, homog, false) {
+            s.push_str(&line);
+        }
     }
     s.push_str(&format!("**Decision:** {}\n\n", text(&r["decision"])));
     if let Some(steps) = r["next_steps"].as_array().filter(|a| !a.is_empty()) {
@@ -1079,14 +1132,15 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
             let tools = d["tools_offered"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).filter(|t| !t.is_empty()).unwrap_or_else(|| "none".into());
             let model = d["served_model"].as_str().unwrap_or("not reported");
             s.push_str(&format!(
-                "- `{}`: model {model}, family {}, carrier {}, tools {tools}; round 1 parsed: {}, round 2 readable: {}, declined: {}{}\n",
+                "- `{}`: model {model}, family {}, carrier {}, tools {tools}; round 1 parsed: {}, round 2 readable: {}, declined: {}, tokens {}{}\n",
                 text(&d["seat"]),
                 text(&d["family"]),
                 if text(&d["carrier"]).is_empty() { "none (did not sit)".to_string() } else { text(&d["carrier"]) },
                 yn(&d["round1_parsed"]),
                 yn(&d["round2_readable"]),
                 yn(&d["declined"]),
-                if d["unverified_against_repo"] == true { format!(" · **{}**", crate::seat::UNVERIFIED_AGAINST_REPO) } else { String::new() }
+                d["tokens"].as_u64().unwrap_or(0),
+                if unverified.contains(&d["seat"].as_str().unwrap_or("")) { format!(" · **{}**", crate::seat::UNVERIFIED_AGAINST_REPO) } else { String::new() }
             ));
         }
         s.push('\n');
@@ -1137,7 +1191,10 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
     let cost = if v["venue"] == "panel" {
         if v["foreign_seat"].is_object() { format!("{tokens} tokens on the seat Delphi ran; the other seats ran on your host's tokens (not measured here)") } else { "seats ran on your host's tokens (not measured here); Delphi spent none".to_string() }
     } else {
-        format!("{tokens} tokens on Delphi's seats")
+        match v["tokens"]["ceiling"].as_u64() {
+            Some(c) => format!("{} of {} tokens on Delphi's seats", crate::council::thousands(tokens), crate::council::thousands(c)),
+            None => format!("{} tokens on Delphi's seats", crate::council::thousands(tokens)),
+        }
     };
     s.push_str(&format!("**Cost:** {cost}. **Record:** `{}`.\n", text(&r["record"])));
     s
@@ -1562,6 +1619,91 @@ mod tests {
         let c = council_view_at(&log, dir.path(), "t-1", at(100), 120, 8).unwrap();
         assert_eq!((c["state"].as_str(), c["reason"].as_str()), (Some("cancelled"), Some("the host cancelled it: a duplicate")));
         assert!(c.get("seats").is_none() && c.get("tail").is_none(), "{c}");
+    }
+
+    /// Spec 123 §3 (AC-1, AC-2): a daemon Council's status names each seat's family and model, its card names the families and has
+    /// the per-seat block from the receipts (the ruling orchestrator's own receipt is not a seat), and a one-family Council or Panel
+    /// says so on its own line under the header.
+    #[test]
+    fn a_daemon_council_names_who_sat_and_a_one_family_ruling_says_so_under_its_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let ev = |kind: &str, agent: Option<&str>, payload: Value| {
+            let mut e = EventEnvelope::new("m", kind, payload);
+            e.timestamp = "2026-11-10T14:00:00.000Z".into();
+            e.task_id = Some("t-1".into());
+            e.agent = agent.map(String::from);
+            e
+        };
+        let receipt = |role: &str, model: &str, family: &str| crate::seat::test_receipt("t-1", role, model, family, 1000);
+        let started = |fams: [&str; 3], homog: bool| ev("council.started", None, json!({"seats": [{"role": "architect", "family": fams[0]}, {"role": "red-team", "family": fams[1]}, {"role": "strategist", "family": fams[2]}], "homogeneous": homog}));
+        let mut log = vec![EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1"})), started(["claude", "gemini", "claude"], false), receipt("architect", "claude-sonnet-5.5", "claude")];
+        let at = crate::progress::parse_ts_ms("2026-11-10T14:01:00.000Z").unwrap();
+        let s = council_view_at(&log, dir.path(), "t-1", at, 120, 8).unwrap();
+        let seat = |r: &str| s["seats"].as_array().unwrap().iter().find(|x| x["role"] == r).unwrap().clone();
+        assert_eq!((seat("architect")["family"].as_str(), seat("architect")["family_source"].as_str(), seat("architect")["model"].as_str()), (Some("claude"), Some("receipt"), Some("claude-sonnet-5.5")));
+        assert_eq!((seat("red-team")["family"].as_str(), seat("red-team")["family_source"].as_str(), seat("red-team")["model"].clone()), (Some("gemini"), Some("plan"), Value::Null));
+        assert_eq!(s["homogeneous"], false, "the plan's label while it deliberates");
+        log.push(receipt("red-team", "gemini-4-argon", "gemini"));
+        log.push(receipt("strategist", "claude-sonnet-5.5", "claude"));
+        log.push(receipt("orchestrator", "gpt-6-luna", "openai"));
+        log.push(ev("council.stance", None, json!({"round": 1, "role": "red-team", "status": "answered", "text": "x", "parsed": true})));
+        log.push(ev("council.verdict", None, json!({"decision": "d", "path": "missions/m/councils/001-x.md", "options": [], "steps": [], "homogeneous": false})));
+        log.push(ev("task.completed", None, json!({"status": "done", "reason": ""})));
+        let card = council_view(&log, dir.path(), "t-1").unwrap()["display"].as_str().unwrap().to_string();
+        assert!(card.starts_with("**Council ruling** · daemon Council · blind barrier held by Delphi · seats span more than one model family · seats on 2 families: claude, gemini\n\n"), "{card}");
+        assert!(card.contains("**Seats Delphi ran** (from the receipts)\n") && card.contains("- `red-team`: model gemini-4-argon, family gemini, carrier api, tools none; round 1 parsed: yes, round 2 readable: n/a, declined: no, tokens 1000\n"), "{card}");
+        assert!(!card.contains("`orchestrator`: model") && !card.contains("openai") && !card.contains("One model family only") && !card.contains("unverified-against-repo"), "{card}");
+        // One family by plan (no receipt yet): the line sits on its own directly under the header.
+        let one = vec![EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1"})), started(["claude", "claude", "claude"], true), ev("council.verdict", None, json!({"decision": "d", "path": "x.md", "options": [], "steps": [], "homogeneous": true})), ev("task.completed", None, json!({"status": "done"}))];
+        let card = council_view(&one, dir.path(), "t-1").unwrap()["display"].as_str().unwrap().to_string();
+        assert!(card.starts_with("**Council ruling** · daemon Council · blind barrier held by Delphi · one model family (homogeneous: the diversity guarantee did not hold) · seats on 1 family: claude\n\n"), "{card}");
+        assert_eq!(card.split("\n\n").nth(1), Some("**One model family only** (`claude`): the seats may share blind spots, and the diversity guarantee did not hold."), "{card}");
+        // A Panel whose seats are all on the host's family.
+        let panel = vec![
+            EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1", "venue": "panel"})),
+            ev("council.started", None, json!({"venue": "panel", "seats": [{"role": "architect", "family": "host-reported"}], "host_family": "claude", "homogeneous": true})),
+            ev("council.verdict", None, json!({"decision": "d", "path": "x.md", "options": [], "steps": []})),
+            ev("task.completed", None, json!({"status": "done"})),
+        ];
+        let card = council_view(&panel, dir.path(), "t-1").unwrap()["display"].as_str().unwrap().to_string();
+        assert!(card.starts_with("**Panel ruling**"), "{card}");
+        assert_eq!(card.split("\n\n").nth(1), Some("**One model family only** (`claude`): every seat ran on the host's family. Treat a unanimous ruling as a quick check, not an independent review."), "{card}");
+    }
+
+    /// Spec 123 §4 items 3 and 4 (AC-3): status shows the tokens spent against the ceiling, per seat too, the progress line ends with
+    /// them, and the card's Cost line names the ceiling. A Panel's count is scoped to Delphi's seats.
+    #[test]
+    fn a_council_status_and_card_show_the_tokens_against_the_ceiling() {
+        let dir = tempfile::tempdir().unwrap();
+        let ev = |kind: &str, agent: Option<&str>, payload: Value| {
+            let mut e = EventEnvelope::new("m", kind, payload);
+            e.timestamp = "2026-11-10T14:00:10.000Z".into();
+            e.task_id = Some("t-1".into());
+            e.agent = agent.map(String::from);
+            e.span_id = agent.map(|a| format!("sp_{a}"));
+            e
+        };
+        let mut log = vec![EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1"})), ev("council.started", None, json!({"seats": [{"role": "architect", "family": "claude"}, {"role": "red-team", "family": "gemini"}], "budget_tokens": 400_000}))];
+        for (r, n) in [("architect", 40_000), ("red-team", 22_000)] {
+            log.push(ev("dag.node.added", Some(r), json!({})));
+            log.push(ev("agent.usage", Some(r), json!({"input_tokens": n - 1000, "output_tokens": 1000})));
+        }
+        let at = crate::progress::parse_ts_ms("2026-11-10T14:01:00.000Z").unwrap();
+        let s = council_view_at(&log, dir.path(), "t-1", at, 120, 8).unwrap();
+        assert_eq!(s["tokens"], json!({"spent": 62_000, "ceiling": 400_000}));
+        assert!(s["phase"].as_str().unwrap().ends_with("; 62k of 400k tokens"), "{}", s["phase"]);
+        assert_eq!(s["seats"].as_array().unwrap().iter().map(|x| x["tokens"].as_u64().unwrap()).collect::<Vec<_>>(), vec![40_000, 22_000]);
+        log.push(ev("council.verdict", None, json!({"decision": "d", "path": "x.md", "options": [], "steps": []})));
+        log.push(ev("task.completed", None, json!({"status": "done"})));
+        let card = council_view(&log, dir.path(), "t-1").unwrap()["display"].as_str().unwrap().to_string();
+        assert!(card.contains("**Cost:** 62,000 of 400,000 tokens on Delphi's seats."), "{card}");
+        // No ceiling: the line ends with the tokens alone. A Panel says its count is Delphi's seats only.
+        log[1] = ev("council.started", None, json!({"seats": [{"role": "architect", "family": "claude"}, {"role": "red-team", "family": "gemini"}]}));
+        log.truncate(log.len() - 2);
+        let s = council_view_at(&log, dir.path(), "t-1", at, 120, 8).unwrap();
+        assert!(s["phase"].as_str().unwrap().ends_with("; 62k tokens") && s["tokens"]["ceiling"].is_null(), "{s}");
+        log[0] = EventEnvelope::new("m", COUNCIL_EVENT, json!({"task_id": "t-1", "venue": "panel"}));
+        assert_eq!(council_view(&log, dir.path(), "t-1").unwrap()["tokens"]["scope"], "delphi_seats");
     }
 
     #[test]
