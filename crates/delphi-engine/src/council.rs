@@ -1624,7 +1624,7 @@ impl Engine {
             }
         }
         // `specs/123` §9: earlier rulings whose headline matches, for Round 2, the repair turn and the synthesis; never Round 1.
-        let earlier = if self.settings.council_earlier_rulings { crate::council_earlier::pick(&self.ws.dir, headline(proposition)) } else { Vec::new() };
+        let earlier = if self.settings.council_earlier_rulings { crate::council_earlier::pick(&self.ws.dir, &m.dir, headline(proposition)) } else { Vec::new() };
         let earlier_paths: Vec<String> = earlier.iter().map(|e| e.path.clone()).collect();
         m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling, "budget_tokens": budget_tokens, "require_families": opts.require_families, "earlier": earlier_paths}))).await?;
 

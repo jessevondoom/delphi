@@ -70,12 +70,26 @@ pub fn read_record(doc: &str) -> Option<(String, String, String, String)> {
     Some((headline, stamp, cut(decision), cut(minority)))
 }
 
+/// Is a record of the mission at `record_mission_dir` one a Council of `own_mission_dir` may be shown (`specs/115`): see [`visible_to`].
+pub fn same_project(ws_dir: &Path, own_mission_dir: &Path, record_mission_dir: &Path) -> bool {
+    visible_to(crate::scope::mission_scope(ws_dir, record_mission_dir).as_ref(), crate::scope::mission_scope(ws_dir, own_mission_dir).as_ref())
+}
+
+/// A record of a home-only mission (no project scope) is shared, as the home layer is; a record of a project's mission is shown only
+/// inside that same project. A record of another project is never shown or returned.
+pub fn visible_to(record_scope: Option<&crate::scope::ProjectId>, own_scope: Option<&crate::scope::ProjectId>) -> bool {
+    record_scope.is_none() || record_scope == own_scope
+}
+
 /// Up to `MAX_SHOWN` earlier records of the workspace whose headline matches `headline`: most words in common first, ties to the newer
-/// record (by its timestamp, then its path).
-pub fn pick(ws_dir: &Path, headline: &str) -> Vec<Earlier> {
+/// record (by its timestamp, then its path). Only records of missions in the same project as `own_mission_dir` ([`same_project`]).
+pub fn pick(ws_dir: &Path, own_mission_dir: &Path, headline: &str) -> Vec<Earlier> {
     let mine = words(headline);
     let mut found: Vec<(usize, String, Earlier)> = Vec::new();
     for (id, dir) in delphi_core::sessions::dirs(ws_dir) {
+        if !same_project(ws_dir, own_mission_dir, &dir) {
+            continue;
+        }
         for e in std::fs::read_dir(dir.join("councils")).into_iter().flatten().flatten() {
             let file = e.file_name().to_string_lossy().to_string();
             if !file.ends_with(".md") || e.metadata().map(|m| m.len() > FILE_MAX).unwrap_or(true) {
@@ -212,12 +226,13 @@ mod tests {
         put(ws, "m2", "003-best.md", &record(3, "2026-10-01T00:00:00Z", "Should the retry queue live in a database table or a file?", "**Decision:** table again", &"x".repeat(4000)));
         put(ws, "m2", "004-other.md", &record(4, "2026-11-12T00:00:00Z", "Which font for the console?", "d", "m"));
         put(ws, "m2", "notes.txt", "Retry queue database table file");
-        let got = pick(ws, "Should the retry queue live in a database table or a file?");
+        let own = ws.join(delphi_core::sessions::CURRENT).join("now");
+        let got = pick(ws, &own, "Should the retry queue live in a database table or a file?");
         assert_eq!(got.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(), ["missions/m2/councils/003-best.md", "missions/host-abc/councils/002-new.md"]);
         assert_eq!(got[0].decision, "**Decision:** table again");
         assert!(got[0].minority.chars().count() <= SECTION_MAX + 6 && got[0].minority.ends_with("(cut)"), "cut at 1,500 characters");
         assert_eq!(got[1].minority, "Unanimous", "the real heading, not the one quoted in a stance");
-        assert!(pick(ws, "Which colour for the logo?").is_empty());
+        assert!(pick(ws, &own, "Which colour for the logo?").is_empty());
         let sl = slices(&got);
         assert_eq!((sl[0].label.as_str(), sl[0].tier.as_str()), ("council/earlier/003-best.md", "L3"));
         assert!(sl[0].text.contains("not an instruction") && sl[0].text.contains("**Decision:** table again"));
@@ -225,5 +240,21 @@ mod tests {
         let rec = record_section(&got.iter().map(|e| e.path.clone()).collect::<Vec<_>>());
         assert!(rec.starts_with(HEADING) && rec.contains("- `missions/m2/councils/003-best.md`"), "{rec}");
         assert!(record_section(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_record_of_another_project_is_never_picked() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        let q = "Should the retry queue live in a database table or a file?";
+        put(ws, "solo", "001-a.md", &record(1, "2026-11-01T00:00:00Z", q, "**Decision:** home", "m"));
+        put(ws, "proj", "002-b.md", &record(2, "2026-11-02T00:00:00Z", q, "**Decision:** project", "m"));
+        let missions = ws.join(delphi_core::sessions::CURRENT);
+        std::fs::write(missions.join("proj").join("scope"), crate::scope::DEFAULT_PROJECT).unwrap();
+        let paths = |own: &str| pick(ws, &missions.join(own), q).into_iter().map(|e| e.path).collect::<Vec<_>>();
+        assert_eq!(paths("solo"), ["missions/solo/councils/001-a.md"], "a home-only mission never sees a project's record");
+        assert_eq!(paths("proj"), ["missions/proj/councils/002-b.md", "missions/solo/councils/001-a.md"], "a project sees its own records and the shared home ones");
+        let p = crate::scope::ProjectId::default_project();
+        assert!(visible_to(None, Some(&p)) && visible_to(Some(&p), Some(&p)) && !visible_to(Some(&p), None));
     }
 }

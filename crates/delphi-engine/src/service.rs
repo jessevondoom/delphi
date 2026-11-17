@@ -1421,7 +1421,7 @@ impl EngineService {
             panel.require_families = required;
             panel.kind = kind.clone();
             if self.engine.settings.council_earlier_rulings {
-                panel.earlier = crate::council_earlier::pick(&self.engine.ws.dir, crate::council::headline(&proposition));
+                panel.earlier = crate::council_earlier::pick(&self.engine.ws.dir, &m.dir, crate::council::headline(&proposition));
             }
             for seat in &planned_foreign {
                 panel.reserve_seat(seat.clone()).map_err(|e| err(code::INVALID_PARAMS, e.to_string()))?;
@@ -2251,9 +2251,12 @@ impl EngineService {
             };
             // `specs/123` §15 item 2: earlier Council records of this workspace (zone `missions`, which is otherwise not searched here),
             // each labelled as a Council record, model-written and untrusted. Explore only: a record is never what a claim rests on.
+            // Only records of missions in the caller's own project (`specs/115`): a record of another project is never returned.
             let council_records: Vec<Value> = if db.is_file() && use_ == crate::host_labels::Use::Explore {
                 let opts = crate::kb::SearchOpts { role: None, limit: limit * 3, zones: Some(vec!["missions"]), include_untrusted: true, ..Default::default() };
-                crate::retrieval::search(&ws.home, &db, &query, opts).map(|r| r.hits).unwrap_or_default().into_iter().filter_map(|h| crate::council_earlier::record_label(&ws.dir, &h.rel_path).map(|label| (h, label))).take(limit.min(3)).map(|(h, label)| {
+                let own_scope = crate::host_noted::host_scope(&ws.dir, &mission_id, &c.cwd);
+                let same_project = |rel: &str| rel.strip_prefix("missions/").and_then(|r| r.split('/').next()).is_some_and(|mid| crate::council_earlier::visible_to(crate::scope::mission_scope(&ws.dir, &delphi_core::sessions::dir(&ws.dir, mid)).as_ref(), own_scope.as_ref()));
+                crate::retrieval::search(&ws.home, &db, &query, opts).map(|r| r.hits).unwrap_or_default().into_iter().filter(|h| same_project(&h.rel_path)).filter_map(|h| crate::council_earlier::record_label(&ws.dir, &h.rel_path).map(|label| (h, label))).take(limit.min(3)).map(|(h, label)| {
                     json!({"layer": "council_records", "pointer": h.pointer, "path": h.rel_path, "heading": h.heading_path, "label": label, "source_type": "external_untrusted", "preview": crate::host_noted::fence(&label, &h.preview)})
                 }).collect()
             } else {
