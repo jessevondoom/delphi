@@ -338,15 +338,17 @@ pub fn role_line(role: &str) -> Option<&'static str> {
 }
 
 /// The model alias or tier a host that fixes its own names gets for `role` (spec 086 §6.2, §6.3). Aliases and tiers only, never a full model id.
-/// Claude Code: the architect takes `opus`, the red-team `sonnet` and the strategist `haiku`, so no two of the three share a model (the `[H-008]`
-/// practice: another tier of the same family; the red-team is the seat that must not echo the architect). The builder is `sonnet`: it rarely sits.
+/// Claude Code: the architect takes `opus`, the red-team `sonnet` and the strategist `fable`, so no two of the three share a model (the `[H-008]`
+/// practice: another tier or version of the same family; the red-team is the seat that must not echo the architect). The strategist was
+/// `haiku`, the weakest tier, for the seat whose judgement the operator most often asks for; `fable` keeps three models without that
+/// (§6.2 asks only for a third model; operator, 2026-11-16, audit fix 6). The builder is `sonnet`: it rarely sits.
 /// agy has two tiers: architect and builder `pro`, red-team and strategist `flash`, so the red-team still differs from the architect.
 /// Copilot and Codex take free names, so Delphi sets none: they come from `[host.models.<host>]` or the seat inherits.
 pub fn default_model(host: &str, role: &str) -> Option<&'static str> {
     match (host, role) {
         ("claude-code", "architect") => Some("opus"),
         ("claude-code", "red-team" | "builder") => Some("sonnet"),
-        ("claude-code", "strategist") => Some("haiku"),
+        ("claude-code", "strategist") => Some("fable"),
         ("agy", "architect" | "builder") => Some("pro"),
         ("agy", "red-team" | "strategist") => Some("flash"),
         _ => None,
