@@ -479,6 +479,22 @@ Whether this build is a signed release.
 
 Signed by the maintainers' key, unsigned (a local or development build), or invalid. Needs no terminal.
 
+### `delphi council`
+
+Follow a Council or Panel from a second terminal.
+
+```
+  delphi council watch [<council_id>] [--mission <id>] [--once] [--interval <secs>]
+    [--workspace <name>] [--home <dir>]
+```
+
+Reads the mission's event log: asks no daemon, calls no model, writes nothing. With no id it follows
+the latest Council or Panel in the workspace's missions (host sessions too), one still running first.
+Prints the planned seats, each fixed-form line as it happens (`HH:MM:SS role kind name`) and a
+progress line every --interval seconds (default 10, 2 to 300) when something changed; no seat text.
+Exits 0 when it is decided, needs the operator, is not decided, failed or was cancelled, printing the
+state and the record's path. --once prints the current state and exits.
+
 ### `delphi sessions`
 
 The finished console sessions, to review later.

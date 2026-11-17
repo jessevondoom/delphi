@@ -262,24 +262,31 @@ fn tail(ev: &[&EventEnvelope], lines: usize) -> Vec<String> {
     let want = lines.clamp(1, 20);
     let mut out: Vec<String> = Vec::new();
     for e in ev.iter().rev() {
-        let role = e.agent.as_deref().map(role_name).or_else(|| e.payload["role"].as_str().map(role_name)).unwrap_or_else(|| "council".to_string());
-        let (kind, name): (&str, &str) = match e.kind.as_str() {
-            "harness.tool" | "tool.result" => ("tool", tool_of(e).unwrap_or("other")),
-            "harness.gate" => ("gate", match e.payload["decision"].as_str() { Some("allow") => "allow", Some("deny") => "deny", Some("ask") => "ask", _ => "other" }),
-            "council.stance" => ("stance", if e.payload["status"].as_str() == Some("abstained") { "abstained" } else { "answered" }),
-            "council.critique" => ("critique", if e.payload["readable"] == false { "unread" } else if e.payload["kept"] == true { "kept" } else { "read" }),
-            "monitor.alert" => ("alert", if e.payload["kind"].as_str() == Some("loop") { "loop" } else { "other" }),
-            _ => continue,
-        };
-        // `HH:MM:SS` from a timestamp of the checked form; a malformed one shows `--:--:--`.
-        let clock = if parse_ts_ms(&e.timestamp).is_some() { e.timestamp[11..19].to_string() } else { "--:--:--".to_string() };
-        out.push(format!("{clock} {role} {kind} {name}"));
+        let Some(line) = tail_line(e) else { continue };
+        out.push(line);
         if out.len() >= want {
             break;
         }
     }
     out.reverse();
     out
+}
+
+/// One event as a tail line, `HH:MM:SS role kind name`, or `None` for an event the tail does not show. Fixed form: also what
+/// `delphi council watch` prints (`specs/123` §7).
+pub fn tail_line(e: &EventEnvelope) -> Option<String> {
+    let role = e.agent.as_deref().map(role_name).or_else(|| e.payload["role"].as_str().map(role_name)).unwrap_or_else(|| "council".to_string());
+    let (kind, name): (&str, &str) = match e.kind.as_str() {
+        "harness.tool" | "tool.result" => ("tool", tool_of(e).unwrap_or("other")),
+        "harness.gate" => ("gate", match e.payload["decision"].as_str() { Some("allow") => "allow", Some("deny") => "deny", Some("ask") => "ask", _ => "other" }),
+        "council.stance" => ("stance", if e.payload["status"].as_str() == Some("abstained") { "abstained" } else { "answered" }),
+        "council.critique" => ("critique", if e.payload["readable"] == false { "unread" } else if e.payload["kept"] == true { "kept" } else { "read" }),
+        "monitor.alert" => ("alert", if e.payload["kind"].as_str() == Some("loop") { "loop" } else { "other" }),
+        _ => return None,
+    };
+    // `HH:MM:SS` from a timestamp of the checked form; a malformed one shows `--:--:--`.
+    let clock = if parse_ts_ms(&e.timestamp).is_some() { e.timestamp[11..19].to_string() } else { "--:--:--".to_string() };
+    Some(format!("{clock} {role} {kind} {name}"))
 }
 
 #[cfg(test)]
