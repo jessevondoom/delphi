@@ -638,7 +638,7 @@ the program, the built\-in files, then the daemons.
 .PP
 \-\-dev installs the latest dev build of main (built on request, so it can be behind main).
 \-\-rollback undoes all three steps. \-\-review leaves the release's changes pending for
-/ratify instead of ratifying them.
+/ratify instead of ratifying them. On macOS the desktop app goes with them (DELPHI_NO_APP=1 skips it).
 A host's Delphi plugin is not part of the program and is not updated here: when one is older than
 the release now installed, the last lines name the host and the command (`delphi connect <host> \-\-update`),
 and say so when an installed plugin cannot be launched. Nothing is run or written for that.

@@ -208,6 +208,8 @@ pub fn find_dev(net: &dyn Net, api: &str, current: &str, target: &str) -> Result
 pub struct Installed {
     pub tag: String,
     pub backup: PathBuf,
+    /// Lines about the desktop app, for the operator (`specs/122` §4).
+    pub notes: Vec<String>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -240,6 +242,185 @@ fn binary_from_tarball(gz: &[u8]) -> Result<Vec<u8>> {
     file_from_tarball(gz, "delphi")?.ok_or_else(|| anyhow!("the release tarball has no `delphi` file"))
 }
 
+/// The desktop app's bundle, in a macOS release tarball beside `delphi` (`specs/122` §2 item 5).
+pub const APP: &str = "Delphi.app";
+/// Where the replaced app is kept for `--rollback`, beside it. No `.app`, so macOS does not take it for an application.
+pub const APP_PREV: &str = ".delphi-app.prev";
+/// The executable inside the bundle, where `delphi app` looks for it (`app_cmd::executable_of`).
+const APP_EXE: &str = "Contents/MacOS/delphi-app";
+/// The most entries a bundle may have (the app has about ten, folders included).
+const MAX_APP_ENTRIES: usize = 2000;
+
+/// Where `delphi update` keeps the desktop app (`specs/122` §4 item 2): `~/Applications`, on macOS only, unless
+/// `DELPHI_NO_APP=1`. Never in a test, which passes its own folder to the `_with` functions.
+fn app_dir() -> Option<PathBuf> {
+    if cfg!(test) || !cfg!(target_os = "macos") || std::env::var("DELPHI_NO_APP").is_ok_and(|v| v == "1") {
+        return None;
+    }
+    std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| PathBuf::from(h).join("Applications"))
+}
+
+/// One entry of the bundle: its path inside `Delphi.app`, and for a file its bytes and whether it is executable.
+#[derive(Debug)]
+struct AppEntry {
+    rel: PathBuf,
+    file: Option<(Vec<u8>, bool)>,
+}
+
+/// The desktop app inside a release tarball: the entries under `<top>/Delphi.app/`, or `None` when there are none (a release
+/// from before `specs/122`, or a Linux one). Each must be a regular file or a folder whose path is made of plain names; a link
+/// or any other kind of entry refuses the whole update, before anything is written (§4 item 1).
+fn app_from_tarball(gz: &[u8]) -> Result<Option<Vec<AppEntry>>> {
+    use std::path::Component;
+    let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(gz));
+    let mut out: Vec<AppEntry> = Vec::new();
+    for entry in ar.entries()? {
+        let entry = entry?;
+        let path = entry.path()?.into_owned();
+        let mut comps = path.components();
+        let (Some(Component::Normal(_)), Some(Component::Normal(second))) = (comps.next(), comps.next()) else { continue };
+        if second != APP {
+            continue;
+        }
+        let rel = comps.as_path().to_path_buf();
+        if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
+            bail!("the release's {APP} has a path that leaves it ({}); nothing was changed", path.display());
+        }
+        if out.len() >= MAX_APP_ENTRIES {
+            bail!("the release's {APP} has more than {MAX_APP_ENTRIES} entries; nothing was changed");
+        }
+        let kind = entry.header().entry_type();
+        if kind.is_dir() {
+            out.push(AppEntry { rel, file: None });
+        } else if kind.is_file() {
+            let exec = entry.header().mode()? & 0o111 != 0;
+            let mut bytes = Vec::new();
+            entry.take(MAX_BINARY + 1).read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > MAX_BINARY {
+                bail!("the `{}` in the release's {APP} is implausibly large", rel.display());
+            }
+            out.push(AppEntry { rel, file: Some((bytes, exec)) });
+        } else {
+            bail!("the release's {APP} holds `{}`, which is neither a file nor a folder; nothing was changed", rel.display());
+        }
+    }
+    if out.is_empty() {
+        return Ok(None);
+    }
+    if !out.iter().any(|e| e.rel == Path::new(APP_EXE) && e.file.as_ref().is_some_and(|(_, x)| *x)) {
+        bail!("the release's {APP} has no executable {APP_EXE}; nothing was changed");
+    }
+    Ok(Some(out))
+}
+
+/// Is there a real folder at `p` (not a link to one)? `None` when nothing is there.
+fn real_folder(p: &Path) -> Option<bool> {
+    std::fs::symlink_metadata(p).ok().map(|m| m.file_type().is_dir())
+}
+
+/// Write the bundle into a fresh folder under `dir` (the same volume as the installed app, so the swap is a rename) and check
+/// its executable. Files are 0755 when the archive marks them executable, 0644 otherwise; folders 0755.
+fn stage_app(dir: &Path, entries: &[AppEntry]) -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).with_context(|| format!("could not make {} for {APP}", dir.display()))?;
+    let stage = dir.join(format!(".delphi-app-new-{}", std::process::id()));
+    if real_folder(&stage).is_some() {
+        remove_any(&stage)?;
+    }
+    let res = (|| -> Result<()> {
+        std::fs::create_dir(&stage)?;
+        std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o755))?;
+        for e in entries {
+            let p = stage.join(&e.rel);
+            match &e.file {
+                None => {
+                    std::fs::create_dir_all(&p)?;
+                    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
+                }
+                Some((bytes, exec)) => {
+                    if let Some(parent) = p.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&p, bytes)?;
+                    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(if *exec { 0o755 } else { 0o644 }))?;
+                }
+            }
+        }
+        let exe = std::fs::symlink_metadata(stage.join(APP_EXE))?;
+        if !exe.is_file() || exe.permissions().mode() & 0o111 == 0 {
+            bail!("the written {APP} has no runnable {APP_EXE}");
+        }
+        Ok(())
+    })();
+    match res {
+        Ok(()) => Ok(stage),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&stage);
+            Err(e.context(format!("could not write {APP} in {}", dir.display())))
+        }
+    }
+}
+
+/// Remove a folder (not following a link) or a file.
+fn remove_any(p: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.file_type().is_dir() => std::fs::remove_dir_all(p),
+        Ok(_) => std::fs::remove_file(p),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Move the staged bundle into place as `dir/Delphi.app`; the installed one becomes `dir/.delphi-app.prev` (an older one there
+/// is removed). A failure puts the installed one back.
+fn swap_app(dir: &Path, stage: &Path) -> Result<()> {
+    let dest = dir.join(APP);
+    let prev = dir.join(APP_PREV);
+    let had = real_folder(&dest) == Some(true);
+    if had {
+        remove_any(&prev).context("could not remove the older kept app")?;
+        std::fs::rename(&dest, &prev).context("could not keep the installed app for rollback")?;
+    }
+    if let Err(e) = std::fs::rename(stage, &dest) {
+        if had {
+            let _ = std::fs::rename(&prev, &dest);
+        }
+        let _ = std::fs::remove_dir_all(stage);
+        return Err(anyhow!(e).context(format!("could not move the new {APP} into place")));
+    }
+    Ok(())
+}
+
+/// `--rollback` for the app: swap `dir/Delphi.app` and `dir/.delphi-app.prev`, when both are real folders or only the kept one is
+/// there. Says what it did, or nothing when there was nothing to put back.
+fn restore_app(dir: &Path) -> Result<Option<String>> {
+    let dest = dir.join(APP);
+    let prev = dir.join(APP_PREV);
+    if real_folder(&prev) != Some(true) {
+        return Ok(None);
+    }
+    match real_folder(&dest) {
+        Some(false) => return Ok(Some(format!("{} is not a folder, so the kept app was left at {}", dest.display(), prev.display()))),
+        Some(true) => {
+            let tmp = dir.join(format!(".delphi-app-rollback-{}", std::process::id()));
+            std::fs::rename(&dest, &tmp).context("could not move the current app aside")?;
+            if let Err(e) = std::fs::rename(&prev, &dest) {
+                let _ = std::fs::rename(&tmp, &dest);
+                return Err(anyhow!(e).context("could not put the previous app back"));
+            }
+            std::fs::rename(&tmp, &prev).context("could not keep the replaced app")?;
+        }
+        None => std::fs::rename(&prev, &dest).context("could not put the previous app back")?,
+    }
+    Ok(Some(format!("Restored the previous {}.", dest.display())))
+}
+
+/// What to say when `/Applications/Delphi.app` is there too: `delphi app` starts that one first (`specs/120` K2).
+fn system_app_note(dir: &Path) -> Option<String> {
+    let system = Path::new("/Applications").join(APP);
+    (dir != Path::new("/Applications") && system.exists()).then(|| format!("{} is also installed and `delphi app` starts it first; remove it, or set DELPHI_APP={}/{}/{}", system.display(), dir.display(), APP, APP_EXE))
+}
+
 /// Write `bytes` as an executable next to `dest` and move it into place; the old file is kept as `<dest>.prev`.
 fn replace_beside(dest: &Path, bytes: &[u8]) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -263,8 +444,13 @@ fn replace_beside(dest: &Path, bytes: &[u8]) -> Result<()> {
     res
 }
 
-/// Download, verify and swap in `rel` for `dest`.
+/// Download, verify and swap in `rel` for `dest`, and on macOS the desktop app in `~/Applications` with it.
 pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Result<Installed> {
+    install_with(net, rel, target, dest, app_dir().as_deref())
+}
+
+/// [`install`], with the app's folder given (`None`: leave any app alone).
+fn install_with(net: &dyn Net, rel: &Release, target: &str, dest: &Path, app_dir: Option<&Path>) -> Result<Installed> {
     let name = format!("delphi-{}-{}.tar.gz", rel.tag, target);
     let url = rel.asset(&name).ok_or_else(|| anyhow!("release {} has no build for {} (looked for {})", rel.tag, target, name))?;
     let sum_url = rel.asset(&format!("{}.sha256", name)).ok_or_else(|| anyhow!("release {} has no checksum for {}; refusing to install without one", rel.tag, name))?;
@@ -278,8 +464,23 @@ pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Resul
     // The full-screen console ships beside the program and is replaced with it, so the two never drift apart.
     // Releases from before it existed simply have none.
     let ui = file_from_tarball(&tarball, "delphi-ui")?;
+    // The desktop app, on macOS (`specs/122` §4). Read and checked before anything is written; a release without it, or an
+    // app path that is not a real folder (Homebrew's link), leaves the installed app alone.
+    let mut notes = Vec::new();
+    let app = match app_dir {
+        Some(d) => match app_from_tarball(&tarball)? {
+            Some(_) if real_folder(&d.join(APP)) == Some(false) => {
+                notes.push(format!("{} is not a folder (a link?), so the desktop app there was left as it is", d.join(APP).display()));
+                None
+            }
+            Some(entries) => Some((d, entries)),
+            None => None,
+        },
+        None => None,
+    };
     let dir = dest.parent().ok_or_else(|| anyhow!("{} has no directory", dest.display()))?;
     let tmp = dir.join(format!(".delphi-new-{}", std::process::id()));
+    let mut staged: Option<PathBuf> = None;
     let result = (|| -> Result<Installed> {
         std::fs::write(&tmp, &bin)?;
         {
@@ -302,14 +503,26 @@ pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Resul
             std::fs::copy(dest, &part).context("could not keep the old version for rollback")?;
             std::fs::rename(&part, &backup).context("could not keep the old version for rollback")?;
         }
+        // The app is written and checked before the console and the program are replaced (§4 item 3).
+        if let Some((d, entries)) = &app {
+            staged = Some(stage_app(d, entries)?);
+        }
         if let Some(ui) = ui.as_deref().filter(|b| !b.is_empty()) {
             replace_beside(&dir.join("delphi-ui"), ui).context("could not replace delphi-ui (is the directory writable?)")?;
         }
+        if let (Some((d, _)), Some(stage)) = (&app, staged.take()) {
+            swap_app(d, &stage)?;
+            notes.push(format!("Installed the desktop app at {} (the previous one is kept as {}).", d.join(APP).display(), d.join(APP_PREV).display()));
+            notes.extend(system_app_note(d));
+        }
         std::fs::rename(&tmp, dest).context("could not replace the executable (is the directory writable?)")?;
-        Ok(Installed { tag: rel.tag.clone(), backup })
+        Ok(Installed { tag: rel.tag.clone(), backup, notes: std::mem::take(&mut notes) })
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
+        if let Some(stage) = staged {
+            let _ = std::fs::remove_dir_all(stage);
+        }
     }
     result
 }
@@ -332,14 +545,19 @@ fn retry_if_busy<T>(mut start: impl FnMut() -> std::io::Result<T>) -> std::io::R
     }
 }
 
-/// Put `delphi.prev` back.
-pub fn rollback(dest: &Path) -> Result<()> {
+/// Put `delphi.prev` back, and on macOS the kept desktop app. Returns lines about the app for the operator.
+pub fn rollback(dest: &Path) -> Result<Vec<String>> {
+    rollback_with(dest, app_dir().as_deref())
+}
+
+/// [`rollback`], with the app's folder given (`None`: leave any app alone).
+fn rollback_with(dest: &Path, app_dir: Option<&Path>) -> Result<Vec<String>> {
     let backup = dest.with_file_name("delphi.prev");
     if !backup.exists() {
         bail!("there is no previous version ({} does not exist)", backup.display());
     }
     let tmp = dest.with_file_name(format!(".delphi-rollback-{}", std::process::id()));
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<Vec<String>> {
         std::fs::copy(&backup, &tmp)?;
         let ok = retry_if_busy(|| std::process::Command::new(&tmp).arg("--version").stdin(std::process::Stdio::null()).output()).is_ok_and(|o| o.status.success());
         if !ok {
@@ -352,7 +570,15 @@ pub fn rollback(dest: &Path) -> Result<()> {
         if ui_prev.exists() {
             let _ = std::fs::copy(&ui_prev, &ui);
         }
-        Ok(())
+        // And the desktop app (`specs/122` §4 item 4): the program is already back, so a failure here is said, not fatal.
+        let mut notes = Vec::new();
+        if let Some(d) = app_dir {
+            match restore_app(d) {
+                Ok(note) => notes.extend(note),
+                Err(e) => notes.push(format!("the desktop app was not put back: {e:#}")),
+            }
+        }
+        Ok(notes)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -419,8 +645,11 @@ pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, after: &
     let flag = |n: &str| args.iter().position(|a| a == n).and_then(|i| args.get(i + 1)).cloned();
     if args.iter().any(|a| a == "--rollback") {
         return match rollback(dest) {
-            Ok(()) => {
+            Ok(notes) => {
                 println!("Restored the previous version.");
+                for n in notes {
+                    println!("{n}");
+                }
                 after(Event::RolledBack);
                 0
             }
@@ -465,6 +694,9 @@ pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, after: &
                 println!("This is a development build of main, not a release; `delphi update` returns to the latest release.");
             }
             println!("Installed {} at {} (the old version is kept as {}; `delphi update --rollback` restores it).", i.tag, dest.display(), i.backup.display());
+            for n in &i.notes {
+                println!("{n}");
+            }
             after(Event::Installed);
             0
         }
@@ -690,6 +922,210 @@ mod tests {
         let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
         install(&net, &rel, T, &dest).unwrap();
         assert_eq!(std::fs::read_to_string(d.path().join("delphi-ui")).unwrap(), "keep");
+    }
+
+    /// An entry of a hand-made tarball (`specs/122` tests): a file with its mode, a folder, a link, or a raw name the tar
+    /// builder would refuse.
+    enum E {
+        File(String, u32),
+        Dir,
+        Link(&'static str),
+        RawFile,
+    }
+
+    /// A release server like [`server`] whose tarball holds `delphi` (printing `version`) and the given entries.
+    fn server_with(tag: &str, version: &str, entries: &[(&str, E)]) -> (Fake, String) {
+        let (mut net, api) = server(tag, version, None);
+        let name = format!("delphi-{}-{}.tar.gz", tag, T);
+        let mut tar_bytes = Vec::new();
+        {
+            let mut b = tar::Builder::new(&mut tar_bytes);
+            let script = format!("#!/bin/sh\necho 'delphi {version}'\n");
+            let mut put = |path: &str, kind: &E| {
+                let mut h = tar::Header::new_gnu();
+                match kind {
+                    E::File(body, mode) => {
+                        h.set_size(body.len() as u64);
+                        h.set_mode(*mode);
+                        h.set_cksum();
+                        b.append_data(&mut h, path, body.as_bytes()).unwrap();
+                    }
+                    E::Dir => {
+                        h.set_entry_type(tar::EntryType::Directory);
+                        h.set_size(0);
+                        h.set_mode(0o755);
+                        h.set_cksum();
+                        b.append_data(&mut h, path, std::io::empty()).unwrap();
+                    }
+                    E::Link(to) => {
+                        h.set_entry_type(tar::EntryType::Symlink);
+                        h.set_size(0);
+                        h.set_mode(0o777);
+                        b.append_link(&mut h, path, to).unwrap();
+                    }
+                    E::RawFile => {
+                        let name = &mut h.as_gnu_mut().unwrap().name;
+                        name[..path.len()].copy_from_slice(path.as_bytes());
+                        h.set_size(1);
+                        h.set_mode(0o644);
+                        h.set_cksum();
+                        b.append(&h, &b"x"[..]).unwrap();
+                    }
+                }
+            };
+            put("delphi-x/delphi", &E::File(script, 0o755));
+            for (p, k) in entries {
+                put(p, k);
+            }
+            b.finish().unwrap();
+        }
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut gz, &tar_bytes).unwrap();
+        let tgz = gz.finish().unwrap();
+        net.0.insert(format!("https://dl/{}.sha256", name), format!("{}  {}\n", sha256_hex(&tgz), name).into_bytes());
+        net.0.insert(format!("https://dl/{}", name), tgz);
+        (net, api)
+    }
+
+    /// The app as the release packs it (`specs/122` §2 item 5), its executable printing `which`.
+    fn app_entries(which: &str) -> Vec<(&'static str, E)> {
+        vec![
+            ("delphi-x/Delphi.app/", E::Dir),
+            ("delphi-x/Delphi.app/Contents/", E::Dir),
+            ("delphi-x/Delphi.app/Contents/Info.plist", E::File("<plist/>".into(), 0o644)),
+            ("delphi-x/Delphi.app/Contents/MacOS/", E::Dir),
+            ("delphi-x/Delphi.app/Contents/MacOS/delphi-app", E::File(which.into(), 0o755)),
+            ("delphi-x/Delphi.app/Contents/Resources/icon.icns", E::File("icon".into(), 0o644)),
+        ]
+    }
+
+    /// A temporary home: the program at `bin/delphi` reporting 0.1.0, and an empty `Applications` path (not made).
+    fn home() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("bin")).unwrap();
+        let dest = d.path().join("bin/delphi");
+        std::fs::write(&dest, "#!/bin/sh\necho 'delphi 0.1.0'\n").unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let apps = d.path().join("Applications");
+        (d, dest, apps)
+    }
+
+    fn app_exe(apps: &Path, name: &str) -> String {
+        std::fs::read_to_string(apps.join(name).join(APP_EXE)).unwrap()
+    }
+
+    #[test]
+    fn the_desktop_app_is_installed_replaced_kept_and_rolled_back_with_the_program() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, dest, apps) = home();
+        // A first release with the app: installed where `delphi app` looks, though there was none.
+        let (net, api) = server_with("v0.2.0", "0.2.0", &app_entries("app 0.2.0"));
+        let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
+        let done = install_with(&net, &rel, T, &dest, Some(&apps)).unwrap();
+        assert_eq!(app_exe(&apps, APP), "app 0.2.0");
+        assert!(done.notes.iter().any(|n| n.contains("Installed the desktop app")), "{:?}", done.notes);
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&apps.join(APP).join(APP_EXE)), 0o755);
+        assert_eq!(mode(&apps.join(APP).join("Contents/Info.plist")), 0o644);
+        assert_eq!(mode(&apps.join(APP).join("Contents")), 0o755);
+        assert!(!apps.join(APP_PREV).exists(), "nothing to keep the first time");
+        // The next release replaces it and keeps the one it replaced.
+        let (net, api) = server_with("v0.3.0", "0.3.0", &app_entries("app 0.3.0"));
+        let rel = find(&net, &api, "0.2.0", None).unwrap().unwrap();
+        install_with(&net, &rel, T, &dest, Some(&apps)).unwrap();
+        assert_eq!(app_exe(&apps, APP), "app 0.3.0");
+        assert_eq!(app_exe(&apps, APP_PREV), "app 0.2.0");
+        let left: Vec<String> = std::fs::read_dir(&apps).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left.len(), 2, "no staging folder is left behind: {left:?}");
+        // Rollback puts the program and the app back; a second rollback swaps them again.
+        let notes = rollback_with(&dest, Some(&apps)).unwrap();
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.2.0"));
+        assert_eq!(app_exe(&apps, APP), "app 0.2.0");
+        assert_eq!(app_exe(&apps, APP_PREV), "app 0.3.0");
+        assert!(notes.iter().any(|n| n.contains("Restored the previous")), "{notes:?}");
+    }
+
+    #[test]
+    fn an_app_with_a_link_a_path_that_leaves_it_an_odd_entry_or_no_executable_changes_nothing() {
+        let cases: Vec<(&str, Vec<(&str, E)>)> = vec![
+            ("a link", vec![("delphi-x/Delphi.app/Contents/MacOS/delphi-app", E::Link("/bin/sh"))]),
+            ("a link beside", {
+                let mut v = app_entries("app");
+                v.push(("delphi-x/Delphi.app/Contents/Frameworks", E::Link("/")));
+                v
+            }),
+            ("leaves", {
+                let mut v = app_entries("app");
+                v.push(("delphi-x/Delphi.app/../../escape", E::RawFile));
+                v
+            }),
+            ("no executable", vec![("delphi-x/Delphi.app/Contents/Info.plist", E::File("x".into(), 0o644))]),
+            ("not executable", vec![("delphi-x/Delphi.app/Contents/MacOS/delphi-app", E::File("x".into(), 0o644))]),
+        ];
+        for (what, entries) in cases {
+            let (_d, dest, apps) = home();
+            std::fs::create_dir_all(apps.join(APP).join("Contents/MacOS")).unwrap();
+            std::fs::write(apps.join(APP).join(APP_EXE), "installed").unwrap();
+            std::fs::write(dest.with_file_name("delphi-ui"), "old ui").unwrap();
+            let (net, api) = server_with("v0.2.0", "0.2.0", &entries);
+            let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
+            let e = install_with(&net, &rel, T, &dest, Some(&apps)).unwrap_err().to_string();
+            assert!(e.contains("Delphi.app"), "{what}: {e}");
+            assert!(std::fs::read_to_string(&dest).unwrap().contains("0.1.0"), "{what}: the program is unchanged");
+            assert_eq!(std::fs::read_to_string(dest.with_file_name("delphi-ui")).unwrap(), "old ui", "{what}");
+            assert_eq!(app_exe(&apps, APP), "installed", "{what}");
+            assert_eq!(std::fs::read_dir(&apps).unwrap().count(), 1, "{what}: nothing written beside the app");
+            assert!(!_d.path().join("escape").exists() && !apps.join("escape").exists(), "{what}");
+        }
+    }
+
+    #[test]
+    fn a_release_without_the_app_a_link_in_its_place_or_no_app_folder_leaves_the_installed_app_alone() {
+        // No app in the release (an earlier release, Linux, the dev channel).
+        let (_d, dest, apps) = home();
+        std::fs::create_dir_all(apps.join(APP)).unwrap();
+        let (net, api) = server_with("v0.2.0", "0.2.0", &[]);
+        let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
+        assert!(install_with(&net, &rel, T, &dest, Some(&apps)).unwrap().notes.is_empty());
+        assert!(apps.join(APP).is_dir() && !apps.join(APP_PREV).exists());
+        // A link where the app goes (Homebrew's): left as it is, said, and the program still updated.
+        let (d, dest, apps) = home();
+        let brew = d.path().join("Cellar/Delphi.app");
+        std::fs::create_dir_all(&brew).unwrap();
+        std::fs::create_dir_all(&apps).unwrap();
+        std::os::unix::fs::symlink(&brew, apps.join(APP)).unwrap();
+        let (net, api) = server_with("v0.2.0", "0.2.0", &app_entries("app"));
+        let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
+        let done = install_with(&net, &rel, T, &dest, Some(&apps)).unwrap();
+        assert!(done.notes.iter().any(|n| n.contains("not a folder")), "{:?}", done.notes);
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.2.0"));
+        assert!(std::fs::symlink_metadata(apps.join(APP)).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_dir(&brew).unwrap().count(), 0, "nothing written through the link");
+        // No app folder at all (`DELPHI_NO_APP=1`, or not macOS): the app in the release is ignored.
+        let (_d, dest, apps) = home();
+        let (net, api) = server_with("v0.2.0", "0.2.0", &app_entries("app"));
+        let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
+        install_with(&net, &rel, T, &dest, None).unwrap();
+        assert!(!apps.exists());
+        assert!(rollback_with(&dest, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failure_writing_the_app_leaves_the_program_the_console_and_the_app_as_they_were() {
+        // The app's folder cannot be made (a file is in its way): nothing else is replaced.
+        let (_d, dest, apps) = home();
+        std::fs::write(&apps, "a file, not a folder").unwrap();
+        std::fs::write(dest.with_file_name("delphi-ui"), "old ui").unwrap();
+        let (net, api) = server_with("v0.2.0", "0.2.0", &app_entries("app"));
+        let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
+        let e = install_with(&net, &rel, T, &dest, Some(&apps)).unwrap_err();
+        assert!(format!("{e:#}").contains("Delphi.app"), "{e:#}");
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.1.0"));
+        assert_eq!(std::fs::read_to_string(dest.with_file_name("delphi-ui")).unwrap(), "old ui");
+        assert!(!dest.with_file_name("delphi-ui.prev").exists());
+        let names: Vec<String> = std::fs::read_dir(dest.parent().unwrap()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.iter().all(|n| !n.starts_with(".delphi")), "no temporary file left: {names:?}");
     }
 
     #[test]
