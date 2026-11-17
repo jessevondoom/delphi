@@ -702,7 +702,7 @@ pub fn tools() -> Value {
         {
             "name": "council_choose",
             "title": "Report the operator's choice on an escalated Council",
-            "description": "After a Council or Panel escalated to the operator and they chose an option, report it here (the option label exactly as the ruling offered it). You get that option's next steps as advice. This records the choice as host-reported and starts nothing; carrying the steps out is your own, gated action.",
+            "description": "After a Council or Panel escalated to the operator and they chose an option, report it here (the option label exactly as the ruling offered it). You get that option's next steps as advice. This records the choice as host-reported and starts nothing; carrying the steps out is your own, gated action. The answer's `decision` says what happened to the decision Delphi raised for the escalation: resolved (Delphi ran the seats) or still open with the choice as its recommendation (a same-family Panel).",
             "inputSchema": {
                 "type": "object",
                 "properties": {

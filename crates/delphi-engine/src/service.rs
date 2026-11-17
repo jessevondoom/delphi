@@ -1820,7 +1820,36 @@ impl EngineService {
         let mut ev = EventEnvelope::new(&m.id, "council.host_choice", json!({"option": option, "source": "host-reported"}));
         ev.task_id = Some(id.clone());
         m.append(ev).await.map_err(engine_err)?;
-        Ok(json!({"council_id": id, "chosen": option, "source": "host-reported", "steps": steps, "note": "advice: this records the choice your host reported and starts nothing; carrying the steps out is your own, gated action"}))
+        let decision = self.host_choice_to_decision(&m, &id, &option, &c.session).await?;
+        Ok(json!({"council_id": id, "chosen": option, "source": "host-reported", "steps": steps, "decision": decision, "note": "advice: this records the choice your host reported and starts nothing; carrying the steps out is your own, gated action"}))
+    }
+
+    /// `specs/123` §15 item 1: the relayed choice resolves the Council's raised decision when Delphi orchestrated it, and is only its
+    /// recommendation after a same-family Panel. The effect of either is `record`: nothing starts.
+    async fn host_choice_to_decision(&self, m: &Arc<MissionState>, id: &str, option: &str, session: &str) -> Result<Value, RpcError> {
+        use crate::council_decision::{self as cd, Effect};
+        let events = m.replay().map_err(engine_err)?;
+        let (state, rd, kind, payload) = match cd::on_host_choice(&events, id, option, session) {
+            Effect::None => return Ok(json!({"state": "none", "text": "no decision was raised for this Council, so nothing in the decisions pane changed"})),
+            Effect::Answered { id } => ("already_answered", id, None, Value::Null),
+            Effect::Resolve { id, payload } => ("resolved", id, Some("decision.resolved"), payload),
+            Effect::Recommend { id, payload } => ("open", id, Some("decision.raised"), payload),
+        };
+        if let Some(kind) = kind {
+            let mut e = EventEnvelope::new(&m.id, kind, payload);
+            e.task_id = Some(id.to_string());
+            if kind == "decision.raised" {
+                e.agent = Some(cd::RAISER.into());
+            }
+            m.append(e).await.map_err(engine_err)?;
+        }
+        let label = cd::label(&rd);
+        let text = match state {
+            "resolved" => format!("{label} in mission `{}` is resolved with this choice, recorded as relayed by the host (Delphi ran this Council's seats)", m.id),
+            "open" => format!("{label} in mission `{}` stays open: after a same-family Panel the choice is shown to the operator as the recommendation, to confirm in the decisions pane", m.id),
+            _ => format!("{label} in mission `{}` was already answered; nothing changed", m.id),
+        };
+        Ok(json!({"state": state, "id": rd, "label": label, "mission": m.id, "text": text}))
     }
 
     /// `host.council_status` and `host.council_result`: the state, and the ruling once decided. Only the session that raised it can read it.
@@ -6873,6 +6902,7 @@ mod tests {
             assert_eq!(got["state"], "needs_operator", "an unreadable Red-Team critique is never agreement: {got}");
             let card = got["display"].as_str().unwrap();
             assert!(card.contains("You must answer") && card.contains("no readable critique"), "{card}");
+            assert!(card.trim_end().ends_with("Raised for your decisions pane as RD-001 in mission `host-abcdef0123456789`."), "spec 123 §8: {card}");
             assert!(got["ruling"]["dissent"].as_str().unwrap().contains("Round 2 gave no readable critique"), "{got}");
             // Only a label the ruling offered, exactly, can be reported.
             assert_eq!(rpc_code(c.call("host.council_choose", p(json!({"council_id": id, "option": "not an option"})))), Some(code::INVALID_PARAMS));
@@ -6880,11 +6910,20 @@ mod tests {
                 let r = c.call("host.council_choose", p(json!({"council_id": id, "option": label}))).unwrap();
                 assert_eq!((r["source"].as_str(), r["chosen"].as_str()), (Some("host-reported"), Some(label)));
                 assert!(r["note"].as_str().unwrap().contains("starts nothing"));
+                // Spec 123 §15 item 1: a same-family Panel's relayed choice is the decision's recommendation, and it stays open.
+                assert_eq!((r["decision"]["state"].as_str(), r["decision"]["label"].as_str()), (Some("open"), Some("RD-001")), "{r}");
+            } else {
+                panic!("the ruling offered no option: {got}");
             }
         })
         .await;
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         assert!(events.iter().filter(|e| e.kind == "council.host_choice").all(|e| e.payload["source"] == "host-reported"));
+        let open = crate::decision_raised::open_entries(&events);
+        assert_eq!(open.len(), 1, "one council decision, still open");
+        assert_eq!((open[0]["kind"].as_str(), open[0]["requester"].as_str()), (Some("council"), Some("orchestrator")));
+        assert!(open[0]["brief"]["recommendation"]["why"].as_str().unwrap().contains("after a same-family Panel"), "{}", open[0]);
+        assert!(!events.iter().any(|e| e.kind == "decision.resolved"), "a host never resolves a same-family Panel's decision");
     }
 
     #[tokio::test(flavor = "multi_thread")]

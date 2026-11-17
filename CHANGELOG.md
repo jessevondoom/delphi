@@ -6,6 +6,10 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
+## Unreleased
+
+- **An escalated host Council reaches the decisions pane** (spec 123 S6): a host Council or Panel that escalates raises one `council` decision in its mission, and its card says where. A choice the host relays resolves it when Delphi ran the seats (recorded `by: host-relayed`); after a same-family Panel it becomes the decision's recommendation and the decision stays open for you.
+
 ## 0.6.3 — 2026-11-16
 
 A summary by spec; the pull requests are listed on the releases page. This release brings the knowledge loop (specs 112 to 121). The tests ran on scratch homes with fakes, and **most of the knowledge loop has not been run against the real web or a real model**:

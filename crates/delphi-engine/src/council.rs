@@ -1602,6 +1602,8 @@ impl Engine {
         let rel = format!("missions/{}/councils/{}", m.id, artifact_name(n, &slug));
         std::fs::write(dir.join(artifact_name(n, &slug)), self.secrets.redact(&doc)).map_err(|e| EngineError::Invalid(e.to_string()))?;
         m.append(emit("council.verdict", json!({"venue": if front.lines().any(|l| l == "venue: panel") { "panel" } else { "daemon" }, "n": n, "decision": follow.decision, "steps": crate::council_next::steps_json(&follow.steps), "from_findings": follow.from_findings, "path": rel, "escalated": decision.escalation, "homogeneous": plan.homogeneous, "unresolved": decision.unresolved.iter().map(|(s, r, t)| json!({"severity": s, "seat": r, "title": t})).collect::<Vec<_>>(), "options": decision.options.iter().map(|(l, s)| json!({"label": l, "seats": s})).collect::<Vec<_>>(), "claims": stances.iter().filter_map(|(r, s)| s.text().map(|t| json!({"seat": r, "claim": crate::learn::first_sentence(t)}))).collect::<Vec<_>>()}))).await?;
+        // `specs/123` §8: an escalated host Council or Panel reaches the decisions pane.
+        crate::council_decision::raise_for_host(m, task_id).await?;
 
         let mut text = String::new();
         match &decision.escalation {
