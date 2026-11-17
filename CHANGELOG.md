@@ -9,6 +9,7 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 ## Unreleased
 
 - **A host may ask for the Council the console can** (spec 123 S4): `request_council` takes `tier` (raises, never lowers), `author_family` (a configured family) and `require_families` (1 to 4; refused at once as `seats_unavailable` when too few families are usable, and the card says met or NOT met from the receipts).
+- **`delphi council watch`** (spec 123 S5): follow a Council or Panel from a second terminal. It reads the mission's log (no daemon, no model, no writes) and prints the planned seats, each fixed-form tail line, a progress line when something changed, and the end state with the record's path; never seat text. `--once` prints the current state.
 
 ## 0.6.3 — 2026-11-16
 
