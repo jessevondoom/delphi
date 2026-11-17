@@ -147,7 +147,8 @@ impl Tally {
 /// The reads of a `host.search_kb` answer: every result of every group, by its pointer (or path), `checked` and `author`.
 pub fn reads_of_search(out: &Value) -> Vec<(String, String, String)> {
     let mut reads = Vec::new();
-    for g in ["core", "release", "findings", "noted", "kept", "project_results", "project_research", "third_party"] {
+    // A Council record (`specs/123` §15 item 2) carries no `checked` or `author`: it counts as a draft by a third party, the most cautious.
+    for g in ["core", "release", "findings", "noted", "kept", "project_results", "project_research", "third_party", "council_records"] {
         for r in out[g].as_array().into_iter().flatten() {
             let id = r["pointer"].as_str().or_else(|| r["path"].as_str()).unwrap_or("").to_string();
             reads.push((format!("{g}:{id}"), r["checked"].as_str().unwrap_or("draft").to_string(), r["author"].as_str().unwrap_or("third_party").to_string()));

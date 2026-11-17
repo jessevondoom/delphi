@@ -691,7 +691,11 @@ fn kb_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     let share = (KB_SEARCH_CHARS / hits.iter().filter(|h| !is_fact(h)).count().max(1)).min(KB_PASSAGE_CHARS);
     let mut out = String::new();
     for (h, full) in hits.iter().zip(&texts) {
-        let line = format!("{} [{}] {}{} (score {:.2})", h.pointer, h.shown_label(), h.rel_path, h.project.as_deref().map(|p| format!(" (project: {p})")).unwrap_or_default(), h.score);
+        let mut line = format!("{} [{}] {}{} (score {:.2})", h.pointer, h.shown_label(), h.rel_path, h.project.as_deref().map(|p| format!(" (project: {p})")).unwrap_or_default(), h.score);
+        // `specs/123` §15 item 2: a Council record says what it is, from the record itself.
+        if let Some(label) = ctx.guard.zones.local.parent().and_then(|ws| crate::council_earlier::record_label(ws, &h.rel_path)) {
+            line.push_str(&format!("\n{label}"));
+        }
         if is_fact(h) {
             let text: String = h.preview.chars().filter(|c| *c != '<' && *c != '>').take(400).collect();
             out.push_str(&format!("{line}\n<fact>{}</fact>\n", text.trim()));
@@ -2203,6 +2207,25 @@ mod tests {
         assert_eq!(stale_line(crate::kb::Freshness { stale: false, age_s: Some(3) }), None);
         let stale = stale_line(crate::kb::Freshness { stale: true, age_s: Some(90) }).unwrap();
         assert!(stale.starts_with("index: stale (last brought up to date 90 s ago)"), "{stale}");
+    }
+
+    /// `specs/123` §15 item 2: an agent's search finds an earlier Council record and labels it as one (venue, number, date, outcome, tier).
+    #[test]
+    fn kb_search_returns_a_council_record_labelled_as_one() {
+        let mut f = fx(&[]);
+        let doc = "---\nid: council-003-retry\ntimestamp: 2026-11-10T09:00:00Z\nsource_type: internal_generated\nstatus: active\nvenue: panel\n---\n\n# Council 003\n\n**Proposition:** Should the quollqueue be a table?\n\n## Seats\n\n## Verdict\n\n**Escalated to the operator:** the Round 2 recommendations conflict.\n\n## Accepted Risks & Minority Report (Red-Team / Dissent)\n\n- [P1] red-team: the quollqueue loses jobs\n";
+        let dir = f.root.join(delphi_core::sessions::CURRENT).join("host-abc").join("councils");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("003-quollqueue.md"), doc).unwrap();
+        let mut kb = crate::kb::Kb::open(&f.root.join("local/state.db")).unwrap();
+        kb.upsert_from("missions/host-abc/councils/003-quollqueue.md", "missions", "external_untrusted", doc, "t").unwrap();
+        kb.upsert_from("missions/host-abc/notes.md", "missions", "external_untrusted", "---\nsource_type: internal_generated\nstatus: active\n---\n# Quollqueue notes\n\nThe quollqueue is a note, not a record.\n", "t").unwrap();
+        drop(kb);
+        let r = run_tool(&mut f, "kb_search", json!({"query": "quollqueue", "limit": 10}));
+        assert!(r.content.contains("missions/host-abc/councils/003-quollqueue.md") && r.content.contains("Council record: host Panel 003, 2026-11-10, escalated to the operator; model-written, tier untrusted"), "{}", r.content);
+        let chunks = r.content.matches("missions/host-abc/councils/003-quollqueue.md (score").count();
+        assert!(chunks >= 1 && r.content.matches("Council record:").count() == chunks, "each chunk of the record is labelled, a mission note is not: {}", r.content);
+        assert!(r.content.contains("missions/host-abc/notes.md"), "the note is still found, unlabelled: {}", r.content);
     }
 
     /// `specs/116` §4.6: in a real workspace the agent's search indexes a source that is newer than the index before it searches, so

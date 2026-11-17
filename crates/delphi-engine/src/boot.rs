@@ -89,6 +89,9 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     if let Some(n) = root.get("council").and_then(|c| c.get("stall_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
         s.council_stall_secs = n.min(86_400) as u64;
     }
+    if let Some(b) = root.get("council").and_then(|c| c.get("earlier_rulings")).and_then(|v| v.as_bool()) {
+        s.council_earlier_rulings = b;
+    }
     if let Some(n) = root.get("research").and_then(|r| r.get("thin_below")).and_then(|v| v.as_integer()).filter(|v| *v >= 1) {
         s.thin_below = n.min(50) as usize;
     }
@@ -582,6 +585,8 @@ mod tests {
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 0\n").unwrap()).council_stall_secs, 0);
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = -5\n").unwrap()).council_stall_secs, 120, "a negative value is ignored");
         assert_eq!(settings_from(&toml::from_str("[council]\nstall_secs = 99999999\n").unwrap()).council_stall_secs, 86_400, "and a huge one is capped at a day");
+        assert!(settings_from(&toml::from_str("").unwrap()).council_earlier_rulings, "spec 123 §9: earlier rulings are shown by default");
+        assert!(!settings_from(&toml::from_str("[council]\nearlier_rulings = false\n").unwrap()).council_earlier_rulings);
     }
 
     #[test]

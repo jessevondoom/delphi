@@ -9,6 +9,7 @@ This file starts with the work after v0.2.7. For earlier releases, the history i
 ## Unreleased
 
 - **An escalated host Council reaches the decisions pane** (spec 123 S6): a host Council or Panel that escalates raises one `council` decision in its mission, and its card says where. A choice the host relays resolves it when Delphi ran the seats (recorded `by: host-relayed`); after a same-family Panel it becomes the decision's recommendation and the decision stays open for you.
+- **Earlier rulings reach later Councils** (spec 123 S7): a Council is shown up to two earlier records whose question matches, in Round 2, the repair turn and the synthesis (a Panel: the moderator's verdict brief), never in Round 1, and its record lists them. `[council] earlier_rulings = false` turns it off. Council records are labelled as such in an agent's `kb_search` and come back in their own `council_records` group of a host's `search_kb`.
 
 ## 0.6.3 — 2026-11-16
 

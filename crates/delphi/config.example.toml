@@ -128,6 +128,7 @@ per_watch_max_wakes_per_day = 10
 # What a Council status call reports while seats work (specs/098 section 19).
 # [council]
 # stall_secs = 120                   # flag a Council `stalled` when every seat still working has been idle this long; 0 turns it off
+# earlier_rulings = true             # show Round 2, the repair turn and the synthesis (a Panel's verdict brief) up to two earlier rulings whose headline matches (specs/123 section 9); never Round 1
 
 # Foreign seats and model families (specs/091 SR-3, SR-4). A Panel's foreign seat is one Delphi runs itself on another model family.
 # [seats]
