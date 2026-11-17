@@ -1171,3 +1171,4 @@ The operator asked on 2026-11-16 for a better Council and Panel experience in th
 | 123 | S5 | `delphi council watch` | not built |
 | 123 | S6 | an escalated host Council raises a `council` decision; a host-reported choice is shown on it and never resolves it | not built |
 | 123 | S7 | earlier rulings in Round 2, the repair turn, the synthesis and the moderator's brief | not built |
+| 123 | amendment | §15: the operator's answers of 2026-11-17: a choice relayed for a Delphi-orchestrated Council resolves its decision (`by: host-relayed`), a same-family Panel's stays open as a recommendation; Council records findable by `kb_search`/`search_kb`, labelled, still not a start zone; one family runs labelled; the token ceiling defaults to 400,000 | amendment written 2026-11-17 (pull request open); approved when the operator merges it |

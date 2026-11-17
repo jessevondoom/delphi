@@ -144,7 +144,7 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 ## 123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop
 
-**123: The Council and the Panel from a host: who sat, what it cost, a tail, and the loop** · approved (per source at `b71c7269dd6a`) · tier 0 · [source](../../specs/123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop.md)
+**123: The Council and the Panel from a host: who sat, what it cost, a tail, and the loop** · approved (per source at `718a181a446e`) · tier 0 · [source](../../specs/123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop.md)
 
 **source excerpt, untrusted** · `specs/123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop.md` line 25
 
