@@ -39,7 +39,16 @@ ignore = [
     { id = "RUSTSEC-2026-0368", reason = "zip: extract() symlink targets; candle-core never calls extract(); revisit by 2027-02-07" },
     { id = "RUSTSEC-2026-0369", reason = "zip: extract() permissions through symlinks; candle-core never calls extract(); revisit by 2027-02-07" },
     { id = "RUSTSEC-2026-0429", reason = "zip: extract() aborts on a large symlink entry; candle-core never calls extract(); revisit by 2027-02-07" },
+    # Four more zip advisories of 2026-11-17, fixed in zip >= 9.0.0. candle-core 0.11.1, the newest, still requires zip 8, so no
+    # upgrade is open to us. Two are about reading entries (AES, legacy decoders), which candle does in its .npz and pickle
+    # readers; Delphi never calls those: the local embedder and reranker load `model.safetensors` only (embed/local.rs,
+    # embed/local/rerank.rs), so no zip archive is ever opened. Short fuse: drop these once candle moves to zip 9.
+    { id = "RUSTSEC-2026-0545", reason = "zip: AES entries not authenticated when data ends early; Delphi never opens a zip archive (candle's npz/pickle readers are unused); revisit by 2026-12-17" },
+    { id = "RUSTSEC-2026-0546", reason = "zip: extract() symlink targets; candle-core never calls extract(); revisit by 2026-12-17" },
+    { id = "RUSTSEC-2026-0547", reason = "zip: legacy Shrink/Reduce/Implode decoders preallocate; Delphi never opens a zip archive (candle's npz/pickle readers are unused); revisit by 2026-12-17" },
+    { id = "RUSTSEC-2026-0548", reason = "zip: ZipStreamReader local-header names; neither candle-core nor Delphi uses ZipStreamReader; revisit by 2026-12-17" },
     # Unmaintained crates with no safe upgrade, each pulled in by something we do not control.
+    { id = "RUSTSEC-2026-0543", reason = "chrono: declared unmaintained 2026-11-17, no safe upgrade; via imap (the relay) and rmcp (the MCP adapter), not a vulnerability; revisit by 2027-01-17" },
     { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained proc-macro, build-time only, via candle-core's gemm; revisit by 2027-02-07" },
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: unmaintained, via the TLS stacks of lettre and imap; revisit by 2027-02-07" },
     { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml: unmaintained, via serde_yaml; revisit by 2027-02-07" },
