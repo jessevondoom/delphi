@@ -1,0 +1,46 @@
+# The key for the hand-written sections in this directory: whether the `options_considered` check passes each, and for a
+# failing one, words its reason must contain. Read by a unit test in crates/delphi/src/train_options.rs. These are not a
+# seat's output: they show what the check can tell apart. Outside fixture/, so no seat sees them.
+
+[[sample]]
+file = "good.md"
+pass = true
+
+[[sample]]
+file = "good-three-columns.md"
+pass = true
+
+[[sample]]
+file = "no-heading.md"
+pass = false
+why = "no heading"
+
+[[sample]]
+file = "two-options.md"
+pass = false
+why = "2 option(s) in the table"
+
+[[sample]]
+file = "same-design.md"
+pass = false
+why = "one design"
+
+[[sample]]
+file = "no-test.md"
+pass = false
+why = "option C has no sentence on how it would be tested"
+
+[[sample]]
+file = "all-conventional.md"
+pass = false
+why = "no option is marked as removing a constraint"
+
+[[sample]]
+file = "no-choice.md"
+pass = false
+why = "which option was chosen"
+
+[[sample]]
+file = "list-not-table.md"
+pass = false
+why = "no table"

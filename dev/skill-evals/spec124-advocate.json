@@ -1,0 +1,10 @@
+[
+["advocate", "The spinner on the status screen changed. Audit the screen for reduce motion, color-only meaning and keyboard reach.", "accessibility-audit"],
+["advocate", "This command output marks failures in red only. Check its contrast and whether it still reads as plain text.", "accessibility-audit"],
+["advocate", "A new animation was added to the header. Does it obey reduce motion, and does the screen work by keyboard?", "accessibility-audit"],
+["advocate", "Name a persona and a job story, then walk the new init command with the four walkthrough questions before release.", "cognitive-walkthrough"],
+["advocate", "Audit the settings screen against the emotional design levels and the heuristics: where is the friction, and where is the joy?", "user-joy-heuristics"],
+["advocate", "Shift this report from the technical register to an executive one for a different audience.", "tonal-calibration"],
+["advocate", "Rename the screen module.", null],
+["advocate", "What is today's date?", null]
+]

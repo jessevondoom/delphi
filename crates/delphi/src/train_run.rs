@@ -280,6 +280,7 @@ fn eval_check(c: &Check, ctx: &Ctx) -> Result<(), String> {
             let s = crate::train_defects::grade(&ctx.case.dir, file, &ctx.deliverable)?;
             crate::train_defects::verdict(&s, *min_recall, *max_false_positives)
         }
+        Check::OptionsConsidered { min } => crate::train_options::grade(&ctx.deliverable, *min as usize).map(|_| ()),
         Check::FileExists(p) => ctx.repo.join(p).is_file().then_some(()).ok_or_else(|| format!("{} does not exist", p)),
         Check::FileContains { path, text } => match fs::read_to_string(ctx.repo.join(path)) {
             Ok(t) if t.contains(text.as_str()) => Ok(()),
