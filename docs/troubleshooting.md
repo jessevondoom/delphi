@@ -57,6 +57,20 @@ delphi daemon stop
 
 Release builds compile the embedding and reranking models in. A plain `cargo build` searches by keyword only unless you install the models under `$DELPHI_HOME/models/` (`dev/fetch-model.sh`). `delphi kb stats` shows what is indexed and whether results are reranked. `DELPHI_EMBED_MODEL=off`, `DELPHI_RERANK_MODEL=off` or `DELPHI_SEED_VECTORS=off` turn parts off on purpose. After adding an org bundle, results from it say `(lexical only: vectors N% ready)` until its vectors finish; `delphi bundle list` shows progress.
 
+## Research returned no claim
+
+A run that keeps no claim says why. Its result carries `empty`: `reason` is one fixed word, `causes` counts every cause the run met, `text` says it plainly and `next` is one sentence on what to do. The answer repeats `text` and `next`. The common ones:
+
+| `empty.reason` | what happened | what to do |
+| :-- | :-- | :-- |
+| `leads_unread` | a connected tool's own search found pages that are not on your trusted list. Delphi never fetches those on a tool's word; they are listed in `host_leads` | the tool reads them itself and hands over what it found with `record_research`; or add the sources worth trusting to your trusted list |
+| `trusted_fetch_failed` | pages on the trusted list could not be fetched; `why` counts each failure by a fixed word (`http_403`, `not_text` for a PDF or other non-text page, `network`, `too_large`, `redirect`) | read them with the tool's own reader and use `record_research`, or run again later |
+| `no_model_seat`, `plan_no_model_seat` | no model could serve the scout, so no page could be read, or the whole question was searched as one query | run again when a model is available (`delphi doctor`) |
+| `no_claims_on_pages` | pages were read and nothing quotable on the question was found | ask a narrower question |
+| `no_results`, `no_search_provider`, `credential_unresolved` | the searches found nothing, or none could be run | ask a shorter question; see the next section for engines |
+
+The words are counted by code and are information only: none of them makes Delphi fetch, trust or permit anything.
+
 ## Research ran with no web search
 
 A research request is never refused for want of a source. `delphi init` writes `[search] providers = ["parallel"]`: Parallel's hosted engine, which needs no key or account, is rate limited, sees your queries, and does not publish how long it keeps them. `delphi research setup` at a terminal offers it first and Brave second; with a Brave key it writes `["parallel", "brave"]`, so a Parallel error or rate limit passes the query to Brave. It takes the key into your keychain, runs one test query and one test fetch, and shows the change for you to ratify. `[search]` names who receives your queries, so it takes effect only once ratified.

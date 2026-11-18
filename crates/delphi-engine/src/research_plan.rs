@@ -41,6 +41,9 @@ pub struct PlannedQuery {
 
 fn private_token(tok: &str) -> bool {
     let t = tok.trim_matches(|c: char| matches!(c, '"' | '\'' | '(' | ')' | ',' | ';' | '[' | ']' | '<' | '>'));
+    // A full stop that ends a sentence is not part of a name: `part.` is the word `part`, not a single-label host. Without this
+    // the last word of every sentence was taken out of the query (`specs/124` S11). A dotted name keeps its dots and is still checked.
+    let t = t.trim_end_matches('.');
     if t.is_empty() {
         return false;
     }
@@ -72,16 +75,35 @@ pub fn clean_query(question: &str, redactor: &Redactor) -> Option<String> {
         return None;
     }
     let mut out = String::new();
+    // Where the last whole sentence that fits ends, in bytes of `out`.
+    let (mut sentence_end, mut cut) = (None::<usize>, false);
     for w in kept {
         if out.chars().count() + w.chars().count() + 1 > MAX_QUERY_CHARS {
+            cut = true;
             break;
         }
         if !out.is_empty() {
             out.push(' ');
         }
         out.push_str(w);
+        if ends_sentence(w) {
+            sentence_end = Some(out.len());
+        }
+    }
+    // A question too long to send whole is cut where a sentence ends, when that keeps at least half of what fits: a query that
+    // stops mid-sentence searches for half a thought (`specs/124` S11). Otherwise it is cut at the last word that fits, as before.
+    if let Some(end) = sentence_end.filter(|_| cut) {
+        if out[..end].chars().count() * 2 >= MAX_QUERY_CHARS {
+            out.truncate(end);
+        }
     }
     (!out.is_empty()).then_some(out)
+}
+
+/// Does this word end a sentence: it ends with `.`, `?`, `!` or `;` and has no dot inside it (`e.g.`, `U.S.`, `v1.2.` do not).
+fn ends_sentence(word: &str) -> bool {
+    let body = word.trim_end_matches(['.', '?', '!', ';', '"', '\'', ')']);
+    body.len() < word.len() && word[body.len()..].contains(['.', '?', '!', ';']) && !body.is_empty() && !body.contains('.')
 }
 
 /// The queries a job sends, in order. `sites` are the trusted-list domains (`TrustedList::site_filters`).
@@ -333,6 +355,27 @@ mod tests {
         let p = plan_guarded("intermittent fasting blood pressure", Depth::Quick, &sites(), &r, &guard);
         assert_eq!(p.queries, plan("intermittent fasting blood pressure", Depth::Quick, &sites(), &r), "no identifier: the plan is unchanged");
         assert_eq!(plan_guarded("/etc/passwd 10.1.2.3", Depth::Deep, &sites(), &r, &guard), Planned::default());
+    }
+
+    #[test]
+    fn a_question_too_long_to_send_whole_is_cut_where_a_sentence_ends() {
+        let r = Redactor::new();
+        // The second sentence does not fit: the query is the first, whole, and not the first plus half of the second.
+        let first = format!("How do large language model agents {} share memory across sessions?", "really ".repeat(12).trim_end());
+        let long = format!("{first} Compare the published approaches of the last two years, e.g. vector stores, and say which of them were measured against a baseline and by whom in each case.");
+        assert!(first.chars().count() >= 100 && long.chars().count() > 200, "{}", first.chars().count());
+        assert_eq!(clean_query(&long, &r).as_deref(), Some(first.as_str()));
+        // A first sentence shorter than half of what fits is not enough to search with: the cut is at the last word that fits.
+        let short = format!("Is it safe? {}", "word ".repeat(60));
+        let q = clean_query(&short, &r).unwrap();
+        assert!(q.starts_with("Is it safe? word") && q.chars().count() > 190 && q.chars().count() <= 200, "{q}");
+        // A question that fits is sent whole, whatever its sentences; a dot inside a word ends nothing.
+        assert_eq!(clean_query("First part. Second part", &r).as_deref(), Some("First part. Second part"));
+        // The word that ends a sentence stays in the query; a private name that ends one is still taken out.
+        assert_eq!(clean_query("Does aspirin reduce fever. Compare it with ibuprofen for adults.", &r).as_deref(), Some("Does aspirin reduce fever. Compare it with ibuprofen for adults."));
+        assert_eq!(clean_query("what runs on build.internal. and why does it matter so much", &r).as_deref(), Some("what runs on and why does it matter so much"));
+        assert!(!ends_sentence("e.g.") && !ends_sentence("U.S.") && !ends_sentence("v1.2.") && !ends_sentence("word") && !ends_sentence("."));
+        assert!(ends_sentence("sessions?") && ends_sentence("done.") && ends_sentence("(done.)") && ends_sentence("first;"));
     }
 
     #[test]
