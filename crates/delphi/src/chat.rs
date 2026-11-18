@@ -1393,6 +1393,8 @@ mod tests {
     fn the_launcher_outlives_a_ctrl_c_meant_for_the_ui_and_reports_the_uis_own_code() {
         // A child that signals the whole foreground group the way the terminal does, then leaves with its own code.
         // If this process did not ignore SIGINT while the child runs, the test runner itself would be killed here.
+        // (The turn: no other test may change SIGINT's disposition while it is ignored and a child is about to send one.)
+        let _turn = crate::run_granted::SIGNAL_TURN.lock().unwrap_or_else(|e| e.into_inner());
         let mut cmd = std::process::Command::new("sh");
         cmd.args(["-c", "kill -INT $PPID; sleep 0.1; exit 7"]);
         assert_eq!(run_ui(&mut cmd).unwrap(), 7);
