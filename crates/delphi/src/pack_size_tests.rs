@@ -13,7 +13,7 @@ const MEASURED: &[(&str, Option<usize>)] = &[
     ("builder", Some(17562)),
     ("scout", Some(18898)),
     ("investigator", Some(19291)),
-    ("strategist", Some(17282)),
+    ("strategist", Some(20116)), // measured again for `specs/124` S3: it gained the source ladder
     ("red-team", Some(19676)),
     ("writer", Some(16744)),
     ("messenger", None),

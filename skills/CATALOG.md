@@ -141,7 +141,7 @@ The first three need a tool the role does not hold in this build: each says so, 
 | `external-comms-dispatch` | Connects Delphi plans to external APIs, calendars, webhooks, or notification channels. | instructions |
 | `protocol-schema-translation` | Validates and translates boundary payloads (webhooks, third-party APIs, provider tool schemas). | instructions |
 
-### 10. **Validator** (Fact-Checker, Source Assessor & Knowledge Gatekeeper; advisory in V1, `specs/040`)
+### 10. **Validator** (Fact-Checker, Source Assessor & Knowledge Gatekeeper; it only asks, the daemon decides by `[validator] mode`, `specs/040`, `specs/100`)
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
 | `fact-validation` | Reports whether a claim has independent, reputable corroboration, and what it would conclude; never writes *validated*. Also usable by the scout and orchestrator. | instructions |
