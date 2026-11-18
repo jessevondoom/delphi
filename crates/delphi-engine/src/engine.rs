@@ -2114,6 +2114,9 @@ impl Engine {
         if self.offers_alignment(sc) {
             defs.push(crate::align_run::def());
         }
+        if self.offers_strategy_trace(sc) {
+            defs.push(crate::strategy_trace::def());
+        }
         if !sc.readonly && !granted {
             defs.extend(self.connector_defs(sc).await?);
         }
@@ -2253,6 +2256,9 @@ impl Engine {
         }
         if name == crate::align_run::TOOL {
             return self.exec_align(sc, args).await;
+        }
+        if name == crate::strategy_trace::TOOL {
+            return self.exec_strategy_trace(sc, args).await;
         }
         if name == crate::settings_run::TOOL {
             if !sc.manifest.execute.iter().any(|e| e == "settings") {
@@ -5466,6 +5472,44 @@ mod tests {
         assert_eq!(ev.len(), 1);
         assert!(ev[0].payload["findings"].as_array().unwrap().iter().all(|x| x["level"] == "P2"));
         assert!(events_of(&f, "approval.requested").is_empty(), "a check is not an action");
+    }
+
+    // specs/124 AC-4: the strategist can trace a strategy document; the check makes no model call, writes nothing, asks for no
+    // approval, and is offered only to a role authorized for the skills that define the layout.
+    #[tokio::test]
+    async fn the_strategist_can_trace_a_strategy_without_a_model_call_and_the_findings_block_nothing() {
+        let planted = crate::strategy_trace::tests::CLEAN.replace("- A1 (P1): Cache", "- A1: Cache").replace("- P2 (D2): One", "- P2: One").replace("  Falsifier: an incident review names one owner.\n", "");
+        let f = setup(vec![Step::tool("s1", "strategy_trace", json!({"path": "specs/strategy.md"})), Step::tool("s2", "strategy_trace", json!({"text": crate::strategy_trace::tests::CLEAN})), Step::tool("s3", "strategy_trace", json!({})), Step::text("Done.")], 5.0, |_| {});
+        std::fs::create_dir_all(f.engine.ws.dir.join("team/specs")).unwrap();
+        std::fs::write(f.engine.ws.dir.join("team/specs/strategy.md"), &planted).unwrap();
+        let before = std::fs::read_to_string(f.engine.ws.dir.join("team/specs/strategy.md")).unwrap();
+        let out = f.engine.run_task(&f.m, "strategist", "check the strategy").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert!(f.model.requests()[0].body["tools"].to_string().contains("strategy_trace"), "offered to the strategist with no bundle added");
+        assert_eq!(f.model.requests().len(), 4, "three calls and the answer: the check itself made no model call");
+        let first = f.model.requests()[1].body["messages"].to_string();
+        for want in ["3 finding(s), all P2 (advice, nothing is blocked)", "TRACE-ACT-01 (P2) A1: orphan action", "TRACE-POL-01 (P2) P2: unfounded policy", "TRACE-DIA-01 (P2) D2: no falsifier"] {
+            assert!(first.contains(want), "{} not in {}", want, first);
+        }
+        let second = f.model.requests()[2].body["messages"].to_string();
+        assert!(second.contains("the text: the trace is complete"), "{}", second);
+        assert!(f.model.requests()[3].body["messages"].to_string().contains("needs a `path` or a `text`"));
+        let ev = events_of(&f, "strategy.trace");
+        assert_eq!(ev.len(), 2);
+        assert_eq!(ev[0].payload["findings"].as_array().unwrap().len(), 3);
+        assert!(ev[0].payload["findings"].as_array().unwrap().iter().all(|x| x["level"] == "P2"));
+        assert_eq!(ev[1].payload["findings"].as_array().unwrap().len(), 0);
+        assert!(events_of(&f, "approval.requested").is_empty(), "a check is not an action");
+        assert_eq!(std::fs::read_to_string(f.engine.ws.dir.join("team/specs/strategy.md")).unwrap(), before, "the document is read, never written");
+    }
+
+    #[tokio::test]
+    async fn a_role_without_the_strategy_skills_is_not_offered_the_trace_and_a_forged_call_is_refused() {
+        let f = setup(vec![Step::tool("s1", "strategy_trace", json!({"text": crate::strategy_trace::tests::CLEAN})), Step::text("Done.")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "architect", "check the strategy").await.unwrap();
+        assert!(!f.model.requests()[0].body["tools"].to_string().contains("strategy_trace"));
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("does not authorize the strategy skills"));
+        assert!(events_of(&f, "strategy.trace").is_empty());
     }
 
     #[tokio::test]

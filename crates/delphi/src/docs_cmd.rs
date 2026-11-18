@@ -138,9 +138,10 @@ pub fn catalog_markdown(repo: &std::path::Path) -> Result<String, String> {
 /// (`delphi_engine::mcp_packs::EXECUTE_NAMES`); a name that list does not know is printed as granted by `nothing`, and
 /// `delphi lint` fails it.
 pub fn execute_names_markdown(repo: &std::path::Path) -> Result<String, String> {
-    use delphi_engine::mcp_packs::{EXECUTE_NAMES, execute_name};
+    use delphi_engine::mcp_packs::{EXECUTE_NAMES, execute_name, skill_granted_tools};
     use serde_yaml::Value;
     let mut roles: std::collections::BTreeMap<String, Vec<String>> = EXECUTE_NAMES.iter().map(|n| (n.name.to_string(), Vec::new())).collect();
+    let mut by_skill: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
     let rd = std::fs::read_dir(repo.join("agents")).map_err(|e| format!("{}: {} (run it from a checkout or pass --repo)", repo.join("agents").display(), e))?;
     for entry in rd.flatten() {
         let Ok(t) = std::fs::read_to_string(entry.path().join("AGENT.md")) else { continue };
@@ -149,6 +150,10 @@ pub fn execute_names_markdown(repo: &std::path::Path) -> Result<String, String> 
         let execute = fm.get(Value::String("default_access_scope".into())).and_then(|s| s.get("execute")).and_then(Value::as_sequence).cloned().unwrap_or_default();
         for name in execute.iter().filter_map(Value::as_str) {
             roles.entry(name.to_string()).or_default().push(id.clone());
+        }
+        let skills = fm.get(Value::String("authorized_skills".into())).and_then(Value::as_sequence).cloned().unwrap_or_default();
+        for skill in skills.iter().filter_map(Value::as_str) {
+            by_skill.entry(skill.to_string()).or_default().push(id.clone());
         }
     }
     let mut out = String::new();
@@ -168,6 +173,15 @@ pub fn execute_names_markdown(repo: &std::path::Path) -> Result<String, String> 
             None => ("nothing", "no tool, daemon capability or host pack", String::new()),
         };
         out.push_str(&format!("| `{}` | {} | {} | {} | {} |\n", name.replace('|', "/"), ro, by, grants, if caps.is_empty() { "none".to_string() } else { caps }));
+    }
+    out.push_str("\n## Tools a skill grants\n\nA daemon tool offered to a role because its manifest authorizes one of the skills below, not because of an `execute` name. None of these is an `execute` name, and `delphi lint` refuses one listed as such.\n\n");
+    out.push_str("| tool | granted by any of the skills | roles |\n| :-- | :-- | :-- |\n");
+    for (tool, skills) in skill_granted_tools() {
+        let mut ids: Vec<String> = skills.iter().flat_map(|s| by_skill.get(*s).cloned().unwrap_or_default()).collect();
+        ids.sort();
+        ids.dedup();
+        let ro = if ids.is_empty() { "(no role)".to_string() } else { ids.iter().map(|r| format!("`{}`", r)).collect::<Vec<_>>().join(", ") };
+        out.push_str(&format!("| `{}` | {} | {} |\n", tool, skills.iter().map(|s| format!("`{}`", s)).collect::<Vec<_>>().join(", "), ro));
     }
     Ok(out)
 }

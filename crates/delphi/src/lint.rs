@@ -105,7 +105,46 @@ pub fn run(tree: &Tree) -> Report {
     check_spec_numbers(tree, &mut r);
     check_spec_group_lines(tree, &mut r);
     check_reviewed_by(tree, &mut r);
+    check_options_considered(tree, &mut r);
     r
+}
+
+// ── "Options considered" in a new spec (specs/124 section 7) ───────────────────
+
+/// The last spec number exempt from the "Options considered" rule: spec 124 made the rule, so it and every older spec predate it.
+const OPTIONS_CONSIDERED_EXEMPT_THROUGH: u32 = 124;
+/// What a missing section costs. Spec 124 OD-4: a warning for one release, then an error. The rule first ships in the release
+/// after 0.6.4. The release after that one changes this constant to `Level::Fail`, in a change that also updates the test
+/// `the_options_rule_starts_as_a_warning_and_the_repo_has_no_finding` and first confirms that `delphi lint --repo .` prints no
+/// `spec-options` line on main. Nothing else needs to change: the check and its other test read this constant.
+const OPTIONS_CONSIDERED_LEVEL: Level = Level::Warn;
+
+/// A spec numbered above [`OPTIONS_CONSIDERED_EXEMPT_THROUGH`] carries a heading that says "Options considered" (any case, any
+/// heading depth, a section number allowed), the section the `divergent-options` skill fills: at least three designs, not one.
+/// A spec whose status is `superseded` is exempt, as is every older spec. The check reads the heading only: whether the options
+/// are real is for review, not for a lint. Source repo only (a workspace's own `specs/` is the operator's).
+fn check_options_considered(tree: &Tree, r: &mut Report) {
+    if tree.mode != Mode::Repo {
+        return;
+    }
+    for path in tree.files.keys() {
+        let Some(number) = path.strip_prefix("specs/").and_then(delphi_core::specdoc::spec_number) else { continue };
+        // "125a" is spec 125: the letter names a sibling, not a different age.
+        let Ok(n) = number.trim_end_matches(|c: char| c.is_ascii_lowercase()).parse::<u32>() else { continue };
+        if n <= OPTIONS_CONSIDERED_EXEMPT_THROUGH {
+            continue;
+        }
+        let text = tree.read(path).unwrap_or_default();
+        // No frontmatter is the frontmatter check's finding; without a status this check has nothing to go on.
+        let Ok(doc) = frontmatter::parse(&text) else { continue };
+        let Some(fm) = doc.frontmatter else { continue };
+        if get_str(&fm, "status").is_some_and(|s| s.trim().eq_ignore_ascii_case("superseded")) {
+            continue;
+        }
+        if !strip_fences(&doc.body).lines().any(|l| l.starts_with('#') && l.to_lowercase().contains("options considered")) {
+            r.push(OPTIONS_CONSIDERED_LEVEL, "spec-options", path.clone(), format!("a spec numbered above {OPTIONS_CONSIDERED_EXEMPT_THROUGH} needs an \"Options considered\" section: at least three designs, one conventional, one that removes a named constraint and one by a named method, each with how it would be tested (spec 124 section 7; the `divergent-options` skill)"));
+        }
+    }
 }
 
 // ── a review a spec cites (specs/104 section 13 G5) ──────────────────────────
@@ -1040,6 +1079,38 @@ mod tests {
         let (_t, tree) = tree_of(&[("specs/001-a.md", with), ("specs/002-b.md", without), ("specs/history/003-c.md", with), ("docs/x.md", with)]);
         let warns: Vec<String> = run(&tree).findings.into_iter().filter(|f| f.check == "spec-group-line").map(|f| format!("{:?} {}", f.level, f.location)).collect();
         assert_eq!(warns, vec!["Warn specs/001-a.md".to_string()], "only a spec directly under specs/ with the line");
+    }
+
+    // specs/124 section 7: a spec numbered 125 or above says which options it considered. Older specs and superseded ones are exempt.
+    #[test]
+    fn a_new_spec_without_options_considered_is_reported_at_the_configured_level() {
+        let spec = |status: &str, body: &str| format!("---\nid: spec-x\ntitle: X\nstatus: {status}\n---\n# Spec\n{body}\n");
+        let (_t, tree) = tree_of(&[
+            ("specs/124-the-rule.md", &spec("approved", "## 1. Scope")),
+            ("specs/090-old.md", &spec("approved", "## 1. Scope")),
+            ("specs/125-missing.md", &spec("draft", "## 1. Scope\nWe thought about options considered, in prose only.")),
+            ("specs/126-has-it.md", &spec("draft", "## 1. Scope\n### 1.3 Options Considered\n| A | B | C |")),
+            ("specs/127-gone.md", &spec("superseded", "## 1. Scope")),
+            ("specs/128a-approved.md", &spec("approved", "## 1. Scope\n```\n## Options considered\n```")),
+            ("specs/history/129-folded.md", &spec("draft", "## 1. Scope")),
+            ("docs/130-not-a-spec.md", &spec("draft", "## 1. Scope")),
+        ]);
+        let got: Vec<String> = run(&tree).findings.into_iter().filter(|f| f.check == "spec-options").map(|f| format!("{:?} {}", f.level, f.location)).collect();
+        let want: Vec<String> = ["specs/125-missing.md", "specs/128a-approved.md"].iter().map(|p| format!("{:?} {}", OPTIONS_CONSIDERED_LEVEL, p)).collect();
+        assert_eq!(got, want, "a heading is needed (prose and a fenced block do not count); 124 and older, superseded specs and files below specs/ are exempt");
+    }
+
+    // OD-4 of spec 124: the rule starts as a warning, so it cannot fail a lint run until the constant is changed on purpose.
+    #[test]
+    fn the_options_rule_starts_as_a_warning_and_the_repo_has_no_finding() {
+        assert!(OPTIONS_CONSIDERED_LEVEL == Level::Warn, "changing this to Fail is the planned second step (see the constant); update this test in the same change");
+        let (_t, tree) = tree_of(&[("specs/125-missing.md", "---\nid: spec-x\ntitle: X\nstatus: draft\n---\n# Spec\n")]);
+        assert!(fails(&tree, "spec-options").is_empty(), "the missing section is a warning, so it cannot fail the run");
+        assert_eq!(run(&tree).findings.iter().filter(|f| f.check == "spec-options" && f.level == Level::Warn).count(), 1);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let real = run(&Tree::from_repo(&root).unwrap());
+        let found: Vec<_> = real.findings.iter().filter(|f| f.check == "spec-options").map(|f| f.location.clone()).collect();
+        assert!(found.is_empty(), "specs in this repository without the section: {:?}", found);
     }
 
     #[test]

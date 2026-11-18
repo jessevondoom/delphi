@@ -22,6 +22,17 @@ What this spec deliberately does not do.
 - **Alternative:** the cheapest thing that might work.
 - **Why Rejected:** the concrete reason it does not, or, if there is none, build this instead.
 
+### 1.3 Options Considered
+At least three, from the `divergent-options` skill. This section does not replace 1.2.
+
+| Option | Method | What it is | How it would be tested |
+| :-- | :-- | :-- | :-- |
+| A | conventional | the design a careful engineer would expect | the observation that shows it works or fails |
+| B | constraint removed: name the constraint | the design if that constraint did not hold | its own test |
+| C | a named method: inversion, a TRIZ principle with the contradiction stated, morphological recombination, or an analogy from a named field | the design that method produced | its own test |
+
+Chosen: A, B or C, and why the others lost. Flagged by the guard (a new layer of abstraction with no test of its own): none, or which.
+
 ## 2. Design
 Interfaces, data shapes, invariants and failure behaviour, at the level a Builder needs.
 

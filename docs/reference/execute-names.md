@@ -31,3 +31,11 @@ The last column is the host capability a role's pack lists because of the name: 
 | `test-runner` | `builder` | host-only | no daemon tool of its own; inside Delphi tests run through `shell-worktree-scoped` | `shell` |
 | `timers` | `orchestrator` | daemon | `timer`; the daemon reads this name | none |
 | `web-search` | `scout`, `validator` | host-only | no tool the role calls by this name; inside Delphi the daemon's research pipeline searches | `search_web` |
+
+## Tools a skill grants
+
+A daemon tool offered to a role because its manifest authorizes one of the skills below, not because of an `execute` name. None of these is an `execute` name, and `delphi lint` refuses one listed as such.
+
+| tool | granted by any of the skills | roles |
+| :-- | :-- | :-- |
+| `strategy_trace` | `strategy-kernel`, `strategy-cascade` | `strategist` |

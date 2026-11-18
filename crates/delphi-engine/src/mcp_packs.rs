@@ -131,6 +131,13 @@ pub const EXECUTE_NAMES: &[ExecuteName] = &[
     ExecuteName { name: "web-search", granted_by: "host-only", grants: "no tool the role calls by this name; inside Delphi the daemon's research pipeline searches", capabilities: &["search_web"] },
 ];
 
+/// The daemon tools a role gets from a skill its manifest authorizes, not from an `execute` name (spec 124 S5: `strategy_trace`):
+/// the tool, and the skills any one of which offers it. They are no `execute` names, so `delphi lint` refuses them there;
+/// `delphi docs execute-names` lists them so the inventory of what a manifest grants is whole.
+pub fn skill_granted_tools() -> Vec<(&'static str, &'static [&'static str])> {
+    vec![(crate::strategy_trace::TOOL, &crate::strategy_trace::SKILLS)]
+}
+
 /// The entry of [`EXECUTE_NAMES`] for `name`, or `None` for a name nothing grants.
 pub fn execute_name(name: &str) -> Option<&'static ExecuteName> {
     EXECUTE_NAMES.iter().find(|n| n.name == name)
@@ -935,6 +942,11 @@ mod tests {
         // Spec 124 §3 item 4: a name the list does not know implies nothing, so a fictional name cannot make a pack expect `shell` or `fetch`.
         for gone in ["fuzz-harness-scoped", "gh-cli-scoped", "webhook-dispatcher", "external-api-client"] {
             assert!(execute_name(gone).is_none() && capabilities(&[], &[], &s(&[gone])).is_empty(), "{gone}");
+        }
+        // A tool a skill grants is not an `execute` name: listing it there would name nothing the daemon reads.
+        assert!(skill_granted_tools().iter().any(|(t, skills)| *t == "strategy_trace" && skills.contains(&"strategy-kernel")));
+        for (tool, _) in skill_granted_tools() {
+            assert!(execute_name(tool).is_none() && execute_name(&tool.replace('_', "-")).is_none(), "{tool}");
         }
         // Every capability the list names is one a pack can name, and no name is listed twice.
         for (i, n) in EXECUTE_NAMES.iter().enumerate() {

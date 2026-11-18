@@ -42,7 +42,8 @@ Sequence by dependency and risk, not by enthusiasm.
 3. Give each milestone a `weight` for relative effort and, where it applies, link the spec it delivers.
 4. Put the riskiest unknown early, where discovering it is cheap, and anything the operator must decide or provide ahead of the work that needs it.
 5. Write the plan from `templates/milestones.yaml` and run `delphi check dag <file> --repo .`. It rejects cycles and unknown ids, then prints the parallel waves and the critical path.
-6. Read the critical path. If it is longer than the constraints allow, cut scope or break a dependency; do not just reorder.
+6. Where the roadmap delivers a strategy written in the `strategy-kernel` layout, match each milestone to an action (`A1…`) in its trace. A milestone with no action in the trace is flagged in the plan: either the strategy lacks an action or the milestone is outside it.
+7. Read the critical path. If it is longer than the constraints allow, cut scope or break a dependency; do not just reorder.
 
 No shell? Call the `check` tool with `kind: dag` and the plan's path; it returns the same verdict.
 
