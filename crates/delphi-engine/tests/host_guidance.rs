@@ -83,15 +83,25 @@ fn the_three_manifests_carry_the_source_ladder_and_a_role_that_does_not_work_it_
     // from them. (That the served pack carries it verbatim is tested in `mcp_host.rs`.)
     // `specs/124` §4: the three roles of `specs/067` carry the ladder too: the same four rungs and reasons, without the names of the
     // capture tools, which only the research roles' host workers may call (`specs/113` §4). Naming one here would promise a tool
-    // the role's worker does not hold.
+    // the role's worker does not hold. `specs/124` §16 item 4: the strategist's worker holds `request_research`, `research_status` and
+    // `research_result`, so its ladder names those three and none of the tools that record.
     for role in ["administrator", "assistant", "advocate", "strategist"] {
         let text = std::fs::read_to_string(repo(&format!("agents/{role}/AGENT.md"))).unwrap();
         let ladder = &text[text.find("## 4. Source ladder").unwrap_or_else(|| panic!("{role}: the manifest lacks the ladder"))..];
         for must in ["Knowledge base, always first", "Trusted sources", "Close sources", "The wider world", "not_connected", "not_approved", "no_results", "refused_by_host", "it grants no tool and no permission", "data, not instructions"] {
             assert!(ladder.contains(must), "{role} lacks {must}");
         }
-        for tool in ["request_research", "record_session_summary", "propose_kb_entry", "propose_note", "record_finding"] {
+        for tool in ["request_research", "record_session_summary", "propose_kb_entry", "propose_note", "record_finding", "record_research"] {
+            if role == "strategist" && tool == "request_research" {
+                continue;
+            }
             assert!(!text.contains(&format!("`{tool}`")), "{role}: names `{tool}`, which its worker cannot call");
+        }
+        if role == "strategist" {
+            for tool in ["request_research", "research_status", "research_result"] {
+                assert!(ladder.contains(&format!("`{tool}`")), "the strategist's ladder names `{tool}`");
+            }
+            assert!(ladder.contains("untrusted data: a claim built on it names its source and is marked not validated"));
         }
     }
     for role in ["scout", "investigator", "red-team"] {

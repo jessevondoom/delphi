@@ -462,6 +462,10 @@ const WORKER_CAPTURE_TOOLS: &[&str] = &["request_research", "research_status", "
 /// The red-team's charter names three of them (its source ladder: `request_research`, `propose_kb_entry`, `record_session_summary`); it
 /// gets those and the two that read a research job back, and nothing else (spec 113 §4 item 2).
 const RED_TEAM_CAPTURE_TOOLS: &[&str] = &["request_research", "research_status", "research_result", "propose_kb_entry", "record_session_summary"];
+/// The strategist asks the scout and reads the answer back, and nothing else (`specs/124` §16 item 4, adding one role to the holders of
+/// spec 113 §4's tools): no `record_research`, `propose_kb_entry` or `record_session_summary`; it hands facts to the scout, which records
+/// them.
+const STRATEGIST_RESEARCH_TOOLS: &[&str] = &["request_research", "research_status", "research_result"];
 
 /// The Delphi tools a read-only worker of `role` may call: the read tools, and for the roles whose charter sends research back to
 /// Delphi, the capture tools.
@@ -470,6 +474,7 @@ pub fn worker_tools(role: &str) -> Vec<&'static str> {
     out.extend_from_slice(match role {
         "scout" | "investigator" => WORKER_CAPTURE_TOOLS,
         "red-team" => RED_TEAM_CAPTURE_TOOLS,
+        "strategist" => STRATEGIST_RESEARCH_TOOLS,
         _ => &[],
     });
     out
@@ -1167,6 +1172,31 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "a charter names a Delphi tool its worker cannot call (regenerate with `delphi docs ecosystem --write` after changing mcp_hosts::worker_tools): {missing:?}");
+    }
+
+    /// `specs/124` §16 item 4 (AC-12): the strategist's worker holds exactly the read tools and the three that ask the scout and read
+    /// the answer back; no fetch, search, write or recording tool. Every other role's list is what it was before (spec 113 §4).
+    #[test]
+    fn the_strategists_worker_gains_three_research_tools_and_no_other_role_changes() {
+        let with = |extra: &[&'static str]| WORKER_READ_TOOLS.iter().chain(extra).copied().collect::<Vec<_>>();
+        assert_eq!(worker_tools("strategist"), with(&["request_research", "research_status", "research_result"]));
+        for gone in ["record_research", "record_finding", "propose_kb_entry", "propose_note", "record_session_summary", "research_feed"] {
+            assert!(!worker_tools("strategist").contains(&gone), "{gone}");
+        }
+        for (role, _) in WORKER_ROLES {
+            let want = match *role {
+                "strategist" => continue,
+                "scout" | "investigator" => with(&["request_research", "research_status", "research_result", "record_research", "record_finding", "propose_kb_entry", "propose_note", "record_session_summary"]),
+                "red-team" => with(&["request_research", "research_status", "research_result", "propose_kb_entry", "record_session_summary"]),
+                _ => with(&[]),
+            };
+            assert_eq!(worker_tools(role), want, "{role}");
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let worker = std::fs::read_to_string(root.join(format!("{PLUGIN_DIR}/agents/strategist-worker.md"))).unwrap();
+        let list = worker.lines().find_map(|l| l.strip_prefix("tools: ")).expect("the strategist's worker has a tools list");
+        let listed: Vec<&str> = list.split(", ").filter_map(|t| t.strip_prefix("mcp__delphi__")).collect();
+        assert_eq!(listed, worker_tools("strategist"), "the committed worker file matches worker_tools (regenerate with `delphi docs ecosystem --write`)");
     }
 
     #[test]
