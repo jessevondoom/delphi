@@ -139,7 +139,9 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `org-bundle-authoring` | Creates, sanitizes and packages an org knowledge bundle (`specs/023`) from allow-listed sources, with a human-approved redaction report before packaging. *`specs/027` §2.6; its `delphi bundle init|distill|validate --report|package --vectors` commands are built (slice B10).* | `templates/redaction-report.md`, `delphi check provenance` |
 | `tonal-calibration` | Dynamically code-switches prose across technical, executive, and pedagogical registers. | instructions |
 
-### 9. **Messenger** (External Integrations, GitHub Ops & Protocol Specialist)
+### 9. **Messenger** (External Message Drafter & Boundary Payload Checker; drafts only, `specs/124` §4)
+The first three need a tool the role does not hold in this build: each says so, and is used to draft what a person runs or sends.
+
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
 | `github-ops-sync` | Bridges local Delphi missions with GitHub via `gh` (Issues, PRs, comments, CI status), confirming each outbound action. | instructions |
@@ -147,34 +149,34 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `external-comms-dispatch` | Connects Delphi plans to external APIs, calendars, webhooks, or notification channels. | instructions |
 | `protocol-schema-translation` | Validates and translates boundary payloads (webhooks, third-party APIs, provider tool schemas). | instructions |
 
-### 10. **Validator** (Fact-Checker, Source Assessor & Knowledge Gatekeeper; advisory in V1, `specs/040`)
+### 10. **Validator** (Fact-Checker, Source Assessor & Knowledge Gatekeeper; it only asks, the daemon decides by `[validator] mode`, `specs/040`, `specs/100`)
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
 | `fact-validation` | Reports whether a claim has independent, reputable corroboration, and what it would conclude; never writes *validated*. Also usable by the scout and orchestrator. | instructions |
 
-### 11. **Administrator** (Process Topology, Delivery Systems & Council Parliamentarian, `specs/067`)
+### 11. **Administrator** (Workspace Administration, `specs/067`, `specs/069`; narrowed by `specs/124` §4)
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
-| `work-breakdown-structures` | Decompose complex, ambiguous epics into Mutually Exclusive, Collectively Exhaustive (MECE) task hierarchies. | instructions |
-| `critical-path-sequencing` | Sequence task dependency DAGs, calculate float and critical path bottlenecks, and balance Little's Law WIP limits. | instructions |
-| `council-parliamentarian` | Audit multi-agent Council debates for procedural compliance with REVIEW.md, extract irreconcilable contentions, and structure operator tie-breaker cards. | instructions |
+| `workspace-administration` | Diagnose workspace health, endpoints, connectors and project scopes with `inspect_system`, and propose governed changes with `propose_admin_action`. | instructions |
 
-### 12. **Assistant** (Executive Leverage, Comms Triage & Calendar Ergonomics, `specs/067`)
+### 12. **Assistant** (Briefings, Transcript Actions & Triage of What It Is Given, `specs/067`)
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
 | `executive-briefing-distillation` | Distill complex operational context, incidents, and multi-channel communications into top-down BLUF briefings and binary decision cards. | instructions |
-| `transcript-action-extraction` | Forensically extract actionable commitments from meeting and conversation transcripts, eliminating hallucinated consensus and enforcing TRIAD ownership. | instructions |
+| `transcript-action-extraction` | Extract commitments from a transcript, each with owner, deliverable, due date, the verbatim line it rests on and the speaker; no invented consensus. | instructions |
 
-### 13. **Advocate** (Human-Centered Design, Behavioral Psychology & Joy Optimization, `specs/067`)
+### 13. **Advocate** (Simulated Walkthroughs, Accessibility & Joy, `specs/067`; every finding is simulated, not observed)
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
-| `persona-simulation` | Model goal-directed user personas, Jobs to Be Done (JTBD) Job Stories, and cognitive walkthrough scenarios. | instructions |
 | `user-joy-heuristics` | Audit software interfaces, TUI screens, and CLI interactions against emotional design levels, Kahneman's Peak-End Rule, and Nielsen's heuristics to maximize user joy and eliminate friction. | instructions |
-| `cognitive-walkthrough` | Perform structured 4-question cognitive walkthroughs on CLI commands, TUI screens, and user workflows to identify mental model mismatches. | instructions |
+| `cognitive-walkthrough` | Name a persona and its job story, then walk a command, screen or workflow with the four walkthrough questions; each finding points at a screen or snapshot (carries the former `persona-simulation`). | instructions |
+| `accessibility-audit` | Audit a screen or a command's output for reduce motion, color as the only carrier of meaning, contrast, keyboard reach, narrow widths and plain text. | instructions |
 
 ### Any role (loaded on demand; in no role's manifest)
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
+| `work-breakdown-structures` | Decompose complex, ambiguous epics into Mutually Exclusive, Collectively Exhaustive (MECE) task hierarchies. Its frontmatter authorizes the orchestrator. | instructions |
+| `critical-path-sequencing` | Sequence task dependency DAGs, calculate float and critical path bottlenecks, and balance Little's Law WIP limits. Its frontmatter authorizes the strategist. | instructions |
 | `reading-labels` | How far to rely on a search result from its label (who wrote it, whether it was checked), by task; leads with the claim rule (`specs/109` §12). | instructions |
 
 ---

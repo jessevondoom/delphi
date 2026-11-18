@@ -807,11 +807,11 @@ Commands that sign show the exact bytes and want the card's code typed at a term
 Print the command reference or a man page.
 
 ```
-  delphi docs cli | man | catalog [--repo <dir>] | coverage
+  delphi docs cli | man | catalog [--repo <dir>] | execute-names [--repo <dir>] | coverage
   delphi docs ecosystem [--repo <dir>] --check | --write
 ```
 
-Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff; `catalog` lists the built-in roles and skills from their manifests (docs/reference/catalog.md), read from a checkout. `coverage` is Markdown (docs/reference/harness-coverage.md): the disposition of every flag and command of the claude, agy and codex CLIs, from the manifests Delphi checks against each CLI's --help (specs/046). `ecosystem --check` fails when the plugin and marketplace files (`ecosystem/`, `.claude-plugin/marketplace.json`) differ from what this release generates; `--write` regenerates them (specs/071).
+Generated from the table behind --help, so it is never out of date. `cli` is Markdown (it is docs/reference/cli.md); `man` is roff; `catalog` lists the built-in roles and skills from their manifests (docs/reference/catalog.md), read from a checkout. `execute-names` lists every `execute` name of the built-in roles with what grants it: the daemon, a host only, or nothing (docs/reference/execute-names.md; specs/124). `coverage` is Markdown (docs/reference/harness-coverage.md): the disposition of every flag and command of the claude, agy and codex CLIs, from the manifests Delphi checks against each CLI's --help (specs/046). `ecosystem --check` fails when the plugin and marketplace files (`ecosystem/`, `.claude-plugin/marketplace.json`) differ from what this release generates; `--write` regenerates them (specs/071).
 
 ### `delphi completions`
 

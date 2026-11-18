@@ -453,7 +453,9 @@ mod tests {
         assert_eq!(format!("{} cases: {counts:?}", cases.len()), BRIEFING_COUNTS);
     }
 
-    const BRIEFING_COUNTS: &str = "40 cases: {\"council_open\": 1, \"get_agent\": 20, \"request_help\": 1, \"roster: 1 role(s)\": 20, \"roster: orchestrator alone\": 20}";
+    // Counted again for `specs/124` S2, which rewrote the role lines and skills of the administrator, the assistant and the advocate:
+    // 21 of 40 now name a role (20 before). The work-breakdown case, once the administrator's, falls to the orchestrator alone.
+    const BRIEFING_COUNTS: &str = "40 cases: {\"council_open\": 1, \"get_agent\": 21, \"request_help\": 1, \"roster: 1 role(s)\": 21, \"roster: orchestrator alone\": 19}";
 
     fn q(text: &str) -> Query<'_> {
         Query { text, domain: None, role: None, limit: 3 }

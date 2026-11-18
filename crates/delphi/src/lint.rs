@@ -639,6 +639,13 @@ pub fn manifest_errors(fm: &Mapping, dir: &str) -> Vec<String> {
                     errs.push(e);
                 }
             }
+            // Spec 124 §3 item 3: a name is real only when the one list beside the host capability map knows it. The check can
+            // only refuse: it grants nothing, and a name enters the list in the same change as the tool that grants it.
+            for name in seq_strs(s.get(Value::String("execute".into()))) {
+                if delphi_engine::mcp_packs::execute_name(&name).is_none() {
+                    errs.push(format!("default_access_scope.execute names `{}`, which nothing grants: remove it, or add the tool and its entry in EXECUTE_NAMES (crates/delphi-engine/src/mcp_packs.rs) in the same change (specs/124 §3)", name));
+                }
+            }
         }
     }
     if string_seq(fm.get(Value::String("authorized_skills".into()))).is_none() {
@@ -1126,6 +1133,19 @@ mod tests {
     }
 
     // specs/098 §3.2: an optional `locus` on a role or a skill names where it runs, in a word we know.
+    // Spec 124 §3 item 3 and AC-1: an `execute` name outside the one known list fails; a known one, or none, passes.
+    #[test]
+    fn an_execute_name_nothing_grants_fails_the_manifest() {
+        let with = |names: &str| frontmatter_of(&BUILDER.replace("execute: ['test-runner']", &format!("execute: [{names}]"))).unwrap();
+        assert!(manifest_errors(&with("'test-runner', 'shell-worktree-scoped'"), "builder").is_empty());
+        assert!(manifest_errors(&with(""), "builder").is_empty(), "a role may list none");
+        for gone in ["scope-analyzer", "gh-cli-scoped", "council-barrier", "Shell-Worktree-Scoped", "shell"] {
+            let errs = manifest_errors(&with(&format!("'test-runner', '{gone}'")), "builder");
+            assert!(errs.len() == 1 && errs[0].contains(&format!("names `{gone}`, which nothing grants")), "{gone}: {errs:?}");
+            assert!(manifest_errors(&with(&format!("'{gone}'")), "custom/builder").iter().any(|e| e.contains("which nothing grants")), "an override is held to the same list");
+        }
+    }
+
     #[test]
     fn locus_is_optional_and_checked_on_roles_and_skills() {
         let role = |v: &str| frontmatter_of(&BUILDER.replace("cognitive_profile: code-craft\n", &format!("cognitive_profile: code-craft\nlocus: {}\n", v))).unwrap();

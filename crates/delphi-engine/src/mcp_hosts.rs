@@ -252,9 +252,9 @@ const ROLE_LINES: &[(&str, &str)] = &[
     ("investigator", "Precision Researcher, Bug Tracker & Benchmark Specialist"),
     ("writer", "Documentation Architect, Technical Writer & Clarity Synthesizer"),
     ("validator", "Fact-Checker, Source Assessor & Knowledge Gatekeeper"),
-    ("administrator", "Process Topology, Delivery Sequencer & Council Parliamentarian"),
-    ("assistant", "Executive Assistant, Comms Triage & Operator Leverage Specialist"),
-    ("advocate", "User Experience Advocate, Behavioral Psychologist & Joy Specialist"),
+    ("administrator", "Workspace Administrator: Health, Endpoints, Connectors & Project Setup"),
+    ("assistant", "Executive Assistant: Briefings, Transcript Actions & Triage of What It Is Given"),
+    ("advocate", "User Experience Advocate: Simulated Walkthroughs, Accessibility & Joy"),
 ];
 
 /// The roles that get a worker subagent file (spec 106 §4 item 1): every servable role whose locus is `host` or `either`, and whether

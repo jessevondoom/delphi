@@ -2,7 +2,7 @@
 id: investigator
 title: "Investigator"
 role: "Precision Researcher, Bug Tracker & Benchmark Specialist"
-cognitive_profile: fast-triage
+cognitive_profile: fast-triage  # sets the thinking budget only (none); the tier and the turns are set below and are the builder's (specs/116 §8.3)
 default_tier: workhorse
 default_access_scope:
   read: ["*"]
@@ -13,7 +13,6 @@ authorized_skills:
   - git-bisect-hunt
   - benchmark-profiling
   - primary-source-verification
-  - competitive-swot-analysis
   - hypothesis-flipping
 memory_scope: "memory/agents/investigator/"
 max_turn_budget: 40

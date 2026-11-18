@@ -27,6 +27,8 @@ required_permissions:
 ---
 # GitHub Operations
 
+> **Not available in this build (`specs/124` §4):** the messenger holds no `gh`, webhook, API-client or MCP tool. Use these steps to draft what a person will run or send, under `missions/**/comms/**`; never report a step as done.
+
 Reading is routine. Writing to GitHub is visible to other people and hard to undo.
 
 ## When to use

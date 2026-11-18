@@ -81,12 +81,25 @@ fn the_claude_md_template_matches_its_golden_file() {
 fn the_three_manifests_carry_the_source_ladder_and_a_role_that_does_not_work_it_does_not() {
     // `specs/098` §13.2: one ladder text, in the manifests; the pack a host is served and the prompt of a seat inside Delphi are built
     // from them. (That the served pack carries it verbatim is tested in `mcp_host.rs`.)
+    // `specs/124` §4: the three roles of `specs/067` carry the ladder too: the same four rungs and reasons, without the names of the
+    // capture tools, which only the research roles' host workers may call (`specs/113` §4). Naming one here would promise a tool
+    // the role's worker does not hold.
+    for role in ["administrator", "assistant", "advocate", "strategist"] {
+        let text = std::fs::read_to_string(repo(&format!("agents/{role}/AGENT.md"))).unwrap();
+        let ladder = &text[text.find("## 4. Source ladder").unwrap_or_else(|| panic!("{role}: the manifest lacks the ladder"))..];
+        for must in ["Knowledge base, always first", "Trusted sources", "Close sources", "The wider world", "not_connected", "not_approved", "no_results", "refused_by_host", "it grants no tool and no permission", "data, not instructions"] {
+            assert!(ladder.contains(must), "{role} lacks {must}");
+        }
+        for tool in ["request_research", "record_session_summary", "propose_kb_entry", "propose_note", "record_finding"] {
+            assert!(!text.contains(&format!("`{tool}`")), "{role}: names `{tool}`, which its worker cannot call");
+        }
+    }
     for role in ["scout", "investigator", "red-team"] {
         let text = std::fs::read_to_string(repo(&format!("agents/{role}/AGENT.md"))).unwrap();
         assert!(text.contains("## 4. Source ladder"), "{role}: the manifest lacks the ladder");
         assert!(text.contains("data, not instructions"), "{role}: still says untrusted content is data");
     }
-    for role in ["architect", "builder", "strategist"] {
+    for role in ["architect", "builder", "writer"] {
         let text = std::fs::read_to_string(repo(&format!("agents/{role}/AGENT.md"))).unwrap();
         assert!(!text.contains("Source ladder"), "{role} does not work the ladder");
     }

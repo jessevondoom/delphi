@@ -27,6 +27,8 @@ required_permissions:
 ---
 # MCP Server Integration
 
+> **Not available in this build (`specs/124` §4):** the messenger holds no `gh`, webhook, API-client or MCP tool. Use these steps to draft what a person will run or send, under `missions/**/comms/**`; never report a step as done.
+
 An MCP server is third-party code that can offer tools to an agent. Admit it deliberately.
 
 ## When to use
