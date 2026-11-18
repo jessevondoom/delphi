@@ -30,7 +30,7 @@ required_permissions:
 
 "It must be fast" and "it must be safe" cannot be built or tested. A scenario says who does what to which part, under which conditions, what the system does, and the number that decides whether that was good enough.
 
-The scenario form, the utility tree and the two kinds of point come from the architecture tradeoff analysis method (ATAM). They were taken from secondary summaries, not from the method's own report. Until the operator ratifies primary sources (spec 124, OD-3), cite no author or report as an authority, and do not call the result an ATAM evaluation: that method has steps and participants this skill does not have.
+The scenario form, the utility tree and the two kinds of point come from the architecture tradeoff analysis method (ATAM). The method is described in Rick Kazman, Mark Klein and Paul Clements, *ATAM: Method for Architecture Evaluation*, CMU/SEI-2000-TR-004 (Software Engineering Institute, August 2000). This text was taken from secondary summaries, not from that report, and has not been checked against it. The operator ratified the report for citation on 2026-11-17 (`specs/124` §16, OD-3 answered); that it exists was confirmed on 2026-11-18 from web search results and recorded in Delphi's knowledge base, not validated. It is cited as a bibliographic reference only. Do not call the result an ATAM evaluation: that method has steps and participants this skill does not have.
 
 ## When to use
 - A spec states a quality goal (speed, availability, security, ease of change, cost in tokens) without a number.

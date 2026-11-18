@@ -102,4 +102,4 @@ The page has all six sections in the layout, in the order above; every alternati
 - Treating this page as evidence. It is a set of choices and claims; the claims are only as good as their sources.
 
 ## Sources
-The order (competitive alternatives, unique attributes, value, best-fit customer, market category) is commonly attributed to April Dunford, and the brand architecture arrangements to David Aaker and Erich Joachimsthaler. This text was written from secondary summaries, not from the primary works, and has not been checked against them. It cites no primary work until the operator ratifies the sources (`specs/124` §12, OD-3).
+The order (competitive alternatives, unique attributes, value, best-fit customer, market category) and the brand architecture arrangements are described in several practitioner sources; none is on the operator's ratified list (`specs/124` §16, OD-3), so no author or work is cited here. This text was written from secondary summaries, not from primary works, and has not been checked against them.

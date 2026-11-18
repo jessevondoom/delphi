@@ -99,4 +99,4 @@ The document has the three sections in the layout, `strategy_trace` reports a co
 - A forecast written as a fact, with no label. No check can see it, and nobody can later say whether it held.
 
 ## Sources
-The kernel (diagnosis, guiding policy, coherent actions) and the bad-strategy signs are commonly attributed to Richard Rumelt. This text was written from secondary summaries, not from the primary work, and has not been checked against it. It cites no primary work until the operator ratifies the sources (`specs/124` §12, OD-3).
+The kernel (diagnosis, guiding policy, coherent actions) and the bad-strategy signs are taken from Richard Rumelt, *Good Strategy/Bad Strategy*. This text was written from secondary summaries, not from the primary work, and has not been checked against it. The operator ratified this work for citation on 2026-11-17 (`specs/124` §16, OD-3 answered). That it exists was confirmed on 2026-11-18 from web search results and recorded in Delphi's knowledge base, not validated; the scout's own research returned no claim. It is cited as a bibliographic reference only: no passage is quoted or relied on.
