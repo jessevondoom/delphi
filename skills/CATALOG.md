@@ -84,6 +84,9 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `divergent-options` | Produces at least three design options by default (conventional, a named constraint removed, a named method), each with a test, and guards against an untested layer of abstraction (`specs/124` §7). | instructions |
 | `quality-scenarios` | Turns a quality goal into six-part scenarios with a measure, ranks them in a utility tree, and lists sensitivity points and tradeoff points (`specs/124` §8). | instructions |
 | `adr-authoring` | Records one architecture decision: context, options, choice, accepted drawbacks, a one-way or two-way tag and a reversal trigger (`specs/124` §8). | instructions |
+| `fitness-functions` | For each invariant a spec states, names the automated check that would fail when it erodes and the role that owns it (`specs/124` §10). | instructions |
+| `spec-premortem` | Before ratification, assumes the design failed and lists the most likely causes, their early signs and the change to the spec (`specs/124` §10). | instructions |
+| `boundary-design` | Names bounded contexts, their terms and the contract at each boundary, behind a guard against dividing a small, data-shaped domain (`specs/124` §10). | instructions |
 
 ### 4. **Investigator** (Precision Hunter, Bug Tracker & Benchmark Specialist)
 | Skill | Purpose | Backing |

@@ -6,5 +6,10 @@
 ["architect", "Mark which decisions in the cache design are sensitivity points and which are tradeoff points for latency against freshness.", "quality-scenarios"],
 ["architect", "We chose the append-only log. Record that architecture decision with its context, the accepted drawbacks and a reversal trigger.", "adr-authoring"],
 ["architect", "This choice of file format will be costly to undo. Record the decision and tag it one-way or two-way.", "adr-authoring"],
+["architect", "The spec states that a role never approves its own action. Name the automated check that would fail when that invariant erodes, and the role that owns it.", "fitness-functions"],
+["architect", "This spec says the full pack must always stay byte for byte the same. Which check would fail if that stopped being true?", "fitness-functions"],
+["architect", "The draft spec goes to review tomorrow. Assume it shipped and failed, and list the likely causes and their early signs.", "spec-premortem"],
+["architect", "The word session means two things in the daemon and in the console. Name the bounded contexts and the contract at the boundary.", "boundary-design"],
+["architect", "Is this settings domain of three record types large enough to need bounded contexts at all?", "boundary-design"],
 ["architect", "What is today's date?", null]
 ]
