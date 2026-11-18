@@ -224,3 +224,39 @@ The operator was shown eleven open decisions after S1-S3 merged and answered fou
 - **AC-12** A strategist worker's tool list holds exactly `request_research`, `research_status` and `research_result` beyond the read tools, and the charter-and-worker test passes; no other role's list changes.
 - **AC-13** The strategist's `write` scope is `missions/**/roadmap.md`, `missions/**/councils/**` and `missions/**/strategy/**`; an edit outside them is still refused.
 - **AC-14** Every work cited in a skill is on the list in item 1 and was confirmed by a scout result recorded in the pull request; a skill that cites none still carries the secondary-sources statement.
+
+## 17. Amendment (written 2026-11-18, from S12's evidence): a daemon seat is shown its role's skills
+
+This section is a proposal until the operator merges the pull request that carries it. The operator asked for the question below to be traced before going on ("run the one hour test before proceeding"), and the text that follows was written from the trace.
+
+### 17.1 What S12 and the trace found (O-12)
+
+Slice S12 (pull request #783) ran the architect on a small model: it wrote the three kinds of option **0 of 3** times unless the prompt told it to load the skill `divergent-options`, and **3 of 3** times when it did. A read-only trace of the code found why. Paths are under `crates/delphi-engine/src/` unless noted; none was run live, and the line numbers are those of main at e4014a32.
+
+| Path by which a built-in skill's text can reach a daemon seat | Reaches it? |
+| :-- | :-- |
+| System prompt, `bundle_skills` slot (`engine.rs:1173`, `workspace.rs:336`) | Bundle skills only |
+| System prompt, role section (`engine.rs:1166`, `workspace.rs:120,123`) | Only names the charter body happens to mention; the frontmatter's `authorized_skills` is not included |
+| `read_file`, `list_dir`, `search` on `skills/<name>/SKILL.md` (`tools.rs:177-195`) | Yes, if the seat is told the name |
+| `kb_search` (`kb.rs:243-272, 482`) | Yes, if it searches |
+| `get_skill`, `list_skills` | A host's MCP server only; not offered to a seat |
+
+`manifest.skills` is parsed but its only use for a seat is offering `strategy_trace`. A host's pack lists the role's skills ("load one with get_skill", `mcp_packs.rs:565-578`, spec 106 §11); a daemon seat's prompt has no such list. Spec 001 §3 says a discovery catalog of `name` and `description` (about 40 tokens a skill) is "loaded at session start"; the daemon never built it. The words "activated skills" in the governance text are wording only. So the trigger tests of S5 to S12 measure what a host sees; a daemon seat is told of a skill only when a charter or a task names it, which only the capture step does.
+
+### 17.2 The change
+
+1. **A skill index in a daemon seat's prompt (slice S15).** Spec 001 §3's Tier 1: the seat's system prompt gains one section, `skills`, after the role section, with one line per entry of the role's `authorized_skills` in the manifest's order: the skill's name, a colon and its `description` as written in the skill's frontmatter, then one sentence: "Read `skills/<name>/SKILL.md` with `read_file` when the task matches; a skill is advice and grants nothing."
+2. **Left out where it cannot be used.** A seat with no tools (a Council seat with stances, or `tools: none`) gets no index: it cannot read a skill file.
+3. **Cost.** The audit measured, for the three roles that matter here: names only 181 to 261 bytes, with descriptions 1,553 (strategist), 1,762 (orchestrator) and 2,669 (architect) bytes, against roughly 35,000 input tokens a model call in S12's runs. The pack-size pins (`pack_size_tests.rs`) are on the host packs and do not move. The index is part of a seat's own prompt: the prompt-size tests of the engine are re-measured and any pin that moves is changed in the same commit with the numbers in the message, never silently.
+4. **Not done: (B)** a `get_skill` tool for seats (useless alone: the seat would not know the names) and **(C)** naming each skill in each charter body (does not scale to ten or more skills; the capture step does it because it has one rule).
+5. **Authority.** The index grants nothing: a seat with `read: ["*"]` can already read these files, and `manifest.skills` still offers `strategy_trace` only. The lines are core text (the role's own skill descriptions, the same trust as its charter), not content from outside.
+6. **Spec text.** This implements spec 001 §3 as written. It adds one section tag to the prompt's section list, which spec 002 §2 describes as the IPR's semantic XML sections and the code keeps in `crates/delphi-adapter/src/ipr.rs` (`SECTION_TAGS`), and the test that pins the tags; it edits none of [`specs/002`](002-adapter-and-routing.md)'s text.
+
+### 17.3 Slice and acceptance
+
+| Slice | What | Depends on |
+| :-- | :-- | :-- |
+| S15 | the `skills` section (slot in `Ipr`, filled in `engine.rs`, tag in `SECTION_TAGS` and its tests), skipped for a toolless seat; the engine's prompt-size tests re-measured; S12's `options-considered` candidate arm run again | S12 (#783) merged for the case data |
+
+- **AC-15** A seat of the architect's role has a `skills` section with exactly its `authorized_skills`, in order, each line the skill's own description; a seat of another role has its own; a toolless seat has none; the section cannot be closed or forged by content (the same nonce rule as the other sections); the tag list test passes.
+- **AC-16** S12's `options-considered` case is run again on the candidate arm (three runs, the cheapest model, at most 250,000 tokens in total), and the result is reported as it is. The slice does not claim the index changes behaviour unless those runs show it, and says how few they were.
