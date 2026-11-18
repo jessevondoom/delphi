@@ -114,9 +114,11 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `scope-creep-detection` | Enforces **The scope audit**: flags gold-plating or unapproved scope expansion. | instructions |
 | `risk-roi-analysis` | Evaluates effort and risk against expected payoff and opportunity cost. | `templates/risk-roi-brief.md` |
 | `strategic-pattern-matching` | Maps challenges to military precedents, business cases, and asymmetric maneuvers. | instructions |
-| `competitive-swot-analysis` | Evaluates competitive dynamics, platform bets, and moats via SWOT and Wardley mapping. | instructions |
 | `strategy-kernel` | A strategy on one page: diagnosis with a falsifier, guiding policies, coherent actions; a bad-strategy checklist. | the `strategy_trace` tool |
 | `strategy-cascade` | Five choices from aspiration to management systems, then tactics and owned actions with a measure and a stop-doing. | the `strategy_trace` tool |
+| `positioning-and-product-strategy` | Positioning from competitive alternatives, unique attributes, value and the best-fit customer, before messaging; brand architecture; a vision to strategy to roadmap review that flags a roadmap that is a list of features. | instructions |
+| `advantage-analysis` | Tests each claimed source of durable advantage for a benefit, a barrier and evidence; maps how components evolve; eliminate, reduce, raise, create. Replaces the retired SWOT skill (`specs/124` §9). | instructions |
+| `scenario-and-premortem` | At least three scenarios, each with a dated tripwire, and a premortem on the chosen strategy. | instructions |
 
 ### 7. **Red-Team** (Red Team, Adversarial Critic & PR Security Auditor)
 | Skill | Purpose | Backing |

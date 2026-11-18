@@ -201,8 +201,7 @@ fn builtin_skills(tree: &Tree) -> Vec<(String, String)> {
 /// from spec 124 onward); the old ones are not retrofitted here. A lint cannot ask the history how old a directory is, so the
 /// old ones are named. Give one a "Done when" section and delete its entry in the same change: a test fails on an entry that
 /// no longer needs to be here, so this list only shrinks.
-const DONE_WHEN_EXEMPT: [&str; 17] = [
-    "competitive-swot-analysis",
+const DONE_WHEN_EXEMPT: [&str; 16] = [
     "critical-path-sequencing",
     "delphi-attribution",
     "dual-horizon-search",

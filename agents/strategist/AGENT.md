@@ -14,9 +14,11 @@ authorized_skills:
   - scope-creep-detection
   - risk-roi-analysis
   - strategic-pattern-matching
-  - competitive-swot-analysis
   - strategy-kernel
   - strategy-cascade
+  - positioning-and-product-strategy
+  - advantage-analysis
+  - scenario-and-premortem
 memory_scope: "memory/agents/strategist/"
 max_turn_budget: 20
 ---
