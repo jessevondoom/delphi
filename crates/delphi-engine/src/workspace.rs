@@ -533,6 +533,36 @@ pub(crate) mod tests {
         assert!(messenger.body.contains("**It sends nothing.**") && messenger.body.contains("drafted, not sent"));
     }
 
+    // `specs/124` §16 item 2 (AC-13): the strategist's write scope is its roadmap, its councils and a strategy folder, and the path
+    // guard built from the loaded manifest (`Engine::guard_for` copies `write` as it is) lets it write a strategy file and nothing
+    // outside those three. No other role gains the path: only the orchestrator, whose scope is `missions/**`, already held it.
+    #[test]
+    fn the_strategist_writes_a_strategy_file_and_nothing_outside_its_three_paths() {
+        use delphi_core::pathguard::{Access, Guard, Zones};
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+        let guard = |m: &AgentManifest| Guard {
+            zones: Zones { local: ws.dir.join("local"), team: ws.dir.join("team"), base: ws.dir.join("base"), ratified: ws.dir.join("local/ratified"), worktree: None, projects: vec![], bundles: vec![], payload: None },
+            role: m.id.clone(),
+            read_globs: m.read.clone(),
+            write_globs: m.write.clone(),
+            protected: Default::default(),
+        };
+        let strategist = ws.load_manifest("strategist").unwrap();
+        assert_eq!(strategist.write, ["missions/**/roadmap.md", "missions/**/councils/**", "missions/**/strategy/**"]);
+        let g = guard(&strategist);
+        for ok in ["missions/x/strategy/a.md", "missions/x/strategy/deep/b.md", "missions/x/roadmap.md", "missions/x/councils/c1.md"] {
+            assert!(g.check_policy(ok, Access::Write).is_ok(), "the strategist may write {ok}");
+        }
+        for no in ["specs/a.md", "missions/x/specs/a.md", "memory/a.md", "memory/agents/strategist/lessons.md", "missions/x/research/a.md", "missions/x/notes.md", "strategy/a.md", "context/heuristics.md", "agents/strategist/AGENT.md"] {
+            assert!(g.check_policy(no, Access::Write).is_err(), "the strategist may not write {no}");
+        }
+        for role in ["architect", "builder", "red-team", "scout", "investigator", "writer", "messenger", "validator", "administrator", "assistant", "advocate"] {
+            let m = ws.load_manifest(role).unwrap();
+            assert!(guard(&m).check_policy("missions/x/strategy/a.md", Access::Write).is_err(), "{role} may not write a strategy file");
+        }
+    }
+
     #[test]
     fn manifests_load_from_ratified_copies_with_their_scopes() {
         let t = tempfile::tempdir().unwrap();

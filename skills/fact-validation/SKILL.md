@@ -3,8 +3,6 @@ name: fact-validation
 description: "Advisory: report whether a claim is true by finding independent, reputable corroboration, and what you would conclude. Writes nothing; never marks a claim validated."
 authorized_agents:
   - validator
-  - scout
-  - orchestrator
 input_schema:
   type: object
   required: ["claim", "needed_for"]

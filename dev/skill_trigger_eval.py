@@ -75,7 +75,8 @@ def audit():
         text = (ROOT / "skills" / n / "SKILL.md").read_text().split("\n---\n", 1)[0]
         agents = set(re.findall(r"^  - ([a-z-]+)$", text.split("authorized_agents:")[1].split("input_schema:")[0], re.M))
         listed = {r for r, names in rs.items() if n in names}
-        if n != "tui-design" and agents != listed:
+        # The three on-demand skills are in no manifest on purpose (ON_DEMAND_SKILLS in crates/delphi/src/lint.rs).
+        if n not in ("reading-labels", "work-breakdown-structures", "critical-path-sequencing") and agents != listed:
             bad += 1
             print(f"[roles] {n}: skill authorizes {sorted(agents)}, agents list it for {sorted(listed)}")
     print("audit: " + ("clean" if not bad else f"{bad} issue(s)"))

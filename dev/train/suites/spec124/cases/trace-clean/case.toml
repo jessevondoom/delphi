@@ -1,0 +1,35 @@
+# Spec 124 S12 (AC-4): a strategy whose every link exists. `strategy_trace` must report nothing.
+# Two arms. No model: `crates/delphi/tests/spec124_evidence.rs` runs the tool's own function on fixture/strategy.md and compares
+# with expect.toml, exactly. With a model (`delphi train run`): the strategist is asked to run the tool and quote it; the
+# checks below read its answer. Run on one model, 2026-11-18 (dev/train/spec124/EVIDENCE.md).
+id = "trace-clean"
+suite = "spec124"
+kind = "task"
+role = "strategist"
+split = "dev"
+tags = ["spec-124", "strategy-trace", "clean"]
+max_cost_usd = 0.5
+timeout_secs = 300
+prompt = "Run the strategy_trace tool on @project/repo/strategy.md. Then report what it found: quote every finding line exactly as the tool printed it, or, if it printed none, quote its first line. Do not edit the file and do not add findings of your own."
+
+[[check]]
+kind = "outcome"
+is = "done"
+
+[[check]]
+kind = "event_count"
+event = "strategy.trace"
+at_least = 1
+
+[[check]]
+kind = "text_matches"
+pattern = 'the trace is complete'
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-[A-Z]{3}-\d\d \(P2\)'
+present = false
+
+[[check]]
+kind = "file_unchanged"
+path = "strategy.md"

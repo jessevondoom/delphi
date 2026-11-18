@@ -4,7 +4,6 @@ description: "Design calm, borderless terminal interfaces: decks, headers, badge
 authorized_agents:
   - architect
   - builder
-  - orchestrator
 input_schema:
   type: object
   properties:

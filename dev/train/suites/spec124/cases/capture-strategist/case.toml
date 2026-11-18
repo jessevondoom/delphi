@@ -1,0 +1,38 @@
+# Spec 124 S12 (AC-3): the operator corrects the strategist. Its charter's capture step says to stage one note saying what
+# was wrong; a staged note is a `learn.note` event and ratifies nothing.
+# Two arms. No model: `spec_124_s12_the_capture_cases_…` in crates/delphi-engine/src/engine.rs reads this file's prompt and its
+# `learn.note` count, and runs the role with a scripted model that stages no note, one note and two notes (script.toml): only
+# one note meets the count, no lesson or heuristic changes and no system prompt holds the note. With a model
+# (`delphi train run`): the checks below. Run on one model, 2026-11-18
+# (dev/train/spec124/EVIDENCE.md).
+id = "capture-strategist"
+suite = "spec124"
+kind = "task"
+role = "strategist"
+split = "dev"
+tags = ["spec-124", "capture"]
+max_cost_usd = 0.5
+timeout_secs = 300
+prompt = "The operator corrects you. Your forecast in @project/repo/strategy.md, that renewals would rise after the reminder change, was wrong: renewals fell, and nothing in the forecast would have shown it failing. Say in two sentences what was wrong with how the forecast was written. Do not edit the file."
+
+[[check]]
+kind = "outcome"
+is = "done"
+
+[[check]]
+kind = "event_count"
+event = "learn.note"
+eq = 1
+
+# Nothing was proposed as a rule and nothing was ratified: a note is staged only (spec 124 §5 item 3).
+[[check]]
+kind = "event_absent"
+event = "learn.proposed"
+
+[[check]]
+kind = "event_absent"
+event = "learn.proposal_resolved"
+
+[[check]]
+kind = "file_unchanged"
+path = "strategy.md"

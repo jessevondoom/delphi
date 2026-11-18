@@ -1,0 +1,6 @@
+# The notes a scripted model stages in the no-model arm (crates/delphi-engine/src/engine.rs). Outside fixture/: no seat sees it.
+# Each is within the `note` tool's limits (280 characters, kind `pitfall`).
+notes = [
+  "the renewal forecast had no tripwire, so nobody could say it had failed when renewals fell",
+  "the renewal forecast named no date, so it could never be checked at retro",
+]

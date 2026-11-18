@@ -106,6 +106,8 @@ pub fn run(tree: &Tree) -> Report {
     check_spec_group_lines(tree, &mut r);
     check_reviewed_by(tree, &mut r);
     check_options_considered(tree, &mut r);
+    check_skill_roles(tree, &mut r);
+    check_done_when(tree, &mut r);
     r
 }
 
@@ -143,6 +145,106 @@ fn check_options_considered(tree: &Tree, r: &mut Report) {
         }
         if !strip_fences(&doc.body).lines().any(|l| l.starts_with('#') && l.to_lowercase().contains("options considered")) {
             r.push(OPTIONS_CONSIDERED_LEVEL, "spec-options", path.clone(), format!("a spec numbered above {OPTIONS_CONSIDERED_EXEMPT_THROUGH} needs an \"Options considered\" section: at least three designs, one conventional, one that removes a named constraint and one by a named method, each with how it would be tested (spec 124 section 7; the `divergent-options` skill)"));
+        }
+    }
+}
+
+// ── a skill's roles agree with the manifests (specs/124 O-8) ─────────────────
+
+/// Skills that authorize roles and that no manifest lists, on purpose: a role's `authorized_skills` is what puts a skill in its
+/// skill index and in the text a task is routed by, and these are read on demand instead (`get_skill`). A skill must name at
+/// least one role, so its list cannot be empty; this list is the other way to say "in no manifest".
+/// - `reading-labels` authorizes every role: each search answer points at it (`specs/109` section 12). Listing it in thirteen
+///   manifests would widen every role's skill list and routing text for a skill that is about results, not about a role's job.
+/// - `work-breakdown-structures` and `critical-path-sequencing` lost their only listing role when spec 124 S2 narrowed the
+///   administrator. Giving them to the orchestrator or the strategist would widen that role, which is the operator's call.
+///
+/// To take a name off: add the skill to the manifests of the roles it authorizes (or retire it), then delete the entry. The
+/// check fails an entry that a manifest does list, so the two cannot be mixed.
+const ON_DEMAND_SKILLS: [&str; 3] = ["reading-labels", "work-breakdown-structures", "critical-path-sequencing"];
+
+/// The built-in roles a built-in skill authorizes each list it in `authorized_skills`. The other direction (a manifest lists a
+/// skill that does not authorize it) is a `manifest` failure already. Source repo only: in a workspace an override may narrow a
+/// role's list, and a custom skill is attached by the operator, so disagreement there is not an error.
+fn check_skill_roles(tree: &Tree, r: &mut Report) {
+    if tree.mode != Mode::Repo {
+        return;
+    }
+    let listed = |role: &str, skill: &str| load_fm(tree, &format!("agents/{role}/AGENT.md")).is_some_and(|m| str_list(&m, "authorized_skills").iter().any(|s| s == skill));
+    for (path, name) in builtin_skills(tree) {
+        let Some(fm) = load_fm(tree, &path) else { continue };
+        let roles = str_list(&fm, "authorized_agents");
+        if ON_DEMAND_SKILLS.contains(&name.as_str()) {
+            let by: Vec<&str> = roles.iter().filter(|role| listed(role, &name)).map(String::as_str).collect();
+            if !by.is_empty() {
+                r.fail("skill-roles", path.clone(), format!("`{name}` is an on-demand skill (in no manifest) and is listed by {}: remove it from `ON_DEMAND_SKILLS` in crates/delphi/src/lint.rs, or from the manifest (specs/124 O-8)", by.join(", ")));
+            }
+            continue;
+        }
+        // A role with no manifest here is not this check's finding (the `skill` check names an unknown role).
+        for role in roles.iter().filter(|role| tree.files.contains_key(&format!("agents/{role}/AGENT.md"))) {
+            if !listed(role, &name) {
+                r.fail("skill-roles", path.clone(), format!("authorizes `{role}`, whose manifest does not list `{name}` in authorized_skills: remove the role here, or add the skill to agents/{role}/AGENT.md, which widens that role's skill list (specs/124 O-8)"));
+            }
+        }
+    }
+}
+
+/// The built-in skill packages of the source repo: (path, name) for `skills/<name>/SKILL.md`.
+fn builtin_skills(tree: &Tree) -> Vec<(String, String)> {
+    tree.files.keys().filter_map(|k| k.strip_prefix("skills/").and_then(|x| x.strip_suffix("/SKILL.md")).filter(|n| !n.contains('/')).map(|n| (k.clone(), n.to_string()))).collect()
+}
+
+// ── "Done when" in a new skill (specs/124 O-8) ───────────────────────────────
+
+/// The skills that predate the rule and have no "Done when" section. Spec 124 asks the section of new skills only (those made
+/// from spec 124 onward); the old ones are not retrofitted here. A lint cannot ask the history how old a directory is, so the
+/// old ones are named. Give one a "Done when" section and delete its entry in the same change: a test fails on an entry that
+/// no longer needs to be here, so this list only shrinks.
+const DONE_WHEN_EXEMPT: [&str; 16] = [
+    "critical-path-sequencing",
+    "delphi-attribution",
+    "dual-horizon-search",
+    "encyclopedia-synthesis",
+    "hypothesis-flipping",
+    "oblique-strategies",
+    "reading-labels",
+    "socratic-interrogation",
+    "spec-driven-build",
+    "strategic-pattern-matching",
+    "systems-pattern-catalog",
+    "tonal-calibration",
+    "tui-design",
+    "user-joy-heuristics",
+    "work-breakdown-structures",
+    "workspace-administration",
+];
+/// What a missing section costs: a warning, as the "Options considered" rule started (see [`OPTIONS_CONSIDERED_LEVEL`]). Spec 124
+/// sets no date for making it an error. Changing this to `Level::Fail` is one line, in a change that also updates the test
+/// `the_done_when_rule_is_a_warning_and_the_repo_has_no_finding` and first confirms `delphi lint --repo .` prints no
+/// `skill-done-when` line on main.
+const DONE_WHEN_LEVEL: Level = Level::Warn;
+
+/// Whether a skill body has a heading that says "Done when" (any case, any depth). A line in a fenced block does not count.
+fn has_done_when(body: &str) -> bool {
+    strip_fences(body).lines().any(|l| l.starts_with('#') && l.to_lowercase().contains("done when"))
+}
+
+/// A built-in skill not in [`DONE_WHEN_EXEMPT`] has a "Done when" section: what finished looks like, checkable by someone who
+/// was not there. The check reads the heading only; whether the conditions are good is for review. Source repo only.
+fn check_done_when(tree: &Tree, r: &mut Report) {
+    if tree.mode != Mode::Repo {
+        return;
+    }
+    for (path, name) in builtin_skills(tree) {
+        if DONE_WHEN_EXEMPT.contains(&name.as_str()) {
+            continue;
+        }
+        let text = tree.read(&path).unwrap_or_default();
+        // A skill with no parseable frontmatter is the `skill` check's finding.
+        let Ok(doc) = frontmatter::parse(&text) else { continue };
+        if !has_done_when(&doc.body) {
+            r.push(DONE_WHEN_LEVEL, "skill-done-when", path.clone(), "a skill made from spec 124 onward needs a \"Done when\" section: what finished looks like, checkable by someone who was not there (specs/124 O-8)");
         }
     }
 }
@@ -1111,6 +1213,74 @@ mod tests {
         let real = run(&Tree::from_repo(&root).unwrap());
         let found: Vec<_> = real.findings.iter().filter(|f| f.check == "spec-options").map(|f| f.location.clone()).collect();
         assert!(found.is_empty(), "specs in this repository without the section: {:?}", found);
+    }
+
+    fn skill_md(name: &str, roles: &[&str], body: &str) -> String {
+        format!("---\nname: {name}\ndescription: d\nauthorized_agents: [{}]\ninput_schema: {{type: object}}\noutput_schema: {{type: object}}\nrequired_permissions: []\n---\n# {name}\n{body}\n", roles.join(", "))
+    }
+
+    fn manifest_md(id: &str, skills: &[&str]) -> String {
+        format!("---\nid: {id}\nauthorized_skills: [{}]\n---\nBody\n", skills.join(", "))
+    }
+
+    // specs/124 O-8: a role a skill authorizes lists the skill; an on-demand skill is in no manifest.
+    #[test]
+    fn a_skill_that_authorizes_a_role_whose_manifest_does_not_list_it_fails() {
+        let done = "## Done when\n- x";
+        let (_t, tree) = tree_of(&[
+            ("agents/scout/AGENT.md", &manifest_md("scout", &["agreed", "reading-labels"])),
+            ("agents/writer/AGENT.md", &manifest_md("writer", &["agreed"])),
+            ("skills/agreed/SKILL.md", &skill_md("agreed", &["scout", "writer"], done)),
+            ("skills/one-sided/SKILL.md", &skill_md("one-sided", &["scout", "writer", "builder"], done)),
+            ("skills/reading-labels/SKILL.md", &skill_md("reading-labels", &["scout", "writer"], done)),
+            ("skills/critical-path-sequencing/SKILL.md", &skill_md("critical-path-sequencing", &["writer"], done)),
+            ("skills/custom/mine/SKILL.md", &skill_md("mine", &["scout"], done)),
+        ]);
+        let f = fails(&tree, "skill-roles");
+        assert_eq!(f.len(), 3, "{:?}", f);
+        assert!(f.iter().any(|m| m.starts_with("skills/one-sided/SKILL.md authorizes `scout`")), "{:?}", f);
+        assert!(f.iter().any(|m| m.starts_with("skills/one-sided/SKILL.md authorizes `writer`")), "{:?}", f);
+        assert!(f.iter().any(|m| m.starts_with("skills/reading-labels/SKILL.md") && m.contains("listed by scout")), "an on-demand skill a manifest lists: {:?}", f);
+        assert!(!f.iter().any(|m| m.contains("builder") || m.contains("custom") || m.contains("critical-path")), "a role with no manifest in the tree, a custom skill and an on-demand skill in no manifest are not findings: {:?}", f);
+    }
+
+    #[test]
+    fn the_skill_roles_rule_passes_on_this_repository_and_its_on_demand_list_is_live() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let tree = Tree::from_repo(&root).unwrap();
+        assert!(fails(&tree, "skill-roles").is_empty(), "{:?}", fails(&tree, "skill-roles"));
+        for name in ON_DEMAND_SKILLS {
+            assert!(tree.files.contains_key(&format!("skills/{name}/SKILL.md")), "`{name}` is in ON_DEMAND_SKILLS and is not a skill: delete the entry");
+        }
+        // The check is not vacuous here: it reads the real manifests, and every role has one.
+        assert_eq!(tree.files.keys().filter(|k| k.starts_with("agents/") && k.ends_with("/AGENT.md")).count(), 13);
+    }
+
+    // specs/124 O-8: a skill made from spec 124 onward has a "Done when" section; the older ones are named, not retrofitted.
+    #[test]
+    fn a_new_skill_without_done_when_is_reported_and_an_exempt_one_is_not() {
+        let (_t, tree) = tree_of(&[
+            ("skills/new-with/SKILL.md", &skill_md("new-with", &["scout"], "## 5. Done When\n- x")),
+            ("skills/new-without/SKILL.md", &skill_md("new-without", &["scout"], "- **Done when:** in prose only\n```\n## Done when\n```")),
+            ("skills/tui-design/SKILL.md", &skill_md("tui-design", &["scout"], "no section")),
+            ("skills/custom/mine/SKILL.md", &skill_md("mine", &["scout"], "no section")),
+        ]);
+        let got: Vec<String> = run(&tree).findings.into_iter().filter(|f| f.check == "skill-done-when").map(|f| format!("{:?} {}", f.level, f.location)).collect();
+        assert_eq!(got, vec![format!("{:?} skills/new-without/SKILL.md", DONE_WHEN_LEVEL)], "a heading is needed (prose and a fenced block do not count); an exempt skill and a custom one are not checked");
+    }
+
+    #[test]
+    fn the_done_when_rule_is_a_warning_and_the_repo_has_no_finding() {
+        assert!(DONE_WHEN_LEVEL == Level::Warn, "changing this to Fail is a decision (see the constant); update this test in the same change");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let tree = Tree::from_repo(&root).unwrap();
+        let found: Vec<_> = run(&tree).findings.into_iter().filter(|f| f.check == "skill-done-when").map(|f| f.location).collect();
+        assert!(found.is_empty(), "skills in this repository without the section: {:?}", found);
+        // The exempt list only shrinks: an entry is a real skill that still lacks the section.
+        for name in DONE_WHEN_EXEMPT {
+            let text = tree.read(&format!("skills/{name}/SKILL.md")).unwrap_or_else(|| panic!("`{name}` is in DONE_WHEN_EXEMPT and is not a skill: delete the entry"));
+            assert!(!has_done_when(&frontmatter::parse(&text).unwrap().body), "`{name}` has a \"Done when\" section now: delete its entry from DONE_WHEN_EXEMPT");
+        }
     }
 
     #[test]

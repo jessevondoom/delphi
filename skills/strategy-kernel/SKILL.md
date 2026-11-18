@@ -78,7 +78,7 @@ A statement about what will be true at a later date is a **forecast**. Write it 
 3. Write one to three guiding policies. For each, say what it rules out. Name the diagnosis claims it answers.
 4. Write the actions. Each names its policies, an owner, a measure, and what stops being done to make room.
 5. Run the bad-strategy checklist below and rewrite what it catches.
-6. Run `strategy_trace` on the document: pass `path` when it is in a file you may read, or `text` when it is in your reply. Fix each finding or say why it stands. Its findings are advice; they decide nothing.
+6. Run `strategy_trace` on the document: pass `path` when it is in a file you may read, or `text` when it is in your reply. A strategy file lives at `missions/<id>/strategy/<name>.md`, and `strategy_trace` can be passed that path. Fix each finding or say why it stands. Its findings are advice; they decide nothing.
 7. Report the strategy, the trace result, and the one diagnosis claim you are least sure of.
 
 ## Bad-strategy checklist
