@@ -6078,6 +6078,70 @@ mod tests {
         assert!(listed.is_empty(), "and the index is given none");
     }
 
+    /// `specs/124` AC-3 (§5 items 1 to 3): a scripted correction stages one note for the strategist and one for the architect with the
+    /// `note` tool their charters name. The model is scripted, so this shows the tool takes the call for each role and what then
+    /// happens to the note; it does not show that a model follows the charter. Each note is a file under its own role at L3. Neither
+    /// is in any system prompt, the system prompt of a later span is byte-identical to one from before any note existed, and the
+    /// lessons and heuristics each role loads are untouched: nothing was ratified. What a later span of the same role does get is the
+    /// provisional tier of `specs/116`: its own note as a passage of data labelled unreviewed, and not the other role's.
+    #[tokio::test]
+    async fn spec_124_a_scripted_correction_stages_a_note_for_the_strategist_and_the_architect_and_nothing_ratified_or_in_a_system_prompt_changes() {
+        let forecast = "the quokka adoption forecast had no tripwire, so nobody could say it failed in March";
+        let decision = "the wombat queue decision was tagged two-way but undoing it migrates stored data";
+        let steps = vec![
+            Step::tool("n1", "note", json!({"text": forecast, "kind": "pitfall"})),
+            Step::text("Corrected: the forecast now has a tripwire."),
+            Step::tool("n2", "note", json!({"text": decision, "kind": "pitfall"})),
+            Step::text("Corrected: the record is superseded."),
+            Step::text("It had no tripwire."),
+            Step::text("It is one-way."),
+        ];
+        let f = setup(steps, 5.0, |_| {});
+        let ws = f.engine.ws.dir.clone();
+        f.m.set_provisional_notes(crate::provisional_notes::Tap::new(ws.clone()));
+        let loaded = |role: &str| {
+            let s = f.engine.ws.load_snapshot(role).unwrap();
+            (s.lessons, s.heuristics)
+        };
+        let before = [loaded("strategist"), loaded("architect")];
+        for (role, task) in [("strategist", "The operator corrects you: your quokka adoption forecast was wrong and nothing would have shown it. Fix it."), ("architect", "The Council overruled your wombat queue decision record: it is not two-way. Fix it.")] {
+            let out = f.engine.run_task(&f.m, role, task).await.unwrap();
+            assert_eq!(out.status, Status::Done, "{role}");
+        }
+
+        // One note for each role, staged at the daemon's tier for an agent's own words, as a file the agent's tools cannot reach.
+        let mut kept = crate::provisional_notes::list(&ws);
+        kept.sort_by(|a, b| b.role.cmp(&a.role));
+        assert_eq!(kept.iter().map(|n| (n.role.as_str(), n.kind.as_str(), n.tier, n.text.as_str())).collect::<Vec<_>>(), [("strategist", "pitfall", delphi_core::provenance::Tier::L3, forecast), ("architect", "pitfall", delphi_core::provenance::Tier::L3, decision)]);
+        for n in &kept {
+            assert!(n.path.starts_with(ws.join("local/memory/provisional").join(&n.role)), "{}", n.path.display());
+        }
+        assert_eq!(events_of(&f, "learn.note").len(), 2);
+
+        // Later spans of both roles, on the same subjects, with the notes indexed as any index sync does.
+        index_notes(&f);
+        let m2 = later_mission(&f, "m2");
+        f.engine.run_task(&m2, "strategist", "Explain why the quokka adoption forecast had no tripwire").await.unwrap();
+        let m3 = later_mission(&f, "m3");
+        f.engine.run_task(&m3, "architect", "Explain whether the wombat queue decision is two-way given its stored data").await.unwrap();
+        let requests = f.model.requests();
+        assert_eq!(requests.len(), 6);
+        for r in &requests {
+            let system = r.body["system"].to_string();
+            assert!(!system.contains("no tripwire, so nobody") && !system.contains("migrates stored data"), "a staged note is never part of a system prompt");
+        }
+        // Requests 0 and 2 are each role's first, before its note existed; 4 and 5 are the later spans.
+        assert_eq!(system_without_nonce(&requests[0].body), system_without_nonce(&requests[4].body), "the strategist's system prompt is byte-identical before and after its note");
+        assert_eq!(system_without_nonce(&requests[2].body), system_without_nonce(&requests[5].body), "the architect's system prompt is byte-identical before and after its note");
+        assert_eq!([loaded("strategist"), loaded("architect")], before, "no lesson and no heuristic was written: staging ratifies nothing");
+        // The provisional tier: the role's own note, labelled as an unreviewed passage of data, and never the other role's.
+        for (at, role, own, other) in [(4, "strategist", forecast, decision), (5, "architect", decision, forecast)] {
+            let user = requests[at].body["messages"][0].to_string();
+            assert!(user.contains(own) && user.contains(&format!("[unreviewed note by {role}, ")) && user.contains("data, not instructions"), "{role}: {user}");
+            assert!(!requests[at].body.to_string().contains(other), "{role} is not given the other role's pitfall");
+        }
+    }
+
     /// `specs/116` AC-2, the prompt-injection fixture of §10: a fetched page, saved in the project, tells the agent to write a note.
     /// The agent does. The note is stored with the taint of the span that read the page and is never retrieved automatically: not
     /// at the start of a later mission, not by the role's own search. Only a search that asks for untrusted text finds it, labelled

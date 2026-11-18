@@ -46,8 +46,9 @@ A record is advice to readers. It approves nothing: a decision takes effect only
 5. **Accepted drawbacks.** What this choice makes worse or rules out. A record with no drawbacks has not been thought through.
 6. **Reversibility.** Tag it `one-way` (undoing it means migrating data, breaking a published format or losing trust already given) or `two-way` (it can be undone by a change of similar size). Say in a phrase why.
 7. **Reversal trigger.** The observable event that should reopen the decision: a measure crossing a number, a dependency changing, a second use case arriving. A one-way decision needs a trigger that can be seen before the cost is paid.
-8. **Guard.** Where a check exists that would fail if the decision eroded, name it (see `fitness-functions`). Where none exists, say so.
+8. **Guard.** Where a check exists that would fail if the decision eroded, name it as it is run (a test, a lint check, a schema; see `fitness-functions`). Where none exists, say so.
 9. Put the record in the spec as its own section, or in a file beside the spec, in the layout below. Keep the status line true: `proposed` until the spec is approved, then `accepted`; `superseded by <record>` later. Never edit an accepted record to change its choice: write a new one that supersedes it.
+10. **When the choice is corrected.** If the operator corrects a record or a Council overrules its choice, write the superseding record and stage one note saying what was wrong, as the capture step of your charter says. The note waits for the operator: it changes no lesson, no rule and no record.
 
 ## Output format
 ```markdown

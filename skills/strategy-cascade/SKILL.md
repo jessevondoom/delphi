@@ -87,7 +87,7 @@ A weekly p99 review owned by payments; a budget check in CI.
 2. Write or copy the diagnosis and the guiding policies (`strategy-kernel`). Where to play and how to win are stated again as policies, so the actions can name them.
 3. Under each policy write the tactics: a few, not a backlog.
 4. Turn each tactic into actions. Every action names its policies, an **owner** (a role or a person, not "the team"), a **measure** (what will be observed, and by when), and a **stop doing** (what is dropped to make room).
-5. Run `strategy_trace` (`path` for a file you may read, `text` otherwise). An action with no policy is cut or its choice is written down; a policy with no action is either given one or removed. The tool notes an action with no owner or measure. It does not read the choices, the tactics or the stop-doing: check those by eye.
+5. Run `strategy_trace` (`path` for a file you may read, `text` otherwise). An action with no policy is cut or its choice is written down; a policy with no action is either given one or removed. The tool notes an action with no owner or measure. It does not read the choices, the tactics or the stop-doing: check those by eye. A statement about what will be true at a later date is a forecast: write `Forecast (YYYY-MM-DD): …` on its own line with a `Tripwire:` line under it (an observable that would show it wrong; layout in `strategy-kernel`). The tool reports a labelled forecast with no date or no tripwire.
 6. Report the cascade, the trace result and the choice most likely to be wrong.
 
 ## Done when

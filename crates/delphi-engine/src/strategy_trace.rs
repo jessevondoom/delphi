@@ -28,7 +28,7 @@ const MAX_TEXT_BYTES: usize = 64 * 1024;
 pub(crate) fn def() -> ToolDef {
     ToolDef {
         name: TOOL.into(),
-        description: "Check that a strategy document leads to action. It reads the fixed layout of the `strategy-kernel` skill (`## Diagnosis` with claims `D1…` and a `Falsifier:` each, `## Guiding policies` with `P1 (D1): …`, `## Actions` with `A1 (P1): …`) and reports an action that names no policy, a policy that names no diagnosis, a diagnosis with no falsifier, a policy with no action, a duplicate id and a reference to an id that does not exist. Pass `path` (a file you may read) or `text` (the document itself), not both. Deterministic and free. Findings are advice (P2): they never block anything, and a clean trace says only that the links exist, not that the strategy is good.".into(),
+        description: "Check that a strategy document leads to action. It reads the fixed layout of the `strategy-kernel` skill (`## Diagnosis` with claims `D1…` and a `Falsifier:` each, `## Guiding policies` with `P1 (D1): …`, `## Actions` with `A1 (P1): …`) and reports an action that names no policy, a policy that names no diagnosis, a diagnosis with no falsifier, a policy with no action, a duplicate id and a reference to an id that does not exist. Anywhere in the document, a line labelled `Forecast` must carry a date (`YYYY-MM-DD`) and a `Tripwire:` (an observable that would show it wrong); one without either is reported. Pass `path` (a file you may read) or `text` (the document itself), not both. Deterministic and free. Findings are advice (P2): they never block anything, and a clean trace says only that the links exist, not that the strategy is good.".into(),
         input_schema: json!({"type": "object", "properties": {"path": {"type": "string"}, "text": {"type": "string"}}}),
     }
 }
@@ -37,7 +37,7 @@ pub(crate) fn def() -> ToolDef {
 pub struct Finding {
     /// `TRACE-ACT-01` orphan action; `TRACE-POL-01` unfounded policy; `TRACE-POL-02` policy with no action; `TRACE-DIA-01` diagnosis with no
     /// falsifier; `TRACE-ID-01` duplicate id; `TRACE-REF-01` reference to an id the document does not define; `TRACE-DOC-01` a section of the
-    /// layout is missing or empty.
+    /// layout is missing or empty; `TRACE-FOR-01` a line labelled `Forecast` with no date or no tripwire (`specs/124` §5).
     pub code: &'static str,
     /// Always `P2`: a trace finding advises, it never blocks (`specs/124` §6.2).
     pub level: &'static str,
@@ -95,11 +95,12 @@ struct Item {
     id: String,
     /// The ids in the parentheses after the item's own id, in the order written.
     refs: Vec<String>,
-    /// Named fields found on the item's line or the lines under it (`falsifier`, `owner`, `measure`), when they say something.
+    /// Named fields found on the item's line or the lines under it (`falsifier`, `owner`, `measure`; `tripwire` is read for a
+    /// forecast and means nothing here), when they say something.
     fields: BTreeSet<&'static str>,
 }
 
-const FIELDS: [&str; 3] = ["falsifier", "owner", "measure"];
+const FIELDS: [&str; 4] = ["falsifier", "owner", "measure", "tripwire"];
 /// A field whose whole value is one of these says nothing, and counts as absent.
 const PLACEHOLDERS: [&str; 8] = ["tbd", "todo", "none", "n/a", "na", "?", "-", "unknown"];
 
@@ -257,7 +258,68 @@ pub fn trace(text: &str) -> (Vec<Finding>, Vec<String>) {
             findings.push(Finding::new("TRACE-POL-02", &p.id, "no action carries this policy out".into()));
         }
     }
+    findings.extend(forecasts(text));
     (findings, notes)
+}
+
+/// What follows the label of a line labelled as a forecast: `Forecast: …`, `- **Forecast** (2027-03-31): …`, `` `forecast`: … ``.
+/// `Forecasts are hard` and a heading `## Forecast` are prose, not a label.
+fn forecast_label(bare: &str) -> Option<&str> {
+    let rest = bare.get(..8).filter(|l| l.eq_ignore_ascii_case("forecast")).map(|_| bare[8..].trim_start())?;
+    (rest.starts_with(':') || rest.starts_with('(')).then_some(rest)
+}
+
+/// Does the text name a day, `YYYY-MM-DD`? What follows `tripwire:` is not read: the day a tripwire is looked at is not the day
+/// the forecast is for.
+fn has_date(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let own = lower.find("tripwire:").map_or(lower.as_str(), |at| &lower[..at]);
+    own.split(|c: char| !(c.is_ascii_digit() || c == '-')).any(|w| w.len() == 10 && crate::frontmatter::entry_date_ok(w))
+}
+
+/// `TRACE-FOR-01` (`specs/124` §5 item 1): every line labelled `Forecast`, in any section and outside a code fence, with the lines
+/// written under it (indented deeper, or a `Tripwire:` line), must carry a date and a tripwire that says something. Only a labelled
+/// line is seen: a forecast written as a plain sentence is not found.
+fn forecasts(text: &str) -> Vec<Finding> {
+    let mut out = Vec::new();
+    // The forecast being read: its line number, its indent, and whether a date and a tripwire were found so far.
+    let mut open: Option<(usize, usize, bool, bool)> = None;
+    let mut close = |open: &mut Option<(usize, usize, bool, bool)>| {
+        if let Some((line, _, dated, tripwire)) = open.take() {
+            let missing: Vec<&str> = [(dated, "no date (write `Forecast (YYYY-MM-DD): …`)"), (tripwire, "no tripwire (write `Tripwire: …`, an observable that would show it wrong)")].into_iter().filter(|(has, _)| !has).map(|(_, what)| what).collect();
+            if !missing.is_empty() {
+                out.push(Finding::new("TRACE-FOR-01", &format!("forecast, line {}", line), format!("a forecast with {}", missing.join(" and "))));
+            }
+        }
+    };
+    let mut fenced = false;
+    for (n, line) in text.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fenced = !fenced;
+            close(&mut open);
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let indent = line.len() - t.len();
+        let b = bare(line).replace('`', "");
+        if let Some(rest) = (!t.starts_with('#')).then(|| forecast_label(&b)).flatten() {
+            close(&mut open);
+            open = Some((n + 1, indent, has_date(rest), fields_in(rest).contains(&"tripwire")));
+        } else if let Some((_, at, dated, tripwire)) = open.as_mut() {
+            let is_tripwire = b.get(..9).is_some_and(|l| l.eq_ignore_ascii_case("tripwire:"));
+            if t.is_empty() || t.starts_with('#') || !(indent > *at || is_tripwire) {
+                close(&mut open);
+            } else {
+                *dated |= has_date(&b);
+                *tripwire |= fields_in(&b).contains(&"tripwire");
+            }
+        }
+    }
+    close(&mut open);
+    out
 }
 
 /// What the tool answers: the findings, the notes, and what a clean result does and does not mean.
@@ -445,6 +507,62 @@ pub(crate) mod tests {
         let strategist = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agents/strategist/AGENT.md")).unwrap();
         let manifest = crate::workspace::AgentManifest::parse(&strategist).unwrap();
         assert!(SKILLS.iter().all(|s| manifest.skills.iter().any(|m| m == s)), "the strategist is authorized for both, which is what offers it the tool");
+    }
+
+    // specs/124 AC-3: a forecast without a date or a tripwire is flagged; one with both is not.
+    #[test]
+    fn a_line_labelled_forecast_with_no_date_or_no_tripwire_is_found_and_one_with_both_is_not() {
+        let good = "- Forecast (2027-03-31): checkout is the fastest step in both regions.\n  Tripwire: p99 above 1.5 s at the 2027-02-15 review.\n";
+        assert!(codes(&format!("{}\n## Outlook\n{}", CLEAN, good)).is_empty());
+        // in a traced section, between items, it is still read and takes nothing from the item above it
+        assert!(codes(&CLEAN.replace("## Guiding policies\n", &format!("{}\n## Guiding policies\n", good))).is_empty());
+        let with = |forecast: &str| trace(&format!("{}\n## Outlook\nSome prose.\n{}\nMore prose with a date, 2027-01-01, and a Tripwire: that belongs to nothing.\n", CLEAN, forecast)).0;
+        let line = CLEAN.lines().count() + 4;
+        for (forecast, missing) in [
+            ("- Forecast: the tax service stays the slowest call.\n  Tripwire: another call is slower in the weekly review.", "no date"),
+            ("- Forecast (next quarter): the tax service stays the slowest call.\n  Tripwire: seen in the 2027-02-15 review.", "no date"),
+            ("- Forecast (2027-13-45): never.\n  Tripwire: something seen.", "no date"),
+            ("- **Forecast** (2027-03-31): the tax service stays the slowest call.", "no tripwire"),
+            ("Forecast (2027-03-31): the tax service stays the slowest call.\n  Tripwire: TBD", "no tripwire"),
+            ("`forecast`: the tax service stays the slowest call.", "no date (write `Forecast (YYYY-MM-DD): …`) and no tripwire"),
+        ] {
+            let found = with(forecast);
+            assert_eq!(found.len(), 1, "{}: {:?}", forecast, found);
+            assert_eq!((found[0].code, found[0].level, found[0].id.as_str()), ("TRACE-FOR-01", "P2", format!("forecast, line {}", line).as_str()), "{}", forecast);
+            assert!(found[0].message.starts_with("a forecast with ") && found[0].message.contains(missing), "{}: {}", forecast, found[0].message);
+        }
+        // other accepted forms: all on one line, a nested bullet, a paragraph with the tripwire on the next line
+        for ok in ["Forecast (2027-03-31): it holds. Tripwire: p99 above 1.5 s.", "- forecast: by 2027-03-31 it holds.\n  - **Tripwire:** p99 above 1.5 s.", "Forecast (2027-03-31): it holds.\nTripwire: p99 above 1.5 s."] {
+            assert!(with(ok).is_empty(), "{}: {:?}", ok, with(ok));
+        }
+        // prose about forecasts, a heading and a fenced example are not forecasts; an unlabelled forecast is not seen at all
+        for prose in ["Forecasts are hard.", "### Forecast", "```\n- Forecast: an example\n```", "Sign-ups will double by 2027-03-31."] {
+            assert!(with(prose).is_empty(), "{}", prose);
+        }
+        // two forecasts, one bad: only the bad one, by its own line
+        let two = with("- Forecast (2027-03-31): a.\n  Tripwire: b.\n- Forecast (2027-06-30): c.");
+        assert_eq!(two.iter().map(|f| f.id.clone()).collect::<Vec<_>>(), [format!("forecast, line {}", line + 2)]);
+        let (out, _) = report("x", &format!("{}\n- Forecast: soon.\n", CLEAN));
+        assert!(out.starts_with("x: 1 finding(s), all P2 (advice, nothing is blocked):\nTRACE-FOR-01 (P2) forecast, line "), "{}", out);
+    }
+
+    // The forecast example in `strategy-kernel` is the layout an agent learns; it is read here so it cannot drift from the check.
+    // The four skills that make forecasts and the two charters carry the rule (`specs/124` §5).
+    #[test]
+    fn the_forecast_example_in_the_skill_passes_and_the_forecasting_skills_carry_the_rule() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |rel: &str| std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("{}: {}", rel, e));
+        let kernel = read("skills/strategy-kernel/SKILL.md");
+        let example = kernel.split("```markdown\n").nth(2).and_then(|rest| rest.split("\n```").next()).expect("strategy-kernel has a forecast example");
+        assert!(forecast_label(&bare(example.lines().next().unwrap())).is_some(), "{}", example);
+        assert!(forecasts(example).is_empty(), "{:?}", forecasts(example));
+        assert_eq!(forecasts(&example.replace("Tripwire:", "Note:")).len(), 1, "without its tripwire the same example is flagged");
+        assert!(kernel.contains("`TRACE-FOR-01`"));
+        for skill in ["strategy-kernel", "strategy-cascade", "roadmap-sequencing", "risk-roi-analysis"] {
+            let text = read(&format!("skills/{}/SKILL.md", skill));
+            assert!(text.contains("Forecast (") && text.contains("Tripwire:") && text.contains("an observable that would show it wrong"), "{}", skill);
+        }
+        assert!(read("agents/strategist/AGENT.md").contains("carries the label `forecast`, a date (`YYYY-MM-DD`) and a tripwire"));
     }
 
     #[test]

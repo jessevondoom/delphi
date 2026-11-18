@@ -63,6 +63,15 @@ A strategy says what is in the way, what approach is chosen, and what will be do
 
 Other sections may come before, between or after these three; they are not traced. Keep the three on one page.
 
+A statement about what will be true at a later date is a **forecast**. Write it on its own line, in any section, with the label, its date in parentheses and a tripwire: an observable that would show it wrong.
+
+```markdown
+- Forecast (2027-03-31): checkout is the fastest step of the purchase in both regions.
+  Tripwire: p99 above 1.5 s at the 2027-02-15 review.
+```
+
+`strategy_trace` reports a line labelled `Forecast` that has no date (`YYYY-MM-DD`) or no `Tripwire:` (`TRACE-FOR-01`). It cannot see a forecast that was not labelled.
+
 ## Steps
 1. Write the diagnosis first, from evidence you can point at. A claim about the outside carries its source, or is marked as an assumption.
 2. Give every diagnosis claim a falsifier. If nothing could show it wrong, it is a restatement, not a diagnosis: rewrite it.
@@ -80,13 +89,14 @@ Other sections may come before, between or after these three; they are not trace
 - **Actions that pull apart:** two actions that spend the same people on opposite ends.
 
 ## Done when
-The document has the three sections in the layout, `strategy_trace` reports a complete trace or each remaining finding is answered in a sentence, the checklist catches nothing, and every diagnosis claim has a falsifier that names an observation.
+The document has the three sections in the layout, `strategy_trace` reports a complete trace or each remaining finding is answered in a sentence, the checklist catches nothing, every diagnosis claim has a falsifier that names an observation, and every forecast carries its label, a date and a tripwire.
 
 ## Pitfalls
 - A clean trace is not a good strategy. The tool checks that the links exist, not that the diagnosis is true.
 - A falsifier nobody could observe ("if the market changes").
 - Adding a policy afterwards to adopt an orphan action. Cut the action, or admit the policy and trace it to a diagnosis.
 - Writing the actions first and the diagnosis to fit them.
+- A forecast written as a fact, with no label. No check can see it, and nobody can later say whether it held.
 
 ## Sources
 The kernel (diagnosis, guiding policy, coherent actions) and the bad-strategy signs are commonly attributed to Richard Rumelt. This text was written from secondary summaries, not from the primary work, and has not been checked against it. It cites no primary work until the operator ratifies the sources (`specs/124` §12, OD-3).
