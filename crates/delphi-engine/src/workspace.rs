@@ -384,6 +384,9 @@ pub fn make_test_workspace(root: &std::path::Path) -> WorkspacePaths {
         ("messenger", include_str!("../../../agents/messenger/AGENT.md")),
         ("investigator", include_str!("../../../agents/investigator/AGENT.md")),
         ("validator", include_str!("../../../agents/validator/AGENT.md")),
+        ("administrator", include_str!("../../../agents/administrator/AGENT.md")),
+        ("assistant", include_str!("../../../agents/assistant/AGENT.md")),
+        ("advocate", include_str!("../../../agents/advocate/AGENT.md")),
     ] {
         let text = if matches!(role, "orchestrator" | "architect" | "red-team" | "strategist") { text.replace("default_tier: workhorse", "default_tier: frontier") } else { text.to_string() };
         add(&format!("agents/{}/AGENT.md", role), &text);
@@ -429,6 +432,10 @@ pub(crate) mod tests {
             // `specs/116` §8.3 item 1: the builder's tier, in place of `fast`.
             ("investigator", include_str!("../../../agents/investigator/AGENT.md"), "workhorse"),
             ("validator", include_str!("../../../agents/validator/AGENT.md"), "workhorse"),
+            // `specs/124` §4 (O-4): the three roles of `specs/067`.
+            ("administrator", include_str!("../../../agents/administrator/AGENT.md"), "workhorse"),
+            ("assistant", include_str!("../../../agents/assistant/AGENT.md"), "fast"),
+            ("advocate", include_str!("../../../agents/advocate/AGENT.md"), "workhorse"),
         ];
         for (role, text, want) in shipped {
             let m = AgentManifest::parse(text).unwrap();
@@ -461,6 +468,9 @@ pub(crate) mod tests {
             ("messenger", include_str!("../../../agents/messenger/AGENT.md")),
             ("investigator", include_str!("../../../agents/investigator/AGENT.md")),
             ("validator", include_str!("../../../agents/validator/AGENT.md")),
+            ("administrator", include_str!("../../../agents/administrator/AGENT.md")),
+            ("assistant", include_str!("../../../agents/assistant/AGENT.md")),
+            ("advocate", include_str!("../../../agents/advocate/AGENT.md")),
         ];
         for (role, text) in shipped {
             assert_eq!(AgentManifest::parse(text).unwrap().search_use, Use::Explore, "{role}");
@@ -487,6 +497,36 @@ pub(crate) mod tests {
         assert!(!now.body.contains("inside-only"));
         assert!(now.host_body.contains("<!-- inside-only -->") && then.host_body == then.body);
         assert_eq!(strip_inside_only_markers("a\n<!-- inside-only -->\nb\n<!-- /inside-only -->\nc x<!-- inside-only --> y<!-- /inside-only -->z"), "a\nb\nc x yz");
+    }
+
+    // `specs/124` §4 (O-4, AC-2): the three roles of `specs/067` are seeded like the others and load with the scope their charters
+    // now describe: the administrator's two tools and one skill, no sequencing or parliamentarian skill; the assistant and the
+    // advocate with no tool but the org-context slice; each with the source ladder.
+    #[test]
+    fn the_three_fleet_roles_are_seeded_and_load_with_the_scopes_their_charters_describe() {
+        let t = tempfile::tempdir().unwrap();
+        let ws = make_workspace(t.path());
+        let strs = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let admin = ws.load_manifest("administrator").unwrap();
+        assert_eq!(admin.execute, strs(&["org-context", "inspect-system", "propose-admin-action"]));
+        let skills = |text: &str| split_frontmatter(text).0.and_then(|fm| fm.get("authorized_skills").and_then(|v| v.as_sequence().cloned())).unwrap_or_default().iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>();
+        assert_eq!(skills(include_str!("../../../agents/administrator/AGENT.md")), strs(&["workspace-administration"]));
+        assert!(admin.body.contains("`propose_admin_action`") && !admin.body.contains("Parliamentarian") && !admin.body.contains("resolve procedural deadlocks"));
+        let assistant = ws.load_manifest("assistant").unwrap();
+        assert_eq!((&assistant.execute, assistant.tier()), (&strs(&["org-context"]), "fast"));
+        assert!(assistant.body.contains("the verbatim line it rests on, and who said it") && assistant.body.contains("holds no calendar, mail or chat tool"));
+        let advocate = ws.load_manifest("advocate").unwrap();
+        assert_eq!(advocate.execute, strs(&["org-context"]));
+        assert_eq!(skills(include_str!("../../../agents/advocate/AGENT.md")), strs(&["cognitive-walkthrough", "user-joy-heuristics", "accessibility-audit", "tonal-calibration"]));
+        assert!(advocate.body.contains("`simulated, not observed`"));
+        for m in [&admin, &assistant, &advocate] {
+            assert!(m.body.contains("## 4. Source ladder") && m.body.contains("it grants no tool and no permission"), "{}", m.id);
+            assert!(m.write.iter().all(|g| g.starts_with("missions/")), "{}: no write scope outside a mission", m.id);
+        }
+        // The messenger is a drafting role: no execute name at all, and a write scope of drafts only.
+        let messenger = ws.load_manifest("messenger").unwrap();
+        assert!(messenger.execute.is_empty() && messenger.write == strs(&["missions/**/comms/**"]));
+        assert!(messenger.body.contains("**It sends nothing.**") && messenger.body.contains("drafted, not sent"));
     }
 
     #[test]

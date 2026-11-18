@@ -18,9 +18,11 @@ const MEASURED: &[(&str, Option<usize>)] = &[
     ("writer", Some(16744)),
     ("messenger", None),
     ("validator", Some(17923)),
-    ("administrator", Some(17244)),
-    ("assistant", Some(16471)),
-    ("advocate", Some(16774)),
+    // Measured again for `specs/124` S2: the three roles of `specs/067` gained the source ladder (about 2.4 KB each). Spec 106 §9's
+    // table still shows the sizes before it; spec 124 amends no spec by text.
+    ("administrator", Some(19680)),
+    ("assistant", Some(19304)),
+    ("advocate", Some(19763)),
 ];
 
 #[test]

@@ -2,7 +2,6 @@
 name: work-breakdown-structures
 description: "Decompose complex, ambiguous epics into Mutually Exclusive, Collectively Exhaustive (MECE) task hierarchies. Use when scoping initiatives or planning sprint structures."
 authorized_agents:
-  - administrator
   - orchestrator
 input_schema:
   type: object

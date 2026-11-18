@@ -40,3 +40,12 @@ Synthesize complex context into high-signal executive briefings adhering to the 
 - **BLUF:** 1-sentence bottom line.
 - **Key Findings:** 3 structured bullet points.
 - **Action Required:** Concrete operator choice.
+
+## Done when
+The first sentence is the bottom line, every finding points at where in the material it came from, and the choice offered is one the operator can answer with a single word.
+
+## Pitfalls
+- Burying bad news below the fold, or softening it.
+- A "decision" with one real option.
+- Adding a fact that is not in the material without saying where it came from.
+- Reporting agreement that nobody stated.

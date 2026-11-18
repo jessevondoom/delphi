@@ -27,6 +27,8 @@ required_permissions:
 ---
 # External Communications Dispatch
 
+> **Not available in this build (`specs/124` §4):** the messenger holds no `gh`, webhook, API-client or MCP tool. Use these steps to draft what a person will run or send, under `missions/**/comms/**`; never report a step as done.
+
 Once sent, a message cannot be recalled. Treat every dispatch as Red-tier.
 
 ## When to use

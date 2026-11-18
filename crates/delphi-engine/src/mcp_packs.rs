@@ -953,11 +953,10 @@ mod tests {
     }
 
     #[test]
-    fn the_five_shipped_inside_skills_declare_it_and_the_shipped_roles_are_either_except_the_messenger() {
+    fn the_four_shipped_inside_skills_declare_it_and_the_shipped_roles_are_either_except_the_messenger() {
         let fm = |t: &str| split_frontmatter(t).0;
         for t in [
             include_str!("../../../skills/council-moderation/SKILL.md"),
-            include_str!("../../../skills/council-parliamentarian/SKILL.md"),
             include_str!("../../../skills/external-comms-dispatch/SKILL.md"),
             include_str!("../../../skills/github-ops-sync/SKILL.md"),
             include_str!("../../../skills/mcp-server-integration/SKILL.md"),

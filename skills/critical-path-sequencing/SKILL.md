@@ -2,7 +2,6 @@
 name: critical-path-sequencing
 description: "Sequence task dependency DAGs, calculate float and critical path bottlenecks, and balance Little's Law WIP limits. Use when optimizing multi-agent execution order or resolving project stalls."
 authorized_agents:
-  - administrator
   - strategist
 input_schema:
   type: object

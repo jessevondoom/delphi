@@ -12,13 +12,13 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 
 | id | job | default tier | runs | search | skills |
 | :-- | :-- | :-- | :-- | :-- | :-- |
-| `administrator` | Process Topology, Delivery Sequencer & Council Parliamentarian | workhorse | either | explore | `work-breakdown-structures`, `critical-path-sequencing`, `council-parliamentarian`, `roadmap-sequencing`, `workspace-administration` |
-| `advocate` | User Experience Advocate, Behavioral Psychologist & Joy Specialist | workhorse | either | explore | `persona-simulation`, `user-joy-heuristics`, `cognitive-walkthrough`, `tonal-calibration` |
+| `administrator` | Workspace Administrator: Health, Endpoints, Connectors & Project Setup | workhorse | either | explore | `workspace-administration` |
+| `advocate` | User Experience Advocate: Simulated Walkthroughs, Accessibility & Joy | workhorse | either | explore | `cognitive-walkthrough`, `user-joy-heuristics`, `accessibility-audit`, `tonal-calibration` |
 | `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | either | explore | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design`, `oblique-strategies` |
-| `assistant` | Executive Assistant, Comms Triage & Operator Leverage Specialist | fast | either | explore | `executive-briefing-distillation`, `transcript-action-extraction`, `tonal-calibration` |
+| `assistant` | Executive Assistant: Briefings, Transcript Actions & Triage of What It Is Given | fast | either | explore | `executive-briefing-distillation`, `transcript-action-extraction`, `tonal-calibration` |
 | `builder` | Lead Engineer, Builder & Verification Specialist | workhorse | either | explore | `worktree-isolation`, `tdd-execution`, `safe-refactoring`, `git-pr-packaging`, `git-merge-and-conflict-resolution`, `ci-triage`, `spec-driven-build`, `tui-design`, `systems-pattern-catalog` |
 | `investigator` | Precision Researcher, Bug Tracker & Benchmark Specialist | workhorse | either | explore | `ast-code-search`, `git-bisect-hunt`, `benchmark-profiling`, `primary-source-verification`, `competitive-swot-analysis`, `hypothesis-flipping` |
-| `messenger` | External Integrations, GitHub/API Operations & Protocol Bridge | fast | inside | explore | `github-ops-sync`, `mcp-server-integration`, `external-comms-dispatch`, `protocol-schema-translation` |
+| `messenger` | External Message Drafter & Boundary Payload Checker (drafts only; a person sends) | fast | inside | explore | `github-ops-sync`, `mcp-server-integration`, `external-comms-dispatch`, `protocol-schema-translation` |
 | `orchestrator` | Lead Orchestrator, Coach, Council Arbiter & Model Scaler | workhorse | either | explore | `task-decomposition`, `dynamic-model-scaling`, `council-moderation`, `handoff-packaging`, `retrospective-facilitation`, `knowledge-compaction`, `review-md-distillation`, `contradiction-pruning`, `lesson-promotion`, `delphi-attribution` |
 | `red-team` | Red Team, Adversarial Critic, Threat Modeler & PR Security Auditor | workhorse | either | explore | `review-md-audit`, `threat-modeling`, `adversarial-test-gen`, `assumption-stress-test`, `socratic-interrogation`, `spec-driven-build` |
 | `scout` | Broad Discovery, Repository Cartographer & Literature Scout | fast | either | explore | `repo-cartography`, `literature-survey`, `multi-source-synthesis`, `dependency-audit`, `dual-horizon-search` |
@@ -30,6 +30,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 
 | name | use it when | runs | roles |
 | :-- | :-- | :-- | :-- |
+| `accessibility-audit` | Audit a screen or command output for reduce motion, color-only meaning, contrast, keyboard reach and plain text. Findings are simulated, not observed. Use when a screen or animation changes. | either | `advocate` |
 | `adversarial-test-gen` | Generate boundary, malformed-input, concurrency and fault-injection tests that try to break a change, and report which ones do. Use after the happy path passes. | either | `red-team` |
 | `api-contract-design` | Design a provider-neutral interface, IPC message or CLI grammar with a JSON Schema, examples and error cases. Use when components must agree on a shape. | either | `architect` |
 | `assumption-stress-test` | Run a pre-mortem on a plan, proposal or research: assume it failed and find the likeliest reasons and the cheapest tests of them. Use before committing. | either | `red-team` |
@@ -37,13 +38,12 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `benchmark-profiling` | Measure performance with warmups, repeated runs and a significance test before claiming a change helps. Use when comparing speed, memory or tokens. | either | `investigator` |
 | `ci-triage` | Diagnose a failing CI or test run: separate real regressions from flakes and environment problems, and say what to do. Use when a pipeline is red. | either | `builder` |
 | `clarity-synthesis` | Turn dense research, specs or logs into a clear brief for a human reader: the answer, the reasons, the decisions needed. Use when handing findings to the operator. | either | `writer` |
-| `cognitive-walkthrough` | Perform structured 4-question cognitive walkthroughs on CLI commands, TUI screens, and user workflows to identify mental model mismatches and execution gulfs. | either | `advocate` |
+| `cognitive-walkthrough` | Name a persona and job story, then walk a command, screen or workflow with the four walkthrough questions. Findings are simulated, not observed. Use when reviewing usability before release. | either | `advocate` |
 | `competitive-swot-analysis` | Execute systematic SWOT, Porter's Five Forces, and Wardley mapping analyses on technical and market positions. Use when evaluating competitive dynamics, platform bets, or product viability. | either | `strategist`, `investigator` |
 | `concision-audit` | Audit documents and knowledge-base articles for bloat, redundancy and unverified claims, and cut them. Use when a document is long or restates others. | either | `writer` |
 | `contradiction-pruning` | Find stale claims, broken links and superseded documents in the knowledge base and propose fixes. Use periodically and before a release. | either | `orchestrator` |
 | `council-moderation` | Run the three-round Council: blind Round 1, cross-examination, Verdict plus verbatim Minority Report. Use when a decision needs adversarial review. | inside | `orchestrator` |
-| `council-parliamentarian` | Audit multi-agent Council debates for procedural compliance with REVIEW.md, extract irreconcilable contentions, and structure operator tie-breaker cards. Use when council sessions reach deadlock. | inside | `administrator` |
-| `critical-path-sequencing` | Sequence task dependency DAGs, calculate float and critical path bottlenecks, and balance Little's Law WIP limits. Use when optimizing multi-agent execution order or resolving project stalls. | either | `administrator`, `strategist` |
+| `critical-path-sequencing` | Sequence task dependency DAGs, calculate float and critical path bottlenecks, and balance Little's Law WIP limits. Use when optimizing multi-agent execution order or resolving project stalls. | either | `strategist` |
 | `delphi-attribution` | Sign what a Delphi agent said, label what is not validated, and ask for research when the knowledge base falls short. Use with request_research, request_help, request_council. | either | `orchestrator` |
 | `dependency-audit` | Audit libraries for maintenance health, licence fit, size, and known advisories, and recommend keep, replace or drop. Use before adding or upgrading a dependency. | either | `scout` |
 | `diagram-generation` | Produce a Mermaid diagram that shows real structure or flow, with quoted labels and the right diagram type. Use when a picture beats prose. | either | `architect` |
@@ -68,7 +68,6 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `narrative-briefing` | Write plans, proposals and release notes that are specific, honest and free of filler. Use for announcements and personal or project plans. | either | `writer` |
 | `oblique-strategies` | Apply lateral thinking prompts, Oblique Strategies, and TRIZ contradiction matrices to break architectural deadlocks. Use when standard designs hit intractable trade-offs or creative blocks. | either | `architect` |
 | `org-bundle-authoring` | Create, sanitize and package an org knowledge bundle (specs/023): gather allow-listed sources, distill, scan, validate, package. Use when an org wants its knowledge and skills bundled. | either | `writer` |
-| `persona-simulation` | Model goal-directed user personas, Jobs to Be Done (JTBD) Job Stories, and cognitive walkthrough scenarios. Use when evaluating product ergonomics, specs, or UI designs. | either | `advocate` |
 | `pr-alignment-review` | Audit a PR or spec against the operator's goal, the governing specs and the REVIEW.md rubric, mapping acceptance criteria to evidence. Use at review. | either | `strategist` |
 | `primary-source-verification` | Check a specific claim, API behaviour or benchmark against the primary source and report what holds. Use before relying on a claim you did not verify. | either | `investigator` |
 | `protocol-schema-translation` | Validate and translate payloads at a boundary (webhook, third-party API, provider tool schema), tagging them untrusted. Use when data crosses into Delphi. | either | `messenger` |
@@ -78,7 +77,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `review-md-audit` | Audit a diff strictly against the base branch's REVIEW.md, never the PR's own copy, and report findings with failure scenarios. Use when reviewing a PR. | either | `red-team` |
 | `review-md-distillation` | Keep the REVIEW.md rubric short: merge repeated findings, flag rules violated twice for a deterministic check. Use when the rubric nears its line budget or a review finding recurs. | either | `orchestrator` |
 | `risk-roi-analysis` | Weigh the effort and risk of an option against its expected payoff and the cost of not doing it, using a one-page brief. Use when deciding whether to invest. | either | `strategist` |
-| `roadmap-sequencing` | Order multi-phase work into milestones along the critical path, with dependencies and weights checked. Use when planning more than one deliverable. | either | `strategist`, `administrator` |
+| `roadmap-sequencing` | Order multi-phase work into milestones along the critical path, with dependencies and weights checked. Use when planning more than one deliverable. | either | `strategist` |
 | `safe-refactoring` | Restructure code while keeping its public behaviour and API surface unchanged, in small steps with tests green. Use for cleanup, renames and extractions. | either | `builder` |
 | `scope-creep-detection` | Flag changes that go beyond the approved spec: unrequested files, features, dependencies or refactors. Use on every spec and PR before approval. | either | `strategist` |
 | `socratic-interrogation` | Subject proposals, specs, and council arguments to disciplined Socratic interrogation with minimalist, probing questions. Use when evaluating critical design premises or high-contention claims. | either | `red-team` |
@@ -91,9 +90,9 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `threat-modeling` | Model threats to a design or change with STRIDE plus agent-specific threats such as prompt injection and memory poisoning. Use when a feature crosses a trust boundary. | either | `red-team` |
 | `tonal-calibration` | Calibrate and shift prose across technical, executive, persuasive, and educational registers for reader comfort. Use when adapting documentation, mission briefs, or reports for distinct audiences. | either | `writer`, `assistant`, `advocate` |
 | `trade-off-matrix` | Compare options across weighted criteria and test whether the winner survives changed weights. Use when a decision has several defensible answers. | either | `architect` |
-| `transcript-action-extraction` | Forensically extract actionable commitments from meeting and conversation transcripts, eliminating hallucinated consensus and enforcing TRIAD ownership. Use when digesting audio/video call notes. | either | `assistant` |
+| `transcript-action-extraction` | Extract commitments, decisions and dissent from a transcript; each action has owner, deliverable, due date, the verbatim line and its speaker. Use when digesting a meeting or call transcript. | either | `assistant` |
 | `tui-design` | Design calm, borderless terminal interfaces: decks, headers, badges and character-cell rules. Use when adding or changing any TUI view, widget or layout in Ratatui. | either | `architect`, `builder`, `orchestrator` |
 | `user-joy-heuristics` | Audit software interfaces, TUI screens, and CLI interactions against emotional design levels, Kahneman's Peak-End Rule, and Nielsen's heuristics to maximize user joy and eliminate friction. | either | `advocate` |
-| `work-breakdown-structures` | Decompose complex, ambiguous epics into Mutually Exclusive, Collectively Exhaustive (MECE) task hierarchies. Use when scoping initiatives or planning sprint structures. | either | `administrator`, `orchestrator` |
+| `work-breakdown-structures` | Decompose complex, ambiguous epics into Mutually Exclusive, Collectively Exhaustive (MECE) task hierarchies. Use when scoping initiatives or planning sprint structures. | either | `orchestrator` |
 | `workspace-administration` | Diagnose workspace health, model endpoints, connectors, and project scopes, and formulate governed action proposals. Use when onboarding, configuring endpoints, or scaffolding projects. | either | `administrator` |
 | `worktree-isolation` | Create and prune isolated git worktrees for a task so builds never touch the operator's checkout. Use before any code change. | either | `builder` |

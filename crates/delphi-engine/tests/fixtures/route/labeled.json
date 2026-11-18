@@ -27,7 +27,7 @@
   {"task": "draft a short executive brief of today's incidents", "expect": "assistant"},
   {"task": "will a new user understand this first run screen, walk through the flow", "expect": "advocate"},
   {"task": "check the terminal interface against usability heuristics", "expect": "advocate"},
-  {"task": "break the epic into a work breakdown structure", "expect": "administrator"},
+  {"task": "break the epic into a work breakdown structure", "expect": "orchestrator"},
   {"task": "decompose this goal into tasks and choose a model tier for each", "expect": "orchestrator"},
   {"task": "hello there", "expect": "none"},
   {"task": "thanks, that looks good", "expect": "none"},
