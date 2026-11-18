@@ -39,6 +39,7 @@ Decide whether the work is worth doing now, before deciding how.
 4. Name the opportunity cost: what the same effort would otherwise deliver.
 5. Include the cheapest experiment that would reduce the largest uncertainty.
 6. Recommend: do now, do later, do smaller, or do not do. Fill `templates/risk-roi-brief.md`.
+7. The payoff you expect by a date is a forecast: write `Forecast (YYYY-MM-DD): …` on its own line with a `Tripwire:` line under it, an observable that would show it wrong. No tool checks a brief for this; check it by eye.
 
 ## Done when
 The brief gives a recommendation and states which assumption, if wrong, would reverse it.

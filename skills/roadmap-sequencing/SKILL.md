@@ -44,6 +44,7 @@ Sequence by dependency and risk, not by enthusiasm.
 5. Write the plan from `templates/milestones.yaml` and run `delphi check dag <file> --repo .`. It rejects cycles and unknown ids, then prints the parallel waves and the critical path.
 6. Where the roadmap delivers a strategy written in the `strategy-kernel` layout, match each milestone to an action (`A1…`) in its trace. A milestone with no action in the trace is flagged in the plan: either the strategy lacks an action or the milestone is outside it.
 7. Read the critical path. If it is longer than the constraints allow, cut scope or break a dependency; do not just reorder.
+8. A date the plan expects and does not control (a dependency landing, a decision arriving, an effect showing) is a forecast: write `Forecast (YYYY-MM-DD): …` on its own line with a `Tripwire:` line under it, an observable that would show it wrong. `strategy_trace` checks this in a strategy document only; in a roadmap, check it by eye.
 
 No shell? Call the `check` tool with `kind: dag` and the plan's path; it returns the same verdict.
 
