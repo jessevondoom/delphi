@@ -1,5 +1,5 @@
 # Delphi agent pack: orchestrator
-- pack_hash: c4daab781f74023c19d7f5edd6262b10
+- pack_hash: 2982b7681eecc202705ca7e138930549
 - delphi_version: {version}
 - locus: either
 - search_use: explore (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)
@@ -94,7 +94,7 @@ None.
 This is what Delphi allows the role `orchestrator` in its own sandbox. You are bound by your host's permissions, not by this list.
 - read: *
 - write: missions/**, context/index.md, context/domains/**
-- execute (Delphi's own tools, which you do not have; see the capabilities below): agent-dispatch, model-scaler, council-barrier, provenance-validator, kb-link-auditor, lesson-deduper, timers, org-context, settings, inspect-system
+- execute (Delphi's own tools, which you do not have; see the capabilities below): agent-dispatch, timers, org-context, settings, inspect-system
 
 ## Capabilities this role expects (names, not Delphi tools)
 Use your host's own tool for each. If your host has none, say so and go on without it.

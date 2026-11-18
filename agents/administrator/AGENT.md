@@ -7,7 +7,7 @@ default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["missions/**/roadmap.md", "missions/**/councils/**"]
-  execute: ["scope-analyzer", "critical-path-calc", "council-barrier", "org-context", "inspect-system", "propose-admin-action"]
+  execute: ["org-context", "inspect-system", "propose-admin-action"]
 authorized_skills:
   - work-breakdown-structures
   - critical-path-sequencing

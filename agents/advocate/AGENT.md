@@ -7,7 +7,7 @@ default_tier: workhorse
 default_access_scope:
   read: ["*"]
   write: ["missions/**/ux-audit.md", "missions/**/personas.md"]
-  execute: ["scope-analyzer", "org-context"]
+  execute: ["org-context"]
 authorized_skills:
   - persona-simulation
   - user-joy-heuristics

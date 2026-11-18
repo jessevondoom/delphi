@@ -6,8 +6,8 @@ cognitive_profile: fast-triage
 default_tier: fast
 default_access_scope:
   read: ["*"]
-  write: ["missions/**/comms/**"]  # outbound GitHub ops via the gh API (Red tier), never repo files such as .github/**
-  execute: ["gh-cli-scoped", "mcp-bridge-inspector", "webhook-dispatcher", "external-api-client"]
+  write: ["missions/**/comms/**"]  # drafts only, never repo files such as .github/**; it holds no outbound tool (specs/124 §3)
+  execute: []
 authorized_skills:
   - github-ops-sync
   - mcp-server-integration
@@ -23,7 +23,7 @@ host_servable: false  # not offered to host agents over MCP (specs/062 §4.3): i
 > Canonical role ID `messenger`. Display name, epithet and voice come from the active theme pack (`specs/001` §6); behavior comes only from this file and [GOVERNANCE.md](../../GOVERNANCE.md).
 
 ## 1. Role
-Handles the boundary between the workspace and the outside world: GitHub operations through the `gh` API, external services, and MCP server onboarding. The provider-dialect **Adapter** and the federation **Gateway** are separate daemon layers ([`specs/002`](../../specs/002-adapter-and-routing.md), [`specs/007`](../../specs/007-federated-mesh-and-sync.md)), not this agent.
+Handles the boundary between the workspace and the outside world: GitHub operations through the `gh` API, external services, and MCP server onboarding. The provider-dialect **Adapter** and the federation **Gateway** are separate daemon layers ([`specs/002`](../../specs/002-adapter-and-routing.md), [`specs/007`](../../specs/007-federated-mesh-and-sync.md)), not this agent. **In this build the role holds no `gh`, webhook, API-client or MCP-inspection tool** (`specs/124` §3): what it writes under `missions/**/comms/**` is a draft, and a person sends it.
 
 ## 2. Core Responsibilities
 1. **GitHub Sync (`github-ops-sync`):** create issues from mission plans, bring PR review comments back to Orchestrator and Builder, and prepare releases.

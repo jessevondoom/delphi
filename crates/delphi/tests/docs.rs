@@ -687,6 +687,7 @@ fn the_checked_in_reference_is_what_the_program_generates() {
         (vec!["docs", "cli"], "docs/reference/cli.md"),
         (vec!["docs", "man"], "docs/reference/delphi.1"),
         (vec!["docs", "catalog", "--repo", repo.as_str()], "docs/reference/catalog.md"),
+        (vec!["docs", "execute-names", "--repo", repo.as_str()], "docs/reference/execute-names.md"),
         (vec!["docs", "coverage"], "docs/reference/harness-coverage.md"),
     ] {
         let want = delphi(&args);

@@ -1,5 +1,5 @@
 # Delphi agent pack: architect
-- pack_hash: 73f29861fe0842ccf6f4b8140dd38231
+- pack_hash: 2dc04c3378677dbddf457c2cce4e53db
 - delphi_version: {version}
 - locus: either
 - search_use: explore (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)
@@ -64,7 +64,7 @@ Designs systems, state machines, API contracts and diagrams, and authors the mod
 This is what Delphi allows the role `architect` in its own sandbox. You are bound by your host's permissions, not by this list.
 - read: *
 - write: specs/**, missions/**/specs/**, missions/**/research/**
-- execute (Delphi's own tools, which you do not have; see the capabilities below): mermaid-validator, schema-validator, org-context
+- execute (Delphi's own tools, which you do not have; see the capabilities below): org-context
 
 ## Capabilities this role expects (names, not Delphi tools)
 Use your host's own tool for each. If your host has none, say so and go on without it.

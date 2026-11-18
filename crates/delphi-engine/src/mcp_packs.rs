@@ -94,19 +94,62 @@ fn locus_of(fm: &Option<serde_yaml::Value>) -> &'static str {
     }
 }
 
+/// One name a manifest may list in `default_access_scope.execute` (spec 124 §3), and what grants it.
+pub struct ExecuteName {
+    pub name: &'static str,
+    /// `daemon`: Delphi's daemon offers the tool, either because the manifest lists this name or to the role by its id.
+    /// `host-only`: nothing in the daemon reads the name; it only tells a host which of its own capabilities the role expects.
+    pub granted_by: &'static str,
+    /// The tool or context the name stands for, in one line, for `docs/reference/execute-names.md`.
+    pub grants: &'static str,
+    /// The host capabilities (spec 098 §4) a pack lists for a role that carries the name. Advice to the host, never a grant.
+    pub capabilities: &'static [&'static str],
+}
+
+/// Every `execute` name a manifest may carry. This is the one list (spec 124 §3 item 3): [`capabilities`] is derived from it,
+/// `delphi lint` fails a manifest that lists a name absent from it, and `delphi docs execute-names` prints it. A new name goes
+/// here in the same change as the tool that grants it; a name is never added because a charter wants it.
+pub const EXECUTE_NAMES: &[ExecuteName] = &[
+    ExecuteName { name: "agent-dispatch", granted_by: "daemon", grants: "`dispatch_agent` (and `search_agent_registry` when the registry routes); the daemon reads this name", capabilities: &["delegate"] },
+    ExecuteName { name: "ast-search", granted_by: "host-only", grants: "no daemon tool; inside Delphi the role searches with `search`", capabilities: &["search_code"] },
+    ExecuteName { name: "benchmark-runner", granted_by: "host-only", grants: "no daemon tool of its own; inside Delphi a benchmark runs through `shell-worktree-scoped`", capabilities: &["shell"] },
+    ExecuteName { name: "cli-harness-delegate", granted_by: "host-only", grants: "no daemon tool the role calls", capabilities: &["delegate"] },
+    ExecuteName { name: "daemon-fetch", granted_by: "host-only", grants: "no tool the role calls by this name; inside Delphi the daemon's own pipelines fetch", capabilities: &["fetch"] },
+    ExecuteName { name: "dependency-auditor", granted_by: "host-only", grants: "no daemon tool; inside Delphi the role reads manifests with `read_file` and `search`", capabilities: &["search_code"] },
+    ExecuteName { name: "git-bisect-readonly", granted_by: "host-only", grants: "no daemon tool of its own; inside Delphi a bisect runs through `shell-worktree-scoped`", capabilities: &["shell"] },
+    ExecuteName { name: "git-worktree", granted_by: "host-only", grants: "no tool the role calls; the daemon attaches the worktree itself", capabilities: &["shell"] },
+    ExecuteName { name: "inspect-system", granted_by: "daemon", grants: "`inspect_system`; the daemon offers it by role id (administrator, orchestrator), not by this name", capabilities: &[] },
+    ExecuteName { name: "kb-search", granted_by: "daemon", grants: "`kb_search`; the daemon offers it to every role, not by this name", capabilities: &[] },
+    ExecuteName { name: "org-context", granted_by: "daemon", grants: "the org-context slice and `check_alignment`, when a bundle is active; the daemon reads this name", capabilities: &[] },
+    ExecuteName { name: "propose-admin-action", granted_by: "daemon", grants: "`propose_admin_action`; the daemon offers it by role id (administrator), not by this name", capabilities: &[] },
+    ExecuteName { name: "repo-mapper", granted_by: "host-only", grants: "no daemon tool; inside Delphi the role maps with `list_dir`, `read_file` and `search`", capabilities: &["search_code"] },
+    ExecuteName { name: "scoped-web-verify", granted_by: "daemon", grants: "`verify_source`; the daemon reads this name", capabilities: &["search_web", "fetch"] },
+    ExecuteName { name: "settings", granted_by: "daemon", grants: "`change_setting`; the daemon reads this name", capabilities: &[] },
+    ExecuteName { name: "shell-worktree-scoped", granted_by: "daemon", grants: "`run_command` and `shell`: in the task's worktree with a write scope there, else in an investigation's throwaway copy; the daemon reads this name", capabilities: &["shell"] },
+    ExecuteName { name: "test-runner", granted_by: "host-only", grants: "no daemon tool of its own; inside Delphi tests run through `shell-worktree-scoped`", capabilities: &["shell"] },
+    ExecuteName { name: "timers", granted_by: "daemon", grants: "`timer`; the daemon reads this name", capabilities: &[] },
+    ExecuteName { name: "web-search", granted_by: "host-only", grants: "no tool the role calls by this name; inside Delphi the daemon's research pipeline searches", capabilities: &["search_web"] },
+];
+
+/// The entry of [`EXECUTE_NAMES`] for `name`, or `None` for a name nothing grants.
+pub fn execute_name(name: &str) -> Option<&'static ExecuteName> {
+    EXECUTE_NAMES.iter().find(|n| n.name == name)
+}
+
 /// The capability names (spec 098 §4) a role's manifest scope implies, in the order a pack lists them. Reading implies searching
-/// code; writing implies editing; the entries of `execute` are Delphi's own tool names and each maps to a capability or to none
-/// (an internal tool such as `council-barrier` gives the host nothing to do).
+/// code; writing implies editing; the entries of `execute` are Delphi's own tool names and each maps to the capabilities
+/// [`EXECUTE_NAMES`] gives it, or to none (an internal tool such as `org-context` gives the host nothing to do, and so does a
+/// name the list does not know).
 pub fn capabilities(read: &[String], write: &[String], execute: &[String]) -> Vec<&'static str> {
-    let has = |names: &[&str]| execute.iter().any(|e| names.contains(&e.as_str()));
+    let has = |cap: &str| execute.iter().any(|e| execute_name(e).is_some_and(|n| n.capabilities.contains(&cap)));
     let want = [
         ("read", !read.is_empty()),
-        ("search_code", !read.is_empty() || has(&["repo-mapper", "ast-search", "dependency-auditor"])),
-        ("search_web", has(&["web-search", "scoped-web-verify"])),
-        ("fetch", has(&["daemon-fetch", "scoped-web-verify", "external-api-client", "webhook-dispatcher"])),
+        ("search_code", !read.is_empty() || has("search_code")),
+        ("search_web", has("search_web")),
+        ("fetch", has("fetch")),
         ("edit", !write.is_empty()),
-        ("shell", has(&["shell-worktree-scoped", "test-runner", "git-worktree", "git-bisect-readonly", "benchmark-runner", "fuzz-harness-scoped", "gh-cli-scoped"])),
-        ("delegate", has(&["agent-dispatch", "cli-harness-delegate"])),
+        ("shell", has("shell")),
+        ("delegate", has("delegate")),
     ];
     crate::mcp_hosts::CAPABILITIES.iter().copied().filter(|c| want.iter().any(|(n, on)| n == c && *on)).collect()
 }
@@ -889,6 +932,16 @@ mod tests {
         assert_eq!(capabilities(&[], &[], &s(&["web-search", "daemon-fetch", "kb-search"])), ["search_web", "fetch"], "kb-search is Delphi's own and gives the host nothing");
         assert_eq!(capabilities(&s(&["*"]), &s(&["x"]), &s(&["shell-worktree-scoped", "agent-dispatch", "council-barrier"])), ["read", "search_code", "edit", "shell", "delegate"], "listed in the pack's fixed order");
         assert!(capabilities(&[], &[], &s(&["council-barrier", "org-context"])).is_empty());
+        // Spec 124 §3 item 4: a name the list does not know implies nothing, so a fictional name cannot make a pack expect `shell` or `fetch`.
+        for gone in ["fuzz-harness-scoped", "gh-cli-scoped", "webhook-dispatcher", "external-api-client"] {
+            assert!(execute_name(gone).is_none() && capabilities(&[], &[], &s(&[gone])).is_empty(), "{gone}");
+        }
+        // Every capability the list names is one a pack can name, and no name is listed twice.
+        for (i, n) in EXECUTE_NAMES.iter().enumerate() {
+            assert!(n.capabilities.iter().all(|c| crate::mcp_hosts::CAPABILITIES.contains(c)), "{}", n.name);
+            assert!(["daemon", "host-only"].contains(&n.granted_by), "{}", n.name);
+            assert!(EXECUTE_NAMES[..i].iter().all(|m| m.name != n.name), "{} is listed twice", n.name);
+        }
         let adapter = [("read", Some("Read")), ("shell", None)];
         assert_eq!(capability_line(&["read", "shell"], &adapter), "read -> Read; shell -> unavailable (the adapter maps no tool for it)");
         assert_eq!(capability_line(&["delegate"], &adapter), "delegate -> unavailable (the adapter maps no tool for it)", "a capability the adapter does not list at all is unavailable too");
