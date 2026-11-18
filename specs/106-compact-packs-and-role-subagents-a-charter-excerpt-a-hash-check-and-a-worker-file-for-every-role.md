@@ -108,14 +108,16 @@ Measured when P2 was built (2026-11-13, branch `build/106`) and again when spec 
 | `builder` | 30,384 | 17,562 |
 | `scout` | 31,000 | 18,898 |
 | `investigator` | 31,596 | 19,291 |
-| `strategist` | 29,613 | 17,282 |
+| `strategist` | 32,866 | 20,116 |
 | `red-team` | 31,963 | 19,676 |
 | `writer` | 29,235 | 16,744 |
 | `messenger` | not served (`host_servable: false`) | not served |
 | `validator` | 29,719 | 17,923 |
-| `administrator` | 29,576 | 17,244 |
-| `assistant` | 28,501 | 16,471 |
-| `advocate` | 28,935 | 16,774 |
+| `administrator` | 31,303 | 19,680 |
+| `assistant` | 31,330 | 19,304 |
+| `advocate` | 31,976 | 19,763 |
+
+Re-measured on 2026-11-18 (main `02651db7`, the same test) after spec 124 S2/S3 gave `strategist`, `administrator`, `assistant` and `advocate` the source ladder: those four rows now show the compact size the test pins and the full size measured today (the strategist's compact pack measures 20,153 today, 37 bytes over its pin and inside the 10 percent); the other rows and the paragraph below are still the 2026-11-14 measurement, which every compact pack has since outgrown by 1 to 9 percent, inside its budget.
 
 The charter is 21,239 bytes; the orchestrator's excerpt, with its closing note, is 10,451 bytes (under half, as A3 asks). G1 left every full pack unchanged. The compact pack is 38 to 42 percent smaller than the full one for every served role, and 2 to 17 percent smaller than before G1. A3's bound of 24 KiB (24,576 bytes) for the orchestrator's compact pack is **met**: it is 21,035 bytes, and the size test asserts it. G1's markers cover five blocks of the orchestrator's manifest (the `suggest_rule` argument detail, the timer item, the tool-inventory reading of seats, naming threads and system inspection); no other role's manifest carries a marker, so their compact packs shrank only by the names-only skill index.
 

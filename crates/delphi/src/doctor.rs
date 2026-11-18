@@ -1740,7 +1740,33 @@ mod tests {
             });
             assert_eq!(probe_socket(&sock), Probe::Reachable);
             assert!(h.join().unwrap().is_empty(), "the probe sent bytes");
-            assert_eq!(probe_socket(&sock), Probe::Stale);
+            // A socket file with nobody behind it, as a dead daemon leaves one. It is bound and never listened on, so the answer
+            // does not hang on when the last copy of a listener's descriptor closes: a child that another test has forked and not
+            // yet exec'd holds a copy of every open descriptor, and a listener dropped here would still accept (spec 125 section 4.3).
+            let dead = t.path().join("dead.sock");
+            bind_without_listening(&dead);
+            assert_eq!(probe_socket(&dead), Probe::Stale);
+        }
+
+        /// Bind a stream socket at `path` and close it without `listen`: the file stays and every `connect` to it is refused.
+        fn bind_without_listening(path: &Path) {
+            use std::os::unix::ffi::OsStrExt;
+            let bytes = path.as_os_str().as_bytes();
+            // SAFETY: a zeroed sockaddr_un is valid; the path is copied within its bounds and stays NUL-terminated.
+            unsafe {
+                let mut addr: libc::sockaddr_un = std::mem::zeroed();
+                assert!(bytes.len() < addr.sun_path.len(), "the socket path is too long for this test");
+                addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+                for (d, s) in addr.sun_path.iter_mut().zip(bytes) {
+                    *d = *s as libc::c_char;
+                }
+                let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+                assert!(fd >= 0, "socket: {}", std::io::Error::last_os_error());
+                let bound = libc::bind(fd, std::ptr::addr_of!(addr).cast(), std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t);
+                let err = std::io::Error::last_os_error();
+                libc::close(fd);
+                assert_eq!(bound, 0, "bind: {err}");
+            }
         }
     }
 

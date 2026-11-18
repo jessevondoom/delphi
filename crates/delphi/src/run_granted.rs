@@ -363,6 +363,12 @@ pub fn tty_ask(prompt: &str) -> Option<String> {
     ask_on(std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").ok()?, prompt)
 }
 
+/// Signal dispositions belong to the whole process, and tests run as threads of one. Every test that changes a disposition (the
+/// prompt's `NoEcho` here, `run_ui` in `chat.rs`) holds this for its whole body, so one test never reads, or is signalled under, what
+/// another has set (spec 125 section 4.4). The product asks one prompt at a time and needs no such lock.
+#[cfg(test)]
+pub(crate) static SIGNAL_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,6 +461,7 @@ mod tests {
     fn the_code_is_typed_without_echo_and_the_terminal_is_restored_on_every_path() {
         use std::io::{Read, Write};
         use std::os::fd::{AsRawFd, FromRawFd};
+        let _turn = SIGNAL_TURN.lock().unwrap_or_else(|e| e.into_inner());
         let (mut master, mut slave) = (0, 0);
         // SAFETY: openpty fills two descriptors.
         assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
@@ -507,6 +514,7 @@ mod tests {
     // A signal that was ignored before the prompt stays ignored, and every disposition is back as it was afterwards (SIGTSTP included).
     #[test]
     fn the_prompt_leaves_an_ignored_signal_ignored_and_restores_every_disposition() {
+        let _turn = SIGNAL_TURN.lock().unwrap_or_else(|e| e.into_inner());
         let disposition = |sig: libc::c_int| {
             // SAFETY: reading the current action only.
             let mut cur: libc::sigaction = unsafe { std::mem::zeroed() };

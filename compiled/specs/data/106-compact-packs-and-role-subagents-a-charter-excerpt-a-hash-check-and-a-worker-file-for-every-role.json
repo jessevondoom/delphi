@@ -76,37 +76,37 @@
     },
     {
       "level": 3,
-      "line": 122,
+      "line": 124,
       "number": "9.1",
       "title": "G2: the subagent-start hook, established and run (2026-11-14)"
     },
     {
       "level": 3,
-      "line": 130,
+      "line": 132,
       "number": "9.2",
       "title": "G6: a role's colour in the host (2026-11-14)"
     },
     {
       "level": 3,
-      "line": 140,
+      "line": 142,
       "number": "9.3",
       "title": "The subagent line, seen live (2026-11-14)"
     },
     {
       "level": 2,
-      "line": 144,
+      "line": 146,
       "number": "10",
       "title": "Amendments from review (2026-11-13)"
     },
     {
       "level": 2,
-      "line": 156,
+      "line": 158,
       "number": "11",
       "title": "Follow-up: a worker that always has its pack, and an orchestrator pack inside its bound (operator, 2026-11-14)"
     },
     {
       "level": 2,
-      "line": 177,
+      "line": 179,
       "number": "12",
       "title": "Follow-up: a role's colour and weight in the host (operator, 2026-11-14)"
     }
@@ -114,7 +114,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md",
-    "sha256": "fdbc133d671852b10da88a38ae775978415ac391cb87c247756d6b4e8d8c5b1d"
+    "sha256": "9b7741a02739f4aecc58d66df27714838327f1d324059270e0791b3320fff359"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +127,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-13, in a host session (\"approve all your plans and suggestions and go\"). The approval was given to the plan this spec carries out (workstream 2: a deterministic governance digest with the full charter by reference, `pack_hash` in `list_roles`, fetch-if-changed, agent files for every role) BEFORE this text was written; the operator has not read the text."
     },
-    "sha256": "fdbc133d671852b10da88a38ae775978415ac391cb87c247756d6b4e8d8c5b1d",
+    "sha256": "9b7741a02739f4aecc58d66df27714838327f1d324059270e0791b3320fff359",
     "word": "approved"
   },
   "spec": {

@@ -2,7 +2,7 @@
 
 # Runtime, models and tools
 
-16 specs. [All groups](./index.md).
+17 specs. [All groups](./index.md).
 
 ## 002-adapter-and-routing
 
@@ -130,4 +130,14 @@ _No standard scope section; open the spec._
 
 ```text
 A model that has started down a route does not reliably turn back. Anthropic's alignment assessment of its September 2026 cybersecurity incidents reports that a reminder of the task's scope stopped the unwanted behaviour in 90% of resamples when it sat in the most recent turn, 55% with one turn after it, 45% with two and 40% with three, and that explicit abort instructions placed in earlier notes had no effect after the third compaction cycle. The same study found the model assumed the systems it reached were simulated until shown otherwise. These are another lab's results, on other models, in an evaluation setting. They are a reason to look at what Delphi puts in the latest turn, not a measurement of Delphi.
+```
+
+## 125-load-sensitive-tests-made-deterministic
+
+**125: Load-sensitive tests made deterministic** · approved (per source at `4464ef67b6b4`) · tier 0 · [source](../../specs/125-load-sensitive-tests-made-deterministic.md)
+
+**source excerpt, untrusted** · `specs/125-load-sensitive-tests-made-deterministic.md` line 25
+
+```text
+Tests that fail on a pull request they have nothing to do with, and pass on a rerun, cost a macOS job each time and teach people to rerun instead of read. Over 2026-11-16 to 2026-11-18 tests of this kind reddened pull requests or `main` again and again. This spec fixes the four whose cause is shown (T1 to T4), and lists the rest (L1 to L3).
 ```
