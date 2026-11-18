@@ -1197,3 +1197,8 @@ The operator asked on 2026-11-16 for a better Council and Panel experience in th
 | 124 | S12 | trigger tests and train cases for every new skill; the report | not built |
 | 124 | S13 | the strategist's write path and research tools (amendment §16) | not built; approved by the operator's words 2026-11-17, the amendment takes effect on merge |
 | 124 | S14 | primary sources confirmed by the scout and cited in the skills (amendment §16) | not built |
+| 125 | S0 | the spec | approved 2026-11-18 by the operator in a session ("4: yes stabilize"; the text was written afterwards from the code and the CI logs and has not been read by the operator); takes effect when its pull request merges |
+| 125 | S1 | T1: the granted seat's stop-at-the-call test is driven by a gate, not a 0.3 s sleep (`crates/delphi-engine`) | not built |
+| 125 | S2 | T2: one turn for the user's process table in the authorized-profile tests, also across test processes (`crates/delphi-sandbox`) | not built |
+| 125 | S3 | T3: the doctor probe's stale case is a socket nobody ever listened on (`crates/delphi`) | not built |
+| 125 | S4 | T4: one turn for the three tests that change the process's signal dispositions (`crates/delphi`) | not built |
