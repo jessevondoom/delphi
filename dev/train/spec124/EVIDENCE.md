@@ -1,8 +1,9 @@
 # Spec 124 S12: evidence for the new strategist and architect skills
 
-Run 2026-11-18. Written for a person to read before anyone says the skills of spec 124 do anything. It covers the nine skills
-merged so far (`skills.toml` in this directory), the two checks (`strategy_trace`, the "Options considered" rule) and the
-capture step. The three strategist skills of slice S8 are not merged and are not covered.
+Run 2026-11-18. Written for a person to read before anyone says the skills of spec 124 do anything. It covers the twelve skills
+in `skills.toml` in this directory, the two checks (`strategy_trace`, the "Options considered" rule) and the capture step. The
+three strategist skills of slice S8 merged after the model runs: they have the lexical trigger test and nothing else. Every
+model run below was made before they merged, with nine skills and with `competitive-swot-analysis` still on the strategist's list.
 
 **Verdict:** the checks and the cases work as instruments; on one small model the capture step was followed (6 of 6 candidate runs staged exactly one note, 0 of 6 baseline runs did) and `strategy_trace` was relayed correctly when asked for (6 of 6); the data does NOT show that any new skill improves a strategy or a spec, and the architect did not write the three kinds of option unless it was told to load the skill (0 of 3 without, 3 of 3 with).
 
@@ -46,7 +47,7 @@ role whose manifest lists a strategy skill) and no `divergent-options` file.
 
 | What | Cases | Result |
 | :-- | :-- | :-- |
-| Trigger, lexical (`crates/delphi/tests/spec124_evidence.rs`) | 36 tasks in `dev/skill-evals/spec124-{architect,strategist,advocate}.json`: 19 written for one of the nine skills, 11 for a sibling skill, 6 for no skill | 36 of 36: each of the nine skills is retrieved from its own tasks (two or three each) and is not retrieved from at least one task that shares a word with it |
+| Trigger, lexical (`crates/delphi/tests/spec124_evidence.rs`) | 51 tasks in `dev/skill-evals/spec124-{architect,strategist,advocate}.json` (13 of the strategist's came with S8, 2 more are sibling tasks for them): 29 written for one of the twelve skills, 15 for a sibling skill, 7 for no skill | 51 of 51: each of the twelve skills is retrieved from its own tasks (two or three each) and is not retrieved from at least one task that shares a word with it |
 | `strategy_trace` (same test) | 6 fixtures: an orphan action, an unfounded policy, a diagnosis with no falsifier, two incomplete forecasts, all four at once, and a clean trace | 6 of 6 report exactly the findings in `expect.toml` (`TRACE-ACT-01`, `TRACE-POL-01`, `TRACE-DIA-01`, `TRACE-FOR-01`; none for the clean one) |
 | The trace cases' own checks | each case's patterns run on what the tool prints for each of the 6 fixtures (36 pairs) | 36 of 36: a case passes on its own fixture's output and fails on every other |
 | Capture, scripted (`spec_124_s12_the_capture_cases_…` in `delphi-engine`) | 2 cases (strategist, architect), each run with a script that stages 0, 1 and 2 notes | 6 of 6 as expected: only one note meets the case's count; in every run no lesson, heuristic or proposal changed and no system prompt held a note |
@@ -67,7 +68,8 @@ their words. It shows a description carries the vocabulary of its task and does 
 | strategist | 10 + 17 | 27 of 27 |
 | architect | 18 + 16 | 34 of 34 |
 
-All tasks of a role go in one prompt, so the 69 answers are three samples, not 69. The older tasks still chose their old skills
+This was run before S8 merged: the strategist's list then held `competitive-swot-analysis` and not the three S8 skills, and
+the 15 strategist tasks added since (13 from S8 and 2 sibling tasks for its skills) were not asked of a model. All tasks of a role go in one prompt, so the 69 answers are three samples, not 69. The older tasks still chose their old skills
 with the new skills on the list. This call shows the model the names and descriptions of the role's skills; see finding 1
 below for why that is not what a seat inside the daemon is shown.
 
@@ -124,14 +126,16 @@ What the rows say beyond the counts:
   in the middle of other work, was not tried. The trace prompts name the tool.
 - **A holdout.** Every case is in the `dev` split and was written by the author of the checks. There was no pre-registration.
 - **A human reading.** Nobody has read the 27 answers or the 6 notes. Whether the notes say the right thing is unjudged.
-- **The other seven skills in use.** `quality-scenarios`, `adr-authoring`, `fitness-functions`, `spec-premortem`,
+- **The other eight skills in use.** `quality-scenarios`, `adr-authoring`, `fitness-functions`, `spec-premortem`,
   `boundary-design`, `strategy-kernel`, `strategy-cascade` and `accessibility-audit` have trigger tests only. No seat was asked
   to use one.
 - **The capture step's later half.** That a staged note reaches `/retro`, that an operator ratifies it, or that a ratified
   lesson changes later work.
 - **The host path.** A host worker that ends its answer with `Note to stage:` was not run.
-- **The strategist skills of S8** (`positioning-and-product-strategy`, `advantage-analysis`, `scenario-and-premortem`): not
-  merged. Adding each is one entry in `skills.toml` and its tasks in `dev/skill-evals/spec124-strategist.json`.
+- **The strategist skills of S8 with a model** (`positioning-and-product-strategy`, `advantage-analysis`,
+  `scenario-and-premortem`): they merged after the model runs. Each now has the lexical trigger test (at least two tasks
+  that retrieve it and a sibling or no-skill task that does not) and nothing else: no model call picked among them, no seat
+  was asked to use one, and no model saw the strategist's list without `competitive-swot-analysis`.
 
 ## Limits of the instruments
 

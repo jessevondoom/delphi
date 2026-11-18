@@ -95,7 +95,6 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `git-bisect-hunt` | Isolates the exact breaking commit using an automated reproduction. | instructions |
 | `benchmark-profiling` | Runs statistical microbenchmarks (percentiles, memory, tokens) with significance tests. | instructions |
 | `primary-source-verification` | Fact-checks specific claims, benchmarks, or APIs against primary sources. | instructions |
-| `competitive-swot-analysis` | Evaluates competitive dynamics, platform bets, and moats via SWOT and Wardley mapping. | instructions |
 | `hypothesis-flipping` | Inverts axioms and formulates contrarian test hypotheses when debugging dead-ends. | instructions |
 
 ### 5. **Scout** (Broad Scout & Landscape Cartographer)
@@ -115,9 +114,11 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `scope-creep-detection` | Enforces **The scope audit**: flags gold-plating or unapproved scope expansion. | instructions |
 | `risk-roi-analysis` | Evaluates effort and risk against expected payoff and opportunity cost. | `templates/risk-roi-brief.md` |
 | `strategic-pattern-matching` | Maps challenges to military precedents, business cases, and asymmetric maneuvers. | instructions |
-| `competitive-swot-analysis` | Evaluates competitive dynamics, platform bets, and moats via SWOT and Wardley mapping. | instructions |
 | `strategy-kernel` | A strategy on one page: diagnosis with a falsifier, guiding policies, coherent actions; a bad-strategy checklist. | the `strategy_trace` tool |
 | `strategy-cascade` | Five choices from aspiration to management systems, then tactics and owned actions with a measure and a stop-doing. | the `strategy_trace` tool |
+| `positioning-and-product-strategy` | Positioning from competitive alternatives, unique attributes, value and the best-fit customer, before messaging; brand architecture; a vision to strategy to roadmap review that flags a roadmap that is a list of features. | instructions |
+| `advantage-analysis` | Tests each claimed source of durable advantage for a benefit, a barrier and evidence; maps how components evolve; eliminate, reduce, raise, create. Replaces the retired SWOT skill (`specs/124` §9). | instructions |
+| `scenario-and-premortem` | At least three scenarios, each with a dated tripwire, and a premortem on the chosen strategy. | instructions |
 
 ### 7. **Red-Team** (Red Team, Adversarial Critic & PR Security Auditor)
 | Skill | Purpose | Backing |
@@ -152,7 +153,7 @@ The first three need a tool the role does not hold in this build: each says so, 
 ### 10. **Validator** (Fact-Checker, Source Assessor & Knowledge Gatekeeper; it only asks, the daemon decides by `[validator] mode`, `specs/040`, `specs/100`)
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
-| `fact-validation` | Reports whether a claim has independent, reputable corroboration, and what it would conclude; never writes *validated*. Also usable by the scout and orchestrator. | instructions |
+| `fact-validation` | Reports whether a claim has independent, reputable corroboration, and what it would conclude; never writes *validated*. | instructions |
 
 ### 11. **Administrator** (Workspace Administration, `specs/067`, `specs/069`; narrowed by `specs/124` §4)
 | Skill | Purpose | Backing |
@@ -173,6 +174,8 @@ The first three need a tool the role does not hold in this build: each says so, 
 | `accessibility-audit` | Audit a screen or a command's output for reduce motion, color as the only carrier of meaning, contrast, keyboard reach, narrow widths and plain text. | instructions |
 
 ### Any role (loaded on demand; in no role's manifest)
+These three are the `ON_DEMAND_SKILLS` of `crates/delphi/src/lint.rs`: `delphi lint` fails when a manifest lists one, and fails any other skill that authorizes a role whose manifest does not list it (`specs/124` O-8).
+
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
 | `work-breakdown-structures` | Decompose complex, ambiguous epics into Mutually Exclusive, Collectively Exhaustive (MECE) task hierarchies. Its frontmatter authorizes the orchestrator. | instructions |

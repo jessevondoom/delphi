@@ -3,8 +3,7 @@
 # its cases are in dev/skill-evals/spec124-<role>.json, at least one task there retrieves it, and at least one task that
 # shares a word with it does not.
 #
-# To add a skill (the strategist skills of S8, when they merge): add an entry here, and its tasks to the role's case file.
-# Nothing in the test names a skill.
+# To add a skill: add an entry here, and its tasks to the role's case file. Nothing in the test names a skill.
 
 [[skill]]
 name = "accessibility-audit"
@@ -20,6 +19,21 @@ slice = "S5"
 name = "strategy-cascade"
 role = "strategist"
 slice = "S5"
+
+[[skill]]
+name = "positioning-and-product-strategy"
+role = "strategist"
+slice = "S8"
+
+[[skill]]
+name = "advantage-analysis"
+role = "strategist"
+slice = "S8"
+
+[[skill]]
+name = "scenario-and-premortem"
+role = "strategist"
+slice = "S8"
 
 [[skill]]
 name = "divergent-options"

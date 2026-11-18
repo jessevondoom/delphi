@@ -8,5 +8,20 @@
 ["strategist", "This pull request says it carries out the strategy. Audit it against the governing specs and the rubric, with evidence for each acceptance criterion.", "pr-alignment-review"],
 ["strategist", "Each of the steps in this change that go beyond the approved spec: flag the unrequested files and features.", "scope-creep-detection"],
 ["strategist", "Fix the typo in the title of the strategy document.", null],
-["strategist", "What is today's date?", null]
+["strategist", "What is today's date?", null],
+["strategist", "Before anyone writes messaging for the launch, position the product: what buyers would use instead, its unique attributes and the best-fit customer.", "positioning-and-product-strategy"],
+["strategist", "We have three product names now. Which brand architecture fits, and what will a buyer of one assume about the others?", "positioning-and-product-strategy"],
+["strategist", "Do a vision review: does the product vision still agree with the items we plan to ship, or is it only a list of features?", "positioning-and-product-strategy"],
+["strategist", "The team says the plugin ecosystem is our moat. Is there a barrier behind that advantage, and what evidence shows it is durable?", "advantage-analysis"],
+["strategist", "Which components of the stack will evolve into a commodity, and which are still worth custom work?", "advantage-analysis"],
+["strategist", "Against what the incumbents offer, what should we eliminate, reduce, raise or create?", "advantage-analysis"],
+["strategist", "We are relying on the clinic focus for two years. Write three futures with a dated tripwire for each, so we notice early.", "scenario-and-premortem"],
+["strategist", "Run a premortem on the chosen direction: suppose it failed by next December, and say why.", "scenario-and-premortem"],
+["strategist", "What could change outside our control that would undo this, and how would we see it coming?", "scenario-and-premortem"],
+["strategist", "Sign-ups are flat and nobody agrees why. Give me a one-page strategy: what is in the way, the approach, and what we do.", "strategy-kernel"],
+["strategist", "Is it worth spending three weeks on offline mode? Weigh effort, risk and payoff.", "risk-roi-analysis"],
+["strategist", "Which milestones sit on the critical path of the migration?", "roadmap-sequencing"],
+["strategist", "The product positioning is settled. Order the three deliverables of the launch into milestones along the critical path, with dependencies checked.", "roadmap-sequencing"],
+["strategist", "The plugin store is said to be an advantage. Weigh the effort and risk of building it against its expected payoff and the cost of not doing it.", "risk-roi-analysis"],
+["strategist", "Translate the user guide into French.", null]
 ]
