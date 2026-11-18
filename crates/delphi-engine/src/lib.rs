@@ -202,6 +202,7 @@ pub mod research_known;
 pub mod search_log;
 pub mod doi;
 pub mod retractions;
+pub mod research_empty;
 pub mod research_run;
 pub mod research_note;
 pub mod research_digest;

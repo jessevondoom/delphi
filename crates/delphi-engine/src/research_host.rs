@@ -319,7 +319,7 @@ impl Scout for LiveScout {
     fn plan<'a>(&'a self, question: &'a str, known: &'a Known) -> BoxFut<'a, Result<Vec<SubQuestion>, String>> {
         Box::pin(async move {
             let e = &self.0;
-            let key = e.scout_key().ok_or_else(|| "no model is available for the scout right now".to_string())?;
+            let key = e.scout_key().ok_or_else(|| crate::research_empty::NO_SCOUT_MODEL.to_string())?;
             let role = crate::role_call::load(e, crate::role_call::Step::Plan).await?;
             let ipr = crate::research::scout_call(crate::research::PLAN_LINE, &role, crate::research_method::plan_contract(question, known));
             let raw = e.one_shot_raw(&key, &ipr, PLAN_OUTPUT).await.ok_or_else(|| "the scout's plan call failed".to_string())?;
@@ -330,7 +330,7 @@ impl Scout for LiveScout {
     fn extract<'a>(&'a self, question: &'a str, page: &'a Page, subs: &'a [SubQuestion]) -> BoxFut<'a, Result<Vec<Extracted>, String>> {
         Box::pin(async move {
             let e = &self.0;
-            let key = e.scout_key().ok_or_else(|| "no model is available for the scout right now".to_string())?;
+            let key = e.scout_key().ok_or_else(|| crate::research_empty::NO_SCOUT_MODEL.to_string())?;
             let role = crate::role_call::load(e, crate::role_call::Step::JudgePage).await?;
             let raw = e.one_shot_raw(&key, &scout_ipr(&role, claim_contract(question, page, e.settings.research_limits.page_chars, subs)), CLAIM_OUTPUT).await.ok_or_else(|| "the scout's call failed".to_string())?;
             Ok(parse_claims(&e.secrets.redact(&raw.text), &page.text, &page.url))
@@ -344,7 +344,7 @@ impl Scout for LiveScout {
     fn write_answer<'a>(&'a self, ask: &'a AnswerAsk<'a>) -> BoxFut<'a, Result<String, String>> {
         Box::pin(async move {
             let e = &self.0;
-            let key = e.scout_key().ok_or_else(|| "no model is available for the scout right now".to_string())?;
+            let key = e.scout_key().ok_or_else(|| crate::research_empty::NO_SCOUT_MODEL.to_string())?;
             let role = crate::role_call::load(e, crate::role_call::Step::WriteAnswer).await?;
             let ipr = crate::research::scout_call(crate::research::WRITE_LINE, &role, crate::research_method::answer_contract(ask));
             let raw = e.one_shot_raw(&key, &ipr, ANSWER_OUTPUT).await.ok_or_else(|| "the scout's answer call failed".to_string())?;
