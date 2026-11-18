@@ -2,5 +2,9 @@
 ["architect", "The requirement for the export queue is stated. Before a design is chosen, produce three options: the conventional one, one that removes a named constraint and one by a named method.", "divergent-options"],
 ["architect", "Every sketch I make for the cache is the obvious design. Give me options beside the conventional one before one is chosen, and say how each would be tested.", "divergent-options"],
 ["architect", "The Council is at a deadlock: latency against consistency, and no standard design wins the trade-off. Break it with lateral thinking.", "oblique-strategies"],
+["architect", "The spec says the daemon must be fast and safe. Turn that quality goal into scenarios, each with a measure, and rank them in a utility tree.", "quality-scenarios"],
+["architect", "Mark which decisions in the cache design are sensitivity points and which are tradeoff points for latency against freshness.", "quality-scenarios"],
+["architect", "We chose the append-only log. Record that architecture decision with its context, the accepted drawbacks and a reversal trigger.", "adr-authoring"],
+["architect", "This choice of file format will be costly to undo. Record the decision and tag it one-way or two-way.", "adr-authoring"],
 ["architect", "What is today's date?", null]
 ]

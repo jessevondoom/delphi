@@ -18,6 +18,8 @@ authorized_skills:
   - tui-design
   - oblique-strategies
   - divergent-options
+  - quality-scenarios
+  - adr-authoring
 memory_scope: "memory/agents/architect/"
 max_turn_budget: 25
 ---

@@ -14,7 +14,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | :-- | :-- | :-- | :-- | :-- | :-- |
 | `administrator` | Process Topology, Delivery Sequencer & Council Parliamentarian | workhorse | either | explore | `work-breakdown-structures`, `critical-path-sequencing`, `council-parliamentarian`, `roadmap-sequencing`, `workspace-administration` |
 | `advocate` | User Experience Advocate, Behavioral Psychologist & Joy Specialist | workhorse | either | explore | `persona-simulation`, `user-joy-heuristics`, `cognitive-walkthrough`, `tonal-calibration` |
-| `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | either | explore | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design`, `oblique-strategies`, `divergent-options` |
+| `architect` | Systems Architect, Creative Designer & Spec Author | workhorse | either | explore | `repo-cartography`, `ast-code-search`, `spec-authoring`, `diagram-generation`, `api-contract-design`, `trade-off-matrix`, `tui-design`, `oblique-strategies`, `divergent-options`, `quality-scenarios`, `adr-authoring` |
 | `assistant` | Executive Assistant, Comms Triage & Operator Leverage Specialist | fast | either | explore | `executive-briefing-distillation`, `transcript-action-extraction`, `tonal-calibration` |
 | `builder` | Lead Engineer, Builder & Verification Specialist | workhorse | either | explore | `worktree-isolation`, `tdd-execution`, `safe-refactoring`, `git-pr-packaging`, `git-merge-and-conflict-resolution`, `ci-triage`, `spec-driven-build`, `tui-design`, `systems-pattern-catalog` |
 | `investigator` | Precision Researcher, Bug Tracker & Benchmark Specialist | workhorse | either | explore | `ast-code-search`, `git-bisect-hunt`, `benchmark-profiling`, `primary-source-verification`, `competitive-swot-analysis`, `hypothesis-flipping` |
@@ -30,6 +30,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 
 | name | use it when | runs | roles |
 | :-- | :-- | :-- | :-- |
+| `adr-authoring` | Record one architecture decision: context, options, the choice, accepted drawbacks, a one-way or two-way tag and a reversal trigger. Use when a choice will be costly to undo or to rediscover. | either | `architect` |
 | `adversarial-test-gen` | Generate boundary, malformed-input, concurrency and fault-injection tests that try to break a change, and report which ones do. Use after the happy path passes. | either | `red-team` |
 | `api-contract-design` | Design a provider-neutral interface, IPC message or CLI grammar with a JSON Schema, examples and error cases. Use when components must agree on a shape. | either | `architect` |
 | `assumption-stress-test` | Run a pre-mortem on a plan, proposal or research: assume it failed and find the likeliest reasons and the cheapest tests of them. Use before committing. | either | `red-team` |
@@ -73,6 +74,7 @@ What a bundle can attach to. A bundle names a **host role** by its id (never a t
 | `pr-alignment-review` | Audit a PR or spec against the operator's goal, the governing specs and the REVIEW.md rubric, mapping acceptance criteria to evidence. Use at review. | either | `strategist` |
 | `primary-source-verification` | Check a specific claim, API behaviour or benchmark against the primary source and report what holds. Use before relying on a claim you did not verify. | either | `investigator` |
 | `protocol-schema-translation` | Validate and translate payloads at a boundary (webhook, third-party API, provider tool schema), tagging them untrusted. Use when data crosses into Delphi. | either | `messenger` |
+| `quality-scenarios` | Turn a quality goal such as speed or safety into six-part scenarios with a measure, rank them in a utility tree and mark sensitivity and tradeoff points. Use when a design must meet one. | either | `architect` |
 | `reading-labels` | Weigh a search result by its label (who wrote it, whether it was checked) before stating a fact, writing a spec or acting. Use with search_kb and kb_retrieve results. | either | `orchestrator`, `architect`, `red-team`, `builder`, `strategist`, `investigator`, `scout`, `writer`, `messenger`, `validator`, `administrator`, `assistant`, `advocate` |
 | `repo-cartography` | Map an unfamiliar repository: entry points, module boundaries, build and test commands, in a pointer map under 300 lines. Use when first meeting a codebase. | either | `architect`, `scout` |
 | `retrospective-facilitation` | Run a short post-mission retrospective: what cost turns, what repeated, what to change. Use at mission close, before compaction. | either | `orchestrator` |

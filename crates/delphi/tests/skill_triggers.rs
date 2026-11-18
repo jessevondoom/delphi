@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// The skills spec 124 adds for the architect, by slice.
-const NEW_SKILLS: &[&str] = &["divergent-options"];
+const NEW_SKILLS: &[&str] = &["divergent-options", "quality-scenarios", "adr-authoring"];
 const CASES: &str = "dev/skill-evals/spec124-architect.json";
 const STOP: &[&str] = &["with", "that", "this", "from", "when", "into", "uses", "used", "using", "before", "after", "their", "them", "each", "your", "what", "which", "have", "will", "would", "should", "does"];
 

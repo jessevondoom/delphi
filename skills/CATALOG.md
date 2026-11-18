@@ -82,6 +82,8 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `tui-design` | Designs calm, high-focus terminal interfaces, deck navigation, and character-cell invariants in Ratatui. | `delphi check tui` |
 | `oblique-strategies` | Applies lateral thinking, Oblique Strategies, and TRIZ matrices to break deadlocks. | instructions |
 | `divergent-options` | Produces at least three design options by default (conventional, a named constraint removed, a named method), each with a test, and guards against an untested layer of abstraction (`specs/124` §7). | instructions |
+| `quality-scenarios` | Turns a quality goal into six-part scenarios with a measure, ranks them in a utility tree, and lists sensitivity points and tradeoff points (`specs/124` §8). | instructions |
+| `adr-authoring` | Records one architecture decision: context, options, choice, accepted drawbacks, a one-way or two-way tag and a reversal trigger (`specs/124` §8). | instructions |
 
 ### 4. **Investigator** (Precision Hunter, Bug Tracker & Benchmark Specialist)
 | Skill | Purpose | Backing |
