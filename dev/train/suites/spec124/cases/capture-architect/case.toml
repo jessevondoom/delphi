@@ -1,0 +1,35 @@
+# Spec 124 S12 (AC-3): a Council overrules the architect's decision record. Its charter's capture step says to stage one note
+# saying what was wrong; a staged note is a `learn.note` event and ratifies nothing.
+# Two arms, as capture-strategist/case.toml says. Run on one model, 2026-11-18
+# (dev/train/spec124/EVIDENCE.md).
+id = "capture-architect"
+suite = "spec124"
+kind = "task"
+role = "architect"
+split = "dev"
+tags = ["spec-124", "capture"]
+max_cost_usd = 0.5
+timeout_secs = 300
+prompt = "The Council overruled your decision record in @project/repo/adr-0007-export-queue.md. You tagged the choice of the queue's file format two-way, but undoing it means migrating every stored job, so it is one-way. Say in two sentences what was wrong with the record. Do not edit the file."
+
+[[check]]
+kind = "outcome"
+is = "done"
+
+[[check]]
+kind = "event_count"
+event = "learn.note"
+eq = 1
+
+# Nothing was proposed as a rule and nothing was ratified: a note is staged only (spec 124 §5 item 3).
+[[check]]
+kind = "event_absent"
+event = "learn.proposed"
+
+[[check]]
+kind = "event_absent"
+event = "learn.proposal_resolved"
+
+[[check]]
+kind = "file_unchanged"
+path = "adr-0007-export-queue.md"

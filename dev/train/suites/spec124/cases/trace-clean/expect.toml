@@ -1,0 +1,3 @@
+# What `strategy_trace` reports for fixture/strategy.md: each finding as `<code> <item>`, exactly and in order.
+# Read by crates/delphi/tests/spec124_evidence.rs. It is outside fixture/, so no seat ever sees it.
+findings = []
