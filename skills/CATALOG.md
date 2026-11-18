@@ -75,12 +75,13 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 ### 3. **Architect** (Systems Architect, Creative Designer & Spec Author)
 | Skill | Purpose | Backing |
 | :--- | :--- | :--- |
-| `spec-authoring` | Authors modular specs (`specs/NNN-*.md`) including `Simpler Alternative Considered`. | `delphi check spec`, `templates/spec-skeleton.md` |
+| `spec-authoring` | Authors modular specs (`specs/NNN-*.md`) including `Simpler Alternative Considered` and `Options considered`. | `delphi check spec`, `delphi lint`, `templates/spec-skeleton.md` |
 | `diagram-generation` | Generates Mermaid diagrams (`flowchart`, `sequenceDiagram`, `stateDiagram-v2`). | instructions |
 | `api-contract-design` | Designs provider-neutral interfaces, IPC schemas, and CLI grammars. | instructions |
 | `trade-off-matrix` | Evaluates competing designs across weighted criteria with weight sensitivity. | `templates/trade-off-matrix.md` |
 | `tui-design` | Designs calm, high-focus terminal interfaces, deck navigation, and character-cell invariants in Ratatui. | `delphi check tui` |
 | `oblique-strategies` | Applies lateral thinking, Oblique Strategies, and TRIZ matrices to break deadlocks. | instructions |
+| `divergent-options` | Produces at least three design options by default (conventional, a named constraint removed, a named method), each with a test, and guards against an untested layer of abstraction (`specs/124` §7). | instructions |
 
 ### 4. **Investigator** (Precision Hunter, Bug Tracker & Benchmark Specialist)
 | Skill | Purpose | Backing |

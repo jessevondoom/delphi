@@ -1,0 +1,6 @@
+[
+["architect", "The requirement for the export queue is stated. Before a design is chosen, produce three options: the conventional one, one that removes a named constraint and one by a named method.", "divergent-options"],
+["architect", "Every sketch I make for the cache is the obvious design. Give me options beside the conventional one before one is chosen, and say how each would be tested.", "divergent-options"],
+["architect", "The Council is at a deadlock: latency against consistency, and no standard design wins the trade-off. Break it with lateral thinking.", "oblique-strategies"],
+["architect", "What is today's date?", null]
+]

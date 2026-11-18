@@ -17,6 +17,7 @@ authorized_skills:
   - trade-off-matrix
   - tui-design
   - oblique-strategies
+  - divergent-options
 memory_scope: "memory/agents/architect/"
 max_turn_budget: 25
 ---

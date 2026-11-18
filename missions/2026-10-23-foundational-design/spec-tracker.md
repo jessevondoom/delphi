@@ -1188,7 +1188,7 @@ The operator asked on 2026-11-16 for a better Council and Panel experience in th
 | 124 | S3 | the other roles' manifests and skills | not built |
 | 124 | S4 | capture step for the strategist and architect | not built |
 | 124 | S5 | strategy-kernel, strategy-cascade, strategy_trace | not built |
-| 124 | S6 | divergent-options, spec-authoring options section, the options lint | not built |
+| 124 | S6 | divergent-options, spec-authoring options section, the options lint | built, in a pull request stacked on #770, not merged: `skills/divergent-options` (architect only; three kinds of option, a test sentence each, a guard against an untested layer of abstraction); `spec-authoring` and its skeleton gain "Options considered" beside "Simpler Alternative Considered" (that rule unchanged); `oblique-strategies` points to it; `delphi lint` check `spec-options` warns on a spec numbered 125 or above (not superseded) with no such heading, a warning until the constant `OPTIONS_CONSIDERED_LEVEL` in `crates/delphi/src/lint.rs` is changed (OD-4). Checked by unit tests and a lexical retrieval test (`crates/delphi/tests/skill_triggers.rs`). NOT checked: the model half of the trigger test (no model call was made), whether the skill changes what an architect writes (S12), and the methods' primary sources (OD-3). Built before S1, which section 14 names as its dependency; nothing here uses S1. |
 | 124 | S7 | quality-scenarios, adr-authoring | not built |
 | 124 | S8 | strategist breadth skills; competitive-swot-analysis retired | not built |
 | 124 | S9 | fitness-functions, spec-premortem, boundary-design | not built |

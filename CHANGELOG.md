@@ -6,6 +6,10 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
+## Unreleased
+
+- **The architect proposes more than one design** (spec 124 S6): a new skill, `divergent-options`, has the architect write at least three options before choosing (a conventional one, one that removes a named constraint, one by a named method), each with how it would be tested. `spec-authoring` and its skeleton gain an "Options considered" section beside "Simpler Alternative Considered", whose rule is unchanged. `delphi lint` warns (`spec-options`) when a spec numbered 125 or above has no such heading; the warning is planned to become a failure one release later. Whether the skill improves specs is not measured.
+
 ## 0.6.4 — 2026-11-17
 
 A summary by spec; the pull requests are listed on the releases page. This is the first release that carries the desktop app on macOS, and it makes the Council and the Panel visible from a host (spec 123). The tests ran on scratch homes with fakes; what was run for real is said item by item.
