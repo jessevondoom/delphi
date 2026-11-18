@@ -97,12 +97,30 @@
       "line": 194,
       "number": "15",
       "title": "Acceptance"
+    },
+    {
+      "level": 2,
+      "line": 206,
+      "number": "16",
+      "title": "Amendment (operator, 2026-11-17 and 2026-11-18): the answers to the open decisions"
+    },
+    {
+      "level": 3,
+      "line": 215,
+      "number": "16.1",
+      "title": "Slices"
+    },
+    {
+      "level": 3,
+      "line": 222,
+      "number": "16.2",
+      "title": "Acceptance"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md",
-    "sha256": "f21f70fe3fecb719f4a0b1d750773913cf199235426a3ce149c045e2bbfb6aee"
+    "sha256": "0e5f94e099c8177c2e14ab7be0f8be27d1b77f75db4a5e6371deb2ddbc899c0a"
   },
   "source_status_at_hash": {
     "line": {
@@ -115,7 +133,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-17, in a session, after seeing the build plan and this draft being written: \"i saw your drafting of the steps for 124 so i'll approve it when ready. if it's based on this conversation consider it approved and run hard at it\". Earlier the same day they answered the three questions: \"1. repo-wide. include the first set of recommendations too. 2. go with your pick. 3. no. now go\". The text was written from that conversation; the operator has not read it line by line. Open questions OD-1 to OD-4 of section 12 take their recommendations unless the operator says otherwise. It takes effect when the operator merges the pull request that carries it."
     },
-    "sha256": "f21f70fe3fecb719f4a0b1d750773913cf199235426a3ce149c045e2bbfb6aee",
+    "sha256": "0e5f94e099c8177c2e14ab7be0f8be27d1b77f75db4a5e6371deb2ddbc899c0a",
     "word": "approved"
   },
   "spec": {
