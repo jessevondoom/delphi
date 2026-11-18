@@ -1,0 +1,140 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 124: The fleet audit: honest manifests, strategist and architect skills, and a learning capture"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 2,
+      "line": 58,
+      "number": "2",
+      "title": "Terms"
+    },
+    {
+      "level": 2,
+      "line": 66,
+      "number": "3",
+      "title": "Honest manifests (slice S1)"
+    },
+    {
+      "level": 2,
+      "line": 75,
+      "number": "4",
+      "title": "The roles, one by one (slices S2 and S3)"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "5",
+      "title": "A capture step for both roles (slice S4)"
+    },
+    {
+      "level": 2,
+      "line": 109,
+      "number": "6",
+      "title": "Strategy that leads to action (slice S5)"
+    },
+    {
+      "level": 2,
+      "line": 118,
+      "number": "7",
+      "title": "Divergent options by default (slice S6)"
+    },
+    {
+      "level": 2,
+      "line": 128,
+      "number": "8",
+      "title": "Architect rigor (slice S7)"
+    },
+    {
+      "level": 2,
+      "line": 134,
+      "number": "9",
+      "title": "Strategist breadth (slice S8)"
+    },
+    {
+      "level": 2,
+      "line": 140,
+      "number": "10",
+      "title": "Architect safeguards (slice S9)"
+    },
+    {
+      "level": 2,
+      "line": 146,
+      "number": "11",
+      "title": "Not built here, and why"
+    },
+    {
+      "level": 2,
+      "line": 156,
+      "number": "12",
+      "title": "Open questions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 167,
+      "number": "13",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 175,
+      "number": "14",
+      "title": "Slices and pull requests"
+    },
+    {
+      "level": 2,
+      "line": 194,
+      "number": "15",
+      "title": "Acceptance"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md",
+    "sha256": "f21f70fe3fecb719f4a0b1d750773913cf199235426a3ce149c045e2bbfb6aee"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 954,
+        "end_line": 6,
+        "line": 6,
+        "start": 260
+      },
+      "text": "status: approved   # by the operator, 2026-11-17, in a session, after seeing the build plan and this draft being written: \"i saw your drafting of the steps for 124 so i'll approve it when ready. if it's based on this conversation consider it approved and run hard at it\". Earlier the same day they answered the three questions: \"1. repo-wide. include the first set of recommendations too. 2. go with your pick. 3. no. now go\". The text was written from that conversation; the operator has not read it line by line. Open questions OD-1 to OD-4 of section 12 take their recommendations unless the operator says otherwise. It takes effect when the operator merges the pull request that carries it."
+    },
+    "sha256": "f21f70fe3fecb719f4a0b1d750773913cf199235426a3ce149c045e2bbfb6aee",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "124",
+    "stem": "124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "124: The fleet audit: honest manifests, strategist and architect skills, and a learning capture"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2530,
+      "end_line": 25,
+      "line": 25,
+      "start": 2496
+    },
+    "text": "Three jobs, in this order of risk:"
+  }
+}
