@@ -9,8 +9,64 @@ use std::sync::Mutex;
 /// `probe_authorized()` reads a process-wide environment hook, so the tests that call it take turns.
 static PROBE: Mutex<()> = Mutex::new(());
 
-/// The sweep floods forks on purpose and the process limit counts every process of the user, so sweeps take turns.
-static FLOOD: Mutex<()> = Mutex::new(());
+/// The user's process table is one resource (spec 125 section 4.2). A command under the authorized profile may start 128 processes
+/// beyond the user's count at its launch, and the kernel counts EVERY process of the user. So a test that floods forks, or starts or
+/// ends hundreds of processes, takes the turn alone ([`flood_turn`]); a test that only launches a command under the limit shares it
+/// ([`launch_turn`]): such commands leave each other room, but one launched just before a flood filled its own cap would find every
+/// `fork` refused. The turn is also a file lock, so two copies of this test binary (two worktrees testing at once) take turns too.
+static TABLE: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+#[allow(dead_code)]
+enum InProcess {
+    Flood(std::sync::RwLockWriteGuard<'static, ()>),
+    Launch(std::sync::RwLockReadGuard<'static, ()>),
+}
+
+struct Turn {
+    count_at_start: Option<u64>,
+    _across_processes: fs::File,
+    _in_process: InProcess,
+}
+
+impl Drop for Turn {
+    fn drop(&mut self) {
+        // What a test cannot rule out (spec 125 section 5): programs outside the tests starting more than the headroom during one
+        // sandboxed command. A failing test says what the count did, so the reader is not left with a riddle.
+        if std::thread::panicking() {
+            eprintln!(
+                "note: this user owned {:?} processes when the test took its turn and owns {:?} now; a rise of more than {PROC_HEADROOM} during one sandboxed command makes its `fork` fail (the profile fails closed)",
+                self.count_at_start,
+                crate::live_process_count()
+            );
+        }
+    }
+}
+
+fn take_turn(alone: bool) -> Turn {
+    let in_process = if alone { InProcess::Flood(TABLE.write().unwrap_or_else(|e| e.into_inner())) } else { InProcess::Launch(TABLE.read().unwrap_or_else(|e| e.into_inner())) };
+    // SAFETY: plain getuid.
+    let path = std::env::temp_dir().join(format!("delphi-sandbox-tests-{}.turn", unsafe { libc::getuid() }));
+    let file = fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path).unwrap_or_else(|e| panic!("cannot open the turn file {}: {e}", path.display()));
+    loop {
+        // SAFETY: flock on a descriptor this function owns; the lock goes when the file is closed or the process ends.
+        if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), if alone { libc::LOCK_EX } else { libc::LOCK_SH }) } == 0 {
+            break;
+        }
+        let e = io::Error::last_os_error();
+        assert_eq!(e.kind(), io::ErrorKind::Interrupted, "cannot take the turn file {}: {e}", path.display());
+    }
+    Turn { count_at_start: crate::live_process_count(), _across_processes: file, _in_process: in_process }
+}
+
+/// The turn of a test that floods forks or moves the user's process count by hundreds: alone.
+fn flood_turn() -> Turn {
+    take_turn(true)
+}
+
+/// The turn of a test that launches a command under the profile's process limit and does not flood: shared with its like.
+fn launch_turn() -> Turn {
+    take_turn(false)
+}
 
 const SWEEP: &str = include_str!("../../tests/fixtures/red_team_sweep.sh");
 
@@ -87,7 +143,7 @@ impl Layout {
 
     /// Run the sweep under `spec`; returns (exit code, stdout).
     fn sweep(&self, sb: &Sandbox, spec: &SandboxSpec) -> (Option<i32>, String) {
-        let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = flood_turn();
         self.sweep_unlocked(sb, spec)
     }
 
@@ -104,9 +160,15 @@ impl Layout {
         ];
         let mut cmd = sb.command(spec, INTERPRETER, args).unwrap();
         cmd.current_dir(self.snap.path());
+        let before = crate::live_process_count();
         let out = run_bounded(cmd, &RunOptions { timeout: Duration::from_secs(60), max_output_bytes: 1 << 20, quota: vec![], kill_over_quota: false }).unwrap();
         assert!(!out.timed_out, "{out:?}");
-        (out.status.and_then(|s| s.code()), out.stdout)
+        let code = out.status.and_then(|s| s.code());
+        // Shown only when the test fails (the harness keeps a passing test's output). What no turn can rule out is a program
+        // outside the tests starting more than the headroom during the run; then bash cannot fork, says so here and leaves with 128.
+        let tail: Vec<&str> = out.stderr.lines().rev().take(3).collect();
+        eprintln!("sweep: exit {code:?}; this user owned {before:?} processes at launch and owns {:?} now (the limit is the count at launch plus {PROC_HEADROOM}); stderr ends: {tail:?}", crate::live_process_count());
+        (code, out.stdout)
     }
 }
 
@@ -205,6 +267,7 @@ fn the_sweep_fails_when_a_nested_delphi_can_run() {
 fn the_sweep_refuses_to_pass_when_it_cannot_prove_anything() {
     // A positive control: with the snapshot unreadable the script exits 2 rather than reporting a vacuous pass.
     let Some(sb) = mac_sandbox() else { return };
+    let _turn = launch_turn();
     let l = layout();
     let args: Vec<std::ffi::OsString> = vec![l.snap.path().join("sweep.sh").into(), l.scratch.clone().into(), l.scratch.clone().into(), l.canary.clone().into(), l.opshome.clone().into()];
     // `data.txt` is looked for under the first argument, here the scratch dir, where it does not exist
@@ -218,6 +281,7 @@ fn the_sweep_refuses_to_pass_when_it_cannot_prove_anything() {
 // ---------------------------------------------------------------------------------------------- exec rules
 
 fn run_in(sb: &Sandbox, spec: &SandboxSpec, program: &str, args: &[&str]) -> Option<i32> {
+    let _turn = launch_turn();
     let mut cmd = sb.command(spec, program, args).unwrap();
     let out = cmd.output().unwrap();
     out.status.code()
@@ -314,6 +378,7 @@ fn the_probe_holds_all_six_canaries_under_the_real_profile() {
     if mac_sandbox().is_none() {
         return;
     }
+    let _turn = launch_turn();
     let p = probe_authorized();
     assert!(p.is_ok(), "{p:?}");
     assert!(p.failed().is_empty() && p.unavailable.is_none());
@@ -340,6 +405,7 @@ fn each_canary_notices_its_own_hole() {
     if mac_sandbox().is_none() {
         return;
     }
+    let _turn = launch_turn();
     let network = probe_with(INTERPRETER, |s, c| s.network = Network::ProxyOnly { port: c.port });
     assert!(!network.network_blocked && !network.is_ok(), "{network:?}");
     assert_eq!(network.failed(), vec!["network_blocked"], "{network:?}");
@@ -370,6 +436,7 @@ fn an_interpreter_that_does_not_exist_is_unavailable_never_ok() {
     if mac_sandbox().is_none() {
         return;
     }
+    let _turn = launch_turn();
     let p = probe_with("/bin/no-such-interpreter", |_, _| {});
     assert!(!p.is_ok(), "{p:?}");
 }
@@ -682,7 +749,7 @@ fn flood_started(sb: &Sandbox, l: &Layout, n: u32) -> u64 {
 fn the_production_headroom_is_pinned_by_floods_and_by_the_limit_the_child_gets() {
     let Some(sb) = mac_sandbox() else { return };
     let l = layout();
-    let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = flood_turn();
     // The cap is the user's own count plus 128 (the child bash is already in the count): 100 forks fit, 200 and 250 do not.
     // 200 sits well under the old headroom of 256 (which would let it through) and leaves a margin of ~70 for the user's own
     // processes coming and going between the launch and the flood (130 was tried: a drift of a dozen processes flips it).
@@ -708,7 +775,7 @@ fn the_count_is_the_users_processes_not_the_systems() {
     }
     // The two readings below are taken a moment apart, and a fork flood (the sweep and the headroom tests start hundreds of
     // processes) between them moves the count by far more than the tolerance. Take the flood's turn, as every test that floods does.
-    let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = flood_turn();
     settle_process_count();
     let ours = crate::live_process_count().unwrap() as i64;
     // SAFETY: plain getuid.
@@ -728,6 +795,7 @@ fn the_cap_is_taken_at_launch_so_a_drop_in_the_users_process_count_after_the_spe
     // Regression: the count used to be read when the spec was built, so processes that exited between then and the launch (a
     // sibling test's 900-subshell flood ending, on a busy runner) left the cap out of the flood's reach and the sweep "failed".
     let Some(sb) = mac_sandbox() else { return };
+    let _turn = flood_turn();
     let l = layout();
     let mut idle: Vec<std::process::Child> = (0..500).filter_map(|_| Command::new("/bin/sleep").arg("120").spawn().ok()).collect();
     assert!(idle.len() >= 400, "could not start the idle processes");
@@ -736,7 +804,7 @@ fn the_cap_is_taken_at_launch_so_a_drop_in_the_users_process_count_after_the_spe
         let _ = c.kill();
         let _ = c.wait();
     }
-    let (code, out) = l.sweep(&sb, &spec);
+    let (code, out) = l.sweep_unlocked(&sb, &spec);
     assert_eq!(code, Some(0), "{out}");
     assert!(out.contains("blocked   fork_flood"), "{out}");
 }
@@ -745,7 +813,7 @@ fn the_cap_is_taken_at_launch_so_a_drop_in_the_users_process_count_after_the_spe
 fn a_fork_flood_is_contained_by_the_process_limit_and_leaves_nothing_behind() {
     let Some(sb) = mac_sandbox() else { return };
     let l = layout();
-    let _turn = FLOOD.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = flood_turn();
     let (code, out) = l.sweep_unlocked(&sb, &l.spec());
     assert_eq!(code, Some(0), "{out}");
     assert!(out.contains("blocked   fork_flood"), "{out}");
@@ -760,6 +828,7 @@ fn a_fork_flood_is_contained_by_the_process_limit_and_leaves_nothing_behind() {
 #[test]
 fn a_set_m_child_in_its_own_process_group_is_killed_with_the_session() {
     let Some(sb) = mac_sandbox() else { return };
+    let _turn = launch_turn();
     let l = layout();
     let marker = l.scratch.join("alive");
     // `set -m` gives the background job a process group of its own; it would survive a group kill. It writes a file
@@ -786,6 +855,7 @@ fn a_set_m_child_in_its_own_process_group_is_killed_with_the_session() {
 #[test]
 fn a_scratch_quota_kills_a_command_that_fills_the_disk_with_files_or_bytes() {
     let Some(sb) = mac_sandbox() else { return };
+    let _turn = launch_turn();
     for (name, body) in [
         ("many empty files", "i=0; while :; do : > \"$1/f$i\"; i=$((i+1)); done"),
         ("a few big files", "big=x; for j in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do big=\"$big$big\"; done; i=0; while :; do printf '%s' \"$big\" > \"$1/b$i\"; i=$((i+1)); done"),

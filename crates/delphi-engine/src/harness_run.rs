@@ -3362,24 +3362,40 @@ echo "$answer" > '{answer_file}'
 
     const G_INIT: &str = r#"echo '{"type":"system","subtype":"init","session_id":"s1","tools":["mcp__delphi__search"],"mcp_servers":[{"name":"delphi","status":"connected"}],"slash_commands":["compact","review"],"skills":["pdf"],"agents":["general-purpose"],"plugins":[{"name":"p1"}]}'"#;
 
-    /// A fake CLI that calls `tool` and then, a third of a second later, would leave a marker (what the tool would have done).
-    /// The span must be over, and the CLI killed, before that: the kill is issued on the tool_use event itself, without waiting for a result.
-    async fn call_run(tool: &str) -> (bool, crate::engine::TaskOutcome, Fx) {
+    /// A fake CLI that calls `tool` and then would leave a marker (what the tool would have done), but only once a gate file exists,
+    /// and the test makes the gate after the span is over. So the order is tested and no clock is (spec 125 section 4.1; the CLI used
+    /// to sleep 0.3 s, which a busy machine outlasts): the span must end on the tool_use event itself, with no further word from the
+    /// CLI (it says nothing more until the gate), and the CLI must be dead by then (the kill is issued at the call and waited for).
+    /// Returns (the CLI was gone when the span returned, the marker exists, the outcome, the fixture).
+    async fn call_run(tool: &str) -> (bool, bool, crate::engine::TaskOutcome, Fx) {
         let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("marker");
+        let (marker, gate, pidfile) = (dir.path().join("marker"), dir.path().join("gate"), dir.path().join("pid"));
         let use_line = format!(r#"echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"tu1","name":"{tool}","input":{{}}}}]}}}}'"#);
-        let body = format!("{}\n{}\nsleep 0.3\ntouch '{}'\n{}", G_INIT, use_line, marker.display(), FINISH);
+        let body = format!("{}\necho $$ > '{}'\n{}\nwhile [ ! -e '{}' ]; do sleep 0.05; done\ntouch '{}'\n{}", G_INIT, pidfile.display(), use_line, gate.display(), marker.display(), FINISH);
         let (f, _s) = fixture(&body, |_| {});
         hold_a_grant(&f);
-        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
-        tokio::time::sleep(Duration::from_millis(1200)).await;
-        (marker.exists(), out, f)
+        // A span that waited for a result would never return (the CLI is parked at the gate): the bound makes that a failure, not a hang.
+        let out = tokio::time::timeout(Duration::from_secs(60), f.engine.run_task(&f.m, "architect", "Plan the change")).await.expect("the span did not end on the tool call").unwrap();
+        let pid: libc::pid_t = fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+        // SAFETY: signal 0 delivers nothing; it only asks whether the process exists.
+        let gone = || unsafe { libc::kill(pid, 0) } == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        let gone_at_return = gone();
+        fs::write(&gate, "").unwrap();
+        // Only a CLI that outlived the span (a regression) is still there to see the gate: let it reach its marker so the caller sees it.
+        for _ in 0..200 {
+            if gone() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        (gone_at_return, marker.exists(), out, f)
     }
 
     #[tokio::test]
     async fn every_tool_but_delphis_own_is_stopped_at_the_call_before_it_can_run() {
         for tool in ["Bash", "Write", "WebFetch", "bash", "BASH", "Read", "Task", "mcp__claude_ai_Slack__slack_send_message", "mcp__someplugin__do", "mcp__delphi_lookalike__x", "NotARealTool"] {
-            let (ran, out, f) = call_run(tool).await;
+            let (gone, ran, out, f) = call_run(tool).await;
+            assert!(gone, "{tool}: the CLI was still running when the span ended");
             assert!(!ran, "{tool}: its effect happened before the span was stopped");
             assert_ne!(out.status, Status::Done, "{tool}");
             let refused = events_of(&f, "authorization.refused");
