@@ -6142,6 +6142,55 @@ mod tests {
         }
     }
 
+    /// `specs/124` S12, the no-model arm of the two capture cases in `dev/train/suites/spec124`: each case's own prompt is run with
+    /// a scripted model that stages no note, one note and two notes (the case's `script.toml`). Only the run with one note meets the
+    /// `learn.note` count the case checks, so the check tells a followed capture step from a skipped or a repeated one. In every run
+    /// the lessons and heuristics the role loads are unchanged, nothing was proposed or ratified, and no request's system prompt
+    /// holds a note. The model is scripted: this grades the case and the machinery, not whether a model follows the step.
+    #[tokio::test]
+    async fn spec_124_s12_the_capture_cases_pass_on_exactly_one_staged_note_and_ratify_nothing() {
+        let cases = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev/train/suites/spec124/cases");
+        for role in ["strategist", "architect"] {
+            let dir = cases.join(format!("capture-{role}"));
+            let case: toml::Table = std::fs::read_to_string(dir.join("case.toml")).unwrap().parse().unwrap();
+            assert_eq!(case["role"].as_str(), Some(role));
+            let prompt = case["prompt"].as_str().unwrap();
+            let checks = case["check"].as_array().unwrap();
+            let want = checks.iter().find(|c| c["kind"].as_str() == Some("event_count") && c["event"].as_str() == Some("learn.note")).and_then(|c| c["eq"].as_integer()).expect("the case counts `learn.note` events");
+            assert_eq!(want, 1, "{role}: one correction, one note");
+            let absent: Vec<&str> = checks.iter().filter(|c| c["kind"].as_str() == Some("event_absent")).filter_map(|c| c["event"].as_str()).collect();
+            assert_eq!(absent, ["learn.proposed", "learn.proposal_resolved"], "{role}: the case checks that nothing was proposed or ratified");
+            let script: toml::Table = std::fs::read_to_string(dir.join("script.toml")).unwrap().parse().unwrap();
+            let notes: Vec<&str> = script["notes"].as_array().unwrap().iter().filter_map(|n| n.as_str()).collect();
+            assert_eq!(notes.len(), 2);
+            for staged in 0..=2usize {
+                let mut steps: Vec<Step> = notes[..staged].iter().enumerate().map(|(i, n)| Step::tool(&format!("n{i}"), "note", json!({"text": n, "kind": "pitfall"}))).collect();
+                steps.push(Step::text("What was wrong is said above."));
+                let f = setup(steps, 5.0, |_| {});
+                f.m.set_provisional_notes(crate::provisional_notes::Tap::new(f.engine.ws.dir.clone()));
+                let loaded = || {
+                    let s = f.engine.ws.load_snapshot(role).unwrap();
+                    (s.lessons, s.heuristics)
+                };
+                let before = loaded();
+                let out = f.engine.run_task(&f.m, role, prompt).await.unwrap();
+                assert_eq!(out.status, Status::Done, "{role}, {staged} note(s)");
+                let got = events_of(&f, "learn.note").len();
+                assert_eq!(got, staged, "{role}: each `note` call is one `learn.note` event");
+                assert_eq!(got as i64 == want, staged == 1, "{role}: the case's count passes on one note only");
+                for event in &absent {
+                    assert!(events_of(&f, event).is_empty(), "{role}: {event}");
+                }
+                assert_eq!(loaded(), before, "{role}: no lesson and no heuristic was written");
+                assert_eq!(crate::provisional_notes::list(&f.engine.ws.dir).len(), staged, "{role}: the notes are staged files, and nothing else is");
+                for r in f.model.requests() {
+                    let system = r.body["system"].to_string();
+                    assert!(notes.iter().all(|n| !system.contains(n)), "{role}: a staged note is never part of a system prompt");
+                }
+            }
+        }
+    }
+
     /// `specs/116` AC-2, the prompt-injection fixture of §10: a fetched page, saved in the project, tells the agent to write a note.
     /// The agent does. The note is stored with the taint of the span that read the page and is never retrieved automatically: not
     /// at the start of a later mission, not by the role's own search. Only a search that asks for untrusted text finds it, labelled

@@ -1,0 +1,39 @@
+# Spec 124 S12 (AC-3): two planted forecasts. The one on line 26 has no date (the day in its tripwire is the day the tripwire
+# is looked at, not the day the forecast is for); the one on line 28 has no tripwire. A third forecast is complete, and
+# nothing else is wrong.
+# Two arms, as trace-clean/case.toml says. Run on one model, 2026-11-18 (dev/train/spec124/EVIDENCE.md).
+id = "trace-forecast-undated"
+suite = "spec124"
+kind = "task"
+role = "strategist"
+split = "dev"
+tags = ["spec-124", "strategy-trace", "forecast"]
+max_cost_usd = 0.5
+timeout_secs = 300
+prompt = "Run the strategy_trace tool on @project/repo/strategy.md. Then report what it found: quote every finding line exactly as the tool printed it, or, if it printed none, quote its first line. Do not edit the file and do not add findings of your own."
+
+[[check]]
+kind = "outcome"
+is = "done"
+
+[[check]]
+kind = "event_count"
+event = "strategy.trace"
+at_least = 1
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-FOR-01 \(P2\) forecast, line 26'
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-FOR-01 \(P2\) forecast, line 28'
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-(ACT|POL|DIA|ID|REF|DOC)-\d\d \(P2\)|TRACE-FOR-01 \(P2\) forecast, line 29'
+present = false
+
+[[check]]
+kind = "file_unchanged"
+path = "strategy.md"

@@ -1,0 +1,26 @@
+# Spec 124 S12 (AC-5, G-4): the same requirement as `options-considered`, but the prompt names the skill and where it is.
+# `options-considered` asks what an architect writes when nothing points at the skill; this case asks what it writes when it
+# has been told to load it. The two are different questions: on 2026-11-18 a Haiku seat with the skill on its list, given the
+# first prompt, opened no skill file in three runs (dev/train/spec124/EVIDENCE.md).
+# Graded by structure only (`options_considered`); the hand-written samples of `options-considered` are this check's key.
+id = "options-skill-named"
+suite = "spec124"
+kind = "task"
+role = "architect"
+split = "dev"
+tags = ["spec-124", "divergent-options"]
+max_cost_usd = 0.5
+timeout_secs = 300
+prompt = "Read @project/repo/requirement.md. Then load your divergent-options skill (the file skills/divergent-options/SKILL.md; find it with kb_search if that path does not open) and follow it: write the \"Options considered\" section a spec for the requirement would carry, in the skill's output format, and give that section in full in your answer, under its heading. Do not write the rest of the spec and do not edit any file."
+
+[[check]]
+kind = "outcome"
+is = "done"
+
+[[check]]
+kind = "options_considered"
+min = 3
+
+[[check]]
+kind = "file_unchanged"
+path = "requirement.md"

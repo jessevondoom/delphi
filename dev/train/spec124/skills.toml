@@ -1,0 +1,52 @@
+# The skills spec 124 adds, with the role each is written for and the slice that added it.
+# crates/delphi/tests/spec124_evidence.rs holds every skill listed here to the trigger rule (spec 124 G-6, AC-6 to AC-8):
+# its cases are in dev/skill-evals/spec124-<role>.json, at least one task there retrieves it, and at least one task that
+# shares a word with it does not.
+#
+# To add a skill (the strategist skills of S8, when they merge): add an entry here, and its tasks to the role's case file.
+# Nothing in the test names a skill.
+
+[[skill]]
+name = "accessibility-audit"
+role = "advocate"
+slice = "S2"
+
+[[skill]]
+name = "strategy-kernel"
+role = "strategist"
+slice = "S5"
+
+[[skill]]
+name = "strategy-cascade"
+role = "strategist"
+slice = "S5"
+
+[[skill]]
+name = "divergent-options"
+role = "architect"
+slice = "S6"
+
+[[skill]]
+name = "quality-scenarios"
+role = "architect"
+slice = "S7"
+
+[[skill]]
+name = "adr-authoring"
+role = "architect"
+slice = "S7"
+
+[[skill]]
+name = "fitness-functions"
+role = "architect"
+slice = "S9"
+
+[[skill]]
+name = "spec-premortem"
+role = "architect"
+slice = "S9"
+
+[[skill]]
+name = "boundary-design"
+role = "architect"
+slice = "S9"

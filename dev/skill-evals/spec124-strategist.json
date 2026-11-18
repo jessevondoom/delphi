@@ -1,0 +1,12 @@
+[
+["strategist", "Renewals fell for two quarters. Write the strategy on one page: a diagnosis with a falsifier, the guiding policies and the steps that carry them out.", "strategy-kernel"],
+["strategist", "Judge this strategy: does every step trace to a guiding policy, and every policy to the diagnosis?", "strategy-kernel"],
+["strategist", "The direction is chosen: sell to hospitals. Cascade it through the five choices, from aspiration to management systems, then into dated steps with a measure and a stop-doing.", "strategy-cascade"],
+["strategist", "We settled on a direction last week. It must now become who does what, with tactics and a measure for each step.", "strategy-cascade"],
+["strategist", "The strategy is agreed. Order its three deliverables into milestones along the critical path and check the dependencies.", "roadmap-sequencing"],
+["strategist", "The strategy page names an offline mode. Weigh the effort and risk of that option against its expected payoff before we invest.", "risk-roi-analysis"],
+["strategist", "This pull request says it carries out the strategy. Audit it against the governing specs and the rubric, with evidence for each acceptance criterion.", "pr-alignment-review"],
+["strategist", "Each of the steps in this change that go beyond the approved spec: flag the unrequested files and features.", "scope-creep-detection"],
+["strategist", "Fix the typo in the title of the strategy document.", null],
+["strategist", "What is today's date?", null]
+]

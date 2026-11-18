@@ -64,6 +64,9 @@ pub enum Check {
     /// directory (outside the fixture): at least `min_recall` of the defects caught and at most `max_false_positives` decoys
     /// flagged. The figures are diagnostics, not a seat score (`train_defects`, `specs/078`).
     ReviewFindings { file: String, min_recall: f64, max_false_positives: u64 },
+    /// The deliverable holds an "Options considered" section with at least `min` options that differ, each with a test
+    /// (`train_options`, `specs/124` §7). A check of structure, not of whether an option is any good.
+    OptionsConsidered { min: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -215,6 +218,13 @@ fn parse_check(t: &toml::Table, at: &str, problems: &mut Problems) -> Option<Che
                 }
             }
         }
+        Some("options_considered") => match t.get("min").map_or(Some(3), |v| v.as_integer()).filter(|n| (2..=12).contains(n)) {
+            Some(n) => Some(Check::OptionsConsidered { min: n as u64 }),
+            None => {
+                problems.push(format!("{}: `options_considered` takes `min`, a whole number from 2 to 12 (3 when left out)", at));
+                None
+            }
+        },
         other => {
             problems.push(format!("{}: unknown check kind `{}`", at, other.unwrap_or("(none)")));
             None

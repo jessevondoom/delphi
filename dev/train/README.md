@@ -31,6 +31,9 @@ a cost cap, a time cap and at least one deterministic `[[check]]`:
 | `event_absent` (`event`) | the log holds none |
 | `file_unchanged`, `file_exists` (`path`) | the fixture file is byte-identical, or exists, after the run |
 | `file_contains` (`path`, `text`) | the fixture file contains the text |
+| `options_considered` (`min`, 3 when left out) | the deliverable has a heading "Options considered" over a table of at least `min` options: one marked conventional, one marked as removing a constraint and one more, each saying what it is and how it would be tested, no two described in the same words, and the section says which was chosen. Structure only: it does not judge a design |
+
+The cases for spec 124's skills are in `suites/spec124`, and what they did and did not show is in `spec124/EVIDENCE.md`.
 
 ## Arms (`specs/037` §2)
 
