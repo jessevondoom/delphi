@@ -50,6 +50,31 @@
     "sources": { "enum": ["host", "engines", "local"], "description": "Where the run's web results came from (specs/119 sections 13.1 and 13.2): `host`: the host's own search tool ran the planned queries and handed back what it found (the engines, when there are any, are asked only for what that left uncovered); the engines of [search]; or `local`: no query was sent to anyone, and the run read what Delphi holds and the addresses it already knew on the trusted list." },
     "host_search": { "type": "object", "properties": { "asked": { "type": "integer", "minimum": 0, "maximum": 12 }, "fed": { "type": "integer", "minimum": 0, "maximum": 12 } }, "required": ["asked", "fed"], "additionalProperties": false, "description": "On a run whose source is the host (specs/119 section 2.1): how many queries the host was asked to search, and how many it handed back." },
     "host_leads": { "type": "array", "maxItems": 40, "items": { "type": "string" }, "description": "On a run whose source is the host: the addresses the host handed back that are not on the trusted list. The daemon did not fetch them; the host may read them with its own tool and hand over what it found with record_research." },
+    "empty": {
+      "type": "object",
+      "required": ["reason", "causes", "text", "next"],
+      "description": "Present only when the run kept no claim and met none the library held (specs/124 section 14, S11): why, and what to do next. Counted by code from what the run did; every word is one of a fixed list and no address, page text, provider text or host's word is in it. It is information: nothing reads it as a reason to fetch, trust, promote or permit anything. When the run also had nothing to write an answer from, `answer` is `text` and `next` in one line.",
+      "properties": {
+        "reason": { "$ref": "#/$defs/empty_reason", "description": "The first of `causes`: the cause nearest a claim." },
+        "causes": {
+          "type": "array", "minItems": 1, "maxItems": 18,
+          "description": "Every cause the run counted, from the step nearest a claim to the one furthest from it. `no_model_seat`: pages were fetched and no model could serve the scout to read them. `scout_call_failed`: the scout's page-reading call failed. `no_claims_on_pages`: pages were read and no claim with a quote found in the page was drawn. `pages_refused`: the library's keep step refused the pages. `trusted_fetch_failed`, `fetch_failed`: the daemon could not fetch pages on, or off, the trusted list (`why` counts the fixed word of each failure). `leads_unread`: addresses the host handed back that are not on the trusted list, which the daemon does not fetch (`host_leads`). `not_fetchable`: results outside what the fetcher reaches, kept as leads. `nothing_new`: results already read. `budget`: the step budget ran out. `host_fed_nothing`: the host handed back none of the queries it was asked. `queries_withheld`: queries the identifier guard withheld. `no_search_provider`, `credential_unresolved`, `no_results`: as in the coverage report. `no_local_sources`: a local run with no source on the trusted list for the question. `plan_no_model_seat`, `plan_unusable`: the scout's plan call gave no plan, so the whole question was searched as one query.",
+          "items": {
+            "type": "object",
+            "required": ["reason"],
+            "properties": {
+              "reason": { "$ref": "#/$defs/empty_reason" },
+              "n": { "type": "integer", "minimum": 1, "description": "How many times, when the cause is a count." },
+              "why": { "type": "object", "propertyNames": { "pattern": "^(http_[0-9]{3}|not_text|too_large|network|redirect|address_refused|url_refused|cloaked|off_list|fetch_cap|refused|other)$" }, "additionalProperties": { "type": "integer", "minimum": 1 }, "description": "On a failed fetch: how many failed for each fixed word. Never the fetcher's or the server's own text." }
+            },
+            "additionalProperties": false
+          }
+        },
+        "text": { "type": "string", "maxLength": 2000, "description": "The causes in plain words, built by code." },
+        "next": { "type": "string", "maxLength": 300, "description": "One sentence on what to do next: something the asker or the operator does. Delphi does none of it by itself." }
+      },
+      "additionalProperties": false
+    },
     "web_search": { "type": "boolean", "description": "Whether any web search answered in the run. When none did, the answer's label ends with `no web search`." },
     "planned_under_mark": { "type": "boolean", "description": "The session or task that asked was under the private-read mark of specs/103 (specs/119 section 15). The run is the same as any other: each query was cleaned and passed the identifier guard, and the search log lists every query planned." },
     "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
@@ -119,6 +144,7 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "empty_reason": { "enum": ["no_model_seat", "scout_call_failed", "no_claims_on_pages", "pages_refused", "trusted_fetch_failed", "fetch_failed", "leads_unread", "not_fetchable", "nothing_new", "budget", "host_fed_nothing", "queries_withheld", "no_search_provider", "credential_unresolved", "no_results", "no_local_sources", "plan_no_model_seat", "plan_unusable"] },
     "search_log": {
       "type": "object",
       "description": "What the run searched, of whom, when, and how much came back (specs/101 section 3). Written by the daemon: a host cannot add, edit or delete a line. It is private when any claim it served is, and a private log never leaves the install. It is information; nothing reads it as a reason to trust, promote or permit anything.",

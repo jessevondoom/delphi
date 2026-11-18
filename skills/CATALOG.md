@@ -116,6 +116,8 @@ The seven kinds that judge one document (`dag`, `handoff`, `provenance`, `rules`
 | `risk-roi-analysis` | Evaluates effort and risk against expected payoff and opportunity cost. | `templates/risk-roi-brief.md` |
 | `strategic-pattern-matching` | Maps challenges to military precedents, business cases, and asymmetric maneuvers. | instructions |
 | `competitive-swot-analysis` | Evaluates competitive dynamics, platform bets, and moats via SWOT and Wardley mapping. | instructions |
+| `strategy-kernel` | A strategy on one page: diagnosis with a falsifier, guiding policies, coherent actions; a bad-strategy checklist. | the `strategy_trace` tool |
+| `strategy-cascade` | Five choices from aspiration to management systems, then tactics and owned actions with a measure and a stop-doing. | the `strategy_trace` tool |
 
 ### 7. **Red-Team** (Red Team, Adversarial Critic & PR Security Auditor)
 | Skill | Purpose | Backing |

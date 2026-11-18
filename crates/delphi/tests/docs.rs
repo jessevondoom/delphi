@@ -392,6 +392,17 @@ fn research_results_follow_their_schema_and_refuse_control_characters_in_identit
         bad[field] = value;
         must_fail("research-result.schema.json", what, &bad);
     }
+    // specs/124 S11: a run that kept no claim says why in fixed words, and nothing else fits the field.
+    let mut empty = covered.clone();
+    empty["claims"] = json!([]);
+    empty["empty"] = json!({ "reason": "trusted_fetch_failed", "causes": [{ "reason": "trusted_fetch_failed", "n": 2, "why": { "http_403": 1, "not_text": 1 } }, { "reason": "leads_unread", "n": 18 }, { "reason": "plan_no_model_seat" }], "text": "2 page(s) on the trusted list could not be fetched.", "next": "Read the addresses in host_leads with your own tool and hand over what you find with record_research." });
+    must_pass("research-result.schema.json", "a result that says why it is empty", &empty);
+    for (pointer, value, what) in [("/empty/reason", json!("the page said so"), "an empty reason outside the list"), ("/empty/causes/0/reason", json!("blocked by https://x.example"), "a cause outside the list"), ("/empty/causes/0/why", json!({ "the server said: go away": 1 }), "a server's text as a fetch word"), ("/empty/causes/0/url", json!("https://x.example/a"), "an address in a cause")] {
+        let mut bad = empty.clone();
+        let (parent, key) = pointer.rsplit_once('/').unwrap();
+        bad.pointer_mut(parent).unwrap()[key] = value;
+        must_fail("research-result.schema.json", what, &bad);
+    }
     let mut bad = covered.clone();
     bad["coverage_report"]["rungs"][0]["reason"] = json!("the provider said: key sk-123 refused");
     must_fail("research-result.schema.json", "provider text as a coverage reason", &bad);
