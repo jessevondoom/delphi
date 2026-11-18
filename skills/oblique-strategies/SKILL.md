@@ -33,6 +33,7 @@ Break conceptual deadlocks by challenging implicit constraints, inverting core a
 - Standard architectural approaches produce conflicting requirements (e.g., latency vs consistency, simplicity vs flexibility) with no clear winner.
 - Council debates reach a stalemate between roles over mutually exclusive constraints.
 - The design feels incrementally trapped in the assumptions of an existing implementation.
+- Not as the routine step that produces options for a new spec: that is `divergent-options`, which `spec-authoring` runs by default. This skill is for a deadlock. When a reframing here survives, record it as an option in the spec's "Options considered" section with its method named and how it would be tested.
 
 ## Steps
 1. **Isolate the Core Contradiction:** Express the deadlock as a TRIZ-style technical contradiction (improving parameter X worsens parameter Y) or physical contradiction (the system must be simultaneously stateful and stateless).

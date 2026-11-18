@@ -6,6 +6,12 @@ Release builds, with their notes and build attestations, are on the [releases pa
 
 This file starts with the work after v0.2.7. For earlier releases, the history is the merged pull requests and the per-spec notes under `specs/`; their entries below give dates, not detail.
 
+## Unreleased
+
+- **The architect proposes more than one design** (spec 124 S6): a new skill, `divergent-options`, has the architect write at least three options before choosing (a conventional one, one that removes a named constraint, one by a named method), each with how it would be tested. `spec-authoring` and its skeleton gain an "Options considered" section beside "Simpler Alternative Considered", whose rule is unchanged. `delphi lint` warns (`spec-options`) when a spec numbered 125 or above has no such heading; the warning is planned to become a failure one release later. Whether the skill improves specs is not measured.
+- **Two skills for the architect's rigor** (spec 124 S7): `quality-scenarios` (a quality goal as six-part scenarios with a measure, ranked in a utility tree, with sensitivity and tradeoff points) and `adr-authoring` (one decision with its context, options, accepted drawbacks, a one-way or two-way tag and a reversal trigger). Their methods are described from secondary summaries; their effect is not measured.
+- **Three safeguards for the architect** (spec 124 S9): `fitness-functions` (each invariant a spec states names the automated check that would fail when it erodes, and its owning role), `spec-premortem` (how the design most likely fails, before review) and `boundary-design` (bounded contexts, with a guard against dividing a small domain of records). Described from secondary summaries; effect not measured.
+
 ## 0.6.4 — 2026-11-17
 
 A summary by spec; the pull requests are listed on the releases page. This is the first release that carries the desktop app on macOS, and it makes the Council and the Panel visible from a host (spec 123). The tests ran on scratch homes with fakes; what was run for real is said item by item.

@@ -1,5 +1,5 @@
 # Delphi agent pack: architect
-- pack_hash: 73f29861fe0842ccf6f4b8140dd38231
+- pack_hash: 02c7bb25f634056e45d41d54d6f1f6bf
 - delphi_version: {version}
 - locus: either
 - search_use: explore (the default `use` of search_kb and kb_retrieve while this role is adopted; a call's own `use` wins)
@@ -81,3 +81,9 @@ Use your host's own tool for each. If your host has none, say so and go on witho
 - trade-off-matrix
 - tui-design
 - oblique-strategies
+- divergent-options
+- quality-scenarios
+- adr-authoring
+- fitness-functions
+- spec-premortem
+- boundary-design

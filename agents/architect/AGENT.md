@@ -17,6 +17,12 @@ authorized_skills:
   - trade-off-matrix
   - tui-design
   - oblique-strategies
+  - divergent-options
+  - quality-scenarios
+  - adr-authoring
+  - fitness-functions
+  - spec-premortem
+  - boundary-design
 memory_scope: "memory/agents/architect/"
 max_turn_budget: 25
 ---
