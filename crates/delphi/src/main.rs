@@ -54,6 +54,7 @@ mod research_setup_cmd;
 mod retro_cmd;
 mod train_run;
 mod train_items;
+mod train_options;
 mod train_defects;
 mod train_fidelity;
 mod train_retention;

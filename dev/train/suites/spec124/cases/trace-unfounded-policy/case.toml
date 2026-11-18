@@ -1,0 +1,34 @@
+# Spec 124 S12 (AC-4): a planted unfounded policy. P3 answers no diagnosis claim (an action carries it out, so it is not
+# also a policy with no action), and nothing else is wrong.
+# Two arms, as trace-clean/case.toml says. Run on one model, 2026-11-18 (dev/train/spec124/EVIDENCE.md).
+id = "trace-unfounded-policy"
+suite = "spec124"
+kind = "task"
+role = "strategist"
+split = "dev"
+tags = ["spec-124", "strategy-trace", "unfounded-policy"]
+max_cost_usd = 0.5
+timeout_secs = 300
+prompt = "Run the strategy_trace tool on @project/repo/strategy.md. Then report what it found: quote every finding line exactly as the tool printed it, or, if it printed none, quote its first line. Do not edit the file and do not add findings of your own."
+
+[[check]]
+kind = "outcome"
+is = "done"
+
+[[check]]
+kind = "event_count"
+event = "strategy.trace"
+at_least = 1
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-POL-01 \(P2\) P3'
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-(ACT-01|POL-02|DIA-01|FOR-01|ID-01|REF-01|DOC-01) \(P2\)'
+present = false
+
+[[check]]
+kind = "file_unchanged"
+path = "strategy.md"

@@ -1,0 +1,33 @@
+# Spec 124 S12 (AC-4): a planted orphan action. A2 names no guiding policy, and nothing else is wrong.
+# Two arms, as trace-clean/case.toml says. Run on one model, 2026-11-18 (dev/train/spec124/EVIDENCE.md).
+id = "trace-orphan-action"
+suite = "spec124"
+kind = "task"
+role = "strategist"
+split = "dev"
+tags = ["spec-124", "strategy-trace", "orphan-action"]
+max_cost_usd = 0.5
+timeout_secs = 300
+prompt = "Run the strategy_trace tool on @project/repo/strategy.md. Then report what it found: quote every finding line exactly as the tool printed it, or, if it printed none, quote its first line. Do not edit the file and do not add findings of your own."
+
+[[check]]
+kind = "outcome"
+is = "done"
+
+[[check]]
+kind = "event_count"
+event = "strategy.trace"
+at_least = 1
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-ACT-01 \(P2\) A2'
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-(POL|DIA|FOR|ID|REF|DOC)-\d\d \(P2\)'
+present = false
+
+[[check]]
+kind = "file_unchanged"
+path = "strategy.md"

@@ -9,7 +9,12 @@
 ["architect", "The spec states that a role never approves its own action. Name the automated check that would fail when that invariant erodes, and the role that owns it.", "fitness-functions"],
 ["architect", "This spec says the full pack must always stay byte for byte the same. Which check would fail if that stopped being true?", "fitness-functions"],
 ["architect", "The draft spec goes to review tomorrow. Assume it shipped and failed, and list the likely causes and their early signs.", "spec-premortem"],
+["architect", "Before ratification, suppose this design has failed in production. What are the most likely causes, and what does the spec change now?", "spec-premortem"],
 ["architect", "The word session means two things in the daemon and in the console. Name the bounded contexts and the contract at the boundary.", "boundary-design"],
 ["architect", "Is this settings domain of three record types large enough to need bounded contexts at all?", "boundary-design"],
+["architect", "We already have three options for the cache. Compare them across weighted criteria and test whether the winner survives changed weights.", "trade-off-matrix"],
+["architect", "Write a modular spec for the draft design of the exporter: scope, acceptance criteria and a verification plan, before the build.", "spec-authoring"],
+["architect", "Map this unfamiliar repository: its entry points, its module boundaries and its build and test commands.", "repo-cartography"],
+["architect", "Rename the decision log file.", null],
 ["architect", "What is today's date?", null]
 ]

@@ -1,0 +1,46 @@
+# Spec 124 S12 (AC-3, AC-4): all four planted at once: a diagnosis with no falsifier (D2), an unfounded policy (P2), an orphan
+# action (A2) and a forecast with neither a date nor a tripwire (line 25).
+# Two arms, as trace-clean/case.toml says. Run on one model, 2026-11-18 (dev/train/spec124/EVIDENCE.md).
+id = "trace-all-planted"
+suite = "spec124"
+kind = "task"
+role = "strategist"
+split = "dev"
+tags = ["spec-124", "strategy-trace", "orphan-action", "unfounded-policy", "no-falsifier", "forecast"]
+max_cost_usd = 0.5
+timeout_secs = 300
+prompt = "Run the strategy_trace tool on @project/repo/strategy.md. Then report what it found: quote every finding line exactly as the tool printed it, or, if it printed none, quote its first line. Do not edit the file and do not add findings of your own."
+
+[[check]]
+kind = "outcome"
+is = "done"
+
+[[check]]
+kind = "event_count"
+event = "strategy.trace"
+at_least = 1
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-DIA-01 \(P2\) D2'
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-POL-01 \(P2\) P2'
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-ACT-01 \(P2\) A2'
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-FOR-01 \(P2\) forecast, line 25'
+
+[[check]]
+kind = "text_matches"
+pattern = 'TRACE-(POL-02|ID-01|REF-01|DOC-01) \(P2\)'
+present = false
+
+[[check]]
+kind = "file_unchanged"
+path = "strategy.md"
