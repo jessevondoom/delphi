@@ -40,6 +40,7 @@ pub mod promote;
 pub mod session;
 pub mod settings_run;
 pub mod settings_store;
+pub mod skill_index;
 pub mod summary;
 pub mod checkpoint;
 pub mod changelog;
