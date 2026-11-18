@@ -215,6 +215,7 @@ pub(crate) fn narrow(sc: &mut SpanCtx, stage: &str) {
     sc.manifest.read = sc.guard.read_globs.clone();
     sc.manifest.write = sc.guard.write_globs.clone();
     sc.manifest.execute = Vec::new();
+    sc.manifest.skills = Vec::new();
     sc.bundle_agent = Some(crate::bundle_load::LoadedAgent { id: "distill".into(), host_role: sc.role.clone(), block: BLOCK.into(), allowed_tools: Some(["write_file".to_string()].into_iter().collect()), unmapped: Vec::new() });
 }
 

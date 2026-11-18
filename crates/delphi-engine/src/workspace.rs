@@ -68,6 +68,9 @@ pub struct AgentManifest {
     pub read: Vec<String>,
     pub write: Vec<String>,
     pub execute: Vec<String>,
+    /// The skills the manifest authorizes (`authorized_skills`). A tool that only makes sense with a skill is offered by it
+    /// (`strategy_trace.rs`); it grants nothing else.
+    pub skills: Vec<String>,
     pub max_turn_budget: u32,
     /// The default `use` of a host's `search_kb` and `kb_retrieve` while this role is adopted (`specs/109` §13.1 item 1): `explore`
     /// unless the manifest says `search_use: verify`. A call's own `use` always wins. Any other word is `explore`, the default.
@@ -114,6 +117,7 @@ impl AgentManifest {
             read: strings(scope.and_then(|s| s.get("read"))),
             write: strings(scope.and_then(|s| s.get("write"))),
             execute: strings(scope.and_then(|s| s.get("execute"))),
+            skills: strings(fm.get("authorized_skills")),
             max_turn_budget: fm.get("max_turn_budget").and_then(|v| v.as_u64()).unwrap_or(20) as u32,
             search_use: if fm.get("search_use").and_then(|v| v.as_str()) == Some("verify") { crate::host_labels::Use::Verify } else { crate::host_labels::Use::Explore },
             body: strip_inside_only_markers(body).trim().to_string(),

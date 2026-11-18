@@ -15,6 +15,8 @@ authorized_skills:
   - risk-roi-analysis
   - strategic-pattern-matching
   - competitive-swot-analysis
+  - strategy-kernel
+  - strategy-cascade
 memory_scope: "memory/agents/strategist/"
 max_turn_budget: 20
 ---
