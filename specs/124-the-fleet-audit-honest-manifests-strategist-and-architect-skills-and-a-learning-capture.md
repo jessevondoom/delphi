@@ -202,3 +202,25 @@ Pull requests, same-spec trial permitting: A = S1 + S2 + S3; B = S4; C = S5; D =
 - **AC-9** The retired `competitive-swot-analysis` is in no manifest, catalog or test.
 - **AC-10** The S12 report exists and says what was and was not shown; nothing in the repo claims the skills improve quality before it does.
 - **AC-11** All gates pass for every slice: `cargo test --workspace --locked`, clippy with `-D warnings`, and `delphi lint --repo .`.
+
+## 16. Amendment (operator, 2026-11-17 and 2026-11-18): the answers to the open decisions
+
+The operator was shown eleven open decisions after S1-S3 merged and answered four of them, in their own words: "2: your list is good. go. 3: follow your recommendation. 4: yes stabilize. 5: give the strategist access to research tools directly. follow your suggested build plan". The amendment takes effect when the operator merges the pull request that carries it. The text below was written after the words and has not been read by the operator.
+
+1. **Primary sources (the answer to 2; OD-3).** The operator ratifies this list as the works the strategy and architecture skills may cite: Rumelt, *Good Strategy/Bad Strategy*; Lafley and Martin, *Playing to Win*; Helmer, *7 Powers*; Wardley, *Wardley Maps*; Ford, Parsons and Kua, *Building Evolutionary Architectures*; and the SEI report *ATAM: Method for Architecture Evaluation* (CMU/SEI-2000-TR-004). The list was suggested by the model from general knowledge and is NOT VALIDATED: the first task of slice S14 is to confirm, for each work, its author, title, year and a public address with the scout (`request_research`), and to drop a work it cannot confirm. A skill cites a work only for a claim the work makes and the builder has read in the work or in a source the scout returned; until then its "Sources" section stays as written. Citations are text in skills; nothing about trust changes.
+2. **A path for the strategist's strategy files (the answer to 3).** The strategist's `write` scope gains `missions/**/strategy/**` and nothing else. It is a drafting path in the mission folder, beside `roadmap.md`: no ratified file, no `specs/`, no code. `strategy_trace` (spec 124 §6) keeps reading a path under the same guarded read as `check_alignment`; the skills say where a strategy file lives.
+3. **Stabilize the timing-sensitive tests (the answer to 4).** Spec 125 carries this: which tests, why they fail under load, and the slices that fix them. It is not part of this spec.
+4. **Research tools for the strategist (the answer to 5).** The strategist may ask for research and read it back: `request_research`, `research_status` and `research_result`, in a host and where the daemon offers them to a role. This amends [`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §4 by adding one role to the roles that hold those tools; it edits none of 113's text. It is the least that gives the strategist a source ladder it can use: it does NOT grant `record_research`, `propose_kb_entry` or `record_session_summary` (the strategist hands facts to the scout, which records them), and it grants no fetch, search or write. The worker's tool list (`mcp_hosts::worker_tools`), its committed worker file and the ecosystem docs follow from the charter by the existing test (113 §4 item 2). What comes back is untrusted data (specs 062 and 119): a strategy claim built on it names its source and is marked not validated, and a result raises no one's trust.
+
+### 16.1 Slices
+
+| Slice | What | Depends on |
+| :-- | :-- | :-- |
+| S13 | the strategist's write path (item 2) and research tools (item 4): manifest, the strategy skills' "where a strategy file lives" line, `worker_tools`, the worker file and ecosystem docs regenerated, the tests | S8 merged (it edits the same manifest) |
+| S14 | confirm the six works with the scout, then add citations to the strategy and architecture skills' "Sources" sections for the claims the works make; a work that cannot be confirmed is dropped | S8, S13 |
+
+### 16.2 Acceptance
+
+- **AC-12** A strategist worker's tool list holds exactly `request_research`, `research_status` and `research_result` beyond the read tools, and the charter-and-worker test passes; no other role's list changes.
+- **AC-13** The strategist's `write` scope is `missions/**/roadmap.md`, `missions/**/councils/**` and `missions/**/strategy/**`; an edit outside them is still refused.
+- **AC-14** Every work cited in a skill is on the list in item 1 and was confirmed by a scout result recorded in the pull request; a skill that cites none still carries the secondary-sources statement.
