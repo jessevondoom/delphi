@@ -40,31 +40,31 @@
     },
     {
       "level": 2,
-      "line": 77,
+      "line": 79,
       "number": "6",
       "title": "Not built here, and why"
     },
     {
       "level": 2,
-      "line": 85,
+      "line": 87,
       "number": "7",
       "title": "Options considered"
     },
     {
       "level": 3,
-      "line": 93,
+      "line": 95,
       "number": null,
       "title": "Simpler Alternative Considered"
     },
     {
       "level": 2,
-      "line": 97,
+      "line": 99,
       "number": "8",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 104,
+      "line": 106,
       "number": "9",
       "title": "Slices and acceptance"
     }
@@ -72,7 +72,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/125-load-sensitive-tests-made-deterministic.md",
-    "sha256": "de6274d7bfd3f2ccc7ccbe5d37ff6992010822ef97aa7f4443eddb3f093fbfef"
+    "sha256": "4770dcab7998718828b69dd3389d1af138cc56496e4e29f70f4258e64ed6458e"
   },
   "source_status_at_hash": {
     "line": {
@@ -85,7 +85,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-18, in a session: \"4: yes stabilize\", in answer to the item \"three timing-sensitive tests keep reddening PRs; stabilize them in a small spec of their own\". The text below was written after that answer, from the code and the CI logs; the operator has not read it. It names two more tests than the three the operator was told about (section 3, T4 and the listed L1 and L2); T4 is built only because its cause is shown from code, and the operator may strike it. It takes effect when the operator merges the pull request that carries it."
     },
-    "sha256": "de6274d7bfd3f2ccc7ccbe5d37ff6992010822ef97aa7f4443eddb3f093fbfef",
+    "sha256": "4770dcab7998718828b69dd3389d1af138cc56496e4e29f70f4258e64ed6458e",
     "word": "approved"
   },
   "spec": {

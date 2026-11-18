@@ -72,7 +72,9 @@ Principles, for these four and for any later one: remove the dependence; never a
 
 ## 5. What is not made deterministic
 
-T2 keeps one dependence that a test cannot remove: the limit counts every process of the user, so if programs outside the tests start more than 128 processes for that user during one sandboxed command, the command's `fork` fails. That is the product's documented behavior (it fails closed, `authorized.rs:38`), not a test fault. The smallest honest handling, and the one built: when a sweep or a probe gives an unexpected verdict, the failure message carries the user's process count before and after the run, so a reader sees "the count rose by N during the run" and not a riddle. No retry.
+T2 keeps one dependence that a test cannot remove: the limit counts every process of the user, so if programs outside the tests start more than 128 processes for that user during one sandboxed command, the command's `fork` fails. That is the product's documented behavior (it fails closed, `authorized.rs:38`), not a test fault. The smallest honest handling, and the one built: when a sweep or a probe gives an unexpected verdict, the failure message carries the user's process count before and after the run and the end of the command's standard error, so a reader sees "the count rose by N during the run" and bash's `fork: Resource temporarily unavailable`, not a riddle. No retry.
+
+The case seen in practice on a developer's machine is a copy of these same tests from a worktree that predates this spec: it takes no turn, and it starts 500 idle processes and floods beside ours (caught on 2026-11-18: the count went from 420 to 705 before a sweep's launch and to 1,052 during it, while another worktree ran `cargo test -p delphi-sandbox`). The file lock ends that only when both copies have it, that is, once this spec's slices are merged and the other branches have taken `main`. A GitHub runner runs one copy and is not exposed.
 
 ## 6. Not built here, and why
 
@@ -114,7 +116,7 @@ Longer sleeps and wider tolerances (0.3 s to 3 s in T1, a second probe attempt i
 One pull request for S0; one for S1 to S4 under the same-spec trial (one commit per slice, each with its trailer and tracker line).
 
 - **AC-1** Each fixed test passes 50 consecutive runs of its test binary's filter while busy loops hold every core (the method of `dev/flake-soak.sh`), and the pull request reports the counts before and after. Where the old failure could be forced, the pull request says how and shows that the same forcing no longer fails.
-- **AC-2** For T1, removing the kill at `harness_run.rs:921` makes the new test fail (checked by hand once, reported, not committed).
+- **AC-2** For T1, an engine that does not stop at the call (the check at `harness_run.rs:920` switched off) makes the new test fail (checked by hand once, reported, not committed). The test cannot tell a kill issued at the call from one issued a few statements later when the span ends; the old test could not either unless those statements took more than 0.3 s.
 - **AC-3** No test in the three crates is ignored, removed or retried by these slices, and the count of tests does not fall.
 - **AC-4** All gates pass for every slice: `cargo test --workspace --locked`, clippy with `-D warnings`, and `delphi lint --repo .`.
 - **AC-5** The tracker says, for each test, what was reproduced, what was not, and what remains load-sensitive (section 5, L1, L2).
