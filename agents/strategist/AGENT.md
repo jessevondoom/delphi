@@ -6,7 +6,7 @@ cognitive_profile: deep-reasoning
 default_tier: workhorse
 default_access_scope:
   read: ["*"]
-  write: ["missions/**/roadmap.md", "missions/**/councils/**"]
+  write: ["missions/**/roadmap.md", "missions/**/councils/**", "missions/**/strategy/**"]
   execute: ["org-context"]
 authorized_skills:
   - roadmap-sequencing
