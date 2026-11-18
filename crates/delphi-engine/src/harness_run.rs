@@ -197,6 +197,16 @@ const DUPLICATED_FOR_BUILDERS: [&str; 6] = ["read_file", "list_dir", "search", "
 /// Delphi tools that only read: a task that used nothing else can still be retried by another method.
 const READ_ONLY_TOOLS: [&str; 4] = ["read_file", "list_dir", "search", "check"];
 
+/// The system sections a CLI seat is given: the prompt's own, with the skills index (`specs/124` §17) kept only when the seat
+/// holds Delphi's `read_file`, the one way it can open `skills/<name>/SKILL.md`. A seat with no bridge, and a Builder that
+/// keeps the CLI's own file tools in its worktree, cannot read a skill file, so it is not told to.
+fn harness_sections(ipr: &Ipr, delphi: &[ToolDef]) -> Vec<String> {
+    if ipr.skills.is_none() || delphi.iter().any(|d| d.name == "read_file") {
+        return ipr.system_sections();
+    }
+    Ipr { skills: None, ..ipr.clone() }.system_sections()
+}
+
 /// What the CLI needs to know about Delphi's logical paths and its own situation.
 fn harness_note(builder: bool, delphi: &[ToolDef], native: &[String], agy: bool, toolless: bool) -> String {
     let prefix = if agy { AGY_TOOL_PREFIX } else { TOOL_PREFIX };
@@ -760,7 +770,7 @@ impl Engine {
         let bridge_on = bridge_rx.is_some() && !bridge_defs.is_empty();
         let native_for_note = if cli == Cli::Agy { if bridge_on { agy_native.clone() } else { vec![] } } else if tools == Tools::None { lp.native_tools.clone() } else { vec![] };
         let note = harness_note(builder, &bridge_defs, &native_for_note, cli == Cli::Agy, sc.toolless);
-        let launch = Launch { cli, program, model, system_prompt: format!("{}\n\n{}", ipr.system_sections().join("\n\n"), note), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
+        let launch = Launch { cli, program, model, system_prompt: format!("{}\n\n{}", harness_sections(ipr, &bridge_defs).join("\n\n"), note), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
         let ctl = Ctl { bridge_on, delegate, profile: &profile };
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
@@ -2691,6 +2701,47 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Reques
             finish = FINISH
         );
         (body, out, argv)
+    }
+
+    // specs/124 §17: a seat in a subscription CLI is given the skills index with the rest of its prompt when it holds Delphi's
+    // `read_file` over the bridge, and not when it could not open a skill file.
+    #[test]
+    fn a_cli_seat_keeps_the_skills_index_only_when_it_holds_delphis_read_file() {
+        let def = |name: &str| ToolDef { name: name.into(), description: String::new(), input_schema: json!({"type": "object"}) };
+        let mut ipr = Ipr { governance: "G".into(), role: "R".into(), skills: Some(format!("a: does a\n\n{}", crate::skill_index::HOW_TO_READ)), persona: None, guidance: None, heuristics: "H".into(), bundle_skills: None, lessons: "L".into(), context_slices: vec![], contract: "c".into(), reminder: None, nonce: "n".into() };
+        let with = harness_sections(&ipr, &[def("timer"), def("read_file")]);
+        assert_eq!(with, ipr.system_sections());
+        assert!(with[2].starts_with("<skills nonce=\"n\">\na: does a\n"), "{:?}", with);
+        for defs in [vec![], vec![def("timer"), def("run_command")]] {
+            let without = harness_sections(&ipr, &defs);
+            assert!(!without.join("\n").contains("<skills") && !without.join("\n").contains("read_file"), "{:?}", without);
+            assert_eq!(without.len(), with.len() - 1, "nothing else changes");
+        }
+        ipr.skills = None;
+        assert_eq!(harness_sections(&ipr, &[]), ipr.system_sections());
+    }
+
+    #[tokio::test]
+    async fn an_architect_on_a_subscription_with_the_bridge_is_shown_its_skills_before_the_harness_note() {
+        if !have_python() {
+            return;
+        }
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, out_file, argv_file) = bridge_cli(scripts.path(), "list_dir", r#"{"path":"skills"}"#, "connected");
+        let (f, _s) = fixture(&body, |_| {});
+        let names = crate::skill_index::tests::ratify_role_skills(&f.engine.ws, "architect");
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let argv = fs::read_to_string(&argv_file).unwrap();
+        let sys = argv.split_once("--append-system-prompt\n").expect("the system prompt is an argument").1;
+        let at = |needle: &str| sys.find(needle).unwrap_or_else(|| panic!("`{}` is not in the CLI's system prompt", needle));
+        assert!(at("<role nonce=") < at("<skills nonce=") && at("<skills nonce=") < at("<heuristics nonce=") && at("</skills>") < at("<harness_note>"));
+        let section = &sys[at("<skills nonce=")..at("</skills>")];
+        let listed: Vec<&str> = section.lines().skip(1).take_while(|l| !l.is_empty()).map(|l| l.split(':').next().unwrap()).collect();
+        assert_eq!(listed, names.iter().map(String::as_str).collect::<Vec<_>>(), "the manifest's skills, in its order");
+        assert!(section.trim_end().ends_with(crate::skill_index::HOW_TO_READ));
+        let answer: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_file).unwrap()).unwrap();
+        assert!(answer["listed"].as_array().unwrap().iter().any(|v| v == "read_file"), "the seat holds the tool the sentence names");
     }
 
     #[tokio::test]

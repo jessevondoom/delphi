@@ -581,6 +581,7 @@ impl Packs {
         let ipr = Ipr {
             governance: snap.governance.clone(),
             role: role_body,
+            skills: None,
             persona: None,
             guidance: (!snap.guidance.is_empty()).then(|| snap.guidance.clone()),
             heuristics: snap.heuristics.clone(),

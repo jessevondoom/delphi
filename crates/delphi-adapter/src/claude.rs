@@ -528,6 +528,7 @@ pub(crate) mod tests {
         Ipr {
             governance: "G".into(),
             role: "You are the builder.".into(),
+            skills: None,
             persona: None,
             guidance: None,
             heuristics: "H".into(),

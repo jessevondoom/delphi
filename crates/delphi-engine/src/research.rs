@@ -197,6 +197,7 @@ pub(crate) fn scout_call(line: &str, role: &crate::role_call::RoleText, contract
     let mut ipr = delphi_adapter::ipr::Ipr {
         governance: line.into(),
         role: "You are the scout.".into(),
+        skills: None,
         persona: None,
         guidance: None,
         bundle_skills: None,

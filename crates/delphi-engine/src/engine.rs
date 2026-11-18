@@ -1161,9 +1161,18 @@ impl Engine {
             if sc.span.ceiling() != before {
                 m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "context pointers"}))).await?;
             }
+            // The role's own skills by name and description (`specs/124` §17): core text that grants nothing, and never for a seat
+            // with no tools, which cannot read a skill file. A listed skill that cannot be read is left out and logged; the seat runs.
+            let skill_index = if sc.toolless { Default::default() } else { crate::skill_index::build(&self.ws, &sc.manifest.skills) };
+            if fresh {
+                for (name, why) in &skill_index.skipped {
+                    delphi_core::elog::error("engine", "skill_index_skipped", &format!("the role `{}` lists the skill `{}`, which is left out of its prompt: {}", sc.role, name, why), json!({"mission": m.id, "task": sc.task_id, "span": sc.span_id, "role": sc.role, "reason": why}));
+                }
+            }
             let ipr = Ipr {
                 governance: snapshot.governance,
                 role: sc.manifest.body.clone(),
+                skills: skill_index.text,
                 persona: None,
                 guidance: {
                     let g = [snapshot.guidance.as_str(), sc.bundle_agent.as_ref().map(|a| a.block.as_str()).unwrap_or("")].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n");
