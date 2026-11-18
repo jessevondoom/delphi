@@ -3,7 +3,6 @@ name: competitive-swot-analysis
 description: "Execute systematic SWOT, Porter's Five Forces, and Wardley mapping analyses on technical and market positions. Use when evaluating competitive dynamics, platform bets, or product viability."
 authorized_agents:
   - strategist
-  - investigator
 input_schema:
   type: object
   required: ["target"]
