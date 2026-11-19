@@ -154,7 +154,7 @@ The operator asked, on 2026-11-16, for "the council experience in the host envir
 
 ## 126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness
 
-**126: Close sources in a host: the scout and the assistant reach the operator's connectors, and search by closeness** · approved (per source at `3129081d8c66`) · tier 0 · [source](../../specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md)
+**126: Close sources in a host: the scout and the assistant reach the operator's connectors, and search by closeness** · approved (per source at `e51ea78c5ae8`) · tier 0 · [source](../../specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md)
 
 **source excerpt, untrusted** · `specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md` line 25
 

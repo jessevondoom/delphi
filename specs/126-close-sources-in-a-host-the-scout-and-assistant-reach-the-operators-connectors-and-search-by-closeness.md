@@ -205,3 +205,13 @@ No new code path may act outside the sandbox, approve its own action, or let con
 | **OD-4** | The assistant's denylist (3.3) includes `WebSearch` and `WebFetch`. | Yes; it has no research job, and it should be unable to send private text to a web page. |
 | **OD-5** | Authorize `close-source-search` for the investigator too (098 §7.4 already gives it chat threads and issue trackers as a rung)? | Yes. The investigator already inherits tools; this adds only the skill. |
 | **OD-6** | Five rings and these names (5.1)? | Keep; the operator's own wording was "closer to the operator", and five rings are easy to apply. A different number changes only the table. |
+
+## 13. Options considered
+
+| Option | Why not (or why) |
+| :-- | :-- |
+| **A. Keep the allowlist and add `mcp__<server>__*` entries for known connectors** | Brittle: it needs each connector's exact tool-name prefix, which the docs do not state for account connectors (O-3), and a connector the operator adds later is silently missing. Kept only as the fallback if S4 shows the denylist does not work (section 10). |
+| **B. Inherit every tool, as the builder, investigator and writer do** | Simple, but it gives a research role `Edit`, `Bash`, `NotebookEdit` and `Agent`, which the operator excluded. |
+| **C. Inherit minus a denylist (chosen, section 3)** | Reaches every connector the host has now or later, matches the operator's stated list, and keeps Delphi's own tool reach fixed through the generated Delphi denies (3.4). |
+| **D. Delphi proxies the connectors for the worker** | Rejected: `specs/113` §3 says Delphi gains no connector in a host, and a proxy would put the daemon between the operator's host permissions and their data (`specs/098` §7.2). |
+| **E. A hook that blocks connector write tools for the two workers** | Not available as a plugin-agent field (plugin agents ignore `hooks`); a session-level hook may work. Left to S4 and OD-2, not assumed. |
