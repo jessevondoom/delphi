@@ -154,9 +154,9 @@ The operator asked, on 2026-11-16, for "the council experience in the host envir
 
 ## 126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness
 
-**126: Close sources in a host: the scout and the assistant reach the operator's connectors, and search by closeness** · draft (per source at `849e801e26d3`) · tier 0 · [source](../../specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md)
+**126: Close sources in a host: the scout and the assistant reach the operator's connectors, and search by closeness** · approved (per source at `3129081d8c66`) · tier 0 · [source](../../specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md)
 
-**source excerpt, untrusted** · `specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md` line 24
+**source excerpt, untrusted** · `specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md` line 25
 
 ```text
 The operator's goal: **the scout must be able to use the operator's storage, communication and social tools whenever its host has them**, because they are vital research tools. The assistant needs the same reach for email, chat and transcripts.

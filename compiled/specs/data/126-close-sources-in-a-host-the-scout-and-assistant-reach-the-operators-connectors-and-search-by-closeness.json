@@ -4,145 +4,145 @@
   "outline": [
     {
       "level": 1,
-      "line": 15,
+      "line": 16,
       "number": null,
       "title": "Spec 126: Close sources in a host: the scout and the assistant reach the operator's connectors, and search by closeness"
     },
     {
       "level": 2,
-      "line": 22,
+      "line": 23,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 2,
-      "line": 42,
+      "line": 43,
       "number": "2",
       "title": "Observations"
     },
     {
       "level": 2,
-      "line": 56,
+      "line": 57,
       "number": "3",
       "title": "The workers: a denylist, not an allowlist"
     },
     {
       "level": 3,
-      "line": 58,
+      "line": 59,
       "number": "3.1",
       "title": "Tool policy"
     },
     {
       "level": 3,
-      "line": 62,
+      "line": 63,
       "number": "3.2",
       "title": "The scout"
     },
     {
       "level": 3,
-      "line": 72,
+      "line": 73,
       "number": "3.3",
       "title": "The assistant"
     },
     {
       "level": 3,
-      "line": 78,
+      "line": 79,
       "number": "3.4",
       "title": "Delphi's own tools stay as they are"
     },
     {
       "level": 3,
-      "line": 82,
+      "line": 83,
       "number": "3.5",
       "title": "Other hosts"
     },
     {
       "level": 3,
-      "line": 88,
+      "line": 89,
       "number": "3.6",
       "title": "What this grants"
     },
     {
       "level": 2,
-      "line": 92,
+      "line": 93,
       "number": "4",
       "title": "Charters"
     },
     {
       "level": 2,
-      "line": 102,
+      "line": 103,
       "number": "5",
       "title": "The skill: `close-source-search`"
     },
     {
       "level": 3,
-      "line": 106,
+      "line": 107,
       "number": "5.1",
       "title": "Closeness"
     },
     {
       "level": 3,
-      "line": 120,
+      "line": 121,
       "number": "5.2",
       "title": "The radial pass"
     },
     {
       "level": 3,
-      "line": 130,
+      "line": 131,
       "number": "5.3",
       "title": "What the answer says"
     },
     {
       "level": 3,
-      "line": 134,
+      "line": 135,
       "number": "5.4",
       "title": "Care"
     },
     {
       "level": 3,
-      "line": 141,
+      "line": 142,
       "number": null,
       "title": "5.4a Companion skill content"
     },
     {
       "level": 2,
-      "line": 145,
+      "line": 146,
       "number": "6",
       "title": "A reach report"
     },
     {
       "level": 2,
-      "line": 152,
+      "line": 153,
       "number": "7",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 164,
+      "line": 165,
       "number": "8",
       "title": "Acceptance"
     },
     {
       "level": 2,
-      "line": 174,
+      "line": 175,
       "number": "9",
       "title": "Constraints that stay"
     },
     {
       "level": 2,
-      "line": 178,
+      "line": 179,
       "number": "10",
       "title": "Risks"
     },
     {
       "level": 2,
-      "line": 189,
+      "line": 190,
       "number": "11",
       "title": "Not verified"
     },
     {
       "level": 2,
-      "line": 197,
+      "line": 198,
       "number": "12",
       "title": "Open decisions for the operator"
     }
@@ -150,21 +150,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md",
-    "sha256": "849e801e26d3a65258cf3932c15de86bb7537118a90a914885f78d994d2d24b1"
+    "sha256": "3129081d8c668185159c098d8403b501e4236b41a5b533ddb3c9030764dc4aff"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 548,
+        "end": 727,
         "end_line": 6,
         "line": 6,
         "start": 294
       },
-      "text": "status: draft   # a proposal, not permission to build (AGENTS.md). Written from the operator's words in a session on 2026-11-19; the operator has not read it. It takes effect only when the operator approves it and merges the pull request that carries it."
+      "text": "status: approved   # by the operator, 2026-11-19, in a session after the draft pull request (#790) was shown: \"spec approved. merge 790\". The text was written from the operator's earlier words in the same session; the operator has not said they read it line by line. Open decisions OD-1 to OD-6 of section 12 take their recommendations unless the operator says otherwise. It takes effect when the pull request that carries it merges."
     },
-    "sha256": "849e801e26d3a65258cf3932c15de86bb7537118a90a914885f78d994d2d24b1",
-    "word": "draft"
+    "sha256": "3129081d8c668185159c098d8403b501e4236b41a5b533ddb3c9030764dc4aff",
+    "word": "approved"
   },
   "spec": {
     "group": "hosts-and-mcp",
@@ -178,10 +178,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2397,
-      "end_line": 24,
-      "line": 24,
-      "start": 2153
+      "end": 2664,
+      "end_line": 25,
+      "line": 25,
+      "start": 2420
     },
     "text": "The operator's goal: **the scout must be able to use the operator's storage, communication and social tools whenever its host has them**, because they are vital research tools. The assistant needs the same reach for email, chat and transcripts."
   }

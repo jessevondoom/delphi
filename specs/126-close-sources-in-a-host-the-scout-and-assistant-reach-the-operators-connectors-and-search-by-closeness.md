@@ -3,7 +3,8 @@ id: spec-126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators
 title: "126: Close sources in a host: the scout and the assistant reach the operator's connectors, and search by closeness"
 author: architect
 timestamp: 2026-11-19T00:00:00Z
-status: draft   # a proposal, not permission to build (AGENTS.md). Written from the operator's words in a session on 2026-11-19; the operator has not read it. It takes effect only when the operator approves it and merges the pull request that carries it.
+status: approved   # by the operator, 2026-11-19, in a session after the draft pull request (#790) was shown: "spec approved. merge 790". The text was written from the operator's earlier words in the same session; the operator has not said they read it line by line. Open decisions OD-1 to OD-6 of section 12 take their recommendations unless the operator says otherwise. It takes effect when the pull request that carries it merges.
+approved_by: operator (2026-11-19)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, scout, assistant, host, connectors, research, workers, skills, priv
 
 # Spec 126: Close sources in a host: the scout and the assistant reach the operator's connectors, and search by closeness
 
-> **Status: draft.** Nothing here is built. Section 11 lists what is unverified; section 12 lists the decisions the operator still owns.
+> **Status: approved by the operator, 2026-11-19** (see the frontmatter). Nothing here is built. Section 11 lists what is unverified; section 12 lists the decisions the operator still owns.
 > **Amends, if approved:** [`specs/098`](098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) §7.1 to §7.4 (rung 3 gains a method and a promise that the worker can reach it), [`specs/119`](119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md) §2.1 item 8 (which host tools a research worker lists) and [`specs/106`](106-compact-packs-and-role-subagents-a-charter-excerpt-a-hash-check-and-a-worker-file-for-every-role.md) A4 (the read-only worker's tool list). It does not change [`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §3: Delphi gains no connector in a host, and what a host reads through one is recorded as the host reports it and never fetched by the daemon.
 
 ---
