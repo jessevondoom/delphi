@@ -26,7 +26,7 @@ required_permissions:
 
 An invariant written only in a spec erodes: a later change breaks it and nothing says so. A fitness function is an automated check that fails when a stated property of the design stops holding. This skill makes each invariant name its check, or say plainly that it has none.
 
-The idea and its name were taken from secondary summaries of writing on evolutionary architecture, not from the primary work. Until the operator ratifies primary sources (spec 124, OD-3), cite no author as an authority for it.
+The idea and its name are taken from Neal Ford, Rebecca Parsons and Patrick Kua, *Building Evolutionary Architectures* (O'Reilly, 2017; a second edition of 2022 adds Pramod Sadalage). This text was taken from secondary summaries, not from the book, and has not been checked against it. The operator ratified the book for citation on 2026-11-17 (`specs/124` §16, OD-3 answered); that it exists was confirmed on 2026-11-18 from web search results and recorded in Delphi's knowledge base, not validated. It is cited as a bibliographic reference only: no passage is quoted or relied on.
 
 The architect names checks; it does not write them. A check is code, built by Builder against an approved spec. Nothing in this skill changes what a gate decides.
 

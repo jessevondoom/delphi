@@ -90,4 +90,4 @@ There are at least three scenarios, one of them unwelcome; each has a tripwire t
 - Treating this as a review by someone else. The author of a strategy finds the failures the author can imagine; it does not replace the red-team.
 
 ## Sources
-Writing several futures around named uncertainties is the common account of scenario planning, and the premortem (suppose the plan failed, then explain why) is commonly attributed to Gary Klein. This text was written from secondary summaries, not from the primary works, and has not been checked against them. It cites no primary work until the operator ratifies the sources (`specs/124` §12, OD-3).
+Writing several futures around named uncertainties is the common account of scenario planning, and the premortem (suppose the plan failed, then explain why) is a known practice from decision research. No author or work for either is on the operator's ratified list (`specs/124` §16, OD-3), so none is cited here. This text was written from secondary summaries, not from primary works, and has not been checked against them.

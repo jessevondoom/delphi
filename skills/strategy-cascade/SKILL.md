@@ -101,4 +101,4 @@ Each of the five choices is one or two sentences and leaves something out; every
 - Treating a complete trace as proof the choices are right. It shows the links exist.
 
 ## Sources
-The five-choice cascade is commonly attributed to A. G. Lafley and Roger Martin. This text was written from secondary summaries, not from the primary work, and has not been checked against it. It cites no primary work until the operator ratifies the sources (`specs/124` §12, OD-3).
+The five-choice cascade is taken from A. G. Lafley and Roger Martin, *Playing to Win: How Strategy Really Works* (Harvard Business Review Press, 2013). This text was written from secondary summaries, not from the primary work, and has not been checked against it. The operator ratified this work for citation on 2026-11-17 (`specs/124` §16, OD-3 answered). That it exists was confirmed on 2026-11-18 from web search results and recorded in Delphi's knowledge base, not validated; the scout's own research returned no claim. It is cited as a bibliographic reference only: no passage is quoted or relied on.
