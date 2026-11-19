@@ -2,7 +2,7 @@
 
 # Hosts and MCP
 
-14 specs. [All groups](./index.md).
+15 specs. [All groups](./index.md).
 
 ## 025-plugin-skill-and-tool-compatibility
 
@@ -150,4 +150,14 @@ Today everything that makes a host session a Delphi session depends on the host'
 
 ```text
 The operator asked, on 2026-11-16, for "the council experience in the host environment" to be "the best experience for the operator with things like better tailing to show activity, really getting better output via mixed families responding from delphi, and learning loop or knowledge base integration". A read-only assessment of the code followed; the operator then said "i like the council/panel split as it stands today. im curious about the experience of both really", and, of the ranked list, "build it".
+```
+
+## 126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness
+
+**126: Close sources in a host: the scout and the assistant reach the operator's connectors, and search by closeness** · draft (per source at `849e801e26d3`) · tier 0 · [source](../../specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md)
+
+**source excerpt, untrusted** · `specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md` line 24
+
+```text
+The operator's goal: **the scout must be able to use the operator's storage, communication and social tools whenever its host has them**, because they are vital research tools. The assistant needs the same reach for email, chat and transcripts.
 ```
