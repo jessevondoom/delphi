@@ -2,7 +2,7 @@
 
 # Install and lifecycle
 
-9 specs. [All groups](./index.md).
+10 specs. [All groups](./index.md).
 
 ## 006-installer-and-updater
 
@@ -68,4 +68,14 @@ _No standard scope section; open the spec._
 
 ```text
 Today `Delphi.app` exists only where someone ran `app/dev/build.sh`. The program (`delphi`) and its console (`delphi-ui`) are built by the release workflow, published with a checksum and an attestation, installed by `install.sh` and replaced by `delphi update`. This spec puts the app on the same path, on macOS:
+```
+
+## 130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing
+
+**130: The desktop app finds every daemon and says what each is doing** · approved (per source at `08c9aec2e1d2`) · tier 0 · [source](../../specs/130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing.md)
+
+**source excerpt, untrusted** · `specs/130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing.md` line 22
+
+```text
+Today the app finds one daemon: `locate::locate()` asks `delphi daemon where` for the workspace named by `DELPHI_WORKSPACE`, else `default`. A person with two workspaces, or one that is not called `default`, sees the wrong window or an empty one, and has no way to tell a running daemon from a stopped one.
 ```
