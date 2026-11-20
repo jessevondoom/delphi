@@ -121,7 +121,7 @@ Three jobs, in this order of risk:
 
 ## 128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes
 
-**128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes** · approved (per source at `0694631677d1`) · tier 0 · [source](../../specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md)
+**128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes** · approved (per source at `4643040af7e6`) · tier 0 · [source](../../specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md)
 
 **source excerpt, untrusted** · `specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md` line 25
 

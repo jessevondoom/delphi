@@ -146,6 +146,16 @@ impl HarnessErr {
     }
 }
 
+/// The level a failed harness run is written at, and so the level the log must be set to for it to be written at all: `error` for a
+/// failure, `warn` for a spent quota (`specs/128` S2).
+pub(crate) fn failure_log_level(exhausted: bool) -> delphi_core::elog::Level {
+    if exhausted {
+        delphi_core::elog::Level::Warn
+    } else {
+        delphi_core::elog::Level::Error
+    }
+}
+
 /// Claude Code's own worktree directory: sessions create and remove it, and a seat has no tool that touches it (`specs/020`).
 const IGNORED_PREFIX: &str = ".claude/worktrees/";
 
@@ -804,6 +814,8 @@ impl Engine {
         let (mut served_reported, mut tools_offered): (Option<String>, Vec<String>) = (None, Vec::new());
         // Any tool call at all (even a read-only one) and whether the failure is the CLI's own `result` error: the retry's conditions.
         let (mut any_tool, mut cli_error_seen) = (false, false);
+        // The names of the tools the run called, for `harness.no_answer` (`specs/128` S2): names and counts only, never arguments or text.
+        let mut tool_names: Vec<String> = Vec::new();
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
         let mut live = LiveRedactor::new(sc.m.secrets());
         loop {
@@ -923,6 +935,9 @@ impl Engine {
                     text_parts.push(t);
                 }
                 Event::ToolUse { name, input, .. } => {
+                    if tool_names.len() < 40 {
+                        tool_names.push(self.secrets.redact(&name).chars().take(80).collect());
+                    }
                     // In a run that holds a grant EVERY tool_use that is not Delphi's bridge tool (or the schema's StructuredOutput) ends the span
                     // at the call: a native tool, a connector, a plugin tool, an unknown name. Nothing is tolerated as an "attempt" and nothing waits
                     // for a result: the CLI has no tool of its own loaded (`--tools ""`, checked at init), so a call to one can only cost a false
@@ -1151,9 +1166,19 @@ impl Engine {
             }
         }
         if let Some((reason, retryable)) = failure {
+            // A run that ended with no answer at all says what it did, in counts and names (`specs/128` S2): the CLI's status, the tools it
+            // called, how many text events and output tokens it produced, and its exit code. Never text, arguments or a path.
+            if fail_kind == FailKind::AnswerNotFound {
+                let (status, out_tokens) = match &result {
+                    Some(Event::Result { subtype, usage, .. }) => (subtype.clone(), usage.output),
+                    _ => (String::new(), 0),
+                };
+                batch.push(sc.agent_ev("harness.no_answer", json!({"task_id": sc.task_id, "status": status, "tool_calls": tool_names.len(), "tools": tool_names, "text_events": text_parts.len(), "text_bytes": text_parts.iter().map(|t| t.len()).sum::<usize>(), "output_tokens": out_tokens, "structured_output": false, "exit_code": exit_code}), ep, &launch.model));
+            }
             // A failed harness run in the central error log (`specs/039`): the reason, the exit code and the redacted tail of stderr.
-            // A spent quota is a decision (warn), anything else an error.
-            if delphi_core::elog::enabled(delphi_core::elog::Level::Warn) {
+            // A spent quota is a decision (warn), anything else an error. The gate is the level of the record itself: at the default
+            // level (`error`) a failure used to be skipped by a `warn` check, so its stderr tail was never written (`specs/128` S2).
+            if delphi_core::elog::enabled(failure_log_level(exhaustion.is_some())) {
                 let ctx = json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "harness": launch.program, "model": launch.model, "exit_code": exit_code, "stderr_tail": session.stderr_tail().await, "reason": if retryable { "retryable" } else { "final" }, "kind": format!("{:?}", fail_kind)});
                 if exhaustion.is_some() {
                     delphi_core::elog::warn("harness", "harness_exhausted", &reason, ctx);
@@ -2513,6 +2538,64 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert!(matches!(&s, crate::council::Stance::Abstained(r) if r.contains("still broken")), "{s:?}");
         assert_eq!(starts(&count), 2);
         assert_eq!(events_of(&f, "harness.retry").len(), 1);
+    }
+
+    /// A Round 2 seat (toolless, asked for the critique schema) on the fake CLI.
+    async fn seat_r2(f: &Fx) -> crate::council::Stance {
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let mut stances = std::collections::BTreeMap::new();
+        stances.insert("architect".to_string(), crate::council::Stance::Said("a stance".into()));
+        f.engine.panel_foreign_run(&f.m, &tid, "COUNCIL, ROUND 2. Proposition: q".into(), "q", "red-team", "gemini", 2, Some(&stances)).await
+    }
+
+    /// The CLI finishes with success, 1,498 output tokens and neither words nor a structured answer (spec 128, the empty finish).
+    const AGY_EMPTY_FINISH: &str = r#"echo '{"event":"result","result":{"status":"SUCCESS","response":"","usage":{"input_tokens":50,"output_tokens":1498}}}'"#;
+
+    #[tokio::test]
+    async fn an_empty_finish_of_a_schema_seat_is_tried_once_more_and_the_first_run_says_what_it_did() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 1, AGY_EMPTY_FINISH), Duration::from_secs(600));
+        let s = seat_r2(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Said(t) if t == "a good answer"), "{s:?}");
+        assert_eq!(starts(&count), 2);
+        let r = events_of(&f, "harness.retry");
+        assert_eq!(r.len(), 1);
+        assert!(r[0].payload["reason"].as_str().unwrap().contains("without the schema-validated answer"));
+        let n = events_of(&f, "harness.no_answer");
+        assert_eq!(n.len(), 1, "only the first run ended with no answer");
+        let p = &n[0].payload;
+        assert_eq!((p["status"].as_str(), p["output_tokens"].as_u64(), p["text_events"].as_u64(), p["tool_calls"].as_u64()), (Some("success"), Some(1498), Some(0), Some(0)), "{p}");
+        assert_eq!(events_of(&f, "agent.usage").len(), 2, "both attempts' usage is logged");
+    }
+
+    #[tokio::test]
+    async fn two_empty_finishes_abstain_after_exactly_one_retry() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_EMPTY_FINISH), Duration::from_secs(600));
+        let s = seat_r2(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Abstained(r) if r.contains("without the schema-validated answer")), "{s:?}");
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.no_answer").len()), (2, 1, 2));
+    }
+
+    #[tokio::test]
+    async fn an_empty_finish_is_not_retried_with_less_than_the_minimum_time_left() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_EMPTY_FINISH), Duration::from_secs(5));
+        assert!(matches!(seat_r2(&f).await, crate::council::Stance::Abstained(_)));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0));
+    }
+
+    #[test]
+    fn a_failed_run_is_logged_at_the_error_level_and_only_a_spent_quota_at_warn() {
+        use delphi_core::elog::Level;
+        assert_eq!(failure_log_level(false), Level::Error, "a failure is written at the default level (the old `warn` gate dropped it)");
+        assert_eq!(failure_log_level(true), Level::Warn, "a spent quota is a decision, not an error");
     }
 
     #[tokio::test]

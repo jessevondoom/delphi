@@ -65,7 +65,7 @@ This makes spec 099 R2 item 3's "do no new research and use no tools" a limit th
 
 1. The retry condition of `engine.rs` (spec 089 P4b) also holds for `FailKind::AnswerNotFound` when the run used no tool that acts and time remains (`RETRY_MIN_REMAINING`, the seat's own deadline). It is still one retry, in a fresh process, with the first run's usage logged. A second `AnswerNotFound` is final and the seat abstains as today.
 2. **The log tells the truth.** The `harness_failed` record is written at the level of the event: `error` for a failure, `warn` only for a spent quota. The check that gates it uses that same level, not `warn`. The record carries what it carried (the reason, the exit code, the redacted stderr tail).
-3. **A new event, `harness.no_answer`,** is appended when a run ends as `AnswerNotFound`. It holds counts and names only, never text: the result's `status` string, the number of tool calls and their names, the number of `agent_response` steps with and without text, `output_tokens`, whether `structured_output` was present, and the exit code. The next occurrence then says whether the model ended its turn, called a blocked tool or sent its answer somewhere the parser does not read.
+3. **A new event, `harness.no_answer`,** is appended when a run ends as `AnswerNotFound`. It holds counts and names only, never text: the result's `status` string, the number of tool calls and their names, the number of text events and their bytes, `output_tokens`, whether `structured_output` was present, and the exit code. The next occurrence then says whether the model ended its turn, called a blocked tool or sent its answer somewhere the parser does not read.
 
 ### S3. The checkout guard ignores what Delphi wrote itself
 
@@ -90,7 +90,7 @@ This makes spec 099 R2 item 3's "do no new research and use no tools" a limit th
 | :-- | :-- | :-- | --: |
 | S0 | this spec, its compile and its tracker entry | `specs/`, `compiled/`, tracker | (docs) |
 | S1 | toolless Round 2 and repair seats | `council.rs` | 60-120 |
-| S2 | retry of an empty finish; `harness_failed` at its own level; `harness.no_answer` | `engine.rs`, `harness_run.rs`, `schemas/` (event) | 150-250 |
+| S2 | retry of an empty finish; `harness_failed` at its own level; `harness.no_answer` | `engine.rs`, `harness_run.rs` | 150-250 |
 | S3 | the own-writes ledger and the guard's subtraction | `research_record.rs`, new `own_writes.rs`, `harness_run.rs` | 150-250 |
 
 Together about 400-600 lines of code and tests, inside the 800-line limit of the same-spec bundling trial in `AGENTS.md`. The pull request merges with a merge commit. The slices touch no `.github/`, charter or rubric path. If the operator wants the guard change reviewed apart (OD-1), S3 moves to its own pull request and nothing else changes.
@@ -102,7 +102,7 @@ Together about 400-600 lines of code and tests, inside the 800-line limit of the
 3. **Empty finish retried once.** A fake `agy` that finishes with success, no words and no `structured_output` on its first run and a valid object on its second yields a readable Round 2, one `harness.retry` event with `attempt = 2`, and both runs' usage in the log. If both runs are empty the seat abstains with the same reason as today and exactly one retry ran. With under `RETRY_MIN_REMAINING` left, no retry runs.
 4. **No retry where it must not.** A timeout, a quota error, a guard failure and a run that used an acting tool are not retried.
 5. **The error is logged at the default level.** With `DELPHI_LOG` unset (level `error`), a failed harness run writes one `harness_failed` record with the stderr tail; a spent quota writes a `warn` and is absent at `error`.
-6. **`harness.no_answer`** is appended for an empty finish with the counts above and no text, and a golden for its payload.
+6. **`harness.no_answer`** is appended for an empty finish with the counts above and no text, and its payload is asserted.
 7. **Own writes are ignored.** A fake `agy` that takes two seconds, while the test calls `research_record`'s writer for a topic in the registered project, is kept, with `own_writes_count = 2` in `harness.checkout_guard`.
 8. **A real change still fails closed.** The existing `an_agy_run_that_touches_a_project_checkout_is_discarded` passes unchanged. A new test: the test writes a file the ledger does not hold, and the run is discarded. A second: the writer writes a file, then the test edits it before the run ends, and the run is discarded.
 9. **The characterization test of spec 089 P4a** (`characterization_an_unrelated_write_to_a_registered_checkout_during_an_agy_run_discards_a_good_answer`) keeps passing for an unrelated write, and a companion shows the same run with a ledger write is kept.
@@ -113,7 +113,7 @@ Together about 400-600 lines of code and tests, inside the 800-line limit of the
 | Item | How it is verified |
 | :-- | :-- |
 | S1 | Engine tests in `council.rs` over a fake CLI (as `a_toolless_agy_seat_has_the_gate_allowing_nothing_and_its_receipt_lists_no_tools`): receipts, the toolless set before, during and after, and for the repair turn. |
-| S2 | Engine tests with a fake `agy` script (first run empty, second valid; both empty; short deadline), an elog test at the default level, and a payload golden for `harness.no_answer`. `schemas/` gets the event schema; `cargo test -p delphi-core` event-schema checks must pass. |
+| S2 | Engine tests with a fake `agy` script (first run empty, second valid; both empty; short deadline), an elog test at the default level, and a payload assertion for `harness.no_answer` (no schema registry holds `harness.*` events). |
 | S3 | Tests beside the existing guard tests in `harness_run.rs`; a ledger unit test (hash match, edit after write, age and size bounds). |
 | Gates | `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo run -q --locked -p delphi -- lint --repo .`, `delphi specs compile`, and `delphi check spec` on this file. |
 

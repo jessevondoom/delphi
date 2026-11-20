@@ -96,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md",
-    "sha256": "0694631677d1ed6ec702c8ea7b985f8a73cc44304aabbb30503b88b3690e3590"
+    "sha256": "4643040af7e6d5c4398165b4c634216b2961dddc20bdcfb64877b6bd45253b3f"
   },
   "source_status_at_hash": {
     "line": {
@@ -109,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-19, in a session after draft pull request #792 was shown: \"i agree with your recommendations. the spec is approved. begin building\". OD-1 to OD-4 of section 8 take their recommendations. It takes effect when the pull request that carries it merges."
     },
-    "sha256": "0694631677d1ed6ec702c8ea7b985f8a73cc44304aabbb30503b88b3690e3590",
+    "sha256": "4643040af7e6d5c4398165b4c634216b2961dddc20bdcfb64877b6bd45253b3f",
     "word": "approved"
   },
   "spec": {
