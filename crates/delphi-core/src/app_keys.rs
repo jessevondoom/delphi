@@ -50,7 +50,9 @@ pub struct Grant {
 /// * `request`: the first acting grant (§4.2), four methods ([`REQUEST_METHODS`]). Each asks the daemon to start something the operator
 ///   could start from a terminal without being asked anything; each takes ids and typed text only. They are answered by
 ///   [`crate::server::Extension::app_request`] and by nothing else, so no other socket reaches them.
-pub const GRANTS: [Grant; 2] = [
+/// * `update` (§13.2): one method, `app.update_apply`, no parameters. Without the key's standing `--auto` it makes a pending request that
+///   the operator approves at a terminal; with it, the daemon goes on at once. Answered by `app_request` as `request`'s are.
+pub const GRANTS: [Grant; 3] = [
     Grant {
         name: "read",
         methods: &[
@@ -81,10 +83,15 @@ pub const GRANTS: [Grant; 2] = [
         ],
     },
     Grant { name: "request", methods: &REQUEST_METHODS },
+    Grant { name: "update", methods: &UPDATE_METHODS },
 ];
 
 /// The `request` grant's methods (`specs/120` §4.2): the only methods of the app socket that start anything.
 pub const REQUEST_METHODS: [&str; 4] = ["app.research_continue", "app.research_ask", "app.page_rebuild", "app.page_dispute"];
+
+/// The `update` grant's one method (`specs/120` §13.2 item 2): it takes no parameter, so the app cannot name a version, a URL, a channel
+/// or a path. Never given at pairing ([`PAIRING_GRANTS`], [`CODE_GRANTS`]) and never derived: `delphi app grant <name> update` gives it.
+pub const UPDATE_METHODS: [&str; 1] = ["app.update_apply"];
 
 /// The encyclopedia's reads (`specs/117` §3 item 1), rows of the `read` grant and of no other list.
 pub const ENCYCLOPEDIA_READS: [&str; 11] = ["pages.list", "pages.get", "pages.versions", "pages.links", "topics.list", "topics.get", "library.source", "library.claim", "memory.roles", "memory.role", "changes.since"];
@@ -159,6 +166,15 @@ pub struct AppKey {
     #[serde(default)]
     pub app_version: String,
     pub grants: Vec<String>,
+    /// The operator's standing authorization for `app.update_apply` (`specs/120` §13.2 item 6): set at a terminal by
+    /// `delphi app grant <name> update --auto`, ended by `--remove` or by revoking the key. It is a field of the record, never
+    /// worked out from the table, and covers nothing but that one method.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub update_auto: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl AppKey {
@@ -251,11 +267,11 @@ mod tests {
 
     fn key(name: &str, grants: &[&str], last_used: &str) -> AppKey {
         let (public_key, _) = test_sign(&[1u8; 32], &"00".repeat(32), &"00".repeat(16), 1, "/s");
-        AppKey { name: name.into(), public_key, paired_at: "2026-11-01T00:00:00.000Z".into(), last_used: last_used.into(), app_version: "0.1.0".into(), grants: grants.iter().map(|g| g.to_string()).collect() }
+        AppKey { name: name.into(), public_key, paired_at: "2026-11-01T00:00:00.000Z".into(), last_used: last_used.into(), app_version: "0.1.0".into(), grants: grants.iter().map(|g| g.to_string()).collect(), update_auto: false }
     }
 
-    /// §4.1: `read` is what the narrator socket reads and the encyclopedia's eleven reads (spec 117 §3), no more and no less, and
-    /// `request` is the four methods of §4.2, and nothing else is reachable.
+    /// §4.1: `read` is what the narrator socket reads and the encyclopedia's eleven reads (spec 117 §3), no more and no less,
+    /// `request` is the four methods of §4.2, `update` is the one of §13.2, and nothing else is reachable.
     #[test]
     fn the_read_grant_is_the_narrator_list_and_request_is_its_four_methods() {
         let mut read: Vec<&str> = GRANTS[0].methods.to_vec();
@@ -271,8 +287,10 @@ mod tests {
             assert!(m.starts_with("app.") && !crate::server::NARRATOR_METHODS.contains(m) && !ENCYCLOPEDIA_READS.contains(m), "{m}");
             assert!(!["approval", "settings", "budget", "permissions", "grant", "revoke", "pair", "key"].iter().any(|w| m.contains(w)), "{m}");
         }
-        assert_eq!(all_methods().len(), 27, "23 reads and 4 requests; a 28th method needs an approved spec and the gate file");
-        assert_eq!(GRANTS.len(), 2, "a third grant needs an approved spec (specs/120 §5 item 1)");
+        assert_eq!((GRANTS[2].name, GRANTS[2].methods), ("update", &["app.update_apply"][..]));
+        assert!(!PAIRING_GRANTS.contains(&"update") && !CODE_GRANTS.contains(&"update"), "a key never starts with `update` (§13.2 item 1)");
+        assert_eq!(all_methods().len(), 28, "23 reads, 4 requests and 1 update; a 29th method needs an approved spec and the gate file");
+        assert_eq!(GRANTS.len(), 3, "a fourth grant needs an approved spec (specs/120 §5 item 1)");
         // No method is listed twice, under one grant or two: a method has exactly one grant.
         let all: Vec<&str> = GRANTS.iter().flat_map(|g| g.methods.iter().copied()).collect();
         let mut once = all.clone();
@@ -292,6 +310,9 @@ mod tests {
         assert_eq!(check_call(&GRANTS, &held(&["read"]), "observe.state"), Ok(()));
         assert_eq!(check_call(&GRANTS, &held(&["request"]), "observe.state"), Err(CallRefused::Lacks("read")));
         assert_eq!(check_call(&GRANTS, &held(&[]), "session.ping"), Err(CallRefused::Lacks("read")));
+        assert_eq!(check_call(&GRANTS, &held(&["read", "request"]), "app.update_apply"), Err(CallRefused::Lacks("update")));
+        assert_eq!(check_call(&GRANTS, &held(&["update"]), "app.update_apply"), Ok(()));
+        assert_eq!(check_call(&GRANTS, &held(&["update"]), "app.page_rebuild"), Err(CallRefused::Lacks("request")), "update is not request");
         for m in REQUEST_METHODS {
             assert_eq!(check_call(&GRANTS, &held(&["request"]), m), Ok(()));
             assert_eq!(check_call(&GRANTS, &held(&["read"]), m), Err(CallRefused::Lacks("request")), "{m}: reading is not asking");
@@ -308,9 +329,12 @@ mod tests {
         let store = KeyStore::at(t.path());
         store.save(&[key("app-00000a", &["read", "request"], "2026-11-10T00:00:00.000Z")]).unwrap();
         // The release after: the table has a third grant with a method of its own.
-        let grown = [Grant { name: "read", methods: GRANTS[0].methods }, Grant { name: "request", methods: GRANTS[1].methods }, Grant { name: "curate", methods: &["app.topic_pin"] }];
+        let grown = [Grant { name: "read", methods: GRANTS[0].methods }, Grant { name: "request", methods: GRANTS[1].methods }, Grant { name: "update", methods: GRANTS[2].methods }, Grant { name: "curate", methods: &["app.topic_pin"] }];
         let keys = store.load().unwrap();
         assert_eq!(keys[0].grants, ["read", "request"], "the record is unchanged by a new table");
+        // The `update` grant itself is such a row: a key paired before it existed does not hold it (§13.2 item 1).
+        assert_eq!(check_call(&grown, &keys[0].grants, "app.update_apply"), Err(CallRefused::Lacks("update")));
+        assert!(!keys[0].update_auto, "and holds no standing authorization");
         assert_eq!(check_call(&grown, &keys[0].grants, "app.topic_pin"), Err(CallRefused::Lacks("curate")));
         assert_eq!(check_call(&grown, &keys[0].grants, "observe.state"), Ok(()));
     }

@@ -6,6 +6,9 @@ import type { Conn } from './types.ts';
 /** A code as the daemon makes it: three and three characters of an alphabet with no 0, O, 1, I or L. Anything else is not shown. */
 const CODE = /^[A-HJKMNP-Z2-9]{3}-[A-HJKMNP-Z2-9]{3}$/;
 
+/** Whether this is a code in the shape the daemon makes (a pairing code or an update's); anything else is not shown. */
+export const isCode = (v: unknown): v is string => typeof v === 'string' && CODE.test(v);
+
 /** The code to show for this connection: only a window that is attached and holds no key, and only a well-formed code. */
 export const pairCodeOf = (conn: Conn): string | null => (conn.connected && !conn.paired && CODE.test(conn.pair_code ?? '') ? (conn.pair_code as string) : null);
 

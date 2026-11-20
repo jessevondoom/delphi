@@ -128,14 +128,21 @@ pub fn run(args: Vec<String>) -> ! {
         daemon.set_app_audit(booted.service.app_audit());
         booted.service.start_timers();
         // Spec 130 §2: the daemon announces itself for the desktop app. A failure to write it never stops the daemon.
-        if let Err(e) = delphi_core::presence::write(&l, &delphi_core::presence::Presence::new(&l, daemon.instance(), &daemon_version, &canon, &home)) {
+        let presence = delphi_core::presence::Presence::new(&l, daemon.instance(), &daemon_version, &canon, &home);
+        if let Err(e) = delphi_core::presence::write(&l, &presence) {
             eprintln!("delphi-core: the presence file could not be written ({e})");
         }
+        // Spec 120 §13.2 item 12: the daemon looks for a newer release at start and every six hours, and says so in the presence file.
+        booted.service.set_update_presence(l.clone(), presence);
         // Ready: the token travels over the pipe only.
         writeln!(ready, "{}", daemon.console_token()).unwrap_or_else(|e| die(&format!("ready pipe: {}", e)));
         drop(ready);
+        // The checks start the program, so they start only once the readiness pipe is closed: nothing started from here holds it open.
+        booted.service.start_update_checks();
         eprintln!("delphi-core: ready on {} (mission {})", l.sock.display(), booted.default_mission);
         daemon.serve_with_app(listener, Some(narrator_listener), Some(relay_listener), Some(host_listener), Some(app_listener)).await;
+        // An apply that is running is ended with everything it started before this process goes: a new daemon would not know of it.
+        booted.service.update_shutdown().await;
         delphi_core::presence::remove(&l);
         let _ = std::fs::remove_file(&l.sock);
         let _ = std::fs::remove_file(&l.narrator_sock);

@@ -50,7 +50,7 @@ pub const ANCHOR_MAX: usize = 80;
 /// The longest question, as `research.start` takes it.
 const QUESTION_MAX: usize = 200;
 /// The states an `app.request` event names.
-pub const STATES: [&str; 6] = ["queued", "running", "done", "failed", "cancelled", "refused"];
+pub const STATES: [&str; 7] = ["waiting", "queued", "running", "done", "failed", "cancelled", "refused"];
 
 /// Something a request started that has not ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +179,10 @@ struct Req {
 impl EngineService {
     /// Answer one of the `request` grant's methods for the key named `key`. `None` for any other method.
     pub async fn app_request(self: &Arc<Self>, key: &str, method: &str, params: Value) -> Option<RpcOutcome> {
+        // The `update` grant's one method (`specs/120` §13.2), answered by [`super::app_update`].
+        if delphi_core::app_keys::UPDATE_METHODS.contains(&method) && delphi_core::app_keys::is_name(key) {
+            return Some(self.app_update_apply(key, params).await);
+        }
         if !METHODS.contains(&method) || !delphi_core::app_keys::is_name(key) {
             return None;
         }

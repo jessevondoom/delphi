@@ -49,3 +49,12 @@ methods = [
     "app.page_rebuild",
     "app.page_dispute",
 ]
+
+# The second acting grant (spec 120 section 13.2): one method, no parameter. The app cannot name a version, a URL, a channel or a
+# path; the daemon applies only what `delphi update` would apply on its own, and without the key's standing `--auto` it waits for
+# the operator to type the release it found, at a terminal. Never given at pairing; `delphi app grant <name> update` gives it.
+[[grant]]
+name = "update"
+methods = [
+    "app.update_apply",
+]

@@ -321,7 +321,7 @@ impl Bridge {
         let conn = self.conn();
         match conn.paired {
             None => return Err(NOT_PAIRED_TO_ASK.into()),
-            Some(name) if !conn.grants.iter().any(|g| g == "request") => return Err(format!("this app's key does not hold `request`: `delphi app grant {name} request` in a terminal gives it")),
+            Some(name) if !conn.grants.iter().any(|g| g == method.grant()) => return Err(format!("this app's key does not hold `{g}`: `delphi app grant {name} {g}` in a terminal gives it", g = method.grant())),
             Some(_) => {}
         }
         self.call(method, params)
@@ -848,7 +848,7 @@ mod tests {
         // did not grow by them. It is the nine reads of spec 111 §2.2, the encyclopedia's eleven (spec 117 E5), each a row
         // of the daemon's `read` grant; and, since spec 120 K5, the four requests of the daemon's `request` grant, which
         // are the only methods here that are not reads.
-        assert_eq!((Method::NARRATOR.len(), Method::PAIRED_ONLY.len(), Method::REQUESTS.len(), Method::ALL.len()), (9, 11, 4, 24));
+        assert_eq!((Method::NARRATOR.len(), Method::PAIRED_ONLY.len(), Method::REQUESTS.len(), Method::ALL.len()), (9, 11, 4, 25));
         assert_eq!(reads.len(), 20);
         let grants = include_str!("../../../crates/delphi-core/src/app_keys.rs");
         let read = grants.split("name: \"read\"").nth(1).and_then(|s| s.split("Grant {").next()).expect("the grant table is where it was");
@@ -859,6 +859,12 @@ mod tests {
         let asked = grants.lines().find(|l| l.contains("pub const REQUEST_METHODS")).and_then(|l| l.split_once('=')).map(|(_, r)| r.trim().trim_end_matches(';').to_string()).expect("the request list is where it was");
         assert_eq!(asked, format!("[{}]", Method::REQUESTS.iter().map(|m| format!("\"{}\"", m.name())).collect::<Vec<_>>().join(", ")));
         assert!(grants.contains("Grant { name: \"request\", methods: &REQUEST_METHODS }"), "the `request` grant is that list");
+        // The update is the one method of the daemon's `update` grant (spec 120 §13.2), listed there and under no other grant.
+        let updated = grants.lines().find(|l| l.contains("pub const UPDATE_METHODS")).and_then(|l| l.split_once('=')).map(|(_, r)| r.trim().trim_end_matches(';').to_string()).expect("the update list is where it was");
+        assert_eq!(updated, format!("[{}]", Method::UPDATES.iter().map(|m| format!("\"{}\"", m.name())).collect::<Vec<_>>().join(", ")));
+        assert!(grants.contains("Grant { name: \"update\", methods: &UPDATE_METHODS }"), "the `update` grant is that list");
+        assert!(!read.contains("app.update_apply") && Method::UpdateApply.asks() && !Method::REQUESTS.contains(&Method::UpdateApply));
+        assert_eq!((Method::UpdateApply.grant(), Method::PageRebuild.grant()), ("update", "request"));
         for m in Method::REQUESTS {
             assert!(!read.contains(&format!("\"{}\"", m.name())), "{} must not be a read", m.name());
         }
@@ -1219,6 +1225,17 @@ mod tests {
         let said = bridge.request(Method::PageRebuild, json!({"slug": "tides"})).unwrap_err();
         assert_eq!(said, format!("this app's key does not hold `request`: `delphi app grant {PAIRED_NAME} request` in a terminal gives it"));
         assert_eq!(app.seen.lock().unwrap().len(), before);
+        // The update (spec 120 §13.2) needs its own grant: `request` is not enough, and nothing is sent without it.
+        bridge.conn.lock().unwrap().grants = vec!["read".to_string(), "request".to_string()];
+        let said = bridge.request(Method::UpdateApply, json!({})).unwrap_err();
+        assert_eq!(said, format!("this app's key does not hold `update`: `delphi app grant {PAIRED_NAME} update` in a terminal gives it"));
+        assert_eq!(app.seen.lock().unwrap().len(), before);
+        // With it, the call goes over the app socket carrying no parameter at all, whatever the window handed over.
+        bridge.conn.lock().unwrap().grants = vec!["read".to_string(), "update".to_string()];
+        let (method, params) = crate::ask::request("update.apply", &json!({"version": "9.9.9", "url": "http://x", "channel": "dev"})).unwrap();
+        assert_eq!(bridge.request(method, params).unwrap(), json!({"echo": "app.update_apply"}));
+        let last = app.seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!((last["method"].as_str(), last["params"].clone()), (Some("app.update_apply"), json!({})));
         bridge.stop();
     }
     #[test]

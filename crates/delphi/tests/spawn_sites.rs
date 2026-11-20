@@ -188,6 +188,37 @@ fn the_list_and_the_scan_disagree_loudly() {
     assert!(compare(&found, &list).iter().any(|p| p.starts_with("gone.rs") && p.contains("Remove the entry")));
 }
 
+/// Spec 120 AC-18: the daemon's one new start (the `update` grant) names its two clauses, and the argument lists it names are the ones the
+/// code builds. A change to either list of arguments is a change to this gate file, which the operator merges at a terminal.
+#[test]
+fn the_update_grants_spawn_names_its_two_clauses_and_they_are_the_arguments_the_code_builds() {
+    use delphi_engine::service::app_update::{apply_argv, check_argv};
+    let text = std::fs::read_to_string(root().join(LIST)).unwrap();
+    let v: toml::Value = toml::from_str(&text).unwrap();
+    let site = v.get("site").and_then(|s| s.as_array()).unwrap().iter().find(|s| s.get("file").and_then(|f| f.as_str()) == Some("crates/delphi-engine/src/app_update.rs")).expect("the update grant's start is listed");
+    assert_eq!((site.get("count").and_then(|c| c.as_integer()), site.get("class").and_then(|c| c.as_str())), (Some(1), Some("self")));
+    let words = |argv: Vec<std::ffi::OsString>| argv.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ");
+    assert_eq!(site.get("clause_apply").and_then(|c| c.as_str()), Some(words(apply_argv("<name>", Path::new("<home>"), "<version>")).as_str()));
+    assert_eq!(site.get("clause_check").and_then(|c| c.as_str()), Some(words(check_argv(Path::new("<home>"))).as_str()));
+    // No other file of the crates names the apply's arguments: nothing else starts that command.
+    let mut hits = Vec::new();
+    fn walk(dir: &Path, hits: &mut Vec<String>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if !p.ends_with("target") && !p.ends_with("tests") {
+                    walk(&p, hits);
+                }
+            } else if p.extension().is_some_and(|x| x == "rs") && std::fs::read_to_string(&p).is_ok_and(|t| t.contains("\"--no-restart\"")) {
+                hits.push(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+    walk(&root().join("crates"), &mut hits);
+    hits.sort();
+    assert!(hits.iter().all(|h| h.ends_with("delphi-engine/src/app_update.rs") || h.ends_with("delphi/src/main.rs")), "{hits:?}");
+}
+
 #[test]
 fn the_list_rejects_an_unknown_class_and_an_empty_entry() {
     let (_, bad) = listed("[[site]]\nfile = \"a.rs\"\ncount = 1\nclass = \"whatever\"\n");
