@@ -103,6 +103,33 @@ fn request(bridge: State<'_, Arc<Bridge>>, what: String, arg: Option<Value>) -> 
     bridge.request(method, params)
 }
 
+/// What the start screen is drawn from (spec 130 §4): the daemons found in the run folder of the Delphi home, whether the
+/// bridge is waiting for one to be chosen, and which one it is attached to.
+#[derive(serde::Serialize)]
+struct Daemons {
+    held: bool,
+    current: Option<String>,
+    /// The app's own version (`0.0.0` in a build that was not made for a release), for a card that says the daemon's differs.
+    app_version: String,
+    daemons: Vec<locate::Found>,
+}
+
+/// The daemons on this machine (spec 130 §3.1), each with a summary read through `observe.state` when `summaries` is asked
+/// for (the start screen and the switcher ask while they are showing, and no daemon is read more than every five seconds).
+/// It reads files and sockets of the Delphi home and starts nothing.
+#[tauri::command(async)]
+fn daemons(app: tauri::AppHandle, bridge: State<'_, Arc<Bridge>>, summaries: Option<bool>) -> Result<Daemons, String> {
+    let daemons = bridge.daemons(&home()?, summaries.unwrap_or(false));
+    Ok(Daemons { held: bridge.held(), current: bridge.current(), app_version: app.package_info().version.to_string(), daemons })
+}
+
+/// Point the window at one daemon of the list `daemons` last gave (spec 130 §3.2): the bridge attaches to it again. Any other
+/// hash is refused and nothing changes.
+#[tauri::command(async)]
+fn attach(bridge: State<'_, Arc<Bridge>>, hash: String) -> Result<(), String> {
+    bridge.attach_to(&hash, locate::info_for)
+}
+
 fn home() -> Result<std::path::PathBuf, String> {
     locate::delphi_home().ok_or_else(|| "no Delphi home was found on this machine".to_string())
 }
@@ -199,6 +226,19 @@ pub fn run() {
             app.manage(bridge.clone());
             let sink: Arc<dyn Sink> = Arc::new(Window(app.handle().clone()));
             std::thread::spawn(move || {
+                // Which daemon to show (spec 130 §3.2): the one that runs, or the one `DELPHI_WORKSPACE` names, as before; with
+                // several and no name, none until the start screen's choice.
+                if let Some(home) = locate::delphi_home() {
+                    let found = bridge.daemons(&home, false);
+                    let named = std::env::var("DELPHI_WORKSPACE").ok();
+                    match locate::start_choice(&found, named.as_deref()) {
+                        locate::Start::Ask => bridge.hold(),
+                        locate::Start::Attach(hash) => {
+                            let _ = bridge.attach_to(&hash, locate::info_for);
+                        }
+                        locate::Start::Locate => {}
+                    }
+                }
                 // A terminal that started the app with `delphi app` left a pairing ticket on the standard input (a pipe); a
                 // window started any other way has none.
                 bridge.offer_ticket(key::ticket_from_stdin());
@@ -206,7 +246,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, kb, encyclopedia, request, marks_load, marks_save, export_page, print_page, reveal, open_file, open_url])
+        .invoke_handler(tauri::generate_handler![info, conn, state, snapshot, session, daemons, attach, kb, encyclopedia, request, marks_load, marks_save, export_page, print_page, reveal, open_file, open_url])
         .run(tauri::generate_context!())
         .expect("the Delphi window could not start");
 }

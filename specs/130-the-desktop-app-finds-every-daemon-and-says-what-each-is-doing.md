@@ -65,7 +65,7 @@ The daemon writes `<home>/run/<h>.json` (`h` is the workspace hash that names it
 
 1. **Mode and write.** 0600, in the run folder (0700), written to a temporary name in the same folder and renamed, as `app-keys.json` is.
 2. **No secrets.** No token, no key, no ticket. A test fails if a key whose name contains `token`, `secret`, `ticket` or `key` is present.
-3. **A crash leaves a stale file.** A reader never trusts one. A daemon is **running** only when its narrator socket accepts a connection and answers `hello` and the reply's instance equals the file's `instance`. Otherwise it is **stopped** (the file is stale) and shown as such. A reader never deletes a presence file (the daemon's own restart overwrites it).
+3. **A crash leaves a stale file.** A reader never trusts one. A daemon is **running** only when its narrator socket accepts a connection and answers `hello` and the reply's instance equals the file's `instance`. The narrator `hello` reply on main carries `pid` and no `instance`; until it does, a reader matches the reply's `pid` against the file's `pid` (weaker: a recycled pid on a reused socket path would pass, and the daemon's own restart rewrites the file; a later slice may add `instance` to `hello`). Otherwise it is **stopped** (the file is stale) and shown as such. A reader never deletes a presence file (the daemon's own restart overwrites it).
 4. **Older daemons write none.** A `<h>.narrator.sock` with no file beside it is listed as "older daemon" with only its hash and whether it answers.
 5. **`daemon_info`** (`delphi daemon status`) is unchanged.
 

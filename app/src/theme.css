@@ -260,6 +260,26 @@ details.card > summary { cursor: pointer; }
 .page-end { height: 1px; }
 
 /* Printing a page (spec 117 §5 item 4): the page alone, with its banner and its bibliography; the window's own furniture stays off the paper. */
+/* The start screen and the switcher (spec 130 §4). Nothing here moves: no transition, no animation, and a state word that
+   changes is replaced, not faded. The rule below says so for the reduce-motion setting as well. */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.where-btn { display: inline-flex; align-items: baseline; gap: 6px; min-height: 32px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line2); background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.where-btn:hover { background: var(--sel); }
+.switcher { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; padding: 12px 16px; background: var(--side); border-bottom: 1px solid var(--line); max-height: 60vh; overflow: auto; }
+.daemon-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; width: 100%; }
+.card.daemon { gap: 4px; align-items: stretch; }
+.daemon-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.daemon-state { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--note-bg); color: var(--note-fg); }
+.daemon-state[data-state='needs you'] { background: var(--warn-bg); color: var(--warn-fg); }
+.daemon-state[data-state='working'] { background: var(--ok-bg); color: var(--ok-fg); }
+.daemon-path { overflow-wrap: anywhere; font-size: 12px; }
+.daemon-version, .daemon-line, .daemon-note, .daemon-needs { display: block; font-size: 13px; }
+.daemon-note { color: var(--warn-fg); background: var(--warn-bg); padding: 4px 8px; border-radius: 6px; }
+.daemon-needs { font-weight: 600; }
+.copy-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.copy-line code { padding: 6px 8px; border-radius: 6px; background: var(--inset); border: 1px solid var(--line); overflow-wrap: anywhere; user-select: all; }
+@media (prefers-reduced-motion: reduce) { .start *, .switcher *, .where-btn { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
 @media print {
   .titlebar, .menu, .aside, .no-print, .passage-notes { display: none !important; }
   html, body, #root { height: auto; }

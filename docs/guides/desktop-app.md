@@ -92,6 +92,19 @@ A key that holds `request` may ask the daemon to start four things, each of whic
 - **The record.** Each request is an `app.request` event with the key's name, the method, the ids and where it stands (queued, running, done, failed, cancelled, refused and why). What you typed is not in it. `delphi app log` prints them.
 - **Revoking.** `delphi app revoke <name>` closes the key's sessions at once. A request that was already being started is not cut halfway: it finishes starting, and its work runs under the daemon's usual limits.
 
+## Several daemons: the start screen and the switcher
+
+Each daemon writes a small presence file beside its sockets (`<home>/run/<hash>.json`, [`specs/130`](../../specs/130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing.md)), and the app reads them. A file is believed only when the socket it names answers as the daemon that wrote it; a crash leaves a file that the app shows as stopped, and a daemon from before the files is shown as an older daemon.
+
+- **One daemon runs**, or `DELPHI_WORKSPACE` names one: the window attaches, as always.
+- **Several run and none is named**: the window starts on a screen with one card per daemon: the workspace, its path, the version, a state word (`needs you`, `working`, `idle`, `stopped`, `older daemon`), and counts (agents running or waiting, approvals waiting and for how long, the session, the tokens used; never money). A card that needs you comes first and says "Answer it in the console": the window answers nothing. Click a card to show that daemon.
+- **A stopped workspace** has the command to start it (`delphi --workspace <name>`) and a button that copies it. Nothing in the window starts a daemon.
+- **A daemon of another version than the app** shows both versions, and says that `delphi update` restarts idle daemons.
+- **None runs**: "Nothing is running", with the command to start Delphi and, for a machine with no Delphi yet, the install line.
+- **With several daemons**, the workspace name in the title row is a button that opens the same cards in a panel, to switch. With one it is plain text.
+
+The counts come from `observe.state`, the read the window already makes, over a short-lived read-only connection to each daemon, at most once every five seconds and only while this screen or the panel is showing. A key paired with one daemon is not offered to another: after a switch the window reads on the narrator socket until `delphi app` has paired it with that daemon too. In a browser, `npm run dev` shows sample daemons (`?daemons=none`, `?daemons=one` or the default several).
+
 ## Your marks on the encyclopedia
 
 - **Read.** A page version is marked read when you scroll to its end. The home page lists a page as *new* until then and as *changed* when the daemon has rebuilt it since.
