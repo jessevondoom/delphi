@@ -82,55 +82,55 @@
     },
     {
       "level": 2,
-      "line": 136,
+      "line": 137,
       "number": "9",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 144,
+      "line": 145,
       "number": "10",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 159,
+      "line": 160,
       "number": "11",
       "title": "Open questions (the operator decides)"
     },
     {
       "level": 2,
-      "line": 165,
+      "line": 166,
       "number": "12",
       "title": "Amendment (operator, 2026-11-15): the unsigned app keeps its key in a file"
     },
     {
       "level": 2,
-      "line": 176,
+      "line": 177,
       "number": "13",
       "title": "Amendment (operator, 2026-11-19): pairing by a code the operator types, and the `update` grant"
     },
     {
       "level": 3,
-      "line": 180,
+      "line": 181,
       "number": "13.1",
       "title": "Pairing by code (slice P1)"
     },
     {
       "level": 3,
-      "line": 190,
+      "line": 191,
       "number": "13.2",
       "title": "The `update` grant (slice U1)"
     },
     {
       "level": 3,
-      "line": 205,
+      "line": 206,
       "number": "13.3",
       "title": "Acceptance criteria"
     },
     {
       "level": 3,
-      "line": 217,
+      "line": 218,
       "number": "13.4",
       "title": "Slices"
     }
@@ -138,7 +138,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md",
-    "sha256": "2f0f2e7ee7f72007c7ee7359dd37ffd7c38c388ce4c750aed44e5ba4ba4c9131"
+    "sha256": "17e28b50d27645c640e72f32d959386e0f6572e1a3f4a33ecfded1367fdbb34a"
   },
   "source_status_at_hash": {
     "line": {
@@ -151,7 +151,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"approve 120. add to the build plan\". The spec was written from the operator's direction earlier that day (\"shouldn't we be able to launch in a secure scope even without user involvement by spawning the app from a terminal with a signed key exchange or similar? i agree to narrowing scope but i think we start narrow and expand explicitly in order to maintain secure operations and support a wide feature set in the app.\"). The operator was shown a summary of the design and its open questions, not every line. It amends an operator decision (2026-10-25, spec 005 section 2.1). Section 12 (2026-11-15) is an amendment written from the operator's words of that day; it takes effect when the operator merges its pull request."
     },
-    "sha256": "2f0f2e7ee7f72007c7ee7359dd37ffd7c38c388ce4c750aed44e5ba4ba4c9131",
+    "sha256": "17e28b50d27645c640e72f32d959386e0f6572e1a3f4a33ecfded1367fdbb34a",
     "word": "approved"
   },
   "spec": {

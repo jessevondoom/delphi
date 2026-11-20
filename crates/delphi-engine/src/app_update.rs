@@ -43,6 +43,10 @@ pub const MAX_WRONG: u8 = 3;
 /// The least time between one apply ending and the next starting, for any key: after an install, and after a failure (item 7).
 pub const AFTER_OK_SECS: i64 = 3600;
 pub const AFTER_FAIL_SECS: i64 = 600;
+/// How long a child's output is read after the child has gone, before whatever it left behind is ended (a process it started may hold the pipes).
+const READERS_GRACE: Duration = Duration::from_secs(2);
+/// What `delphi update --only-newer` exits with when the release is not newer than the program installed.
+const EXIT_NOT_NEWER: i32 = 3;
 /// What is kept of a child's output, per stream. The rest is read and thrown away so the child never blocks on a full pipe.
 pub const OUT_MAX: usize = 64 * 1024;
 /// How long an apply, and a check, may take before the child is killed.
@@ -65,10 +69,12 @@ pub fn plain_name(n: &str) -> bool {
 }
 
 /// The arguments of clause 1. Made from the daemon's own workspace name and home and the release the daemon found and the operator approved,
-/// never from anything an app sent. `--version` makes the install exactly that release, whatever the release list says later; `--review`
-/// leaves the release's changes to the built-in agents and skills pending for `/ratify` instead of ratifying them unseen.
+/// never from anything an app sent. `--version` makes the install exactly that release, whatever the release list says later; `--only-newer`
+/// makes the program refuse (exit 3) when that release is not newer than the program installed now, so a program updated by hand since the
+/// daemon looked is never put back; `--review` leaves the release's changes to the built-in agents and skills pending for `/ratify`
+/// instead of ratifying them unseen.
 pub fn apply_argv(workspace: &str, home: &Path, version: &str) -> Vec<OsString> {
-    vec!["update".into(), "--no-restart".into(), "--review".into(), "--version".into(), format!("v{version}").into(), "--workspace".into(), workspace.into(), "--home".into(), home.as_os_str().to_owned()]
+    vec!["update".into(), "--no-restart".into(), "--review".into(), "--only-newer".into(), "--version".into(), format!("v{version}").into(), "--workspace".into(), workspace.into(), "--home".into(), home.as_os_str().to_owned()]
 }
 
 /// The arguments of clause 2.
@@ -133,9 +139,15 @@ struct Pending {
     /// The code the operator types at the terminal, as shown (`K7Q-4M2`). Made by the daemon, given to the app connection that asked and
     /// to nobody else: [`EngineService::app_update_admin`]'s list never holds it.
     code: String,
-    /// When the request was made, on the monotonic clock ([`mono`]).
+    /// When the request was made, on the monotonic clock ([`mono`]) and on the wall clock. It is stale when either says so: the monotonic
+    /// clock can pause while a machine sleeps, and the wall clock can be set back.
     issued: i64,
+    issued_wall: i64,
     wrong: u8,
+}
+
+fn stale(p: &Pending, at: i64, wall: i64) -> bool {
+    at - p.issued > PENDING_SECS || wall - p.issued_wall > PENDING_SECS
 }
 
 /// Seconds on a clock that only moves forward: the wall clock can be set back, which would stretch a request's ten minutes or an hour's limit.
@@ -158,9 +170,15 @@ pub struct State {
     /// Counts each start and end of an apply: a check that began before one and ended after it is out of date and is thrown away.
     epoch: u64,
     made: u64,
-    /// Tests: seconds added to the monotonic clock, and a shorter limit on a child.
+    /// The process group of the child that runs now (its pid), so a shutdown can end it, and a process that was running when an earlier
+    /// daemon stopped (its pid, from the marker file), which keeps this daemon from starting a second apply on top of it.
+    child: Option<u32>,
+    orphan: Option<i32>,
+    /// Tests: seconds added to the monotonic clock, a shorter limit on a child, and a panic in the apply task.
     skew: i64,
     limit: Option<Duration>,
+    #[cfg(test)]
+    panic_in_apply: bool,
     /// The program to start instead of this one (tests: a script that records what it was asked and answers as it is told).
     exe: Option<PathBuf>,
     /// Where the presence file is, and what it said when the daemon wrote it: the update fields are added to it and it is rewritten.
@@ -185,13 +203,52 @@ fn private_dir() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
-/// Read a stream: the first [`OUT_MAX`] bytes kept, the rest read and dropped.
-async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(mut r: R) -> String {
+/// Read a stream into `buf` as it comes: the first [`OUT_MAX`] bytes kept, the rest read and dropped.
+async fn read_into<R: tokio::io::AsyncRead + Unpin>(mut r: R, buf: Arc<std::sync::Mutex<Vec<u8>>>) {
     use tokio::io::AsyncReadExt;
-    let mut kept = Vec::new();
-    let _ = (&mut r).take(OUT_MAX as u64).read_to_end(&mut kept).await;
-    let _ = tokio::io::copy(&mut r, &mut tokio::io::sink()).await;
-    String::from_utf8_lossy(&kept).into_owned()
+    let mut chunk = [0u8; 4096];
+    loop {
+        match r.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let mut b = buf.lock().unwrap_or_else(|e| e.into_inner());
+                let room = OUT_MAX.saturating_sub(b.len());
+                b.extend_from_slice(&chunk[..n.min(room)]);
+            }
+        }
+    }
+}
+
+/// Is a process with this id alive (this user's, or another's that we may not signal)?
+fn alive(pid: i32) -> bool {
+    // SAFETY: signal 0 only asks whether the process exists.
+    pid > 0 && (unsafe { libc::kill(pid, 0) } == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+}
+
+/// Given back when the apply task ends, however it ends: a panic in the task must not leave the daemon thinking an apply still runs.
+struct RunGuard {
+    svc: Arc<EngineService>,
+    armed: bool,
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let marker = {
+            let mut st = self.svc.update.lock().unwrap_or_else(|e| e.into_inner());
+            let at = st.now();
+            st.running = false;
+            st.epoch += 1;
+            st.last_end = Some((at, false));
+            st.child = None;
+            st.presence.as_ref().map(|(l, _)| l.presence.with_extension("update.lock"))
+        };
+        if let Some(m) = marker {
+            let _ = std::fs::remove_file(m);
+        }
+    }
 }
 
 /// Is `exe` something the daemon may start as the installed program? It is made canonical once, and that path is the one returned and the
@@ -303,24 +360,46 @@ impl EngineService {
             Err(e) => Err(format!("the program could not be started: {e}")),
             Ok(mut child) => {
                 let pid = child.id().unwrap_or(0);
-                let (so, se) = (child.stdout.take(), child.stderr.take());
-                let reading = async {
-                    let (a, b) = tokio::join!(async { if let Some(s) = so { read_bounded(s).await } else { String::new() } }, async { if let Some(s) = se { read_bounded(s).await } else { String::new() } });
-                    (a, b)
-                };
-                let finished = tokio::time::timeout(limit, async {
-                    let (outs, status) = tokio::join!(reading, child.wait());
-                    (outs, status)
-                })
-                .await;
+                if pid != 0 {
+                    self.update_child_started(pid);
+                }
+                let (out_buf, err_buf) = (Arc::new(std::sync::Mutex::new(Vec::new())), Arc::new(std::sync::Mutex::new(Vec::new())));
+                let mut readers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+                if let Some(o) = child.stdout.take() {
+                    readers.push(tokio::spawn(read_into(o, out_buf.clone())));
+                }
+                if let Some(e) = child.stderr.take() {
+                    readers.push(tokio::spawn(read_into(e, err_buf.clone())));
+                }
+                let waited = tokio::time::timeout(limit, child.wait()).await;
+                if waited.is_ok() {
+                    // The program is done. What it printed is read for a moment: a process it started and left behind may hold the pipes
+                    // open for ever, and that must not make a finished install look like a failure.
+                    let _ = tokio::time::timeout(READERS_GRACE, async {
+                        for h in readers.iter_mut() {
+                            if !h.is_finished() {
+                                let _ = h.await;
+                            }
+                        }
+                    })
+                    .await;
+                }
                 // Whatever happened, nothing the child started stays behind, and this does not return until the group is gone: the next
                 // apply is not allowed while the last one's processes might still run.
                 if pid != 0 {
                     end_group(pid).await;
                 }
-                match finished {
-                    Ok(((stdout, stderr), Ok(status))) => Ok(Ran { code: status.code(), stdout, stderr }),
-                    Ok((_, Err(e))) => Err(format!("the program could not be waited for: {e}")),
+                for h in readers.iter_mut() {
+                    if !h.is_finished() {
+                        let _ = tokio::time::timeout(Duration::from_secs(1), &mut *h).await;
+                    }
+                    h.abort();
+                }
+                self.update_child_ended();
+                let text = |b: &Arc<std::sync::Mutex<Vec<u8>>>| String::from_utf8_lossy(&b.lock().unwrap_or_else(|e| e.into_inner())).into_owned();
+                match waited {
+                    Ok(Ok(status)) => Ok(Ran { code: status.code(), stdout: text(&out_buf), stderr: text(&err_buf) }),
+                    Ok(Err(e)) => Err(format!("the program could not be waited for: {e}")),
                     Err(_) => {
                         let _ = child.wait().await;
                         Err("the program did not finish in time and was stopped".into())
@@ -330,6 +409,39 @@ impl EngineService {
         };
         let _ = std::fs::remove_dir_all(&tmp);
         out
+    }
+
+    /// The marker of a running apply, beside the presence file: the child's process id and when it started, readable by this user only.
+    fn update_marker(&self) -> Option<PathBuf> {
+        self.update.lock().unwrap_or_else(|e| e.into_inner()).presence.as_ref().map(|(l, _)| l.presence.with_extension("update.lock"))
+    }
+
+    fn update_child_started(&self, pid: u32) {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        self.update.lock().unwrap_or_else(|e| e.into_inner()).child = Some(pid);
+        if let Some(m) = self.update_marker() {
+            let _ = std::fs::remove_file(&m);
+            if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&m) {
+                let _ = writeln!(f, "{} {}", pid, (self.engine.clock_unix)());
+            }
+        }
+    }
+
+    fn update_child_ended(&self) {
+        self.update.lock().unwrap_or_else(|e| e.into_inner()).child = None;
+        if let Some(m) = self.update_marker() {
+            let _ = std::fs::remove_file(m);
+        }
+    }
+
+    /// The daemon is stopping: end the child that is running, with everything it started, so no orphan goes on installing after this
+    /// daemon is gone (a new daemon would not know of it). Called by the daemon's boot after the server has stopped.
+    pub async fn update_shutdown(&self) {
+        let pid = self.update.lock().unwrap_or_else(|e| e.into_inner()).child;
+        if let Some(pid) = pid {
+            end_group(pid).await;
+        }
     }
 
     /// The program to start: the one this daemon runs as, checked to be the installed `delphi` (tests give their own). The path returned is
@@ -356,9 +468,30 @@ impl EngineService {
         self.update.lock().unwrap().limit = Some(limit);
     }
 
+    /// Tests: whether an apply is running now.
+    pub fn update_running(&self) -> bool {
+        self.update.lock().unwrap_or_else(|e| e.into_inner()).running
+    }
+
     /// Where the presence file is and what it held, so that a change to `update_available` or `restart_pending` rewrites it.
+    ///
+    /// A marker beside the presence file names the child of an apply that an earlier daemon was running when it stopped. If that process is
+    /// still alive, this daemon starts no apply while it is, and for the window after any failure once it has ended; a marker whose process
+    /// is gone is removed.
     pub fn set_update_presence(&self, layout: delphi_core::spawn::Layout, base: delphi_core::presence::Presence) {
-        self.update.lock().unwrap().presence = Some((layout, base));
+        let marker = layout.presence.with_extension("update.lock");
+        let pid = std::fs::read_to_string(&marker).ok().and_then(|t| t.split_whitespace().next().and_then(|p| p.parse::<i32>().ok()));
+        let mut st = self.update.lock().unwrap();
+        st.presence = Some((layout, base));
+        match pid {
+            Some(p) if alive(p) => {
+                st.orphan = Some(p);
+                st.last_end = Some((st.now(), false));
+            }
+            _ => {
+                let _ = std::fs::remove_file(&marker);
+            }
+        }
     }
 
     /// The daemon's own version: what an update must be newer than.
@@ -490,11 +623,13 @@ impl EngineService {
         let verdict = {
             let mut st = self.update.lock().unwrap();
             let at = st.now();
-            if st.pending.as_ref().is_some_and(|p| at - p.issued > PENDING_SECS) {
+            if st.pending.as_ref().is_some_and(|p| stale(p, at, now)) {
                 st.pending = None;
             }
             if st.running {
                 Verdict::Refuse("update_running", "an update is already running".to_string())
+            } else if let Some(pid) = st.orphan.filter(|p| alive(*p)) {
+                Verdict::Refuse("orphan_update", format!("an update that an earlier run of this daemon started (process {pid}) may still be running; wait for it to end"))
             } else if let Some(since) = st.last_apply.get(key).filter(|t| at - **t < APPLY_EVERY_SECS) {
                 Verdict::Refuse("one_an_hour", format!("one update an hour for one key; this key's last was started {} minutes ago", (at - *since) / 60))
             } else if let Some((ended, ok)) = st.last_end.filter(|(t, ok)| at - *t < if *ok { AFTER_OK_SECS } else { AFTER_FAIL_SECS }) {
@@ -513,7 +648,7 @@ impl EngineService {
                 } else if auto {
                     Verdict::Go { version: v }
                 } else {
-                    st.pending = Some(Pending { key: key.to_string(), version: v.clone(), request: request.clone(), code: code.clone(), issued: at, wrong: 0 });
+                    st.pending = Some(Pending { key: key.to_string(), version: v.clone(), request: request.clone(), code: code.clone(), issued: at, issued_wall: now, wrong: 0 });
                     Verdict::Pending { code: code.clone(), version: v }
                 }
             } else {
@@ -547,6 +682,8 @@ impl EngineService {
             let at = st.now();
             if st.running {
                 Some(("update_running", "an update is already running"))
+            } else if st.orphan.is_some_and(alive) {
+                Some(("orphan_update", "an update that an earlier run of this daemon started may still be running"))
             } else if st.last_apply.get(key).is_some_and(|t| at - *t < APPLY_EVERY_SECS) {
                 Some(("one_an_hour", "one update an hour for one key"))
             } else if st.last_end.is_some_and(|(t, ok)| at - t < if ok { AFTER_OK_SECS } else { AFTER_FAIL_SECS }) {
@@ -566,23 +703,30 @@ impl EngineService {
         self.update_request_event(key, request, "running", None).await;
         let (svc, key, version, request) = (self.clone(), key.to_string(), version.to_string(), request.to_string());
         tokio::spawn(async move {
+            let mut guard = RunGuard { svc: svc.clone(), armed: true };
+            #[cfg(test)]
+            if svc.update.lock().unwrap().panic_in_apply {
+                panic!("a panic in the apply task (a test's)");
+            }
             let ran = svc.update_run(Clause::Apply { version: &version }).await;
-            svc.update_finish(&key, &version, &request, ran).await;
+            svc.update_finish(&key, &version, &request, ran, &mut guard).await;
         });
         Ok(())
     }
 
     /// The end of the apply, as events: `app.updated` for the install that was approved; `app.update_refused` for anything else, and
     /// loudly for an install of a different release than the one approved, which still leaves the daemon needing a restart.
-    async fn update_finish(&self, key: &str, version: &str, request: &str, ran: Result<Ran, String>) {
+    async fn update_finish(&self, key: &str, version: &str, request: &str, ran: Result<Ran, String>, guard: &mut RunGuard) {
         let from = Self::installed_version();
         enum End {
             Installed(String),
             Different(String),
+            NotNewer,
             Failed(String),
         }
         let end = match ran {
             Err(e) => End::Failed(e),
+            Ok(r) if r.code == Some(EXIT_NOT_NEWER) => End::NotNewer,
             Ok(r) if r.code == Some(0) => match parse_installed(&r.stdout) {
                 Some(to) if to == version => End::Installed(to),
                 Some(to) => End::Different(to),
@@ -602,6 +746,7 @@ impl EngineService {
                 st.available = None;
             }
         }
+        guard.armed = false;
         if installed {
             self.update_publish();
         }
@@ -615,6 +760,11 @@ impl EngineService {
                 self.update_event(crate::app_audit::UPDATE_REFUSED_EVENT, json!({"name": key, "reason": "installed_different_release", "approved": version, "installed": to, "restart_pending": true, "why": text})).await;
                 self.update_request_event(key, request, "failed", Some(&text)).await;
             }
+            End::NotNewer => {
+                let text = format!("the program refused to install {version}: it is not newer than the program installed now (it was updated since the daemon looked); nothing was installed");
+                self.update_event(crate::app_audit::UPDATE_REFUSED_EVENT, json!({"name": key, "reason": "not_newer", "approved": version, "why": text})).await;
+                self.update_request_event(key, request, "refused", Some(&text)).await;
+            }
             End::Failed(text) => {
                 self.update_event(crate::app_audit::UPDATE_REFUSED_EVENT, json!({"name": key, "reason": "update_failed", "why": one_line(&text)})).await;
                 self.update_request_event(key, request, "failed", Some(&text)).await;
@@ -627,9 +777,10 @@ impl EngineService {
         match method {
             // What the console sees: the key and the release the DAEMON found, never anything the app said, and never the code.
             "app.update_pending" => {
+                let wall = (self.engine.clock_unix)();
                 let mut st = self.update.lock().unwrap();
                 let at = st.now();
-                if st.pending.as_ref().is_some_and(|p| at - p.issued > PENDING_SECS) {
+                if st.pending.as_ref().is_some_and(|p| stale(p, at, wall)) {
                     st.pending = None;
                 }
                 let rows: Vec<Value> = st.pending.iter().map(|p| json!({"request_id": p.request, "key": p.key, "version": p.version, "installed": Self::installed_version(), "age_secs": at - p.issued, "expires_in": (PENDING_SECS - (at - p.issued)).max(0)})).collect();
@@ -650,13 +801,14 @@ impl EngineService {
             Go(Pending),
         }
         let typed = app_keys::normalize_code(params["code"].as_str().unwrap_or(""));
+        let wall = (self.engine.clock_unix)();
         // Decided under the lock, with nothing awaited there.
         let outcome = {
             let mut st = self.update.lock().unwrap();
             let at = st.now();
             match st.pending.as_mut() {
                 None => Outcome::Nothing,
-                Some(p) if at - p.issued > PENDING_SECS => {
+                Some(p) if stale(p, at, wall) => {
                     let v = Outcome::Expired(p.key.clone(), p.request.clone());
                     st.pending = None;
                     v
@@ -701,7 +853,7 @@ mod tests {
     #[test]
     fn the_two_clauses_are_made_from_the_daemons_own_words() {
         let home = Path::new("/h/.delphi");
-        assert_eq!(apply_argv("default", home, "0.6.6"), ["update", "--no-restart", "--review", "--version", "v0.6.6", "--workspace", "default", "--home", "/h/.delphi"].map(OsString::from));
+        assert_eq!(apply_argv("default", home, "0.6.6"), ["update", "--no-restart", "--review", "--only-newer", "--version", "v0.6.6", "--workspace", "default", "--home", "/h/.delphi"].map(OsString::from));
         assert_eq!(check_argv(home), ["update", "--check", "--home", "/h/.delphi"].map(OsString::from));
         for ok in ["default", "my-ws", "a.b_c", "7"] {
             assert!(plain_name(ok), "{ok}");
@@ -820,7 +972,7 @@ mod tests {
         let rec = bin.path().join("rec");
         std::fs::create_dir(&rec).unwrap();
         let script = format!(
-            "#!/bin/sh\nrec='{}'\n{{ echo \"ARGV $*\"; echo \"PWD $(pwd)\"; echo \"TMP $TMPDIR\"; echo \"ENV $(env | cut -d= -f1 | sort | tr '\\n' ' ')\"; echo \"PATH $PATH\"; if [ -t 0 ]; then echo 'STDIN tty'; else echo 'STDIN none'; fi; }} >> \"$rec/calls\"\nif [ -e \"$rec/leakfd\" ]; then if [ -e \"/dev/fd/$(cat \"$rec/leakfd\")\" ]; then echo LEAK >> \"$rec/leak\"; else echo CLEAN >> \"$rec/leak\"; fi; fi\nif [ -e \"$rec/hang\" ]; then sleep 300 & echo $! > \"$rec/bgpid\"; sleep 300; fi\ncase \"$*\" in\n  *--check*) if [ -e \"$rec/slow\" ]; then while [ ! -e \"$rec/go\" ]; do sleep 0.05; done; fi; cat \"$rec/check.out\"; exit 0 ;;\n  *) cat \"$rec/apply.out\"; exit \"$(cat \"$rec/apply.code\")\" ;;\nesac\n",
+            "#!/bin/sh\nrec='{}'\n{{ echo \"ARGV $*\"; echo \"PWD $(pwd)\"; echo \"TMP $TMPDIR\"; echo \"ENV $(env | cut -d= -f1 | sort | tr '\\n' ' ')\"; echo \"PATH $PATH\"; if [ -t 0 ]; then echo 'STDIN tty'; else echo 'STDIN none'; fi; }} >> \"$rec/calls\"\nif [ -e \"$rec/leakfd\" ]; then if [ -e \"/dev/fd/$(cat \"$rec/leakfd\")\" ]; then echo LEAK >> \"$rec/leak\"; else echo CLEAN >> \"$rec/leak\"; fi; fi\nif [ -e \"$rec/hang\" ]; then sleep 300 & echo $! > \"$rec/bgpid\"; sleep 300; fi\nif [ -e \"$rec/linger\" ]; then sleep 300 & echo $! > \"$rec/bgpid\"; fi\ncase \"$*\" in\n  *--check*) if [ -e \"$rec/slow\" ]; then while [ ! -e \"$rec/go\" ]; do sleep 0.05; done; fi; cat \"$rec/check.out\"; exit 0 ;;\n  *) cat \"$rec/apply.out\"; exit \"$(cat \"$rec/apply.code\")\" ;;\nesac\n",
             rec.display()
         );
         let exe = bin.path().join("delphi");
@@ -938,7 +1090,7 @@ mod tests {
         }
         assert_eq!(r.applies(), 1);
         let apply = r.calls().into_iter().find(|l| l.starts_with("ARGV update --no-restart")).unwrap();
-        assert!(apply.contains("--version v99.0.0") && apply.contains("--review"), "{apply}");
+        assert!(apply.contains("--version v99.0.0") && apply.contains("--review") && apply.contains("--only-newer"), "{apply}");
     }
 
     /// A request that is not approved in ten minutes is dropped, and the version typed afterwards approves nothing.
@@ -974,7 +1126,7 @@ mod tests {
         assert_eq!(apply.len(), 6, "{calls:?}");
         let name = r.f.engine.ws.dir.file_name().unwrap().to_string_lossy().into_owned();
         let home = r.f.engine.ws.home.display().to_string();
-        assert_eq!(apply[0], &format!("ARGV update --no-restart --review --version v99.0.0 --workspace {name} --home {home}"));
+        assert_eq!(apply[0], &format!("ARGV update --no-restart --review --only-newer --version v99.0.0 --workspace {name} --home {home}"));
         let words = |argv: Vec<OsString>| argv.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ");
         assert_eq!(apply[0], &format!("ARGV {}", words(apply_argv(&name, &r.f.engine.ws.home, "99.0.0"))));
         assert!(apply[1].starts_with("PWD ") && apply[1].contains("delphi-update-"), "a private folder of its own: {}", apply[1]);
@@ -1138,7 +1290,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(r.calls().iter().any(|l| l == &format!("ARGV {}", [
-            "update", "--no-restart", "--review", "--version", "v99.0.0", "--workspace", r.f.engine.ws.dir.file_name().unwrap().to_str().unwrap(), "--home", r.f.engine.ws.home.to_str().unwrap()
+            "update", "--no-restart", "--review", "--only-newer", "--version", "v99.0.0", "--workspace", r.f.engine.ws.dir.file_name().unwrap().to_str().unwrap(), "--home", r.f.engine.ws.home.to_str().unwrap()
         ].join(" "))));
     }
 
@@ -1270,4 +1422,156 @@ mod tests {
         let p = delphi_core::presence::read(&l.presence).unwrap();
         assert_eq!((p.update_available, p.restart_pending), (None, true));
     }
+
+    /// Round 2, item 1: a program updated by hand to something newer than the approved release refuses to be put back (the child exits 3),
+    /// and the daemon reports it by name and installs nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_release_that_is_no_longer_newer_is_refused_by_the_program_and_reported() {
+        let r = rig(vec![key(KEY, &["read", "update"], true)]);
+        r.svc.update_check_now().await;
+        std::fs::write(r.rec.join("apply.out"), "delphi update: v99.0.0 is not newer than the installed 99.0.1; nothing was installed (--only-newer)\n").unwrap();
+        std::fs::write(r.rec.join("apply.code"), "3").unwrap();
+        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        let refusals = r.wait("app.update_refused", 1).await;
+        assert_eq!((refusals[0]["reason"].as_str(), refusals[0]["approved"].as_str()), (Some("not_newer"), Some("99.0.0")), "{}", refusals[0]);
+        assert!(r.kinds("app.updated").is_empty(), "no clean app.updated for an install that did not happen");
+        assert_eq!(r.svc.update_facts(), (Some("99.0.0".to_string()), false), "nothing was installed, so no restart is due");
+        let end = std::time::Instant::now() + Duration::from_secs(30);
+        while r.states().last().map(String::as_str) != Some("refused") {
+            assert!(std::time::Instant::now() < end, "{:?}", r.states());
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(r.calls().iter().any(|l| l.contains("--only-newer")));
+    }
+
+    /// Item 3: a daemon that stops while an apply runs ends the child and what it started.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_daemon_that_stops_ends_the_apply_it_is_running() {
+        let r = rig(vec![key(KEY, &["read", "update"], true)]);
+        r.svc.update_check_now().await;
+        std::fs::write(r.rec.join("hang"), "").unwrap();
+        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        let end = std::time::Instant::now() + Duration::from_secs(30);
+        while !r.rec.join("bgpid").exists() || r.svc.update.lock().unwrap().child.is_none() {
+            assert!(std::time::Instant::now() < end, "the child never started");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let bg: i32 = std::fs::read_to_string(r.rec.join("bgpid")).unwrap().trim().parse().unwrap();
+        assert!(unsafe { libc::kill(bg, 0) } == 0, "the child's process runs");
+        r.svc.update_shutdown().await;
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        while unsafe { libc::kill(bg, 0) } == 0 {
+            assert!(std::time::Instant::now() < end, "the process the child started survived the daemon's shutdown");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Item 3: the marker beside the presence file names a running apply's child and is gone when it ends; a new daemon that finds one
+    /// naming a live process starts no apply, and one naming a dead process removes it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_marker_names_a_running_apply_and_a_new_daemon_waits_for_an_orphan() {
+        use std::os::unix::fs::PermissionsExt;
+        let r = rig(vec![key(KEY, &["read", "update"], true)]);
+        let (home, ws) = (r.f.engine.ws.home.clone(), r.f.engine.ws.dir.clone());
+        let l = delphi_core::spawn::layout(&home, &ws).unwrap();
+        delphi_core::spawn::ensure_run_dir(&l.run_dir).unwrap();
+        let base = delphi_core::presence::Presence::new(&l, &"0123456789abcdef".repeat(2), "0.6.5", &ws, &home);
+        let marker = l.presence.with_extension("update.lock");
+        assert!(marker.to_string_lossy().ends_with(".update.lock"), "{}", marker.display());
+
+        // A dead process: the marker is removed and nothing is held back.
+        let mut gone = std::process::Command::new("/bin/sleep").arg("0").spawn().unwrap();
+        let dead = gone.id();
+        gone.wait().unwrap();
+        std::fs::write(&marker, format!("{dead} 1\n")).unwrap();
+        r.svc.set_update_presence(l.clone(), base.clone());
+        assert!(!marker.exists(), "a marker whose process is gone is removed");
+
+        // A running apply writes its marker (0600, pid and time) and removes it at the end.
+        r.svc.update_check_now().await;
+        std::fs::write(r.rec.join("hang"), "").unwrap();
+        r.svc.set_update_limit(Duration::from_secs(3));
+        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        let end = std::time::Instant::now() + Duration::from_secs(30);
+        while !marker.exists() {
+            assert!(std::time::Instant::now() < end, "no marker while the child runs");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let text = std::fs::read_to_string(&marker).unwrap();
+        let mut words = text.split_whitespace();
+        let (pid, at): (i32, i64) = (words.next().unwrap().parse().unwrap(), words.next().unwrap().parse().unwrap());
+        assert!(pid > 0 && at > 0, "{text}");
+        assert_eq!(std::fs::metadata(&marker).unwrap().permissions().mode() & 0o777, 0o600);
+        r.wait("app.update_refused", 1).await;
+        assert!(!marker.exists(), "the marker is removed when the apply ends");
+
+        // A live process named by the marker: this daemon starts no apply until it ends.
+        let mut orphan = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        std::fs::write(&marker, format!("{} 1\n", orphan.id())).unwrap();
+        let r2 = rig(vec![key(KEY, &["read", "update"], true)]);
+        let (home2, ws2) = (r2.f.engine.ws.home.clone(), r2.f.engine.ws.dir.clone());
+        let l2 = delphi_core::spawn::layout(&home2, &ws2).unwrap();
+        delphi_core::spawn::ensure_run_dir(&l2.run_dir).unwrap();
+        std::fs::write(l2.presence.with_extension("update.lock"), format!("{} 1\n", orphan.id())).unwrap();
+        r2.svc.update_check_now().await;
+        r2.svc.set_update_presence(l2.clone(), delphi_core::presence::Presence::new(&l2, &"fedcba9876543210".repeat(2), "0.6.5", &ws2, &home2));
+        let (_, m) = refused(r2.svc.app_update_apply(KEY, json!({})).await);
+        assert!(m.contains("may still be running"), "{m}");
+        assert_eq!(r2.applies(), 0);
+        let _ = orphan.kill();
+        let _ = orphan.wait();
+    }
+
+    /// Item 4: a program that has finished its install and left a process holding its output open is not reported as a failure.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_install_that_finished_is_not_a_failure_because_something_it_left_holds_the_pipe() {
+        let r = rig(vec![key(KEY, &["read", "update"], true)]);
+        r.svc.update_check_now().await;
+        std::fs::write(r.rec.join("linger"), "").unwrap();
+        let started = std::time::Instant::now();
+        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        let done = r.wait("app.updated", 1).await;
+        assert_eq!(done[0]["to"], "99.0.0");
+        assert!(started.elapsed() < Duration::from_secs(20), "it did not wait for the leftover process for ever");
+        assert!(r.kinds("app.update_refused").is_empty());
+        assert_eq!(r.svc.update_facts(), (None, true), "the install happened, so a restart is due");
+        let bg: i32 = std::fs::read_to_string(r.rec.join("bgpid")).unwrap().trim().parse().unwrap();
+        assert!(unsafe { libc::kill(bg, 0) } != 0, "and the leftover process was ended");
+    }
+
+    /// Item 6: a code does not outlive the wall clock either: a request older than ten minutes by the wall clock is stale though the
+    /// monotonic clock (which can pause across a sleep) says otherwise.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_older_than_ten_minutes_by_the_wall_clock_is_stale() {
+        let r = rig(vec![key(KEY, &["read", "update"], false)]);
+        r.svc.update_check_now().await;
+        let code = r.svc.app_update_apply(KEY, json!({})).await.unwrap()["code"].as_str().unwrap().to_string();
+        r.f.now.fetch_add(PENDING_SECS + 1, std::sync::atomic::Ordering::SeqCst);
+        let (c, m) = refused(r.svc.app_update_admin("app.update_approve", json!({"code": code})).await.unwrap());
+        assert_eq!(c, rpc::FORBIDDEN);
+        assert!(m.contains("expired"), "{m}");
+        assert_eq!(r.applies(), 0);
+    }
+
+    /// Item 9: a panic in the apply task gives the daemon its freedom back, and it counts as a failure.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_panic_in_the_apply_task_does_not_leave_the_daemon_thinking_one_runs() {
+        let r = rig(vec![key(KEY, &["read", "update"], true)]);
+        r.svc.update_check_now().await;
+        r.svc.update.lock().unwrap().panic_in_apply = true;
+        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        let end = std::time::Instant::now() + Duration::from_secs(30);
+        while r.svc.update_running() {
+            assert!(std::time::Instant::now() < end, "running was never cleared");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(r.applies(), 0);
+        r.svc.update.lock().unwrap_or_else(|e| e.into_inner()).panic_in_apply = false;
+        let (_, m) = refused(r.svc.app_update_apply(OTHER_KEY_FOR_PANIC, json!({})).await);
+        assert!(m.contains("no longer paired"), "{m}");
+        let (_, m) = refused(r.svc.app_update_apply(KEY, json!({})).await);
+        assert!(m.contains("one update an hour") || m.contains("the next waits"), "it counts as a failed apply: {m}");
+    }
+    const OTHER_KEY_FOR_PANIC: &str = "app-ffffff";
 }

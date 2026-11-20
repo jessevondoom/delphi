@@ -642,6 +642,9 @@ impl Net for RealNet {
     }
 }
 
+/// The exit code of `delphi update --only-newer` when the release is not newer than the installed program: the daemon reads it as the reason.
+pub const EXIT_NOT_NEWER: i32 = 3;
+
 /// What the program step of `delphi update` did, for the caller to follow up on (workspace files, daemons).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Event {
@@ -703,6 +706,13 @@ pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, after: &
             return 1;
         }
     };
+    // `--only-newer` is the desktop app's update (spec 120 §13.2 item 1): the daemon names the release it found and the operator approved,
+    // and a program that has since been updated by hand to something newer must not be put back. Without it, `--version` installs the
+    // named release whatever is installed, as it always did.
+    if args.iter().any(|a| a == "--only-newer") && !newer(&rel.tag, current) {
+        eprintln!("delphi update: {} is not newer than the installed {}; nothing was installed (--only-newer)", rel.tag, current);
+        return EXIT_NOT_NEWER;
+    }
     println!("{} -> {}", current, rel.tag);
     if args.iter().any(|a| a == "--check") {
         println!("An update is available. Run `delphi update{}` to install it.", if dev { " --dev" } else { "" });
@@ -1267,6 +1277,31 @@ mod tests {
         assert_eq!(run(&["--check".into()], &net, &dest, &api), 0);
         assert!(!dest.exists(), "--check never installs");
         assert_eq!(run(&["--version".into(), "v7.7.7".into()], &net, &dest, &api), 1, "an unknown version is an error, not a silent success");
+    }
+
+    /// `--only-newer`: a release that is not newer than this program is refused with its own exit code and nothing is installed; without
+    /// the flag, `--version` installs the named release as before (an explicit downgrade at a terminal is untouched).
+    #[test]
+    fn only_newer_refuses_a_release_that_is_not_newer_and_a_plain_version_still_installs_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let dest = d.path().join("delphi");
+        let (mut net, api) = server("v0.2.0", "0.2.0", None);
+        let name = format!("delphi-v0.2.0-{}.tar.gz", T);
+        let one = serde_json::json!({"tag_name": "v0.2.0", "prerelease": false, "draft": false, "assets": [
+            {"name": name, "browser_download_url": format!("https://dl/{}", name)},
+            {"name": format!("{}.sha256", name), "browser_download_url": format!("https://dl/{}.sha256", name)}]});
+        net.0.insert(format!("{}/tags/v0.2.0", api), one.to_string().into_bytes());
+        let refused = run(&["--version".into(), "v0.2.0".into(), "--only-newer".into()], &net, &dest, &api);
+        assert_eq!(refused, EXIT_NOT_NEWER);
+        assert!(!dest.exists(), "nothing was installed");
+        std::fs::write(&dest, "#!/bin/sh\necho 'delphi 0.6.5'\n").unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(run(&["--version".into(), "v0.2.0".into(), "--only-newer".into()], &net, &dest, &api), EXIT_NOT_NEWER);
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.6.5"), "the installed program was not touched");
+        // The same release, named plainly: installed, as `delphi update --version` always did.
+        assert_eq!(run(&["--version".into(), "v0.2.0".into()], &net, &dest, &api), 0);
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.2.0"));
     }
 
     #[test]

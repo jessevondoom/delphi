@@ -141,6 +141,8 @@ pub fn run(args: Vec<String>) -> ! {
         booted.service.start_update_checks();
         eprintln!("delphi-core: ready on {} (mission {})", l.sock.display(), booted.default_mission);
         daemon.serve_with_app(listener, Some(narrator_listener), Some(relay_listener), Some(host_listener), Some(app_listener)).await;
+        // An apply that is running is ended with everything it started before this process goes: a new daemon would not know of it.
+        booted.service.update_shutdown().await;
         delphi_core::presence::remove(&l);
         let _ = std::fs::remove_file(&l.sock);
         let _ = std::fs::remove_file(&l.narrator_sock);
