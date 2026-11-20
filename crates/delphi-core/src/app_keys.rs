@@ -21,6 +21,13 @@ use std::path::{Path, PathBuf};
 pub const KEYS_FILE: &str = "operator/app-keys.json";
 /// What a key holds when it is paired (§2 item 5).
 pub const PAIRING_GRANTS: [&str; 2] = ["read", "request"];
+/// What a key holds when the operator approves it by a code (`specs/120` §13.1 item 5): `read` only. `request` comes from the
+/// approval's own flag or a later `delphi app grant`.
+pub const CODE_GRANTS: [&str; 1] = ["read"];
+/// The characters of a pairing code: no `0`, `O`, `1`, `I` or `L`, so a code read off a window is typed as it was meant.
+pub const CODE_ALPHABET: &[u8; 31] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+/// A pairing code's length without its dash: `K7Q-4M2` is seven characters as shown, six that are typed.
+pub const CODE_LEN: usize = 6;
 /// A key unused for this long is removed (§2 item 8).
 pub const UNUSED_SECS: i64 = 180 * 86_400;
 /// More keys than this are not recorded: one operator has a handful of machines' worth of windows, not hundreds.
@@ -359,5 +366,62 @@ mod tests {
         assert_eq!(sig, vector);
         let k = AppKey { public_key, ..key("app-00000c", &["read"], "2026-11-10T00:00:00.000Z") };
         assert!(k.signed(&nonce, &inst, 1, socket, vector));
+    }
+}
+
+/// A pairing code (`specs/120` §13.1 item 1) from random bytes: six characters of [`CODE_ALPHABET`], shown as seven with a dash, `K7Q-4M2`. A byte that
+/// would make some characters likelier than others (248 and up) is skipped, so every character is equally likely. `None` when the
+/// bytes ran out before six characters were found; the caller asks for more.
+pub fn code_from(random: &[u8]) -> Option<String> {
+    let chars: Vec<char> = random.iter().filter(|b| (**b as usize) < CODE_ALPHABET.len() * 8).map(|b| CODE_ALPHABET[*b as usize % CODE_ALPHABET.len()] as char).take(CODE_LEN).collect();
+    (chars.len() == CODE_LEN).then(|| format!("{}-{}", chars[..3].iter().collect::<String>(), chars[3..].iter().collect::<String>()))
+}
+
+/// What a typed code is compared as: upper case, with dashes and spaces dropped. `None` unless what is left is a code's length of
+/// the alphabet's characters.
+pub fn normalize_code(typed: &str) -> Option<String> {
+    let s: String = typed.chars().filter(|c| !matches!(c, '-' | ' ')).map(|c| c.to_ascii_uppercase()).collect();
+    (s.len() == CODE_LEN && s.bytes().all(|b| CODE_ALPHABET.contains(&b))).then_some(s)
+}
+
+/// A key's fingerprint as the terminal shows it beside a pending request: the first twelve hex digits of the BLAKE3 hash of the
+/// public key's bytes. `None` for something that is not a public key.
+pub fn fingerprint(public_key_hex: &str) -> Option<String> {
+    let bytes = unhex::<32>(public_key_hex)?;
+    Some(blake3::hash(&bytes).to_hex()[..12].to_string())
+}
+
+#[cfg(test)]
+mod code_tests {
+    use super::*;
+
+    #[test]
+    fn a_code_is_six_characters_without_look_alikes_and_skips_biased_bytes() {
+        assert_eq!(code_from(&[0, 1, 2, 3, 4, 5]).unwrap(), "ABC-DEF");
+        for bad in *b"0O1IL" {
+            assert!(!CODE_ALPHABET.contains(&bad));
+        }
+        // 248 and up would favor the first characters; those bytes are not used.
+        assert_eq!(code_from(&[255, 250, 248, 0, 0, 0, 0, 0, 0]).unwrap(), "AAA-AAA");
+        assert!(code_from(&[255, 255, 255]).is_none());
+        assert!(code_from(&[1, 2, 3]).is_none(), "too few bytes");
+    }
+
+    #[test]
+    fn a_typed_code_is_compared_without_case_dash_or_spaces() {
+        assert_eq!(normalize_code("k7q-4m2").as_deref(), Some("K7Q4M2"));
+        assert_eq!(normalize_code("K7Q 4M2").as_deref(), Some("K7Q4M2"));
+        assert_eq!(normalize_code("K7Q4M"), None, "five characters is not a code");
+        assert_eq!(normalize_code("K7Q-4M0"), None, "0 is not in the alphabet");
+        assert_eq!(normalize_code(""), None);
+    }
+
+    #[test]
+    fn a_fingerprint_is_twelve_hex_digits_of_the_keys_hash() {
+        let key = hex(&[7u8; 32]);
+        let f = fingerprint(&key).unwrap();
+        assert_eq!(f.len(), 12);
+        assert_eq!(f, blake3::hash(&[7u8; 32]).to_hex()[..12]);
+        assert!(fingerprint("zz").is_none());
     }
 }

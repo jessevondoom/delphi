@@ -24,7 +24,19 @@ pub fn delphi_home() -> Option<PathBuf> {
 }
 
 /// Where `delphi` may be: `DELPHI_EXE` first, then the standard install locations.
-pub fn candidates(user_home: Option<&Path>) -> Vec<PathBuf> {
+/// The program inside the app's own bundle (spec 122 §10.1 item 3): `<exe>/../../Resources/delphi` for an app executable at
+/// `Delphi.app/Contents/MacOS/<name>`. A path only; nothing is read or run here.
+pub fn bundled_path(app_exe: &Path) -> Option<PathBuf> {
+    let contents = app_exe.parent()?.parent()?;
+    (contents.file_name()? == "Contents").then(|| contents.join("Resources/delphi"))
+}
+
+fn own_bundled() -> Option<PathBuf> {
+    bundled_path(&std::env::current_exe().ok()?)
+}
+
+/// The places an install puts `delphi`, without the bundled copy.
+pub fn installed_candidates(user_home: Option<&Path>) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = env_path("DELPHI_EXE").into_iter().collect();
     if let Some(h) = user_home {
         v.push(h.join(".local/bin/delphi"));
@@ -32,6 +44,32 @@ pub fn candidates(user_home: Option<&Path>) -> Vec<PathBuf> {
     v.push(PathBuf::from("/opt/homebrew/bin/delphi"));
     v.push(PathBuf::from("/usr/local/bin/delphi"));
     v
+}
+
+/// Where `delphi` may be: `DELPHI_EXE` first, then the standard install locations, then the copy in this app's bundle (last,
+/// so an installed program is always preferred).
+pub fn candidates(user_home: Option<&Path>) -> Vec<PathBuf> {
+    let mut v = installed_candidates(user_home);
+    v.extend(own_bundled());
+    v
+}
+
+/// What the start screen needs to offer "Install the delphi command" (spec 122 §10.1 item 3): whether an installed `delphi`
+/// exists, and the bundled one's path when this app has one. Reads file metadata only; nothing is run.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Program {
+    pub installed: bool,
+    pub bundled: Option<String>,
+}
+
+pub fn program_in(user_home: Option<&Path>, bundled: Option<PathBuf>) -> Program {
+    let installed = installed_candidates(user_home).iter().any(|p| p.is_file());
+    let bundled = bundled.filter(|p| p.is_file()).and_then(|p| p.to_str().map(String::from));
+    Program { installed, bundled }
+}
+
+pub fn program() -> Program {
+    program_in(env_path("HOME").as_deref(), own_bundled())
 }
 
 /// The narrator socket of a workspace, as `delphi_core::spawn::layout` names it: `<home>/run/<h>.narrator.sock`, `h` the first
@@ -531,6 +569,30 @@ mod tests {
         assert!(c.contains(&PathBuf::from("/h/.local/bin/delphi")));
         assert!(c.contains(&PathBuf::from("/opt/homebrew/bin/delphi")));
         assert!(c.contains(&PathBuf::from("/usr/local/bin/delphi")));
+    }
+
+    #[test]
+    fn the_bundled_program_is_found_from_the_app_executable() {
+        let app = Path::new("/Applications/Delphi.app/Contents/MacOS/delphi-app");
+        assert_eq!(bundled_path(app), Some(PathBuf::from("/Applications/Delphi.app/Contents/Resources/delphi")));
+        assert_eq!(bundled_path(Path::new("/x/target/debug/delphi-app")), None, "not inside a bundle");
+        // Installed places come first; a bundled copy, when there is one, is last.
+        let installed = installed_candidates(Some(Path::new("/h")));
+        let all = candidates(Some(Path::new("/h")));
+        assert_eq!(all[..installed.len()], installed[..]);
+    }
+
+    #[test]
+    fn program_state_names_the_bundled_copy_only_when_it_exists() {
+        let t = tempfile::tempdir().unwrap();
+        let bundled = t.path().join("Resources/delphi");
+        assert_eq!(program_in(Some(t.path()), Some(bundled.clone())).bundled, None);
+        std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        std::fs::write(&bundled, b"x").unwrap();
+        assert_eq!(program_in(Some(t.path()), Some(bundled.clone())).bundled.as_deref(), bundled.to_str());
+        std::fs::create_dir_all(t.path().join(".local/bin")).unwrap();
+        std::fs::write(t.path().join(".local/bin/delphi"), b"x").unwrap();
+        assert!(program_in(Some(t.path()), None).installed);
     }
 }
 

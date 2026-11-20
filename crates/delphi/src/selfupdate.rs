@@ -252,12 +252,30 @@ const APP_EXE: &str = "Contents/MacOS/delphi-app";
 const MAX_APP_ENTRIES: usize = 2000;
 
 /// Where `delphi update` keeps the desktop app (`specs/122` §4 item 2): `~/Applications`, on macOS only, unless
-/// `DELPHI_NO_APP=1`. Never in a test, which passes its own folder to the `_with` functions.
+/// `DELPHI_NO_APP=1`, or while `<home>/app/opt-out` exists (`delphi app opt-out`, spec 122 §10.3). Never in a test, which
+/// passes its own folder to the `_with` functions.
 fn app_dir() -> Option<PathBuf> {
     if cfg!(test) || !cfg!(target_os = "macos") || std::env::var("DELPHI_NO_APP").is_ok_and(|v| v == "1") {
         return None;
     }
-    std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| PathBuf::from(h).join("Applications"))
+    app_dir_for(std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from).as_deref(), &crate::home::delphi_home(None))
+}
+
+/// `~/Applications` for the user home `user_home`, unless the Delphi home `delphi_home` holds the opt-out file.
+fn app_dir_for(user_home: Option<&Path>, delphi_home: &Path) -> Option<PathBuf> {
+    if crate::app_cmd::opted_out(delphi_home) {
+        return None;
+    }
+    user_home.map(|h| h.join("Applications"))
+}
+
+/// The one line `delphi update` says when the opt-out file is why the desktop app was left alone (macOS only).
+fn opt_out_note() -> Option<String> {
+    if cfg!(test) || !cfg!(target_os = "macos") || std::env::var("DELPHI_NO_APP").is_ok_and(|v| v == "1") {
+        return None;
+    }
+    let file = crate::app_cmd::opt_out_path(&crate::home::delphi_home(None));
+    crate::app_cmd::opted_out(&crate::home::delphi_home(None)).then(|| format!("The desktop app was left alone: {} exists (`delphi app opt-in` removes it).", file.display()))
 }
 
 /// One entry of the bundle: its path inside `Delphi.app`, and for a file its bytes and whether it is executable.
@@ -446,7 +464,9 @@ fn replace_beside(dest: &Path, bytes: &[u8]) -> Result<()> {
 
 /// Download, verify and swap in `rel` for `dest`, and on macOS the desktop app in `~/Applications` with it.
 pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Result<Installed> {
-    install_with(net, rel, target, dest, app_dir().as_deref())
+    let mut done = install_with(net, rel, target, dest, app_dir().as_deref())?;
+    done.notes.extend(opt_out_note());
+    Ok(done)
 }
 
 /// [`install`], with the app's folder given (`None`: leave any app alone).
@@ -1000,6 +1020,19 @@ mod tests {
     }
 
     /// A temporary home: the program at `bin/delphi` reporting 0.1.0, and an empty `Applications` path (not made).
+    /// Spec 122 §10.3 (AC-9): the opt-out file in the Delphi home is why `delphi update` leaves the app alone.
+    #[test]
+    fn the_opt_out_file_leaves_the_app_alone_until_opt_in() {
+        let t = tempfile::tempdir().unwrap();
+        let (user, dh) = (t.path().join("u"), t.path().join("dh"));
+        assert_eq!(app_dir_for(Some(&user), &dh), Some(user.join("Applications")));
+        std::fs::create_dir_all(dh.join("app")).unwrap();
+        std::fs::write(dh.join("app/opt-out"), b"").unwrap();
+        assert_eq!(app_dir_for(Some(&user), &dh), None);
+        std::fs::remove_file(dh.join("app/opt-out")).unwrap();
+        assert_eq!(app_dir_for(Some(&user), &dh), Some(user.join("Applications")));
+    }
+
     fn home() -> (tempfile::TempDir, PathBuf, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
