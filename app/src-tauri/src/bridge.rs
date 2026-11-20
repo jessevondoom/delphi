@@ -33,11 +33,15 @@ pub struct Conn {
     /// read, the pairing failed. Empty when it is paired or never tried. The title row shows it (spec 120 §6 item 2).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub unpaired_because: String,
+    /// The code this window asked the daemon's operator to type at a terminal (spec 120 §13.1), while it waits. The window
+    /// shows it; it is never sent anywhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pair_code: Option<String>,
 }
 
 impl Conn {
     fn off(detail: &str) -> Conn {
-        Conn { connected: false, detail: detail.to_string(), paired: None, grants: Vec::new(), unpaired_because: String::new() }
+        Conn { connected: false, detail: detail.to_string(), paired: None, grants: Vec::new(), unpaired_because: String::new(), pair_code: None }
     }
 }
 
@@ -169,6 +173,13 @@ pub struct Bridge {
     key: Mutex<Option<Loaded>>,
     /// A pairing ticket a terminal handed over, until it is used. Held in memory only.
     ticket: Mutex<Option<String>>,
+    /// The code shown while a request waits to be approved at a terminal (spec 120 §13.1), and what to say when it ended unapproved.
+    pairing: Mutex<Option<String>>,
+    pair_note: Mutex<String>,
+    /// Asked once for each daemon this window attaches to.
+    pair_tried: AtomicBool,
+    /// A key was just approved: leave the read-only connection and attach again with it.
+    reattach: AtomicBool,
     /// Where `attach_to` pointed the bridge (spec 130 §3.2): that daemon's info and narrator socket. `None` until it is, and
     /// the locator decides. It stays, so a daemon that goes away is looked for again where it was.
     target: Mutex<Option<(Value, PathBuf)>>,
@@ -205,6 +216,10 @@ impl Bridge {
             keys,
             key: Mutex::new(None),
             ticket: Mutex::new(None),
+            pairing: Mutex::new(None),
+            pair_note: Mutex::new(String::new()),
+            pair_tried: AtomicBool::new(false),
+            reattach: AtomicBool::new(false),
             target: Mutex::new(None),
             current: Mutex::new(None),
             held: AtomicBool::new(false),
@@ -267,6 +282,9 @@ impl Bridge {
         // A key paired with one daemon is refused by another (spec 130 §3.2): what was learned about it is not carried over.
         *self.key.lock().unwrap() = None;
         *self.calls.lock().unwrap() = None;
+        *self.pairing.lock().unwrap() = None;
+        self.pair_note.lock().unwrap().clear();
+        self.pair_tried.store(false, Ordering::SeqCst);
         self.held.store(false, Ordering::SeqCst);
         self.switch.store(true, Ordering::SeqCst);
         Ok(())
@@ -310,10 +328,17 @@ impl Bridge {
     }
 
     fn set_conn(&self, sink: &dyn Sink, connected: bool, detail: &str) {
-        self.say(sink, Conn { connected, detail: detail.to_string(), paired: None, grants: Vec::new(), unpaired_because: String::new() });
+        self.say(sink, Conn { connected, detail: detail.to_string(), paired: None, grants: Vec::new(), unpaired_because: String::new(), pair_code: None });
     }
 
-    fn say(&self, sink: &dyn Sink, c: Conn) {
+    fn say(&self, sink: &dyn Sink, mut c: Conn) {
+        // A window that is reading while a request waits for its code (or after one ran out) says so.
+        if c.connected && c.paired.is_none() {
+            c.pair_code = self.pairing.lock().unwrap().clone();
+            if c.unpaired_because.is_empty() {
+                c.unpaired_because = self.pair_note.lock().unwrap().clone();
+            }
+        }
         let changed = {
             let mut cur = self.conn.lock().unwrap();
             let changed = *cur != c;
@@ -333,7 +358,7 @@ impl Bridge {
             match self.attach_paired(app, keys) {
                 Ok(Some((events, name, grants))) => {
                     let detail = format!("Connected to the daemon, paired as {name}");
-                    return Ok((events, Conn { connected: true, detail, paired: Some(name), grants, unpaired_because: String::new() }));
+                    return Ok((events, Conn { connected: true, detail, paired: Some(name), grants, unpaired_because: String::new(), pair_code: None }));
                 }
                 Ok(None) => {}
                 Err(why) => why_not_paired = why,
@@ -345,7 +370,66 @@ impl Bridge {
         events.call(Method::Subscribe, json!({}))?;
         *self.calls.lock().unwrap() = Some(calls);
         let detail = if why_not_paired.is_empty() { "Connected to the daemon, read-only".to_string() } else { format!("Connected to the daemon, read-only ({why_not_paired})") };
-        Ok((events, Conn { connected: true, detail, paired: None, grants: Vec::new(), unpaired_because: why_not_paired }))
+        Ok((events, Conn { connected: true, detail, paired: None, grants: Vec::new(), unpaired_because: why_not_paired, pair_code: None }))
+    }
+
+    /// With no key, no ticket and an app socket to ask on, ask the daemon's operator to approve this app by a code (spec 120
+    /// §13.1), once for each daemon. The window keeps reading meanwhile; the request waits on a thread of its own.
+    fn maybe_ask_to_pair(self: &Arc<Self>, app: Option<&Path>, conn: &Conn, sink: &Arc<dyn Sink>) {
+        let Some(app) = app.filter(|a| self.keys.is_some() && a.exists()) else { return };
+        let unkeyed = matches!(self.key.lock().unwrap().as_ref(), Some(Ok(None)));
+        if conn.paired.is_some() || !conn.unpaired_because.is_empty() || !unkeyed || self.pair_tried.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (me, app, sink) = (self.clone(), app.to_path_buf(), sink.clone());
+        std::thread::spawn(move || me.ask_to_pair(&app, sink.as_ref()));
+    }
+
+    /// The request and the wait for its answer. The key is made here and kept only when the daemon says it was approved.
+    fn ask_to_pair(&self, app: &Path, sink: &dyn Sink) {
+        let end = |why: &str| {
+            *self.pairing.lock().unwrap() = None;
+            *self.pair_note.lock().unwrap() = why.to_string();
+            self.say(sink, self.conn());
+        };
+        let Some(keys) = self.keys.as_deref() else { return };
+        let Ok(seed) = key::new_seed() else { return end("the app could not make a key to ask with") };
+        let asked = Client::knock(app).and_then(|(mut c, _)| {
+            let asked = c.pair_request(&key::public_hex(&seed), &self.version)?;
+            Ok((c, asked))
+        });
+        let (mut c, asked) = match asked {
+            Ok(x) => x,
+            Err(Error::Rpc { message, .. }) => return end(&format!("the daemon would not take a pairing request ({message}); `delphi app` in a terminal pairs this app")),
+            Err(_) => return end("the daemon would not take a pairing request; `delphi app` in a terminal pairs this app"),
+        };
+        *self.pairing.lock().unwrap() = Some(asked.code.clone());
+        self.say(sink, self.conn());
+        c.set_read_timeout(Some(Duration::from_secs(1)));
+        let until = std::time::Instant::now() + Duration::from_secs(asked.expires_in + 10);
+        let outcome = loop {
+            if self.stop.load(Ordering::SeqCst) || self.switch.load(Ordering::SeqCst) {
+                return;
+            }
+            match c.next_notification() {
+                Ok(Some(n)) if n["method"].as_str() == Some("app.pair_result") => break n["params"].clone(),
+                Ok(Some(_)) => {}
+                Ok(None) if std::time::Instant::now() < until => {}
+                _ => break json!({ "outcome": "expired" }),
+            }
+        };
+        if outcome["outcome"].as_str() != Some("approved") || outcome["name"].as_str() != Some(asked.name.as_str()) {
+            let why = if outcome["outcome"].as_str() == Some("cancelled") { "the request was cancelled after wrong codes" } else { "the request ran out before it was approved" };
+            return end(&format!("{why}; restart the app, or run `delphi app` in a terminal, to pair it"));
+        }
+        let Some(key) = AppKey::new(&asked.name, seed) else { return end("the daemon approved a key this app cannot use") };
+        if let Err(why) = keys.save(&key) {
+            return end(&format!("approved as {}, but the key could not be kept ({why}); `delphi app revoke {}` removes it", asked.name, asked.name));
+        }
+        *self.key.lock().unwrap() = Some(Ok(Some(key)));
+        *self.pairing.lock().unwrap() = None;
+        self.pair_note.lock().unwrap().clear();
+        self.reattach.store(true, Ordering::SeqCst);
     }
 
     /// The paired way in (spec 120 §2 items 4, 5 and 7; §3 item 2). `Ok(None)`: there is no key and no ticket, or no app
@@ -418,7 +502,7 @@ impl Bridge {
     fn pump(&self, events: &mut Client, sink: &dyn Sink) -> Error {
         let mut batch: Vec<Value> = Vec::new();
         loop {
-            if self.stop.load(Ordering::SeqCst) || self.switch.load(Ordering::SeqCst) {
+            if self.stop.load(Ordering::SeqCst) || self.switch.load(Ordering::SeqCst) || self.reattach.load(Ordering::SeqCst) {
                 return Error::Closed;
             }
             // With nothing waiting to be sent, wait for the next notification; with a batch open, wait only briefly for more.
@@ -485,9 +569,15 @@ impl Bridge {
                     match self.attach(&socket, app.as_deref()) {
                         Ok((mut events, conn)) => {
                             wait = Duration::from_millis(500);
-                            self.say(sink.as_ref(), conn);
+                            self.say(sink.as_ref(), conn.clone());
+                            self.maybe_ask_to_pair(app.as_deref(), &conn, &sink);
                             let lost = self.pump(&mut events, sink.as_ref());
                             *self.calls.lock().unwrap() = None;
+                            if self.reattach.swap(false, Ordering::SeqCst) {
+                                self.set_conn(sink.as_ref(), false, "Approved; attaching with the new key");
+                                wait = Duration::from_millis(500);
+                                continue;
+                            }
                             if self.switch.load(Ordering::SeqCst) {
                                 self.set_conn(sink.as_ref(), false, "Switching to another daemon");
                                 wait = Duration::from_millis(500);
@@ -841,6 +931,12 @@ mod tests {
     }
 
     fn app_socket(path: &Path, ticket: Option<&str>, keys: Vec<(String, String)>) -> AppSocket {
+        app_socket_with(path, ticket, keys, None)
+    }
+
+    /// [`app_socket`], and when `by_code` is `Some(code)` it also answers `app.pair_request` as the daemon does: it hands out that
+    /// code, and a little later records the key and says the request was approved (an operator typed the code).
+    fn app_socket_with(path: &Path, ticket: Option<&str>, keys: Vec<(String, String)>, by_code: Option<&'static str>) -> AppSocket {
         let listener = UnixListener::bind(path).unwrap();
         let (seen, keys): (Seen, Recorded) = (Arc::default(), Arc::new(Mutex::new(keys)));
         let ticket = Arc::new(Mutex::new(ticket.map(String::from)));
@@ -868,6 +964,13 @@ mod tests {
                                 }
                                 keys.lock().unwrap().push((PAIRED_NAME.to_string(), p["public_key"].as_str().unwrap().to_string()));
                                 json!({"jsonrpc": "2.0", "id": id, "result": {"name": PAIRED_NAME, "grants": ["read", "request"]}})
+                            }
+                            "app.pair_request" if !proved && by_code.is_some() => {
+                                let result = json!({"jsonrpc": "2.0", "id": id, "result": {"code": by_code.unwrap(), "name": PAIRED_NAME, "expires_in": 120}});
+                                writeln!(out, "{result}").unwrap();
+                                std::thread::sleep(Duration::from_millis(400));
+                                keys.lock().unwrap().push((PAIRED_NAME.to_string(), p["public_key"].as_str().unwrap().to_string()));
+                                json!({"jsonrpc": "2.0", "method": "app.pair_result", "params": {"outcome": "approved", "name": PAIRED_NAME, "grants": ["read"]}})
                             }
                             "app.hello" if !proved => {
                                 let name = p["name"].as_str().unwrap_or("");
@@ -905,6 +1008,58 @@ mod tests {
         let (b, sink): (Arc<Bridge>, Arc<dyn Sink>) = (bridge.clone(), Arc::new(Chan(Mutex::new(tx))));
         std::thread::spawn(move || b.run(sink));
         (bridge, rx)
+    }
+
+    /// Spec 120 §13.1 items 1, 2 and 7: with no key and no ticket the app asks, shows the code the daemon gave while it keeps
+    /// reading, and when an operator typed it at a terminal keeps the key it made and attaches with it. The code is on the
+    /// connection state and nowhere else; only the public half of the key is sent.
+    #[test]
+    fn with_no_key_it_shows_the_code_it_was_given_and_attaches_once_approved() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, nsock, asock) = (t.path().join("home"), t.path().join("n.sock"), t.path().join("a.sock"));
+        daemon(&nsock, Arc::default(), vec![], false);
+        let app = app_socket_with(&asock, None, vec![], Some("K7Q-4M2"));
+        let (bridge, rx) = start_with_keys(&home, nsock, &asock, None);
+        // Reading first, with the code on show while the request waits.
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while bridge.conn().pair_code.is_none() && std::time::Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let waiting = bridge.conn();
+        assert_eq!((waiting.connected, waiting.paired, waiting.pair_code.as_deref()), (true, None, Some("K7Q-4M2")));
+        assert!(!home.join("app/key.json").exists(), "no key is kept before it is approved");
+        // Then the key, kept, and a session proved with it; the code is gone.
+        assert_eq!(wait_for(&rx, |g| matches!(g, Got::Conn(true, d) if d.contains("paired as"))), Got::Conn(true, format!("Connected to the daemon, paired as {PAIRED_NAME}")));
+        let conn = bridge.conn();
+        assert_eq!((conn.paired.as_deref(), conn.pair_code), (Some(PAIRED_NAME), None));
+        let kept = key::FileStore::under(&home).load().unwrap().unwrap();
+        assert_eq!((kept.name.as_str(), key::public_hex(kept.seed())), (PAIRED_NAME, app.keys.lock().unwrap()[0].1.clone()));
+        let seen = methods(&app.seen);
+        assert_eq!(seen.iter().filter(|m| *m == "app.pair_request").count(), 1, "asked once: {seen:?}");
+        assert!(!seen.contains(&"app.pair".to_string()));
+        let ask = app.seen.lock().unwrap().iter().find(|r| r["method"] == "app.pair_request").unwrap()["params"].clone();
+        assert_eq!((ask["app_version"].as_str(), ask["public_key"].as_str().map(str::len), ask.as_object().unwrap().len()), (Some("9.9.9"), Some(64), 2), "{ask}");
+    }
+
+    /// A daemon that does not take the request (it closes the connection) leaves the window reading, with the reason, and it
+    /// does not ask again while the window is open.
+    #[test]
+    fn a_request_the_daemon_does_not_take_leaves_the_window_reading() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, nsock, asock) = (t.path().join("home"), t.path().join("n.sock"), t.path().join("a.sock"));
+        daemon(&nsock, Arc::default(), vec![], false);
+        let app = app_socket(&asock, None, vec![]);
+        let (bridge, _rx) = start_with_keys(&home, nsock, &asock, None);
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while bridge.conn().unpaired_because.is_empty() && std::time::Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let conn = bridge.conn();
+        assert_eq!((conn.connected, conn.paired.clone(), conn.pair_code.clone()), (true, None, None));
+        assert!(conn.unpaired_because.contains("would not take a pairing request"), "{conn:?}");
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(methods(&app.seen).iter().filter(|m| *m == "app.pair_request").count(), 1);
+        assert!(!home.join("app/key.json").exists());
     }
 
     /// Spec 120 §2 items 3 to 5: started with a ticket and no key, the app makes a key, pairs it, keeps it where only the

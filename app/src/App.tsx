@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Asking, type Asker } from './EncyParts.tsx';
+import { PairCode, pairCodeOf } from './PairCode.tsx';
 import { MARK_ROLES, fillOf } from './avatar.ts';
 import { openBridge, type Bridge } from './bridge.ts';
 import { showStart, switchable, type DaemonList } from './daemons.ts';
@@ -168,6 +169,7 @@ export function App() {
           <button type="button" className="btn small" onClick={() => setSwitcher(false)}>Close</button>
         </div>
       )}
+      {pairCodeOf(conn) && <PairCode code={pairCodeOf(conn) as string} />}
       <div className="body">
         {prefs.menu && (
           <nav className="menu" aria-label="Sections">

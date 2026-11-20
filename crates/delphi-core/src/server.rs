@@ -44,14 +44,20 @@ pub const RELAY_METHODS: [&str; 5] = ["session.ping", "events.subscribe", "appro
 /// content, and keep or read one handoff (`specs/062` §8). A host cannot start work, read events or approve anything.
 pub const HOST_METHODS: [&str; 32] = ["session.ping", "host.search_kb", "host.propose_note", "host.propose_kb_entry", "host.record_finding", "host.flag_wrong","host.request_test_authorization", "host.record_session_summary", "host.handoff_put", "host.handoff_get", "host.recall_sessions", "host.ingest_transcript", "host.request_help", "host.help_result", "host.request_council", "host.council_status", "host.council_result", "host.council_open", "host.council_frame", "host.council_brief", "host.council_submit", "host.council_choose", "host.request_research", "host.research_status", "host.research_result", "host.record_research", "host.research_feed", "host.cancel_job", "host.route_decided", "host.reads_seen", "host.ask_family", "host.ask_result"];
 
-/// The console methods that pair, list, revoke and grant the desktop app's keys (`specs/120` §2, §5). All four need the console
-/// scope; the three that change what a key may do also need the caller to be attached to a terminal, as `auth.issue` does.
-pub const APP_ADMIN_METHODS: [&str; 4] = ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant"];
+/// The console methods that pair, list, revoke and grant the desktop app's keys (`specs/120` §2, §5, §13.1). All need the console
+/// scope; the ones that change what a key may do (all but the two lists, `app.keys` and `app.pair_pending`) also need the caller
+/// to be attached to a terminal, as `auth.issue` does.
+pub const APP_ADMIN_METHODS: [&str; 6] = ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair_pending", "app.pair_approve"];
 
 /// How many refusals on the app socket, within [`DaemonConfig::app_refusal_window`], close it to new connections.
 pub const APP_REFUSALS: usize = 5;
 /// Pairing tickets that may be outstanding at once.
 pub const MAX_TICKETS: usize = 4;
+/// Pairing requests by code that may be pending at once, how many may be made in an hour, and how many wrong codes cancel one
+/// (`specs/120` §13.1 item 4).
+pub const MAX_PAIR_PENDING: usize = 3;
+pub const MAX_PAIR_PER_HOUR: usize = 6;
+pub const MAX_WRONG_CODES: u8 = 3;
 
 /// A request line larger than this closes the connection.
 pub const MAX_LINE: usize = 1024 * 1024;
@@ -61,6 +67,18 @@ pub const MAX_LINE: usize = 1024 * 1024;
 /// never anything a peer sent as free text.
 pub type AppAudit = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
+/// What an app is told when its pairing request by code is refused: the limit, by name. The reason word is also what the log keeps.
+fn pair_refusal_text(reason: &str) -> &'static str {
+    match reason {
+        "too_many_pending" => "3 pairing requests are waiting for an operator already; try again in two minutes",
+        "too_many_requests_this_hour" => "6 pairing requests were made in the last hour; try again later",
+        "already_paired" => "this key is paired already",
+        "key_record_full" => "the daemon holds as many keys as it keeps; revoke one first",
+        "bad_public_key" => "that is not a public key",
+        _ => "pairing was refused",
+    }
+}
+
 /// A pairing ticket (`specs/120` §2 item 2): 32 random bytes, one use, good until `issued + ticket_ttl`. Kept in memory only.
 struct Ticket {
     secret: String,
@@ -69,9 +87,34 @@ struct Ticket {
     issued: Instant,
 }
 
+/// What became of a pairing request by code, until the connection that filed it is told.
+enum PairOutcome {
+    Pending,
+    /// The operator typed the code: the key is recorded with these grants.
+    Approved(Vec<String>),
+    /// Too many wrong codes.
+    Cancelled,
+}
+
+/// A pairing request by code (`specs/120` §13.1): kept in memory only, bound to the public key and to this daemon's instance.
+struct PairReq {
+    /// The name the key will have, also the request's id on the console.
+    name: String,
+    /// Six characters of the code alphabet, no dash.
+    code: String,
+    public_key: String,
+    app_version: String,
+    issued: Instant,
+    wrong: u8,
+    outcome: PairOutcome,
+}
+
 #[derive(Default)]
 struct AppState {
     tickets: Vec<Ticket>,
+    pairs: Vec<PairReq>,
+    /// When the requests of the last hour were made.
+    pair_times: VecDeque<Instant>,
     refusals: VecDeque<Instant>,
     locked_until: Option<Instant>,
     /// Open sessions by client id: the key's name, and what ends the session at once.
@@ -136,6 +179,8 @@ pub struct DaemonConfig {
     /// The window in which [`APP_REFUSALS`] refusals close the app socket, and for how long (`specs/120` §3 item 4: a minute each).
     pub app_refusal_window: Duration,
     pub app_lockout: Duration,
+    /// How long a pairing request by code is good for (`specs/120` §13.1 item 4: two minutes).
+    pub pair_request_ttl: Duration,
 }
 
 impl DaemonConfig {
@@ -150,6 +195,7 @@ impl DaemonConfig {
             ticket_ttl: Duration::from_secs(60),
             app_refusal_window: Duration::from_secs(60),
             app_lockout: Duration::from_secs(60),
+            pair_request_ttl: Duration::from_secs(120),
         }
     }
 }
@@ -180,6 +226,14 @@ pub fn random_token() -> io::Result<String> {
     let mut b = [0u8; 32];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
     Ok(b.iter().map(|x| format!("{:02x}", x)).collect())
+}
+
+/// Random bytes from the same source as [`random_token`].
+fn random_bytes<const N: usize>() -> io::Result<[u8; N]> {
+    use std::io::Read;
+    let mut b = [0u8; N];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+    Ok(b)
 }
 
 fn ct_eq(a: &str, b: &str) -> bool {
@@ -624,6 +678,33 @@ impl Daemon {
                         return Ok(None);
                     }
                 },
+                // A key that has none asks to be approved by a code its operator types at a terminal (`specs/120` §13.1). The
+                // connection waits here for the answer and then goes on to `app.hello` as a connection that paired does.
+                "app.pair_request" if !paired => match self.app_pair_request(&req.params) {
+                    Ok((name, code)) => {
+                        paired = true;
+                        let ttl = self.cfg.pair_request_ttl.as_secs();
+                        write_line(wr, &Response::ok(req.id.clone(), json!({"code": code, "name": name, "expires_in": ttl}))).await?;
+                        let result = loop {
+                            tokio::time::sleep(Duration::from_millis(150)).await;
+                            if let Some(r) = self.pair_poll(&name) {
+                                break r;
+                            }
+                        };
+                        match result {
+                            Ok(grants) => write_line(wr, &Notification::new("app.pair_result", json!({"outcome": "approved", "name": name, "grants": grants}))).await?,
+                            Err(outcome) => {
+                                write_line(wr, &Notification::new("app.pair_result", json!({"outcome": outcome}))).await?;
+                                return Ok(None);
+                            }
+                        }
+                    }
+                    Err(reason) => {
+                        self.app_refused(reason, None);
+                        write_line(wr, &Response::err(req.id.clone(), code::FORBIDDEN, pair_refusal_text(reason))).await?;
+                        return Ok(None);
+                    }
+                },
                 "app.hello" => {
                     let major = req.params["protocol_version"].as_u64();
                     if major != Some(PROTOCOL_MAJOR as u64) {
@@ -650,6 +731,75 @@ impl Daemon {
                 _ => return Ok(None),
             }
         }
+    }
+
+    /// `app.pair_request {public_key, app_version}` (`specs/120` §13.1 items 1 and 4): file a request, and return its key name and
+    /// the code to show. A second request from the same public key replaces its first.
+    fn app_pair_request(&self, params: &Value) -> Result<(String, String), &'static str> {
+        let public_key = params["public_key"].as_str().unwrap_or("");
+        let Some(fingerprint) = app_keys::fingerprint(public_key) else { return Err("bad_public_key") };
+        let app_version = app_keys::clean_version(params["app_version"].as_str().unwrap_or(""));
+        let now = Instant::now();
+        let (name, code) = {
+            let mut st = self.app.lock().unwrap();
+            let ttl = self.cfg.pair_request_ttl;
+            st.pairs.retain(|p| !matches!(p.outcome, PairOutcome::Pending) || now.duration_since(p.issued) <= ttl);
+            while st.pair_times.front().is_some_and(|t| now.duration_since(*t) > Duration::from_secs(3600)) {
+                st.pair_times.pop_front();
+            }
+            if st.pair_times.len() >= MAX_PAIR_PER_HOUR {
+                return Err("too_many_requests_this_hour");
+            }
+            st.pairs.retain(|p| p.public_key != public_key);
+            if st.pairs.iter().filter(|p| matches!(p.outcome, PairOutcome::Pending)).count() >= MAX_PAIR_PENDING {
+                return Err("too_many_pending");
+            }
+            let keys = self.live_keys().map_err(|_| "key_record_unreadable")?;
+            if keys.iter().any(|k| k.public_key == public_key) {
+                return Err("already_paired");
+            }
+            if keys.len() >= app_keys::MAX_KEYS {
+                return Err("key_record_full");
+            }
+            let tag = random_bytes::<3>().map_err(|_| "no_randomness")?;
+            let name = format!("app-{}", app_keys::hex(&tag));
+            if keys.iter().any(|k| k.name == name) || st.pairs.iter().any(|p| p.name == name) {
+                return Err("name_taken");
+            }
+            let code = app_keys::code_from(&random_bytes::<32>().map_err(|_| "no_randomness")?).ok_or("no_randomness")?;
+            st.pair_times.push_back(now);
+            st.pairs.push(PairReq { name: name.clone(), code: code.replace('-', ""), public_key: public_key.to_string(), app_version: app_version.clone(), issued: now, wrong: 0, outcome: PairOutcome::Pending });
+            (name, code)
+        };
+        self.audit("app.pair_requested", json!({"name": name, "fingerprint": fingerprint, "app_version": app_version}));
+        Ok((name, code))
+    }
+
+    /// What became of the request `name`, for the connection that filed it: `None` while it waits; `Ok(grants)` once approved;
+    /// `Err` with the word for a request that ran out or was cancelled. The request is removed when it is reported.
+    fn pair_poll(&self, name: &str) -> Option<Result<Vec<String>, &'static str>> {
+        {
+            let mut st = self.app.lock().unwrap();
+            let Some(i) = st.pairs.iter().position(|p| p.name == name) else { return Some(Err("expired")) };
+            match &st.pairs[i].outcome {
+                PairOutcome::Approved(g) => {
+                    let g = g.clone();
+                    st.pairs.remove(i);
+                    return Some(Ok(g));
+                }
+                PairOutcome::Cancelled => {
+                    st.pairs.remove(i);
+                    return Some(Err("cancelled"));
+                }
+                PairOutcome::Pending => {}
+            }
+            if Instant::now().duration_since(st.pairs[i].issued) <= self.cfg.pair_request_ttl {
+                return None;
+            }
+            st.pairs.remove(i);
+        }
+        self.audit("app.refused", json!({"reason": "expired_request", "name": name, "locked_out": false}));
+        Some(Err("expired"))
     }
 
     /// `app.pair {ticket, public_key, app_version}` (`specs/120` §2 item 5). The ticket is spent whatever follows.
@@ -757,7 +907,7 @@ impl Daemon {
         }
         // Pairing, revoking and granting are the operator's, at a terminal (`specs/120` §8): a console token alone (a script's,
         // a headless run's) is not enough.
-        if req.method != "app.keys" && !self.at_terminal(peer.pid) {
+        if !matches!(req.method.as_str(), "app.keys" | "app.pair_pending") && !self.at_terminal(peer.pid) {
             return Response::err(id, code::TTY_REQUIRED, "the app's keys are paired, revoked and granted only by a client attached to an interactive terminal");
         }
         let name = req.params["name"].as_str().unwrap_or("");
@@ -786,6 +936,78 @@ impl Daemon {
                 }
                 st.tickets.push(Ticket { secret: secret.clone(), name: key_name.clone(), issued: now });
                 Response::ok(id, json!({"ticket": secret, "name": key_name, "expires_in": self.cfg.ticket_ttl.as_secs(), "grants": app_keys::PAIRING_GRANTS}))
+            }
+            // The requests waiting for a code (`specs/120` §13.1 item 3). Never the codes: a terminal is told what to ask for, not given it.
+            "app.pair_pending" => {
+                let now = Instant::now();
+                let ttl = self.cfg.pair_request_ttl;
+                st.pairs.retain(|p| !matches!(p.outcome, PairOutcome::Pending) || now.duration_since(p.issued) <= ttl);
+                let rows: Vec<Value> = st
+                    .pairs
+                    .iter()
+                    .filter(|p| matches!(p.outcome, PairOutcome::Pending))
+                    .map(|p| {
+                        let age = now.duration_since(p.issued).as_secs();
+                        json!({"request_id": p.name, "fingerprint": app_keys::fingerprint(&p.public_key), "app_version": p.app_version, "age_secs": age, "expires_in": ttl.as_secs().saturating_sub(age)})
+                    })
+                    .collect();
+                Response::ok(id, json!({"pending": rows}))
+            }
+            "app.pair_approve" => {
+                let request_id = req.params["request_id"].as_str().unwrap_or("");
+                let mut grants: Vec<String> = app_keys::CODE_GRANTS.iter().map(|g| g.to_string()).collect();
+                if let Some(extra) = req.params["grants"].as_array() {
+                    for g in extra {
+                        // Only `request` may be added at this prompt: a key paired by code never starts with more.
+                        match g.as_str() {
+                            Some("request") => {
+                                if !grants.iter().any(|x| x == "request") {
+                                    grants.push("request".into());
+                                }
+                            }
+                            Some("read") => {}
+                            _ => return Response::err(id, code::INVALID_PARAMS, "a key approved by code may be given `request` at this prompt and nothing else"),
+                        }
+                    }
+                }
+                let now = Instant::now();
+                let Some(i) = st.pairs.iter().position(|p| p.name == request_id && matches!(p.outcome, PairOutcome::Pending)) else { return Response::err(id, code::NOT_FOUND, "no such pending request") };
+                if now.duration_since(st.pairs[i].issued) > self.cfg.pair_request_ttl {
+                    st.pairs.remove(i);
+                    drop(st);
+                    self.audit("app.refused", json!({"reason": "expired_request", "name": request_id, "locked_out": false}));
+                    return Response::err(id, code::FORBIDDEN, "that request has expired; the app asks again");
+                }
+                let typed = app_keys::normalize_code(req.params["code"].as_str().unwrap_or(""));
+                let right = typed.as_deref().is_some_and(|t| ct_eq(t, &st.pairs[i].code));
+                if !right {
+                    st.pairs[i].wrong += 1;
+                    let cancelled = st.pairs[i].wrong >= MAX_WRONG_CODES;
+                    if cancelled {
+                        st.pairs[i].outcome = PairOutcome::Cancelled;
+                    }
+                    drop(st);
+                    self.audit("app.refused", json!({"reason": if cancelled { "wrong_code_limit" } else { "wrong_code" }, "name": request_id, "locked_out": false}));
+                    let why = if cancelled { format!("that is not the code, {MAX_WRONG_CODES} times: the request is cancelled and the app asks again") } else { "that is not the code shown in the app's window".to_string() };
+                    return Response::err(id, code::FORBIDDEN, &why);
+                }
+                let mut keys = match self.live_keys() {
+                    Ok(k) => k,
+                    Err(e) => return Response::err(id, code::INTERNAL, &e),
+                };
+                if keys.len() >= app_keys::MAX_KEYS || keys.iter().any(|k| k.name == st.pairs[i].name || k.public_key == st.pairs[i].public_key) {
+                    return Response::err(id, code::FORBIDDEN, "the key record is full or already holds this key; `delphi app list`");
+                }
+                let at = crate::time::now_rfc3339();
+                let key = AppKey { name: st.pairs[i].name.clone(), public_key: st.pairs[i].public_key.clone(), paired_at: at.clone(), last_used: at, app_version: st.pairs[i].app_version.clone(), grants: grants.clone() };
+                keys.push(key.clone());
+                if let Err(e) = self.keys.save(&keys) {
+                    return Response::err(id, code::INTERNAL, &e);
+                }
+                st.pairs[i].outcome = PairOutcome::Approved(grants.clone());
+                drop(st);
+                self.audit("app.pair_approved", json!({"name": key.name, "grants": grants, "app_version": key.app_version}));
+                Response::ok(id, json!({"name": key.name, "grants": grants}))
             }
             "app.keys" => match self.live_keys() {
                 Ok(keys) => {
