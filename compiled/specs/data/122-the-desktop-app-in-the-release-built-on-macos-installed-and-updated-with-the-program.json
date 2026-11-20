@@ -73,12 +73,54 @@
       "line": 111,
       "number": "9",
       "title": "Open questions (the operator decides)"
+    },
+    {
+      "level": 2,
+      "line": 116,
+      "number": "10",
+      "title": "Amendment (operator, 2026-11-19): the app carries the program, a disk image for those who want one, a lasting opt-out, and a doctor check"
+    },
+    {
+      "level": 3,
+      "line": 120,
+      "number": "10.1",
+      "title": "The program inside the app (slices C1 and C2)"
+    },
+    {
+      "level": 3,
+      "line": 127,
+      "number": "10.2",
+      "title": "A disk image, as a fallback (slice C2)"
+    },
+    {
+      "level": 3,
+      "line": 133,
+      "number": "10.3",
+      "title": "A lasting opt-out (slice C1)"
+    },
+    {
+      "level": 3,
+      "line": 137,
+      "number": "10.4",
+      "title": "The doctor (slice C1)"
+    },
+    {
+      "level": 3,
+      "line": 141,
+      "number": "10.5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 3,
+      "line": 150,
+      "number": "10.6",
+      "title": "Slices"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md",
-    "sha256": "841589a1a1f5bf66bede329a0d16c8caa942d1d4ec8bf40744a3d0b29da2791e"
+    "sha256": "b0d5d3405feeeb46d6a224a2314f59d96c74bded53c05dd4b3a72adf27d886d3"
   },
   "source_status_at_hash": {
     "line": {
@@ -91,7 +133,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-16, in a host session. Asked \"what's the shortest path to distributing a compiled binary for mac and linux, just like we are for the TUI?\", shown a two-step plan (step 1: build and publish the app in the release; step 2: install and update it like the console) and its estimate in hours, the operator answered \"do step one and step two, but macos only and only on release\". The spec was written from those words; the operator was shown the plan and the estimate, not this text."
     },
-    "sha256": "841589a1a1f5bf66bede329a0d16c8caa942d1d4ec8bf40744a3d0b29da2791e",
+    "sha256": "b0d5d3405feeeb46d6a224a2314f59d96c74bded53c05dd4b3a72adf27d886d3",
     "word": "approved"
   },
   "spec": {
