@@ -145,11 +145,12 @@ start the desktop app and pair it; list, revoke and grant its keys.
   delphi app list | log
   delphi app approve [\-\-grant request]
   delphi app revoke <name>
-  delphi app grant <name> [\-\-remove] <grant>
+  delphi app grant <name> [\-\-remove] <grant> [\-\-auto]
 .fi
 .PP
-Run it in a terminal: that vouches for the app. `approve` takes the code an unpaired app shows, typed by you.
-It holds only its grants (read, request). The app is DELPHI_APP, else the build beside this one, else /Applications.
+Run it in a terminal: that vouches for the app. `approve` takes an unpaired app's code, or an update's version.
+A key holds only its grants (read, request, update); `grant <name> update \-\-auto` lets it update without asking.
+The app is DELPHI_APP, else the build beside this one, else /Applications.
 .SS delphi hooks
 run your observe hooks on events.
 .PP

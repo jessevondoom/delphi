@@ -220,7 +220,7 @@ async fn pairing_a_recorded_key_again_changes_nothing_about_it() {
 async fn a_ticket_is_issued_only_to_a_console_client_at_a_terminal() {
     let f = start(TtyPolicy::Required, |_| {}).await;
     let out = run_child_without_tty(&f.sock, f.daemon.console_token());
-    for m in ["auth.pair_ticket", "app.revoke", "app.grant", "app.pair_approve"] {
+    for m in ["auth.pair_ticket", "app.revoke", "app.grant", "app.pair_approve", "app.update_approve"] {
         assert!(out.contains(&format!("PROBE {} rpc {}", m, code::TTY_REQUIRED)), "{m}: expected TTY_REQUIRED, got {out}");
     }
     assert!(out.contains("PROBE app.keys ok") && out.contains("PROBE app.pair_pending ok"), "listing changes nothing and needs no terminal: {out}");
@@ -229,7 +229,7 @@ async fn a_ticket_is_issued_only_to_a_console_client_at_a_terminal() {
     n.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let tok = f.daemon.narrator_token().to_string();
     n.hello(&tok).unwrap();
-    for m in ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair", "app.hello", "app.pair_request", "app.pair_pending", "app.pair_approve"] {
+    for m in ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair", "app.hello", "app.pair_request", "app.pair_pending", "app.pair_approve", "app.update_pending", "app.update_approve"] {
         assert_eq!(rpc_code(n.call(m, json!({"name": "app-000000", "grant": "request"}))), Some(code::FORBIDDEN), "{m}");
     }
     assert!(f.keys().is_empty() && f.kinds().is_empty());
@@ -254,8 +254,8 @@ fn pair_probe_child() {
     let mut c = Client::connect(Path::new(&sock)).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     c.hello(&token).unwrap();
-    for m in ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair_pending", "app.pair_approve"] {
-        match c.call(m, json!({"name": "app-000000", "grant": "request", "request_id": "app-000000", "code": "ABC-DEF"})) {
+    for m in ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair_pending", "app.pair_approve", "app.update_approve"] {
+        match c.call(m, json!({"name": "app-000000", "grant": "request", "request_id": "app-000000", "code": "ABC-DEF", "version": "0.6.6"})) {
             Ok(_) => println!("PROBE {} ok", m),
             Err(ClientError::Rpc { code, .. }) => println!("PROBE {} rpc {}", m, code),
             Err(e) => println!("PROBE {} err {}", m, e),
@@ -655,4 +655,113 @@ async fn the_limits_on_requests_are_held_and_each_refusal_names_its_limit() {
     assert_eq!(kx.c.next_notification().unwrap()["params"]["outcome"], "expired");
     assert_eq!(rpc_code(h.console().call("app.pair_approve", json!({"request_id": namex, "code": codex}))), Some(code::NOT_FOUND));
     assert!(h.refusals().iter().any(|r| r["reason"] == "expired_request") && h.keys().is_empty());
+}
+
+/// An extension that holds nothing but a record of what the server handed it for the update grant.
+struct UpdateRecorder {
+    asked: Arc<Mutex<Vec<(String, String, Value)>>>,
+    admin: Arc<Mutex<Vec<(String, Value)>>>,
+}
+
+impl delphi_core::server::Extension for UpdateRecorder {
+    fn call(&self, _method: &str, _params: Value, _ctx: delphi_core::server::CallContext) -> delphi_core::server::RpcFuture {
+        Box::pin(async { None })
+    }
+
+    fn app_request(&self, key: &str, method: &str, params: Value) -> delphi_core::server::RpcFuture {
+        self.asked.lock().unwrap().push((key.to_string(), method.to_string(), params));
+        Box::pin(async { Some(Ok(json!({"state": "waiting"}))) })
+    }
+
+    fn app_update_admin(&self, method: &str, params: Value) -> delphi_core::server::RpcFuture {
+        self.admin.lock().unwrap().push((method.to_string(), params));
+        Box::pin(async { Some(Ok(json!({"pending": []}))) })
+    }
+}
+
+/// `specs/120` §13.2 at the socket (U1): `app.update_apply` is reachable only by an app session whose key holds `update` now, and
+/// `grant` gives it, `--auto` records the standing authorization, `--remove` ends both. Pairing, by ticket or by code, never gives it,
+/// and a table that grows gives it to no existing key (AC-11). The console's two methods need the console scope; the approval also a terminal.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_update_grant_is_given_by_the_operator_only_and_its_method_reaches_the_engine_from_a_key_that_holds_it() {
+    let f = start(TtyPolicy::Disabled, |_| {}).await;
+    let (asked, admin) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
+    f.daemon.set_extension(Arc::new(UpdateRecorder { asked: asked.clone(), admin: admin.clone() }));
+    let name = f.pair(&A);
+    assert_eq!(f.keys()[0].grants, ["read", "request"], "a ticket never gives `update`");
+    let mut s = f.session(&A, &name);
+    match s.call("app.update_apply", json!({})) {
+        Err(ClientError::Rpc { code: c, message, .. }) => assert!(c == code::FORBIDDEN && message.contains("`update` grant"), "{message}"),
+        other => panic!("a key without `update` must be refused, got {other:?}"),
+    }
+    assert!(asked.lock().unwrap().is_empty());
+
+    // The operator gives it, then the standing authorization; each is an event, and the key's own record holds them.
+    let mut con = f.console();
+    let r = con.call("app.grant", json!({"name": name, "grant": "update"})).unwrap();
+    assert_eq!((r["changed"].clone(), r["update_auto"].clone()), (json!(true), json!(false)));
+    assert!(!f.keys()[0].update_auto);
+    let r = con.call("app.grant", json!({"name": name, "grant": "update", "auto": true})).unwrap();
+    assert_eq!((r["changed"].clone(), r["update_auto"].clone(), r["grants"].clone()), (json!(true), json!(true), json!(["read", "request", "update"])));
+    assert!(f.keys()[0].update_auto);
+    assert_eq!(con.call("app.keys", json!({})).unwrap()["keys"][0]["update_auto"], true);
+    assert_eq!(con.call("app.grant", json!({"name": name, "grant": "update"})).unwrap()["changed"], false, "asking again without `auto` changes nothing and does not end it");
+    assert!(f.keys()[0].update_auto);
+    // `auto` is for giving `update` and for nothing else.
+    for (g, remove) in [("request", false), ("read", false), ("update", true)] {
+        assert_eq!(rpc_code(con.call("app.grant", json!({"name": name, "grant": g, "remove": remove, "auto": true}))), Some(code::INVALID_PARAMS), "{g} {remove}");
+    }
+    assert!(f.keys()[0].update_auto && f.keys()[0].grants.contains(&"update".to_string()));
+    let granted: Vec<Value> = f.audit.lock().unwrap().iter().filter(|(k, _)| k == "app.granted").map(|(_, p)| p.clone()).collect();
+    assert_eq!(granted.iter().map(|p| (p["grant"].as_str().unwrap(), p["auto"].as_bool().unwrap())).collect::<Vec<_>>(), [("update", false), ("update", true)]);
+
+    // With the grant, the call reaches the engine under the key's own name, whatever the parameters say (the engine refuses any).
+    let mut s = f.session(&A, &name);
+    assert_eq!(s.call("app.update_apply", json!({"name": "app-ffffff"})).unwrap()["state"], "waiting");
+    assert_eq!(asked.lock().unwrap()[0], (name.clone(), "app.update_apply".to_string(), json!({"name": "app-ffffff"})));
+    // No other socket has the method.
+    let mut nar = Client::connect(&f.narrator_sock).unwrap();
+    nar.hello(f.daemon.narrator_token()).unwrap();
+    assert_eq!(rpc_code(con.call("app.update_apply", json!({}))), Some(code::METHOD_NOT_FOUND));
+    assert!(matches!(rpc_code(nar.call("app.update_apply", json!({}))), Some(code::METHOD_NOT_FOUND | code::FORBIDDEN)));
+    assert_eq!(asked.lock().unwrap().len(), 1);
+
+    // The console's two methods: the app's own session cannot call them, and the console reaches the engine's.
+    for m in ["app.update_pending", "app.update_approve"] {
+        match s.call(m, json!({"version": "0.6.6"})) {
+            Err(ClientError::Rpc { code: c, message, .. }) => assert!(c == code::FORBIDDEN && message.contains("under no grant"), "{m}: {message}"),
+            other => panic!("{m} must be refused to the app, got {other:?}"),
+        }
+    }
+    assert!(admin.lock().unwrap().is_empty());
+    assert_eq!(con.call("app.update_pending", json!({})).unwrap()["pending"], json!([]));
+    assert_eq!(con.call("app.update_approve", json!({"version": "0.6.6"})).unwrap()["pending"], json!([]));
+    assert_eq!(admin.lock().unwrap().iter().map(|(m, _)| m.as_str()).collect::<Vec<_>>(), ["app.update_pending", "app.update_approve"]);
+
+    // `--remove` ends the grant and the authorization with it, and closes the open session; the key then asks for nothing.
+    let r = con.call("app.grant", json!({"name": name, "grant": "update", "remove": true})).unwrap();
+    assert_eq!((r["update_auto"].clone(), r["sessions_closed"].as_u64()), (json!(false), Some(2))); // both sessions the key opened
+    assert!(!f.keys()[0].update_auto && !f.keys()[0].grants.contains(&"update".to_string()));
+    let mut k = f.knock().unwrap();
+    k.hello(&A, &name).unwrap();
+    assert_eq!(rpc_code(k.c.call("app.update_apply", json!({}))), Some(code::FORBIDDEN));
+    // Given again later without `--auto`, the standing authorization does not come back with it.
+    con.call("app.grant", json!({"name": name, "grant": "update"})).unwrap();
+    assert!(!f.keys()[0].update_auto);
+    // Revoking the key ends everything it held.
+    con.call("app.grant", json!({"name": name, "grant": "update", "auto": true})).unwrap();
+    con.call("app.revoke", json!({"name": name})).unwrap();
+    assert!(f.keys().is_empty());
+    assert_eq!(asked.lock().unwrap().len(), 1);
+}
+
+/// Without a terminal, the approval of an update is refused whatever the token (the child has no controlling terminal).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_update_is_approved_only_by_a_client_at_a_terminal() {
+    let f = start(TtyPolicy::Required, |_| {}).await;
+    let (asked, admin) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
+    f.daemon.set_extension(Arc::new(UpdateRecorder { asked, admin: admin.clone() }));
+    let out = run_child_without_tty(&f.sock, f.daemon.console_token());
+    assert!(out.contains(&format!("PROBE app.update_approve rpc {}", code::TTY_REQUIRED)), "{out}");
+    assert!(admin.lock().unwrap().is_empty(), "the engine was not asked");
 }

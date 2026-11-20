@@ -22,6 +22,7 @@ pub const READY_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a launcher waits for a peer launcher or a starting daemon, beyond the readiness timeout.
 pub const LAUNCH_WAIT: Duration = Duration::from_secs(5);
 
+#[derive(Clone)]
 pub struct Layout {
     pub run_dir: PathBuf,
     pub sock: PathBuf,

@@ -59,11 +59,15 @@ pub enum Method {
     ResearchAsk,
     PageRebuild,
     PageDispute,
+    /// The one method of the daemon's `update` grant (spec 120 §13.2): it takes no parameters.
+    UpdateApply,
 }
 
 impl Method {
     /// The requests of spec 120 §4.2 (`delphi_core::app_keys::REQUEST_METHODS`), in the daemon's order.
     pub const REQUESTS: [Method; 4] = [Method::ResearchContinue, Method::ResearchAsk, Method::PageRebuild, Method::PageDispute];
+    /// The `update` grant's methods (spec 120 §13.2): one, and it carries no parameter.
+    pub const UPDATES: [Method; 1] = [Method::UpdateApply];
     /// The reads of spec 111 §2.2: narrator methods.
     pub const NARRATOR: [Method; 9] = [Method::Ping, Method::Subscribe, Method::SessionSnapshot, Method::ObserveState, Method::ObserveSnapshot, Method::KbSearch, Method::KbGet, Method::UsageGet, Method::ApprovalList];
     /// The encyclopedia's reads (spec 117 §3 item 1; `delphi_core::app_keys::ENCYCLOPEDIA_READS`), in the daemon's order.
@@ -80,7 +84,7 @@ impl Method {
         Method::MemoryRole,
         Method::ChangesSince,
     ];
-    pub const ALL: [Method; 24] = [
+    pub const ALL: [Method; 25] = [
         Method::Ping,
         Method::Subscribe,
         Method::SessionSnapshot,
@@ -105,6 +109,7 @@ impl Method {
         Method::ResearchAsk,
         Method::PageRebuild,
         Method::PageDispute,
+        Method::UpdateApply,
     ];
 
     /// Whether this read is sent only on a connection that proved a paired key.
@@ -112,9 +117,14 @@ impl Method {
         Method::PAIRED_ONLY.contains(&self)
     }
 
-    /// Whether this is one of the four requests: a method that asks the daemon to start something.
+    /// Whether this is one of the four requests or the update: a method that asks the daemon to start something.
     pub fn asks(self) -> bool {
-        Method::REQUESTS.contains(&self)
+        Method::REQUESTS.contains(&self) || Method::UPDATES.contains(&self)
+    }
+
+    /// The grant a key must hold for this method to be sent at all (the daemon holds the same line): `update` for the update, else `request`.
+    pub fn grant(self) -> &'static str {
+        if Method::UPDATES.contains(&self) { "update" } else { "request" }
     }
 
     pub fn name(self) -> &'static str {
@@ -143,6 +153,7 @@ impl Method {
             Method::ResearchAsk => "app.research_ask",
             Method::PageRebuild => "app.page_rebuild",
             Method::PageDispute => "app.page_dispute",
+            Method::UpdateApply => "app.update_apply",
         }
     }
 }

@@ -46,6 +46,18 @@ file = "crates/delphi-core/src/xenia_testkit.rs"
 count = 1
 class = "test-support"
 
+# The daemon starts its own program for the desktop app's `update` grant (spec 120 section 13.2). One site, two clauses, each with its
+# argument list, built by `app_update::apply_argv` and `app_update::check_argv` from the daemon's own workspace name and home: nothing
+# comes from the app. Clause 1 (apply) installs the release and leaves running daemons on the old code; clause 2 (check) is
+# read-only. The child has no terminal, a closed standard input, a private temporary folder and an environment of HOME, PATH,
+# DELPHI_HOME and TMPDIR only. `spawn_sites.rs` holds the argument lists below equal to the code's.
+[[site]]
+file = "crates/delphi-engine/src/app_update.rs"
+count = 1
+class = "self"
+clause_apply = "update --no-restart --workspace <name> --home <home>"
+clause_check = "update --check --home <home>"
+
 [[site]]
 file = "crates/delphi-engine/src/auth_cli.rs"
 count = 1

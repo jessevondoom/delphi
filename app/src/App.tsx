@@ -14,6 +14,7 @@ import { Memory } from './screens/Memory.tsx';
 import { Output } from './screens/Output.tsx';
 import { Settings } from './screens/Settings.tsx';
 import { Cards, Start } from './screens/Start.tsx';
+import { UpdateBanner } from './UpdateBanner.tsx';
 import { Team } from './screens/Team.tsx';
 import type { Conn, Envelope, Info, OState } from './types.ts';
 import { defaultCouncil, isDecided, phaseNote, tilde, waiting } from './view.ts';
@@ -127,6 +128,7 @@ export function App() {
     states: requestStates(events),
     waits,
   }), [bridge, conn, events, waits]);
+  const attachedDaemon = list?.daemons.find((d) => d.hash === list.current && d.state === 'running') ?? null;
   const live = state?.councils.filter((c) => !isDecided(c)).length ?? 0;
   const notes: Partial<Record<Screen, string>> = {
     activity: waits ? `${waits} waiting on you` : '',
@@ -170,6 +172,8 @@ export function App() {
         </div>
       )}
       {pairCodeOf(conn) && <PairCode code={pairCodeOf(conn) as string} />}
+      {/* Spec 120 §13.2 item 12: the attached daemon's presence file says whether a newer release exists or a restart is due. */}
+      {!startShown && attachedDaemon && <UpdateBanner d={attachedDaemon} attached={conn.connected} grants={conn.grants} paired={!!conn.paired} send={bridge?.kind === 'app' ? asker.send : undefined} events={events} />}
       <div className="body">
         {prefs.menu && (
           <nav className="menu" aria-label="Sections">

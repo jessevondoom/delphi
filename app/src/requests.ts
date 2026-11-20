@@ -8,7 +8,7 @@
 import { NOTE_MAX } from './ency.ts';
 import type { Conn, Envelope } from './types.ts';
 
-export type AskWhat = 'research.continue' | 'research.ask' | 'page.rebuild' | 'page.dispute';
+export type AskWhat = 'research.continue' | 'research.ask' | 'page.rebuild' | 'page.dispute' | 'update.apply';
 /** The fields a request may carry; the bridge passes on only the ones its request takes (`src-tauri/src/ask.rs`). */
 export type AskArg = { topic_id?: string; section?: string; note?: string; question?: string; follows?: string; slug?: string; claim?: string };
 export type Request = { what: AskWhat; arg: AskArg };
@@ -61,6 +61,12 @@ export function disputeRequest(claimId: string, typed: string): Request | null {
   return ID.test(claimId) && !claimId.includes('..') && claimId.length <= 120 && note ? { what: 'page.dispute', arg: { claim: claimId, note } } : null;
 }
 
+/** "Update now" (spec 120 §13.2): the one request of the `update` grant. It takes no parameters at all: not a version, not a channel. */
+export const updateRequest = (): Request => ({ what: 'update.apply', arg: {} });
+
+/** Whether this window may ask for an update: attached with a key it proved, and that key holds `update`. */
+export const canUpdate = (conn: Conn): boolean => conn.connected && !!conn.paired && (conn.grants ?? []).includes('update');
+
 /** Whether this window may ask: attached with a key it proved, and that key holds `request` (spec 120 §6 item 1). */
 export const canAsk = (conn: Conn): boolean => conn.connected && !!conn.paired && (conn.grants ?? []).includes('request');
 
@@ -81,7 +87,7 @@ export function connWords(conn: Conn, fixture: boolean): { text: string; why: st
 /** Where one request stands, from the daemon's `app.request` events. */
 export type RequestState = { request: string; method: string; state: string; why: string; ids: Record<string, unknown> };
 
-const STATES = ['queued', 'running', 'done', 'failed', 'cancelled', 'refused'];
+const STATES = ['waiting', 'queued', 'running', 'done', 'failed', 'cancelled', 'refused'];
 
 /** Each request's latest state, from the events the window already reads (spec 120 §6 item 3). */
 export function requestStates(events: Envelope[]): Map<string, RequestState> {
@@ -109,6 +115,7 @@ export function stateWords(s: { state: string; why?: string }, waits = 0): strin
   const card = waits > 0 ? ` ${waits === 1 ? 'A decision is' : `${waits} decisions are`} waiting on you in the console; this window cannot answer it.` : '';
   switch (s.state) {
     case 'sending': return 'Asking the daemon.';
+    case 'waiting': return 'Waiting for approval at your terminal: run `delphi app approve` and type the version shown there. This window cannot approve it.';
     case 'queued': return `Queued: the daemon will start it when the run before it ends.${card}`;
     case 'running': return `Running.${card}`;
     case 'done': return 'Done.';

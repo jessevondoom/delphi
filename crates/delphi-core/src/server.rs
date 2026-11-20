@@ -44,10 +44,13 @@ pub const RELAY_METHODS: [&str; 5] = ["session.ping", "events.subscribe", "appro
 /// content, and keep or read one handoff (`specs/062` §8). A host cannot start work, read events or approve anything.
 pub const HOST_METHODS: [&str; 32] = ["session.ping", "host.search_kb", "host.propose_note", "host.propose_kb_entry", "host.record_finding", "host.flag_wrong","host.request_test_authorization", "host.record_session_summary", "host.handoff_put", "host.handoff_get", "host.recall_sessions", "host.ingest_transcript", "host.request_help", "host.help_result", "host.request_council", "host.council_status", "host.council_result", "host.council_open", "host.council_frame", "host.council_brief", "host.council_submit", "host.council_choose", "host.request_research", "host.research_status", "host.research_result", "host.record_research", "host.research_feed", "host.cancel_job", "host.route_decided", "host.reads_seen", "host.ask_family", "host.ask_result"];
 
-/// The console methods that pair, list, revoke and grant the desktop app's keys (`specs/120` §2, §5, §13.1). All need the console
-/// scope; the ones that change what a key may do (all but the two lists, `app.keys` and `app.pair_pending`) also need the caller
-/// to be attached to a terminal, as `auth.issue` does.
-pub const APP_ADMIN_METHODS: [&str; 6] = ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair_pending", "app.pair_approve"];
+/// The console methods that pair, list, revoke and grant the desktop app's keys (`specs/120` §2, §5, §13.1) and that list and approve
+/// a pending update (§13.2 item 5). All need the console scope; the ones that change what a key may do or approve something (all
+/// but the three lists, `app.keys`, `app.pair_pending` and `app.update_pending`) also need the caller to be attached to a terminal,
+/// as `auth.issue` does.
+pub const APP_ADMIN_METHODS: [&str; 8] = ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair_pending", "app.pair_approve", "app.update_pending", "app.update_approve"];
+/// The two of [`APP_ADMIN_METHODS`] that belong to the extension, which holds the pending update (`Extension::app_update_admin`).
+pub const APP_UPDATE_ADMIN_METHODS: [&str; 2] = ["app.update_pending", "app.update_approve"];
 
 /// How many refusals on the app socket, within [`DaemonConfig::app_refusal_window`], close it to new connections.
 pub const APP_REFUSALS: usize = 5;
@@ -153,6 +156,14 @@ pub trait Extension: Send + Sync {
     /// An extension that does not answer them leaves this as it is.
     fn app_request(&self, key: &str, method: &str, params: Value) -> RpcFuture {
         let _ = (key, method, params);
+        Box::pin(async { None })
+    }
+
+    /// `app.update_pending` and `app.update_approve` ([`APP_UPDATE_ADMIN_METHODS`], `specs/120` §13.2 item 5). The server has already
+    /// checked that the caller is a console client and, for the approval, attached to a terminal. An extension that holds no pending
+    /// update leaves this as it is.
+    fn app_update_admin(&self, method: &str, params: Value) -> RpcFuture {
+        let _ = (method, params);
         Box::pin(async { None })
     }
 }
@@ -849,7 +860,7 @@ impl Daemon {
             return Err("key_record_full");
         }
         let at = crate::time::now_rfc3339();
-        let key = AppKey { name: t.name.clone(), public_key: public_key.to_string(), paired_at: at.clone(), last_used: at, app_version: app_keys::clean_version(app_version), grants: app_keys::PAIRING_GRANTS.iter().map(|g| g.to_string()).collect() };
+        let key = AppKey { name: t.name.clone(), public_key: public_key.to_string(), paired_at: at.clone(), last_used: at, app_version: app_keys::clean_version(app_version), grants: app_keys::PAIRING_GRANTS.iter().map(|g| g.to_string()).collect(), update_auto: false };
         keys.push(key.clone());
         self.keys.save(&keys).map_err(|_| "key_record_unwritable")?;
         Ok(json!({"name": key.name, "grants": key.grants, "app_version": key.app_version}))
@@ -999,7 +1010,7 @@ impl Daemon {
                     return Response::err(id, code::FORBIDDEN, "the key record is full or already holds this key; `delphi app list`");
                 }
                 let at = crate::time::now_rfc3339();
-                let key = AppKey { name: st.pairs[i].name.clone(), public_key: st.pairs[i].public_key.clone(), paired_at: at.clone(), last_used: at, app_version: st.pairs[i].app_version.clone(), grants: grants.clone() };
+                let key = AppKey { name: st.pairs[i].name.clone(), public_key: st.pairs[i].public_key.clone(), paired_at: at.clone(), last_used: at, app_version: st.pairs[i].app_version.clone(), grants: grants.clone(), update_auto: false };
                 keys.push(key.clone());
                 if let Err(e) = self.keys.save(&keys) {
                     return Response::err(id, code::INTERNAL, &e);
@@ -1011,7 +1022,7 @@ impl Daemon {
             }
             "app.keys" => match self.live_keys() {
                 Ok(keys) => {
-                    let rows: Vec<Value> = keys.iter().map(|k| json!({"name": k.name, "grants": k.grants, "paired_at": k.paired_at, "last_used": k.last_used, "app_version": k.app_version, "sessions": st.sessions.values().filter(|(n, _)| *n == k.name).count()})).collect();
+                    let rows: Vec<Value> = keys.iter().map(|k| json!({"name": k.name, "grants": k.grants, "update_auto": k.update_auto, "paired_at": k.paired_at, "last_used": k.last_used, "app_version": k.app_version, "sessions": st.sessions.values().filter(|(n, _)| *n == k.name).count()})).collect();
                     // The names of tickets not yet used or run out: the terminal that asked for one watches for its name to leave this list.
                     let now = Instant::now();
                     let pending: Vec<&str> = st.tickets.iter().filter(|t| now.duration_since(t.issued) <= self.cfg.ticket_ttl).map(|t| t.name.as_str()).collect();
@@ -1040,6 +1051,11 @@ impl Daemon {
             "app.grant" => {
                 let grant = req.params["grant"].as_str().unwrap_or("");
                 let remove = req.params["remove"].as_bool().unwrap_or(false);
+                // `auto` is the operator's standing authorization for `app.update_apply` (`specs/120` §13.2 item 6) and nothing else's.
+                let auto = req.params["auto"].as_bool().unwrap_or(false);
+                if auto && (grant != "update" || remove) {
+                    return Response::err(id, code::INVALID_PARAMS, "`auto` goes with giving `update`: a standing authorization covers `app.update_apply` and nothing else, and `--remove` ends it");
+                }
                 // Only a grant the table defines (`specs/120` §5 item 1): a name from anywhere else is refused, not stored.
                 if !app_keys::is_grant(grant) {
                     return Response::err(id, code::INVALID_PARAMS, &format!("no such grant; the grants are: {}", app_keys::GRANTS.iter().map(|g| g.name).collect::<Vec<_>>().join(", ")));
@@ -1050,12 +1066,19 @@ impl Daemon {
                 };
                 let Some(key) = keys.iter_mut().find(|k| k.name == name) else { return Response::err(id, code::NOT_FOUND, "no such key") };
                 let held = key.grants.iter().any(|g| g == grant);
+                let was_auto = key.update_auto;
                 if remove {
                     key.grants.retain(|g| g != grant);
+                    if grant == "update" {
+                        key.update_auto = false;
+                    }
                 } else if !held {
                     key.grants.push(grant.to_string());
                 }
-                let grants = key.grants.clone();
+                if auto {
+                    key.update_auto = true;
+                }
+                let (grants, now_auto) = (key.grants.clone(), key.update_auto);
                 if let Err(e) = self.keys.save(&keys) {
                     return Response::err(id, code::INTERNAL, &e);
                 }
@@ -1063,10 +1086,11 @@ impl Daemon {
                 // does not outlive it. The app connects again and holds what the record now says.
                 let closed = if remove && held { Daemon::close_sessions(&st, name) } else { 0 };
                 drop(st);
-                if held == remove {
-                    self.audit("app.granted", json!({"name": name, "grant": grant, "removed": remove, "sessions_closed": closed}));
+                let changed = held == remove || was_auto != now_auto;
+                if changed {
+                    self.audit("app.granted", json!({"name": name, "grant": grant, "removed": remove, "auto": now_auto, "sessions_closed": closed}));
                 }
-                Response::ok(id, json!({"name": name, "grants": grants, "changed": held == remove, "sessions_closed": closed}))
+                Response::ok(id, json!({"name": name, "grants": grants, "update_auto": now_auto, "changed": changed, "sessions_closed": closed}))
             }
             _ => Response::err(id, code::METHOD_NOT_FOUND, "unknown method"),
         }
@@ -1089,6 +1113,24 @@ impl Daemon {
         }
     }
 
+    /// `app.update_pending` (a list, console scope) and `app.update_approve` (console scope and a terminal, as a key's grant is):
+    /// checked here, answered by the extension that holds the pending request.
+    async fn app_update_admin(&self, req: Request, scope: Scope, peer: &Peer) -> Response {
+        let id = req.id.clone();
+        if scope != Scope::Console {
+            return Response::err(id, code::FORBIDDEN, "this method requires the console scope");
+        }
+        if req.method == "app.update_approve" && !self.at_terminal(peer.pid) {
+            return Response::err(id, code::TTY_REQUIRED, "an update is approved only by a client attached to an interactive terminal");
+        }
+        let Some(ext) = self.extension.lock().unwrap().clone() else { return Response::err(id, code::METHOD_NOT_FOUND, "unknown method") };
+        match ext.app_update_admin(&req.method, req.params).await {
+            Some(Ok(v)) => Response::ok(id, v),
+            Some(Err(e)) => Response { jsonrpc: "2.0".into(), id, result: None, error: Some(e) },
+            None => Response::err(id, code::METHOD_NOT_FOUND, "unknown method"),
+        }
+    }
+
     async fn dispatch(&self, req: Request, scope: Scope, client_id: u64, peer: &Peer) -> Response {
         let id = req.id.clone();
         // The app socket offers the methods of the grants the key holds at this moment, by name, and nothing else
@@ -1101,7 +1143,7 @@ impl Daemon {
         }
         // The `request` grant's methods are the app socket's alone (`specs/120` §4.2): a session whose key holds the grant has them
         // answered by the extension's own entry for them; from any other socket they do not exist.
-        if app_keys::REQUEST_METHODS.contains(&req.method.as_str()) {
+        if app_keys::REQUEST_METHODS.contains(&req.method.as_str()) || app_keys::UPDATE_METHODS.contains(&req.method.as_str()) {
             return match (scope, peer.app.as_deref()) {
                 (Scope::App, Some(key)) => self.app_request(req, key.to_string()).await,
                 _ => Response::err(id, code::METHOD_NOT_FOUND, "unknown method"),
@@ -1120,6 +1162,10 @@ impl Daemon {
         if scope == Scope::Host && !HOST_METHODS.contains(&req.method.as_str()) {
             crate::elog::warn("daemon", "rpc_forbidden", "a method outside the host list was refused", json!({"method": req.method, "kind": "host"}));
             return Response::err(id, code::FORBIDDEN, &format!("`{}` is not available on the host socket", req.method));
+        }
+        // The pending update is the extension's to hold, behind the same scope and terminal checks as the keys.
+        if APP_UPDATE_ADMIN_METHODS.contains(&req.method.as_str()) {
+            return self.app_update_admin(req, scope, peer).await;
         }
         // The app's keys are the server's own business, and the console's only: never offered to the engine.
         if APP_ADMIN_METHODS.contains(&req.method.as_str()) {

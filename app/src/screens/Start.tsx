@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { INSTALL_COMMAND, START_COMMAND, cards, switchable, type Card, type DaemonList } from '../daemons.ts';
 import type { Conn } from '../types.ts';
+import { UpdateBanner } from '../UpdateBanner.tsx';
 
 async function toClipboard(text: string): Promise<boolean> {
   try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
@@ -88,6 +89,10 @@ export function Start({ list, now, conn, onChoose, error }: { list: DaemonList |
       )}
       {list && !none && <div className="muted" style={{ marginBottom: 12 }}>More than one daemon is running here. Choose the one to show; this window reads it, and answers nothing.</div>}
       {error && <div className="empty" role="alert">{error}</div>}
+      {/* Spec 120 §13.2 item 12: a daemon that names a newer release, or says it was updated, shows it with the command to copy. */}
+      {list && list.daemons.filter((d) => d.state === 'running').map((d) => (
+        <UpdateBanner key={d.hash} d={d} attached={false} paired={false} />
+      ))}
       {list && list.daemons.length > 0 && <Cards list={list} now={now} current={list.current} conn={conn} onChoose={onChoose} />}
     </main>
   );

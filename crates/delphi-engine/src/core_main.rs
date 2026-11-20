@@ -128,9 +128,13 @@ pub fn run(args: Vec<String>) -> ! {
         daemon.set_app_audit(booted.service.app_audit());
         booted.service.start_timers();
         // Spec 130 §2: the daemon announces itself for the desktop app. A failure to write it never stops the daemon.
-        if let Err(e) = delphi_core::presence::write(&l, &delphi_core::presence::Presence::new(&l, daemon.instance(), &daemon_version, &canon, &home)) {
+        let presence = delphi_core::presence::Presence::new(&l, daemon.instance(), &daemon_version, &canon, &home);
+        if let Err(e) = delphi_core::presence::write(&l, &presence) {
             eprintln!("delphi-core: the presence file could not be written ({e})");
         }
+        // Spec 120 §13.2 item 12: the daemon looks for a newer release at start and every six hours, and says so in the presence file.
+        booted.service.set_update_presence(l.clone(), presence);
+        booted.service.start_update_checks();
         // Ready: the token travels over the pipe only.
         writeln!(ready, "{}", daemon.console_token()).unwrap_or_else(|e| die(&format!("ready pipe: {}", e)));
         drop(ready);

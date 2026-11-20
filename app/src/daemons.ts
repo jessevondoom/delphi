@@ -30,6 +30,10 @@ export type Daemon = {
   pid: number;
   started: string;
   summary: Summary | null;
+  /** The newest stable release the daemon found (`1.2.3`), from its presence file; spec 120 §13.2 item 12. Absent from a daemon that does not say. */
+  update_available?: string | null;
+  /** Set after an update was applied: the daemon still runs the old code until it is restarted. */
+  restart_pending?: boolean;
 };
 
 export type DaemonList = {
@@ -165,4 +169,30 @@ export const switchable = (list: DaemonList | null): number => (list ? list.daem
  */
 export function showStart(list: DaemonList | null, connected: boolean, hasState: boolean): boolean {
   return !!list && (list.held || (!connected && !hasState && switchable(list) === 0));
+}
+
+/** What the update banner says (spec 120 §13.2 item 12): all of it is made from a version number and a plain workspace name. */
+export type UpdateBannerWords = {
+  /** `Update to v1.2.3 available`, or null when the daemon names no release. */
+  text: string | null;
+  /** The command to copy and run in a terminal. */
+  command: string;
+  /** Whether this window may offer "Update now": attached to this daemon with a key that holds `update`, and nothing waiting to restart. */
+  canApply: boolean;
+  /** `restart when idle`, with the command that restarts this daemon; shown after an update was applied. Never a button that restarts. */
+  restart: { text: string; command: string } | null;
+};
+
+/** A release the daemon names is a number and never text: three dot-separated numbers, nothing more. */
+export const releaseVersion = (v: unknown): string | null => (typeof v === 'string' && /^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(v) ? v : null);
+
+/**
+ * The banner for one daemon, from its presence file's fields. `attached` is whether this window is attached to it now: only
+ * then, and only with a key that holds `update`, is "Update now" offered. Every other window copies the command.
+ */
+export function updateBannerWords(d: Daemon, attached: boolean, grants: string[] | undefined, paired: boolean): UpdateBannerWords | null {
+  const version = releaseVersion(d.update_available);
+  const restart = d.restart_pending === true && plainName(d.workspace_name) ? { text: 'Updated: restart when idle', command: `delphi daemon restart --workspace ${d.workspace_name}` } : null;
+  if (!version && !restart) return null;
+  return { text: version && !restart ? `Update to v${version} available` : null, command: 'delphi update', canApply: !!version && !restart && attached && paired && (grants ?? []).includes('update'), restart };
 }

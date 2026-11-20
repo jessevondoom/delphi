@@ -24,6 +24,8 @@ mod service_xenia;
 /// console's own methods run.
 #[path = "app_requests.rs"]
 pub mod app_requests;
+#[path = "app_update.rs"]
+pub mod app_update;
 
 struct Running {
     target: String,
@@ -88,6 +90,8 @@ pub struct EngineService {
     research_jobs: crate::research_jobs::Jobs,
     /// What each app key asked in the last hour, and what of it still runs (`specs/120` §4.2 item 3).
     app_asked: Mutex<app_requests::Tally>,
+    /// What the daemon knows about updates and the one that waits for an operator (`specs/120` §13.2).
+    update: Mutex<app_update::State>,
     /// Host Panels in progress (`specs/086`): Round 1 is held here, in memory, until every seat has answered. A restart ends them.
     panels: Panels,
 }
@@ -427,7 +431,7 @@ impl EngineService {
         let _ = engine.research_ask.set(tx);
         // One queue for every research run, under the one limits table (`specs/112` §4 item 6).
         let research_queue = crate::research_jobs::Jobs::with_limits(&engine.settings.research_limits);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: research_queue, app_asked: Default::default(),
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: research_queue, app_asked: Default::default(), update: Default::default(),
             #[cfg(test)]
             research_web: Mutex::new(None),
             #[cfg(test)]
@@ -5010,6 +5014,12 @@ impl Extension for ServiceExt {
     fn app_request(&self, key: &str, method: &str, params: Value) -> RpcFuture {
         let (svc, key, method) = (self.0.clone(), key.to_string(), method.to_string());
         Box::pin(async move { svc.app_request(&key, &method, params).await })
+    }
+
+    /// `specs/120` §13.2 item 5: the pending update, listed and approved by the console at a terminal.
+    fn app_update_admin(&self, method: &str, params: Value) -> RpcFuture {
+        let (svc, method) = (self.0.clone(), method.to_string());
+        Box::pin(async move { svc.app_update_admin(&method, params).await })
     }
 
     fn call(&self, method: &str, params: Value, ctx: CallContext) -> RpcFuture {
