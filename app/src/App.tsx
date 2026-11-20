@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Asking, type Asker } from './EncyParts.tsx';
 import { MARK_ROLES, fillOf } from './avatar.ts';
 import { openBridge, type Bridge } from './bridge.ts';
+import { showStart, switchable, type DaemonList } from './daemons.ts';
 import { load, save, type Prefs, type Screen } from './prefs.ts';
-import { canAsk, connWords, requestStates } from './requests.ts';
+import { canAsk, connWords, refusalWords, requestStates } from './requests.ts';
 import { Activity } from './screens/Activity.tsx';
 import { Council } from './screens/Council.tsx';
 import { Encyclopedia } from './screens/Encyclopedia.tsx';
@@ -11,6 +12,7 @@ import { Knowledge } from './screens/Knowledge.tsx';
 import { Memory } from './screens/Memory.tsx';
 import { Output } from './screens/Output.tsx';
 import { Settings } from './screens/Settings.tsx';
+import { Cards, Start } from './screens/Start.tsx';
 import { Team } from './screens/Team.tsx';
 import type { Conn, Envelope, Info, OState } from './types.ts';
 import { defaultCouncil, isDecided, phaseNote, tilde, waiting } from './view.ts';
@@ -56,6 +58,10 @@ export function App() {
   const [visit, setVisit] = useState(0);
   // A search the encyclopedia handed to the knowledge base (spec 117 §4 item 1): the words, until the screen is left.
   const [ask, setAsk] = useState('');
+  // The daemons on this machine (spec 130): the start screen and the switcher are drawn from this list.
+  const [list, setList] = useState<DaemonList | null>(null);
+  const [switcher, setSwitcher] = useState(false);
+  const [chooseError, setChooseError] = useState('');
   const light = useLight(prefs.theme);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -83,6 +89,33 @@ export function App() {
     });
     return () => { gone = true; off(); if (timer.current) clearTimeout(timer.current); };
   }, []);
+
+  // The list is read when the connection changes, and, with summaries, every five seconds while the start screen or the
+  // switcher is showing (spec 130 §3.3). A state word that changes is not animated.
+  const startShown = showStart(list, conn.connected, !!state);
+  const listing = startShown || switcher;
+  useEffect(() => {
+    if (!bridge) return;
+    let gone = false;
+    const read = () => { void bridge.daemons(listing).then((l) => { if (!gone) setList(l); }).catch(() => {}); };
+    read();
+    if (!listing) return () => { gone = true; };
+    const every = setInterval(read, 5000);
+    return () => { gone = true; clearInterval(every); };
+  }, [bridge, listing, conn.connected]);
+
+  // Choosing a daemon points the bridge at it; what the window held of the last one is dropped, and the connection's own
+  // notice (it says `connected` again) fetches the new one. A refusal leaves everything as it was.
+  const choose = (hash: string) => {
+    if (!bridge) return;
+    const kept = { state, events, info };
+    setChooseError('');
+    setState(null); setEvents([]); setInfo(null);
+    bridge.attach(hash).then(
+      () => { setSwitcher(false); setList((l) => (l ? { ...l, held: false, current: hash } : l)); },
+      (e: unknown) => { setState(kept.state); setEvents(kept.events); setInfo(kept.info); setChooseError(refusalWords(e)); },
+    );
+  };
 
   const waits = state ? waiting(state).length : 0;
   const said = connWords(conn, bridge?.kind === 'fixture');
@@ -116,9 +149,11 @@ export function App() {
           <span className="mark" role="img" aria-label="Delphi">{MARK_ROLES.map((r) => <span key={r} style={{ background: fillOf(info, r, light) }} />)}</span>
           delphi
         </span>
-        {/* Display only: the daemon serves one workspace and no read call takes a project, so there is nothing to switch (spec 111 §8). */}
+        {/* One daemon: the name is text. Several: it is the button that opens the switcher (spec 130 §4 item 6). */}
         <span className="where">
-          {info?.workspace_name && <b>{info.workspace_name}</b>}
+          {info?.workspace_name && (switchable(list) > 1
+            ? <button type="button" className="where-btn" aria-haspopup="dialog" aria-expanded={switcher} onClick={() => { setChooseError(''); setSwitcher((o) => !o); }}><b>{info.workspace_name}</b> <span aria-hidden="true">▾</span><span className="sr-only"> switch daemon</span></button>
+            : <b>{info.workspace_name}</b>)}
           {info?.workspace && <span>{tilde(info.workspace)}</span>}
           {info?.version && <span>delphi {info.version}</span>}
         </span>
@@ -126,6 +161,13 @@ export function App() {
         {/* Spec 120 §6 item 2: read-only or paired, and the grants held; a key that was not accepted says why. */}
         <span className="conn" role="status"><span className={conn.connected ? 'dot on' : 'dot off'} />{said.text}{said.why && <span className="conn-why">{said.why}</span>}</span>
       </header>
+      {switcher && list && (
+        <div className="switcher" role="dialog" aria-label="Switch daemon" onKeyDown={(e) => { if (e.key === 'Escape') setSwitcher(false); }}>
+          <Cards list={list} now={Date.now()} current={list.current} conn={conn} onChoose={choose} />
+          {chooseError && <div className="empty" role="alert">{chooseError}</div>}
+          <button type="button" className="btn small" onClick={() => setSwitcher(false)}>Close</button>
+        </div>
+      )}
       <div className="body">
         {prefs.menu && (
           <nav className="menu" aria-label="Sections">
@@ -151,7 +193,9 @@ export function App() {
             ))}
           </nav>
         )}
-        {!conn.connected && !state ? (
+        {startShown ? (
+          <Start list={list} now={Date.now()} conn={conn} onChoose={choose} error={chooseError} />
+        ) : !conn.connected && !state ? (
           <main className="main">
             <h1 className="title">No daemon to show</h1>
             <div className="empty">{conn.detail}. Start Delphi in a terminal with <span className="mono">delphi chat</span>, and this window attaches by itself. Without a key paired from a terminal it only reads.</div>

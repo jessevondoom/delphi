@@ -34,6 +34,8 @@ pub struct Layout {
     pub app_sock: PathBuf,
     pub lock: PathBuf,
     pub log: PathBuf,
+    /// The presence file the daemon writes once ready (`specs/130` §2).
+    pub presence: PathBuf,
 }
 
 /// 12 hex characters of the blake3 hash of the *canonical* workspace path (short enough for the
@@ -46,7 +48,7 @@ pub fn workspace_hash(workspace: &Path) -> io::Result<String> {
 pub fn layout(home: &Path, workspace: &Path) -> io::Result<Layout> {
     let h = workspace_hash(workspace)?;
     let run_dir = home.join("run");
-    Ok(Layout { sock: run_dir.join(format!("{}.sock", h)), narrator_sock: run_dir.join(format!("{}.narrator.sock", h)), relay_sock: run_dir.join(format!("{}.relay.sock", h)), host_sock: run_dir.join(format!("{}.host.sock", h)), app_sock: run_dir.join(format!("{}.app.sock", h)), lock: run_dir.join(format!("{}.lock", h)), log: run_dir.join(format!("{}.log", h)), run_dir })
+    Ok(Layout { sock: run_dir.join(format!("{}.sock", h)), narrator_sock: run_dir.join(format!("{}.narrator.sock", h)), relay_sock: run_dir.join(format!("{}.relay.sock", h)), host_sock: run_dir.join(format!("{}.host.sock", h)), app_sock: run_dir.join(format!("{}.app.sock", h)), lock: run_dir.join(format!("{}.lock", h)), log: run_dir.join(format!("{}.log", h)), presence: run_dir.join(format!("{}.json", h)), run_dir })
 }
 
 /// Create `run/` with mode 0700 (and tighten it if it already exists).

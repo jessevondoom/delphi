@@ -2,6 +2,7 @@
 // cannot name a daemon method; each function here is one of the bridge's commands. With no bridge present (a browser, a test)
 // the same interface is served from a fixture, so every screen runs as a plain web page (§3.3).
 import { BUILT_IN } from './avatar.ts';
+import type { Daemon, DaemonList } from './daemons.ts';
 import type { EncyRead } from './ency.ts';
 import type { Asked, AskArg, AskWhat } from './requests.ts';
 import type { Conn, Envelope, Info, OState } from './types.ts';
@@ -43,6 +44,13 @@ export interface Bridge {
   open?(path: string): Promise<void>;
   /** Open an `http` or `https` address in the system's browser. */
   openUrl?(url: string): Promise<void>;
+  /**
+   * The daemons on this machine (spec 130 §3): read from the Delphi home's run folder, probed, and, when `summaries` is
+   * asked for (the start screen and the switcher are showing), each running one with what `observe.state` says.
+   */
+  daemons(summaries: boolean): Promise<DaemonList>;
+  /** Point the window at one daemon of the list `daemons` last gave (spec 130 §3.2). Any other hash is refused, with the sentence to show. */
+  attach(hash: string): Promise<void>;
   subscribe(l: Listener): () => void;
 }
 /** What the daemon's retrieval service answered: its status and its body. */
@@ -129,8 +137,37 @@ async function download(name: string, text: string): Promise<string> {
   return `${name}.md, in your downloads`;
 }
 
+/**
+ * Sample daemons for a browser (spec 130 §4): one that needs you, one working, one idle, one stopped and one older daemon.
+ * `now` makes the oldest approval four minutes old.
+ */
+export function fixtureDaemons(now = Date.now()): Daemon[] {
+  const sample = (hash: string, name: string, state: Daemon['state'], summary: Daemon['summary'], version = '0.6.5'): Daemon => ({ hash, state, answers: state === 'running', workspace_name: name, workspace: `~/.delphi/workspaces/${name}`, home: '~/.delphi', version, pid: 4100, started: '2026-11-19T10:00:00Z', summary });
+  return [
+    sample('1a2b3c4d5e6f', 'research', 'running', { running: 2, waiting: 1, escalated: 0, approvals: 1, oldest_approval_ms: now - 4 * 60_000, mission: 'm-tides', session: 's-2', tokens: 482_100 }),
+    sample('2b3c4d5e6f7a', 'default', 'running', { running: 3, waiting: 0, escalated: 0, approvals: 0, oldest_approval_ms: null, mission: 'm-docs', session: 's-1', tokens: 12_300 }, '0.6.4'),
+    sample('3c4d5e6f7a8b', 'scratch', 'running', { running: 0, waiting: 0, escalated: 0, approvals: 0, oldest_approval_ms: null, mission: null, session: null, tokens: 0 }),
+    sample('4d5e6f7a8b9c', 'client-work', 'stopped', null),
+    { hash: '5e6f7a8b9c0d', state: 'older', answers: true, workspace_name: '', workspace: '', home: '', version: '0.6.1', pid: 3900, started: '', summary: null },
+  ];
+}
+
+/** `?daemons=none|one|several` picks the sample list; a browser's default is several, so the start screen shows. */
+function fixtureMode(): 'none' | 'one' | 'several' {
+  const named = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('daemons') : null;
+  if (named === 'none' || named === 'one' || named === 'several') return named;
+  return typeof location !== 'undefined' ? 'several' : 'one';
+}
+
 export async function fixtureBridge(): Promise<Bridge> {
   const sim = await fixtureData();
+  const mode = fixtureMode();
+  const all = fixtureDaemons();
+  const listed = mode === 'none' ? [] : mode === 'one' ? [all[0]!] : all;
+  let held = mode === 'several';
+  let current: string | null = mode === 'one' ? all[0]!.hash : null;
+  const listeners = new Set<Listener>();
+  const says = (c: Conn) => listeners.forEach((l) => l.conn(c));
   return {
     kind: 'fixture',
     info: async () => (sim.info?.roles && Object.keys(sim.info.roles).length ? sim.info : fixtureInfo()),
@@ -146,9 +183,19 @@ export async function fixtureBridge(): Promise<Bridge> {
     print: async () => { globalThis.print?.(); },
     // A browser has no Finder; an address opens in a tab of its own.
     openUrl: async (url: string) => { if (/^https?:\/\//i.test(url)) globalThis.open?.(url, '_blank', 'noopener'); },
+    daemons: async (summaries) => ({ held, current, app_version: '0.6.5', daemons: listed.map((d) => (summaries || d.state !== 'running' ? d : { ...d, summary: null })) }),
+    attach: async (hash) => {
+      const d = listed.find((x) => x.hash === hash);
+      if (!d) throw new Error('that is not a daemon in the list this window was given');
+      if (!d.answers) throw new Error('that daemon is not running; start it in a terminal');
+      held = false;
+      current = hash;
+      says({ connected: true, detail: 'sample data, no daemon' });
+    },
     subscribe(l) {
-      l.conn({ connected: true, detail: 'sample data, no daemon' });
-      return () => {};
+      listeners.add(l);
+      l.conn(held ? { connected: false, detail: 'Choose a daemon to show' } : mode === 'none' ? { connected: false, detail: 'No daemon is running' } : { connected: true, detail: 'sample data, no daemon' });
+      return () => { listeners.delete(l); };
     },
   };
 }

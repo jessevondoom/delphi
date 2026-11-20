@@ -108,6 +108,7 @@ pub fn run(args: Vec<String>) -> ! {
         if let Ok(v) = std::env::var("DELPHI_RELEASE_VERSION") {
             cfg.binary_version = v;
         }
+        let daemon_version = cfg.binary_version.clone();
         let daemon = Daemon::new(cfg).unwrap_or_else(|e| die(&format!("daemon: {}", e)));
         // The engine publishes through the daemon's hub, so attached clients see its events.
         let booted = crate::boot::build(&home, &canon, daemon.hub.clone()).unwrap_or_else(|e| die(&e));
@@ -126,11 +127,16 @@ pub fn run(args: Vec<String>) -> ! {
         daemon.set_extension(booted.service.extension());
         daemon.set_app_audit(booted.service.app_audit());
         booted.service.start_timers();
+        // Spec 130 §2: the daemon announces itself for the desktop app. A failure to write it never stops the daemon.
+        if let Err(e) = delphi_core::presence::write(&l, &delphi_core::presence::Presence::new(&l, daemon.instance(), &daemon_version, &canon, &home)) {
+            eprintln!("delphi-core: the presence file could not be written ({e})");
+        }
         // Ready: the token travels over the pipe only.
         writeln!(ready, "{}", daemon.console_token()).unwrap_or_else(|e| die(&format!("ready pipe: {}", e)));
         drop(ready);
         eprintln!("delphi-core: ready on {} (mission {})", l.sock.display(), booted.default_mission);
         daemon.serve_with_app(listener, Some(narrator_listener), Some(relay_listener), Some(host_listener), Some(app_listener)).await;
+        delphi_core::presence::remove(&l);
         let _ = std::fs::remove_file(&l.sock);
         let _ = std::fs::remove_file(&l.narrator_sock);
         let _ = std::fs::remove_file(&l.relay_sock);

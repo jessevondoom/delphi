@@ -1,0 +1,134 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 130: The desktop app finds every daemon and says what each is doing"
+    },
+    {
+      "level": 2,
+      "line": 20,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 31,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 38,
+      "number": "1.2",
+      "title": "Options Considered"
+    },
+    {
+      "level": 2,
+      "line": 47,
+      "number": "2",
+      "title": "The presence file (slice S1)"
+    },
+    {
+      "level": 2,
+      "line": 72,
+      "number": "3",
+      "title": "Discovery (slice S2)"
+    },
+    {
+      "level": 3,
+      "line": 74,
+      "number": "3.1",
+      "title": "The list"
+    },
+    {
+      "level": 3,
+      "line": 80,
+      "number": "3.2",
+      "title": "Choosing one"
+    },
+    {
+      "level": 3,
+      "line": 86,
+      "number": "3.3",
+      "title": "The summary"
+    },
+    {
+      "level": 2,
+      "line": 99,
+      "number": "4",
+      "title": "The start screen and the switcher (slice S2)"
+    },
+    {
+      "level": 2,
+      "line": 110,
+      "number": "5",
+      "title": "Authority and trust"
+    },
+    {
+      "level": 2,
+      "line": 117,
+      "number": "6",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 130,
+      "number": "7",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "8",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 146,
+      "number": "9",
+      "title": "Open questions (the operator decides)"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing.md",
+    "sha256": "287616056abdc2b6bc200e7fb5ddfd3d4ab30571aa8ac4ca9a25f3f0688e2168"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 555,
+        "end_line": 6,
+        "line": 6,
+        "start": 207
+      },
+      "text": "status: approved   # by the operator, 2026-11-19, in a host session. Shown a plan (discovery start screen, code-approved pairing, bundled CLI, update grant, in five slices) and answering \"follow your recommendation and start building. use subagents if you can\". The spec was written from those words; the operator was shown the plan, not this text."
+    },
+    "sha256": "287616056abdc2b6bc200e7fb5ddfd3d4ab30571aa8ac4ca9a25f3f0688e2168",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "install-and-lifecycle",
+    "number": "130",
+    "stem": "130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "130: The desktop app finds every daemon and says what each is doing"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1621,
+      "end_line": 22,
+      "line": 22,
+      "start": 1315
+    },
+    "text": "Today the app finds one daemon: `locate::locate()` asks `delphi daemon where` for the workspace named by `DELPHI_WORKSPACE`, else `default`. A person with two workspaces, or one that is not called `default`, sees the wrong window or an empty one, and has no way to tell a running daemon from a stopped one."
+  }
+}

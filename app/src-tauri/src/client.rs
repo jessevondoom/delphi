@@ -208,8 +208,16 @@ impl Client {
 
     /// Connect and attach as a read-only client: ask the narrator socket for its token, then say hello with it.
     pub fn attach(path: &Path, version: &str) -> Result<Client, Error> {
+        Client::attach_hello(path, version, Duration::from_secs(10)).map(|(c, _)| c)
+    }
+
+    /// [`Client::attach`] with its own timeout for every read and write, which also returns what the daemon answered to
+    /// `hello` (its pid, its version, and its instance when it names one). Discovery (spec 130 §3) uses it to tell a
+    /// daemon that is there from a stale file, and to read a summary, over a connection it closes afterwards.
+    pub fn attach_hello(path: &Path, version: &str, timeout: Duration) -> Result<(Client, Value), Error> {
         let mut c = Client::connect(path).map_err(Error::Io)?;
-        c.set_read_timeout(Some(Duration::from_secs(10)));
+        c.set_read_timeout(Some(timeout));
+        let _ = c.writer.set_write_timeout(Some(timeout));
         let issued = c.raw("auth.issue", json!({ "scope": "narrator" }))?;
         let token = issued["token"].as_str().ok_or_else(|| Error::Protocol("the daemon issued no token".into()))?.to_string();
         if issued["scope"].as_str() != Some("narrator") {
@@ -219,7 +227,7 @@ impl Client {
         if hello["scope"].as_str() != Some("narrator") {
             return Err(Error::Protocol("attached with a scope other than narrator; closing".into()));
         }
-        Ok(c)
+        Ok((c, hello))
     }
 
     /// Connect to the app socket and read what the daemon sends first: its challenge (spec 120 §3 item 2). A daemon that
