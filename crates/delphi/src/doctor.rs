@@ -228,10 +228,114 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // 14. The central error log (specs/039): the effective level and where it came from, the file, its size and the drops.
     check_error_log(home, &mut r);
     check_host_plugin(home, ws, &mut r);
+    // 24. The desktop app (specs/122 §10.4): macOS only, facts and warnings, never a failure.
+    if cfg!(target_os = "macos") {
+        let user_home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+        let canon = |p: PathBuf| fs::canonicalize(&p).unwrap_or(p);
+        let running = std::env::current_exe().ok().map(canon);
+        let finds = app_finds(user_home.as_deref()).map(canon);
+        check_app(&AppProbes { user_home: user_home.as_deref(), delphi_home: home, system_dir: Path::new("/Applications"), own_version: env!("CARGO_PKG_VERSION"), running, finds, quarantined: &has_quarantine }, &mut r);
+    }
 
     // Checks are pushed as they are cheap to run; show them in their numbered order.
     r.findings.sort_by_key(|f| f.check.split(' ').next().and_then(|n| n.parse::<u32>().ok()).unwrap_or(u32::MAX));
     r
+}
+
+/// What `24 app` looks at, each injectable so a test needs no real `~/Applications`.
+struct AppProbes<'a> {
+    user_home: Option<&'a Path>,
+    delphi_home: &'a Path,
+    own_version: &'a str,
+    /// This program, and the `delphi` the desktop app would pick (the same order as `app/src-tauri/src/locate.rs`).
+    running: Option<PathBuf>,
+    finds: Option<PathBuf>,
+    quarantined: &'a dyn Fn(&Path) -> bool,
+    /// `/Applications`, or a folder standing in for it in a test.
+    system_dir: &'a Path,
+}
+
+/// Is `com.apple.quarantine` set on `path`? Read with `getxattr`, so no process is started. Always false off macOS.
+fn has_quarantine(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let (Ok(p), Ok(n)) = (std::ffi::CString::new(path.as_os_str().as_bytes()), std::ffi::CString::new("com.apple.quarantine")) else { return false };
+        // SAFETY: both names are NUL-terminated C strings that outlive the call; a null value with size 0 only asks whether the attribute exists.
+        unsafe { libc::getxattr(p.as_ptr(), n.as_ptr(), std::ptr::null_mut(), 0, 0, libc::XATTR_NOFOLLOW) >= 0 }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// The installed `delphi` the app looks for first: `DELPHI_EXE`, `~/.local/bin`, Homebrew's, `/usr/local/bin` (the order of `locate::candidates`).
+fn app_finds(user_home: Option<&Path>) -> Option<PathBuf> {
+    let env = std::env::var_os("DELPHI_EXE").map(PathBuf::from).filter(|p| p.is_absolute());
+    env.into_iter().chain(user_home.map(|h| h.join(".local/bin/delphi"))).chain(["/opt/homebrew/bin/delphi", "/usr/local/bin/delphi"].map(PathBuf::from)).find(|p| p.is_file())
+}
+
+/// `CFBundleShortVersionString` of a bundle's `Contents/Info.plist` (the XML form the app's build writes), or `None`.
+fn bundle_version(app: &Path) -> Option<String> {
+    let text = fs::read_to_string(app.join("Contents/Info.plist")).ok()?;
+    let key = "<key>CFBundleShortVersionString</key>";
+    let after = &text[text.find(key)? + key.len()..];
+    let start = after.find("<string>")? + "<string>".len();
+    let v = after[start..].split("</string>").next()?.trim();
+    (!v.is_empty() && v.len() <= 64).then(|| v.to_string())
+}
+
+/// `24 app` (specs/122 §10.4): where the desktop app is and whether it is a real folder, its version against this program's, a
+/// quarantine flag on the bundle, an app in both places, the opt-out, and whether the `delphi` the app would find is this one.
+/// Facts and warnings only: nothing here can fail the doctor. No app and no opt-out is "not installed (optional)".
+fn check_app(p: &AppProbes, r: &mut Report) {
+    const C: &str = "24 app";
+    let places: Vec<PathBuf> = p.user_home.iter().map(|h| h.join("Applications/Delphi.app")).chain([p.system_dir.join("Delphi.app")]).collect();
+    let mut real: Vec<&PathBuf> = Vec::new();
+    let mut anything = false;
+    for place in &places {
+        match fs::symlink_metadata(place) {
+            Ok(m) if m.is_dir() => {
+                anything = true;
+                real.push(place);
+            }
+            Ok(_) => {
+                anything = true;
+                r.warn(C, place.display().to_string(), "is not a real folder (a link?), so `delphi update` leaves it as it is and `delphi app` cannot start it from there");
+            }
+            Err(_) => {}
+        }
+    }
+    let opted_out = crate::app_cmd::opted_out(p.delphi_home);
+    if !anything && !opted_out {
+        r.push(Level::Ok, C, "", "not installed (optional): install.sh and `delphi update` put it in ~/Applications on macOS");
+    }
+    for app in &real {
+        match bundle_version(app).as_deref() {
+            Some(v) if v == p.own_version => r.push(Level::Ok, C, app.display().to_string(), format!("installed, version {v}, the same as this program")),
+            Some(v) => r.warn(C, app.display().to_string(), format!("version {v}, but this program is {}; `delphi update` brings them together", p.own_version)),
+            None => r.warn(C, app.display().to_string(), "installed, but its version could not be read from Contents/Info.plist"),
+        }
+        if (p.quarantined)(app) {
+            r.warn(C, app.display().to_string(), "carries the quarantine flag, so macOS may refuse to open it: allow it under System Settings, Privacy & Security (Open Anyway), or run `xattr -dr com.apple.quarantine <this path>`");
+        }
+    }
+    if real.len() > 1 {
+        r.warn(C, "", format!("the app is installed in both {} and {}; `delphi app` starts the one in /Applications first, and `delphi update` changes only the one in ~/Applications", real[1].display(), real[0].display()));
+    }
+    if !real.is_empty() {
+        match (&p.running, &p.finds) {
+            (Some(run), Some(find)) if run != find => r.warn(C, "", format!("the app would use {}, not this program ({}); run `delphi self-install` or set DELPHI_EXE", find.display(), run.display())),
+            (_, None) if real.iter().any(|a| a.join("Contents/Resources/delphi").is_file()) => r.push(Level::Ok, C, "", "no delphi is installed, so the app would use its own copy; `delphi self-install` (from this program) puts one on your PATH"),
+            (_, None) => r.warn(C, "", "the app would find no delphi to ask; run `delphi self-install` from this program"),
+            _ => {}
+        }
+    }
+    if opted_out {
+        r.push(Level::Ok, C, crate::app_cmd::opt_out_path(p.delphi_home).display().to_string(), "opted out: `delphi update` and install.sh leave the desktop app alone; `delphi app opt-in` undoes it");
+    }
 }
 
 /// `17 research` (spec 098 §7.5 item 9): read-only and offline. States the inside limits of research before a run, as facts: which
@@ -2256,5 +2360,96 @@ mod tests {
             let found = levels(&home, now());
             assert!(found.iter().any(|(l, m)| *l == Level::Fail && m.contains("refused the store's head")), "{found:?}");
         }
+    }
+
+    // ── 24 app (specs/122 §10.4, AC-10) ───────────────────────────────────────────────────────────────────────────────────
+
+    fn plist(version: &str) -> String {
+        format!("<plist><dict><key>CFBundleName</key><string>Delphi</string><key>CFBundleShortVersionString</key><string>{version}</string></dict></plist>")
+    }
+
+    fn make_app(dir: &Path, version: &str) -> PathBuf {
+        let app = dir.join("Delphi.app");
+        fs::create_dir_all(app.join("Contents")).unwrap();
+        fs::write(app.join("Contents/Info.plist"), plist(version)).unwrap();
+        app
+    }
+
+    fn app_report(user: &Path, sys: &Path, dh: &Path, running: &str, finds: Option<&str>, quarantined: &dyn Fn(&Path) -> bool) -> Report {
+        let mut r = Report::default();
+        check_app(&AppProbes { user_home: Some(user), delphi_home: dh, own_version: "1.2.3", running: Some(PathBuf::from(running)), finds: finds.map(PathBuf::from), quarantined, system_dir: sys }, &mut r);
+        r
+    }
+
+    fn lines(r: &Report) -> String {
+        r.findings.iter().map(|f| format!("{:?} {}", f.level, f.message)).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn the_app_check_says_not_installed_when_there_is_no_app_and_no_opt_out() {
+        let t = tempfile::tempdir().unwrap();
+        let r = app_report(&t.path().join("u"), &t.path().join("sys"), &t.path().join("dh"), "/bin/delphi", None, &|_| false);
+        assert_eq!(r.findings.len(), 1, "{}", lines(&r));
+        assert!(r.findings[0].level == Level::Ok && r.findings[0].message.contains("not installed (optional)"));
+    }
+
+    #[test]
+    fn the_app_check_warns_about_version_quarantine_two_places_and_another_program_and_never_fails() {
+        let t = tempfile::tempdir().unwrap();
+        let (user, sys, dh) = (t.path().join("u"), t.path().join("sys"), t.path().join("dh"));
+        let mine = make_app(&user.join("Applications"), "1.2.3");
+        // Matching version, no flag, the app finds this program: all fine.
+        let r = app_report(&user, &sys, &dh, "/bin/delphi", Some("/bin/delphi"), &|_| false);
+        assert!(r.findings.iter().all(|f| f.level == Level::Ok), "{}", lines(&r));
+        // An older app, a quarantine flag, a second copy, and another program: a warning each, and no failure.
+        fs::write(mine.join("Contents/Info.plist"), plist("1.0.0")).unwrap();
+        make_app(&sys, "1.2.3");
+        let r = app_report(&user, &sys, &dh, "/bin/delphi", Some("/other/delphi"), &|p| p.starts_with(&user));
+        let text = lines(&r);
+        for want in ["version 1.0.0, but this program is 1.2.3", "quarantine flag", "installed in both", "would use /other/delphi"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        assert!(r.findings.iter().all(|f| f.level != Level::Fail), "{text}");
+        // No installed delphi, and no copy in the app: a warning; with the app's own copy: a fact.
+        let r = app_report(&user, &sys, &dh, "/bin/delphi", None, &|_| false);
+        assert!(lines(&r).contains("would find no delphi"), "{}", lines(&r));
+        fs::create_dir_all(mine.join("Contents/Resources")).unwrap();
+        fs::write(mine.join("Contents/Resources/delphi"), b"x").unwrap();
+        let r = app_report(&user, &sys, &dh, "/bin/delphi", None, &|_| false);
+        assert!(lines(&r).contains("its own copy") && !lines(&r).contains("would find no delphi"), "{}", lines(&r));
+    }
+
+    #[test]
+    fn the_app_check_names_a_link_and_the_opt_out() {
+        let t = tempfile::tempdir().unwrap();
+        let (user, sys, dh) = (t.path().join("u"), t.path().join("sys"), t.path().join("dh"));
+        fs::create_dir_all(user.join("Applications")).unwrap();
+        fs::create_dir_all(&sys).unwrap();
+        std::os::unix::fs::symlink(&sys, user.join("Applications/Delphi.app")).unwrap();
+        let r = app_report(&user, &sys, &dh, "/bin/delphi", None, &|_| false);
+        assert!(lines(&r).contains("not a real folder"), "{}", lines(&r));
+        assert!(r.findings.iter().all(|f| f.level != Level::Fail));
+        fs::remove_file(user.join("Applications/Delphi.app")).unwrap();
+        fs::create_dir_all(dh.join("app")).unwrap();
+        fs::write(dh.join("app/opt-out"), b"").unwrap();
+        let r = app_report(&user, &sys, &dh, "/bin/delphi", None, &|_| false);
+        assert!(lines(&r).contains("opted out") && !lines(&r).contains("not installed"), "{}", lines(&r));
+    }
+
+    /// The quarantine probe reads the extended attribute without starting a process (macOS).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_quarantine_flag_is_read_with_getxattr() {
+        let t = tempfile::tempdir().unwrap();
+        let f = t.path().join("f");
+        fs::write(&f, b"x").unwrap();
+        assert!(!has_quarantine(&f));
+        let (p, n) = (std::ffi::CString::new(f.to_str().unwrap()).unwrap(), std::ffi::CString::new("com.apple.quarantine").unwrap());
+        let v = b"0081;00000000;Safari;";
+        // SAFETY: valid NUL-terminated names and a buffer of the stated length.
+        let set = unsafe { libc::setxattr(p.as_ptr(), n.as_ptr(), v.as_ptr().cast(), v.len(), 0, 0) };
+        assert_eq!(set, 0, "the test could not set the attribute");
+        assert!(has_quarantine(&f));
+        assert!(!has_quarantine(&t.path().join("missing")));
     }
 }

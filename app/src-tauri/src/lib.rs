@@ -112,6 +112,8 @@ struct Daemons {
     /// The app's own version (`0.0.0` in a build that was not made for a release), for a card that says the daemon's differs.
     app_version: String,
     daemons: Vec<locate::Found>,
+    /// Whether an installed `delphi` exists, and this app's bundled one (spec 122 §10.1 item 3), for the empty state.
+    program: locate::Program,
 }
 
 /// The daemons on this machine (spec 130 §3.1), each with a summary read through `observe.state` when `summaries` is asked
@@ -120,7 +122,7 @@ struct Daemons {
 #[tauri::command(async)]
 fn daemons(app: tauri::AppHandle, bridge: State<'_, Arc<Bridge>>, summaries: Option<bool>) -> Result<Daemons, String> {
     let daemons = bridge.daemons(&home()?, summaries.unwrap_or(false));
-    Ok(Daemons { held: bridge.held(), current: bridge.current(), app_version: app.package_info().version.to_string(), daemons })
+    Ok(Daemons { held: bridge.held(), current: bridge.current(), app_version: app.package_info().version.to_string(), daemons, program: locate::program() })
 }
 
 /// Point the window at one daemon of the list `daemons` last gave (spec 130 §3.2): the bridge attaches to it again. Any other

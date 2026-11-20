@@ -26,6 +26,10 @@ pub(crate) enum Action {
     Log,
     Revoke(String),
     Grant { name: String, grant: String, remove: bool },
+    /// Keep `delphi update` and `install.sh` from installing the desktop app, for good (spec 122 §10.3). Needs no terminal.
+    OptOut,
+    /// Undo [`Action::OptOut`].
+    OptIn,
     /// Approve a pairing request by the code typed at a prompt (§13.1); `request` adds that grant to the new key.
     Approve { request: bool },
 }
@@ -69,6 +73,8 @@ pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
         [] => Action::Start,
         ["list"] => Action::List,
         ["log"] => Action::Log,
+        ["opt-out"] => Action::OptOut,
+        ["opt-in"] => Action::OptIn,
         ["revoke", name] => Action::Revoke(key(name)?),
         ["approve"] => Action::Approve { request: false },
         ["grant", name, grant] => {
@@ -78,7 +84,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
             }
             Action::Grant { name: key(name)?, grant: grant.to_string(), remove }
         }
-        _ => return Err("usage: delphi app | app list | app log | app approve [--grant request] | app revoke <name> | app grant <name> [--remove] <grant>".to_string()),
+        _ => return Err("usage: delphi app | app list | app log | app approve [--grant request] | app revoke <name> | app grant <name> [--remove] <grant> | app opt-out | app opt-in".to_string()),
     };
     let action = match (action, grant_flag.as_deref()) {
         (Action::Approve { .. }, Some("request")) => Action::Approve { request: true },
@@ -90,6 +96,53 @@ pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
         return Err("`--remove` goes with `grant`".to_string());
     }
     Ok(action)
+}
+
+/// The opt-out file (spec 122 §10.3): `<home>/app/opt-out`, empty. `install.sh` looks at the same path.
+pub(crate) fn opt_out_path(delphi_home: &Path) -> PathBuf {
+    delphi_home.join("app").join("opt-out")
+}
+
+/// Is the desktop app opted out of, for the Delphi home `delphi_home`?
+pub(crate) fn opted_out(delphi_home: &Path) -> bool {
+    opt_out_path(delphi_home).exists()
+}
+
+/// `delphi app opt-out` and `opt-in`: write or remove the opt-out file, an empty file of mode 0600 in a folder of mode 0700.
+/// Nothing is started and no daemon is spoken to. A symbolic link at the path is never followed.
+pub(crate) fn opt(action: &Action, delphi_home: &Path, out: &mut dyn std::io::Write) -> i32 {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let file = opt_out_path(delphi_home);
+    match action {
+        Action::OptOut => {
+            let made = file.parent().map(|d| std::fs::DirBuilder::new().recursive(true).mode(0o700).create(d)).unwrap_or(Ok(()));
+            let made = made.and_then(|()| std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&file).map(|_| ()));
+            match made {
+                Ok(()) => {
+                    let _ = writeln!(out, "opted out: {} exists, so `delphi update` and install.sh leave the desktop app alone. An installed app is not removed. `delphi app opt-in` undoes it.", file.display());
+                    0
+                }
+                Err(e) => {
+                    eprintln!("delphi app: could not write {}: {}", file.display(), e);
+                    1
+                }
+            }
+        }
+        _ => match std::fs::remove_file(&file) {
+            Ok(()) => {
+                let _ = writeln!(out, "opted in: {} is gone, so `delphi update` and install.sh handle the desktop app again.", file.display());
+                0
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let _ = writeln!(out, "already opted in: there is no {}.", file.display());
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi app: could not remove {}: {}", file.display(), e);
+                1
+            }
+        },
+    }
 }
 
 /// Is this a file the operator (or root) alone can change, and can it be run? A ticket is about to be handed to it.
@@ -384,7 +437,7 @@ pub(crate) fn act(client: &mut Client, action: &Action, out: &mut dyn std::io::W
             }
             Err(e) => fail(&e),
         },
-        Action::Start | Action::Log | Action::Approve { .. } => 2,
+Action::Start | Action::Log | Action::Approve { .. } | Action::OptOut | Action::OptIn => 2,
     }
 }
 
@@ -470,9 +523,36 @@ mod tests {
         for g in ["answer", "settings", "review", "curate", "console", "*", "Read"] {
             assert!(parse(&args(&format!("grant app-0a1b2c {g}"))).unwrap_err().contains("the grants are: read, request"), "{g}");
         }
-        for bad in ["revoke", "revoke ../x", "revoke app-XYZ", "grant app-0a1b2c", "grant request", "pair", "list extra", "list --remove", "--remove", "revoke app-0a1b2c --yes", "start"] {
+        assert_eq!(parse(&args("opt-out --home /h")), Ok(Action::OptOut));
+        assert_eq!(parse(&args("opt-in")), Ok(Action::OptIn));
+        for bad in ["opt-out now", "opt-in --remove", "revoke", "revoke ../x", "revoke app-XYZ", "grant app-0a1b2c", "grant request", "pair", "list extra", "list --remove", "--remove", "revoke app-0a1b2c --yes", "start"] {
             assert!(parse(&args(bad)).is_err(), "{bad:?} must not parse");
         }
+    }
+
+    /// Spec 122 §10.3 (AC-9): opt-out writes an empty 0600 file in a 0700 folder, opt-in removes it, neither needs a terminal or a
+    /// daemon, and a link at the path is not followed.
+    #[test]
+    fn opt_out_and_opt_in_write_and_remove_the_file() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("dh");
+        let mut out = Vec::new();
+        assert!(!opted_out(&home));
+        assert_eq!(opt(&Action::OptOut, &home, &mut out), 0);
+        assert!(opted_out(&home));
+        let (f, d) = (std::fs::metadata(opt_out_path(&home)).unwrap(), std::fs::metadata(home.join("app")).unwrap());
+        assert_eq!((f.len(), f.permissions().mode() & 0o777, d.permissions().mode() & 0o777), (0, 0o600, 0o700));
+        assert_eq!(opt(&Action::OptOut, &home, &mut out), 0, "twice is fine");
+        assert_eq!(opt(&Action::OptIn, &home, &mut out), 0);
+        assert!(!opted_out(&home));
+        assert_eq!(opt(&Action::OptIn, &home, &mut out), 0, "nothing to remove is not an error");
+        assert!(String::from_utf8(out).unwrap().contains("already opted in"));
+        // A link at the path is refused, and its target is untouched.
+        let target = t.path().join("victim");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, opt_out_path(&home)).unwrap();
+        assert_eq!(opt(&Action::OptOut, &home, &mut Vec::new()), 1);
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
     }
 
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
