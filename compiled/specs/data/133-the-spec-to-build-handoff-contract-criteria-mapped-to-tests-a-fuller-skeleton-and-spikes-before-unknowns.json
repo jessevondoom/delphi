@@ -1,0 +1,152 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 17,
+      "number": null,
+      "title": "Spec 133: The spec-to-build handoff contract"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 35,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 42,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 3,
+      "line": 47,
+      "number": "1.3",
+      "title": "Options considered"
+    },
+    {
+      "level": 2,
+      "line": 57,
+      "number": "2",
+      "title": "Design"
+    },
+    {
+      "level": 3,
+      "line": 59,
+      "number": "2.1",
+      "title": "The build contract (`skills/spec-driven-build/SKILL.md`, `skills/git-pr-packaging/SKILL.md`)"
+    },
+    {
+      "level": 4,
+      "line": 70,
+      "number": "2.1.1",
+      "title": "The table and lists in the pull request"
+    },
+    {
+      "level": 4,
+      "line": 79,
+      "number": "2.1.2",
+      "title": "The tracker"
+    },
+    {
+      "level": 3,
+      "line": 85,
+      "number": "2.2",
+      "title": "The skeleton (`skills/spec-authoring/templates/spec-skeleton.md`)"
+    },
+    {
+      "level": 3,
+      "line": 96,
+      "number": "2.3",
+      "title": "Authoring rules (`skills/spec-authoring/SKILL.md`)"
+    },
+    {
+      "level": 3,
+      "line": 107,
+      "number": "2.4",
+      "title": "The deferred check (recommendation R4) and its trigger"
+    },
+    {
+      "level": 2,
+      "line": 116,
+      "number": "3",
+      "title": "Authority"
+    },
+    {
+      "level": 2,
+      "line": 120,
+      "number": "4",
+      "title": "Slices (one pull request; same-spec slices, each its own commit, own trailer and own tracker row)"
+    },
+    {
+      "level": 2,
+      "line": 130,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 140,
+      "number": "6",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 150,
+      "number": "7",
+      "title": "What is not verified"
+    },
+    {
+      "level": 2,
+      "line": 156,
+      "number": "8",
+      "title": "Decisions for the operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md",
+    "sha256": "218d6fb1d1b117fa09f7fa78b7955f2e5b82d930f6349265e190b5cbcbddaad3"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 534,
+        "end_line": 6,
+        "line": 6,
+        "start": 294
+      },
+      "text": "status: approved   # by the operator, 2026-11-20, in a host session after the plan was shown: \"follow your plan and go. i'll approve specs from this plan and ratify and changes\". It takes effect when the pull request that carries it merges."
+    },
+    "sha256": "218d6fb1d1b117fa09f7fa78b7955f2e5b82d930f6349265e190b5cbcbddaad3",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "133",
+    "stem": "133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "133: The spec-to-build handoff contract: criteria mapped to tests, a fuller skeleton, and spikes before unknowns"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1702,
+      "end_line": 25,
+      "line": 25,
+      "start": 1419
+    },
+    "text": "An audit of the architect, the builder and the spec skills (host session, 2026-11-20, a Fable subagent reading main at 76da4a79, then a daemon Council `t_0001` with seats on two families) found that the specs Delphi writes are better than the contract that carries them into a build:"
+  }
+}

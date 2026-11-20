@@ -2,7 +2,7 @@
 
 # Orchestration and Council
 
-13 specs. [All groups](./index.md).
+14 specs. [All groups](./index.md).
 
 ## 003-collaboration-and-council
 
@@ -137,4 +137,14 @@ A host Council kept losing the red-team's Round 2: the ruling said "Red-Team's R
 
 ```text
 Over three Councils (`t_0002`, `t_0003`, `t_0004`, 2026-11-19 and 2026-11-20) every seat on the Gemini family failed, and each Council still printed "two families met". This spec says how Delphi stops a Gemini-carried seat from being sent more than its carrier delivers, keeps the task readable when something is cut anyway, counts a family only when a seat was heard, and keeps a seat from acting on the project.
+```
+
+## 133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns
+
+**133: The spec-to-build handoff contract: criteria mapped to tests, a fuller skeleton, and spikes before unknowns** · approved (per source at `218d6fb1d1b1`) · tier 0 · [source](../../specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md)
+
+**source excerpt, untrusted** · `specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md` line 25
+
+```text
+An audit of the architect, the builder and the spec skills (host session, 2026-11-20, a Fable subagent reading main at 76da4a79, then a daemon Council `t_0001` with seats on two families) found that the specs Delphi writes are better than the contract that carries them into a build:
 ```
