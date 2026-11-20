@@ -2,7 +2,7 @@
 
 # Specs
 
-137 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
+138 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
 
 | Spec | Title | Status | Group | Supersedes / superseded by | Summary | Source |
 | :-- | :-- | :-- | :-- | :-- | :-- | :-- |

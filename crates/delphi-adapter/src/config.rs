@@ -1578,7 +1578,7 @@ impl Config {
                 },
                 AccessPath::Harness => {
                     if e.harness.as_deref().unwrap_or("").is_empty() {
-                        errs.push(format!("endpoint `{}`: harness endpoints need `harness = \"claude\"|\"agy\"|\"codex\"` (`gemini` is accepted but the Gemini CLI no longer supports personal sign-in)", e.id));
+                        errs.push(format!("endpoint `{}`: harness endpoints need `harness = \"claude\"|\"agy\"|\"codex\"|\"copilot\"` (`gemini` is accepted but the Gemini CLI no longer supports personal sign-in)", e.id));
                     }
                 }
                 AccessPath::Api => {
@@ -2212,6 +2212,24 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
             let errs = Config::parse(&format!("{}\n{}", SAMPLE, bad)).unwrap_err().join("; ");
             assert!(errs.contains(needle), "{} -> {}", bad, errs);
         }
+    }
+
+    /// specs/132 O1, AC-1: the harness endpoint's error names every harness, `copilot` among them.
+    #[test]
+    fn a_harness_endpoint_without_a_harness_is_told_every_harness_name() {
+        let bad = "[[endpoints]]\nid = \"h\"\nfamily = \"claude\"\npath = \"harness\"\ncredential = \"harness-login\"\n";
+        let errs = Config::parse(&format!("{}\n{}", bad, SAMPLE)).unwrap_err().join("; ");
+        assert!(errs.contains("harness endpoints need") && errs.contains("\"codex\"|\"copilot\""), "{}", errs);
+    }
+
+    /// The operator's staged `agy-oss` endpoint (GPT-OSS through agy): an agy endpoint whose family is `openai` is accepted, and
+    /// a role can be mapped to it.
+    #[test]
+    fn an_agy_endpoint_serving_an_openai_model_is_accepted() {
+        let ep = "[[endpoints]]\nid = \"agy-oss\"\nfamily = \"openai\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\nmodels = { fast = \"gpt-oss-120b-medium\", workhorse = \"gpt-oss-120b-medium\", frontier = \"gpt-oss-120b-medium\" }\n";
+        let text = format!("{}\n{}", ep, SAMPLE).replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"agy-oss\"]\nrole_family = { red-team = \"openai\" }");
+        let c = Config::parse(&text).unwrap();
+        assert_eq!(c.endpoints.iter().find(|e| e.id == "agy-oss").map(|e| e.family.as_str()), Some("openai"));
     }
 
     #[test]
