@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { fixtureBridge, fixtureDaemons } from '../src/bridge.ts';
 import {
-  INSTALL_COMMAND, START_COMMAND, agoWords, cardOf, cardState, cards, orderDaemons, showStart, startCommand, summaryLines, switchable, tokenWords, versionNote,
+  INSTALL_COMMAND, START_COMMAND, selfInstallCommand, agoWords, cardOf, cardState, cards, orderDaemons, showStart, startCommand, summaryLines, switchable, tokenWords, versionNote,
   type Daemon, type DaemonList, type Summary,
 } from '../src/daemons.ts';
 import { Cards, Start } from '../src/screens/Start.tsx';
@@ -134,4 +134,20 @@ test('nothing on the start screen moves, and the reduce-motion rule says so (AC-
   assert.match(block, /@media \(prefers-reduced-motion: reduce\) \{ \.start \*, \.switcher \*[^}]*animation: none !important; transition: none !important/);
   const html = renderToStaticMarkup(<Start list={list(fixtureDaemons(NOW))} now={NOW} conn={null} onChoose={() => {}} error="" />);
   assert.ok(!/style="[^"]*(animation|transition)/.test(html) && !/class="[^"]*(spin|pulse|blink)/.test(html));
+});
+
+test('with no installed delphi and a bundled one, the empty state names its self-install command (spec 122 AC-11)', () => {
+  const bundled = '/Applications/Delphi.app/Contents/Resources/delphi';
+  const none = { ...list([]), program: { installed: false, bundled } };
+  const html = renderToStaticMarkup(<Start list={none} now={NOW} conn={null} onChoose={() => {}} error="" />);
+  assert.ok(html.includes('Install the delphi command'));
+  assert.ok(html.includes(`&quot;${bundled}&quot; self-install`));
+  assert.equal((html.match(/>Copy command</g) ?? []).length, 3, 'a copy button for each command');
+  // An installed delphi, or no bundled copy: no offer.
+  for (const program of [{ installed: true, bundled }, { installed: false, bundled: null }, undefined]) {
+    assert.ok(!renderToStaticMarkup(<Start list={{ ...none, program }} now={NOW} conn={null} onChoose={() => {}} error="" />).includes('Install the delphi command'));
+  }
+  // A path a shell would read inside double quotes is single-quoted; a relative one is not offered.
+  assert.equal(selfInstallCommand({ installed: false, bundled: '/a b/$x/delphi' }), "'/a b/$x/delphi' self-install");
+  assert.equal(selfInstallCommand({ installed: false, bundled: 'delphi' }), null);
 });

@@ -167,14 +167,14 @@ Start the desktop app and pair it; list, revoke and grant its keys.
 
 ```
   delphi app [--workspace <name>] [--home <dir>]
-  delphi app list | log
+  delphi app list | log | opt-out | opt-in
   delphi app revoke <name>
   delphi app grant <name> [--remove] <grant>
 ```
 
-Run it in a terminal: starting the app from one is what vouches for it, and nothing is asked.
-A paired app reads, and asks only for what its grants list (read, request). `revoke` closes its
-sessions at once. The app is DELPHI_APP, else the build beside this program, else /Applications.
+Run it in a terminal (opt-out and opt-in need none): starting the app from one vouches for it; nothing is asked.
+A paired app reads and asks only for what its grants list (read, request). `revoke` closes its sessions at once.
+The app is DELPHI_APP, else the build beside this program, else /Applications. opt-out: update leaves it alone.
 
 ### `delphi hooks`
 
@@ -754,6 +754,20 @@ It runs no model; the judge and the contradiction search are the daemon's. It lo
 page's DOI up at doi.org, as the daemon does; `--offline` skips that.
 
 ## Maintain
+
+### `delphi self-install`
+
+Put this program on your PATH, as install.sh does.
+
+```
+  delphi self-install
+```
+
+Copies the running delphi to ~/.local/bin/delphi (or $DELPHI_INSTALL_DIR/delphi): written under a temporary name,
+mode 0755, then moved into place. It never writes over a symbolic link or over a file that is not a delphi
+(a regular program holding delphi's own text; the file is read, never run), and prints what it did. The desktop
+app carries a copy of delphi and shows this command, to be run from that copy, when no delphi is installed.
+Needs no terminal. Refused inside an agent seat.
 
 ### `delphi update`
 

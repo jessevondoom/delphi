@@ -120,7 +120,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md",
-    "sha256": "b0d5d3405feeeb46d6a224a2314f59d96c74bded53c05dd4b3a72adf27d886d3"
+    "sha256": "7b08b2d27ba6af710a0171055e7fc2fe53a89ce2e030c7a3025bd138a58aa350"
   },
   "source_status_at_hash": {
     "line": {
@@ -133,7 +133,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-16, in a host session. Asked \"what's the shortest path to distributing a compiled binary for mac and linux, just like we are for the TUI?\", shown a two-step plan (step 1: build and publish the app in the release; step 2: install and update it like the console) and its estimate in hours, the operator answered \"do step one and step two, but macos only and only on release\". The spec was written from those words; the operator was shown the plan and the estimate, not this text."
     },
-    "sha256": "b0d5d3405feeeb46d6a224a2314f59d96c74bded53c05dd4b3a72adf27d886d3",
+    "sha256": "7b08b2d27ba6af710a0171055e7fc2fe53a89ce2e030c7a3025bd138a58aa350",
     "word": "approved"
   },
   "spec": {

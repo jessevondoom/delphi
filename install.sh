@@ -9,6 +9,8 @@
 #   --dir DIR          (DELPHI_INSTALL_DIR)  install into DIR (default: ~/.local/bin)
 #   --no-setup                               do not offer to run `delphi setup` afterwards
 #   --no-app           (DELPHI_NO_APP=1)     on macOS, do not install the desktop app in ~/Applications
+#                                            (`delphi app opt-out` makes that last: the file <home>/app/opt-out, home being
+#                                            $DELPHI_HOME or ~/.delphi, is looked for here and by `delphi update`)
 # Maintainers / mirrors: DELPHI_API (releases API base) and DELPHI_DOWNLOAD (asset base URL) override the defaults.
 # A fork: DELPHI_REPO=owner/repo installs that GitHub repository's releases instead (specs/074 section 11). The checksum and
 # the build attestation are then that repository's, so you are trusting it and not the project.
@@ -63,7 +65,7 @@ while [ $# -gt 0 ]; do
     --dir) [ $# -ge 2 ] || die "--dir needs a value"; DIR="$2"; shift 2 ;;
     --no-setup) SETUP=0; shift ;;
     --no-app) APP=0; shift ;;
-    -h|--help) sed -n '2,22p' "$0" 2>/dev/null || true; exit 0 ;;
+    -h|--help) sed -n "2,24p" "$0" 2>/dev/null || true; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
@@ -166,6 +168,11 @@ say "Installed $("$DIR/delphi" --version) to $DIR/delphi"
 
 # The desktop app (specs/122 section 3), on macOS only: from the same archive, so it passed the same checks. A release from
 # before it has none. It goes to ~/Applications, where `delphi app` and `delphi update` look; nothing here starts it.
+OPT_OUT="${DELPHI_HOME:-$HOME/.delphi}/app/opt-out"
+if [ "$os" = Darwin ] && [ "$APP" -eq 1 ] && [ -e "$OPT_OUT" ]; then
+  say "Leaving the desktop app alone: $OPT_OUT exists (\`delphi app opt-in\` removes it)."
+  APP=0
+fi
 if [ "$os" = Darwin ] && [ "$APP" -eq 1 ]; then
   top="delphi-$VERSION-$target"
   if tar -tzf "$tmp/$name" "$top/Delphi.app/Contents/MacOS/delphi-app" >/dev/null 2>&1; then

@@ -4,13 +4,58 @@ A window on what your Delphi team is doing: who is working, a council as it deli
 
 ## Install it
 
-On macOS, a release carries the app ([`specs/122`](../../specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md); releases made before that spec do not). It is in the same archive as `delphi`, so it passes the same checksum and attestation:
+The one-line installer is the way to get the app. It writes files that macOS puts no quarantine flag on, so the app opens without a warning:
+
+```sh
+curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh
+```
+
+On macOS a release carries the app ([`specs/122`](../../specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md); releases made before that spec do not). It is in the same archive as `delphi`, so it passes the same checksum and attestation:
 
 - **`install.sh`** puts it at `~/Applications/Delphi.app` (`--no-app`, or `DELPHI_NO_APP=1`, leaves it out).
 - **`delphi update`** replaces it there with the release's, keeps the one it replaced as `~/Applications/.delphi-app.prev`, and `delphi update --rollback` puts that back. It installs the app there if it is missing; `DELPHI_NO_APP=1` leaves the app alone. A running window keeps running; the next start is the new build.
 - **Homebrew** keeps it inside the formula; `brew info delphi` gives the one line that links it into `~/Applications`. `install.sh` and `delphi update` leave such a link alone.
 
 Nothing installs or updates it on Linux yet: build it yourself (below). If `/Applications/Delphi.app` is also there, `delphi app` starts that one first; remove it, or set `DELPHI_APP`.
+
+### Not wanting it: the opt-out
+
+`DELPHI_NO_APP=1` has to be set each time. To keep the app off for good, run:
+
+```sh
+delphi app opt-out     # writes <home>/app/opt-out, an empty file (mode 0600) in a folder of mode 0700
+delphi app opt-in      # removes it
+```
+
+While the file exists (`$DELPHI_HOME/app/opt-out`, `~/.delphi/app/opt-out` by default), `install.sh` and `delphi update` leave the app alone and say so in one line. An app that is already installed is not removed. Neither command needs a terminal; both are refused inside an agent seat. `delphi doctor` (check `24 app`, macOS only) reports the opt-out.
+
+### The program inside the app
+
+The app carries its own copy of `delphi` in `Delphi.app/Contents/Resources/delphi`, so it is never a dead end ([`specs/122`](../../specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md) §10). The app looks for your installed `delphi` first and uses its own copy only when it finds none. With none installed, its empty state says "Install the delphi command" and shows a command to paste into a terminal:
+
+```sh
+"/Applications/Delphi.app/Contents/Resources/delphi" self-install
+```
+
+`delphi self-install` copies the program that runs it to `~/.local/bin/delphi` (or `$DELPHI_INSTALL_DIR/delphi`), as `install.sh` does: it writes under a temporary name, sets mode 0755 and moves the file into place, so a reader sees the old program or the new one. It never writes over a symbolic link, or over a file that is not a `delphi` (it reads the file and starts nothing, so it takes a regular program that holds Delphi's own text for one; move anything else away first). It prints what it did and, if the folder is not on your `PATH`, the line to add. It needs no terminal and is refused inside an agent seat. The app copies nothing itself, and `delphi update` replaces the whole bundle, so the bundled copy always matches the app.
+
+### The disk image (arrives with the disk image)
+
+A later release adds a disk image, `Delphi-vX-<target>.dmg`, as a fallback for a machine where you do not want to run the installer. This section describes it ahead of that release; until then there is no image to download.
+
+There is no Apple Developer ID for Delphi yet, so the image is not notarized. A disk image downloaded in a browser, and the app in it, carry macOS's quarantine flag, and macOS will not open the app the first time:
+
+1. Open the image and drag `Delphi.app` onto the `Applications` link.
+2. Try to open `Delphi.app`; macOS says it cannot verify it. Close that message.
+3. Open **System Settings**, then **Privacy & Security**, scroll to the message about Delphi and choose **Open Anyway**.
+
+Or remove the flag in a terminal:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Delphi.app
+```
+
+`install.sh` and `delphi update` never read the image. `delphi doctor` says when the app carries the flag.
 
 ## Build it
 
@@ -24,12 +69,12 @@ That installs the window's pinned dependencies without running their install scr
 
 The app is at `target/app/release/bundle/macos/Delphi.app`. Copy it where you keep applications.
 
-It is not signed with a developer certificate. An app you build yourself, or one `install.sh` or `delphi update` wrote, opens normally. One downloaded in a browser or copied from another machine is stopped by macOS the first time: open it from the Finder with a right-click and **Open**.
+It is not signed with a developer certificate. An app you build yourself, or one `install.sh` or `delphi update` wrote, opens normally. One downloaded in a browser or copied from another machine is stopped by macOS the first time (see the disk image section above for how to open it).
 
 ## What it needs
 
 - **A running daemon.** Start Delphi in a terminal (`delphi chat`). The app attaches by itself and attaches again if the daemon restarts. With no daemon it says so and waits.
-- **Your `delphi`.** The app asks it where the daemon is (`delphi daemon where`). It looks in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`; set `DELPHI_EXE` to the full path if yours is elsewhere. `DELPHI_HOME` and `DELPHI_WORKSPACE` are honoured (the workspace is `default` otherwise).
+- **Your `delphi`.** The app asks it where the daemon is (`delphi daemon where`). It looks in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, then in its own bundle; set `DELPHI_EXE` to the full path if yours is elsewhere. `DELPHI_HOME` and `DELPHI_WORKSPACE` are honoured (the workspace is `default` otherwise).
 
 ## What it shows
 
@@ -67,9 +112,10 @@ delphi app grant <name> <grant>          # give a key a grant
 delphi app grant <name> --remove <grant> # take one away; the key's open sessions are closed
 delphi app revoke <name>                 # remove a key; its open sessions are closed at once
 delphi app log                           # what paired, what was refused, what was revoked or granted
+delphi app opt-out | opt-in              # keep install.sh and delphi update from installing the app, or undo that
 ```
 
-- Every one of these is run by you, in a terminal. They refuse when their input is not a terminal and inside an agent seat, and the daemon holds the same line: it gives a pairing ticket, revokes and grants only for a client attached to a terminal.
+- Every one of these is run by you, in a terminal (`opt-out` and `opt-in` need none). They refuse when their input is not a terminal and inside an agent seat, and the daemon holds the same line: it gives a pairing ticket, revokes and grants only for a client attached to a terminal.
 - `delphi app` asks the daemon for a ticket (good once, for 60 seconds) and starts the app with it on a pipe. Nothing is asked of you. It prints the key's short name (`app-1a2b3c`) and its grants. It starts the app named by `DELPHI_APP` (the executable, or a `Delphi.app`); otherwise the build beside your `delphi` in a source checkout (`target/app/release/…`), then `/Applications/Delphi.app`, then `~/Applications/Delphi.app`. It never starts a program found under the folder you happen to be in.
 - A key is recorded in `operator/app-keys.json` under your Delphi home, which no agent can read or write. A key unused for 180 days is removed.
 - The grants are `read` (what the app reads today) and `request`. A key gets both when it is paired, and gets a new grant only when you give it: an update of the app or of Delphi never adds one.
