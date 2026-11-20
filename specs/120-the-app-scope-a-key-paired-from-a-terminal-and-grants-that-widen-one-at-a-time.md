@@ -172,3 +172,52 @@ The operator's words, in a host session on 2026-11-15, after the trade-offs of t
 4. When the app is signed with a stable identity, the keychain becomes the store on macOS again, by a later amendment that also moves an existing key from the file into the keychain and deletes the file.
 5. A key already in the keychain from a build before this amendment is read once, written to the file and removed from the keychain; when it cannot be read (the system's dialog was refused), the app falls back to read-only and the terminal's `delphi app` pairs it again.
 6. Slice: **K3b**, the key file on every system and the one-time move (2 to 3 hours), built before K5.
+
+## 13. Amendment (operator, 2026-11-19): pairing by a code the operator types, and the `update` grant
+
+The operator's words, in a host session on 2026-11-19, after a plan was set out: "code-approved pairing is acceptable and encouraged", "could we pull the update grant into scope?" and "follow your recommendation and start building. use subagents if you can". The recommendation: pair by a short code the operator types at a terminal, give `read` only at that pairing, and add an `update` grant that raises a card for each update, with a standing choice (`--auto`) the operator makes at a terminal. The operator was shown the plan, not this text. Extends §2 (pairing) and §5 (grants); changes no other rule of this spec.
+
+### 13.1 Pairing by code (slice P1)
+
+1. **Request.** An app that has no key sends `app.pair_request {public_key, app_version}` on the app socket, as a third method an unauthenticated connection may call (beside `app.pair` and `app.hello`). The daemon keeps the request pending and replies `{code, expires_in}`; the code is 7 characters from an alphabet with no look-alikes (`K7Q-4M2` style), made from the daemon's random source, and bound to this public key and this connection's instance.
+2. **Show.** The app shows the code in its window with the words "Waiting for you to approve this at your terminal". It cannot approve, widen or skip.
+3. **Approve.** At a terminal, `delphi app approve` lists the pending requests (the key's fingerprint, the app's version, how long ago) and asks the operator to **type the code shown in the app's window**. A matching code records the key. Pressing Enter alone approves nothing: a local process that files a request and waits for an Enter would not be approved. The same approval is offered as a card in the console. Both need a terminal: the daemon-side test is the one `auth.pair_ticket` uses (`at_terminal(peer.pid)`) and the CLI refuses with no terminal and inside an agent seat, as `delphi app` does (§2 item 1). No agent can approve.
+4. **Limits.** At most 3 requests pending, each good for 2 minutes and one approval; at most 6 requests an hour; past these the request is refused with the limit named and an `app.refused` event is written. A second request from the same public key replaces its first. A wrong code is a refusal; 3 wrong codes against one request cancel it.
+5. **Grants.** A key approved by code holds `read` only. `delphi app approve --grant request` (typed at the same prompt) or a later `delphi app grant <name> request` gives `request`. This answers §11 item 1 for this path; the ticket path of §2 is unchanged and gives `read` and `request`.
+6. **Events.** `app.pair_requested` and `app.pair_approved` join `APP_EVENTS`; `delphi app log` prints them with the key's name.
+7. **The key is the same key.** Once recorded, the app proves it as §3 says; the request path changes only how a key comes to be recorded.
+
+### 13.2 The `update` grant (slice U1)
+
+1. **Not given at pairing, and never through an upgrade** (§5 item 2). `delphi app grant <name> update` at a terminal gives it; `--remove` takes it away. `delphi app grant <name> update --auto` records a standing authorization (§13.2 item 6).
+2. **One method, `app.update_apply`, no parameters.** The app cannot name a version, URL, channel or path. The daemon applies only what `delphi update` would apply on its own.
+3. **The same checks as `delphi update`, no more.** That is the SHA-256 of the tarball against the release's `.sha256` asset and a run of the new binary's `--version`, and the app rules of spec 122 §4. **There is no attestation check in the code today** (`gh attestation verify` is documented, not run): an update from the app is exactly as authentic as an update at a terminal, and a compromised release would reach a machine either way.
+4. **How.** The `selfupdate` module is in the `delphi` crate and the daemon is in `delphi-engine`; the daemon does not call it. The daemon starts the program it is running as (`std::env::current_exe`, checked to be the installed `delphi`) with the arguments `update --no-restart --workspace <name> --home <home>`, on a detached child with no terminal, a private temporary directory and a minimal environment. This is a new process-start site: it is listed in `crates/delphi/tests/spawn_sites.toml` (a gate file) with this clause named, and nothing else may start it.
+5. **A card for each update** unless a standing authorization says otherwise: the daemon raises a Red approval card "Delphi.app asks to update Delphi to vX.Y.Z" (the release `delphi update --check` found, named by the daemon, never by the app), answered in the console or by the relay as any card is. The app shows "waiting for approval". The app cannot answer it. A card with no answer in 10 minutes is denied.
+6. **Standing authorization (`--auto`).** The operator, at a terminal, may record that this key's update requests skip the card. It is a visible record in `operator/app-keys.json` (`delphi app list` shows `update (auto)`), an `app.granted` event names it, and `--remove` or `delphi app revoke` ends it. It never covers anything but `app.update_apply`.
+7. **Limits.** Only a version newer than the installed one, on the stable channel; no downgrade (`--rollback` and `--allow-downgrade` stay at a terminal); one apply an hour per key; none while one runs; an update does not run while a `delphi update` or an install holds the update lock.
+8. **After.** The daemon does not restart itself. `delphi update --no-restart` leaves running daemons on the old code; the daemon sets a `restart_pending` fact its next presence-file rewrite and its `app.update_state` events carry, and the start screen of spec 130 shows it with "restart when idle" as a copy button for `delphi daemon restart`. The running app keeps running; its next start uses the new build (spec 122 §4 item 3).
+9. **Record.** Every request writes an `app.request` event (key name, method) and the outcome (`app.updated` with the versions, or `app.update_refused` with the reason). `delphi app log` prints them.
+10. **The gate file.** `crates/delphi/tests/app_grants.toml` gains a third `[[grant]]`, `update`, with the one method; the tests that hold the table (`app_grants.rs`, `app_keys.rs`: the read and `request` rows are unchanged, `GRANTS` and the method counts grow by one) move with it. The pull request changes a gate file and a spawn-site file, so the operator merges it at a terminal.
+11. **What a stolen key can do with this grant.** Ask the daemon to install the latest stable release, once an hour, with or without a card; nothing else. That is churn and, if a release were compromised, a faster path to it. It is why the grant is off by default and the card is on by default.
+
+### 13.3 Acceptance criteria
+
+- **AC-12.** A request filed by a process that then waits is not approved by an Enter at the terminal; only the code typed.
+- **AC-13.** `delphi app approve` refuses with no terminal and inside an agent seat, and the daemon refuses an approve that did not come from a controlling terminal.
+- **AC-14.** A fourth pending request, a seventh in an hour, a third wrong code, and an expired request are each refused with the limit named, with an `app.refused` event.
+- **AC-15.** A key approved by code holds `read` and nothing else; `request` comes only from the prompt's flag or `delphi app grant`.
+- **AC-16.** `app.update_apply` on a key without `update` is refused (the table test); with `update`, it carries no parameter and a call with any is refused.
+- **AC-17.** Without `--auto`, the call raises a Red card naming the release the daemon found, and nothing is changed until it is approved at a terminal or the relay; a denied or unanswered card changes nothing.
+- **AC-18.** The daemon's only new spawn is the clause named in `spawn_sites.toml`, with the argument list of §13.2 item 4 and nothing taken from the app.
+- **AC-19.** A release no newer than the installed one, or a second call within the hour, is refused with the reason.
+- **AC-20.** After an apply, `delphi app log` shows the request and the outcome, and the start screen shows the restart-pending fact.
+
+### 13.4 Slices
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| P1 | `app.pair_request`, the pending list, `delphi app approve`, the console card, events, the app's code screen | 8-12 |
+| U1 | the `update` grant, `app.update_apply`, the spawn site, the card, `--auto`, `restart_pending`, the app's banner and button | 10-14 |
+
+P1 changes `server.rs`'s handshake and `APP_ADMIN_METHODS`. U1 changes two gate files and is merged by the operator at a terminal; it needs a red-team pass before merge (spec 120 §9).
