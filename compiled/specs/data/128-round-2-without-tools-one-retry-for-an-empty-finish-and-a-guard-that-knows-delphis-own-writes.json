@@ -1,0 +1,134 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 42,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 49,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 53,
+      "number": "2",
+      "title": "The changes"
+    },
+    {
+      "level": 3,
+      "line": 55,
+      "number": null,
+      "title": "S1. A seat that reads peer words has no tools (daemon Council)"
+    },
+    {
+      "level": 3,
+      "line": 64,
+      "number": null,
+      "title": "S2. One retry for an empty finish, and the evidence"
+    },
+    {
+      "level": 3,
+      "line": 70,
+      "number": null,
+      "title": "S3. The checkout guard ignores what Delphi wrote itself"
+    },
+    {
+      "level": 2,
+      "line": 77,
+      "number": "3",
+      "title": "Authority invariants (what the tests prove)"
+    },
+    {
+      "level": 2,
+      "line": 87,
+      "number": "4",
+      "title": "Slices (one pull request; same-spec slices, each its own commit, own trailer and own tracker row)"
+    },
+    {
+      "level": 2,
+      "line": 98,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 111,
+      "number": "6",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 122,
+      "number": "7",
+      "title": "What is not verified"
+    },
+    {
+      "level": 2,
+      "line": 129,
+      "number": "8",
+      "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "9",
+      "title": "Options considered"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md",
+    "sha256": "28649453642268b058fe4f79405e7caf12b3d5ba8b929820015760322d1f18f6"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 575,
+        "end_line": 6,
+        "line": 6,
+        "start": 281
+      },
+      "text": "status: approved   # by the operator, 2026-11-19, in a session after draft pull request #792 was shown: \"i agree with your recommendations. the spec is approved. begin building\". OD-1 to OD-4 of section 8 take their recommendations. It takes effect when the pull request that carries it merges."
+    },
+    "sha256": "28649453642268b058fe4f79405e7caf12b3d5ba8b929820015760322d1f18f6",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "128",
+    "stem": "128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2373,
+      "end_line": 25,
+      "line": 25,
+      "start": 2108
+    },
+    "text": "A host Council kept losing the red-team's Round 2: the ruling said \"Red-Team's Round 2 could not be read\" and escalated. Spec 099 fixed one reason (a valid critique followed by prose). This is another reason, and a second one that removed the red-team from Round 1."
+  }
+}

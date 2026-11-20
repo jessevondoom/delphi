@@ -145,7 +145,10 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         e.to_string()
-    })
+    })?;
+    // Delphi wrote this file itself: the `agy` checkout guard must not blame a seat that ran at the same time (`specs/128` S3).
+    crate::own_writes::note(path, bytes);
+    Ok(())
 }
 
 /// Who asked (§2.2): the operator, a Delphi role, or a host and the model it says it runs. A label, and nothing more.
@@ -970,6 +973,18 @@ pub fn render_due(due: &[(Topic, Value, String)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `specs/128` S3: the one writer of a topic's files tells the own-writes ledger, which the `agy` checkout guard reads.
+    #[test]
+    fn the_writer_notes_what_it_wrote_in_the_own_writes_ledger() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("research/topics/t-9/answer.md");
+        let before = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
+        write_atomic(&p, b"an answer").unwrap();
+        assert!(crate::own_writes::holds(&p, before));
+        std::fs::write(&p, "changed").unwrap();
+        assert!(!crate::own_writes::holds(&p, before), "no longer what the writer wrote");
+    }
 
     fn begin<'a>(question: &'a str, run_id: &'a str) -> Begin<'a> {
         Begin { question, asked_by: Asker::host("host:claude-code/some-model"), project: None, depth: Depth::Survey, run_id }
