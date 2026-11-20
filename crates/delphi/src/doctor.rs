@@ -535,6 +535,11 @@ fn check_host_plugin(home: &Path, ws: &Workspace, r: &mut Report) {
             r.warn("15 host-plugin", "claude-code adapter", format!("{detail}. Fix: `claude plugin update delphi@delphi`"));
         }
     }
+    // Spec 126 §6: the close sources the operator's hosts have, from the capabilities map. Information, never a failure: a missing
+    // group is the operator's to connect, and a missing map is simply not reported.
+    if let Some(map) = delphi_engine::hostmap::load(home) {
+        r.push(Level::Ok, "15 host-plugin", "close sources", delphi_engine::hostmap::reach_line(&map));
+    }
     let sock = delphi_core::spawn::layout(home, &ws.dir).ok().map(|l| l.host_sock);
     host_chain(&ws.dir, sock.as_deref(), &probe_socket, &checks, r);
 }
