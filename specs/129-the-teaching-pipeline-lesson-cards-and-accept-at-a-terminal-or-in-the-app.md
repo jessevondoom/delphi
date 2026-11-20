@@ -117,7 +117,7 @@ A **card** is a note, a proposal or a request that waits for the operator, shown
 
 1. **In a host session.** The `delphi` skill tells the host: when the operator says to teach, remember or learn something for a role, call `propose_note` with the lesson as `T: D: [F:] [G:]`, label `teach`, and say that a card now waits, naming its ref and the two places to accept it. The host never says the lesson is learned. If the goal is not plain from the operator's words, the host asks once and writes the answer into `G:`; if the operator gives none, `G: none given`.
 2. **At a terminal.** `delphi teach <role> "<text>" [--goal "<why>"] [--scope operator]`. It shows the lesson as it will be written and writes it after the operator types `yes` (there is no `--yes`). The operator's own typing at a terminal is the card and the accept in one act; origin `operator-terminal`.
-3. **In the app.** A composer for a role, a lesson and an optional goal (S5). Origin `operator-app`.
+3. **In the app: not in the first cut** (OD-8). A composer for a role, a lesson and an optional goal (`app.lesson_teach`, origin `operator-app`) is deferred behind its own red-team pass (section 10.3). In the first cut the app accepts a card that exists, and may edit its text at the accept (section 6 item 2).
 
 ### 5.2 A role asks to be taught
 
@@ -146,7 +146,7 @@ In v1 exactly one signal creates a suggestion: **a host note reported by two or 
 ## 7. What the operator sees
 
 - **Terminal:** `delphi learn list` shows each card with kind, role, goal, origin, recurrence and expiry, and the exact command to accept it. A new `delphi learn lessons [<role>]` lists what each role carries with its provenance and counts. `delphi learn unteach <role> <lesson id>` retires one (section 8).
-- **App:** an inbox of waiting cards, a per-role list of lessons with their goal, origin, age and counts, the composer, and unteach. Opening it needs the `review` grant for the actions and `read` for the lists.
+- **App:** an inbox of waiting cards, a per-role list of lessons with their goal, origin, age and counts, and unteach (no composer in the first cut, OD-8). Opening it needs the `review` grant for the actions and `read` for the lists.
 - **Host:** at session start the brief (spec 105 §3) gains one line of fixed words and a count, `N lesson cards wait for review (delphi learn list)`, and no text from any card. `recall_sessions` is unchanged.
 - **Expiry is visible.** A provisional note shows how many days it has left everywhere it is listed; a card with seven days or fewer is marked.
 
@@ -200,13 +200,13 @@ In v1 exactly one signal creates a suggestion: **a host note reported by two or 
 | S3 | `G:` and the goal in provenance; `delphi teach`; `learn lessons`; `unteach`; the card view in `learn list`; the Rule-of-25 and conflict messages | S0 | 10-14 |
 | S4a | a probe, no product code: can a process running as the operator answer a dialog the daemon shows on macOS without the screen-control permission? (section 6 item 9 (ii)) | S0 | 2-3 |
 | S4 | the keep logic into the engine; daemon methods for the `review` grant, with per-connection arming (`delphi app arm`, `app.arm`), the limit and the digest line; the grant and its gate-file entry (a gate-changing path, so the operator merges it at a terminal) | S1, S2, S3 | 16-22 |
-| S5 | the app: inbox, per-role lessons, composer, unteach, actions; the read methods | S4 | 14-20 |
+| S5 | the app: inbox, per-role lessons, unteach, actions (accept, edit and accept, not this); the read methods. No composer (OD-8) | S4 | 14-20 |
 | S6 | the `delphi` skill lines (teach, ask), the brief's count line | S3 | 4-6 |
 | S7 | `lesson.served` and the counts of section 8 | S3 | 6-10 |
 
 - **S3's exit is a live proof,** operator-run: teach a lesson, accept it at a terminal, confirm `pack_hash` changed and the next `get_agent` for the role carries it, then unteach it. If a real model has never called `propose_note` with a `teach` label by then, that is recorded. Before S4 starts, the numbers are read again: how many host notes recur and how many cards the operator kept at the terminal in two weeks. The order is terminal accept (S3), then the app's accept (S4, S5), with the `review` grant last of all.
 - **S4 and S5 do not start until S1 and S2 are merged.** The app becomes a place that accepts lessons; it must not be lockable or leave work running after a revoke.
-- **Deferred, in this order of likelihood:** the signals of section 5.3; a mirror of counted evidence and a role's legibility card; teaching a skill; the app as the operator's working place (OD-5); an in-chat accept, only if measured friction justifies it and a verification that does not depend on a model exists.
+- **Deferred, in this order of likelihood:** the signals of section 5.3; a mirror of counted evidence and a role's legibility card; the typed composer in the app (`app.lesson_teach`, OD-8, after its own red-team pass); teaching a skill; the app as the operator's working place (OD-5); an in-chat accept, only if measured friction justifies it and a verification that does not depend on a model exists.
 
 ## 13. Known limits, and what is not verified
 
