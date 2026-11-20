@@ -33,6 +33,7 @@ Agents improve by carrying better standing instructions with provenance, chosen 
 | 2026-11-20 | Look into the Gemini seat failures before work starts; the operator said yes to three short test calls | section 5 below |
 | 2026-11-20 | **OD-9: the recommendation.** Terminal `yes` arms `review` in v1; the daemon-shown macOS confirmation is probed in S4a and preferred if it holds; operator-scope accepts need an arming no older than five minutes | section 6 items 8 and 9, OD-9 |
 | 2026-11-20 | "merge 793": PR #793 to be merged as a draft spec so a Council can read it from the main checkout | the merge itself is the operator's act, run with the operator's words |
+| 2026-11-20 | The merge flow refused a draft spec spanning more than its bounded exemption; the operator then said **"approve 129 and add the trailer"**: spec 129 is `status: approved`, `approved_by: operator (2026-11-20)`, commits carry `Implements-Spec: specs/129-*.md`. No Council has read the text; a Council and the spec 120 §5 red-team pass remain required before S4; S1 to S3 may start | frontmatter, sections 12 and 15 |
 
 ## 3. What changed in the spec since the first draft
 
@@ -50,7 +51,7 @@ Agents improve by carrying better standing instructions with provenance, chosen 
 
 | Order | Slice | Gate before it starts | Exit |
 | :-- | :-- | :-- | :-- |
-| 0 | A Council that read the spec text, with a working red-team seat; operator approval (OD-1 to OD-9) | the Gemini fix below | a ruling with no unread seat, and the approval |
+| 0 | Operator approval (**given 2026-11-20**, without a Council that read the text); a Council that reads it, with a working red-team seat, is still advised before S4 | the Gemini fixes (a separate spec in draft) | the approval merged; a Council ruling with no unread seat before S4 |
 | 1 | S1 lockout replaced | spec approved | flood test passes |
 | 1 | S2 revoke cancels running work | spec approved | race test passes; page-rebuild cancel premise checked |
 | 1 | S3 `G:`, `delphi teach`, `learn lessons`, `unteach`, card view | spec approved | operator-run live proof (teach, accept, pack changed, unteach); two weeks of numbers |

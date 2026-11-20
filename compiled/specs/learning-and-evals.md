@@ -55,9 +55,9 @@ _No standard scope section; open the spec._
 
 ## 129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app
 
-**129: The teaching pipeline: lesson cards, and accept at a terminal or in the app** · draft (per source at `74b495fdb9a4`) · tier 0 · [source](../../specs/129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app.md)
+**129: The teaching pipeline: lesson cards, and accept at a terminal or in the app** · approved (per source at `ea5d5d26d7c0`) · tier 0 · [source](../../specs/129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app.md)
 
-**source excerpt, untrusted** · `specs/129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app.md` line 24
+**source excerpt, untrusted** · `specs/129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app.md` line 25
 
 ```text
 The operator wants agents to improve with their guidance: to say "remember this" or "learn this" to a particular role, to be asked why when the reason is not plain, to have the agent say what it is unsure of, and to have the system suggest lessons from what happens. All of this changes what a role carries into its next task, with provenance, chosen or confirmed by the operator. It does not change a model's weights.

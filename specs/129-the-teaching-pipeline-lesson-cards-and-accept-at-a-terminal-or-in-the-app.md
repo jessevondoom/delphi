@@ -3,7 +3,8 @@ id: spec-129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-t
 title: "129: The teaching pipeline: lesson cards, and accept at a terminal or in the app"
 author: architect
 timestamp: 2026-11-20T00:00:00Z
-status: draft   # a proposal, not permission to build (AGENTS.md). Written with the operator over one session; it has had no Council and no red-team pass of its own.
+status: approved   # by the operator, 2026-11-20, in a session after the draft pull request (#793) was shown and its decisions (OD-1, OD-7, OD-8, OD-9) were given: "approve 129 and add the trailer". NO Council has read this text: t_0004 could not open the file and its red-team seat gave no valid answer, so the operator approved on the work plan and the decisions, not on a review of this text. The open decisions OD-2 to OD-6 take their recommendations unless the operator says otherwise. The red-team pass spec 120 section 5 names stays required before S4.
+approved_by: operator (2026-11-20)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, learning, lessons, memory, hosts, app, ratification, cards]
 
 # Spec 129: The teaching pipeline: lesson cards, and accept at a terminal or in the app
 
-> **Status: draft.** Nothing here is approved or built. It follows two Council runs on earlier drafts of the idea (`t_0002`, `t_0003`, section 14) and a measured first phase (section 3).
+> **Status: approved by the operator, 2026-11-20** (see the frontmatter), without a Council that read this text. Nothing here is built; the red-team pass of spec 120 section 5 is still required before S4. It follows two Council runs on earlier drafts of the idea (`t_0002`, `t_0003`, section 14) and a measured first phase (section 3).
 > **Extends:** [`specs/031`](031-layered-learning-and-training-mode.md) (the operator layer, staging, ratification), [`specs/108`](108-closing-the-learning-loop-for-host-sessions.md) (what a host session leaves, `delphi learn keep`), [`specs/116`](116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md) (the provisional tier).
 > **Amends, from its approval:** [`specs/120`](120-the-app-scope-a-key-paired-from-a-terminal-and-grants-that-widen-one-at-a-time.md) (section 10 says exactly what), and builds the `review` grant that 120 section 5 foresees.
 > **Does not change:** taint rules, the Rule of 25, the no-relaxation linter, or who may ratify.
@@ -193,7 +194,7 @@ In v1 exactly one signal creates a suggestion: **a host note reported by two or 
 
 | Slice | Content | Depends on | Hours (estimate) |
 | :-- | :-- | :-- | --: |
-| S0 | this spec, and the amendment text of section 10 applied to spec 120 | Council with a readable red-team Round 2, operator approval | 3 |
+| S0 | this spec, and the amendment text of section 10 applied to spec 120 | approved by the operator 2026-11-20 (no Council read the text; one is still advised before S4); the text of section 10 takes effect on the merge of this pull request, and spec 120's own file is edited in S1 and S2 | 3 |
 | S1 | the lockout replaced (section 10.1), with a flood test | S0 | 6-8 |
 | S2 | revoke cancels running work (section 10.2), the page rebuild cancel handle | S0 | 6-10 |
 | S3 | `G:` and the goal in provenance; `delphi teach`; `learn lessons`; `unteach`; the card view in `learn list`; the Rule-of-25 and conflict messages | S0 | 10-14 |
@@ -235,7 +236,7 @@ In v1 exactly one signal creates a suggestion: **a host note reported by two or 
 - **`t_0003`** (on the plan with a host-chat confirm, 2026-11-19): the architect answered; the red-team seat audited spec 120 and its Round 2 could not be read; the strategist abstained. It recommended terminal and app accept only, which this draft adopts, and its findings on spec 120 (checked against the text) are section 10.
 - **`t_0004`** (on this text, 2026-11-20): **not a review of this text.** The daemon looked for the spec in the main checkout, where this branch's file did not exist, so the architect seat answered from the question and the cited specs and said so; the red-team seat's Gemini carrier finished without a valid answer (its report says the gate could not be reached and the prompt was truncated) and the strategist seat abstained. The architect's conditional findings were applied where they were clear: accept bound to the card id and a hash of the rendered text and the checks re-run at accept (sections 6.2, 6.3), recurrence labelled as host-supplied (5.3), the lockout's peer defined so a same-user process cannot rotate around it (10.1), a revoke race test and a named event (10.2), measure first and terminal before app (12). Two findings are policy choices left to the operator: OD-7 and OD-8.
 - **Why the Gemini seats failed (tested 2026-11-20, three one-seat calls):** the carrier delivers about 186 KB of a prompt and cuts the tail, which holds the task and the output contract. The Councils were given about 255 KB of files. A bare question and one 18 KB file were answered. A Council that includes a Gemini seat must stay under about 150 KB of context until the daemon enforces a budget (work plan section 5).
-- **The gate before S0 is still a Council that read this text,** with a red-team seat that answered in a readable Round 2.
+- **The operator approved this spec on 2026-11-20 without a Council that read the text.** A Council that reads it, with a red-team seat that answers a readable Round 2, is still advised before S4, and the red-team pass spec 120 section 5 names is required before S4. S1 to S3 may start on this approval.
 
 ## 16. Acceptance criteria
 
@@ -258,6 +259,8 @@ In v1 exactly one signal creates a suggestion: **a host note reported by two or 
 - **A measured result per slice** (section 2 principle 5): after S3, how many cards the operator creates and accepts in two weeks and how many expire; after S7, which lessons were served and which problems came back. A slice that the operator does not use is stopped, not extended.
 
 ## 18. Decisions and open questions
+
+On approval (2026-11-20) OD-1, OD-7, OD-8 and OD-9 stand as the operator decided them, and OD-2 to OD-6 take their recommendations unless the operator says otherwise.
 
 | # | Question | Recommendation |
 | :-- | :-- | :-- |
