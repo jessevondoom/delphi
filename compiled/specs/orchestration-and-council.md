@@ -121,7 +121,7 @@ Three jobs, in this order of risk:
 
 ## 131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard
 
-**131: Gemini seats: a bounded prompt, the task at both ends, and a Council that counts who was heard** · draft (per source at `92c496fe2374`) · tier 0 · [source](../../specs/131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard.md)
+**131: Gemini seats: a bounded prompt, the task at both ends, and a Council that counts who was heard** · draft (per source at `0aedff114b03`) · tier 0 · [source](../../specs/131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard.md)
 
 **source excerpt, untrusted** · `specs/131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard.md` line 25
 

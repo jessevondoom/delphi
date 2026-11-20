@@ -64,79 +64,79 @@
     },
     {
       "level": 3,
-      "line": 89,
+      "line": 99,
       "number": "3.3",
       "title": "S3: the task at the top and at the bottom"
     },
     {
       "level": 3,
-      "line": 98,
+      "line": 108,
       "number": "3.4",
       "title": "S4: count who was heard"
     },
     {
       "level": 3,
-      "line": 108,
+      "line": 119,
       "number": "3.5",
       "title": "S5: a Council seat is offered reading tools only"
     },
     {
       "level": 2,
-      "line": 117,
+      "line": 128,
       "number": "4",
       "title": "Authority invariants (what the tests prove)"
     },
     {
       "level": 2,
-      "line": 126,
+      "line": 137,
       "number": "5",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 142,
+      "line": 153,
       "number": "6",
       "title": "Where this meets spec 128"
     },
     {
       "level": 2,
-      "line": 152,
+      "line": 163,
       "number": "7",
       "title": "Why Codex and Copilot are not used in Councils (read-only; no config was changed)"
     },
     {
       "level": 2,
-      "line": 162,
+      "line": 174,
       "number": "8",
       "title": "What is not verified, and how the limit is learned"
     },
     {
       "level": 2,
-      "line": 173,
+      "line": 185,
       "number": "9",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 190,
+      "line": 203,
       "number": "10",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 204,
+      "line": 217,
       "number": "11",
       "title": "Open decisions for the operator"
     },
     {
       "level": 2,
-      "line": 215,
+      "line": 228,
       "number": "12",
       "title": "Options considered"
     },
     {
       "level": 2,
-      "line": 228,
+      "line": 241,
       "number": "13",
       "title": "Known limits"
     }
@@ -144,7 +144,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard.md",
-    "sha256": "92c496fe2374250e53732c9ed103e10d8d069bd1d7bdbbcf3cc7b1bf85efb87b"
+    "sha256": "0aedff114b035bece2e2af978764dc67c9216d0a447a218dfa82adb832c175b6"
   },
   "source_status_at_hash": {
     "line": {
@@ -157,7 +157,7 @@
       },
       "text": "status: draft   # a proposal written 2026-11-20 for the operator to read; it is not permission to build. Nothing here is approved."
     },
-    "sha256": "92c496fe2374250e53732c9ed103e10d8d069bd1d7bdbbcf3cc7b1bf85efb87b",
+    "sha256": "0aedff114b035bece2e2af978764dc67c9216d0a447a218dfa82adb832c175b6",
     "word": "draft"
   },
   "spec": {
