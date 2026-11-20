@@ -30,7 +30,9 @@ Agents improve by carrying better standing instructions with provenance, chosen 
 | 2026-11-20 | **Accept at a terminal or in the app only**; no host-chat confirm, no top-ups | sections 1.1, 6 |
 | 2026-11-20 | **OD-7: option (a) at full operator scope**: the app may accept operator-scope lessons, bounded as in section 6 item 8, with the red-team pass before S4 | section 6, OD-1, OD-7 |
 | 2026-11-20 | **OD-8:** make the one-click card accept in the app safe; read as: the accept is in the first cut and secured, the typed composer is not (operator to correct if wrong) | section 6 items 8 and 9, OD-8 |
-| 2026-11-20 | Look into the Gemini seat failures before work starts | section 5 below |
+| 2026-11-20 | Look into the Gemini seat failures before work starts; the operator said yes to three short test calls | section 5 below |
+| 2026-11-20 | **OD-9: the recommendation.** Terminal `yes` arms `review` in v1; the daemon-shown macOS confirmation is probed in S4a and preferred if it holds; operator-scope accepts need an arming no older than five minutes | section 6 items 8 and 9, OD-9 |
+| 2026-11-20 | "merge 793": PR #793 to be merged as a draft spec so a Council can read it from the main checkout | the merge itself is the operator's act, run with the operator's words |
 
 ## 3. What changed in the spec since the first draft
 
@@ -74,17 +76,33 @@ Deferred, in likely order: signals other than a recurring host note; a mirror of
 2. **A tool-connection failure** once the seat starts calling tools: the hook cannot reach the span's socket (possibly a changed carrier sandbox or the bridge ending early). Test: a seat told to call one allowed tool, then read the daemon's gate log and the hook's stderr.
 3. **The seat writes files** (the `request_research` tool made files in the checkout in `t_0002`): the daemon discards its output. Fix is policy: no research tool for Council seats, or a scratch checkout.
 
-**Needs the operator's yes:** the three-call experiment of hypothesis 1 spends the operator's Delphi tokens on a foreign seat (`ask_family` refuses without it); three Flash calls, short. It was not run.
+**Test run 2026-11-20 with the operator's yes (three `ask_family` calls, Gemini Flash, no tools): hypothesis 1 is confirmed.**
+
+| Call | Context given | Result |
+| :-- | :-- | :-- |
+| `t_0005` | none | answered (20k tokens) |
+| `t_0006` | one file, spec 120 (18 KB) | answered correctly: title and what section 3 item 4 says (24k tokens) |
+| `t_0007` | the seven large files the Councils used (about 255 KB) | the carrier cut **69,110 bytes** from the tail, mid-sentence in spec 120 §12 (the fifth of seven files); the seat reported that the task, objective and output contract were missing (144k tokens) |
+
+- So the carrier delivers about 186 KB of a prompt (105, 102, 108, 098 and most of 120 fit) and drops the rest, **including the task, which sits at the end**. That explains `t_0003` and `t_0004`: no task, so the red-team improvised an audit of spec 120 or reported a "block", and the strategist returned an empty answer.
+- A seat with no tools works (`ask_family` offers none); the Councils' seats are offered 33 tools with a gate. Hypothesis 2 (the gate or hook failing) is **not shown**: the truncation alone explains the symptoms, and the "gate could not be reached" line may be the lost seat's own wording or a real connect failure; the daemon cannot see the latter. It stays open until a Gemini Council seat is run with a small context and its tool calls read.
+- `t_0002` is a different cause (hypothesis 3): the seat used a research tool that wrote files into the checkout.
+
+**Fixes to specify (none built; adjacent to spec 128, which is a draft in PR #792 about Round 2 without tools and a retry for an empty finish):**
+1. A context budget for a Gemini-carried seat of about 150 KB in total, counted before the seat starts; over it, the daemon sends excerpts (`delphi specs show --section`) or summaries, not whole files, and says so in the receipt.
+2. The task and the output contract at the top **and** the bottom of the prompt for that carrier, so a cut tail still leaves the task.
+3. A seat whose answer says it was truncated counts as not sat; `require_families` counts seats that answered a readable Round 1 and Round 2, not seats that were started.
+4. No research tool for Council seats, or a scratch checkout, so a seat cannot change the project (`t_0002`).
+Until 1 to 3 exist, a Council that includes a Gemini seat must be given under about 150 KB of context files in total.
 
 **Likely fixes, none built:** cap the context a Gemini seat is given and put the task first and last; send large files as pointers the seat reads, not inline; drop `request_research` from Council seats; treat an unreadable seat as a failed Council, not a nominal pass (the ruling says it, but "families met" should count only seats that answered).
 
 ## 6. Open questions for the operator
 
-- OD-9: how `review` is armed (terminal yes, a daemon-shown macOS confirmation, Touch ID later), and the five-minute rule for operator-scope accepts.
-- OD-8: was "one-click cards" meant to include the typed composer?
-- May the three Gemini experiment calls be run?
-- May PR #793 be merged as a draft so a Council can read the spec from the main checkout (the operator merges; agents do not)?
+- OD-8: was "one-click cards" meant to include the typed composer? (Read as no; the operator has not said otherwise.)
 - OD-2 to OD-6 as in the spec.
+- Where the Gemini fixes of section 5 are specified: inside spec 128's pull request, or a small spec of their own.
+- Answered 2026-11-20: OD-9 (the recommendation); the Gemini test calls (yes, run); the merge of #793 (yes, "merge 793").
 
 ## 7. Measured so far (section 3 of the spec)
 

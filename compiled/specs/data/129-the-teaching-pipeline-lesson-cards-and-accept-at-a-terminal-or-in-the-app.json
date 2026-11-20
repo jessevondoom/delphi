@@ -136,19 +136,19 @@
     },
     {
       "level": 2,
-      "line": 239,
+      "line": 240,
       "number": "16",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 252,
+      "line": 253,
       "number": "17",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 259,
+      "line": 260,
       "number": "18",
       "title": "Decisions and open questions"
     }
@@ -156,7 +156,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app.md",
-    "sha256": "a4bdc97884ef144a60dceca4c95d37d10faa9994d120d8d0ffd304137f7bc38f"
+    "sha256": "74b495fdb9a469ca9761f26398804908b559a3ef6e0e36d7729fc3bb761f9263"
   },
   "source_status_at_hash": {
     "line": {
@@ -169,7 +169,7 @@
       },
       "text": "status: draft   # a proposal, not permission to build (AGENTS.md). Written with the operator over one session; it has had no Council and no red-team pass of its own."
     },
-    "sha256": "a4bdc97884ef144a60dceca4c95d37d10faa9994d120d8d0ffd304137f7bc38f",
+    "sha256": "74b495fdb9a469ca9761f26398804908b559a3ef6e0e36d7729fc3bb761f9263",
     "word": "draft"
   },
   "spec": {
