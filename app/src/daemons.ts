@@ -44,6 +44,8 @@ export type DaemonList = {
   /** The app's own version; `0.0.0` in a build that was not made for a release. */
   app_version: string;
   daemons: Daemon[];
+  /** Whether an installed `delphi` was found, and the path of the one inside this app's bundle, when there is one (spec 122 §10.1). */
+  program?: { installed: boolean; bundled: string | null };
 };
 
 /** What a card says a daemon is doing. `running` is a daemon that answered but gave no summary in time. */
@@ -78,6 +80,18 @@ export function startCommand(d: Daemon): string | null {
 /** What to run when nothing is running (spec 130 §4 item 5) and how to get Delphi when there is none (spec 122 §3). */
 export const START_COMMAND = 'delphi chat';
 export const INSTALL_COMMAND = 'curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh';
+
+/**
+ * The command that installs the program inside the app (spec 122 §10.1 item 3): the bundled path in quotes, then `self-install`.
+ * A path with a character a shell reads inside double quotes is single-quoted instead. Null when there is nothing to install
+ * from, or when an installed `delphi` was found. This window never runs it.
+ */
+export function selfInstallCommand(program: DaemonList['program']): string | null {
+  if (!program || program.installed || !program.bundled || !program.bundled.startsWith('/') || /[\u0000-\u001f]/.test(program.bundled)) return null;
+  const p = program.bundled;
+  const quoted = /["$`\\!]/.test(p) ? `'${p.replace(/'/g, `'\\''`)}'` : `"${p}"`;
+  return `${quoted} self-install`;
+}
 
 /** `1`, `12.3k`, `1.2M`: tokens, never dollars. */
 export function tokenWords(n: number): string {

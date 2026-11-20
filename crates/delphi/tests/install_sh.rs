@@ -99,3 +99,58 @@ fn with_no_attestation_a_signed_build_installs_and_an_unsigned_one_stops() {
     let r = install("release 9.9.9: unsigned", "0", "1");
     assert!(!r.ok && !r.installed && r.out.contains("cannot be verified"), "{}", r.out);
 }
+
+/// Spec 122 §10.3 (AC-9): on macOS (a stub `uname` says so on any machine), `<home>/app/opt-out` makes the installer leave the
+/// desktop app alone and say why; without it the app goes in.
+fn install_with_app(opt_out: bool) -> (String, bool, bool) {
+    let d = tempfile::tempdir().unwrap();
+    let (fx, bin, dest) = (d.path().join("fx"), d.path().join("bin"), d.path().join("dest"));
+    for p in [&fx, &bin] {
+        std::fs::create_dir_all(p).unwrap();
+    }
+    fixture(&fx, "release 9.9.9: unsigned");
+    // The macOS archive carries an app.
+    let top = "delphi-v9.9.9-aarch64-apple-darwin";
+    std::fs::create_dir_all(fx.join(top).join("Delphi.app/Contents/MacOS")).unwrap();
+    write_exec(&fx.join(top).join("Delphi.app/Contents/MacOS/delphi-app"), "#!/bin/sh\nexit 0\n");
+    sh(&fx, &format!("tar -czf {top}.tar.gz {top} && (shasum -a 256 {top}.tar.gz 2>/dev/null || sha256sum {top}.tar.gz) > {top}.tar.gz.sha256"));
+    write_exec(&bin.join("gh"), GH);
+    write_exec(&bin.join("uname"), "#!/bin/sh\ncase \"$1\" in -s) echo Darwin ;; -m) echo arm64 ;; *) echo Darwin ;; esac\n");
+    let home = d.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let delphi_home = d.path().join("dh");
+    if opt_out {
+        std::fs::create_dir_all(delphi_home.join("app")).unwrap();
+        std::fs::write(delphi_home.join("app/opt-out"), b"").unwrap();
+    }
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install.sh");
+    let out = Command::new("sh")
+        .arg(script)
+        .args(["--no-setup", "--dir"])
+        .arg(&dest)
+        .env("PATH", path)
+        .env("STUB_FIXTURE", &fx)
+        .env("STUB_ATTESTATIONS", "1")
+        .env("STUB_VERIFY_RC", "0")
+        .env_remove("DELPHI_SKIP_ATTESTATION")
+        .env_remove("DELPHI_INSECURE_TEST")
+        .env_remove("DELPHI_API")
+        .env_remove("DELPHI_DOWNLOAD")
+        .env_remove("DELPHI_NO_APP")
+        .env("DELPHI_HOME", &delphi_home)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    (text, out.status.success() && dest.join("delphi").is_file(), home.join("Applications/Delphi.app/Contents/MacOS/delphi-app").is_file())
+}
+
+#[test]
+fn the_opt_out_file_keeps_the_app_off_and_says_so() {
+    let (out, program, app) = install_with_app(false);
+    assert!(program && app, "without the file the app is installed: {out}");
+    let (out, program, app) = install_with_app(true);
+    assert!(program, "the program is still installed: {out}");
+    assert!(!app && out.contains("Leaving the desktop app alone") && out.contains("app/opt-out"), "{out}");
+}

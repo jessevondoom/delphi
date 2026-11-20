@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { INSTALL_COMMAND, START_COMMAND, cards, switchable, type Card, type DaemonList } from '../daemons.ts';
+import { INSTALL_COMMAND, START_COMMAND, cards, selfInstallCommand, switchable, type Card, type DaemonList } from '../daemons.ts';
 import type { Conn } from '../types.ts';
 import { UpdateBanner } from '../UpdateBanner.tsx';
 
@@ -75,6 +75,7 @@ export function Cards({ list, now, current, conn, onChoose }: { list: DaemonList
  */
 export function Start({ list, now, conn, onChoose, error }: { list: DaemonList | null; now: number; conn: Conn | null; onChoose: (hash: string) => void; error: string }) {
   const none = switchable(list) === 0;
+  const selfInstall = list ? selfInstallCommand(list.program) : null;
   return (
     <main className="main start" style={{ maxWidth: 900 }}>
       <h1 className="title">{none ? 'Nothing is running' : 'Choose a daemon'}</h1>
@@ -85,6 +86,13 @@ export function Start({ list, now, conn, onChoose, error }: { list: DaemonList |
           <CopyButton command={START_COMMAND} />
           <span>No <span className="mono">delphi</span> on this machine yet? Install it with:</span>
           <CopyButton command={INSTALL_COMMAND} />
+          {selfInstall && (
+            <>
+              <b>Install the delphi command</b>
+              <span>This app carries its own copy. To put it on your <span className="mono">PATH</span>, run this in a terminal (the app copies nothing itself):</span>
+              <CopyButton command={selfInstall} />
+            </>
+          )}
         </div>
       )}
       {list && !none && <div className="muted" style={{ marginBottom: 12 }}>More than one daemon is running here. Choose the one to show; this window reads it, and answers nothing.</div>}
