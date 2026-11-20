@@ -129,7 +129,7 @@ It **cannot** prove a host really ran each seat in an isolated context, or that 
 
 The question, the file excerpts and every stance are content from outside Delphi: fenced as data, never as instructions (existing 062 §7.1 rule), and a Panel's excerpts are limited to the project scope the caller already has (072 §6 isolation).
 
-**Peer text (amendment approved by the operator, 2026-11-07).** A seat that reads peer text in Round 2 is given no tools, and the peer text is fenced untrusted data. A seat that needs tools to verify something does so in Round 1, before it sees any peer.
+**Peer text (amendment approved by the operator, 2026-11-07).** A seat that reads peer text in Round 2 is given no tools (for the Panel's foreign seat, and, since spec 128 S1, for a daemon Council's Round 2 and repair seats), and the peer text is fenced untrusted data. A seat that needs tools to verify something does so in Round 1, before it sees any peer.
 
 ### 4.4 Degraded forms, always labelled
 
