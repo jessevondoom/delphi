@@ -189,3 +189,4 @@ order = 9
 "128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes" = "orchestration-and-council"
 "129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app" = "learning-and-evals"
 "131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard" = "orchestration-and-council"
+"132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens" = "runtime-models-and-tools"

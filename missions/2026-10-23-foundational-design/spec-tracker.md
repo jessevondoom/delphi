@@ -1240,3 +1240,21 @@ The operator asked on 2026-11-16 for a better Council and Panel experience in th
 | 131 | S4 | `heard` on `council.stance` and `council.critique`, the cut-complaint matcher, the Round 1 threshold, `require_families` judged on heard seats, `ask_family` unanswered on a decline or cut, the failure line with counts, the retry with half the budget (shared with 128's one retry) | not built; depends on S1 and on 128 S2 |
 | 131 | S5 | a Council or Panel seat is offered reading tools only (no `request_research`, no `write_*`); amends 128's Round 1 non-goal | not built; waits for 128 to merge (same files) |
 | 131 | S6 | the operator-run input-ceiling probe (`endpoints test --probe`), its version-keyed record and a `doctor` line | not built; spends the operator's tokens, on the operator's yes only |
+| 132 | S0 | the spec: one carrier contract (rows C1 to C9) and one operator-run conformance probe extending spec 131 S6; Copilot first as the multi-family carrier; Codex specified and waiting for its account | approved in advance on the plan (operator, 2026-11-20: "i approve this plan in full"; then "prioritize copilot ..."); text written afterwards by an architect agent, not read line by line by the operator; no Council has read it; takes effect when its pull request merges |
+| 132 | C1 | PA quick wins: premise check; stale config text; setup per family; `copilot.cov` refresh; Copilot in `delphi capabilities`; L0 honesty (no bridge named to a reader without a transport); model-access guide; tracker fixes for 046, 047, 091 | approved in advance on the plan; not built |
+| 132 | C2 | premium-request accounting (fractions exact), doctor `gh` quota line | approved in advance on the plan; not built |
+| 132 | C3 | Copilot catalog read and cached per CLI version, models validated, cost class shown, mixed-vendor endpoint refused | approved in advance on the plan; not built; premise (is `session/new` free) needs one operator-run call |
+| 132 | C4 | seats spread across every usable family; endpoint choice within a family | approved in advance on the plan; not built |
+| 132 | C5 | validated JSON-in-text answer with one shared retry | approved in advance on the plan; not built; waits for spec 128 S2 |
+| 132 | C6 | the conformance probe for every carrier, version-keyed record, doctor lines | approved in advance on the plan; not built; waits for spec 131 S6 |
+| 132 | C7 | Copilot probe run per family (operator-run, spends tokens and premium requests) | approved in advance on the plan; not run |
+| 132 | C8 | Copilot L1: read-only Delphi tools via `--additional-mcp-config` behind tool flags and the bridge | approved in advance on the plan; not built; unproven |
+| 132 | C9 | Copilot live proofs as Council, Panel, red-team and `ask_family` seat (operator-run) | approved in advance on the plan; not run |
+| 132 | A1 | agy through the same probe (operator-run) | approved in advance on the plan; not run; waits for spec 131 S2 and S6 |
+| 132 | X1 | Codex without a live run: manifest, estimate and rank, exhaustion text and reset parse | approved in advance on the plan; not built |
+| 132 | X2 | Codex probe (operator-run) | approved in advance on the plan; not run; waits for the Codex account (usage limit until Nov 27, 2026 2:49 AM) or an API key |
+| 132 | X3 | Codex served model (`exec` field or `app-server` readers) | approved in advance on the plan; not built; waits for X2 |
+| 132 | X4 | Codex structured output live | approved in advance on the plan; not run; waits for X2 |
+| 132 | X5 | Codex L1: probe for a deny-capable gate, build only if found | approved in advance on the plan; not built; waits for X2 |
+| 132 | X6 | Codex live proofs (operator-run) | approved in advance on the plan; not run; waits for X3 and X4 |
+| 132 | F1 | drift and meters for every carrier | approved in advance on the plan; not built |
