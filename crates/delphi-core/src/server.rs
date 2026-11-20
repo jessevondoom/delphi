@@ -61,6 +61,10 @@ pub const MAX_TICKETS: usize = 4;
 pub const MAX_PAIR_PENDING: usize = 3;
 pub const MAX_PAIR_PER_HOUR: usize = 6;
 pub const MAX_WRONG_CODES: u8 = 3;
+/// Unauthenticated connections on the app socket at once (a local program that opens many holds one place each, and no more).
+pub const MAX_UNAUTH: usize = 8;
+/// How long past its request's time an answered pairing request is kept for its app to collect.
+const ANSWERED_KEPT: Duration = Duration::from_secs(60);
 
 /// A request line larger than this closes the connection.
 pub const MAX_LINE: usize = 1024 * 1024;
@@ -69,6 +73,22 @@ pub const MAX_LINE: usize = 1024 * 1024;
 /// `app.expired`): the engine writes each as an event. The payload holds a key's short name, a grant's name and a fixed reason,
 /// never anything a peer sent as free text.
 pub type AppAudit = Arc<dyn Fn(&str, Value) + Send + Sync>;
+
+/// Is a pairing request still worth keeping? A pending one while it is good; an answered one (approved or cancelled) until its app has
+/// collected the answer, or a minute past the request's time.
+fn pair_kept(p: &PairReq, now: Instant, ttl: Duration) -> bool {
+    now.duration_since(p.issued) <= if matches!(p.outcome, PairOutcome::Pending) { ttl } else { ttl + ANSWERED_KEPT }
+}
+
+/// A place among the unauthenticated connections, given back when the connection's handshake ends.
+struct UnauthSlot<'a>(&'a Daemon);
+
+impl Drop for UnauthSlot<'_> {
+    fn drop(&mut self) {
+        let mut st = self.0.app.lock().unwrap();
+        st.unauth = st.unauth.saturating_sub(1);
+    }
+}
 
 /// What an app is told when its pairing request by code is refused: the limit, by name. The reason word is also what the log keeps.
 fn pair_refusal_text(reason: &str) -> &'static str {
@@ -122,6 +142,8 @@ struct AppState {
     locked_until: Option<Instant>,
     /// Open sessions by client id: the key's name, and what ends the session at once.
     sessions: HashMap<u64, (String, Arc<Notify>)>,
+    /// Connections on the app socket that have not proved a key.
+    unauth: usize,
     /// The last few tickets that were used, with what became of each: (ticket name, outcome, key name).
     spent: VecDeque<(String, String, String)>,
 }
@@ -192,6 +214,11 @@ pub struct DaemonConfig {
     pub app_lockout: Duration,
     /// How long a pairing request by code is good for (`specs/120` §13.1 item 4: two minutes).
     pub pair_request_ttl: Duration,
+    /// How often a connection that waits for its pairing request to be answered looks (`specs/120` §13.1).
+    pub pair_poll: Duration,
+    /// Connections on the app socket that have not proved a key (waiting in the handshake, or holding a pairing request) that may be open
+    /// at once; one more is closed without a word.
+    pub max_unauth: usize,
 }
 
 impl DaemonConfig {
@@ -207,6 +234,8 @@ impl DaemonConfig {
             app_refusal_window: Duration::from_secs(60),
             app_lockout: Duration::from_secs(60),
             pair_request_ttl: Duration::from_secs(120),
+            pair_poll: Duration::from_millis(150),
+            max_unauth: MAX_UNAUTH,
         }
     }
 }
@@ -665,9 +694,18 @@ impl Daemon {
     /// The whole of what an unproven connection on the app socket may do: `app.pair` once, with a ticket, and `app.hello` once,
     /// with a signature over the nonce it was just sent. `Some(name)` is a proven key; `None` means the connection is over.
     async fn app_handshake<R: AsyncBufRead + Unpin, W: tokio::io::AsyncWrite + Unpin>(&self, rd: &mut R, wr: &mut W, socket_names: &[String]) -> io::Result<Option<String>> {
-        if self.app.lock().unwrap().locked_until.is_some_and(|t| Instant::now() < t) {
-            return Ok(None); // closed to new connections: not a word, and no new record for each knock
-        }
+        let _slot = {
+            let mut st = self.app.lock().unwrap();
+            if st.locked_until.is_some_and(|t| Instant::now() < t) {
+                return Ok(None); // closed to new connections: not a word, and no new record for each knock
+            }
+            if st.unauth >= self.cfg.max_unauth {
+                crate::elog::warn("daemon", "app_socket", "too many connections that have not proved a key; one was closed", json!({"limit": self.cfg.max_unauth, "view": "app"}));
+                return Ok(None);
+            }
+            st.unauth += 1;
+            UnauthSlot(self)
+        };
         let nonce = random_token()?;
         write_line(wr, &Notification::new("app.challenge", json!({"nonce": nonce, "instance": self.instance, "protocol_version": PROTOCOL_MAJOR}))).await?;
         let mut paired = false;
@@ -697,7 +735,7 @@ impl Daemon {
                         let ttl = self.cfg.pair_request_ttl.as_secs();
                         write_line(wr, &Response::ok(req.id.clone(), json!({"code": code, "name": name, "expires_in": ttl}))).await?;
                         let result = loop {
-                            tokio::time::sleep(Duration::from_millis(150)).await;
+                            tokio::time::sleep(self.cfg.pair_poll).await;
                             if let Some(r) = self.pair_poll(&name) {
                                 break r;
                             }
@@ -754,14 +792,16 @@ impl Daemon {
         let (name, code) = {
             let mut st = self.app.lock().unwrap();
             let ttl = self.cfg.pair_request_ttl;
-            st.pairs.retain(|p| !matches!(p.outcome, PairOutcome::Pending) || now.duration_since(p.issued) <= ttl);
+            st.pairs.retain(|p| pair_kept(p, now, ttl));
             while st.pair_times.front().is_some_and(|t| now.duration_since(*t) > Duration::from_secs(3600)) {
                 st.pair_times.pop_front();
             }
             if st.pair_times.len() >= MAX_PAIR_PER_HOUR {
                 return Err("too_many_requests_this_hour");
             }
-            st.pairs.retain(|p| p.public_key != public_key);
+            // A second request from the same key replaces its first, unless the first was already answered and its app has not yet
+            // collected the answer: that one stays until it is delivered or runs out.
+            st.pairs.retain(|p| p.public_key != public_key || !matches!(p.outcome, PairOutcome::Pending));
             if st.pairs.iter().filter(|p| matches!(p.outcome, PairOutcome::Pending)).count() >= MAX_PAIR_PENDING {
                 return Err("too_many_pending");
             }
@@ -952,7 +992,7 @@ impl Daemon {
             "app.pair_pending" => {
                 let now = Instant::now();
                 let ttl = self.cfg.pair_request_ttl;
-                st.pairs.retain(|p| !matches!(p.outcome, PairOutcome::Pending) || now.duration_since(p.issued) <= ttl);
+                st.pairs.retain(|p| pair_kept(p, now, ttl));
                 let rows: Vec<Value> = st
                     .pairs
                     .iter()

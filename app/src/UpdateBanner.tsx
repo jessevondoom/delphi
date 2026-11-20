@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { updateBannerWords, type Daemon } from './daemons.ts';
-import { refusalWords, requestStates, stateWords, updateRequest, type Asked, type Request } from './requests.ts';
+import { ended, refusalWords, requestStates, stateWords, updateRequest, type Asked, type Request } from './requests.ts';
+import { isCode } from './PairCode.tsx';
 import { CopyButton } from './screens/Start.tsx';
 import type { Envelope } from './types.ts';
 
@@ -14,6 +15,7 @@ import type { Envelope } from './types.ts';
  */
 export function UpdateBanner({ d, attached, grants, paired, send, events }: { d: Daemon; attached: boolean; grants?: string[]; paired: boolean; send?: (r: Request) => Promise<Asked>; events?: Envelope[] }) {
   const [said, setSaid] = useState('');
+  const [code, setCode] = useState('');
   const w = updateBannerWords(d, attached, grants, paired);
   if (!w) return null;
   const mine = events ? [...requestStates(events).values()].filter((s) => s.method === 'app.update_apply').pop() : undefined;
@@ -23,9 +25,11 @@ export function UpdateBanner({ d, attached, grants, paired, send, events }: { d:
       {w.text && <b>{w.text}</b>}
       {w.text && <CopyButton command={w.command} />}
       {w.canApply && send && !live && (
-        <button type="button" className="btn small" onClick={() => { setSaid(''); send(updateRequest()).catch((e: unknown) => setSaid(refusalWords(e))); }}>Update now</button>
+        <button type="button" className="btn small" onClick={() => { setSaid(''); setCode(''); send(updateRequest()).then((a) => { if (isCode(a.code)) setCode(a.code); }, (e: unknown) => setSaid(refusalWords(e))); }}>Update now</button>
       )}
       {live && mine && <span className="muted">{stateWords(mine)}</span>}
+      {/* The code only this window shows: typed at the terminal, it is what approves the update. */}
+      {code && mine?.state !== 'running' && !(mine && ended(mine.state)) && <span>Code <b className="mono" aria-label={`Code ${code.replace('-', ' dash ').split('').join(' ')}`}>{code}</b></span>}
       {said && <span role="alert">{said}</span>}
       {w.restart && <><b>{w.restart.text}</b><CopyButton command={w.restart.command} /></>}
     </div>

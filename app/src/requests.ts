@@ -13,7 +13,7 @@ export type AskWhat = 'research.continue' | 'research.ask' | 'page.rebuild' | 'p
 export type AskArg = { topic_id?: string; section?: string; note?: string; question?: string; follows?: string; slug?: string; claim?: string };
 export type Request = { what: AskWhat; arg: AskArg };
 /** What the daemon answers a request it counted: its id and where it stands. */
-export type Asked = { request?: string; state?: string };
+export type Asked = { request?: string; state?: string; /** An update waiting for approval: the code to type at the terminal. Shown, never sent anywhere. */ code?: string };
 
 /** The most a follow-up question may hold: what the console's `/research` takes. */
 export const QUESTION_MAX = 200;
@@ -115,7 +115,7 @@ export function stateWords(s: { state: string; why?: string }, waits = 0): strin
   const card = waits > 0 ? ` ${waits === 1 ? 'A decision is' : `${waits} decisions are`} waiting on you in the console; this window cannot answer it.` : '';
   switch (s.state) {
     case 'sending': return 'Asking the daemon.';
-    case 'waiting': return 'Waiting for approval at your terminal: run `delphi app approve` and type the version shown there. This window cannot approve it.';
+    case 'waiting': return 'Waiting for you to approve this at your terminal: run `delphi app approve` and type the code shown here. This window cannot approve it.';
     case 'queued': return `Queued: the daemon will start it when the run before it ends.${card}`;
     case 'running': return `Running.${card}`;
     case 'done': return 'Done.';

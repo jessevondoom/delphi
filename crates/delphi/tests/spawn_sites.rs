@@ -198,7 +198,7 @@ fn the_update_grants_spawn_names_its_two_clauses_and_they_are_the_arguments_the_
     let site = v.get("site").and_then(|s| s.as_array()).unwrap().iter().find(|s| s.get("file").and_then(|f| f.as_str()) == Some("crates/delphi-engine/src/app_update.rs")).expect("the update grant's start is listed");
     assert_eq!((site.get("count").and_then(|c| c.as_integer()), site.get("class").and_then(|c| c.as_str())), (Some(1), Some("self")));
     let words = |argv: Vec<std::ffi::OsString>| argv.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ");
-    assert_eq!(site.get("clause_apply").and_then(|c| c.as_str()), Some(words(apply_argv("<name>", Path::new("<home>"))).as_str()));
+    assert_eq!(site.get("clause_apply").and_then(|c| c.as_str()), Some(words(apply_argv("<name>", Path::new("<home>"), "<version>")).as_str()));
     assert_eq!(site.get("clause_check").and_then(|c| c.as_str()), Some(words(check_argv(Path::new("<home>"))).as_str()));
     // No other file of the crates names the apply's arguments: nothing else starts that command.
     let mut hits = Vec::new();

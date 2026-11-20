@@ -134,10 +134,11 @@ pub fn run(args: Vec<String>) -> ! {
         }
         // Spec 120 §13.2 item 12: the daemon looks for a newer release at start and every six hours, and says so in the presence file.
         booted.service.set_update_presence(l.clone(), presence);
-        booted.service.start_update_checks();
         // Ready: the token travels over the pipe only.
         writeln!(ready, "{}", daemon.console_token()).unwrap_or_else(|e| die(&format!("ready pipe: {}", e)));
         drop(ready);
+        // The checks start the program, so they start only once the readiness pipe is closed: nothing started from here holds it open.
+        booted.service.start_update_checks();
         eprintln!("delphi-core: ready on {} (mission {})", l.sock.display(), booted.default_mission);
         daemon.serve_with_app(listener, Some(narrator_listener), Some(relay_listener), Some(host_listener), Some(app_listener)).await;
         delphi_core::presence::remove(&l);

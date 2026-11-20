@@ -255,7 +255,7 @@ fn pair_probe_child() {
     c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     c.hello(&token).unwrap();
     for m in ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair_pending", "app.pair_approve", "app.update_approve"] {
-        match c.call(m, json!({"name": "app-000000", "grant": "request", "request_id": "app-000000", "code": "ABC-DEF", "version": "0.6.6"})) {
+        match c.call(m, json!({"name": "app-000000", "grant": "request", "request_id": "app-000000", "code": "ABC-DEF"})) {
             Ok(_) => println!("PROBE {} ok", m),
             Err(ClientError::Rpc { code, .. }) => println!("PROBE {} rpc {}", m, code),
             Err(e) => println!("PROBE {} err {}", m, e),
@@ -728,14 +728,14 @@ async fn the_update_grant_is_given_by_the_operator_only_and_its_method_reaches_t
 
     // The console's two methods: the app's own session cannot call them, and the console reaches the engine's.
     for m in ["app.update_pending", "app.update_approve"] {
-        match s.call(m, json!({"version": "0.6.6"})) {
+        match s.call(m, json!({"code": "K7Q-4M2"})) {
             Err(ClientError::Rpc { code: c, message, .. }) => assert!(c == code::FORBIDDEN && message.contains("under no grant"), "{m}: {message}"),
             other => panic!("{m} must be refused to the app, got {other:?}"),
         }
     }
     assert!(admin.lock().unwrap().is_empty());
     assert_eq!(con.call("app.update_pending", json!({})).unwrap()["pending"], json!([]));
-    assert_eq!(con.call("app.update_approve", json!({"version": "0.6.6"})).unwrap()["pending"], json!([]));
+    assert_eq!(con.call("app.update_approve", json!({"code": "K7Q-4M2"})).unwrap()["pending"], json!([]));
     assert_eq!(admin.lock().unwrap().iter().map(|(m, _)| m.as_str()).collect::<Vec<_>>(), ["app.update_pending", "app.update_approve"]);
 
     // `--remove` ends the grant and the authorization with it, and closes the open session; the key then asks for nothing.
@@ -764,4 +764,46 @@ async fn an_update_is_approved_only_by_a_client_at_a_terminal() {
     let out = run_child_without_tty(&f.sock, f.daemon.console_token());
     assert!(out.contains(&format!("PROBE app.update_approve rpc {}", code::TTY_REQUIRED)), "{out}");
     assert!(admin.lock().unwrap().is_empty(), "the engine was not asked");
+}
+
+/// P1 follow-up (a): a request that was approved but not yet collected by its app is not dropped when the same key files another request.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_approved_request_is_kept_until_its_app_has_collected_it() {
+    let f = start(TtyPolicy::Disabled, |c| c.pair_poll = Duration::from_secs(2)).await;
+    let (mut k, shown, name) = request(&f, &A);
+    let mut con = f.console();
+    con.call("app.pair_approve", json!({"request_id": name, "code": shown})).unwrap();
+    // Before the first connection has looked, the same key asks again on another one.
+    let mut second = f.knock().unwrap();
+    assert_eq!(rpc_code(second.pair_request(&A)), Some(code::FORBIDDEN), "the key is recorded now, so a second request is refused");
+    let told = k.c.next_notification().unwrap();
+    assert_eq!((told["method"].as_str(), told["params"]["outcome"].as_str()), (Some("app.pair_result"), Some("approved")), "{told}");
+    assert_eq!(f.keys().len(), 1);
+}
+
+/// P1 follow-up (b): connections that have not proved a key are few. The one over the limit is closed without a word, and a place is given
+/// back when a connection ends.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_few_connections_may_wait_unproven_on_the_app_socket() {
+    let f = start(TtyPolicy::Disabled, |c| {
+        c.max_unauth = 3;
+        c.auth_timeout = Duration::from_secs(30);
+    })
+    .await;
+    let held: Vec<Knock> = (0..3).map(|_| f.knock().expect("within the limit")).collect();
+    assert!(f.knock().is_none(), "the fourth is closed without a challenge");
+    assert!(f.refusals().is_empty(), "and it is not a refusal that counts toward the lockout");
+    drop(held);
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if f.knock().is_some() {
+            break;
+        }
+        assert!(std::time::Instant::now() < end, "a place is given back when connections end");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // A proven key is not held to the limit: it holds no place once its handshake is done.
+    let name = f.pair(&A);
+    let _quiet: Vec<Knock> = (0..3).filter_map(|_| f.knock()).collect();
+    let _ = name;
 }

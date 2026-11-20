@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { releaseVersion, updateBannerWords, type Daemon } from '../src/daemons.ts';
 import { canUpdate, requestStates, stateWords, updateRequest } from '../src/requests.ts';
+import { isCode } from '../src/PairCode.tsx';
 import { UpdateBanner } from '../src/UpdateBanner.tsx';
 import type { Conn } from '../src/types.ts';
 
@@ -60,11 +61,21 @@ test('after an update the banner says restart when idle with a command to copy, 
   assert.equal(updateBannerWords(daemon({ restart_pending: true, workspace_name: '-rf; x' }), true, [], true), null);
 });
 
+test('the code the daemon gave for a waiting update is shown only when it is in the shape the daemon makes', async () => {
+  const d = daemon({ update_available: '0.6.6' });
+  for (const [given, shown] of [['K7Q-4M2', true], ['k7q-4m2', false], ['K70-4M2', false], ['<b>x</b>', false], ['', false]] as const) {
+    assert.equal(isCode(given), shown, given);
+  }
+  // The banner keeps what the daemon answered in its own state and prints it; renderToStaticMarkup cannot press the button, so the shape check is the test.
+  assert.match(renderToStaticMarkup(<UpdateBanner d={d} attached paired grants={['update']} send={async () => ({ state: 'waiting', code: 'K7Q-4M2' })} />), /Update now/);
+});
+
 test('a request that waits for approval is said to wait at the terminal, and cannot be approved here', () => {
   const states = requestStates([{ type: 'app.request', payload: { request: 'aq-1', method: 'app.update_apply', ids: {}, state: 'waiting' } } as never]);
   assert.equal(states.get('aq-1')?.state, 'waiting');
   assert.match(stateWords({ state: 'waiting' }), /delphi app approve/);
+  assert.match(stateWords({ state: 'waiting' }), /type the code shown here/);
   const html = renderToStaticMarkup(<UpdateBanner d={daemon({ update_available: '0.6.6' })} attached paired grants={['update']} send={send} events={[{ type: 'app.request', payload: { request: 'aq-1', method: 'app.update_apply', ids: {}, state: 'waiting' } } as never]} />);
   assert.doesNotMatch(html, /Update now/, 'one request at a time');
-  assert.match(html, /Waiting for approval at your terminal/);
+  assert.match(html, /Waiting for you to approve this at your terminal/);
 });

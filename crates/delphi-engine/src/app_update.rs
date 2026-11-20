@@ -6,12 +6,14 @@
 //!   `restart_pending`, go into the presence file as optional fields.
 //! * **A request** (items 2, 5, 7). A key that holds `update` asks. The daemon, not the app, says what the release is. Without the key's
 //!   standing `--auto` the request is **pending**, one at a time, for ten minutes, and nothing changes until the operator, at a
-//!   terminal, types the version the daemon found (`app.update_approve`). A version no newer than the one installed, a second apply
-//!   within the hour for the key, an apply while one runs: each is refused, by name.
-//! * **The apply** (items 3, 4, 8). The daemon starts the program it is running as with `update --no-restart --workspace <name> --home
-//!   <home>` (clause 1): detached from any terminal, standard input closed, a private temporary directory, an environment of `HOME`,
-//!   `PATH`, `DELPHI_HOME` and `TMPDIR` only, output kept to a bounded buffer. Nothing in the command comes from the app. The daemon
-//!   does not restart itself; it records `restart_pending`.
+//!   terminal, types the short code the app's window shows (`app.update_approve`): the daemon gives that code to the app connection that
+//!   asked and lists it nowhere else. A version no newer than the one installed, a second apply within the hour for the key, an apply
+//!   less than ten minutes after a failure or an hour after an install, an apply while one runs: each is refused, by name.
+//! * **The apply** (items 3, 4, 8). The daemon starts the program it is running as with `update --no-restart --review --version
+//!   v<approved> --workspace <name> --home <home>` (clause 1): detached from any terminal, standard input closed, nothing inherited above
+//!   descriptor 2, a private temporary directory, an environment of `HOME`, `PATH`, `DELPHI_HOME` and `TMPDIR` only, output kept to a
+//!   bounded buffer, and its whole process group ended when it is done or out of time. Nothing in the command comes from the app. An install
+//!   of any release but the approved one is a failure, written loudly. The daemon does not restart itself; it records `restart_pending`.
 //!
 //! This is the only place in the engine that starts that program, and it is listed in `crates/delphi/tests/spawn_sites.toml`.
 //! **No lock is held against a `delphi update` run at a terminal**: `delphi update` takes none (it replaces the file by renaming), so
@@ -38,6 +40,9 @@ pub const APPLY_EVERY_SECS: i64 = 3600;
 pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 /// Wrong versions typed at one pending request before it is cancelled.
 pub const MAX_WRONG: u8 = 3;
+/// The least time between one apply ending and the next starting, for any key: after an install, and after a failure (item 7).
+pub const AFTER_OK_SECS: i64 = 3600;
+pub const AFTER_FAIL_SECS: i64 = 600;
 /// What is kept of a child's output, per stream. The rest is read and thrown away so the child never blocks on a full pipe.
 pub const OUT_MAX: usize = 64 * 1024;
 /// How long an apply, and a check, may take before the child is killed.
@@ -46,9 +51,9 @@ const CHECK_MAX: Duration = Duration::from_secs(60);
 
 /// The two ways the daemon starts its own program for this grant. Each is a clause of the spawn-site list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Clause {
-    /// Clause 1: install the release, leaving running daemons on the old code.
-    Apply,
+pub enum Clause<'a> {
+    /// Clause 1: install exactly this release (the one the daemon found and the operator approved), leaving running daemons on the old code.
+    Apply { version: &'a str },
     /// Clause 2: ask whether there is a newer one; changes nothing.
     Check,
 }
@@ -59,9 +64,11 @@ pub fn plain_name(n: &str) -> bool {
     n.len() <= 64 && b.next().is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_') && b.all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))
 }
 
-/// The arguments of clause 1. Made from the daemon's own workspace name and home, and from nothing an app sent.
-pub fn apply_argv(workspace: &str, home: &Path) -> Vec<OsString> {
-    vec!["update".into(), "--no-restart".into(), "--workspace".into(), workspace.into(), "--home".into(), home.as_os_str().to_owned()]
+/// The arguments of clause 1. Made from the daemon's own workspace name and home and the release the daemon found and the operator approved,
+/// never from anything an app sent. `--version` makes the install exactly that release, whatever the release list says later; `--review`
+/// leaves the release's changes to the built-in agents and skills pending for `/ratify` instead of ratifying them unseen.
+pub fn apply_argv(workspace: &str, home: &Path, version: &str) -> Vec<OsString> {
+    vec!["update".into(), "--no-restart".into(), "--review".into(), "--version".into(), format!("v{version}").into(), "--workspace".into(), workspace.into(), "--home".into(), home.as_os_str().to_owned()]
 }
 
 /// The arguments of clause 2.
@@ -123,8 +130,18 @@ struct Pending {
     key: String,
     version: String,
     request: String,
+    /// The code the operator types at the terminal, as shown (`K7Q-4M2`). Made by the daemon, given to the app connection that asked and
+    /// to nobody else: [`EngineService::app_update_admin`]'s list never holds it.
+    code: String,
+    /// When the request was made, on the monotonic clock ([`mono`]).
     issued: i64,
     wrong: u8,
+}
+
+/// Seconds on a clock that only moves forward: the wall clock can be set back, which would stretch a request's ten minutes or an hour's limit.
+fn mono() -> i64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_secs() as i64
 }
 
 /// What the daemon knows about updates. In memory: a daemon that restarts forgets the hour's count, as the other limits do.
@@ -133,13 +150,29 @@ pub struct State {
     available: Option<String>,
     pending: Option<Pending>,
     running: bool,
+    /// When each key's last apply started ([`mono`]).
     last_apply: HashMap<String, i64>,
+    /// When the last apply ended, and whether it installed: the next apply of any key waits [`AFTER_OK_SECS`] or [`AFTER_FAIL_SECS`].
+    last_end: Option<(i64, bool)>,
     restart_pending: bool,
+    /// Counts each start and end of an apply: a check that began before one and ended after it is out of date and is thrown away.
+    epoch: u64,
     made: u64,
+    /// Tests: seconds added to the monotonic clock, and a shorter limit on a child.
+    skew: i64,
+    limit: Option<Duration>,
     /// The program to start instead of this one (tests: a script that records what it was asked and answers as it is told).
     exe: Option<PathBuf>,
     /// Where the presence file is, and what it said when the daemon wrote it: the update fields are added to it and it is rewritten.
     presence: Option<(delphi_core::spawn::Layout, delphi_core::presence::Presence)>,
+    /// One writer of the presence file at a time, each reading the facts after it holds this.
+    publish_gate: Arc<std::sync::Mutex<()>>,
+}
+
+impl State {
+    fn now(&self) -> i64 {
+        mono() + self.skew
+    }
 }
 
 /// A private folder for one child: a new directory, mode 0700, that nothing else knows the name of.
@@ -161,51 +194,115 @@ async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(mut r: R) -> String {
     String::from_utf8_lossy(&kept).into_owned()
 }
 
-/// Is `exe` something the daemon may start as the installed program: an absolute path to a regular file named `delphi`, owned by this
-/// user, that no group or other can write? (The daemon runs as `<delphi> __core`, so this is the file it was started from.)
-pub fn is_installed_program(exe: &Path) -> Result<(), String> {
+/// Is `exe` something the daemon may start as the installed program? It is made canonical once, and that path is the one returned and the
+/// one started. It must be a regular file named `delphi`, owned by this user, that no group or other can write, and every directory above it
+/// must be owned by this user or by root and closed to group and other writers (a sticky directory owned by root, such as `/tmp`, is the
+/// one exception), so nobody else can swap the file or a folder on the way to it. (The daemon runs as `<delphi> __core`, so this is the
+/// file it was started from.)
+pub fn is_installed_program(exe: &Path) -> Result<PathBuf, String> {
     use std::os::unix::fs::MetadataExt;
-    if !exe.is_absolute() || exe.file_name().and_then(|n| n.to_str()) != Some("delphi") {
+    if !exe.is_absolute() {
         return Err("this daemon is not running as an installed `delphi`".into());
     }
-    let m = std::fs::metadata(exe).map_err(|e| format!("the installed program cannot be read: {e}"))?;
+    let canon = std::fs::canonicalize(exe).map_err(|e| format!("the installed program cannot be found: {e}"))?;
+    if canon.file_name().and_then(|n| n.to_str()) != Some("delphi") {
+        return Err("this daemon is not running as an installed `delphi`".into());
+    }
+    let m = std::fs::metadata(&canon).map_err(|e| format!("the installed program cannot be read: {e}"))?;
     // SAFETY: geteuid has no preconditions.
-    if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o022 != 0 {
+    let me = unsafe { libc::geteuid() };
+    if !m.is_file() || m.uid() != me || m.mode() & 0o022 != 0 {
         return Err("the installed program is not a file only this user can change".into());
     }
-    Ok(())
+    for dir in canon.ancestors().skip(1) {
+        let d = std::fs::metadata(dir).map_err(|e| format!("a folder above the installed program cannot be read: {e}"))?;
+        let sticky_root = d.uid() == 0 && d.mode() & 0o1000 != 0;
+        if d.uid() != me && d.uid() != 0 {
+            return Err(format!("{} is owned by another user, so the installed program could be swapped", dir.display()));
+        }
+        if d.mode() & 0o022 != 0 && !sticky_root {
+            return Err(format!("{} can be written by others, so the installed program could be swapped", dir.display()));
+        }
+    }
+    Ok(canon)
+}
+
+/// Kill every process of the child's group (the child made its own session, so its group is its pid) and wait until none is left.
+async fn end_group(pid: u32) {
+    let group = -(pid as i32);
+    // SAFETY: kill has no preconditions; a group that is gone answers ESRCH.
+    unsafe { libc::kill(group, libc::SIGKILL) };
+    for _ in 0..100 {
+        // SAFETY: as above; signal 0 only asks whether the group exists.
+        if unsafe { libc::kill(group, 0) } != 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// A fresh pairing-style code (`K7Q-4M2`) from the system's random source.
+fn fresh_code() -> Result<String, String> {
+    let mut rnd = [0u8; 64];
+    std::io::Read::read_exact(&mut std::fs::File::open("/dev/urandom").map_err(|e| e.to_string())?, &mut rnd).map_err(|e| e.to_string())?;
+    app_keys::code_from(&rnd).ok_or_else(|| "no randomness for a code".to_string())
+}
+
+fn ct_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// What one look at the state decided for a request, made and recorded under one lock.
+enum Verdict {
+    Refuse(&'static str, String),
+    /// The same key asking again while its request waits: the same request and code.
+    Waiting { request: String, code: String, left: i64, version: String },
+    /// A new pending request, already recorded.
+    Pending { code: String, version: String },
+    /// A standing authorization: go on.
+    Go { version: String },
 }
 
 impl EngineService {
     /// Start `Clause`'s command: the program this daemon is running as, with the clause's own arguments. The one process start of this
     /// grant (`crates/delphi/tests/spawn_sites.toml`, class `self`).
-    pub async fn update_run(&self, clause: Clause) -> Result<Ran, String> {
+    pub async fn update_run(&self, clause: Clause<'_>) -> Result<Ran, String> {
         let exe = self.update_exe()?;
         let home = self.engine.ws.home.clone();
+        let limit_override = self.update.lock().unwrap().limit;
         let (argv, limit) = match clause {
-            Clause::Apply => {
+            Clause::Apply { version } => {
                 let name = self.engine.ws.dir.file_name().and_then(|n| n.to_str()).filter(|n| plain_name(n)).ok_or("this workspace's name is not a plain one")?.to_string();
-                (apply_argv(&name, &home), APPLY_MAX)
+                if parse_release(version).is_none() {
+                    return Err("the release to install is not a release number".into());
+                }
+                (apply_argv(&name, &home, version), APPLY_MAX)
             }
             Clause::Check => (check_argv(&home), CHECK_MAX),
         };
+        let limit = limit_override.unwrap_or(limit);
         let tmp = private_dir().map_err(|e| format!("no private folder for the update: {e}"))?;
         let mut cmd = tokio::process::Command::new(&exe);
         cmd.args(&argv).env_clear().env("PATH", "/usr/bin:/bin").env("DELPHI_HOME", &home).env("TMPDIR", &tmp).current_dir(&tmp).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         if let Some(h) = std::env::var_os("HOME") {
             cmd.env("HOME", h);
         }
-        // SAFETY: setsid runs between fork and exec and touches nothing of this process: the child has no controlling terminal.
+        // SAFETY: setsid and fcntl run between fork and exec and touch nothing of this process. The child gets no controlling terminal and
+        // every descriptor above 2 that this daemon holds (the readiness pipe, the lock, sockets) is closed for it when it starts the program.
         unsafe {
             cmd.pre_exec(|| {
                 libc::setsid();
+                let max = libc::sysconf(libc::_SC_OPEN_MAX).clamp(256, 8192) as i32;
+                for fd in 3..max {
+                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                }
                 Ok(())
             });
         }
-        let started = cmd.spawn();
-        let out = match started {
+        let out = match cmd.spawn() {
             Err(e) => Err(format!("the program could not be started: {e}")),
             Ok(mut child) => {
+                let pid = child.id().unwrap_or(0);
                 let (so, se) = (child.stdout.take(), child.stderr.take());
                 let reading = async {
                     let (a, b) = tokio::join!(async { if let Some(s) = so { read_bounded(s).await } else { String::new() } }, async { if let Some(s) = se { read_bounded(s).await } else { String::new() } });
@@ -216,11 +313,16 @@ impl EngineService {
                     (outs, status)
                 })
                 .await;
+                // Whatever happened, nothing the child started stays behind, and this does not return until the group is gone: the next
+                // apply is not allowed while the last one's processes might still run.
+                if pid != 0 {
+                    end_group(pid).await;
+                }
                 match finished {
                     Ok(((stdout, stderr), Ok(status))) => Ok(Ran { code: status.code(), stdout, stderr }),
                     Ok((_, Err(e))) => Err(format!("the program could not be waited for: {e}")),
                     Err(_) => {
-                        let _ = child.kill().await;
+                        let _ = child.wait().await;
                         Err("the program did not finish in time and was stopped".into())
                     }
                 }
@@ -230,19 +332,28 @@ impl EngineService {
         out
     }
 
-    /// The program to start: the one this daemon runs as, checked to be the installed `delphi` (tests give their own).
+    /// The program to start: the one this daemon runs as, checked to be the installed `delphi` (tests give their own). The path returned is
+    /// the canonical one that was checked, and the one that is started.
     fn update_exe(&self) -> Result<PathBuf, String> {
         let exe = match self.update.lock().unwrap().exe.clone() {
             Some(e) => e,
-            None => std::env::current_exe().and_then(std::fs::canonicalize).map_err(|e| format!("this daemon's program cannot be found: {e}"))?,
+            None => std::env::current_exe().map_err(|e| format!("this daemon's program cannot be found: {e}"))?,
         };
-        is_installed_program(&exe)?;
-        Ok(exe)
+        is_installed_program(&exe)
     }
 
     /// Tests: start this program instead of the current executable.
     pub fn set_update_exe(&self, exe: PathBuf) {
         self.update.lock().unwrap().exe = Some(exe);
+    }
+
+    /// Tests: move the monotonic clock the limits use forward, and shorten the time a child may run.
+    pub fn update_advance(&self, secs: i64) {
+        self.update.lock().unwrap().skew += secs;
+    }
+
+    pub fn set_update_limit(&self, limit: Duration) {
+        self.update.lock().unwrap().limit = Some(limit);
     }
 
     /// Where the presence file is and what it held, so that a change to `update_available` or `restart_pending` rewrites it.
@@ -261,14 +372,16 @@ impl EngineService {
         (st.available.clone(), st.restart_pending)
     }
 
-    /// Rewrite the presence file with the two facts, when the daemon has one to rewrite.
+    /// Rewrite the presence file with the two facts, when the daemon has one to rewrite. One writer at a time, and each reads the facts
+    /// only once it holds the gate, so a writer that waited writes what is true now and never an older snapshot over a newer one.
     fn update_publish(&self) {
-        let (facts, base) = {
+        let gate = self.update.lock().unwrap().publish_gate.clone();
+        let _one_at_a_time = gate.lock().unwrap();
+        let (facts, layout, mut p) = {
             let st = self.update.lock().unwrap();
             let Some((layout, base)) = st.presence.clone() else { return };
-            ((st.available.clone(), st.restart_pending), (layout, base))
+            ((st.available.clone(), st.restart_pending), layout, base)
         };
-        let (layout, mut p) = base;
         (p.update_available, p.restart_pending) = facts;
         if let Err(e) = delphi_core::presence::write(&layout, &p) {
             delphi_core::elog::warn("daemon", "presence_update", "the presence file could not be rewritten", json!({"error": e.to_string()}));
@@ -276,14 +389,25 @@ impl EngineService {
     }
 
     /// Look for a newer release now (clause 2) and keep what was found. A check that fails, or prints something that is not an update,
-    /// leaves the daemon knowing no release.
+    /// leaves the daemon knowing no release. A check that began before an apply started or ended, or that finds one running, is out of
+    /// date when it is done and changes nothing.
     pub async fn update_check_now(&self) {
+        let epoch = {
+            let st = self.update.lock().unwrap();
+            if st.running {
+                return;
+            }
+            st.epoch
+        };
         let found = match self.update_run(Clause::Check).await {
             Ok(r) if r.code == Some(0) => parse_check(&r.stdout, Self::installed_version()),
             _ => None,
         };
         let changed = {
             let mut st = self.update.lock().unwrap();
+            if st.running || st.epoch != epoch {
+                return;
+            }
             let changed = st.available != found;
             st.available = found;
             changed
@@ -293,7 +417,7 @@ impl EngineService {
         }
     }
 
-    /// The daemon's own look for a release: at start, then every six hours. Called once, by the daemon's boot, and by no test.
+    /// The daemon's own look for a release: at start, then every six hours. Called once, by the daemon's boot after it is ready, and by no test.
     pub fn start_update_checks(self: &Arc<Self>) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -313,7 +437,7 @@ impl EngineService {
         }
     }
 
-    /// The `app.request` event of an update request, in the states of [`crate::app_requests::STATES`].
+    /// The `app.request` event of an update request, in the states of [`crate::app_requests::STATES`]. Never the code.
     async fn update_request_event(&self, key: &str, request: &str, state: &str, because: Option<&str>) {
         let mut p = json!({"name": key, "request": request, "method": "app.update_apply", "ids": {}, "state": state});
         if let Some(b) = because {
@@ -360,52 +484,58 @@ impl EngineService {
         if !holds {
             return self.update_refuse(key, &request, "no_grant", "this key does not hold `update`".into()).await;
         }
+        let code = fresh_code().map_err(|e| err(code::INTERNAL, e))?;
+        // One look at the state decides and records: whether this request is refused, is the one already waiting, becomes the waiting one, or
+        // goes on. Nothing is awaited while the lock is held, and two keys asking at once cannot both become the pending request.
         let verdict = {
             let mut st = self.update.lock().unwrap();
-            if st.pending.as_ref().is_some_and(|p| now - p.issued > PENDING_SECS) {
+            let at = st.now();
+            if st.pending.as_ref().is_some_and(|p| at - p.issued > PENDING_SECS) {
                 st.pending = None;
             }
             if st.running {
-                Err(("update_running", "an update is already running".to_string()))
-            } else if let Some(at) = st.last_apply.get(key).filter(|at| now - **at < APPLY_EVERY_SECS) {
-                Err(("one_an_hour", format!("one update an hour for one key; this key's last was started {} minutes ago", (now - *at) / 60)))
+                Verdict::Refuse("update_running", "an update is already running".to_string())
+            } else if let Some(since) = st.last_apply.get(key).filter(|t| at - **t < APPLY_EVERY_SECS) {
+                Verdict::Refuse("one_an_hour", format!("one update an hour for one key; this key's last was started {} minutes ago", (at - *since) / 60))
+            } else if let Some((ended, ok)) = st.last_end.filter(|(t, ok)| at - *t < if *ok { AFTER_OK_SECS } else { AFTER_FAIL_SECS }) {
+                Verdict::Refuse("too_soon", format!("the last update ended {} minutes ago{}; the next waits {} minutes after one", (at - ended) / 60, if ok { "" } else { " in a failure" }, (if ok { AFTER_OK_SECS } else { AFTER_FAIL_SECS }) / 60))
             } else if st.restart_pending {
-                Err(("restart_pending", "an update was applied and this daemon has not been restarted since; restart it first".to_string()))
+                Verdict::Refuse("restart_pending", "an update was applied and this daemon has not been restarted since; restart it first".to_string())
             } else if let Some(v) = st.available.clone() {
                 if !newer(&v, Self::installed_version()) {
-                    Err(("not_newer", "the release found is not newer than the one installed".to_string()))
+                    Verdict::Refuse("not_newer", "the release found is not newer than the one installed".to_string())
                 } else if let Some(p) = st.pending.as_ref() {
                     if p.key == key {
-                        Ok((v, Some((p.request.clone(), p.issued))))
+                        Verdict::Waiting { request: p.request.clone(), code: p.code.clone(), left: (PENDING_SECS - (at - p.issued)).max(0), version: v }
                     } else {
-                        Err(("another_pending", "another update request is waiting for approval at the terminal".to_string()))
+                        Verdict::Refuse("another_pending", "another update request is waiting for approval at the terminal".to_string())
                     }
+                } else if auto {
+                    Verdict::Go { version: v }
                 } else {
-                    Ok((v, None))
+                    st.pending = Some(Pending { key: key.to_string(), version: v.clone(), request: request.clone(), code: code.clone(), issued: at, wrong: 0 });
+                    Verdict::Pending { code: code.clone(), version: v }
                 }
             } else {
-                Err(("none_available", "no newer stable release is known; the daemon looks at start and every 6 hours".to_string()))
+                Verdict::Refuse("none_available", "no newer stable release is known; the daemon looks at start and every 6 hours".to_string())
             }
         };
-        let (version, waiting) = match verdict {
-            Ok(v) => v,
-            Err((reason, text)) => return self.update_refuse(key, &request, reason, text).await,
-        };
-        if let Some((request, issued)) = waiting {
-            // The same key asking again while its request waits: the same answer, and the clock is not extended.
-            return Ok(json!({"request": request, "state": "waiting", "version": version, "expires_in": (PENDING_SECS - (now - issued)).max(0)}));
+        match verdict {
+            Verdict::Refuse(reason, text) => self.update_refuse(key, &request, reason, text).await,
+            // The same key again: the same answer, and the clock is not extended. The code goes to this connection, which is the key's own.
+            Verdict::Waiting { request, code, left, version } => Ok(json!({"request": request, "state": "waiting", "version": version, "code": code, "expires_in": left})),
+            Verdict::Go { version } => self.update_begin(key, &version, &request).await.map(|_| json!({"request": request, "state": "running", "version": version})),
+            Verdict::Pending { code, version } => {
+                self.update_request_event(key, &request, "waiting", None).await;
+                Ok(json!({"request": request, "state": "waiting", "version": version, "code": code, "expires_in": PENDING_SECS}))
+            }
         }
-        if auto {
-            return self.update_begin(key, &version, &request).await.map(|_| json!({"request": request, "state": "running", "version": version}));
-        }
-        self.update.lock().unwrap().pending = Some(Pending { key: key.to_string(), version: version.clone(), request: request.clone(), issued: now, wrong: 0 });
-        self.update_request_event(key, &request, "waiting", None).await;
-        Ok(json!({"request": request, "state": "waiting", "version": version, "expires_in": PENDING_SECS}))
     }
 
     /// Start the apply for `key`: the checks that must hold at the moment it starts, the child, and its outcome in a task of its own.
+    /// `version` is the release the daemon found and the operator approved (or the standing authorization covered); it is the one the
+    /// command is told to install.
     async fn update_begin(self: &Arc<Self>, key: &str, version: &str, request: &str) -> Result<(), delphi_core::proto::RpcError> {
-        let now = (self.engine.clock_unix)();
         // The key must still hold the grant, and the program must still be the installed one, now that it is time to go.
         let still = self.update_key_state(key).is_some_and(|(holds, _)| holds);
         let ready = if still { self.update_exe().map(|_| ()) } else { Err("this key no longer holds `update`".to_string()) };
@@ -414,15 +544,19 @@ impl EngineService {
         }
         let verdict = {
             let mut st = self.update.lock().unwrap();
+            let at = st.now();
             if st.running {
                 Some(("update_running", "an update is already running"))
-            } else if st.last_apply.get(key).is_some_and(|at| now - *at < APPLY_EVERY_SECS) {
+            } else if st.last_apply.get(key).is_some_and(|t| at - *t < APPLY_EVERY_SECS) {
                 Some(("one_an_hour", "one update an hour for one key"))
+            } else if st.last_end.is_some_and(|(t, ok)| at - t < if ok { AFTER_OK_SECS } else { AFTER_FAIL_SECS }) {
+                Some(("too_soon", "the last update ended too recently for another to start"))
             } else if !st.available.as_deref().is_some_and(|a| a == version && newer(a, Self::installed_version())) {
                 Some(("not_newer", "the release found is not newer than the one installed"))
             } else {
                 st.running = true;
-                st.last_apply.insert(key.to_string(), now);
+                st.epoch += 1;
+                st.last_apply.insert(key.to_string(), at);
                 None
             }
         };
@@ -432,35 +566,56 @@ impl EngineService {
         self.update_request_event(key, request, "running", None).await;
         let (svc, key, version, request) = (self.clone(), key.to_string(), version.to_string(), request.to_string());
         tokio::spawn(async move {
-            let ran = svc.update_run(Clause::Apply).await;
+            let ran = svc.update_run(Clause::Apply { version: &version }).await;
             svc.update_finish(&key, &version, &request, ran).await;
         });
         Ok(())
     }
 
-    /// The exit code of the apply, as events: `app.updated` for an install, `app.update_refused` for anything else.
+    /// The end of the apply, as events: `app.updated` for the install that was approved; `app.update_refused` for anything else, and
+    /// loudly for an install of a different release than the one approved, which still leaves the daemon needing a restart.
     async fn update_finish(&self, key: &str, version: &str, request: &str, ran: Result<Ran, String>) {
         let from = Self::installed_version();
-        let outcome: Result<String, String> = match ran {
-            Err(e) => Err(e),
-            Ok(r) if r.code == Some(0) => parse_installed(&r.stdout).ok_or_else(|| "the program finished without installing: it says it is already the newest".to_string()),
-            Ok(r) => Err(format!("the update did not complete (exit {}): {}", r.code.map_or("signal".to_string(), |c| c.to_string()), one_line(&r.stderr))),
+        enum End {
+            Installed(String),
+            Different(String),
+            Failed(String),
+        }
+        let end = match ran {
+            Err(e) => End::Failed(e),
+            Ok(r) if r.code == Some(0) => match parse_installed(&r.stdout) {
+                Some(to) if to == version => End::Installed(to),
+                Some(to) => End::Different(to),
+                None => End::Failed("the program finished without installing: it says it is already the newest".to_string()),
+            },
+            Ok(r) => End::Failed(format!("the update did not complete (exit {}): {}", r.code.map_or("signal".to_string(), |c| c.to_string()), one_line(&r.stderr))),
         };
-        match outcome {
-            Ok(to) => {
-                {
-                    let mut st = self.update.lock().unwrap();
-                    st.running = false;
-                    st.restart_pending = true;
-                    st.available = None;
-                }
-                self.update_publish();
-                let to = if parse_release(&to).is_some() { to } else { version.to_string() };
+        let installed = matches!(end, End::Installed(_) | End::Different(_));
+        {
+            let mut st = self.update.lock().unwrap();
+            let at = st.now();
+            st.running = false;
+            st.epoch += 1;
+            st.last_end = Some((at, matches!(end, End::Installed(_))));
+            if installed {
+                st.restart_pending = true;
+                st.available = None;
+            }
+        }
+        if installed {
+            self.update_publish();
+        }
+        match end {
+            End::Installed(to) => {
                 self.update_event(crate::app_audit::UPDATED_EVENT, json!({"name": key, "from": from, "to": to, "restart_pending": true})).await;
                 self.update_request_event(key, request, "done", None).await;
             }
-            Err(text) => {
-                self.update.lock().unwrap().running = false;
+            End::Different(to) => {
+                let text = format!("installed a different release than the one approved (approved {version}, installed {to}); restart the daemon, and check what is installed");
+                self.update_event(crate::app_audit::UPDATE_REFUSED_EVENT, json!({"name": key, "reason": "installed_different_release", "approved": version, "installed": to, "restart_pending": true, "why": text})).await;
+                self.update_request_event(key, request, "failed", Some(&text)).await;
+            }
+            End::Failed(text) => {
                 self.update_event(crate::app_audit::UPDATE_REFUSED_EVENT, json!({"name": key, "reason": "update_failed", "why": one_line(&text)})).await;
                 self.update_request_event(key, request, "failed", Some(&text)).await;
             }
@@ -469,68 +624,69 @@ impl EngineService {
 
     /// `app.update_pending` and `app.update_approve` (item 5), for the server, which has checked the caller's scope and terminal.
     pub async fn app_update_admin(self: &Arc<Self>, method: &str, params: Value) -> Option<RpcOutcome> {
-        let now = (self.engine.clock_unix)();
         match method {
-            // What waits, with the release the daemon found: never anything the app said.
+            // What the console sees: the key and the release the DAEMON found, never anything the app said, and never the code.
             "app.update_pending" => {
                 let mut st = self.update.lock().unwrap();
-                if st.pending.as_ref().is_some_and(|p| now - p.issued > PENDING_SECS) {
+                let at = st.now();
+                if st.pending.as_ref().is_some_and(|p| at - p.issued > PENDING_SECS) {
                     st.pending = None;
                 }
-                let rows: Vec<Value> = st.pending.iter().map(|p| json!({"request_id": p.request, "key": p.key, "version": p.version, "installed": Self::installed_version(), "age_secs": now - p.issued, "expires_in": (PENDING_SECS - (now - p.issued)).max(0)})).collect();
+                let rows: Vec<Value> = st.pending.iter().map(|p| json!({"request_id": p.request, "key": p.key, "version": p.version, "installed": Self::installed_version(), "age_secs": at - p.issued, "expires_in": (PENDING_SECS - (at - p.issued)).max(0)})).collect();
                 Some(Ok(json!({"pending": rows, "update_available": st.available, "restart_pending": st.restart_pending})))
             }
-            "app.update_approve" => Some(self.update_approve(params, now).await),
+            "app.update_approve" => Some(self.update_approve(params).await),
             _ => None,
         }
     }
 
-    /// The operator typed a version. Only the version of the request that waits approves it; Enter alone, or any other string, approves
-    /// nothing, and three wrong ones cancel the request.
-    async fn update_approve(self: &Arc<Self>, params: Value, now: i64) -> RpcOutcome {
-        enum Verdict {
+    /// The operator typed the code shown in the app's window. Only that code approves the request that waits; Enter alone, or any other
+    /// string, approves nothing, and three wrong ones cancel the request (so a local process can cancel one by guessing: a nuisance, and no more).
+    async fn update_approve(self: &Arc<Self>, params: Value) -> RpcOutcome {
+        enum Outcome {
             Nothing,
             Expired(String, String),
             Wrong { key: String, request: String, cancelled: bool },
             Go(Pending),
         }
-        let typed = params["version"].as_str().unwrap_or("").trim().to_string();
+        let typed = app_keys::normalize_code(params["code"].as_str().unwrap_or(""));
         // Decided under the lock, with nothing awaited there.
-        let verdict = {
+        let outcome = {
             let mut st = self.update.lock().unwrap();
+            let at = st.now();
             match st.pending.as_mut() {
-                None => Verdict::Nothing,
-                Some(p) if now - p.issued > PENDING_SECS => {
-                    let v = Verdict::Expired(p.key.clone(), p.request.clone());
+                None => Outcome::Nothing,
+                Some(p) if at - p.issued > PENDING_SECS => {
+                    let v = Outcome::Expired(p.key.clone(), p.request.clone());
                     st.pending = None;
                     v
                 }
-                Some(p) if typed.strip_prefix('v').unwrap_or(&typed).is_empty() || typed.strip_prefix('v').unwrap_or(&typed) != p.version => {
+                Some(p) if !typed.as_deref().is_some_and(|t| ct_eq(t, &p.code.replace('-', ""))) => {
                     p.wrong += 1;
-                    let v = Verdict::Wrong { key: p.key.clone(), request: p.request.clone(), cancelled: p.wrong >= MAX_WRONG };
+                    let v = Outcome::Wrong { key: p.key.clone(), request: p.request.clone(), cancelled: p.wrong >= MAX_WRONG };
                     if p.wrong >= MAX_WRONG {
                         st.pending = None;
                     }
                     v
                 }
-                Some(_) => Verdict::Go(st.pending.take().unwrap()),
+                Some(_) => Outcome::Go(st.pending.take().unwrap()),
             }
         };
-        match verdict {
-            Verdict::Nothing => Err(err(code::NOT_FOUND, "no update is waiting for approval")),
-            Verdict::Expired(key, request) => {
+        match outcome {
+            Outcome::Nothing => Err(err(code::NOT_FOUND, "no update is waiting for approval")),
+            Outcome::Expired(key, request) => {
                 self.update_request_event(&key, &request, "refused", Some("not approved in 10 minutes")).await;
                 self.update_event(crate::app_audit::UPDATE_REFUSED_EVENT, json!({"name": key, "reason": "expired_request"})).await;
                 Err(err(code::FORBIDDEN, "that update request has expired; the app asks again"))
             }
-            Verdict::Wrong { key, request, cancelled } => {
-                self.update_event(crate::app_audit::UPDATE_REFUSED_EVENT, json!({"name": key, "reason": if cancelled { "wrong_version_limit" } else { "wrong_version" }})).await;
+            Outcome::Wrong { key, request, cancelled } => {
+                self.update_event(crate::app_audit::UPDATE_REFUSED_EVENT, json!({"name": key, "reason": if cancelled { "wrong_code_limit" } else { "wrong_code" }})).await;
                 if cancelled {
-                    self.update_request_event(&key, &request, "refused", Some("the wrong version was typed 3 times")).await;
+                    self.update_request_event(&key, &request, "refused", Some("the wrong code was typed 3 times")).await;
                 }
-                Err(err(code::FORBIDDEN, if cancelled { format!("that is not the version, {MAX_WRONG} times: the request is cancelled and the app asks again") } else { "that is not the version the daemon found".to_string() }))
+                Err(err(code::FORBIDDEN, if cancelled { format!("that is not the code, {MAX_WRONG} times: the request is cancelled and the app asks again") } else { "that is not the code shown in the app's window".to_string() }))
             }
-            Verdict::Go(taken) => {
+            Outcome::Go(taken) => {
                 self.update_begin(&taken.key, &taken.version, &taken.request).await?;
                 Ok(json!({"approved": true, "version": taken.version, "name": taken.key}))
             }
@@ -545,7 +701,7 @@ mod tests {
     #[test]
     fn the_two_clauses_are_made_from_the_daemons_own_words() {
         let home = Path::new("/h/.delphi");
-        assert_eq!(apply_argv("default", home), ["update", "--no-restart", "--workspace", "default", "--home", "/h/.delphi"].map(OsString::from));
+        assert_eq!(apply_argv("default", home, "0.6.6"), ["update", "--no-restart", "--review", "--version", "v0.6.6", "--workspace", "default", "--home", "/h/.delphi"].map(OsString::from));
         assert_eq!(check_argv(home), ["update", "--check", "--home", "/h/.delphi"].map(OsString::from));
         for ok in ["default", "my-ws", "a.b_c", "7"] {
             assert!(plain_name(ok), "{ok}");
@@ -589,13 +745,42 @@ mod tests {
         let ok = t.path().join("delphi");
         std::fs::write(&ok, "#!/bin/sh\n").unwrap();
         std::fs::set_permissions(&ok, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(is_installed_program(&ok).is_ok());
+        assert_eq!(is_installed_program(&ok).unwrap(), std::fs::canonicalize(&ok).unwrap(), "the canonical path is what is returned, and started");
         std::fs::set_permissions(&ok, std::fs::Permissions::from_mode(0o775)).unwrap();
         assert!(is_installed_program(&ok).is_err(), "group-writable");
         let other = t.path().join("not-delphi");
         std::fs::write(&other, "#!/bin/sh\n").unwrap();
         assert!(is_installed_program(&other).is_err(), "another name");
         assert!(is_installed_program(Path::new("delphi")).is_err() && is_installed_program(&t.path().join("nope/delphi")).is_err());
+    }
+
+    /// Item 6: a folder above the program that others can write could be used to swap the program; a link is followed and what it leads to
+    /// is judged.
+    #[test]
+    fn every_folder_above_the_program_must_be_closed_to_others() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let open = t.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let inner = open.join("bin");
+        std::fs::create_dir(&inner).unwrap();
+        std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let exe = inner.join("delphi");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let e = is_installed_program(&exe).unwrap_err();
+        assert!(e.contains("can be written by others") && e.contains("open"), "{e}");
+        // A link named `delphi` that leads into the open folder is judged by where it leads.
+        let safe = t.path().join("safe");
+        std::fs::create_dir(&safe).unwrap();
+        std::os::unix::fs::symlink(&exe, safe.join("delphi")).unwrap();
+        assert!(is_installed_program(&safe.join("delphi")).is_err(), "a link into a folder others can write");
+        // A closed folder above it is fine again, and a link under another name to a program of the right name is judged by the target.
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_installed_program(&exe).is_ok());
+        std::os::unix::fs::symlink(&exe, t.path().join("other-name")).unwrap();
+        assert_eq!(is_installed_program(&t.path().join("other-name")).unwrap(), std::fs::canonicalize(&exe).unwrap());
     }
 
     // ── The engine's half, with a script standing in for the installed program ─────────────────────────────────────────────
@@ -635,7 +820,7 @@ mod tests {
         let rec = bin.path().join("rec");
         std::fs::create_dir(&rec).unwrap();
         let script = format!(
-            "#!/bin/sh\nrec='{}'\n{{ echo \"ARGV $*\"; echo \"PWD $(pwd)\"; echo \"TMP $TMPDIR\"; echo \"ENV $(env | cut -d= -f1 | sort | tr '\\n' ' ')\"; echo \"PATH $PATH\"; if [ -t 0 ]; then echo 'STDIN tty'; else echo 'STDIN none'; fi; }} >> \"$rec/calls\"\ncase \"$*\" in\n  *--check*) cat \"$rec/check.out\"; exit 0 ;;\n  *) cat \"$rec/apply.out\"; exit \"$(cat \"$rec/apply.code\")\" ;;\nesac\n",
+            "#!/bin/sh\nrec='{}'\n{{ echo \"ARGV $*\"; echo \"PWD $(pwd)\"; echo \"TMP $TMPDIR\"; echo \"ENV $(env | cut -d= -f1 | sort | tr '\\n' ' ')\"; echo \"PATH $PATH\"; if [ -t 0 ]; then echo 'STDIN tty'; else echo 'STDIN none'; fi; }} >> \"$rec/calls\"\nif [ -e \"$rec/leakfd\" ]; then if [ -e \"/dev/fd/$(cat \"$rec/leakfd\")\" ]; then echo LEAK >> \"$rec/leak\"; else echo CLEAN >> \"$rec/leak\"; fi; fi\nif [ -e \"$rec/hang\" ]; then sleep 300 & echo $! > \"$rec/bgpid\"; sleep 300; fi\ncase \"$*\" in\n  *--check*) if [ -e \"$rec/slow\" ]; then while [ ! -e \"$rec/go\" ]; do sleep 0.05; done; fi; cat \"$rec/check.out\"; exit 0 ;;\n  *) cat \"$rec/apply.out\"; exit \"$(cat \"$rec/apply.code\")\" ;;\nesac\n",
             rec.display()
         );
         let exe = bin.path().join("delphi");
@@ -678,7 +863,7 @@ mod tests {
         }
 
         fn advance(&self, secs: i64) {
-            self.f.now.fetch_add(secs, std::sync::atomic::Ordering::SeqCst);
+            self.svc.update_advance(secs);
         }
     }
 
@@ -703,53 +888,57 @@ mod tests {
         assert_eq!(r.svc.update_facts(), (Some("99.0.0".to_string()), false));
     }
 
-    /// AC-17: without `--auto`, the call makes a pending request naming the release the daemon found, and changes nothing. Only the
-    /// version typed approves it: Enter, a wrong string and the third wrong string do not.
+    /// AC-17: without `--auto`, the call makes a pending request naming the release the daemon found, and changes nothing. Only the code
+    /// the app was given approves it: Enter, a typed version, a wrong code and the third wrong one do not, and the console's list never holds the code.
     #[tokio::test(flavor = "multi_thread")]
-    async fn without_auto_the_call_waits_for_the_version_typed_at_a_terminal() {
+    async fn without_auto_the_call_waits_for_the_code_typed_at_a_terminal() {
         let r = rig(vec![key(KEY, &["read", "update"], false), key(OTHER, &["read", "update"], false)]);
         r.svc.update_check_now().await;
         assert_eq!(r.calls().iter().filter(|l| l.starts_with("ARGV")).count(), 1, "one check, no apply");
         let asked = r.svc.app_update_apply(KEY, json!({})).await.unwrap();
         assert_eq!((asked["state"].as_str(), asked["version"].as_str(), asked["expires_in"].as_i64()), (Some("waiting"), Some("99.0.0"), Some(PENDING_SECS)));
+        let code = asked["code"].as_str().unwrap().to_string();
+        assert!(app_keys::normalize_code(&code).is_some(), "{code}");
         assert_eq!(r.states(), ["waiting"]);
         assert!(r.kinds("app.updated").is_empty());
-        // The same key again: the same request. Another key: refused, one at a time.
+        // The same key again: the same request and the same code. Another key: refused, one at a time.
         let again = r.svc.app_update_apply(KEY, json!(null)).await.unwrap();
-        assert_eq!((again["request"].clone(), again["state"].as_str()), (asked["request"].clone(), Some("waiting")));
+        assert_eq!((again["request"].clone(), again["state"].as_str(), again["code"].clone()), (asked["request"].clone(), Some("waiting"), asked["code"].clone()));
         let (c, m) = refused(r.svc.app_update_apply(OTHER, json!({})).await);
         assert_eq!(c, rpc::FORBIDDEN);
         assert!(m.contains("another update request is waiting"), "{m}");
-        // What the console sees: the release the DAEMON found, never anything the app said.
+        // What the console sees: the key and the release the DAEMON found, never the code, and no event holds it either.
         let listed = r.svc.app_update_admin("app.update_pending", json!({})).await.unwrap().unwrap();
         assert_eq!((listed["pending"][0]["version"].as_str(), listed["pending"][0]["key"].as_str(), listed["pending"][0]["installed"].as_str()), (Some("99.0.0"), Some(KEY), Some(env!("CARGO_PKG_VERSION"))));
-        // Enter and a wrong version: refused, nothing installed.
-        for wrong in ["", "0.0.1"] {
-            let (c, m) = refused(r.svc.app_update_admin("app.update_approve", json!({"version": wrong})).await.unwrap());
-            assert_eq!((c, m.as_str()), (rpc::FORBIDDEN, "that is not the version the daemon found"), "{wrong:?}");
+        let seen = format!("{listed}{:?}", r.f.m.replay().unwrap().iter().map(|e| e.payload.to_string()).collect::<Vec<_>>());
+        assert!(!seen.contains(&code) && !seen.contains(&code.replace('-', "")), "the code is in what the console or the log can see");
+        // Enter, a typed version and the third wrong string: refused, nothing installed, and the third cancels the request.
+        let wrong = if code == "AAA-AAA" { "BBB-BBB" } else { "AAA-AAA" };
+        for (i, bad) in ["", "99.0.0", wrong].into_iter().enumerate() {
+            let (c, m) = refused(r.svc.app_update_admin("app.update_approve", json!({"code": bad})).await.unwrap());
+            assert_eq!(c, rpc::FORBIDDEN, "{bad:?}");
+            assert_eq!(m.contains("cancelled"), i == 2, "{m}");
         }
         assert_eq!(r.applies(), 0);
-        // The third wrong string cancels the request: the right version after it finds nothing waiting.
-        let (c, m) = refused(r.svc.app_update_admin("app.update_approve", json!({"version": "latest"})).await.unwrap());
-        assert!(c == rpc::FORBIDDEN && m.contains("cancelled"), "{m}");
-        assert_eq!(refused(r.svc.app_update_admin("app.update_approve", json!({"version": "99.0.0"})).await.unwrap()).0, rpc::NOT_FOUND);
-        assert!(r.kinds("app.update_refused").iter().any(|p| p["reason"] == "wrong_version_limit"));
+        assert_eq!(refused(r.svc.app_update_admin("app.update_approve", json!({"code": code.clone()})).await.unwrap()).0, rpc::NOT_FOUND, "the right code finds nothing waiting now");
+        assert!(r.kinds("app.update_refused").iter().any(|p| p["reason"] == "wrong_code_limit"));
         assert_eq!(r.applies(), 0);
 
-        // A new request, then the version typed (a leading `v` is the same version).
-        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
-        let approved = r.svc.app_update_admin("app.update_approve", json!({"version": "v99.0.0"})).await.unwrap().unwrap();
+        // A new request, then the code as typed from the window (in lower case, with or without the dash).
+        let asked = r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        let code = asked["code"].as_str().unwrap().to_string();
+        let approved = r.svc.app_update_admin("app.update_approve", json!({"code": code.to_lowercase()})).await.unwrap().unwrap();
         assert_eq!((approved["approved"].as_bool(), approved["version"].as_str(), approved["name"].as_str()), (Some(true), Some("99.0.0"), Some(KEY)));
         let done = r.wait("app.updated", 1).await;
         assert_eq!((done[0]["name"].as_str(), done[0]["from"].as_str(), done[0]["to"].as_str(), done[0]["restart_pending"].as_bool()), (Some(KEY), Some(env!("CARGO_PKG_VERSION")), Some("99.0.0"), Some(true)));
-        r.wait("app.request", 1).await;
         let end = std::time::Instant::now() + Duration::from_secs(30);
         while r.states().last().map(String::as_str) != Some("done") {
             assert!(std::time::Instant::now() < end, "{:?}", r.states());
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert_eq!(r.states(), ["waiting", "refused", "refused", "waiting", "running", "done"], "waiting; the other key refused; the request cancelled; asked again, approved, installed");
         assert_eq!(r.applies(), 1);
+        let apply = r.calls().into_iter().find(|l| l.starts_with("ARGV update --no-restart")).unwrap();
+        assert!(apply.contains("--version v99.0.0") && apply.contains("--review"), "{apply}");
     }
 
     /// A request that is not approved in ten minutes is dropped, and the version typed afterwards approves nothing.
@@ -757,14 +946,14 @@ mod tests {
     async fn a_request_that_is_not_approved_in_ten_minutes_changes_nothing() {
         let r = rig(vec![key(KEY, &["read", "update"], false)]);
         r.svc.update_check_now().await;
-        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        let code = r.svc.app_update_apply(KEY, json!({})).await.unwrap()["code"].as_str().unwrap().to_string();
         r.advance(PENDING_SECS + 1);
-        let (c, m) = refused(r.svc.app_update_admin("app.update_approve", json!({"version": "99.0.0"})).await.unwrap());
+        let (c, m) = refused(r.svc.app_update_admin("app.update_approve", json!({"code": code})).await.unwrap());
         assert_eq!(c, rpc::FORBIDDEN);
         assert!(m.contains("expired"), "{m}");
         assert_eq!(r.applies(), 0);
         assert!(r.kinds("app.update_refused").iter().any(|p| p["reason"] == "expired_request"));
-        assert_eq!(refused(r.svc.app_update_admin("app.update_approve", json!({"version": "99.0.0"})).await.unwrap()).0, rpc::NOT_FOUND);
+        assert_eq!(refused(r.svc.app_update_admin("app.update_approve", json!({"code": "ABC-DEF"})).await.unwrap()).0, rpc::NOT_FOUND);
         // A request that waited past the time is not listed either.
         r.svc.app_update_apply(KEY, json!({})).await.unwrap();
         r.advance(PENDING_SECS + 1);
@@ -785,9 +974,9 @@ mod tests {
         assert_eq!(apply.len(), 6, "{calls:?}");
         let name = r.f.engine.ws.dir.file_name().unwrap().to_string_lossy().into_owned();
         let home = r.f.engine.ws.home.display().to_string();
-        assert_eq!(apply[0], &format!("ARGV update --no-restart --workspace {name} --home {home}"));
+        assert_eq!(apply[0], &format!("ARGV update --no-restart --review --version v99.0.0 --workspace {name} --home {home}"));
         let words = |argv: Vec<OsString>| argv.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ");
-        assert_eq!(apply[0], &format!("ARGV {}", words(apply_argv(&name, &r.f.engine.ws.home))));
+        assert_eq!(apply[0], &format!("ARGV {}", words(apply_argv(&name, &r.f.engine.ws.home, "99.0.0"))));
         assert!(apply[1].starts_with("PWD ") && apply[1].contains("delphi-update-"), "a private folder of its own: {}", apply[1]);
         assert_eq!(apply[2].trim_start_matches("TMP ").trim_start_matches("/private"), apply[1].trim_start_matches("PWD ").trim_start_matches("/private"), "and it is the temporary folder");
         let env = apply[3].trim_start_matches("ENV ");
@@ -852,9 +1041,9 @@ mod tests {
         let (_, m) = refused(r.svc.app_update_apply("app-ffffff", json!({})).await);
         assert!(m.contains("no longer paired"), "{m}");
         // Pending, then the operator takes the grant away: approval finds nothing to go on with.
-        r.svc.app_update_apply(OTHER, json!({})).await.unwrap();
+        let code = r.svc.app_update_apply(OTHER, json!({})).await.unwrap()["code"].as_str().unwrap().to_string();
         KeyStore::at(&r.f.engine.ws.home).save(&[key(OTHER, &["read"], false)]).unwrap();
-        let (_, m) = refused(r.svc.app_update_admin("app.update_approve", json!({"version": "99.0.0"})).await.unwrap());
+        let (_, m) = refused(r.svc.app_update_admin("app.update_approve", json!({"code": code})).await.unwrap());
         assert!(m.contains("no longer holds `update`"), "{m}");
         assert_eq!(r.applies(), 0);
         assert!(!r.svc.update_facts().1);
@@ -928,5 +1117,157 @@ mod tests {
         assert_eq!((read().update_available, read().restart_pending), (None, false));
         let text = std::fs::read_to_string(&l.presence).unwrap();
         assert!(!text.contains("update_available") && !text.contains("restart_pending"));
+    }
+
+    /// Item 1: the command is told which release to install, and an install of any other is a failure written loudly, `--auto` or not.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_install_of_another_release_than_the_approved_one_is_a_loud_failure() {
+        let r = rig(vec![key(KEY, &["read", "update"], true)]);
+        r.svc.update_check_now().await;
+        std::fs::write(r.rec.join("apply.out"), "0.0.1 -> v99.0.1\nInstalled v99.0.1 at /x/delphi (the old version is kept as /x/delphi.prev)\n").unwrap();
+        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        let refusals = r.wait("app.update_refused", 1).await;
+        assert_eq!((refusals[0]["reason"].as_str(), refusals[0]["approved"].as_str(), refusals[0]["installed"].as_str()), (Some("installed_different_release"), Some("99.0.0"), Some("99.0.1")));
+        assert!(refusals[0]["why"].as_str().unwrap().contains("installed a different release"), "{}", refusals[0]);
+        assert!(r.kinds("app.updated").is_empty(), "it is not reported as the update that was approved");
+        // Something was installed, so the daemon still needs its restart, and the log says it failed.
+        assert_eq!(r.svc.update_facts(), (None, true));
+        let end = std::time::Instant::now() + Duration::from_secs(30);
+        while r.states().last().map(String::as_str) != Some("failed") {
+            assert!(std::time::Instant::now() < end, "{:?}", r.states());
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(r.calls().iter().any(|l| l == &format!("ARGV {}", [
+            "update", "--no-restart", "--review", "--version", "v99.0.0", "--workspace", r.f.engine.ws.dir.file_name().unwrap().to_str().unwrap(), "--home", r.f.engine.ws.home.to_str().unwrap()
+        ].join(" "))));
+    }
+
+    /// Item 3: two keys asking at the same moment cannot both become the pending request, whichever gets the lock first.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_keys_asking_at_once_leave_one_pending_request_and_one_refusal() {
+        for round in 0..8 {
+            let r = rig(vec![key(KEY, &["read", "update"], false), key(OTHER, &["read", "update"], false)]);
+            r.svc.update_check_now().await;
+            let (a, b) = (r.svc.clone(), r.svc.clone());
+            let (x, y) = tokio::join!(tokio::spawn(async move { a.app_update_apply(KEY, json!({})).await }), tokio::spawn(async move { b.app_update_apply(OTHER, json!({})).await }));
+            let (x, y) = (x.unwrap(), y.unwrap());
+            assert_eq!(x.is_ok() as u8 + y.is_ok() as u8, 1, "round {round}: exactly one waits: {x:?} {y:?}");
+            let winner = if x.is_ok() { KEY } else { OTHER };
+            let (_, m) = refused(if x.is_ok() { y } else { x });
+            assert!(m.contains("another update request is waiting"), "{m}");
+            let listed = r.svc.app_update_admin("app.update_pending", json!({})).await.unwrap().unwrap();
+            assert_eq!((listed["pending"].as_array().unwrap().len(), listed["pending"][0]["key"].as_str()), (1, Some(winner)), "round {round}: the request that waits is the one that was told it waits");
+            assert!(r.kinds("app.update_refused").iter().any(|p| p["reason"] == "another_pending"));
+        }
+    }
+
+    /// Item 4: out of time, the child's whole group is ended, and the daemon is not free to start another until it is gone.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_child_that_runs_out_of_time_is_ended_with_everything_it_started() {
+        let r = rig(vec![key(KEY, &["read", "update"], true)]);
+        r.svc.update_check_now().await;
+        std::fs::write(r.rec.join("hang"), "").unwrap();
+        r.svc.set_update_limit(Duration::from_millis(1500));
+        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        let refusals = r.wait("app.update_refused", 1).await;
+        assert_eq!(refusals[0]["reason"], "update_failed");
+        assert!(refusals[0]["why"].as_str().unwrap().contains("did not finish in time"), "{}", refusals[0]);
+        let bg: i32 = std::fs::read_to_string(r.rec.join("bgpid")).unwrap().trim().parse().unwrap();
+        // The event is written after the group is gone and `running` is cleared: nothing the child started is left.
+        assert!(unsafe { libc::kill(bg, 0) } != 0, "the process the child started is still running");
+        let st = r.svc.update.lock().unwrap();
+        assert!(!st.running);
+    }
+
+    /// Item 5: the child holds no descriptor above 2 that the daemon held (the readiness pipe, the lock, a socket).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_child_inherits_no_descriptor_above_two() {
+        let r = rig(vec![key(KEY, &["read", "update"], true)]);
+        let f = std::fs::File::open("/dev/null").unwrap();
+        use std::os::fd::AsRawFd;
+        // A descriptor that is not close-on-exec, as the daemon's lock and readiness descriptors are.
+        let leaked = unsafe { libc::fcntl(f.as_raw_fd(), libc::F_DUPFD, 200) };
+        assert!(leaked >= 200);
+        std::fs::write(r.rec.join("leakfd"), leaked.to_string()).unwrap();
+        r.svc.update_check_now().await;
+        let seen = std::fs::read_to_string(r.rec.join("leak")).unwrap();
+        unsafe { libc::close(leaked) };
+        assert_eq!(seen.trim(), "CLEAN", "the descriptor was open in the child");
+    }
+
+    /// Item 7: any key waits after an apply, longer after an install than after a failure, and the wall clock is no part of it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn another_key_waits_after_any_apply_and_the_wall_clock_does_not_count() {
+        let r = rig(vec![key(KEY, &["read", "update"], true), key(OTHER, &["read", "update"], true)]);
+        r.svc.update_check_now().await;
+        std::fs::write(r.rec.join("apply.out"), "delphi update: nope\n").unwrap();
+        std::fs::write(r.rec.join("apply.code"), "1").unwrap();
+        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        r.wait("app.update_refused", 1).await;
+        // The wall clock moves a day; the daemon does not take it for time passed.
+        r.f.now.fetch_add(86_400, std::sync::atomic::Ordering::SeqCst);
+        let (_, m) = refused(r.svc.app_update_apply(OTHER, json!({})).await);
+        assert!(m.contains("the next waits 10 minutes"), "{m}");
+        r.advance(AFTER_FAIL_SECS + 1);
+        std::fs::write(r.rec.join("apply.out"), INSTALLED).unwrap();
+        std::fs::write(r.rec.join("apply.code"), "0").unwrap();
+        r.svc.app_update_apply(OTHER, json!({})).await.unwrap();
+        r.wait("app.updated", 1).await;
+        // After an install: an hour, for any key. (The restart is the other reason the next is refused; the wait is named first.)
+        r.advance(AFTER_OK_SECS - 100);
+        let (_, m) = refused(r.svc.app_update_apply(KEY, json!({})).await);
+        assert!(m.contains("the next waits 60 minutes"), "{m}");
+    }
+
+    /// Item 8: a check that began before an apply and ends after it is out of date, and changes nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_check_that_straddles_an_apply_is_thrown_away() {
+        let r = rig(vec![key(KEY, &["read", "update"], true)]);
+        r.svc.update_check_now().await;
+        assert_eq!(r.svc.update_facts().0.as_deref(), Some("99.0.0"));
+        std::fs::write(r.rec.join("slow"), "").unwrap();
+        let svc = r.svc.clone();
+        let slow = tokio::spawn(async move { svc.update_check_now().await });
+        // Wait until the slow check is running, then apply and finish the apply.
+        let end = std::time::Instant::now() + Duration::from_secs(30);
+        while r.calls().iter().filter(|l| l.contains("--check")).count() < 2 {
+            assert!(std::time::Instant::now() < end);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        r.wait("app.updated", 1).await;
+        assert_eq!(r.svc.update_facts(), (None, true));
+        // Now the slow check answers, with the release the apply just installed: it must not bring `update_available` back.
+        std::fs::write(r.rec.join("go"), "").unwrap();
+        slow.await.unwrap();
+        assert_eq!(r.svc.update_facts(), (None, true));
+    }
+
+    /// Item 8: writers of the presence file go one at a time and each writes what is true when it gets its turn.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_presence_file_is_never_left_older_than_the_state() {
+        let r = rig(vec![]);
+        let (home, ws) = (r.f.engine.ws.home.clone(), r.f.engine.ws.dir.clone());
+        let l = delphi_core::spawn::layout(&home, &ws).unwrap();
+        delphi_core::spawn::ensure_run_dir(&l.run_dir).unwrap();
+        let base = delphi_core::presence::Presence::new(&l, &"0123456789abcdef".repeat(2), "0.6.5", &ws, &home);
+        r.svc.set_update_presence(l.clone(), base);
+        let mut tasks = Vec::new();
+        for i in 0..24 {
+            let svc = r.svc.clone();
+            tasks.push(tokio::task::spawn_blocking(move || {
+                if i == 12 {
+                    let mut st = svc.update.lock().unwrap();
+                    st.available = None;
+                    st.restart_pending = true;
+                }
+                svc.update_publish();
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap();
+        }
+        let p = delphi_core::presence::read(&l.presence).unwrap();
+        assert_eq!((p.update_available, p.restart_pending), (None, true));
     }
 }

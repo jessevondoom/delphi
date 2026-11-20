@@ -11,8 +11,8 @@
 //! * `delphi app approve` (`specs/120` §13.1): an app with no key shows a code in its window; the operator types that code
 //!   here. Enter alone approves nothing, and nothing a process does for itself can type it. A key approved this way holds
 //!   `read`; `--grant request` adds `request`.
-//! * The same command approves a pending update (§13.2 item 5): the daemon names the release it found, and the operator types
-//!   that version. Enter alone, or any other string, approves nothing. `grant <name> update --auto` records a standing
+//! * The same command approves a pending update (§13.2 item 5): the daemon names the key and the release it found, and the
+//!   operator types the code the app's window shows for it. Enter alone, or any other string, approves nothing. `grant <name> update --auto` records a standing
 //!   authorization, which skips that approval for this key's `app.update_apply` and for nothing else.
 
 use delphi_core::app_keys;
@@ -319,8 +319,8 @@ pub(crate) fn pair(client: &mut Client, exe: &Path, start: &dyn Fn(&Path, &str) 
 
 /// `delphi app approve` (§13.1 item 3, §13.2 item 5): list what waits (pairing requests and a pending update), ask for what proves the
 /// operator is looking, and send it with the request's id. For a pairing request that is the code shown in the app's window; for an
-/// update it is the version the daemon found, typed. A line with nothing in it approves nothing and sends nothing; the daemon holds
-/// the code and the version, so a wrong one is refused there and three cancel the request.
+/// update it is the code the app's window shows for it, typed (the list names the key and the release and never the code). A line with
+/// nothing in it approves nothing and sends nothing; the daemon holds the code, so a wrong one is refused there and three cancel the request.
 pub(crate) fn approve(client: &mut Client, request: bool, input: &mut dyn std::io::BufRead, out: &mut dyn std::io::Write) -> i32 {
     let listed = match client.call("app.pair_pending", json!({})) {
         Ok(v) => v,
@@ -361,14 +361,14 @@ pub(crate) fn approve(client: &mut Client, request: bool, input: &mut dyn std::i
     if chosen >= pending.len() {
         let u = &updates[chosen - pending.len()];
         let version = u["version"].as_str().unwrap_or("");
-        let typed = ask(&format!("the daemon found {version}; type that version to install it: "), out).unwrap_or_default();
+        let typed = ask(&format!("type the code shown in the app window to install Delphi {version}: "), out).unwrap_or_default();
         if typed.is_empty() {
-            let _ = writeln!(out, "nothing was approved: approval is the version typed, not Enter.");
+            let _ = writeln!(out, "nothing was approved: approval is the code typed, not Enter.");
             return 1;
         }
-        return match client.call("app.update_approve", json!({"version": typed})) {
+        return match client.call("app.update_approve", json!({"code": typed})) {
             Ok(v) => {
-                let _ = writeln!(out, "approved: {} will install Delphi {}; it does not restart the daemon. `delphi app log` shows how it went.", v["name"].as_str().unwrap_or("the app's key"), v["version"].as_str().unwrap_or(version));
+                let _ = writeln!(out, "approved: {} will install Delphi {}; it does not restart the daemon, and the release's changes to the built-in agents and skills wait for /ratify. `delphi app log` shows how it went.", v["name"].as_str().unwrap_or("the app's key"), v["version"].as_str().unwrap_or(version));
                 0
             }
             Err(e) => fail(&e),
@@ -756,9 +756,11 @@ mod tests {
         s.daemon.request_shutdown();
     }
 
-    /// A daemon's extension that holds one pending update, as the engine's does, to drive the terminal's half of §13.2 item 5.
+    /// A daemon's extension that holds one pending update, as the engine's does, to drive the terminal's half of §13.2 item 5. The list it
+    /// gives names the key and the release and never the code.
     struct Waiting {
         version: String,
+        code: String,
         approved: std::sync::Mutex<Vec<String>>,
     }
 
@@ -768,8 +770,8 @@ mod tests {
         }
 
         fn app_update_admin(&self, method: &str, params: Value) -> delphi_core::server::RpcFuture {
-            let version = self.version.clone();
-            let typed = params["version"].as_str().unwrap_or("").to_string();
+            let (version, code) = (self.version.clone(), self.code.clone());
+            let typed = params["code"].as_str().unwrap_or("").to_string();
             let method = method.to_string();
             if method == "app.update_approve" {
                 self.approved.lock().unwrap().push(typed.clone());
@@ -777,34 +779,35 @@ mod tests {
             Box::pin(async move {
                 match method.as_str() {
                     "app.update_pending" => Some(Ok(json!({"pending": [{"request_id": "au-1", "key": "app-0a1b2c", "version": version, "installed": "0.6.5", "age_secs": 3, "expires_in": 597}]}))),
-                    _ if typed == version => Some(Ok(json!({"approved": true, "version": version, "name": "app-0a1b2c"}))),
-                    _ => Some(Err(delphi_core::proto::RpcError { code: delphi_core::proto::code::FORBIDDEN, message: "that is not the version the daemon found".into(), data: None })),
+                    _ if typed == code => Some(Ok(json!({"approved": true, "version": version, "name": "app-0a1b2c"}))),
+                    _ => Some(Err(delphi_core::proto::RpcError { code: delphi_core::proto::code::FORBIDDEN, message: "that is not the code shown in the app's window".into(), data: None })),
                 }
             })
         }
     }
 
-    /// AC-17, the terminal's half: the daemon names the release; Enter alone, end of input and a wrong string approve nothing (the
-    /// first two do not even ask the daemon); the version typed approves.
+    /// AC-17, the terminal's half: the daemon names the key and the release; Enter alone, end of input and a wrong string (the version
+    /// itself included) approve nothing (the first two do not even ask the daemon); the code typed approves.
     #[test]
-    fn a_pending_update_is_approved_by_typing_the_version_the_daemon_found() {
+    fn a_pending_update_is_approved_by_typing_the_code_the_app_shows() {
         let mut s = serve();
-        let ext = Arc::new(Waiting { version: "0.6.6".into(), approved: Default::default() });
+        let ext = Arc::new(Waiting { version: "0.6.6".into(), code: "K7Q-4M2".into(), approved: Default::default() });
         s.daemon.set_extension(ext.clone());
         let mut out: Vec<u8> = Vec::new();
         assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(b"\n".to_vec()), &mut out), 1);
         let said = String::from_utf8(out).unwrap();
         assert!(said.contains("update") && said.contains("app-0a1b2c") && said.contains("Delphi 0.6.5 -> 0.6.6"), "{said}");
-        assert!(said.contains("the daemon found 0.6.6; type that version to install it") && said.contains("nothing was approved: approval is the version typed, not Enter"), "{said}");
+        assert!(said.contains("type the code shown in the app window to install Delphi 0.6.6") && said.contains("nothing was approved: approval is the code typed, not Enter"), "{said}");
+        assert!(!said.contains("K7Q"), "the list never holds the code: {said}");
         assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(Vec::new()), &mut Vec::new()), 1);
         assert!(ext.approved.lock().unwrap().is_empty(), "Enter and end of input are not sent");
-        for wrong in ["0.6.5", "0.6", "yes", "latest"] {
+        for wrong in ["0.6.6", "0.6.5", "K7Q-4M3", "yes"] {
             assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(format!("{wrong}\n").into_bytes()), &mut Vec::new()), 1, "{wrong}");
         }
         assert_eq!(ext.approved.lock().unwrap().len(), 4, "a wrong string is sent and the daemon refuses it");
         let mut out: Vec<u8> = Vec::new();
-        assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(b"0.6.6\n".to_vec()), &mut out), 0);
-        assert_eq!(ext.approved.lock().unwrap().last().map(String::as_str), Some("0.6.6"));
+        assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(b"K7Q-4M2\n".to_vec()), &mut out), 0);
+        assert_eq!(ext.approved.lock().unwrap().last().map(String::as_str), Some("K7Q-4M2"));
         let said = String::from_utf8(out).unwrap();
         assert!(said.contains("approved: app-0a1b2c will install Delphi 0.6.6; it does not restart the daemon"), "{said}");
         s.daemon.request_shutdown();
