@@ -72,7 +72,7 @@ Today `Delphi.app` exists only where someone ran `app/dev/build.sh`. The program
 
 ## 130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing
 
-**130: The desktop app finds every daemon and says what each is doing** · approved (per source at `08c9aec2e1d2`) · tier 0 · [source](../../specs/130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing.md)
+**130: The desktop app finds every daemon and says what each is doing** · approved (per source at `c4f1704329db`) · tier 0 · [source](../../specs/130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing.md)
 
 **source excerpt, untrusted** · `specs/130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing.md` line 22
 

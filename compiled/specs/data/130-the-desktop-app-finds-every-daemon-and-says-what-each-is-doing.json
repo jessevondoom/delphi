@@ -21,68 +21,74 @@
       "title": "Non-goals"
     },
     {
-      "level": 2,
+      "level": 3,
       "line": 38,
+      "number": "1.2",
+      "title": "Options Considered"
+    },
+    {
+      "level": 2,
+      "line": 47,
       "number": "2",
       "title": "The presence file (slice S1)"
     },
     {
       "level": 2,
-      "line": 63,
+      "line": 72,
       "number": "3",
       "title": "Discovery (slice S2)"
     },
     {
       "level": 3,
-      "line": 65,
+      "line": 74,
       "number": "3.1",
       "title": "The list"
     },
     {
       "level": 3,
-      "line": 71,
+      "line": 80,
       "number": "3.2",
       "title": "Choosing one"
     },
     {
       "level": 3,
-      "line": 77,
+      "line": 86,
       "number": "3.3",
       "title": "The summary"
     },
     {
       "level": 2,
-      "line": 90,
+      "line": 99,
       "number": "4",
       "title": "The start screen and the switcher (slice S2)"
     },
     {
       "level": 2,
-      "line": 101,
+      "line": 110,
       "number": "5",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 108,
+      "line": 117,
       "number": "6",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 121,
+      "line": 130,
       "number": "7",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 127,
+      "line": 136,
       "number": "8",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 137,
+      "line": 146,
       "number": "9",
       "title": "Open questions (the operator decides)"
     }
@@ -90,7 +96,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/130-the-desktop-app-finds-every-daemon-and-says-what-each-is-doing.md",
-    "sha256": "08c9aec2e1d22b5898f7ba86b89b62119c8e8aef7c486f2ef39e105931d17999"
+    "sha256": "c4f1704329db012707222166f268c5bb71560c38b00d65c08285a0604937e71a"
   },
   "source_status_at_hash": {
     "line": {
@@ -103,7 +109,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-19, in a host session. Shown a plan (discovery start screen, code-approved pairing, bundled CLI, update grant, in five slices) and answering \"follow your recommendation and start building. use subagents if you can\". The spec was written from those words; the operator was shown the plan, not this text."
     },
-    "sha256": "08c9aec2e1d22b5898f7ba86b89b62119c8e8aef7c486f2ef39e105931d17999",
+    "sha256": "c4f1704329db012707222166f268c5bb71560c38b00d65c08285a0604937e71a",
     "word": "approved"
   },
   "spec": {

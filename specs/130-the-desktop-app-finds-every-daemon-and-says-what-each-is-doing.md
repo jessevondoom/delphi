@@ -35,6 +35,15 @@ After this spec:
 - **Notifications, a Dock badge, a menu-bar item.** Each needs a Tauri plugin, which the dependency gate refuses (`app/dev/check-deps.mjs`, at most 10 production packages, an allowlist), and spec 111 §2 lists the window commands. They are a later amendment, not this one.
 - **Pairing, installing, updating** (specs 120 and 122 amendments).
 
+### 1.2 Options Considered
+
+| Option | Verdict |
+| :-- | :-- |
+| A presence file per daemon, read by the app (chosen) | Needs no new method or grant; a crash leaves a stale file, which the socket probe of §2.3 catches. |
+| Scan `<home>/run/*.narrator.sock` only | Needs no daemon change, but shows no workspace name, version or path; kept as the fallback for older daemons (§2.4). |
+| A registry daemon or a shared database of daemons | A new long-lived process and a new authority; refused (§1.1, no new process). |
+| Ask each workspace through `delphi daemon where` | Spawns a process from the app, which spec 111 §2 forbids. |
+
 ## 2. The presence file (slice S1)
 
 The daemon writes `<home>/run/<h>.json` (`h` is the workspace hash that names its other files, `spawn::workspace_hash`) once it is ready to serve, and removes it with its sockets on a clean shutdown (`core_main.rs`, beside the socket cleanup).

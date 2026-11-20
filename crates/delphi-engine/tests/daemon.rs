@@ -602,3 +602,58 @@ fn a_granted_daemon_exits_when_its_launcher_dies() {
     }
     assert!(gone, "the granted daemon outlived its launcher");
 }
+
+/// The instance a daemon announces on its app socket (the challenge needs no key to read).
+fn app_socket_instance(sock: &Path) -> String {
+    let s = UnixStream::connect(sock).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut line = String::new();
+    BufReader::new(s).read_line(&mut line).unwrap();
+    let v: Value = serde_json::from_str(&line).unwrap();
+    v["params"]["instance"].as_str().expect("the app challenge names the instance").to_string()
+}
+
+// Spec 130 S1 (AC-1): a ready daemon has its presence file, with its own instance; a clean shutdown removes it; a file left by a
+// killed daemon is not touched by anything but the next daemon's start, which overwrites it.
+#[test]
+fn a_daemon_writes_its_presence_file_and_removes_it_on_clean_shutdown() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::Builder::new().prefix("dp").tempdir_in("/tmp").unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let (home, ws) = (root.join("h"), root.join("w"));
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("config.toml"), "").unwrap();
+    let l = layout(&home, &ws).unwrap();
+    let opts = SpawnOptions { home: &home, workspace: &ws, daemon_exe: Path::new(DAEMON_EXE), extra_args: vec![], prefix_args: vec![], own_version: None };
+
+    let first = connect_or_spawn(&opts).expect("the daemon starts");
+    assert!(first.spawned);
+    let p = delphi_core::presence::read(&l.presence).expect("a ready daemon has a presence file the reader accepts");
+    assert_eq!(std::fs::metadata(&l.presence).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!((p.pid as u64, p.binary_version.as_str(), p.workspace.as_str(), p.workspace_name.as_str()), (first.daemon_pid, env!("CARGO_PKG_VERSION"), ws.to_str().unwrap(), "w"));
+    assert_eq!((p.home.as_str(), p.narrator_socket.as_str(), p.app_socket.as_str()), (home.to_str().unwrap(), l.narrator_sock.to_str().unwrap(), l.app_sock.to_str().unwrap()));
+    assert_eq!(p.instance, app_socket_instance(&l.app_sock), "the file names the running daemon's instance");
+
+    // A kill leaves the file behind, untouched.
+    unsafe { libc::kill(first.daemon_pid as i32, libc::SIGKILL) };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { libc::kill(first.daemon_pid as i32, 0) } == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let stale = std::fs::read_to_string(&l.presence).expect("a killed daemon leaves its file");
+    assert_eq!(delphi_core::presence::read(&l.presence).unwrap().instance, p.instance);
+
+    // A restart overwrites it, and a clean shutdown removes it.
+    let mut second = connect_or_spawn(&opts).expect("the daemon restarts");
+    assert!(second.spawned);
+    let q = delphi_core::presence::read(&l.presence).unwrap();
+    assert_ne!(std::fs::read_to_string(&l.presence).unwrap(), stale);
+    assert_eq!((q.instance.clone(), q.pid as u64), (app_socket_instance(&l.app_sock), second.daemon_pid));
+    assert_ne!(q.instance, p.instance);
+    let _ = second.client.call("daemon.shutdown", json!({}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while l.presence.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!l.presence.exists(), "a clean shutdown removes the presence file");
+}
