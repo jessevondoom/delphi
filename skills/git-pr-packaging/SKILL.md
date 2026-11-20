@@ -38,8 +38,12 @@ A reviewer should be able to understand the change from the commits and the desc
 2. Search the diff for secrets, tokens and absolute home paths. Remove them.
 3. Split into atomic commits: each builds and passes tests on its own, with a message saying why.
 4. Add the trailer `Implements-Spec: specs/NNN-name.md` where a spec applies.
-5. Write the description: what changed, why, how it was verified (commands and results, including anything skipped), and risks.
+5. Write the description: what changed, why, how it was verified (commands and results, including anything skipped), and risks. Where a spec applies, add (`specs/133` §2.1.1):
+   - a table `| Criterion | Test or check | Result |`, one row per criterion the slice closes; a result is `pass`, `fail`, `not run`, `not run live` or `not verified`;
+   - `Deviations:` `none`, or each place the build departed from the spec text (`GOVERNANCE.md` §1.4);
+   - `Follow-ups:` ideas outside this slice.
 6. Report failures plainly. Do not describe a check as passing unless you ran it and read the output.
+7. Update the spec tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) by finding the spec's rows with a search and changing or appending only those lines. The file is over 1,200 lines: never read it whole.
 
 ## Done when
 The diff contains only intended changes, each commit stands alone, and the description's verification claims are all true.
