@@ -3,7 +3,8 @@ id: spec-128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-tha
 title: "128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes"
 author: architect
 timestamp: 2026-11-19T00:00:00Z
-status: draft   # a proposal, not permission: nothing is built until the operator approves it (No Spec, No Build)
+status: approved   # by the operator, 2026-11-19, in a session after draft pull request #792 was shown: "i agree with your recommendations. the spec is approved. begin building". OD-1 to OD-4 of section 8 take their recommendations. It takes effect when the pull request that carries it merges.
+approved_by: operator (2026-11-19)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, council, red-team, agy, round-2, guard, error-log]
 
 # Spec 128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes
 
-> **Status: draft.** Nothing here is built. Section 7 lists what is unverified; section 8 lists the decisions the operator owns (one of them, OD-1, is the safety-guard change that [`specs/089`](089-panel-hardening-from-e2.md) OD-4 reserved for the operator).
+> **Status: approved by the operator, 2026-11-19** (see the frontmatter). Nothing here was built when it was approved. Section 7 lists what is unverified; section 8 lists the decisions the operator owns (one of them, OD-1, is the safety-guard change that [`specs/089`](089-panel-hardening-from-e2.md) OD-4 reserved for the operator).
 > **Amends, if approved:** [`specs/086`](086-outside-council-panel-and-host-subagents.md) §4.3 (the no-tools rule for a seat that reads peer text now holds for the daemon Council too, not only the Panel's foreign seat), [`specs/099`](099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md) R2 item 3 ("no tools" becomes enforced, not asked), [`specs/020`](020-harness-tool-bridge.md) §8 (the checkout guard's ignore rule) and takes the decision [`specs/089`](089-panel-hardening-from-e2.md) OD-4 left open.
 
 ---
