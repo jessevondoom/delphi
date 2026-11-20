@@ -1204,7 +1204,10 @@ impl Engine {
                 if let Err(f) = &first {
                     let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
                     // A refused answer was found and judged; another run is not a retry of a crash.
-                    if let (true, true, Some(left)) = (f.cli_error && f.kind != crate::harness_run::FailKind::AnswerRefused, f.retryable, left) {
+                    // A run that finished with success and no answer or words at all (`AnswerNotFound`) is also tried once more (`specs/128` S2);
+                    // `retryable` already means no tool that acts was used.
+                    let retry_kind = (f.cli_error && f.kind != crate::harness_run::FailKind::AnswerRefused) || f.kind == crate::harness_run::FailKind::AnswerNotFound;
+                    if let (true, true, Some(left)) = (retry_kind, f.retryable, left) {
                         if left >= crate::harness_run::RETRY_MIN_REMAINING {
                             m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64}))).await?;
                             first = self.run_harness(&mut sc, &ipr, &hep).await?;

@@ -146,16 +146,28 @@ impl HarnessErr {
     }
 }
 
+/// The level a failed harness run is written at, and so the level the log must be set to for it to be written at all: `error` for a
+/// failure, `warn` for a spent quota (`specs/128` S2).
+pub(crate) fn failure_log_level(exhausted: bool) -> delphi_core::elog::Level {
+    if exhausted {
+        delphi_core::elog::Level::Warn
+    } else {
+        delphi_core::elog::Level::Error
+    }
+}
+
 /// Claude Code's own worktree directory: sessions create and remove it, and a seat has no tool that touches it (`specs/020`).
 const IGNORED_PREFIX: &str = ".claude/worktrees/";
 
 /// Every path whose `git status --porcelain -z` entry appears or disappears between two snapshots of the registered
-/// projects, and the number of such paths ignored for lying under `.claude/worktrees/`. With several projects each kept
-/// path is prefixed by the project's name. Names only, never contents.
-pub(crate) fn changed_path_list(names: &[&str], before: &[String], after: &[String]) -> (Vec<String>, usize) {
+/// projects, the number of such paths ignored for lying under `.claude/worktrees/`, and the number ignored because Delphi's own
+/// writer wrote them (`own(project index, path)`, `specs/128` S3). With several projects each kept path is prefixed by the
+/// project's name. Names only, never contents.
+pub(crate) fn changed_path_list(names: &[&str], before: &[String], after: &[String], own: &dyn Fn(usize, &str) -> bool) -> (Vec<String>, usize, usize) {
     let entries = |s: &str| -> Vec<String> { s.split('\0').filter(|e| !e.is_empty()).map(String::from).collect() };
     let mut all: Vec<String> = Vec::new();
     let mut ignored: Vec<String> = Vec::new();
+    let mut owned: Vec<String> = Vec::new();
     for (i, (b, a)) in before.iter().zip(after.iter()).enumerate() {
         let (b, a) = (entries(b), entries(a));
         let prefix = if names.len() > 1 { format!("{}/", names.get(i).copied().unwrap_or("?")) } else { String::new() };
@@ -167,12 +179,16 @@ pub(crate) fn changed_path_list(names: &[&str], before: &[String], after: &[Stri
                 if !ignored.contains(&p) {
                     ignored.push(p);
                 }
+            } else if own(i, path) {
+                if !owned.contains(&p) {
+                    owned.push(p);
+                }
             } else if !all.contains(&p) {
                 all.push(p);
             }
         }
     }
-    (all, ignored.len())
+    (all, ignored.len(), owned.len())
 }
 
 /// The first five of `all`, then "+N more" (for the note; the event keeps every name).
@@ -618,6 +634,8 @@ impl Engine {
         }
         // Projects must come out of an agy run exactly as they went in.
         let project_state = |engine: &Engine| -> Vec<String> { engine.projects.iter().map(|(_, p)| engine.exec.worktrees.project_status(p)).collect() };
+        // The time the guard's first snapshot is taken: only a write by Delphi itself at or after it can be ignored (`specs/128` S3).
+        let seat_started = std::time::SystemTime::now();
         let projects_before = (cli == Cli::Agy).then(|| project_state(self));
         // A role without a worktree gets an empty directory and no tools: it sees only its prompt.
         // Spec 092 TA-5: in a run that holds a grant, a Claude Builder runs with NONE of the CLI's own tools (`--tools ""`, an empty working
@@ -804,6 +822,8 @@ impl Engine {
         let (mut served_reported, mut tools_offered): (Option<String>, Vec<String>) = (None, Vec::new());
         // Any tool call at all (even a read-only one) and whether the failure is the CLI's own `result` error: the retry's conditions.
         let (mut any_tool, mut cli_error_seen) = (false, false);
+        // The names of the tools the run called, for `harness.no_answer` (`specs/128` S2): names and counts only, never arguments or text.
+        let mut tool_names: Vec<String> = Vec::new();
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
         let mut live = LiveRedactor::new(sc.m.secrets());
         loop {
@@ -923,6 +943,9 @@ impl Engine {
                     text_parts.push(t);
                 }
                 Event::ToolUse { name, input, .. } => {
+                    if tool_names.len() < 40 {
+                        tool_names.push(self.secrets.redact(&name).chars().take(80).collect());
+                    }
                     // In a run that holds a grant EVERY tool_use that is not Delphi's bridge tool (or the schema's StructuredOutput) ends the span
                     // at the call: a native tool, a connector, a plugin tool, an unknown name. Nothing is tolerated as an "attempt" and nothing waits
                     // for a result: the CLI has no tool of its own loaded (`--tools ""`, checked at init), so a call to one can only cost a false
@@ -1138,12 +1161,22 @@ impl Engine {
                 let after = project_state(self);
                 if after != before {
                     let names: Vec<&str> = self.projects.iter().map(|(n, _)| n.as_str()).collect();
-                    let (paths, ignored) = changed_path_list(&names, &before, &after);
-                    // Only paths under `.claude/worktrees/` differ: another session's worktree, not the seat. The run is kept.
-                    let only_ignored = paths.is_empty() && ignored > 0;
+                    let roots: Vec<std::path::PathBuf> = self.projects.iter().map(|(_, p)| p.clone()).collect();
+                    let own = |i: usize, rel: &str| roots.get(i).is_some_and(|r| crate::own_writes::holds(&r.join(rel), seat_started));
+                    let (paths, ignored, owned) = changed_path_list(&names, &before, &after, &own);
+                    // Only paths under `.claude/worktrees/` (another session's worktree) or ones Delphi's own research writer wrote
+                    // (unchanged since) differ: not the seat. The run is kept.
+                    let only_ignored = paths.is_empty() && ignored + owned > 0;
                     let redacted: Vec<String> = paths.iter().map(|p| self.secrets.redact(p)).collect();
-                    let note = if ignored > 0 { format!("ignored {} paths under {}", ignored, IGNORED_PREFIX) } else { String::new() };
-                    batch.push(sc.ev("harness.checkout_guard", json!({"task_id": sc.task_id, "discarded": !only_ignored, "changed_paths": redacted, "ignored_count": ignored, "note": note})));
+                    let mut notes: Vec<String> = Vec::new();
+                    if ignored > 0 {
+                        notes.push(format!("ignored {} paths under {}", ignored, IGNORED_PREFIX));
+                    }
+                    if owned > 0 {
+                        notes.push(format!("ignored {} paths Delphi wrote itself", owned));
+                    }
+                    let note = notes.join("; ");
+                    batch.push(sc.ev("harness.checkout_guard", json!({"task_id": sc.task_id, "discarded": !only_ignored, "changed_paths": redacted, "ignored_count": ignored, "own_writes_count": owned, "note": note})));
                     if !only_ignored {
                         failure = Some((self.secrets.redact(&format!("the agy run changed a project checkout; its output is discarded (`git status` differs from before): {}", paths_note(&paths))).chars().take(600).collect(), false));
                     }
@@ -1151,9 +1184,19 @@ impl Engine {
             }
         }
         if let Some((reason, retryable)) = failure {
+            // A run that ended with no answer at all says what it did, in counts and names (`specs/128` S2): the CLI's status, the tools it
+            // called, how many text events and output tokens it produced, and its exit code. Never text, arguments or a path.
+            if fail_kind == FailKind::AnswerNotFound {
+                let (status, out_tokens) = match &result {
+                    Some(Event::Result { subtype, usage, .. }) => (subtype.clone(), usage.output),
+                    _ => (String::new(), 0),
+                };
+                batch.push(sc.agent_ev("harness.no_answer", json!({"task_id": sc.task_id, "status": status, "tool_calls": tool_names.len(), "tools": tool_names, "text_events": text_parts.len(), "text_bytes": text_parts.iter().map(|t| t.len()).sum::<usize>(), "output_tokens": out_tokens, "structured_output": false, "exit_code": exit_code}), ep, &launch.model));
+            }
             // A failed harness run in the central error log (`specs/039`): the reason, the exit code and the redacted tail of stderr.
-            // A spent quota is a decision (warn), anything else an error.
-            if delphi_core::elog::enabled(delphi_core::elog::Level::Warn) {
+            // A spent quota is a decision (warn), anything else an error. The gate is the level of the record itself: at the default
+            // level (`error`) a failure used to be skipped by a `warn` check, so its stderr tail was never written (`specs/128` S2).
+            if delphi_core::elog::enabled(failure_log_level(exhaustion.is_some())) {
                 let ctx = json!({"mission": sc.m.id, "task": sc.task_id, "span": sc.span_id, "harness": launch.program, "model": launch.model, "exit_code": exit_code, "stderr_tail": session.stderr_tail().await, "reason": if retryable { "retryable" } else { "final" }, "kind": format!("{:?}", fail_kind)});
                 if exhaustion.is_some() {
                     delphi_core::elog::warn("harness", "harness_exhausted", &reason, ctx);
@@ -2415,6 +2458,66 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "a good answer"), "{}", out.text);
     }
 
+    /// `specs/128` S3: a run in flight while Delphi's OWN research writer writes into the registered project keeps its answer, and the
+    /// guard event counts the paths it left out. Two files, as a research record writes (answer and log).
+    #[tokio::test]
+    async fn a_write_by_delphis_own_research_writer_during_an_agy_run_does_not_discard_the_answer() {
+        let (f, out, _) = run_with_concurrent_write(|dir| {
+            let d = dir.join("research/topics/t-1");
+            fs::create_dir_all(&d).unwrap();
+            for (name, text) in [("answer.md", "an answer"), ("search-log.json", "{}")] {
+                fs::write(d.join(name), text).unwrap();
+                crate::own_writes::note(&d.join(name), text.as_bytes());
+            }
+        })
+        .await;
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "a good answer"), "{}", out.text);
+        let g = events_of(&f, "harness.checkout_guard");
+        assert_eq!((g[0].payload["discarded"].clone(), g[0].payload["own_writes_count"].clone()), (json!(false), json!(2)), "{}", g[0].payload);
+        assert!(g[0].payload["note"].as_str().unwrap().contains("2 paths Delphi wrote itself"));
+    }
+
+    /// The guard still fails closed: a file the ledger never saw, and a file Delphi wrote that was edited afterwards, are differences.
+    #[tokio::test]
+    async fn the_guard_still_discards_a_write_the_ledger_never_saw_or_one_edited_after_delphi_wrote_it() {
+        let (_, out, _) = run_with_concurrent_write(|dir| {
+            fs::create_dir_all(dir.join("research/topics/t-2")).unwrap();
+            fs::write(dir.join("research/topics/t-2/answer.md"), "not noted").unwrap();
+        })
+        .await;
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("changed a project checkout") && r.contains("research/topics/t-2/answer.md")), "{:?}", out.status);
+        let (_, out, _) = run_with_concurrent_write(|dir| {
+            let p = dir.join("research/topics/t-3/answer.md");
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, "what Delphi wrote").unwrap();
+            crate::own_writes::note(&p, b"what Delphi wrote");
+            fs::write(&p, "what the seat changed it to").unwrap();
+        })
+        .await;
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("changed a project checkout") && r.contains("research/topics/t-3/answer.md")), "{:?}", out.status);
+    }
+
+    /// An `agy` stand-in that answers after two seconds, while `write` runs against the registered project 700 ms in.
+    async fn run_with_concurrent_write(write: impl FnOnce(&std::path::Path) + Send + 'static) -> (Fx, crate::engine::TaskOutcome, ()) {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{}}'
+sleep 2
+echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer","usage":{}}}'"#,
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let proj = f.root.join("proj");
+        let writer = async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            write(&proj);
+        };
+        let (out, ()) = tokio::join!(f.engine.run_task(&f.m, "architect", "Review the plan"), writer);
+        (f, out.unwrap(), ())
+    }
+
     // ---- one retry of an agy seat after a CLI error, and the guard message (`specs/089` P4b) ----
 
     /// A stand-in `agy` that keeps a count of its starts in `count`, fails with `error_result` while the count is at most `fails`,
@@ -2515,6 +2618,64 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert_eq!(events_of(&f, "harness.retry").len(), 1);
     }
 
+    /// A Round 2 seat (toolless, asked for the critique schema) on the fake CLI.
+    async fn seat_r2(f: &Fx) -> crate::council::Stance {
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let mut stances = std::collections::BTreeMap::new();
+        stances.insert("architect".to_string(), crate::council::Stance::Said("a stance".into()));
+        f.engine.panel_foreign_run(&f.m, &tid, "COUNCIL, ROUND 2. Proposition: q".into(), "q", "red-team", "gemini", 2, Some(&stances)).await
+    }
+
+    /// The CLI finishes with success, 1,498 output tokens and neither words nor a structured answer (spec 128, the empty finish).
+    const AGY_EMPTY_FINISH: &str = r#"echo '{"event":"result","result":{"status":"SUCCESS","response":"","usage":{"input_tokens":50,"output_tokens":1498}}}'"#;
+
+    #[tokio::test]
+    async fn an_empty_finish_of_a_schema_seat_is_tried_once_more_and_the_first_run_says_what_it_did() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 1, AGY_EMPTY_FINISH), Duration::from_secs(600));
+        let s = seat_r2(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Said(t) if t == "a good answer"), "{s:?}");
+        assert_eq!(starts(&count), 2);
+        let r = events_of(&f, "harness.retry");
+        assert_eq!(r.len(), 1);
+        assert!(r[0].payload["reason"].as_str().unwrap().contains("without the schema-validated answer"));
+        let n = events_of(&f, "harness.no_answer");
+        assert_eq!(n.len(), 1, "only the first run ended with no answer");
+        let p = &n[0].payload;
+        assert_eq!((p["status"].as_str(), p["output_tokens"].as_u64(), p["text_events"].as_u64(), p["tool_calls"].as_u64()), (Some("success"), Some(1498), Some(0), Some(0)), "{p}");
+        assert_eq!(events_of(&f, "agent.usage").len(), 2, "both attempts' usage is logged");
+    }
+
+    #[tokio::test]
+    async fn two_empty_finishes_abstain_after_exactly_one_retry() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_EMPTY_FINISH), Duration::from_secs(600));
+        let s = seat_r2(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Abstained(r) if r.contains("without the schema-validated answer")), "{s:?}");
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.no_answer").len()), (2, 1, 2));
+    }
+
+    #[tokio::test]
+    async fn an_empty_finish_is_not_retried_with_less_than_the_minimum_time_left() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_EMPTY_FINISH), Duration::from_secs(5));
+        assert!(matches!(seat_r2(&f).await, crate::council::Stance::Abstained(_)));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0));
+    }
+
+    #[test]
+    fn a_failed_run_is_logged_at_the_error_level_and_only_a_spent_quota_at_warn() {
+        use delphi_core::elog::Level;
+        assert_eq!(failure_log_level(false), Level::Error, "a failure is written at the default level (the old `warn` gate dropped it)");
+        assert_eq!(failure_log_level(true), Level::Warn, "a spent quota is a decision, not an error");
+    }
+
     #[tokio::test]
     async fn an_agy_seat_is_not_retried_after_a_tool_a_quota_error_a_guard_failure_a_timeout_or_with_no_time_left() {
         // After a tool.
@@ -2578,12 +2739,12 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
     #[test]
     fn the_discard_message_names_the_changed_paths_up_to_five() {
         let before = vec![String::new()];
-        let note = |names: &[&str], b: &[String], a: &[String]| paths_note(&changed_path_list(names, b, a).0);
+        let note = |names: &[&str], b: &[String], a: &[String]| paths_note(&changed_path_list(names, b, a, &|_, _| false).0);
         let two = vec!["?? a.txt\0?? b.txt\0".to_string()];
         assert_eq!(note(&["proj"], &before, &two), "a.txt, b.txt");
         let seven = vec![(1..=7).map(|i| format!("?? f{}.txt\0", i)).collect::<String>()];
         assert_eq!(note(&["proj"], &before, &seven), "f1.txt, f2.txt, f3.txt, f4.txt, f5.txt +2 more");
-        assert_eq!(changed_path_list(&["proj"], &before, &seven).0.len(), 7, "the list keeps every name");
+        assert_eq!(changed_path_list(&["proj"], &before, &seven, &|_, _| false).0.len(), 7, "the list keeps every name");
         // A path that disappears is named too, and two projects are told apart.
         let (b2, a2) = (vec!["?? x\0".to_string(), String::new()], vec![String::new(), " M y\0".to_string()]);
         assert_eq!(note(&["one", "two"], &b2, &a2), "one/x, two/y");
@@ -2593,7 +2754,7 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
     fn only_the_claude_worktrees_prefix_is_ignored() {
         let before = vec![String::new()];
         let after = vec!["?? .claude/worktrees/w1/a.rs\0?? .claude/worktrees/w1/b.rs\0?? .claude/settings.json\0?? .claude/worktreesx/c\0 M src/lib.rs\0".to_string()];
-        let (kept, ignored) = changed_path_list(&["proj"], &before, &after);
+        let (kept, ignored, _) = changed_path_list(&["proj"], &before, &after, &|_, _| false);
         assert_eq!(ignored, 2);
         assert_eq!(kept, vec![".claude/settings.json", ".claude/worktreesx/c", "src/lib.rs"]);
     }

@@ -60,7 +60,7 @@ A role that writes "I'll check back in 20 minutes" has no clock and no way to wa
 
 ## 020-harness-tool-bridge
 
-**020: The Harness Tool Bridge, Seat Profiles & the Tool Inventory** · approved (per source at `8249ec2f7b76`) · tier 0 · [source](../../specs/020-harness-tool-bridge.md)
+**020: The Harness Tool Bridge, Seat Profiles & the Tool Inventory** · approved (per source at `bd54b0248002`) · tier 0 · [source](../../specs/020-harness-tool-bridge.md)
 
 **source excerpt, untrusted** · `specs/020-harness-tool-bridge.md` line 18
 
