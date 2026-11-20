@@ -45,7 +45,7 @@ A spec is the contract Builder implements and Red-Team attacks. It should be sho
    - **Unknowns first:** a premise nobody has observed gets slice S0, a spike whose kill criterion is written into the spec before it runs. No other slice starts until its result is in the spec.
    - **Decisions:** propose whether each is reversible; the operator decides. Only one marked reversible may take its recommendation by default (record the default in the tracker). One that changes a criterion, an interface, a data shape or authority blocks the slices it names until answered.
    - **What is not verified:** list each claim nobody has observed.
-   - **Review before approval:** ask for a Strategist and a Red-Team review and name them in `reviewed_by` (`GOVERNANCE.md` §1.3). A spec with an Authority section also gets `spec-premortem`. Never record a review that did not happen.
+   - **Review before approval** (`GOVERNANCE.md` §1.3): ask for a Council or a witnessed Panel with Strategist and Red-Team seats, cite it as `reviewed_by: [council:<id>]` or `[panel:<id>]`, and commit its record under `missions/<mission>/councils/` with the spec; `delphi lint` resolves each id. A spec with an Authority section also gets `spec-premortem`. Never cite a review that did not happen.
 8. Start from `templates/spec-skeleton.md`, with provenance frontmatter and `status: draft`. An agent never marks a spec `approved`.
 9. Run `delphi check spec <file>`, then `delphi lint`: a spec numbered 125 or above with no "Options considered" heading gets a warning now and will fail later (spec 124 section 7).
 

@@ -4,7 +4,7 @@ title: "NNN: Short Name"
 author: architect
 timestamp: "2026-01-01T00:00:00Z"   # replace with the current UTC time
 status: draft
-reviewed_by: ""   # the reviews that happened (role, and where: a Council record, a Panel id, a pull-request review); GOVERNANCE.md §1.3
+reviewed_by: []   # the Councils or Panels that reviewed it: [council:<id>, panel:<id>]; commit each record under missions/*/councils/ (delphi lint resolves it; specs/104 §13 G5)
 source_type: internal_generated
 confidence: medium
 source_mission: mission-id

@@ -4,103 +4,103 @@
   "outline": [
     {
       "level": 1,
-      "line": 17,
+      "line": 16,
       "number": null,
       "title": "Spec 133: The spec-to-build handoff contract"
     },
     {
       "level": 2,
-      "line": 23,
+      "line": 22,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 35,
+      "line": 34,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 42,
+      "line": 41,
       "number": "1.2",
       "title": "Simpler Alternative Considered"
     },
     {
       "level": 3,
-      "line": 47,
+      "line": 46,
       "number": "1.3",
       "title": "Options considered"
     },
     {
       "level": 2,
-      "line": 57,
+      "line": 56,
       "number": "2",
       "title": "Design"
     },
     {
       "level": 3,
-      "line": 59,
+      "line": 58,
       "number": "2.1",
       "title": "The build contract (`skills/spec-driven-build/SKILL.md`, `skills/git-pr-packaging/SKILL.md`)"
     },
     {
       "level": 4,
-      "line": 70,
+      "line": 69,
       "number": "2.1.1",
       "title": "The table and lists in the pull request"
     },
     {
       "level": 4,
-      "line": 79,
+      "line": 78,
       "number": "2.1.2",
       "title": "The tracker"
     },
     {
       "level": 3,
-      "line": 85,
+      "line": 84,
       "number": "2.2",
       "title": "The skeleton (`skills/spec-authoring/templates/spec-skeleton.md`)"
     },
     {
       "level": 3,
-      "line": 96,
+      "line": 95,
       "number": "2.3",
       "title": "Authoring rules (`skills/spec-authoring/SKILL.md`)"
     },
     {
       "level": 3,
-      "line": 107,
+      "line": 106,
       "number": "2.4",
       "title": "The deferred check (recommendation R4) and its trigger"
     },
     {
       "level": 2,
-      "line": 116,
+      "line": 115,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 120,
+      "line": 119,
       "number": "4",
       "title": "Slices (one pull request; same-spec slices, each its own commit, own trailer and own tracker row)"
     },
     {
       "level": 2,
-      "line": 130,
+      "line": 129,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 140,
+      "line": 139,
       "number": "6",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 150,
+      "line": 149,
       "number": "7",
       "title": "What is not verified"
     },
@@ -114,7 +114,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md",
-    "sha256": "218d6fb1d1b117fa09f7fa78b7955f2e5b82d930f6349265e190b5cbcbddaad3"
+    "sha256": "41b77b7efa80e49e329f0473b4b4cdb41643a649b53096750b111ef268764937"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +127,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, in a host session after the plan was shown: \"follow your plan and go. i'll approve specs from this plan and ratify and changes\". It takes effect when the pull request that carries it merges."
     },
-    "sha256": "218d6fb1d1b117fa09f7fa78b7955f2e5b82d930f6349265e190b5cbcbddaad3",
+    "sha256": "41b77b7efa80e49e329f0473b4b4cdb41643a649b53096750b111ef268764937",
     "word": "approved"
   },
   "spec": {
@@ -142,10 +142,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 1702,
-      "end_line": 25,
-      "line": 25,
-      "start": 1419
+      "end": 1651,
+      "end_line": 24,
+      "line": 24,
+      "start": 1368
     },
     "text": "An audit of the architect, the builder and the spec skills (host session, 2026-11-20, a Fable subagent reading main at 76da4a79, then a daemon Council `t_0001` with seats on two families) found that the specs Delphi writes are better than the contract that carries them into a build:"
   }

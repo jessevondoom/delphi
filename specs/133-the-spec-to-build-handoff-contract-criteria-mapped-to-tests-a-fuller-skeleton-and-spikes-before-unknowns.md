@@ -5,7 +5,6 @@ author: architect
 timestamp: 2026-11-20T21:00:00Z
 status: approved   # by the operator, 2026-11-20, in a host session after the plan was shown: "follow your plan and go. i'll approve specs from this plan and ratify and changes". It takes effect when the pull request that carries it merges.
 approved_by: operator (2026-11-20)
-reviewed_by: "PENDING"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -16,7 +15,7 @@ tags: [spec, builder, architect, skills, spec-authoring, spec-driven-build, proc
 
 # Spec 133: The spec-to-build handoff contract
 
-> **Status: approved by the operator, 2026-11-20** (see the frontmatter). Markdown only: no code, no gate file, no change to any role's authority. Its sibling, [`specs/134`](134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md), carries the two charter changes (drift and recorded review) in their own pull request.
+> **Status: approved by the operator, 2026-11-20** (see the frontmatter). Markdown only: no code, no gate file, no change to any role's authority. Its sibling, `specs/134` (drift on a closed list and review on the record), carries the two charter changes (drift and recorded review) in their own pull request.
 
 ---
 
@@ -35,7 +34,7 @@ This spec changes four markdown files and one role file so that a slice has a wr
 ### 1.1 Non-goals
 
 - **No code and no check.** Mechanical enforcement (recommendation R4 of the audit: `delphi check spec` tests numbered criteria, criterion-to-slice mapping and blocking decisions, run from `delphi lint`) is deferred to a later spec with a written trigger (section 2.4).
-- **No charter change.** The drift rule and the recorded review are [`specs/134`](134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md). This spec leaves step 7 of `spec-driven-build` and the builder's role file to it.
+- **No charter change.** The drift rule and the recorded review are `specs/134` (drift on a closed list and review on the record). This spec leaves step 7 of `spec-driven-build` and the builder's role file to it.
 - **No new skill for any role.** The audit proposed authorizing `scope-creep-detection` for the builder. That widens a manifest; its one rule ("build only this slice; new ideas go to a follow-up list") is folded into the build contract instead.
 - **No retroactive edits** to existing specs.
 
@@ -86,7 +85,7 @@ The skill's `description` changes to say it covers building a slice (at most 200
 
 The skeleton keeps every section `delphi check spec` looks for (Scope, Simpler Alternative Considered, Verification Plan) and gains:
 
-- **`reviewed_by:` in the frontmatter**, empty in a draft, with a comment: the operator approves; the reviews are named here (`GOVERNANCE.md` §1.3 already requires them).
+- **`reviewed_by: []` in the frontmatter**, in the form `delphi lint` already checks ([`specs/104`](104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md) §13 G5): `[council:<id>, panel:<id>]`, each resolving to a record committed under `missions/*/councils/`. `GOVERNANCE.md` §1.3 already requires the reviews; this is where they are cited.
 - **Authority** (only when the spec touches authority, trust, a gate or a sandbox): what the change may and may not do, and the test that proves each limit.
 - **Slices**: a table with columns `Slice | Criteria closed | Files | Lines (est.) | Depends on | Blocked by`. S0 is the spec itself, or a spike (2.3).
 - **What is not verified**: the claims the spec makes that no one has observed.
@@ -101,7 +100,7 @@ New steps and rules, in place of nothing (no existing step is weakened):
 2. **Tiny change.** A spec for a change of about 100 lines or fewer with 3 criteria or fewer may leave out the Slices and Decisions tables; it says so in one line.
 3. **Unknowns first.** A premise nobody has observed gets slice S0: a spike, with a kill criterion written into the spec before the spike runs. No other slice starts until the spike's result is written into the spec.
 4. **Decisions.** The architect proposes whether a decision is reversible; the operator decides. Only a decision the operator marked reversible may take its recommendation by default, and the default is recorded in the tracker. A decision that changes an acceptance criterion, an interface, a data shape or authority blocks the slices it names until the operator answers.
-5. **Review before approval.** Ask for a Strategist and a Red-Team review and name them in `reviewed_by`. A spec with an Authority section also gets `spec-premortem`. Never write a review that did not happen.
+5. **Review before approval.** Ask for a Council or a witnessed Panel with Strategist and Red-Team seats, cite it in `reviewed_by` as `council:<id>` or `panel:<id>`, and commit its record under `missions/<mission>/councils/` with the spec so the lint can resolve it. A spec with an Authority section also gets `spec-premortem`. Never cite a review that did not happen.
 6. **Start from the skeleton** (unchanged: `status: draft`; an agent never marks a spec `approved`).
 
 ### 2.4 The deferred check (recommendation R4) and its trigger
@@ -132,7 +131,7 @@ The pull request touches no `.github/`, charter or rubric path. Spec 134 edits s
 1. **AC-1.** `skills/spec-driven-build/SKILL.md` has a "Build contract" section with the four steps of 2.1, and its step 7 is byte-identical to main's.
 2. **AC-2.** `skills/git-pr-packaging/SKILL.md` step 5 names the table and two lists of 2.1.1, and a step says to change tracker rows by search, not by reading the file.
 3. **AC-3.** Both skill packages pass `delphi check skill`; the new description is at most 200 characters; `docs/reference/catalog.md` matches `delphi docs catalog`.
-4. **AC-4.** The skeleton has `reviewed_by`, Authority, Slices (with the six columns), What is not verified and the Decisions table (with the five columns), and still passes `delphi check spec` (the test `shipped_templates_pass_their_checks`).
+4. **AC-4.** The skeleton has `reviewed_by: []` with a comment giving the spec 104 form, Authority, Slices (with the six columns), What is not verified and the Decisions table (with the five columns), and still passes `delphi check spec` (the test `shipped_templates_pass_their_checks`).
 5. **AC-5.** `skills/spec-authoring/SKILL.md` carries rules 1 to 5 of 2.3, and step 8's "an agent never marks a spec `approved`" is unchanged.
 6. **AC-6.** `agents/architect/AGENT.md` §2 item 2 asks for a traversal map only when a design spans more than one crate or process; its frontmatter is unchanged.
 7. **AC-7.** No manifest's `authorized_skills` or `default_access_scope` changes (a diff of every `agents/*/AGENT.md` and `skills/*/SKILL.md` frontmatter shows only the one `description` of AC-3).
@@ -151,7 +150,8 @@ The pull request touches no `.github/`, charter or rubric path. Spec 134 edits s
 
 1. **That the text changes behaviour.** Gap 5 says skill prose is often skipped. The skeleton is the stronger lever, but whether architects fill the new sections, and builders the table, is what the tally of 2.4 measures. Nothing here measures it in advance.
 2. **The sizing numbers.** About 300 lines a slice and about 8 slices a spec are guesses from specs 110-132, not measured against outcomes. They are guidance for that reason.
-3. **The audit's counts** (criteria cited in tests, sections per spec) are regular-expression matches over specs 110-132 and `crates/`, not a manual read.
+3. **That a cited Council id is unique.** The lint maps a `council_id` to one record; ids such as `t_0001` restart in every session, so two committed records with the same id would shadow each other. Not fixed here (a follow-up for the R4 spec).
+4. **The audit's counts** (criteria cited in tests, sections per spec) are regular-expression matches over specs 110-132 and `crates/`, not a manual read.
 
 ## 8. Decisions for the operator
 
