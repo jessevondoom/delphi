@@ -207,7 +207,7 @@ What differs from the first reviewer's order ({S1, S2, S3, S4a} now; {S6, S7, Co
 
 | Fix | Specified in | State |
 | :-- | :-- | :-- |
-| A checkout guard that knows Delphi's own writes; Round 2 without tools; one retry for an empty finish | spec 128 | approved 2026-11-19; S1 to S3 built and merged (#792). A live check is recorded in the tracker pull request #801, which is open |
+| A checkout guard that knows Delphi's own writes; Round 2 without tools; one retry for an empty finish | spec 128 | approved 2026-11-19; S1 to S3 built and merged (#792); verified live 2026-11-20 (tracker #801, merged) |
 | 1. A per-carrier input budget, 150,000 bytes by default for an unmeasured carrier, counted before the seat starts; over it, excerpts and a note in the receipt | spec 131 S1, S2 | approved 2026-11-20 (#794 merged); not built |
 | 2. The task at the top and the bottom of the prompt for a budgeted carrier | spec 131 S3 | not built |
 | 3. A seat that says it was cut counts as not heard; `require_families` counts seats that were heard, not seats that were started | spec 131 S4 | not built |
