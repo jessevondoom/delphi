@@ -75,7 +75,7 @@ The orchestrator briefs models outside Delphi in two ways: it dispatches to exte
 
 ## 086-outside-council-panel-and-host-subagents
 
-**086: The Council outside Delphi: a Panel run by host subagents, a server-held barrier, one front door, and a ruling card** · approved (per source at `fc177b02f63b`) · tier 0 · [source](../../specs/086-outside-council-panel-and-host-subagents.md)
+**086: The Council outside Delphi: a Panel run by host subagents, a server-held barrier, one front door, and a ruling card** · approved (per source at `0255ac356809`) · tier 0 · [source](../../specs/086-outside-council-panel-and-host-subagents.md)
 
 **source excerpt, untrusted** · `specs/086-outside-council-panel-and-host-subagents.md` line 28
 
@@ -101,7 +101,7 @@ _No standard scope section; open the spec._
 
 ## 099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why
 
-**099: Round 2 readability: keep a seat's valid critique, ignore Markdown restatements, ask for the object only, repair once, and say why a reply was unreadable** · approved (per source at `a2ebff4b2475`) · tier 0 · [source](../../specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md)
+**099: Round 2 readability: keep a seat's valid critique, ignore Markdown restatements, ask for the object only, repair once, and say why a reply was unreadable** · approved (per source at `c913851c0a19`) · tier 0 · [source](../../specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md)
 
 **source excerpt, untrusted** · `specs/099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md` line 22
 
@@ -121,7 +121,7 @@ Three jobs, in this order of risk:
 
 ## 128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes
 
-**128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes** · approved (per source at `4643040af7e6`) · tier 0 · [source](../../specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md)
+**128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes** · approved (per source at `286494536422`) · tier 0 · [source](../../specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md)
 
 **source excerpt, untrusted** · `specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md` line 25
 

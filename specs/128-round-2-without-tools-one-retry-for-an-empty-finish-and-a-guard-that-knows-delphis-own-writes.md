@@ -123,7 +123,7 @@ No slice is verified by a live Council. One live Council with the red-team on `a
 
 1. **The exact output of the failed Round 2.** The daemon did not keep it (see the logging bug in section 1). Whether the seat ended its turn after its tool calls, called a blocked tool such as `finish`, or sent text the parser does not read is inferred from the counts: tools were used, 1,498 tokens were spent, no words arrived. S1 removes the tools that invited the wandering; S2 captures the next case. It is possible that S1 alone does not cure the empty finish, and S2's retry and event are there for that case.
 2. **That a toolless Flash seat returns a schema answer.** The Panel's foreign seat has run this way since spec 086 §4.3, and a toolless `agy` seat with a text answer is tested (`a_toolless_agy_seat_...`), but a schema-validated answer from a toolless `agy` Round 2 has not been seen live.
-3. **That the research writer is the only Delphi writer into a checkout during a seat's run.** The ledger covers `write_atomic`. A second Delphi writer would trip the guard as before, which fails closed; S3 does not look for one.
+3. **That the research writer is the only Delphi writer into a checkout during a seat's run.** The ledger covers `write_atomic`. A second Delphi writer would trip the guard as before, which fails closed; S3 does not look for one. A temporary file of the writer (`.<name>.<pid>.<n>.tmp`) that a snapshot happened to catch between its creation and its rename would also count; the window is microseconds and the result fails closed.
 4. **Whether the Round 1 red-team still fails in other ways.** Spec 089 E-6 counted two other causes ("the CLI reported an error" after a hang); this spec does not touch them.
 
 ## 8. Decisions for the operator

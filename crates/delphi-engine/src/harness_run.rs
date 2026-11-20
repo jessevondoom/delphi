@@ -160,12 +160,14 @@ pub(crate) fn failure_log_level(exhausted: bool) -> delphi_core::elog::Level {
 const IGNORED_PREFIX: &str = ".claude/worktrees/";
 
 /// Every path whose `git status --porcelain -z` entry appears or disappears between two snapshots of the registered
-/// projects, and the number of such paths ignored for lying under `.claude/worktrees/`. With several projects each kept
-/// path is prefixed by the project's name. Names only, never contents.
-pub(crate) fn changed_path_list(names: &[&str], before: &[String], after: &[String]) -> (Vec<String>, usize) {
+/// projects, the number of such paths ignored for lying under `.claude/worktrees/`, and the number ignored because Delphi's own
+/// writer wrote them (`own(project index, path)`, `specs/128` S3). With several projects each kept path is prefixed by the
+/// project's name. Names only, never contents.
+pub(crate) fn changed_path_list(names: &[&str], before: &[String], after: &[String], own: &dyn Fn(usize, &str) -> bool) -> (Vec<String>, usize, usize) {
     let entries = |s: &str| -> Vec<String> { s.split('\0').filter(|e| !e.is_empty()).map(String::from).collect() };
     let mut all: Vec<String> = Vec::new();
     let mut ignored: Vec<String> = Vec::new();
+    let mut owned: Vec<String> = Vec::new();
     for (i, (b, a)) in before.iter().zip(after.iter()).enumerate() {
         let (b, a) = (entries(b), entries(a));
         let prefix = if names.len() > 1 { format!("{}/", names.get(i).copied().unwrap_or("?")) } else { String::new() };
@@ -177,12 +179,16 @@ pub(crate) fn changed_path_list(names: &[&str], before: &[String], after: &[Stri
                 if !ignored.contains(&p) {
                     ignored.push(p);
                 }
+            } else if own(i, path) {
+                if !owned.contains(&p) {
+                    owned.push(p);
+                }
             } else if !all.contains(&p) {
                 all.push(p);
             }
         }
     }
-    (all, ignored.len())
+    (all, ignored.len(), owned.len())
 }
 
 /// The first five of `all`, then "+N more" (for the note; the event keeps every name).
@@ -628,6 +634,8 @@ impl Engine {
         }
         // Projects must come out of an agy run exactly as they went in.
         let project_state = |engine: &Engine| -> Vec<String> { engine.projects.iter().map(|(_, p)| engine.exec.worktrees.project_status(p)).collect() };
+        // The time the guard's first snapshot is taken: only a write by Delphi itself at or after it can be ignored (`specs/128` S3).
+        let seat_started = std::time::SystemTime::now();
         let projects_before = (cli == Cli::Agy).then(|| project_state(self));
         // A role without a worktree gets an empty directory and no tools: it sees only its prompt.
         // Spec 092 TA-5: in a run that holds a grant, a Claude Builder runs with NONE of the CLI's own tools (`--tools ""`, an empty working
@@ -1153,12 +1161,22 @@ impl Engine {
                 let after = project_state(self);
                 if after != before {
                     let names: Vec<&str> = self.projects.iter().map(|(n, _)| n.as_str()).collect();
-                    let (paths, ignored) = changed_path_list(&names, &before, &after);
-                    // Only paths under `.claude/worktrees/` differ: another session's worktree, not the seat. The run is kept.
-                    let only_ignored = paths.is_empty() && ignored > 0;
+                    let roots: Vec<std::path::PathBuf> = self.projects.iter().map(|(_, p)| p.clone()).collect();
+                    let own = |i: usize, rel: &str| roots.get(i).is_some_and(|r| crate::own_writes::holds(&r.join(rel), seat_started));
+                    let (paths, ignored, owned) = changed_path_list(&names, &before, &after, &own);
+                    // Only paths under `.claude/worktrees/` (another session's worktree) or ones Delphi's own research writer wrote
+                    // (unchanged since) differ: not the seat. The run is kept.
+                    let only_ignored = paths.is_empty() && ignored + owned > 0;
                     let redacted: Vec<String> = paths.iter().map(|p| self.secrets.redact(p)).collect();
-                    let note = if ignored > 0 { format!("ignored {} paths under {}", ignored, IGNORED_PREFIX) } else { String::new() };
-                    batch.push(sc.ev("harness.checkout_guard", json!({"task_id": sc.task_id, "discarded": !only_ignored, "changed_paths": redacted, "ignored_count": ignored, "note": note})));
+                    let mut notes: Vec<String> = Vec::new();
+                    if ignored > 0 {
+                        notes.push(format!("ignored {} paths under {}", ignored, IGNORED_PREFIX));
+                    }
+                    if owned > 0 {
+                        notes.push(format!("ignored {} paths Delphi wrote itself", owned));
+                    }
+                    let note = notes.join("; ");
+                    batch.push(sc.ev("harness.checkout_guard", json!({"task_id": sc.task_id, "discarded": !only_ignored, "changed_paths": redacted, "ignored_count": ignored, "own_writes_count": owned, "note": note})));
                     if !only_ignored {
                         failure = Some((self.secrets.redact(&format!("the agy run changed a project checkout; its output is discarded (`git status` differs from before): {}", paths_note(&paths))).chars().take(600).collect(), false));
                     }
@@ -2440,6 +2458,66 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "a good answer"), "{}", out.text);
     }
 
+    /// `specs/128` S3: a run in flight while Delphi's OWN research writer writes into the registered project keeps its answer, and the
+    /// guard event counts the paths it left out. Two files, as a research record writes (answer and log).
+    #[tokio::test]
+    async fn a_write_by_delphis_own_research_writer_during_an_agy_run_does_not_discard_the_answer() {
+        let (f, out, _) = run_with_concurrent_write(|dir| {
+            let d = dir.join("research/topics/t-1");
+            fs::create_dir_all(&d).unwrap();
+            for (name, text) in [("answer.md", "an answer"), ("search-log.json", "{}")] {
+                fs::write(d.join(name), text).unwrap();
+                crate::own_writes::note(&d.join(name), text.as_bytes());
+            }
+        })
+        .await;
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "a good answer"), "{}", out.text);
+        let g = events_of(&f, "harness.checkout_guard");
+        assert_eq!((g[0].payload["discarded"].clone(), g[0].payload["own_writes_count"].clone()), (json!(false), json!(2)), "{}", g[0].payload);
+        assert!(g[0].payload["note"].as_str().unwrap().contains("2 paths Delphi wrote itself"));
+    }
+
+    /// The guard still fails closed: a file the ledger never saw, and a file Delphi wrote that was edited afterwards, are differences.
+    #[tokio::test]
+    async fn the_guard_still_discards_a_write_the_ledger_never_saw_or_one_edited_after_delphi_wrote_it() {
+        let (_, out, _) = run_with_concurrent_write(|dir| {
+            fs::create_dir_all(dir.join("research/topics/t-2")).unwrap();
+            fs::write(dir.join("research/topics/t-2/answer.md"), "not noted").unwrap();
+        })
+        .await;
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("changed a project checkout") && r.contains("research/topics/t-2/answer.md")), "{:?}", out.status);
+        let (_, out, _) = run_with_concurrent_write(|dir| {
+            let p = dir.join("research/topics/t-3/answer.md");
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, "what Delphi wrote").unwrap();
+            crate::own_writes::note(&p, b"what Delphi wrote");
+            fs::write(&p, "what the seat changed it to").unwrap();
+        })
+        .await;
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("changed a project checkout") && r.contains("research/topics/t-3/answer.md")), "{:?}", out.status);
+    }
+
+    /// An `agy` stand-in that answers after two seconds, while `write` runs against the registered project 700 ms in.
+    async fn run_with_concurrent_write(write: impl FnOnce(&std::path::Path) + Send + 'static) -> (Fx, crate::engine::TaskOutcome, ()) {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{}}'
+sleep 2
+echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer","usage":{}}}'"#,
+        );
+        let f = setup_with_exec(vec![], 5.0, |s| s.agy_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        use_agy(&f);
+        let proj = f.root.join("proj");
+        let writer = async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            write(&proj);
+        };
+        let (out, ()) = tokio::join!(f.engine.run_task(&f.m, "architect", "Review the plan"), writer);
+        (f, out.unwrap(), ())
+    }
+
     // ---- one retry of an agy seat after a CLI error, and the guard message (`specs/089` P4b) ----
 
     /// A stand-in `agy` that keeps a count of its starts in `count`, fails with `error_result` while the count is at most `fails`,
@@ -2661,12 +2739,12 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
     #[test]
     fn the_discard_message_names_the_changed_paths_up_to_five() {
         let before = vec![String::new()];
-        let note = |names: &[&str], b: &[String], a: &[String]| paths_note(&changed_path_list(names, b, a).0);
+        let note = |names: &[&str], b: &[String], a: &[String]| paths_note(&changed_path_list(names, b, a, &|_, _| false).0);
         let two = vec!["?? a.txt\0?? b.txt\0".to_string()];
         assert_eq!(note(&["proj"], &before, &two), "a.txt, b.txt");
         let seven = vec![(1..=7).map(|i| format!("?? f{}.txt\0", i)).collect::<String>()];
         assert_eq!(note(&["proj"], &before, &seven), "f1.txt, f2.txt, f3.txt, f4.txt, f5.txt +2 more");
-        assert_eq!(changed_path_list(&["proj"], &before, &seven).0.len(), 7, "the list keeps every name");
+        assert_eq!(changed_path_list(&["proj"], &before, &seven, &|_, _| false).0.len(), 7, "the list keeps every name");
         // A path that disappears is named too, and two projects are told apart.
         let (b2, a2) = (vec!["?? x\0".to_string(), String::new()], vec![String::new(), " M y\0".to_string()]);
         assert_eq!(note(&["one", "two"], &b2, &a2), "one/x, two/y");
@@ -2676,7 +2754,7 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
     fn only_the_claude_worktrees_prefix_is_ignored() {
         let before = vec![String::new()];
         let after = vec!["?? .claude/worktrees/w1/a.rs\0?? .claude/worktrees/w1/b.rs\0?? .claude/settings.json\0?? .claude/worktreesx/c\0 M src/lib.rs\0".to_string()];
-        let (kept, ignored) = changed_path_list(&["proj"], &before, &after);
+        let (kept, ignored, _) = changed_path_list(&["proj"], &before, &after, &|_, _| false);
         assert_eq!(ignored, 2);
         assert_eq!(kept, vec![".claude/settings.json", ".claude/worktreesx/c", "src/lib.rs"]);
     }
