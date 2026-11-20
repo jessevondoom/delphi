@@ -1,0 +1,182 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 131: Gemini seats: a bounded prompt, the task at both ends, and a Council that counts who was heard"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 31,
+      "number": "1.1",
+      "title": "Observations tied to code"
+    },
+    {
+      "level": 3,
+      "line": 51,
+      "number": "1.2",
+      "title": "Objectives"
+    },
+    {
+      "level": 3,
+      "line": 59,
+      "number": "1.3",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 67,
+      "number": "1.4",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 2,
+      "line": 71,
+      "number": "2",
+      "title": "Interim rule (in force from the operator's approval of this spec, until S2 is built)"
+    },
+    {
+      "level": 2,
+      "line": 75,
+      "number": "3",
+      "title": "The changes"
+    },
+    {
+      "level": 3,
+      "line": 77,
+      "number": "3.1",
+      "title": "S1: count the prompt (diagnostic only)"
+    },
+    {
+      "level": 3,
+      "line": 81,
+      "number": "3.2",
+      "title": "S2: a per-carrier byte budget"
+    },
+    {
+      "level": 3,
+      "line": 89,
+      "number": "3.3",
+      "title": "S3: the task at the top and at the bottom"
+    },
+    {
+      "level": 3,
+      "line": 98,
+      "number": "3.4",
+      "title": "S4: count who was heard"
+    },
+    {
+      "level": 3,
+      "line": 108,
+      "number": "3.5",
+      "title": "S5: a Council seat is offered reading tools only"
+    },
+    {
+      "level": 2,
+      "line": 117,
+      "number": "4",
+      "title": "Authority invariants (what the tests prove)"
+    },
+    {
+      "level": 2,
+      "line": 126,
+      "number": "5",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 142,
+      "number": "6",
+      "title": "Where this meets spec 128"
+    },
+    {
+      "level": 2,
+      "line": 152,
+      "number": "7",
+      "title": "Why Codex and Copilot are not used in Councils (read-only; no config was changed)"
+    },
+    {
+      "level": 2,
+      "line": 162,
+      "number": "8",
+      "title": "What is not verified, and how the limit is learned"
+    },
+    {
+      "level": 2,
+      "line": 173,
+      "number": "9",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 190,
+      "number": "10",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 204,
+      "number": "11",
+      "title": "Open decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 215,
+      "number": "12",
+      "title": "Options considered"
+    },
+    {
+      "level": 2,
+      "line": 228,
+      "number": "13",
+      "title": "Known limits"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard.md",
+    "sha256": "92c496fe2374250e53732c9ed103e10d8d069bd1d7bdbbcf3cc7b1bf85efb87b"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 398,
+        "end_line": 6,
+        "line": 6,
+        "start": 268
+      },
+      "text": "status: draft   # a proposal written 2026-11-20 for the operator to read; it is not permission to build. Nothing here is approved."
+    },
+    "sha256": "92c496fe2374250e53732c9ed103e10d8d069bd1d7bdbbcf3cc7b1bf85efb87b",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "orchestration-and-council",
+    "number": "131",
+    "stem": "131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "131: Gemini seats: a bounded prompt, the task at both ends, and a Council that counts who was heard"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2593,
+      "end_line": 25,
+      "line": 25,
+      "start": 2180
+    },
+    "text": "Over three Councils (`t_0002`, `t_0003`, `t_0004`, 2026-11-19 and 2026-11-20) every seat on the Gemini family failed, and each Council still printed \"two families met\". This spec says how Delphi stops a Gemini-carried seat from being sent more than its carrier delivers, keeps the task readable when something is cut anyway, counts a family only when a seat was heard, and keeps a seat from acting on the project."
+  }
+}
