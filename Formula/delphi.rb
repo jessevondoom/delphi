@@ -1,27 +1,27 @@
 class Delphi < Formula
   desc "Terminal-first multi-agent working environment"
   homepage "https://github.com/jessevondoom/delphi"
-  version "0.6.5"
+  version "0.6.6"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/jessevondoom/delphi/releases/download/v0.6.5/delphi-v0.6.5-aarch64-apple-darwin.tar.gz"
-      sha256 "5c47619b4e4143efb8e31f7ec4e5919643711343817ee120c1ca090994a7a019"
+      url "https://github.com/jessevondoom/delphi/releases/download/v0.6.6/delphi-v0.6.6-aarch64-apple-darwin.tar.gz"
+      sha256 "db45bbc75d65c289cd61ead909b897a8bce3660ac4f6103f78bdf1ec8b6ab146"
     end
     on_intel do
-      url "https://github.com/jessevondoom/delphi/releases/download/v0.6.5/delphi-v0.6.5-x86_64-apple-darwin.tar.gz"
-      sha256 "bbb0bd7440da454a19e7d0a1f4c892d38c8ed3c115593adef671216d58ba2d8a"
+      url "https://github.com/jessevondoom/delphi/releases/download/v0.6.6/delphi-v0.6.6-x86_64-apple-darwin.tar.gz"
+      sha256 "9f83c88942d518d6c24c2369f6ddc22ad735bb7a6bd3bcf987bb788e2939be81"
     end
   end
   on_linux do
     on_arm do
-      url "https://github.com/jessevondoom/delphi/releases/download/v0.6.5/delphi-v0.6.5-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "d8e52f4aa4303835419eb353acd7614b494d74a93be47dc2f92b8118c26aa64d"
+      url "https://github.com/jessevondoom/delphi/releases/download/v0.6.6/delphi-v0.6.6-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "919d379ffdaf84ee851169e8543ede125ab5b571f29abb6f16ce61e773d5da4a"
     end
     on_intel do
-      url "https://github.com/jessevondoom/delphi/releases/download/v0.6.5/delphi-v0.6.5-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "680ef3050a42c3017c52600d12e967614a1350b917e4062410698745938da6e3"
+      url "https://github.com/jessevondoom/delphi/releases/download/v0.6.6/delphi-v0.6.6-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "f15b624d8a74b17abf86761e7c3824d903d8a40fc8637cc648614cdb1567a939"
     end
   end
 
