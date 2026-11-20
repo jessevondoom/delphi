@@ -5,9 +5,11 @@
 //! It attaches in one of two ways, and each fixes what it attached as:
 //! * on the **narrator** socket, with the token that socket issues ([`Client::attach`]): scope `narrator` and nothing else;
 //! * on the **app** socket (spec 120 §3), with no token: the daemon sends a challenge and the app answers with a signature by
-//!   its paired key ([`Client::attach_app`]); or, once, with the ticket a terminal handed it ([`Client::pair`]).
+//!   its paired key ([`Client::attach_app`]); or, once, with the ticket a terminal handed it ([`Client::pair`]); or, with no
+//!   key and no ticket, by asking to be approved with a code its operator types at a terminal ([`Client::pair_request`], spec 120
+//!   §13.1). The app can show the code and wait; it cannot approve.
 //!
-//! `auth.issue`, `hello`, `app.pair` and `app.hello` are sent by those functions only. They are how a connection begins, not
+//! `auth.issue`, `hello`, `app.pair`, `app.pair_request` and `app.hello` are sent by those functions only. They are how a connection begins, not
 //! methods the app can call, and [`Method`] does not grow by them.
 
 use std::collections::VecDeque;
@@ -187,6 +189,20 @@ pub struct Challenge {
     pub instance: String,
 }
 
+/// What the daemon answered to `app.pair_request`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairAsked {
+    pub code: String,
+    pub name: String,
+    pub expires_in: u64,
+}
+
+/// A pairing code as the daemon shows it, `K7Q-4M2`: what the window is willing to print, whatever it was sent.
+pub fn is_code(s: &str) -> bool {
+    let ok = |c: char| c.is_ascii_uppercase() && !matches!(c, 'I' | 'L' | 'O') || ('2'..='9').contains(&c);
+    s.len() == 7 && s.as_bytes()[3] == b'-' && s.chars().enumerate().all(|(i, c)| i == 3 || ok(c))
+}
+
 pub struct Client {
     reader: BufReader<UnixStream>,
     writer: UnixStream,
@@ -256,6 +272,17 @@ impl Client {
             return Err(Error::Protocol("the daemon did not name the key".into()));
         }
         Ok(name.to_string())
+    }
+
+    /// `app.pair_request` (spec 120 §13.1 item 1): ask the daemon to approve this public key by a code its operator types at a
+    /// terminal. The daemon answers with the code to show, the name the key will have and how long the request is good for.
+    pub fn pair_request(&mut self, public_key: &str, version: &str) -> Result<PairAsked, Error> {
+        let r = self.raw("app.pair_request", json!({ "public_key": public_key, "app_version": version }))?;
+        let (code, name) = (r["code"].as_str().unwrap_or(""), r["name"].as_str().unwrap_or(""));
+        if !crate::key::is_name(name) || !is_code(code) {
+            return Err(Error::Protocol("the daemon did not give a code and a name".into()));
+        }
+        Ok(PairAsked { code: code.to_string(), name: name.to_string(), expires_in: r["expires_in"].as_u64().unwrap_or(120).min(600) })
     }
 
     /// `app.hello` (spec 120 §3 item 2): answer the challenge with the key's name and its signature over this connection.
