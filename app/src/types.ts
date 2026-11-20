@@ -71,6 +71,7 @@ export type Envelope = {
 
 /**
  * `paired`: the short name of the key this window proved (spec 120), when it is attached on the app socket; `grants`: what
- * that key holds; `unpaired_because`: why a window that has a key, or was handed a ticket, is reading without one.
+ * that key holds; `unpaired_because`: why a window that has a key, or was handed a ticket, is reading without one;
+ * `pair_code`: the code this window asked its operator to type at a terminal (spec 120 §13.1), while the request waits.
  */
-export type Conn = { connected: boolean; detail: string; paired?: string | null; grants?: string[]; unpaired_because?: string };
+export type Conn = { connected: boolean; detail: string; paired?: string | null; grants?: string[]; unpaired_because?: string; pair_code?: string };

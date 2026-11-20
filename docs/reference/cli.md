@@ -168,13 +168,13 @@ Start the desktop app and pair it; list, revoke and grant its keys.
 ```
   delphi app [--workspace <name>] [--home <dir>]
   delphi app list | log | opt-out | opt-in
+  delphi app approve [--grant request]
   delphi app revoke <name>
   delphi app grant <name> [--remove] <grant>
 ```
 
-Run it in a terminal (opt-out and opt-in need none): starting the app from one vouches for it; nothing is asked.
-A paired app reads and asks only for what its grants list (read, request). `revoke` closes its sessions at once.
-The app is DELPHI_APP, else the build beside this program, else /Applications. opt-out: update leaves it alone.
+Run it in a terminal (opt-out/opt-in need none): that vouches for the app. `approve` takes the code it shows.
+The app is DELPHI_APP, else the build beside this one, else /Applications. opt-out: update skips it; opt-in undoes.
 
 ### `delphi hooks`
 

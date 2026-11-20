@@ -1,5 +1,5 @@
 //! The record of what happens on the app socket (`specs/120` §3 item 4): each thing the daemon's server reports there
-//! (`app.paired`, `app.refused`, `app.revoked`, `app.granted`, `app.expired`) is written as an event of the default
+//! (`app.paired`, `app.refused`, `app.revoked`, `app.granted`, `app.expired`, and, since spec 120 §13.1, `app.pair_requested` and `app.pair_approved`) is written as an event of the default
 //! mission, where every attached client and `delphi app log` can read it. The server makes the payload from a key's short
 //! name, a grant's name and a fixed reason: nothing a peer sent as text reaches the log.
 //!
@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 /// The event kinds the app socket writes.
-pub const APP_EVENTS: [&str; 6] = ["app.paired", "app.refused", "app.revoked", "app.granted", "app.expired", REQUEST_EVENT];
+pub const APP_EVENTS: [&str; 8] = ["app.paired", "app.refused", "app.revoked", "app.granted", "app.expired", REQUEST_EVENT, "app.pair_requested", "app.pair_approved"];
 /// A request of the `request` grant and each change of its state (`specs/120` §4.2 item 4).
 pub const REQUEST_EVENT: &str = "app.request";
 
@@ -57,7 +57,7 @@ mod tests {
         // A request's record is the engine's own to write, for a request it counted: the server cannot report one.
         svc.record_app("app.request", json!({"name": "app-0a1b2c", "method": "app.page_rebuild", "ids": {"slug": "tides"}, "state": "done"})).await;
         assert!(events_of(&f, "app.request").is_empty());
-        assert_eq!(super::APP_EVENTS.len(), 6);
+        assert_eq!(super::APP_EVENTS.len(), 8);
         let refused = events_of(&f, "app.refused");
         assert_eq!(refused.len(), 1);
         assert_eq!((refused[0].payload["reason"].as_str(), refused[0].payload["name"].as_str()), (Some("bad_signature"), Some("app-0a1b2c")));

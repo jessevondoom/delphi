@@ -8,6 +8,9 @@
 //!   app's standard input, a pipe only the two of them hold. The ticket is never in an argument, an environment variable or
 //!   a file. Nothing is asked of the operator.
 //! * `grant` takes only a grant the code's table defines ([`delphi_core::app_keys::GRANTS`]).
+//! * `delphi app approve` (`specs/120` §13.1): an app with no key shows a code in its window; the operator types that code
+//!   here. Enter alone approves nothing, and nothing a process does for itself can type it. A key approved this way holds
+//!   `read`; `--grant request` adds `request`.
 
 use delphi_core::app_keys;
 use delphi_core::client::{Client, ClientError};
@@ -27,6 +30,8 @@ pub(crate) enum Action {
     OptOut,
     /// Undo [`Action::OptOut`].
     OptIn,
+    /// Approve a pairing request by the code typed at a prompt (§13.1); `request` adds that grant to the new key.
+    Approve { request: bool },
 }
 
 /// The refusal every form of the command shares, before a workspace is looked up or a daemon is spoken to.
@@ -44,6 +49,7 @@ pub(crate) fn gate(agent_seat: bool, input_is_terminal: bool) -> Result<(), &'st
 pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
     let mut words: Vec<&str> = Vec::new();
     let mut remove = false;
+    let mut grant_flag: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -51,6 +57,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
                 it.next();
             }
             "--remove" => remove = true,
+            "--grant" => grant_flag = Some(it.next().ok_or("`--grant` takes a grant: request")?.clone()),
             other if other.starts_with("--") => return Err(format!("unknown option `{}`", other)),
             other => words.push(other),
         }
@@ -69,6 +76,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
         ["opt-out"] => Action::OptOut,
         ["opt-in"] => Action::OptIn,
         ["revoke", name] => Action::Revoke(key(name)?),
+        ["approve"] => Action::Approve { request: false },
         ["grant", name, grant] => {
             // Only a grant the table defines (§5 item 1); the daemon holds the same line.
             if !app_keys::is_grant(grant) {
@@ -76,7 +84,13 @@ pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
             }
             Action::Grant { name: key(name)?, grant: grant.to_string(), remove }
         }
-        _ => return Err("usage: delphi app | app list | app log | app revoke <name> | app grant <name> [--remove] <grant> | app opt-out | app opt-in".to_string()),
+        _ => return Err("usage: delphi app | app list | app log | app approve [--grant request] | app revoke <name> | app grant <name> [--remove] <grant> | app opt-out | app opt-in".to_string()),
+    };
+    let action = match (action, grant_flag.as_deref()) {
+        (Action::Approve { .. }, Some("request")) => Action::Approve { request: true },
+        (Action::Approve { .. }, Some(_)) => return Err("a key approved by code may be given `request` here and nothing else: `--grant request`".to_string()),
+        (_, Some(_)) => return Err("`--grant` goes with `approve`".to_string()),
+        (a, None) => a,
     };
     if remove && !matches!(action, Action::Grant { .. }) {
         return Err("`--remove` goes with `grant`".to_string());
@@ -242,6 +256,8 @@ pub(crate) fn render_event(timestamp: &str, kind: &str, p: &Value) -> String {
     let list = |v: &Value| v.as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
     let what = match kind {
         "app.paired" => format!("paired with {}", list(&p["grants"])),
+        "app.pair_requested" => format!("asked to pair (key {}, app {})", p["fingerprint"].as_str().unwrap_or("?"), p["app_version"].as_str().filter(|v| !v.is_empty()).unwrap_or("-")),
+        "app.pair_approved" => format!("approved by code with {}", list(&p["grants"])),
         "app.refused" => format!("refused: {}{}", p["reason"].as_str().unwrap_or("?"), if p["locked_out"] == true { " (the socket is closed to new connections for a minute)" } else { "" }),
         "app.revoked" => format!("revoked; {} session(s) closed", p["sessions_closed"].as_u64().unwrap_or(0)),
         "app.granted" => format!("{} {}", if p["removed"] == true { "lost" } else { "given" }, p["grant"].as_str().unwrap_or("?")),
@@ -339,6 +355,57 @@ pub(crate) fn pair(client: &mut Client, exe: &Path, start: &dyn Fn(&Path, &str) 
     }
 }
 
+/// `delphi app approve` (§13.1 item 3): list the requests that wait, ask for the code shown in the app's window, and send it with
+/// the request's id. A line with nothing in it approves nothing and sends nothing; the daemon holds the code, so a wrong one is
+/// refused there and three cancel the request.
+pub(crate) fn approve(client: &mut Client, request: bool, input: &mut dyn std::io::BufRead, out: &mut dyn std::io::Write) -> i32 {
+    let listed = match client.call("app.pair_pending", json!({})) {
+        Ok(v) => v,
+        Err(e) => return fail(&e),
+    };
+    let pending = listed["pending"].as_array().cloned().unwrap_or_default();
+    if pending.is_empty() {
+        let _ = writeln!(out, "no app is waiting to be approved. Start the desktop app; with no key it shows a code and waits.");
+        return 1;
+    }
+    let _ = writeln!(out, "{:<4}{:<16}{:<12}ASKED", "NO.", "KEY", "APP");
+    for (i, p) in pending.iter().enumerate() {
+        let _ = writeln!(out, "{:<4}{:<16}{:<12}{}s ago (good for {}s more)", i + 1, p["fingerprint"].as_str().unwrap_or("?"), p["app_version"].as_str().filter(|v| !v.is_empty()).unwrap_or("-"), p["age_secs"].as_u64().unwrap_or(0), p["expires_in"].as_u64().unwrap_or(0));
+    }
+    let mut ask = |question: &str, out: &mut dyn std::io::Write| -> Option<String> {
+        let _ = write!(out, "{}", question);
+        let _ = out.flush();
+        let mut line = String::new();
+        (input.read_line(&mut line).ok()? > 0).then(|| line.trim().to_string())
+    };
+    let chosen = if pending.len() == 1 {
+        0
+    } else {
+        match ask("which one? (the number): ", out).and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=pending.len()).contains(n)) {
+            Some(n) => n - 1,
+            None => {
+                let _ = writeln!(out, "nothing was approved.");
+                return 1;
+            }
+        }
+    };
+    let typed = ask("type the code shown in the app window: ", out).unwrap_or_default();
+    if typed.is_empty() {
+        let _ = writeln!(out, "nothing was approved: approval is the code typed, not Enter.");
+        return 1;
+    }
+    let grants: Vec<&str> = if request { vec!["request"] } else { vec![] };
+    match client.call("app.pair_approve", json!({"request_id": pending[chosen]["request_id"], "code": typed, "grants": grants})) {
+        Ok(v) => {
+            let held = v["grants"].as_array().map(|g| g.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+            let name = v["name"].as_str().unwrap_or("?");
+            let _ = writeln!(out, "approved: {} may use the grants {}. `delphi app list` shows it; `delphi app grant {} request` gives `request`; `delphi app revoke {}` removes it.", name, held, name, name);
+            0
+        }
+        Err(e) => fail(&e),
+    }
+}
+
 /// The forms that speak to the daemon over an attached console connection.
 pub(crate) fn act(client: &mut Client, action: &Action, out: &mut dyn std::io::Write) -> i32 {
     match action {
@@ -370,7 +437,7 @@ pub(crate) fn act(client: &mut Client, action: &Action, out: &mut dyn std::io::W
             }
             Err(e) => fail(&e),
         },
-        Action::Start | Action::Log | Action::OptOut | Action::OptIn => 2,
+Action::Start | Action::Log | Action::Approve { .. } | Action::OptOut | Action::OptIn => 2,
     }
 }
 
@@ -412,7 +479,10 @@ pub(crate) fn run(action: Action, home: &Path, ws_dir: &Path, ws_name: &str) -> 
             let daemon = [("DELPHI_EXE", daemon_exe.display().to_string()), ("DELPHI_HOME", home.display().to_string()), ("DELPHI_WORKSPACE", ws_name.to_string())];
             pair(&mut attached.client, &exe, &|exe, ticket| start_with_ticket(exe, ticket, &daemon), &mut out)
         }
-        None => act(&mut attached.client, &action, &mut out),
+        None => match action {
+            Action::Approve { request } => approve(&mut attached.client, request, &mut std::io::stdin().lock(), &mut out),
+            _ => act(&mut attached.client, &action, &mut out),
+        },
     }
 }
 
@@ -442,6 +512,11 @@ mod tests {
         assert_eq!(parse(&args("--workspace w --home /h")), Ok(Action::Start));
         assert_eq!(parse(&args("list --home /h")), Ok(Action::List));
         assert_eq!(parse(&args("log")), Ok(Action::Log));
+        assert_eq!(parse(&args("approve")), Ok(Action::Approve { request: false }));
+        assert_eq!(parse(&args("approve --grant request --home /h")), Ok(Action::Approve { request: true }));
+        for bad in ["approve --grant update", "approve --grant", "approve extra", "list --grant request", "approve --remove"] {
+            assert!(parse(&args(bad)).is_err(), "{bad:?} must not parse");
+        }
         assert_eq!(parse(&args("revoke app-0a1b2c")), Ok(Action::Revoke("app-0a1b2c".into())));
         assert_eq!(parse(&args("grant app-0a1b2c request")), Ok(Action::Grant { name: "app-0a1b2c".into(), grant: "request".into(), remove: false }));
         assert_eq!(parse(&args("grant app-0a1b2c --remove request")), Ok(Action::Grant { name: "app-0a1b2c".into(), grant: "request".into(), remove: true }));
@@ -662,8 +737,64 @@ mod tests {
         s.daemon.request_shutdown();
     }
 
+    /// What an app with no key does (`specs/120` §13.1): ask on a fresh connection, and hold it open while it waits.
+    fn app_asks(app_sock: &Path, seed: [u8; 32]) -> (Client, String, String) {
+        let mut c = Client::connect(app_sock).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let ch = c.next_notification().unwrap();
+        let (public_key, _) = app_keys::test_sign(&seed, ch["params"]["nonce"].as_str().unwrap(), ch["params"]["instance"].as_str().unwrap(), 1, &app_sock.to_string_lossy());
+        let r = c.call("app.pair_request", json!({"public_key": public_key, "app_version": "0.0.0"})).unwrap();
+        (c, r["code"].as_str().unwrap().to_string(), r["name"].as_str().unwrap().to_string())
+    }
+
+    /// AC-12: Enter alone approves nothing, a wrong code approves nothing, the code typed approves, with `read` only, or with
+    /// `request` when the flag says so.
+    #[test]
+    fn approve_takes_the_code_typed_and_nothing_else() {
+        let mut s = serve();
+        // Nothing waiting: nothing to approve.
+        let mut out: Vec<u8> = Vec::new();
+        assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(b"\n".to_vec()), &mut out), 1);
+        assert!(String::from_utf8(out).unwrap().contains("no app is waiting"));
+
+        let (mut app, code, name) = app_asks(&s.app_sock, [9u8; 32]);
+        // A process that filed a request and waits for an Enter: the empty line approves nothing, and the daemon is not asked.
+        let mut out: Vec<u8> = Vec::new();
+        assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(b"\n".to_vec()), &mut out), 1);
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.contains("type the code shown in the app window") && said.contains("nothing was approved"), "{said}");
+        assert!(!said.contains(&code), "the code is not printed here");
+        // End of input is no code either.
+        assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(Vec::new()), &mut Vec::new()), 1);
+        assert!(app_keys::KeyStore::at(&s.home).load().unwrap().is_empty());
+        // A wrong code is refused by the daemon.
+        let wrong = if code == "AAA-AAA" { "BBB-BBB" } else { "AAA-AAA" };
+        assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(format!("{wrong}\n").into_bytes()), &mut Vec::new()), 1);
+        assert!(app_keys::KeyStore::at(&s.home).load().unwrap().is_empty());
+        // The code, as typed from the window.
+        let mut out: Vec<u8> = Vec::new();
+        assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(format!("{code}\n").into_bytes()), &mut out), 0);
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.contains(&format!("approved: {name} may use the grants read.")), "{said}");
+        let keys = app_keys::KeyStore::at(&s.home).load().unwrap();
+        assert_eq!((keys.len(), keys[0].grants.clone()), (1, vec!["read".to_string()]));
+        assert_eq!(app.next_notification().unwrap()["params"]["outcome"], "approved");
+
+        // `--grant request`.
+        let (mut app2, code2, name2) = app_asks(&s.app_sock, [8u8; 32]);
+        let mut out: Vec<u8> = Vec::new();
+        assert_eq!(approve(&mut s.console, true, &mut std::io::Cursor::new(format!("{}\n", code2.to_lowercase()).into_bytes()), &mut out), 0);
+        assert!(String::from_utf8(out).unwrap().contains(&format!("approved: {name2} may use the grants read, request.")));
+        assert_eq!(app2.next_notification().unwrap()["params"]["outcome"], "approved");
+        let keys = app_keys::KeyStore::at(&s.home).load().unwrap();
+        assert_eq!(keys.iter().find(|k| k.name == name2).unwrap().grants, ["read", "request"]);
+        s.daemon.request_shutdown();
+    }
+
     #[test]
     fn the_log_says_who_did_what_in_fixed_words() {
+        assert_eq!(render_event("T", "app.pair_requested", &json!({"name": "app-0a1b2c", "fingerprint": "0123456789ab", "app_version": "0.1.0"})), "T  app-0a1b2c  asked to pair (key 0123456789ab, app 0.1.0)");
+        assert_eq!(render_event("T", "app.pair_approved", &json!({"name": "app-0a1b2c", "grants": ["read"]})), "T  app-0a1b2c  approved by code with read");
         assert_eq!(render_event("2026-11-15T10:00:00.000Z", "app.paired", &json!({"name": "app-0a1b2c", "grants": ["read", "request"]})), "2026-11-15T10:00:00.000Z  app-0a1b2c  paired with read, request");
         assert_eq!(render_event("T", "app.refused", &json!({"name": null, "reason": "bad_signature", "locked_out": true})), "T  -           refused: bad_signature (the socket is closed to new connections for a minute)");
         assert_eq!(render_event("T", "app.revoked", &json!({"name": "app-0a1b2c", "sessions_closed": 2})), "T  app-0a1b2c  revoked; 2 session(s) closed");
