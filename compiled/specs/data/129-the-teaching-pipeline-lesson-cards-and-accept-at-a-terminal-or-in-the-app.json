@@ -82,73 +82,73 @@
     },
     {
       "level": 2,
-      "line": 139,
+      "line": 145,
       "number": "7",
       "title": "What the operator sees"
     },
     {
       "level": 2,
-      "line": 146,
+      "line": 152,
       "number": "8",
       "title": "Probation, evidence and unteaching"
     },
     {
       "level": 2,
-      "line": 153,
+      "line": 159,
       "number": "9",
       "title": "Authority invariants (what the tests prove)"
     },
     {
       "level": 2,
-      "line": 166,
+      "line": 173,
       "number": "10",
       "title": "Amendments to spec 120 (they take effect on approval; slices S1 and S2 build them)"
     },
     {
       "level": 2,
-      "line": 174,
+      "line": 181,
       "number": "11",
       "title": "What exists to build on, and what does not"
     },
     {
       "level": 2,
-      "line": 185,
+      "line": 192,
       "number": "12",
       "title": "Slices (one pull request each; none starts before approval)"
     },
     {
       "level": 2,
-      "line": 202,
+      "line": 210,
       "number": "13",
       "title": "Known limits, and what is not verified"
     },
     {
       "level": 2,
-      "line": 212,
+      "line": 220,
       "number": "14",
       "title": "Considered and not adopted"
     },
     {
       "level": 2,
-      "line": 224,
+      "line": 232,
       "number": "15",
       "title": "Council record"
     },
     {
       "level": 2,
-      "line": 231,
+      "line": 239,
       "number": "16",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 244,
+      "line": 252,
       "number": "17",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 251,
+      "line": 259,
       "number": "18",
       "title": "Decisions and open questions"
     }
@@ -156,7 +156,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app.md",
-    "sha256": "a30c633308cd30e9938423c58d279fb9390fe2a629ee6dfb1fd28733da6328b1"
+    "sha256": "a4bdc97884ef144a60dceca4c95d37d10faa9994d120d8d0ffd304137f7bc38f"
   },
   "source_status_at_hash": {
     "line": {
@@ -169,7 +169,7 @@
       },
       "text": "status: draft   # a proposal, not permission to build (AGENTS.md). Written with the operator over one session; it has had no Council and no red-team pass of its own."
     },
-    "sha256": "a30c633308cd30e9938423c58d279fb9390fe2a629ee6dfb1fd28733da6328b1",
+    "sha256": "a4bdc97884ef144a60dceca4c95d37d10faa9994d120d8d0ffd304137f7bc38f",
     "word": "draft"
   },
   "spec": {

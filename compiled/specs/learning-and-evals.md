@@ -55,7 +55,7 @@ _No standard scope section; open the spec._
 
 ## 129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app
 
-**129: The teaching pipeline: lesson cards, and accept at a terminal or in the app** · draft (per source at `a30c633308cd`) · tier 0 · [source](../../specs/129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app.md)
+**129: The teaching pipeline: lesson cards, and accept at a terminal or in the app** · draft (per source at `a4bdc97884ef`) · tier 0 · [source](../../specs/129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app.md)
 
 **source excerpt, untrusted** · `specs/129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app.md` line 24
 
