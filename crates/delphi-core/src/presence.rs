@@ -25,6 +25,18 @@ pub struct Presence {
     pub started: String,
     pub narrator_socket: String,
     pub app_socket: String,
+    /// The newest stable release the daemon found (`1.2.3`), when it found one newer than itself (`specs/120` §13.2 item 12). An
+    /// optional field: `version` stays 1, a reader that does not know it ignores it, and a file without it means no release is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_available: Option<String>,
+    /// Set after an update was applied: this daemon still runs the old code until it is restarted. Cleared by the restart, which writes a
+    /// new file.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub restart_pending: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Presence {
@@ -41,6 +53,8 @@ impl Presence {
             started: crate::time::now_rfc3339(),
             narrator_socket: layout.narrator_sock.to_string_lossy().into_owned(),
             app_socket: layout.app_sock.to_string_lossy().into_owned(),
+            update_available: None,
+            restart_pending: false,
         }
     }
 }
@@ -116,6 +130,42 @@ mod tests {
         remove(&l);
         assert!(!l.presence.exists());
         remove(&l);
+    }
+
+    /// `specs/120` §13.2 item 12: the two update fields are optional. Absent they are not written (the file is what it was), present they
+    /// are read back, a reader of the older shape ignores them, and the file is still `version` 1.
+    #[test]
+    fn the_update_fields_are_optional_and_ignored_by_a_reader_that_does_not_know_them() {
+        let (_d, l) = fixture();
+        let mut p = sample(&l);
+        write(&l, &p).unwrap();
+        let text = std::fs::read_to_string(&l.presence).unwrap();
+        assert!(!text.contains("update_available") && !text.contains("restart_pending"), "nothing known, nothing written");
+        p.update_available = Some("0.6.6".into());
+        p.restart_pending = true;
+        write(&l, &p).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&l.presence).unwrap()).unwrap();
+        assert_eq!((v["version"].as_u64(), v["update_available"].as_str(), v["restart_pending"].as_bool()), (Some(1), Some("0.6.6"), Some(true)));
+        assert_eq!(read(&l.presence), Some(p.clone()));
+        // A reader of the file as it was before: it names only the fields it knew, and the extra keys do not stop it.
+        #[derive(serde::Deserialize)]
+        struct Older {
+            version: u32,
+            instance: String,
+        }
+        let older: Older = serde_json::from_str(&std::fs::read_to_string(&l.presence).unwrap()).unwrap();
+        assert_eq!((older.version, older.instance.len()), (1, 32));
+        // A file written without the fields reads as none known.
+        let mut stripped = v.clone();
+        stripped.as_object_mut().unwrap().remove("update_available");
+        stripped.as_object_mut().unwrap().remove("restart_pending");
+        let back: Presence = serde_json::from_value(stripped).unwrap();
+        assert_eq!((back.update_available, back.restart_pending), (None, false));
+        for k in v.as_object().unwrap().keys() {
+            for bad in ["token", "secret", "ticket", "key"] {
+                assert!(!k.to_lowercase().contains(bad), "{k} looks like a secret");
+            }
+        }
     }
 
     #[test]

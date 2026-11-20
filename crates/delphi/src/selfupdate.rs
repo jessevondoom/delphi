@@ -252,12 +252,30 @@ const APP_EXE: &str = "Contents/MacOS/delphi-app";
 const MAX_APP_ENTRIES: usize = 2000;
 
 /// Where `delphi update` keeps the desktop app (`specs/122` §4 item 2): `~/Applications`, on macOS only, unless
-/// `DELPHI_NO_APP=1`. Never in a test, which passes its own folder to the `_with` functions.
+/// `DELPHI_NO_APP=1`, or while `<home>/app/opt-out` exists (`delphi app opt-out`, spec 122 §10.3). Never in a test, which
+/// passes its own folder to the `_with` functions.
 fn app_dir() -> Option<PathBuf> {
     if cfg!(test) || !cfg!(target_os = "macos") || std::env::var("DELPHI_NO_APP").is_ok_and(|v| v == "1") {
         return None;
     }
-    std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| PathBuf::from(h).join("Applications"))
+    app_dir_for(std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from).as_deref(), &crate::home::delphi_home(None))
+}
+
+/// `~/Applications` for the user home `user_home`, unless the Delphi home `delphi_home` holds the opt-out file.
+fn app_dir_for(user_home: Option<&Path>, delphi_home: &Path) -> Option<PathBuf> {
+    if crate::app_cmd::opted_out(delphi_home) {
+        return None;
+    }
+    user_home.map(|h| h.join("Applications"))
+}
+
+/// The one line `delphi update` says when the opt-out file is why the desktop app was left alone (macOS only).
+fn opt_out_note() -> Option<String> {
+    if cfg!(test) || !cfg!(target_os = "macos") || std::env::var("DELPHI_NO_APP").is_ok_and(|v| v == "1") {
+        return None;
+    }
+    let file = crate::app_cmd::opt_out_path(&crate::home::delphi_home(None));
+    crate::app_cmd::opted_out(&crate::home::delphi_home(None)).then(|| format!("The desktop app was left alone: {} exists (`delphi app opt-in` removes it).", file.display()))
 }
 
 /// One entry of the bundle: its path inside `Delphi.app`, and for a file its bytes and whether it is executable.
@@ -446,7 +464,9 @@ fn replace_beside(dest: &Path, bytes: &[u8]) -> Result<()> {
 
 /// Download, verify and swap in `rel` for `dest`, and on macOS the desktop app in `~/Applications` with it.
 pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Result<Installed> {
-    install_with(net, rel, target, dest, app_dir().as_deref())
+    let mut done = install_with(net, rel, target, dest, app_dir().as_deref())?;
+    done.notes.extend(opt_out_note());
+    Ok(done)
 }
 
 /// [`install`], with the app's folder given (`None`: leave any app alone).
@@ -622,6 +642,9 @@ impl Net for RealNet {
     }
 }
 
+/// The exit code of `delphi update --only-newer` when the release is not newer than the installed program: the daemon reads it as the reason.
+pub const EXIT_NOT_NEWER: i32 = 3;
+
 /// What the program step of `delphi update` did, for the caller to follow up on (workspace files, daemons).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Event {
@@ -683,6 +706,13 @@ pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, after: &
             return 1;
         }
     };
+    // `--only-newer` is the desktop app's update (spec 120 §13.2 item 1): the daemon names the release it found and the operator approved,
+    // and a program that has since been updated by hand to something newer must not be put back. Without it, `--version` installs the
+    // named release whatever is installed, as it always did.
+    if args.iter().any(|a| a == "--only-newer") && !newer(&rel.tag, current) {
+        eprintln!("delphi update: {} is not newer than the installed {}; nothing was installed (--only-newer)", rel.tag, current);
+        return EXIT_NOT_NEWER;
+    }
     println!("{} -> {}", current, rel.tag);
     if args.iter().any(|a| a == "--check") {
         println!("An update is available. Run `delphi update{}` to install it.", if dev { " --dev" } else { "" });
@@ -1000,6 +1030,19 @@ mod tests {
     }
 
     /// A temporary home: the program at `bin/delphi` reporting 0.1.0, and an empty `Applications` path (not made).
+    /// Spec 122 §10.3 (AC-9): the opt-out file in the Delphi home is why `delphi update` leaves the app alone.
+    #[test]
+    fn the_opt_out_file_leaves_the_app_alone_until_opt_in() {
+        let t = tempfile::tempdir().unwrap();
+        let (user, dh) = (t.path().join("u"), t.path().join("dh"));
+        assert_eq!(app_dir_for(Some(&user), &dh), Some(user.join("Applications")));
+        std::fs::create_dir_all(dh.join("app")).unwrap();
+        std::fs::write(dh.join("app/opt-out"), b"").unwrap();
+        assert_eq!(app_dir_for(Some(&user), &dh), None);
+        std::fs::remove_file(dh.join("app/opt-out")).unwrap();
+        assert_eq!(app_dir_for(Some(&user), &dh), Some(user.join("Applications")));
+    }
+
     fn home() -> (tempfile::TempDir, PathBuf, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
@@ -1234,6 +1277,33 @@ mod tests {
         assert_eq!(run(&["--check".into()], &net, &dest, &api), 0);
         assert!(!dest.exists(), "--check never installs");
         assert_eq!(run(&["--version".into(), "v7.7.7".into()], &net, &dest, &api), 1, "an unknown version is an error, not a silent success");
+    }
+
+    /// `--only-newer`: a release that is not newer than this program is refused with its own exit code and nothing is installed; without
+    /// the flag, `--version` installs the named release as before (an explicit downgrade at a terminal is untouched).
+    #[test]
+    fn only_newer_refuses_a_release_that_is_not_newer_and_a_plain_version_still_installs_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let dest = d.path().join("delphi");
+        // The build for this machine: `run` looks for the machine's own target, so the fixture is made for it (Linux CI is not macOS).
+        let machine = target().expect("a platform with releases");
+        let (mut net, api) = server_for(machine, "v0.2.0", "0.2.0", None);
+        let name = format!("delphi-v0.2.0-{}.tar.gz", machine);
+        let one = serde_json::json!({"tag_name": "v0.2.0", "prerelease": false, "draft": false, "assets": [
+            {"name": name, "browser_download_url": format!("https://dl/{}", name)},
+            {"name": format!("{}.sha256", name), "browser_download_url": format!("https://dl/{}.sha256", name)}]});
+        net.0.insert(format!("{}/tags/v0.2.0", api), one.to_string().into_bytes());
+        let refused = run(&["--version".into(), "v0.2.0".into(), "--only-newer".into()], &net, &dest, &api);
+        assert_eq!(refused, EXIT_NOT_NEWER);
+        assert!(!dest.exists(), "nothing was installed");
+        std::fs::write(&dest, "#!/bin/sh\necho 'delphi 0.6.5'\n").unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(run(&["--version".into(), "v0.2.0".into(), "--only-newer".into()], &net, &dest, &api), EXIT_NOT_NEWER);
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.6.5"), "the installed program was not touched");
+        // The same release, named plainly: installed, as `delphi update --version` always did.
+        assert_eq!(run(&["--version".into(), "v0.2.0".into()], &net, &dest, &api), 0);
+        assert!(std::fs::read_to_string(&dest).unwrap().contains("0.2.0"));
     }
 
     #[test]

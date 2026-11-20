@@ -167,14 +167,15 @@ Start the desktop app and pair it; list, revoke and grant its keys.
 
 ```
   delphi app [--workspace <name>] [--home <dir>]
-  delphi app list | log
+  delphi app list | log | opt-out | opt-in
   delphi app approve [--grant request]
   delphi app revoke <name>
-  delphi app grant <name> [--remove] <grant>
+  delphi app grant <name> [--remove] <grant> [--auto]
 ```
 
-Run it in a terminal: that vouches for the app. `approve` takes the code an unpaired app shows, typed by you.
-It holds only its grants (read, request). The app is DELPHI_APP, else the build beside this one, else /Applications.
+Run it in a terminal (opt-out/opt-in need none): that vouches for the app. `approve` takes the code an app shows.
+A key holds only its grants (read, request, update); `grant <name> update --auto` lets it update without asking.
+The app is DELPHI_APP, else the build beside this one, else /Applications. opt-out: update skips it; opt-in undoes.
 
 ### `delphi hooks`
 
@@ -755,16 +756,30 @@ page's DOI up at doi.org, as the daemon does; `--offline` skips that.
 
 ## Maintain
 
+### `delphi self-install`
+
+Put this program on your PATH, as install.sh does.
+
+```
+  delphi self-install
+```
+
+Copies the running delphi to ~/.local/bin/delphi (or $DELPHI_INSTALL_DIR/delphi): written under a temporary name,
+mode 0755, then moved into place. It never writes over a symbolic link or over a file that is not a delphi
+(a regular program holding delphi's own text; the file is read, never run), and prints what it did. The desktop
+app carries a copy of delphi and shows this command, to be run from that copy, when no delphi is installed.
+Needs no terminal. Refused inside an agent seat.
+
 ### `delphi update`
 
 The program, the built-in files, then the daemons.
 
 ```
   delphi update [--check] [--version vX.Y.Z | --dev] [--rollback] [--review] [--no-restart] [--allow-downgrade]
-    [--workspace <name>] [--home <dir>]
+    [--only-newer] [--workspace <name>] [--home <dir>]
 ```
 
---dev installs the latest dev build of main (built on request, so it can be behind main).
+--dev installs the latest dev build of main (built on request). --only-newer refuses a --version not newer than this.
 --rollback undoes all three steps. --review leaves the release's changes pending for
 /ratify instead of ratifying them. On macOS the desktop app goes with them (DELPHI_NO_APP=1 skips it).
 A host's Delphi plugin is not part of the program and is not updated here: when one is older than

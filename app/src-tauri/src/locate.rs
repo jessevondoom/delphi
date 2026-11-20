@@ -24,7 +24,19 @@ pub fn delphi_home() -> Option<PathBuf> {
 }
 
 /// Where `delphi` may be: `DELPHI_EXE` first, then the standard install locations.
-pub fn candidates(user_home: Option<&Path>) -> Vec<PathBuf> {
+/// The program inside the app's own bundle (spec 122 §10.1 item 3): `<exe>/../../Resources/delphi` for an app executable at
+/// `Delphi.app/Contents/MacOS/<name>`. A path only; nothing is read or run here.
+pub fn bundled_path(app_exe: &Path) -> Option<PathBuf> {
+    let contents = app_exe.parent()?.parent()?;
+    (contents.file_name()? == "Contents").then(|| contents.join("Resources/delphi"))
+}
+
+fn own_bundled() -> Option<PathBuf> {
+    bundled_path(&std::env::current_exe().ok()?)
+}
+
+/// The places an install puts `delphi`, without the bundled copy.
+pub fn installed_candidates(user_home: Option<&Path>) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = env_path("DELPHI_EXE").into_iter().collect();
     if let Some(h) = user_home {
         v.push(h.join(".local/bin/delphi"));
@@ -32,6 +44,32 @@ pub fn candidates(user_home: Option<&Path>) -> Vec<PathBuf> {
     v.push(PathBuf::from("/opt/homebrew/bin/delphi"));
     v.push(PathBuf::from("/usr/local/bin/delphi"));
     v
+}
+
+/// Where `delphi` may be: `DELPHI_EXE` first, then the standard install locations, then the copy in this app's bundle (last,
+/// so an installed program is always preferred).
+pub fn candidates(user_home: Option<&Path>) -> Vec<PathBuf> {
+    let mut v = installed_candidates(user_home);
+    v.extend(own_bundled());
+    v
+}
+
+/// What the start screen needs to offer "Install the delphi command" (spec 122 §10.1 item 3): whether an installed `delphi`
+/// exists, and the bundled one's path when this app has one. Reads file metadata only; nothing is run.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Program {
+    pub installed: bool,
+    pub bundled: Option<String>,
+}
+
+pub fn program_in(user_home: Option<&Path>, bundled: Option<PathBuf>) -> Program {
+    let installed = installed_candidates(user_home).iter().any(|p| p.is_file());
+    let bundled = bundled.filter(|p| p.is_file()).and_then(|p| p.to_str().map(String::from));
+    Program { installed, bundled }
+}
+
+pub fn program() -> Program {
+    program_in(env_path("HOME").as_deref(), own_bundled())
 }
 
 /// The narrator socket of a workspace, as `delphi_core::spawn::layout` names it: `<home>/run/<h>.narrator.sock`, `h` the first
@@ -130,6 +168,17 @@ pub struct Presence {
     pub workspace_name: String,
     pub home: String,
     pub started: String,
+    /// The newest stable release the daemon says it found (`1.2.3`), and whether it says an update was applied and it awaits a restart
+    /// (spec 120 §13.2 item 12). Optional fields of the file: absent means nothing is known.
+    pub update_available: Option<String>,
+    pub restart_pending: bool,
+}
+
+/// A release as the daemon writes it: three numbers and nothing else. A value of any other shape is not shown.
+fn release(v: &Value, key: &str) -> Option<String> {
+    let s = v.get(key)?.as_str()?;
+    let parts: Vec<&str> = s.split('.').collect();
+    (parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.len() <= 4 && p.bytes().all(|b| b.is_ascii_digit()))).then(|| s.to_string())
 }
 
 /// Twelve lower-case hex characters: the workspace hash that names a daemon's files.
@@ -161,6 +210,8 @@ pub fn parse_presence(bytes: &[u8], hash: &str) -> Option<Presence> {
         workspace_name: text(&v, "workspace_name", 128)?,
         home: text(&v, "home", 1024)?,
         started: text(&v, "started", 64).unwrap_or_default(),
+        update_available: release(&v, "update_available"),
+        restart_pending: v.get("restart_pending").and_then(|b| b.as_bool()).unwrap_or(false),
     })
 }
 
@@ -244,6 +295,9 @@ pub struct Found {
     pub narrator_socket: PathBuf,
     pub app_socket: PathBuf,
     pub summary: Option<Summary>,
+    /// From the presence file (spec 120 §13.2 item 12): the release the daemon found, and whether a restart is due after an update.
+    pub update_available: Option<String>,
+    pub restart_pending: bool,
 }
 
 /// Whether the daemon that answered `hello` is the one that wrote `p`. A daemon names its instance in the reply; one that
@@ -307,12 +361,12 @@ pub fn discover_as(home: &Path, uid: u32) -> Vec<Found> {
                     match p {
                         Some(p) => {
                             let live = hello.as_ref().is_some_and(|h| hello_matches(h, &p));
-                            Found { hash, state: if live { State::Running } else { State::Stopped }, answers: live, workspace_name: p.workspace_name, workspace: p.workspace, home: p.home, version: p.binary_version, pid: p.pid, started: p.started, narrator_socket, app_socket, summary: None }
+                            Found { hash, state: if live { State::Running } else { State::Stopped }, answers: live, workspace_name: p.workspace_name, workspace: p.workspace, home: p.home, version: p.binary_version, pid: p.pid, started: p.started, narrator_socket, app_socket, summary: None, update_available: p.update_available, restart_pending: p.restart_pending }
                         }
                         None => {
                             let version = hello.as_ref().and_then(|h| h["binary_version"].as_str()).unwrap_or("").chars().filter(|c| !c.is_control()).take(64).collect();
                             let pid = hello.as_ref().and_then(|h| h["pid"].as_u64()).unwrap_or(0);
-                            Found { hash, state: State::Older, answers, workspace_name: String::new(), workspace: String::new(), home: String::new(), version, pid, started: String::new(), narrator_socket, app_socket, summary: None }
+                            Found { hash, state: State::Older, answers, workspace_name: String::new(), workspace: String::new(), home: String::new(), version, pid, started: String::new(), narrator_socket, app_socket, summary: None, update_available: None, restart_pending: false }
                         }
                     }
                 })
@@ -532,6 +586,30 @@ mod tests {
         assert!(c.contains(&PathBuf::from("/opt/homebrew/bin/delphi")));
         assert!(c.contains(&PathBuf::from("/usr/local/bin/delphi")));
     }
+
+    #[test]
+    fn the_bundled_program_is_found_from_the_app_executable() {
+        let app = Path::new("/Applications/Delphi.app/Contents/MacOS/delphi-app");
+        assert_eq!(bundled_path(app), Some(PathBuf::from("/Applications/Delphi.app/Contents/Resources/delphi")));
+        assert_eq!(bundled_path(Path::new("/x/target/debug/delphi-app")), None, "not inside a bundle");
+        // Installed places come first; a bundled copy, when there is one, is last.
+        let installed = installed_candidates(Some(Path::new("/h")));
+        let all = candidates(Some(Path::new("/h")));
+        assert_eq!(all[..installed.len()], installed[..]);
+    }
+
+    #[test]
+    fn program_state_names_the_bundled_copy_only_when_it_exists() {
+        let t = tempfile::tempdir().unwrap();
+        let bundled = t.path().join("Resources/delphi");
+        assert_eq!(program_in(Some(t.path()), Some(bundled.clone())).bundled, None);
+        std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        std::fs::write(&bundled, b"x").unwrap();
+        assert_eq!(program_in(Some(t.path()), Some(bundled.clone())).bundled.as_deref(), bundled.to_str());
+        std::fs::create_dir_all(t.path().join(".local/bin")).unwrap();
+        std::fs::write(t.path().join(".local/bin/delphi"), b"x").unwrap();
+        assert!(program_in(Some(t.path()), None).installed);
+    }
 }
 
 /// A presence file as a daemon writes it (spec 130 §2), for tests here and in `bridge`.
@@ -707,6 +785,17 @@ mod discovery_tests {
         assert!(parse_presence(with("workspace_name", json!("a\u{1b}[31mb")).as_bytes(), A).is_none(), "control characters");
         assert!(parse_presence(with("pid", json!("3")).as_bytes(), A).is_none());
         assert!(parse_presence(good.to_string().as_bytes(), "ABC").is_none());
+        // Spec 120 §13.2 item 12: the two update fields are optional, and carried only in the shape the daemon writes them.
+        assert_eq!((p.update_available.clone(), p.restart_pending), (None, false), "a file from before them says nothing");
+        let mut updated = good.clone();
+        updated["update_available"] = json!("0.6.6");
+        updated["restart_pending"] = json!(true);
+        let q = parse_presence(updated.to_string().as_bytes(), A).unwrap();
+        assert_eq!((q.update_available.as_deref(), q.restart_pending), (Some("0.6.6"), true));
+        for bad in [json!("v0.6.6"), json!("0.6.6-rc1"), json!("0.6"), json!("<b>0.6.6</b>"), json!(7), json!("0.6.6\n"), json!("")] {
+            assert_eq!(parse_presence(with("update_available", bad.clone()).as_bytes(), A).unwrap().update_available, None, "{bad}");
+        }
+        assert!(!parse_presence(with("restart_pending", json!("yes")).as_bytes(), A).unwrap().restart_pending);
         assert!(parse_presence(b"[1,2]", A).is_none() && parse_presence(b"", A).is_none() && parse_presence(b"{", A).is_none());
         assert!(is_hash(A) && !is_hash("AAAAAAAAAAAA") && !is_hash("aaaaaaaaaaa") && !is_hash("../../../etc/"));
     }
@@ -756,6 +845,8 @@ mod discovery_tests {
             narrator_socket: PathBuf::new(),
             app_socket: PathBuf::new(),
             summary: None,
+            update_available: None,
+            restart_pending: false,
         };
         assert_eq!(start_choice(&[], None), Start::Locate);
         assert_eq!(start_choice(&[f(A, false)], None), Start::Locate);

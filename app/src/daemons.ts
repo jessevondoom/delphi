@@ -30,6 +30,10 @@ export type Daemon = {
   pid: number;
   started: string;
   summary: Summary | null;
+  /** The newest stable release the daemon found (`1.2.3`), from its presence file; spec 120 §13.2 item 12. Absent from a daemon that does not say. */
+  update_available?: string | null;
+  /** Set after an update was applied: the daemon still runs the old code until it is restarted. */
+  restart_pending?: boolean;
 };
 
 export type DaemonList = {
@@ -40,6 +44,8 @@ export type DaemonList = {
   /** The app's own version; `0.0.0` in a build that was not made for a release. */
   app_version: string;
   daemons: Daemon[];
+  /** Whether an installed `delphi` was found, and the path of the one inside this app's bundle, when there is one (spec 122 §10.1). */
+  program?: { installed: boolean; bundled: string | null };
 };
 
 /** What a card says a daemon is doing. `running` is a daemon that answered but gave no summary in time. */
@@ -74,6 +80,18 @@ export function startCommand(d: Daemon): string | null {
 /** What to run when nothing is running (spec 130 §4 item 5) and how to get Delphi when there is none (spec 122 §3). */
 export const START_COMMAND = 'delphi chat';
 export const INSTALL_COMMAND = 'curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh';
+
+/**
+ * The command that installs the program inside the app (spec 122 §10.1 item 3): the bundled path in quotes, then `self-install`.
+ * A path with a character a shell reads inside double quotes is single-quoted instead. Null when there is nothing to install
+ * from, or when an installed `delphi` was found. This window never runs it.
+ */
+export function selfInstallCommand(program: DaemonList['program']): string | null {
+  if (!program || program.installed || !program.bundled || !program.bundled.startsWith('/') || /[\u0000-\u001f]/.test(program.bundled)) return null;
+  const p = program.bundled;
+  const quoted = /["$`\\!]/.test(p) ? `'${p.replace(/'/g, `'\\''`)}'` : `"${p}"`;
+  return `${quoted} self-install`;
+}
 
 /** `1`, `12.3k`, `1.2M`: tokens, never dollars. */
 export function tokenWords(n: number): string {
@@ -165,4 +183,30 @@ export const switchable = (list: DaemonList | null): number => (list ? list.daem
  */
 export function showStart(list: DaemonList | null, connected: boolean, hasState: boolean): boolean {
   return !!list && (list.held || (!connected && !hasState && switchable(list) === 0));
+}
+
+/** What the update banner says (spec 120 §13.2 item 12): all of it is made from a version number and a plain workspace name. */
+export type UpdateBannerWords = {
+  /** `Update to v1.2.3 available`, or null when the daemon names no release. */
+  text: string | null;
+  /** The command to copy and run in a terminal. */
+  command: string;
+  /** Whether this window may offer "Update now": attached to this daemon with a key that holds `update`, and nothing waiting to restart. */
+  canApply: boolean;
+  /** `restart when idle`, with the command that restarts this daemon; shown after an update was applied. Never a button that restarts. */
+  restart: { text: string; command: string } | null;
+};
+
+/** A release the daemon names is a number and never text: three dot-separated numbers, nothing more. */
+export const releaseVersion = (v: unknown): string | null => (typeof v === 'string' && /^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(v) ? v : null);
+
+/**
+ * The banner for one daemon, from its presence file's fields. `attached` is whether this window is attached to it now: only
+ * then, and only with a key that holds `update`, is "Update now" offered. Every other window copies the command.
+ */
+export function updateBannerWords(d: Daemon, attached: boolean, grants: string[] | undefined, paired: boolean): UpdateBannerWords | null {
+  const version = releaseVersion(d.update_available);
+  const restart = d.restart_pending === true && plainName(d.workspace_name) ? { text: 'Updated: restart when idle', command: `delphi daemon restart --workspace ${d.workspace_name}` } : null;
+  if (!version && !restart) return null;
+  return { text: version && !restart ? `Update to v${version} available` : null, command: 'delphi update', canApply: !!version && !restart && attached && paired && (grants ?? []).includes('update'), restart };
 }

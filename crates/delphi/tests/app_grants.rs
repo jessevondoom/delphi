@@ -7,15 +7,15 @@
 //! absent and `merge-gates.toml` does not name it; this test then holds the table to the copy below, so the table is
 //! pinned either way. Once `merge-gates.toml` names the file, its absence fails.
 
-use delphi_core::app_keys::{all_methods, GRANTS, PAIRING_GRANTS, REQUEST_METHODS};
+use delphi_core::app_keys::{all_methods, CODE_GRANTS, GRANTS, PAIRING_GRANTS, REQUEST_METHODS, UPDATE_METHODS};
 use std::path::{Path, PathBuf};
 
 const FILE: &str = "crates/delphi/tests/app_grants.toml";
 
 /// The table as the spec approved it: `read` is the narrator's twelve reads and the encyclopedia's eleven (spec 117 §3);
-/// `request` is the four methods of spec 120 §4.2. A row is added here, and in the gate file, only with the approved spec
+/// `request` is the four methods of spec 120 §4.2; `update` is the one method of §13.2 (no parameter). A row is added here, and in the gate file, only with the approved spec
 /// or amendment that names it (§5 item 1).
-const EXPECTED: [(&str, &[&str]); 2] = [
+const EXPECTED: [(&str, &[&str]); 3] = [
     (
         "read",
         &[
@@ -45,6 +45,7 @@ const EXPECTED: [(&str, &[&str]); 2] = [
         ],
     ),
     ("request", &["app.research_continue", "app.research_ask", "app.page_rebuild", "app.page_dispute"]),
+    ("update", &["app.update_apply"]),
 ];
 
 fn root() -> PathBuf {
@@ -100,8 +101,11 @@ fn every_method_the_app_socket_can_reach_is_listed_under_a_grant_in_the_gate_fil
     let mut once: Vec<&str> = all.iter().map(|(_, m)| *m).collect();
     once.sort();
     once.dedup();
-    assert_eq!((all.len(), once.len()), (27, 27));
+    assert_eq!((all.len(), once.len()), (28, 28));
     assert_eq!(GRANTS[1].methods, &REQUEST_METHODS[..]);
+    assert_eq!(GRANTS[2].methods, &UPDATE_METHODS[..]);
+    // `update` is never given at pairing, by ticket or by code (spec 120 §13.2 item 1).
+    assert!(!PAIRING_GRANTS.contains(&"update") && !CODE_GRANTS.contains(&"update"));
     assert!(PAIRING_GRANTS.iter().all(|p| GRANTS.iter().any(|g| g.name == *p)));
 }
 
@@ -113,14 +117,14 @@ fn a_gate_file_that_differs_from_the_table_is_found() {
     let code = table();
     assert_eq!(listed(&render(&code)).unwrap(), code, "the table written as the file reads back as the table");
     let mut missing = code.clone();
-    missing[1].1.pop();
+    missing[2].1.pop();
     let mut extra = code.clone();
-    extra[1].1.push("approval.resolve".into());
+    extra[2].1.push("approval.resolve".into());
     let mut moved = code.clone();
     let m = moved[1].1.remove(0);
     moved[0].1.push(m);
     let mut renamed = code.clone();
-    renamed[1].0 = "answer".into();
+    renamed[2].0 = "answer".into();
     for (what, other) in [("a method the file lacks", missing), ("a method only the file has", extra), ("a method under another grant", moved), ("a grant by another name", renamed)] {
         assert_ne!(listed(&render(&other)).unwrap(), code, "{what}");
     }

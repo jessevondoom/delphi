@@ -180,8 +180,21 @@ jobs:
           app="../target/app/${{ matrix.target }}/release/bundle/macos/Delphi.app"
           # The build leaves only the executable signed (by the linker). An ad-hoc signature over the whole bundle is not a
           # developer certificate; it makes the bundle verify, so a copy a browser downloaded is "unidentified", not "damaged".
-          codesign --force --sign - --timestamp=none "$app"
-          codesign --verify --strict "$app"
+          # The release's own delphi for this target goes in first (specs/122 section 10), so the seal covers it and the app
+          # is never without the program. It was built above; the same file is in the tarball beside the app.
+          rel="../target/${{ matrix.target }}/release/delphi"
+          mkdir -p "$app/Contents/Resources"
+          install -m 0755 "$rel" "$app/Contents/Resources/delphi"
+          cmp "$rel" "$app/Contents/Resources/delphi"
+          codesign --force --deep --sign - --timestamp=none "$app"
+          codesign --verify --deep --strict "$app"
+          # Resources are sealed as data, not re-signed: the copy must still be the release's bytes after the seal.
+          cmp "$rel" "$app/Contents/Resources/delphi"
+          test -x "$app/Contents/Resources/delphi"
+          # --version only where the executable can run on this runner (the x86_64 build is cross-built); cmp is the hard check.
+          if [ "${{ matrix.native }}" = true ]; then
+            test "$("$app/Contents/Resources/delphi" --version)" = "$("$rel" --version)"
+          fi
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "${{ steps.ver.outputs.version }}"
           test -x "$app/Contents/MacOS/delphi-app"
       - name: Package
@@ -199,10 +212,51 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then
             tar -tzf "dist/$name.tar.gz" > "$RUNNER_TEMP/listing.txt"
             grep -qx "$name/Delphi.app/Contents/MacOS/delphi-app" "$RUNNER_TEMP/listing.txt" || { echo "the tarball has no Delphi.app"; exit 1; }
+            grep -qx "$name/Delphi.app/Contents/Resources/delphi" "$RUNNER_TEMP/listing.txt" || { echo "the app in the tarball has no delphi"; exit 1; }
             if grep -q '/\._' "$RUNNER_TEMP/listing.txt"; then echo "the tarball holds macOS metadata files"; exit 1; fi
           fi
           (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
           rm -rf "dist/$name"
+      # The disk image, a fallback for those who want one (specs/122 section 10.2): macOS targets only. It is not notarized
+      # (no Developer ID). install.sh and `delphi update` never read it: they ask for delphi-<tag>-<target>.tar.gz by name.
+      - name: Disk image
+        if: runner.os == 'macOS'
+        run: |
+          set -eu
+          dmg="Delphi-${{ steps.ver.outputs.tag }}-${{ matrix.target }}.dmg"
+          app="target/app/${{ matrix.target }}/release/bundle/macos/Delphi.app"
+          stage="$RUNNER_TEMP/dmg-stage"
+          rm -rf "$stage"; mkdir -p "$stage"
+          COPYFILE_DISABLE=1 ditto --norsrc --noextattr --noqtn "$app" "$stage/Delphi.app"
+          ln -s /Applications "$stage/Applications"
+          printf '%s\n' \
+            'Delphi' \
+            '' \
+            'This build is not notarized: it has no Apple Developer ID.' \
+            'A disk image downloaded in a browser is stopped by macOS the first time you open the app.' \
+            'To open it anyway: drag Delphi.app onto Applications, try to open it, then open' \
+            'System Settings > Privacy & Security and choose Open Anyway.' \
+            'Or remove the quarantine flag in a terminal:' \
+            '' \
+            '  xattr -dr com.apple.quarantine /Applications/Delphi.app' \
+            '' \
+            'The recommended install is the one-line installer from the project README. It writes files' \
+            'that no quarantine flag follows, and it installs the delphi command line program too:' \
+            '' \
+            '  gh release download --repo jessevondoom/delphi --pattern install.sh --output - | sh' \
+            '  # a public repository also works without gh:' \
+            '  curl -fsSL https://github.com/jessevondoom/delphi/releases/latest/download/install.sh | sh' \
+            '' \
+            'The app carries its own copy of the command line program. To install that copy, run in a terminal:' \
+            '' \
+            '  /Applications/Delphi.app/Contents/Resources/delphi self-install' \
+            '' \
+            '(delphi self-install arrives with the release that adds it.)' \
+            > "$stage/READ ME FIRST.txt"
+          hdiutil create -volname "Delphi" -srcfolder "$stage" -format UDZO -ov "dist/$dmg"
+          hdiutil verify "dist/$dmg"
+          (cd dist && shasum -a 256 "$dmg" > "$dmg.sha256")
+          rm -rf "$stage"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.target }}
@@ -232,7 +286,9 @@ jobs:
         continue-on-error: true
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.dmg
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}

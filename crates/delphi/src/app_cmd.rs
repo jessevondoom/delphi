@@ -11,6 +11,9 @@
 //! * `delphi app approve` (`specs/120` §13.1): an app with no key shows a code in its window; the operator types that code
 //!   here. Enter alone approves nothing, and nothing a process does for itself can type it. A key approved this way holds
 //!   `read`; `--grant request` adds `request`.
+//! * The same command approves a pending update (§13.2 item 5): the daemon names the key and the release it found, and the
+//!   operator types the code the app's window shows for it. Enter alone, or any other string, approves nothing. `grant <name> update --auto` records a standing
+//!   authorization, which skips that approval for this key's `app.update_apply` and for nothing else.
 
 use delphi_core::app_keys;
 use delphi_core::client::{Client, ClientError};
@@ -25,7 +28,11 @@ pub(crate) enum Action {
     List,
     Log,
     Revoke(String),
-    Grant { name: String, grant: String, remove: bool },
+    Grant { name: String, grant: String, remove: bool, auto: bool },
+    /// Keep `delphi update` and `install.sh` from installing the desktop app, for good (spec 122 §10.3). Needs no terminal.
+    OptOut,
+    /// Undo [`Action::OptOut`].
+    OptIn,
     /// Approve a pairing request by the code typed at a prompt (§13.1); `request` adds that grant to the new key.
     Approve { request: bool },
 }
@@ -45,6 +52,7 @@ pub(crate) fn gate(agent_seat: bool, input_is_terminal: bool) -> Result<(), &'st
 pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
     let mut words: Vec<&str> = Vec::new();
     let mut remove = false;
+    let mut auto = false;
     let mut grant_flag: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -53,6 +61,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
                 it.next();
             }
             "--remove" => remove = true,
+            "--auto" => auto = true,
             "--grant" => grant_flag = Some(it.next().ok_or("`--grant` takes a grant: request")?.clone()),
             other if other.starts_with("--") => return Err(format!("unknown option `{}`", other)),
             other => words.push(other),
@@ -69,6 +78,8 @@ pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
         [] => Action::Start,
         ["list"] => Action::List,
         ["log"] => Action::Log,
+        ["opt-out"] => Action::OptOut,
+        ["opt-in"] => Action::OptIn,
         ["revoke", name] => Action::Revoke(key(name)?),
         ["approve"] => Action::Approve { request: false },
         ["grant", name, grant] => {
@@ -76,9 +87,9 @@ pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
             if !app_keys::is_grant(grant) {
                 return Err(format!("no such grant; the grants are: {}", app_keys::GRANTS.iter().map(|g| g.name).collect::<Vec<_>>().join(", ")));
             }
-            Action::Grant { name: key(name)?, grant: grant.to_string(), remove }
+            Action::Grant { name: key(name)?, grant: grant.to_string(), remove, auto }
         }
-        _ => return Err("usage: delphi app | app list | app log | app approve [--grant request] | app revoke <name> | app grant <name> [--remove] <grant>".to_string()),
+        _ => return Err("usage: delphi app | app list | app log | app approve [--grant request] | app revoke <name> | app grant <name> [--remove] <grant> [--auto] | app opt-out | app opt-in".to_string()),
     };
     let action = match (action, grant_flag.as_deref()) {
         (Action::Approve { .. }, Some("request")) => Action::Approve { request: true },
@@ -89,7 +100,61 @@ pub(crate) fn parse(args: &[String]) -> Result<Action, String> {
     if remove && !matches!(action, Action::Grant { .. }) {
         return Err("`--remove` goes with `grant`".to_string());
     }
+    // A standing authorization (§13.2 item 6) is for `update` alone, and `--remove` ends it rather than giving it.
+    match &action {
+        Action::Grant { grant, remove, auto: true, .. } if grant != "update" || *remove => return Err("`--auto` goes with giving `update`: a standing authorization covers `app.update_apply` and nothing else, and `--remove` ends it".to_string()),
+        Action::Grant { .. } => {}
+        _ if auto => return Err("`--auto` goes with `grant <name> update`".to_string()),
+        _ => {}
+    }
     Ok(action)
+}
+
+/// The opt-out file (spec 122 §10.3): `<home>/app/opt-out`, empty. `install.sh` looks at the same path.
+pub(crate) fn opt_out_path(delphi_home: &Path) -> PathBuf {
+    delphi_home.join("app").join("opt-out")
+}
+
+/// Is the desktop app opted out of, for the Delphi home `delphi_home`?
+pub(crate) fn opted_out(delphi_home: &Path) -> bool {
+    opt_out_path(delphi_home).exists()
+}
+
+/// `delphi app opt-out` and `opt-in`: write or remove the opt-out file, an empty file of mode 0600 in a folder of mode 0700.
+/// Nothing is started and no daemon is spoken to. A symbolic link at the path is never followed.
+pub(crate) fn opt(action: &Action, delphi_home: &Path, out: &mut dyn std::io::Write) -> i32 {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let file = opt_out_path(delphi_home);
+    match action {
+        Action::OptOut => {
+            let made = file.parent().map(|d| std::fs::DirBuilder::new().recursive(true).mode(0o700).create(d)).unwrap_or(Ok(()));
+            let made = made.and_then(|()| std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&file).map(|_| ()));
+            match made {
+                Ok(()) => {
+                    let _ = writeln!(out, "opted out: {} exists, so `delphi update` and install.sh leave the desktop app alone. An installed app is not removed. `delphi app opt-in` undoes it.", file.display());
+                    0
+                }
+                Err(e) => {
+                    eprintln!("delphi app: could not write {}: {}", file.display(), e);
+                    1
+                }
+            }
+        }
+        _ => match std::fs::remove_file(&file) {
+            Ok(()) => {
+                let _ = writeln!(out, "opted in: {} is gone, so `delphi update` and install.sh handle the desktop app again.", file.display());
+                0
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let _ = writeln!(out, "already opted in: there is no {}.", file.display());
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi app: could not remove {}: {}", file.display(), e);
+                1
+            }
+        },
+    }
 }
 
 /// Is this a file the operator (or root) alone can change, and can it be run? A ticket is about to be handed to it.
@@ -189,7 +254,8 @@ pub(crate) fn render_list(listed: &Value) -> String {
     }
     let mut out = format!("{:<12}{:<18}{:<12}{:<12}{:<10}{}\n", "NAME", "GRANTS", "PAIRED", "LAST USED", "APP", "OPEN");
     for k in &keys {
-        let grants = k["grants"].as_array().map(|g| g.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+        let auto = k["update_auto"] == true;
+        let grants = k["grants"].as_array().map(|g| g.iter().filter_map(|x| x.as_str()).map(|x| if x == "update" && auto { "update (auto)" } else { x }).collect::<Vec<_>>().join(", ")).unwrap_or_default();
         let grants = if grants.is_empty() { "(none)".to_string() } else { grants };
         out.push_str(&format!("{:<12}{:<18}{:<12}{:<12}{:<10}{}\n", k["name"].as_str().unwrap_or("?"), grants, day(k["paired_at"].as_str().unwrap_or("")), day(k["last_used"].as_str().unwrap_or("")), k["app_version"].as_str().filter(|v| !v.is_empty()).unwrap_or("-"), k["sessions"].as_u64().unwrap_or(0)));
     }
@@ -207,7 +273,9 @@ pub(crate) fn render_event(timestamp: &str, kind: &str, p: &Value) -> String {
         "app.pair_approved" => format!("approved by code with {}", list(&p["grants"])),
         "app.refused" => format!("refused: {}{}", p["reason"].as_str().unwrap_or("?"), if p["locked_out"] == true { " (the socket is closed to new connections for a minute)" } else { "" }),
         "app.revoked" => format!("revoked; {} session(s) closed", p["sessions_closed"].as_u64().unwrap_or(0)),
-        "app.granted" => format!("{} {}", if p["removed"] == true { "lost" } else { "given" }, p["grant"].as_str().unwrap_or("?")),
+        "app.granted" => format!("{} {}{}", if p["removed"] == true { "lost" } else { "given" }, p["grant"].as_str().unwrap_or("?"), if p["auto"] == true { " (auto: its update requests skip the terminal approval)" } else { "" }),
+        "app.updated" => format!("updated Delphi {} -> {}; restart the daemon when idle", p["from"].as_str().unwrap_or("?"), p["to"].as_str().unwrap_or("?")),
+        "app.update_refused" => format!("update refused: {}{}", p["reason"].as_str().unwrap_or("?"), p["why"].as_str().filter(|w| !w.is_empty()).map(|w| format!(" ({})", w.chars().filter(|c| !c.is_control()).take(200).collect::<String>())).unwrap_or_default()),
         "app.expired" => "removed: unused for 180 days".to_string(),
         // `app.request` (§4.2 item 4): the method, the ids it named and where the request stands. Never what was typed: the
         // daemon does not record it. The reason is the daemon's own sentence, cut to one short line when it was written.
@@ -302,22 +370,28 @@ pub(crate) fn pair(client: &mut Client, exe: &Path, start: &dyn Fn(&Path, &str) 
     }
 }
 
-/// `delphi app approve` (§13.1 item 3): list the requests that wait, ask for the code shown in the app's window, and send it with
-/// the request's id. A line with nothing in it approves nothing and sends nothing; the daemon holds the code, so a wrong one is
-/// refused there and three cancel the request.
+/// `delphi app approve` (§13.1 item 3, §13.2 item 5): list what waits (pairing requests and a pending update), ask for what proves the
+/// operator is looking, and send it with the request's id. For a pairing request that is the code shown in the app's window; for an
+/// update it is the code the app's window shows for it, typed (the list names the key and the release and never the code). A line with
+/// nothing in it approves nothing and sends nothing; the daemon holds the code, so a wrong one is refused there and three cancel the request.
 pub(crate) fn approve(client: &mut Client, request: bool, input: &mut dyn std::io::BufRead, out: &mut dyn std::io::Write) -> i32 {
     let listed = match client.call("app.pair_pending", json!({})) {
         Ok(v) => v,
         Err(e) => return fail(&e),
     };
     let pending = listed["pending"].as_array().cloned().unwrap_or_default();
-    if pending.is_empty() {
-        let _ = writeln!(out, "no app is waiting to be approved. Start the desktop app; with no key it shows a code and waits.");
+    // A daemon from before the `update` grant has no such method: nothing waits there.
+    let updates: Vec<Value> = client.call("app.update_pending", json!({})).ok().and_then(|v| v["pending"].as_array().cloned()).unwrap_or_default();
+    if pending.is_empty() && updates.is_empty() {
+        let _ = writeln!(out, "nothing is waiting to be approved. Start the desktop app; with no key it shows a code and waits. An app that asks to update waits here too.");
         return 1;
     }
-    let _ = writeln!(out, "{:<4}{:<16}{:<12}ASKED", "NO.", "KEY", "APP");
+    let _ = writeln!(out, "{:<4}{:<10}{:<16}{:<12}ASKED", "NO.", "FOR", "KEY", "APP");
     for (i, p) in pending.iter().enumerate() {
-        let _ = writeln!(out, "{:<4}{:<16}{:<12}{}s ago (good for {}s more)", i + 1, p["fingerprint"].as_str().unwrap_or("?"), p["app_version"].as_str().filter(|v| !v.is_empty()).unwrap_or("-"), p["age_secs"].as_u64().unwrap_or(0), p["expires_in"].as_u64().unwrap_or(0));
+        let _ = writeln!(out, "{:<4}{:<10}{:<16}{:<12}{}s ago (good for {}s more)", i + 1, "pairing", p["fingerprint"].as_str().unwrap_or("?"), p["app_version"].as_str().filter(|v| !v.is_empty()).unwrap_or("-"), p["age_secs"].as_u64().unwrap_or(0), p["expires_in"].as_u64().unwrap_or(0));
+    }
+    for (i, u) in updates.iter().enumerate() {
+        let _ = writeln!(out, "{:<4}{:<10}{:<16}{:<12}{}s ago (good for {}s more): Delphi {} -> {}", pending.len() + i + 1, "update", u["key"].as_str().unwrap_or("?"), "-", u["age_secs"].as_u64().unwrap_or(0), u["expires_in"].as_u64().unwrap_or(0), u["installed"].as_str().unwrap_or("?"), u["version"].as_str().unwrap_or("?"));
     }
     let mut ask = |question: &str, out: &mut dyn std::io::Write| -> Option<String> {
         let _ = write!(out, "{}", question);
@@ -325,10 +399,11 @@ pub(crate) fn approve(client: &mut Client, request: bool, input: &mut dyn std::i
         let mut line = String::new();
         (input.read_line(&mut line).ok()? > 0).then(|| line.trim().to_string())
     };
-    let chosen = if pending.len() == 1 {
+    let total = pending.len() + updates.len();
+    let chosen = if total == 1 {
         0
     } else {
-        match ask("which one? (the number): ", out).and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=pending.len()).contains(n)) {
+        match ask("which one? (the number): ", out).and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=total).contains(n)) {
             Some(n) => n - 1,
             None => {
                 let _ = writeln!(out, "nothing was approved.");
@@ -336,6 +411,22 @@ pub(crate) fn approve(client: &mut Client, request: bool, input: &mut dyn std::i
             }
         }
     };
+    if chosen >= pending.len() {
+        let u = &updates[chosen - pending.len()];
+        let version = u["version"].as_str().unwrap_or("");
+        let typed = ask(&format!("type the code shown in the app window to install Delphi {version}: "), out).unwrap_or_default();
+        if typed.is_empty() {
+            let _ = writeln!(out, "nothing was approved: approval is the code typed, not Enter.");
+            return 1;
+        }
+        return match client.call("app.update_approve", json!({"code": typed})) {
+            Ok(v) => {
+                let _ = writeln!(out, "approved: {} will install Delphi {}; it does not restart the daemon, and the release's changes to the built-in agents and skills wait for /ratify. `delphi app log` shows how it went.", v["name"].as_str().unwrap_or("the app's key"), v["version"].as_str().unwrap_or(version));
+                0
+            }
+            Err(e) => fail(&e),
+        };
+    }
     let typed = ask("type the code shown in the app window: ", out).unwrap_or_default();
     if typed.is_empty() {
         let _ = writeln!(out, "nothing was approved: approval is the code typed, not Enter.");
@@ -370,10 +461,11 @@ pub(crate) fn act(client: &mut Client, action: &Action, out: &mut dyn std::io::W
             }
             Err(e) => fail(&e),
         },
-        Action::Grant { name, grant, remove } => match client.call("app.grant", json!({"name": name, "grant": grant, "remove": remove})) {
+        Action::Grant { name, grant, remove, auto } => match client.call("app.grant", json!({"name": name, "grant": grant, "remove": remove, "auto": auto})) {
             Ok(v) => {
-                let held = v["grants"].as_array().map(|g| g.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+                let held = v["grants"].as_array().map(|g| g.iter().filter_map(|x| x.as_str()).map(|x| if x == "update" && v["update_auto"] == true { "update (auto)" } else { x }).collect::<Vec<_>>().join(", ")).unwrap_or_default();
                 let change = match (v["changed"] == true, *remove) {
+                    (true, false) if *auto => format!("{} now holds {} with a standing authorization: its update requests skip the terminal approval until `--remove` or `revoke`", name, grant),
                     (true, false) => format!("{} now holds {}", name, grant),
                     (true, true) => format!("{} no longer holds {}; {} open session(s) closed", name, grant, v["sessions_closed"].as_u64().unwrap_or(0)),
                     (false, false) => format!("{} already holds {}", name, grant),
@@ -384,7 +476,7 @@ pub(crate) fn act(client: &mut Client, action: &Action, out: &mut dyn std::io::W
             }
             Err(e) => fail(&e),
         },
-        Action::Start | Action::Log | Action::Approve { .. } => 2,
+Action::Start | Action::Log | Action::Approve { .. } | Action::OptOut | Action::OptIn => 2,
     }
 }
 
@@ -465,14 +557,47 @@ mod tests {
             assert!(parse(&args(bad)).is_err(), "{bad:?} must not parse");
         }
         assert_eq!(parse(&args("revoke app-0a1b2c")), Ok(Action::Revoke("app-0a1b2c".into())));
-        assert_eq!(parse(&args("grant app-0a1b2c request")), Ok(Action::Grant { name: "app-0a1b2c".into(), grant: "request".into(), remove: false }));
-        assert_eq!(parse(&args("grant app-0a1b2c --remove request")), Ok(Action::Grant { name: "app-0a1b2c".into(), grant: "request".into(), remove: true }));
-        for g in ["answer", "settings", "review", "curate", "console", "*", "Read"] {
-            assert!(parse(&args(&format!("grant app-0a1b2c {g}"))).unwrap_err().contains("the grants are: read, request"), "{g}");
-        }
-        for bad in ["revoke", "revoke ../x", "revoke app-XYZ", "grant app-0a1b2c", "grant request", "pair", "list extra", "list --remove", "--remove", "revoke app-0a1b2c --yes", "start"] {
+        assert_eq!(parse(&args("grant app-0a1b2c request")), Ok(Action::Grant { name: "app-0a1b2c".into(), grant: "request".into(), remove: false, auto: false }));
+        assert_eq!(parse(&args("grant app-0a1b2c --remove request")), Ok(Action::Grant { name: "app-0a1b2c".into(), grant: "request".into(), remove: true, auto: false }));
+        // The standing authorization (§13.2 item 6): `--auto` goes with giving `update`, and with nothing else.
+        assert_eq!(parse(&args("grant app-0a1b2c update")), Ok(Action::Grant { name: "app-0a1b2c".into(), grant: "update".into(), remove: false, auto: false }));
+        assert_eq!(parse(&args("grant app-0a1b2c update --auto")), Ok(Action::Grant { name: "app-0a1b2c".into(), grant: "update".into(), remove: false, auto: true }));
+        for bad in ["grant app-0a1b2c request --auto", "grant app-0a1b2c --remove update --auto", "list --auto", "approve --auto", "revoke app-0a1b2c --auto"] {
             assert!(parse(&args(bad)).is_err(), "{bad:?} must not parse");
         }
+        for g in ["answer", "settings", "review", "curate", "console", "*", "Read"] {
+            assert!(parse(&args(&format!("grant app-0a1b2c {g}"))).unwrap_err().contains("the grants are: read, request, update"), "{g}");
+        }
+        assert_eq!(parse(&args("opt-out --home /h")), Ok(Action::OptOut));
+        assert_eq!(parse(&args("opt-in")), Ok(Action::OptIn));
+        for bad in ["opt-out now", "opt-in --remove", "revoke", "revoke ../x", "revoke app-XYZ", "grant app-0a1b2c", "grant request", "pair", "list extra", "list --remove", "--remove", "revoke app-0a1b2c --yes", "start"] {
+            assert!(parse(&args(bad)).is_err(), "{bad:?} must not parse");
+        }
+    }
+
+    /// Spec 122 §10.3 (AC-9): opt-out writes an empty 0600 file in a 0700 folder, opt-in removes it, neither needs a terminal or a
+    /// daemon, and a link at the path is not followed.
+    #[test]
+    fn opt_out_and_opt_in_write_and_remove_the_file() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("dh");
+        let mut out = Vec::new();
+        assert!(!opted_out(&home));
+        assert_eq!(opt(&Action::OptOut, &home, &mut out), 0);
+        assert!(opted_out(&home));
+        let (f, d) = (std::fs::metadata(opt_out_path(&home)).unwrap(), std::fs::metadata(home.join("app")).unwrap());
+        assert_eq!((f.len(), f.permissions().mode() & 0o777, d.permissions().mode() & 0o777), (0, 0o600, 0o700));
+        assert_eq!(opt(&Action::OptOut, &home, &mut out), 0, "twice is fine");
+        assert_eq!(opt(&Action::OptIn, &home, &mut out), 0);
+        assert!(!opted_out(&home));
+        assert_eq!(opt(&Action::OptIn, &home, &mut out), 0, "nothing to remove is not an error");
+        assert!(String::from_utf8(out).unwrap().contains("already opted in"));
+        // A link at the path is refused, and its target is untouched.
+        let target = t.path().join("victim");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, opt_out_path(&home)).unwrap();
+        assert_eq!(opt(&Action::OptOut, &home, &mut Vec::new()), 1);
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
     }
 
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
@@ -638,13 +763,13 @@ mod tests {
         assert!(listed.lines().nth(1).unwrap().starts_with(&format!("{}  read, request", name)) && listed.contains("0.0.0"), "{listed}");
 
         let mut out: Vec<u8> = Vec::new();
-        assert_eq!(act(&mut s.console, &Action::Grant { name: name.clone(), grant: "request".into(), remove: true }, &mut out), 0);
-        assert_eq!(act(&mut s.console, &Action::Grant { name: name.clone(), grant: "request".into(), remove: true }, &mut out), 0);
-        assert_eq!(act(&mut s.console, &Action::Grant { name: name.clone(), grant: "request".into(), remove: false }, &mut out), 0);
+        assert_eq!(act(&mut s.console, &Action::Grant { name: name.clone(), grant: "request".into(), remove: true, auto: false }, &mut out), 0);
+        assert_eq!(act(&mut s.console, &Action::Grant { name: name.clone(), grant: "request".into(), remove: true, auto: false }, &mut out), 0);
+        assert_eq!(act(&mut s.console, &Action::Grant { name: name.clone(), grant: "request".into(), remove: false, auto: false }, &mut out), 0);
         let said = String::from_utf8(out).unwrap();
         assert_eq!(said.lines().collect::<Vec<_>>(), [format!("{name} no longer holds request; 0 open session(s) closed (grants: read)"), format!("{name} did not hold request (grants: read)"), format!("{name} now holds request (grants: read, request)")]);
         // A grant the table does not define never reaches the record, even past `parse`.
-        assert_eq!(act(&mut s.console, &Action::Grant { name: name.clone(), grant: "answer".into(), remove: false }, &mut Vec::new()), 1);
+        assert_eq!(act(&mut s.console, &Action::Grant { name: name.clone(), grant: "answer".into(), remove: false, auto: false }, &mut Vec::new()), 1);
         assert_eq!(app_keys::KeyStore::at(&s.home).load().unwrap()[0].grants, ["read", "request"]);
 
         let mut out: Vec<u8> = Vec::new();
@@ -675,7 +800,7 @@ mod tests {
         // Nothing waiting: nothing to approve.
         let mut out: Vec<u8> = Vec::new();
         assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(b"\n".to_vec()), &mut out), 1);
-        assert!(String::from_utf8(out).unwrap().contains("no app is waiting"));
+        assert!(String::from_utf8(out).unwrap().contains("nothing is waiting to be approved"));
 
         let (mut app, code, name) = app_asks(&s.app_sock, [9u8; 32]);
         // A process that filed a request and waits for an Enter: the empty line approves nothing, and the daemon is not asked.
@@ -709,6 +834,113 @@ mod tests {
         let keys = app_keys::KeyStore::at(&s.home).load().unwrap();
         assert_eq!(keys.iter().find(|k| k.name == name2).unwrap().grants, ["read", "request"]);
         s.daemon.request_shutdown();
+    }
+
+    /// A daemon's extension that holds one pending update, as the engine's does, to drive the terminal's half of §13.2 item 5. The list it
+    /// gives names the key and the release and never the code.
+    struct Waiting {
+        version: String,
+        code: String,
+        approved: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl delphi_core::server::Extension for Waiting {
+        fn call(&self, _m: &str, _p: Value, _c: delphi_core::server::CallContext) -> delphi_core::server::RpcFuture {
+            Box::pin(async { None })
+        }
+
+        fn app_update_admin(&self, method: &str, params: Value) -> delphi_core::server::RpcFuture {
+            let (version, code) = (self.version.clone(), self.code.clone());
+            let typed = params["code"].as_str().unwrap_or("").to_string();
+            let method = method.to_string();
+            if method == "app.update_approve" {
+                self.approved.lock().unwrap().push(typed.clone());
+            }
+            Box::pin(async move {
+                match method.as_str() {
+                    "app.update_pending" => Some(Ok(json!({"pending": [{"request_id": "au-1", "key": "app-0a1b2c", "version": version, "installed": "0.6.5", "age_secs": 3, "expires_in": 597}]}))),
+                    _ if typed == code => Some(Ok(json!({"approved": true, "version": version, "name": "app-0a1b2c"}))),
+                    _ => Some(Err(delphi_core::proto::RpcError { code: delphi_core::proto::code::FORBIDDEN, message: "that is not the code shown in the app's window".into(), data: None })),
+                }
+            })
+        }
+    }
+
+    /// AC-17, the terminal's half: the daemon names the key and the release; Enter alone, end of input and a wrong string (the version
+    /// itself included) approve nothing (the first two do not even ask the daemon); the code typed approves.
+    #[test]
+    fn a_pending_update_is_approved_by_typing_the_code_the_app_shows() {
+        let mut s = serve();
+        let ext = Arc::new(Waiting { version: "0.6.6".into(), code: "K7Q-4M2".into(), approved: Default::default() });
+        s.daemon.set_extension(ext.clone());
+        let mut out: Vec<u8> = Vec::new();
+        assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(b"\n".to_vec()), &mut out), 1);
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.contains("update") && said.contains("app-0a1b2c") && said.contains("Delphi 0.6.5 -> 0.6.6"), "{said}");
+        assert!(said.contains("type the code shown in the app window to install Delphi 0.6.6") && said.contains("nothing was approved: approval is the code typed, not Enter"), "{said}");
+        assert!(!said.contains("K7Q"), "the list never holds the code: {said}");
+        assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(Vec::new()), &mut Vec::new()), 1);
+        assert!(ext.approved.lock().unwrap().is_empty(), "Enter and end of input are not sent");
+        for wrong in ["0.6.6", "0.6.5", "K7Q-4M3", "yes"] {
+            assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(format!("{wrong}\n").into_bytes()), &mut Vec::new()), 1, "{wrong}");
+        }
+        assert_eq!(ext.approved.lock().unwrap().len(), 4, "a wrong string is sent and the daemon refuses it");
+        let mut out: Vec<u8> = Vec::new();
+        assert_eq!(approve(&mut s.console, false, &mut std::io::Cursor::new(b"K7Q-4M2\n".to_vec()), &mut out), 0);
+        assert_eq!(ext.approved.lock().unwrap().last().map(String::as_str), Some("K7Q-4M2"));
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.contains("approved: app-0a1b2c will install Delphi 0.6.6; it does not restart the daemon"), "{said}");
+        s.daemon.request_shutdown();
+    }
+
+    /// §13.2 item 6: `grant <name> update --auto` records the standing authorization, `list` shows `update (auto)`, `--remove` ends it.
+    #[test]
+    fn a_standing_authorization_is_recorded_listed_and_ended_with_the_grant() {
+        let mut s = serve();
+        let sock = s.app_sock.clone();
+        let start = move |_: &Path, ticket: &str| app_pairs(&sock, ticket, [4u8; 32]).map(|_| 1).map_err(|e| std::io::Error::other(e.to_string()));
+        assert_eq!(pair(&mut s.console, Path::new("/the/app"), &start, &mut Vec::new()), 0);
+        let name = app_keys::KeyStore::at(&s.home).load().unwrap()[0].name.clone();
+        let grant = |s: &mut Served, remove: bool, auto: bool| {
+            let mut out: Vec<u8> = Vec::new();
+            assert_eq!(act(&mut s.console, &Action::Grant { name: name.clone(), grant: "update".into(), remove, auto }, &mut out), 0);
+            String::from_utf8(out).unwrap()
+        };
+        let said = grant(&mut s, false, false);
+        assert!(said.contains("now holds update (grants: read, request, update)"), "{said}");
+        let key = |s: &Served| app_keys::KeyStore::at(&s.home).load().unwrap().remove(0);
+        assert!(!key(&s).update_auto, "the grant alone is no standing authorization");
+        let said = grant(&mut s, false, true);
+        assert!(said.contains("with a standing authorization") && said.contains("update (auto)"), "{said}");
+        assert!(key(&s).update_auto);
+        let mut out: Vec<u8> = Vec::new();
+        act(&mut s.console, &Action::List, &mut out);
+        assert!(String::from_utf8(out).unwrap().contains("read, request, update (auto)"));
+        // Asking for the grant again without `--auto` changes nothing: only `--remove` or `revoke` ends it.
+        assert!(grant(&mut s, false, false).contains("already holds update"));
+        assert!(key(&s).update_auto);
+        assert!(grant(&mut s, true, false).contains("no longer holds update"));
+        assert!(!key(&s).update_auto && !key(&s).grants.contains(&"update".to_string()), "removing the grant ends the authorization");
+        // The daemon holds the same line as the parser: `auto` with anything but giving `update` is refused.
+        for (g, remove) in [("request", false), ("update", true)] {
+            let r = s.console.call("app.grant", json!({"name": name, "grant": g, "remove": remove, "auto": true}));
+            assert!(r.is_err(), "{g} {remove}");
+        }
+        assert!(!key(&s).update_auto);
+        s.daemon.request_shutdown();
+    }
+
+    #[test]
+    fn the_log_and_the_list_say_what_an_update_did_in_fixed_words() {
+        assert_eq!(render_event("T", "app.updated", &json!({"name": "app-0a1b2c", "from": "0.6.5", "to": "0.6.6"})), "T  app-0a1b2c  updated Delphi 0.6.5 -> 0.6.6; restart the daemon when idle");
+        assert_eq!(render_event("T", "app.update_refused", &json!({"name": "app-0a1b2c", "reason": "one_an_hour", "why": "one update an hour\nfor one key"})), "T  app-0a1b2c  update refused: one_an_hour (one update an hourfor one key)");
+        assert_eq!(render_event("T", "app.update_refused", &json!({"name": "app-0a1b2c", "reason": "wrong_version"})), "T  app-0a1b2c  update refused: wrong_version");
+        assert_eq!(render_event("T", "app.granted", &json!({"name": "app-0a1b2c", "grant": "update", "removed": false, "auto": true})), "T  app-0a1b2c  given update (auto: its update requests skip the terminal approval)");
+        assert_eq!(render_event("T", "app.request", &json!({"name": "app-0a1b2c", "request": "au-1", "method": "app.update_apply", "ids": {}, "state": "waiting"})), "T  app-0a1b2c  asked app.update_apply {}: waiting");
+        let listed = json!({"keys": [{"name": "app-0a1b2c", "grants": ["read", "update"], "update_auto": true, "paired_at": "2026-11-19T00:00:00Z", "last_used": "2026-11-20T00:00:00Z", "app_version": "0.6.5", "sessions": 0}, {"name": "app-0a1b2d", "grants": ["read", "update"], "paired_at": "2026-11-19T00:00:00Z", "last_used": "2026-11-20T00:00:00Z", "app_version": "", "sessions": 0}]});
+        let out = render_list(&listed);
+        let rows: Vec<&str> = out.lines().collect();
+        assert!(rows[1].contains("read, update (auto)") && rows[2].contains("read, update ") && !rows[2].contains("(auto)"), "{out}");
     }
 
     #[test]

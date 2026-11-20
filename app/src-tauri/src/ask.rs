@@ -76,6 +76,8 @@ pub fn request(what: &str, arg: &Value) -> Option<(Method, Value)> {
             (Method::ResearchAsk, p)
         }
         "page.rebuild" => (Method::PageRebuild, json!({ "slug": word(&arg["slug"], 60)? })),
+        // The update takes no parameter at all: whatever the window hands over is dropped, and the daemon names the release.
+        "update.apply" => (Method::UpdateApply, json!({})),
         "page.dispute" => (Method::PageDispute, json!({ "claim": id(&arg["claim"])?, "note": typed(&arg["note"]).filter(|n| !n.is_empty())? })),
         _ => return None,
     })
@@ -131,6 +133,19 @@ mod tests {
         }
         for bad in [json!({}), json!({"slug": "Tides"}), json!({"slug": "a/b"}), json!({"slug": ""})] {
             assert!(request("page.rebuild", &bad).is_none(), "{bad}");
+        }
+    }
+
+    /// Spec 120 §13.2 item 2: the update carries no parameter. Whatever the window hands over (a version, a URL, a channel, a path) is dropped.
+    #[test]
+    fn the_update_request_carries_nothing_the_window_says() {
+        for arg in [Value::Null, json!({}), json!({"version": "9.9.9", "url": "http://example.test/x", "channel": "dev", "path": "/tmp/x", "slug": "tides", "note": "n"})] {
+            let (m, p) = request("update.apply", &arg).unwrap();
+            assert_eq!((m, p), (Method::UpdateApply, json!({})));
+        }
+        assert_eq!(Method::UpdateApply.name(), "app.update_apply");
+        for not in ["update", "update.apply ", "app.update_apply", "update.check", "update.approve"] {
+            assert!(request(not, &json!({})).is_none(), "{not}");
         }
     }
 
