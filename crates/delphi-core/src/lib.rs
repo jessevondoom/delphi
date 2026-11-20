@@ -18,6 +18,7 @@ pub mod event;
 pub mod hub;
 pub mod ledger;
 pub mod lock;
+pub mod presence;
 pub mod log;
 pub mod pathguard;
 pub mod peer;

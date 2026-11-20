@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 
 use crate::client::{Client, Error, Method};
 use crate::key::{self, AppKey, KeyStore};
+use crate::locate::{self, Found, SummaryCache};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Conn {
@@ -168,6 +169,18 @@ pub struct Bridge {
     key: Mutex<Option<Loaded>>,
     /// A pairing ticket a terminal handed over, until it is used. Held in memory only.
     ticket: Mutex<Option<String>>,
+    /// Where `attach_to` pointed the bridge (spec 130 §3.2): that daemon's info and narrator socket. `None` until it is, and
+    /// the locator decides. It stays, so a daemon that goes away is looked for again where it was.
+    target: Mutex<Option<(Value, PathBuf)>>,
+    /// The narrator socket the bridge is attached, or trying to attach, to.
+    current: Mutex<Option<PathBuf>>,
+    /// Nothing is attached until `attach_to` names a daemon: the start screen is showing (spec 130 §3.2).
+    held: AtomicBool,
+    /// `attach_to` was called: the connection that is open is dropped and the bridge attaches again, to the new target.
+    switch: AtomicBool,
+    /// What the last `daemons` call returned: the only daemons `attach_to` will name.
+    listed: Mutex<Vec<Found>>,
+    summaries: Mutex<SummaryCache>,
 }
 
 impl Bridge {
@@ -192,6 +205,12 @@ impl Bridge {
             keys,
             key: Mutex::new(None),
             ticket: Mutex::new(None),
+            target: Mutex::new(None),
+            current: Mutex::new(None),
+            held: AtomicBool::new(false),
+            switch: AtomicBool::new(false),
+            listed: Mutex::new(Vec::new()),
+            summaries: Mutex::new(SummaryCache::new()),
         })
     }
 
@@ -208,6 +227,49 @@ impl Bridge {
 
     pub fn info(&self) -> Value {
         self.info.lock().unwrap().clone()
+    }
+
+    /// Attach to nothing until `attach_to` names a daemon (the start screen is showing).
+    pub fn hold(&self) {
+        self.held.store(true, Ordering::SeqCst);
+    }
+
+    pub fn held(&self) -> bool {
+        self.held.load(Ordering::SeqCst)
+    }
+
+    /// The hash of the daemon the bridge is attached to or looking for, when it has one.
+    pub fn current(&self) -> Option<String> {
+        let sock = self.current.lock().unwrap().clone()?;
+        sock.file_name()?.to_str()?.strip_suffix(".narrator.sock").filter(|h| locate::is_hash(h)).map(String::from)
+    }
+
+    /// The daemons of `home` (spec 130 §3.1), with a summary for each running one when `summaries` is asked for (§3.3: no
+    /// daemon is read more than once in five seconds). What this returns is the list `attach_to` is held to.
+    pub fn daemons(&self, home: &Path, summaries: bool) -> Vec<Found> {
+        let mut found = locate::discover(home);
+        if summaries {
+            locate::add_summaries(&mut found, &mut self.summaries.lock().unwrap());
+        }
+        *self.listed.lock().unwrap() = found.clone();
+        found
+    }
+
+    /// Point the bridge at a daemon of the last list and attach again (spec 130 §3.2). A hash that is not in that list, or
+    /// names a daemon that is not running, is refused and nothing changes. `info_for` makes what the window is told about
+    /// the daemon (`locate::info_for`); it is not called for a refused hash.
+    pub fn attach_to(&self, hash: &str, info_for: impl FnOnce(&Found) -> Value) -> Result<(), String> {
+        let found = self.listed.lock().unwrap().iter().find(|f| f.hash == hash).cloned().ok_or("that is not a daemon in the list this window was given")?;
+        if !found.answers {
+            return Err("that daemon is not running; start it in a terminal".into());
+        }
+        *self.target.lock().unwrap() = Some((info_for(&found), found.narrator_socket.clone()));
+        // A key paired with one daemon is refused by another (spec 130 §3.2): what was learned about it is not carried over.
+        *self.key.lock().unwrap() = None;
+        *self.calls.lock().unwrap() = None;
+        self.held.store(false, Ordering::SeqCst);
+        self.switch.store(true, Ordering::SeqCst);
+        Ok(())
     }
 
     pub fn stop(&self) {
@@ -356,7 +418,7 @@ impl Bridge {
     fn pump(&self, events: &mut Client, sink: &dyn Sink) -> Error {
         let mut batch: Vec<Value> = Vec::new();
         loop {
-            if self.stop.load(Ordering::SeqCst) {
+            if self.stop.load(Ordering::SeqCst) || self.switch.load(Ordering::SeqCst) {
                 return Error::Closed;
             }
             // With nothing waiting to be sent, wait for the next notification; with a batch open, wait only briefly for more.
@@ -405,18 +467,32 @@ impl Bridge {
     pub fn run(self: &Arc<Self>, sink: Arc<dyn Sink>) {
         let mut wait = Duration::from_millis(500);
         while !self.stop.load(Ordering::SeqCst) {
-            match (self.locate)() {
+            // A choice made from now on is seen by the pump; one made before this line is in `target`.
+            self.switch.store(false, Ordering::SeqCst);
+            if self.held.load(Ordering::SeqCst) {
+                self.set_conn(sink.as_ref(), false, "Choose a daemon to show");
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            let target = self.target.lock().unwrap().clone();
+            match target.or_else(|| (self.locate)()) {
                 None => self.set_conn(sink.as_ref(), false, "No Delphi home was found on this machine"),
                 Some((info, socket)) => {
                     // The app socket is the one `delphi daemon where` named, or the one the app worked out beside the narrator's.
                     let app = crate::locate::app_socket_in(&info);
                     *self.info.lock().unwrap() = info;
+                    *self.current.lock().unwrap() = Some(socket.clone());
                     match self.attach(&socket, app.as_deref()) {
                         Ok((mut events, conn)) => {
                             wait = Duration::from_millis(500);
                             self.say(sink.as_ref(), conn);
                             let lost = self.pump(&mut events, sink.as_ref());
                             *self.calls.lock().unwrap() = None;
+                            if self.switch.load(Ordering::SeqCst) {
+                                self.set_conn(sink.as_ref(), false, "Switching to another daemon");
+                                wait = Duration::from_millis(500);
+                                continue;
+                            }
                             self.set_conn(sink.as_ref(), false, &format!("The daemon went away ({lost}); trying again"));
                         }
                         Err(Error::Io(_)) => self.set_conn(sink.as_ref(), false, "No daemon is running"),
@@ -988,6 +1064,78 @@ mod tests {
         let said = bridge.request(Method::PageRebuild, json!({"slug": "tides"})).unwrap_err();
         assert_eq!(said, format!("this app's key does not hold `request`: `delphi app grant {PAIRED_NAME} request` in a terminal gives it"));
         assert_eq!(app.seen.lock().unwrap().len(), before);
+        bridge.stop();
+    }
+    #[test]
+    fn attach_names_only_a_daemon_of_the_last_list_and_a_refusal_changes_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let (b, c, d) = ("bbbbbbbbbbbb", "cccccccccccc", "dddddddddddd");
+        let instance = "0123456789abcdef0123456789abcdef";
+        let run = home.join("run");
+        std::fs::create_dir_all(&run).unwrap();
+        // The locator's daemon: the start screen is showing, so it must never be contacted.
+        let first = t.path().join("first.sock");
+        let seen_first: Seen = Arc::default();
+        daemon(&first, seen_first.clone(), vec![], false);
+        // B and D are running (their sockets answer with pid 1, as the presence files say); C has a file and nothing behind it.
+        let (seen_b, seen_d): (Seen, Seen) = (Arc::default(), Arc::default());
+        for (hash, seen) in [(b, &seen_b), (d, &seen_d)] {
+            crate::locate::write_presence(home, hash, instance, 1, hash);
+            daemon(&run.join(format!("{hash}.narrator.sock")), seen.clone(), vec![], false);
+        }
+        crate::locate::write_presence(home, c, instance, 1, "stopped");
+
+        let (tx, rx) = mpsc::channel();
+        let socket = first.clone();
+        let bridge = Bridge::new("9.9.9", Box::new(move || Some((json!({"roles": {}, "version": "test"}), socket.clone()))));
+        bridge.hold();
+        let (b2, sink): (Arc<Bridge>, Arc<dyn Sink>) = (bridge.clone(), Arc::new(Chan(Mutex::new(tx))));
+        std::thread::spawn(move || b2.run(sink));
+        assert_eq!(wait_for(&rx, |g| matches!(g, Got::Conn(..))), Got::Conn(false, "Choose a daemon to show".into()));
+
+        let never = |_: &Found| -> Value { panic!("a refused hash is not resolved") };
+        let nothing_changed = |bridge: &Bridge| {
+            assert!(bridge.held() && bridge.target.lock().unwrap().is_none() && bridge.current().is_none());
+            // Listing a daemon says hello to it and nothing more: no connection to B or D has subscribed or read.
+            assert!(seen_first.lock().unwrap().is_empty());
+            for seen in [&seen_b, &seen_d] {
+                assert!(seen.lock().unwrap().iter().all(|r| matches!(r["method"].as_str(), Some("auth.issue" | "hello"))), "{:?}", seen.lock().unwrap());
+            }
+        };
+        // Before any list, after one for a hash that is not in it, for one that is not a hash at all, and for a stopped daemon.
+        assert!(bridge.attach_to(b, never).is_err());
+        nothing_changed(&bridge);
+        let listed = bridge.daemons(home, false);
+        let states: Vec<(&str, bool)> = listed.iter().map(|f| (f.hash.as_str(), f.answers)).collect();
+        assert_eq!(states, vec![(b, true), (d, true), (c, false)], "{states:?}");
+        for refused in ["aaaaaaaaaaaa", "../etc/passwd", "", "BBBBBBBBBBBB", c] {
+            assert!(bridge.attach_to(refused, never).is_err(), "{refused}");
+        }
+        nothing_changed(&bridge);
+        assert_eq!(bridge.attach_to(c, never).unwrap_err(), "that daemon is not running; start it in a terminal");
+
+        // A daemon of the list: attached, with what the window is told about it.
+        bridge.attach_to(b, |f| json!({"roles": {}, "workspace_name": "beta", "narrator_socket": f.narrator_socket})).unwrap();
+        wait_for(&rx, |g| matches!(g, Got::Conn(true, _)));
+        assert!(!bridge.held());
+        assert_eq!(bridge.current().as_deref(), Some(b));
+        assert_eq!(bridge.info()["workspace_name"], "beta");
+        assert_eq!(bridge.call(Method::Ping, json!({})).unwrap(), json!({"echo": "session.ping"}));
+        assert!(seen_first.lock().unwrap().is_empty(), "the locator's daemon was never contacted");
+        assert!(seen_b.lock().unwrap().iter().any(|r| r["method"] == "events.subscribe") && !seen_d.lock().unwrap().iter().any(|r| r["method"] == "events.subscribe"));
+
+        // Another one: the connection to B is dropped and the bridge attaches to D, whose connection answers the next read.
+        bridge.daemons(home, false);
+        bridge.attach_to(d, |f| json!({"roles": {}, "workspace_name": "delta", "narrator_socket": f.narrator_socket})).unwrap();
+        wait_for(&rx, |g| *g == Got::Conn(false, "Switching to another daemon".into()));
+        wait_for(&rx, |g| matches!(g, Got::Conn(true, _)));
+        assert_eq!(bridge.current().as_deref(), Some(d));
+        assert_eq!(bridge.info()["workspace_name"], "delta");
+        let on_b = seen_b.lock().unwrap().len();
+        assert_eq!(bridge.call(Method::Ping, json!({})).unwrap(), json!({"echo": "session.ping"}));
+        assert!(seen_d.lock().unwrap().iter().any(|r| r["method"] == "session.ping"));
+        assert_eq!(seen_b.lock().unwrap().len(), on_b);
         bridge.stop();
     }
 }
