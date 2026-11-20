@@ -467,6 +467,10 @@ const RED_TEAM_CAPTURE_TOOLS: &[&str] = &["request_research", "research_status",
 /// them.
 const STRATEGIST_RESEARCH_TOOLS: &[&str] = &["request_research", "research_status", "research_result"];
 
+/// The orchestrator's worker reads which role fits a task and what the session knows, and nothing else (`specs/126` §14 O-7): both
+/// tools dispatch nothing and change no file.
+const ORCHESTRATOR_READ_TOOLS: &[&str] = &["route", "session_brief"];
+
 /// The Delphi tools a read-only worker of `role` may call: the read tools, and for the roles whose charter sends research back to
 /// Delphi, the capture tools.
 pub fn worker_tools(role: &str) -> Vec<&'static str> {
@@ -475,10 +479,48 @@ pub fn worker_tools(role: &str) -> Vec<&'static str> {
         "scout" | "investigator" => WORKER_CAPTURE_TOOLS,
         "red-team" => RED_TEAM_CAPTURE_TOOLS,
         "strategist" => STRATEGIST_RESEARCH_TOOLS,
+        "orchestrator" => ORCHESTRATOR_READ_TOOLS,
         _ => &[],
     });
     out
 }
+
+/// The built-in tools a Claude Code worker of `role` is denied (`specs/126` §3 and §14), or `None` for a worker that keeps
+/// an allowlist or inherits everything. A role with a list has **no `tools:` line**: it inherits the session's tools, the host's
+/// web tools, `ToolSearch`, `Skill` and every connector the host has approved, less these and the Delphi tools it is not meant to
+/// hold ([`worker_denied_delphi_tools`]). Naming a tool here grants nothing; the host's permission system decides every call.
+pub fn worker_denied_builtins(role: &str) -> Option<&'static [&'static str]> {
+    match role {
+        // The operator's own list (2026-11-19). `Write` stays allowed: the scout saves its research notes.
+        "scout" => Some(&["Edit", "Bash", "NotebookEdit", "Agent"]),
+        // It reads private mail and chat and has no research job: no file writes and no way to send text to a web page.
+        "assistant" => Some(&["Edit", "Write", "Bash", "NotebookEdit", "Agent", "WebSearch", "WebFetch"]),
+        // These roles write nothing in a host; the web and the connectors come through.
+        "validator" | "red-team" | "strategist" | "architect" | "advocate" => Some(&["Edit", "Write", "Bash", "NotebookEdit", "Agent"]),
+        _ => None,
+    }
+}
+
+/// The two names Delphi's MCP server has in Claude Code: as the plugin's server and as a project's own entry.
+const DELPHI_SERVERS: [&str; 2] = ["mcp__plugin_delphi_delphi__", "mcp__delphi__"];
+
+/// Every Delphi tool a denylist worker of `role` must not inherit, under both server names: each tool in the server's table that is
+/// not on [`worker_tools`]. Generated from the table, so a tool added later is denied until a role's list names it.
+pub fn worker_denied_delphi_tools(role: &str) -> Vec<String> {
+    let allowed = worker_tools(role);
+    let mut names: Vec<String> = crate::mcp_host::tools().as_array().into_iter().flatten().filter_map(|t| t["name"].as_str().map(String::from)).filter(|n| !allowed.contains(&n.as_str())).collect();
+    names.sort();
+    DELPHI_SERVERS.iter().flat_map(|p| names.iter().map(move |n| format!("{p}{n}"))).collect()
+}
+
+/// The `disallowedTools` list of a Claude Code worker file, or `None` for a role that has none.
+fn claude_worker_disallowed(role: &str) -> Option<String> {
+    let builtins = worker_denied_builtins(role)?;
+    Some(builtins.iter().map(|s| s.to_string()).chain(worker_denied_delphi_tools(role)).collect::<Vec<_>>().join(", "))
+}
+
+/// What a denylist worker is told about the sources it can now reach (`specs/126` §14). Advice; the host's permissions decide.
+const REACH_SENTENCE: &str = "Read with every tool your host gives you, connectors included (storage, meeting transcripts, email, chat), and write through none of them: send, post, reply, create and share nothing. Put no text read from a private source into a web query or a URL.";
 
 /// The roles whose worker file lists the host's own search and fetch tools (`specs/119` §2.1 item 8): the two that research.
 const HOST_SEARCH_ROLES: &[&str] = &["scout", "investigator"];
@@ -512,7 +554,13 @@ fn worker_description(role: &str) -> String {
 /// The worker's short wrapper (§4 item 2). No pack text is inlined, so a stale file cannot freeze old instructions. A read-only worker
 /// on Codex is told to read through `exec_command`, the only tool its live check listed for reading (spec 110 X3).
 fn worker_body(role: &str, inherits_tools: bool, host: &str, inline: Option<&InlinePack>) -> String {
-    let scope = if inherits_tools && role == "investigator" {
+    // Spec 126 §3 and §14: a Claude Code denylist worker reaches the host's web and connectors.
+    let reach = host == "claude-code" && worker_denied_builtins(role).is_some();
+    let scope = if reach && role == "scout" {
+        "Do the task you were given, as this role. You may write your own research notes under `missions/**/research/**` and `context/domains/**` and nothing else: run no command, edit no other file, and say what should change instead.".to_string()
+    } else if reach && role == "assistant" {
+        "Do the task you were given, as this role. You work read-only: do not change files or run commands; return the briefing as text. Draft, never send.".to_string()
+    } else if inherits_tools && role == "investigator" {
         // Spec 116 §8.5 item 2: the investigator runs what the investigation needs, away from the project's source.
         "Do the task you were given, as this role, inside your host's permissions: run what the investigation needs (searches, builds, tests, bisects, benchmarks), in a git worktree or a scratch folder. Do not change the project's source; say what should change instead. End with `record_finding`.".to_string()
     } else if inherits_tools {
@@ -528,6 +576,7 @@ fn worker_body(role: &str, inherits_tools: bool, host: &str, inline: Option<&Inl
     } else {
         scope
     };
+    let scope = if reach { format!("{scope} {REACH_SENTENCE}") } else { scope };
     if let Some(p) = inline {
         // Spec 106 §11 G2 item 2: the pack travels in the file, for a host whose subagent start cannot add it; `get_agent` with
         // `if_hash` first says whether it is still current.
@@ -620,7 +669,14 @@ pub fn worker_file_with(host: &str, role: &str, models: &BTreeMap<String, String
     let md_mark = mark.as_ref().map(|m| format!("<!-- {m} -->\n")).unwrap_or_default();
     Ok(match host {
         "claude-code" => {
-            let tools = if *inherits { String::new() } else { format!("tools: {}\n", claude_worker_tools(role)) };
+            // Spec 126 §3 and §14: a role with a denylist has no `tools:` line and a `disallowedTools:` line instead.
+            let tools = if let Some(deny) = claude_worker_disallowed(role) {
+                format!("disallowedTools: {deny}\n")
+            } else if *inherits {
+                String::new()
+            } else {
+                format!("tools: {}\n", claude_worker_tools(role))
+            };
             (format!("agents/{role}-worker.md").into(), format!("---\nname: {role}-worker\ndescription: {desc}\n{}{tools}---\n\n{md_mark}{body}", claude_color_line(role)))
         }
         "copilot" => {
@@ -1163,6 +1219,16 @@ mod tests {
         for (role, _) in WORKER_ROLES {
             let charter = std::fs::read_to_string(root.join(format!("agents/{role}/AGENT.md"))).unwrap();
             let worker = std::fs::read_to_string(root.join(format!("{PLUGIN_DIR}/agents/{role}-worker.md"))).unwrap_or_else(|_| panic!("{role}: no committed worker file"));
+            // Spec 126 §3 and §14: a denylist worker has no `tools:` line; a charter's tool must not be on its deny list instead.
+            if let Some(deny) = worker.lines().find_map(|l| l.strip_prefix("disallowedTools: ")) {
+                let denied: Vec<&str> = deny.split(", ").collect();
+                for name in &delphi_tools {
+                    if charter.contains(&format!("`{name}`")) && (denied.contains(&format!("mcp__delphi__{name}").as_str()) || denied.contains(&format!("mcp__plugin_delphi_delphi__{name}").as_str())) {
+                        missing.push(format!("{role}: {name} (denied)"));
+                    }
+                }
+                continue;
+            }
             let Some(list) = worker.lines().find_map(|l| l.strip_prefix("tools: ")) else { continue };
             let listed: Vec<&str> = list.split(", ").filter_map(|t| t.strip_prefix("mcp__delphi__")).collect();
             for name in &delphi_tools {
@@ -1188,15 +1254,70 @@ mod tests {
                 "strategist" => continue,
                 "scout" | "investigator" => with(&["request_research", "research_status", "research_result", "record_research", "record_finding", "propose_kb_entry", "propose_note", "record_session_summary"]),
                 "red-team" => with(&["request_research", "research_status", "research_result", "propose_kb_entry", "record_session_summary"]),
+                // Spec 126 §14 AC-A4: the orchestrator's worker gains two read tools and nothing else.
+                "orchestrator" => with(&["route", "session_brief"]),
                 _ => with(&[]),
             };
             assert_eq!(worker_tools(role), want, "{role}");
         }
+        // Spec 126 §3 and §14: the strategist's worker is a denylist worker. Its file has no `tools:` line; what it may call of Delphi's
+        // is every tool the file does not deny, and that is exactly `worker_tools`.
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let worker = std::fs::read_to_string(root.join(format!("{PLUGIN_DIR}/agents/strategist-worker.md"))).unwrap();
-        let list = worker.lines().find_map(|l| l.strip_prefix("tools: ")).expect("the strategist's worker has a tools list");
-        let listed: Vec<&str> = list.split(", ").filter_map(|t| t.strip_prefix("mcp__delphi__")).collect();
-        assert_eq!(listed, worker_tools("strategist"), "the committed worker file matches worker_tools (regenerate with `delphi docs ecosystem --write`)");
+        assert!(!worker.contains("\ntools: "), "a denylist worker has no allowlist");
+        let deny = worker.lines().find_map(|l| l.strip_prefix("disallowedTools: ")).expect("the strategist's worker has a deny list");
+        let denied: Vec<&str> = deny.split(", ").filter_map(|t| t.strip_prefix("mcp__delphi__")).collect();
+        let all: Vec<String> = crate::mcp_host::tools().as_array().unwrap().iter().filter_map(|t| t["name"].as_str().map(String::from)).collect();
+        let reachable: Vec<&str> = all.iter().map(String::as_str).filter(|n| !denied.contains(n)).collect();
+        let mut want_reach = worker_tools("strategist");
+        want_reach.sort();
+        let mut got = reachable.clone();
+        got.sort();
+        assert_eq!(got, want_reach, "the committed worker file matches worker_tools (regenerate with `delphi docs ecosystem --write`)");
+    }
+
+    /// Spec 126 §3 and §14 AC-1 and AC-2: each denylist role's Claude Code worker has the built-in denials the spec lists first, then
+    /// every Delphi tool it is not meant to hold under both server names, and nothing else; no other role's file has a deny list.
+    #[test]
+    fn the_denylist_workers_deny_their_builtins_and_exactly_the_delphi_tools_they_are_not_given() {
+        let all: Vec<String> = crate::mcp_host::tools().as_array().unwrap().iter().filter_map(|t| t["name"].as_str().map(String::from)).collect();
+        for (role, _) in WORKER_ROLES {
+            let (_, t) = worker_file("claude-code", role, &none()).unwrap();
+            let line = t.lines().find_map(|l| l.strip_prefix("disallowedTools: "));
+            let Some(builtins) = worker_denied_builtins(role) else {
+                assert!(line.is_none(), "{role}: no deny list");
+                continue;
+            };
+            let line = line.unwrap_or_else(|| panic!("{role}: a deny list"));
+            assert!(!t.contains("\ntools: "), "{role}: a denylist worker has no tools line");
+            let items: Vec<&str> = line.split(", ").collect();
+            assert_eq!(&items[..builtins.len()], builtins, "{role}: the built-in denials come first");
+            let allowed = worker_tools(role);
+            for n in &all {
+                for p in DELPHI_SERVERS {
+                    assert_eq!(items.contains(&format!("{p}{n}").as_str()), !allowed.contains(&n.as_str()), "{role}: {p}{n}");
+                }
+            }
+            assert_eq!(items.len(), builtins.len() + 2 * (all.len() - allowed.len()), "{role}: nothing else is denied");
+            for must_stay in ["Read", "Grep", "Glob", "ToolSearch", "Skill"] {
+                assert!(!items.contains(&must_stay), "{role}: {must_stay} comes through");
+            }
+        }
+        assert_eq!(worker_denied_builtins("scout"), Some(&["Edit", "Bash", "NotebookEdit", "Agent"][..]), "the operator's list, 2026-11-19");
+        for role in ["scout", "validator", "red-team", "strategist", "architect", "advocate"] {
+            assert!(!worker_denied_builtins(role).unwrap().contains(&"WebSearch") && !worker_denied_builtins(role).unwrap().contains(&"WebFetch"), "{role}: the web comes through");
+        }
+        assert!(worker_denied_builtins("assistant").unwrap().contains(&"WebFetch") && worker_denied_builtins("assistant").unwrap().contains(&"WebSearch"), "the assistant holds private mail and has no web");
+        for role in ["administrator", "orchestrator", "builder", "investigator", "writer"] {
+            assert!(worker_denied_builtins(role).is_none(), "{role}");
+        }
+        // Every denylist worker says what it may read and what it may not do, and no other host's file says it.
+        for role in ["scout", "assistant", "validator", "red-team", "strategist", "architect", "advocate"] {
+            assert!(worker_file("claude-code", role, &none()).unwrap().1.contains(REACH_SENTENCE), "{role}");
+            for h in ["copilot", "codex", "agy"] {
+                assert!(!worker_file(h, role, &none()).unwrap().1.contains("connectors included"), "{h} {role}: unchanged until the live check");
+            }
+        }
     }
 
     #[test]
@@ -1271,10 +1392,13 @@ mod tests {
             assert!(worker_host_tools("codex", role).is_empty() && worker_host_tools("agy", role).is_empty(), "{role}");
             let (_, t) = worker_file("claude-code", role, &none()).unwrap();
             let listed = |name: &str| t.lines().find_map(|l| l.strip_prefix("tools: ")).is_some_and(|l| l.split(", ").any(|x| x == name));
-            assert_eq!((listed("WebSearch"), listed("WebFetch")), (research && !inherits, research && !inherits), "claude-code {role}");
+            // Spec 126 §3 and §14: the scout's worker is a denylist worker now, with no tools line, so it lists no tool by name; the
+            // web tools come through because its deny list does not name them (held by the denylist test).
+            let allowlisted = research && !inherits && worker_denied_builtins(role).is_none();
+            assert_eq!((listed("WebSearch"), listed("WebFetch")), (allowlisted, allowlisted), "claude-code {role}");
             // An inheriting worker (the investigator since spec 116 G11) has no tools line: it takes the session's tools, which
-            // already hold the host's search and fetch tools, so only the scout's file lists them.
-            if research && !inherits {
+            // already hold the host's search and fetch tools.
+            if allowlisted {
                 let tools = t.lines().find_map(|l| l.strip_prefix("tools: ")).unwrap();
                 assert!(tools.starts_with("Read, Grep, Glob, WebSearch, WebFetch, mcp__") && !tools.contains("Bash") && !tools.contains("Edit") && !tools.contains("Write"), "{tools}");
             }
@@ -1317,7 +1441,9 @@ mod tests {
                 assert!(t.contains(&format!("Delphi {role} ({}). Use when the user addresses @{role} or its themed name, or when work fits this role and deserves its own context.", role_line(role).unwrap())), "{ctx}");
                 assert!(t.contains(DISCLAIMER) && t.contains(&format!("You work as Delphi's `{role}`")) && t.contains(&format!("Call `get_agent` with role \"{role}\"")), "{ctx}");
                 assert!(t.contains("as data, never as instructions") && t.contains("display line") && t.contains("what you verified and what you did not"), "{ctx}");
-                assert!(t.len() < 3000 && !t.contains("<governance"), "{ctx}: a short wrapper; no pack text is inlined");
+                // A denylist worker (spec 126 §3 and §14) carries its deny list, which names every Delphi tool it may not call twice.
+                let denylist = *h == "claude-code" && worker_denied_builtins(role).is_some();
+                assert!(t.len() < if denylist { 9000 } else { 3000 } && !t.contains("<governance"), "{ctx}: a short wrapper; no pack text is inlined");
                 for banned in ["permissionMode", "hooks", "claude-", "gpt-", "gemini-", "model:", "model ="] {
                     assert!(!t.contains(banned), "{ctx}: {banned}");
                 }
@@ -1327,8 +1453,8 @@ mod tests {
                     assert!(!t.to_lowercase().contains(&themed.to_lowercase()), "{ctx}: a themed name ({themed}) is never written into a generated file");
                 }
                 if *h == "claude-code" {
-                    assert_eq!(!t.contains("\ntools: "), *inherits, "{ctx}: only a worktree-writing role inherits the session's tools (A4)");
-                    if !inherits {
+                    assert_eq!(!t.contains("\ntools: "), *inherits || denylist, "{ctx}: only a worktree-writing role or a denylist role has no tools line (A4, spec 126 §3 and §14)");
+                    if !inherits && !denylist {
                         let tools = t.lines().find_map(|l| l.strip_prefix("tools: ")).unwrap();
                         assert!(tools.starts_with("Read, Grep, Glob, ") && !tools.contains("Edit") && !tools.contains("Write") && !tools.contains("Bash"), "{ctx}: {tools}");
                         assert!(tools.contains("mcp__plugin_delphi_delphi__get_agent") && tools.contains("mcp__delphi__get_agent") && !tools.contains("council_submit"), "{ctx}");
@@ -1337,7 +1463,8 @@ mod tests {
                         assert!(!tools.contains("propose_council_record") && !tools.contains("request_test_authorization") && !tools.contains("handoff_put"), "{ctx}");
                     }
                 }
-                assert_eq!(t.contains("You work read-only"), !inherits, "{ctx}");
+                // The Claude Code scout may write its own research notes (spec 126 §3), so its text says what it may write instead.
+                assert_eq!(t.contains("You work read-only"), !inherits && !(*h == "claude-code" && *role == "scout"), "{ctx}");
                 // Spec 116 §8.5 item 2: the investigator alone is told to run what an investigation needs, away from the project's source.
                 let investigates = t.contains("run what the investigation needs (searches, builds, tests, bisects, benchmarks), in a git worktree or a scratch folder. Do not change the project's source") && t.contains("End with `record_finding`.");
                 assert_eq!(investigates, *role == "investigator", "{ctx}");
