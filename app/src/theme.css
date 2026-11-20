@@ -190,6 +190,9 @@ button.menu-row:hover, button.menu-row.on { background: var(--sel); }
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; padding: 14px 16px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; }
 .facts dt { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+.pair-code { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 20px; padding: 12px 16px; background: var(--side); border-bottom: 1px solid var(--line); }
+.pair-code p { margin: 0; flex: 1 1 280px; color: var(--text2); font-size: 14px; line-height: 1.5; }
+.pair-code-value { font-size: 28px; font-weight: 700; letter-spacing: 0.12em; }
 .empty { padding: 28px 20px; border: 1px dashed var(--line2); border-radius: 10px; color: var(--text2); font-size: 14px; line-height: 1.55; }
 
 /* Agents roster */

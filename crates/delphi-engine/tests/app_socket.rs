@@ -110,6 +110,12 @@ impl Knock {
         self.c.call("app.pair", json!({"ticket": ticket, "public_key": public_key, "app_version": "0.1.0"}))
     }
 
+    /// `app.pair_request` (`specs/120` §13.1): the request, as an app with no key makes it. The answer is `{code, name, expires_in}`.
+    fn pair_request(&mut self, seed: &[u8; 32]) -> Result<Value, ClientError> {
+        let public_key = test_sign(seed, &self.nonce, &self.instance, 1, &self.socket).0;
+        self.c.call("app.pair_request", json!({"public_key": public_key, "app_version": "0.1.0"}))
+    }
+
     fn hello(&mut self, seed: &[u8; 32], name: &str) -> Result<Value, ClientError> {
         let signature = self.signature(seed);
         self.hello_with(name, &signature)
@@ -214,16 +220,16 @@ async fn pairing_a_recorded_key_again_changes_nothing_about_it() {
 async fn a_ticket_is_issued_only_to_a_console_client_at_a_terminal() {
     let f = start(TtyPolicy::Required, |_| {}).await;
     let out = run_child_without_tty(&f.sock, f.daemon.console_token());
-    for m in ["auth.pair_ticket", "app.revoke", "app.grant"] {
+    for m in ["auth.pair_ticket", "app.revoke", "app.grant", "app.pair_approve"] {
         assert!(out.contains(&format!("PROBE {} rpc {}", m, code::TTY_REQUIRED)), "{m}: expected TTY_REQUIRED, got {out}");
     }
-    assert!(out.contains("PROBE app.keys ok"), "listing changes nothing and needs no terminal: {out}");
+    assert!(out.contains("PROBE app.keys ok") && out.contains("PROBE app.pair_pending ok"), "listing changes nothing and needs no terminal: {out}");
     // The narrator socket does not offer the methods at all.
     let mut n = Client::connect(&f.narrator_sock).unwrap();
     n.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let tok = f.daemon.narrator_token().to_string();
     n.hello(&tok).unwrap();
-    for m in ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair", "app.hello"] {
+    for m in ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair", "app.hello", "app.pair_request", "app.pair_pending", "app.pair_approve"] {
         assert_eq!(rpc_code(n.call(m, json!({"name": "app-000000", "grant": "request"}))), Some(code::FORBIDDEN), "{m}");
     }
     assert!(f.keys().is_empty() && f.kinds().is_empty());
@@ -248,8 +254,8 @@ fn pair_probe_child() {
     let mut c = Client::connect(Path::new(&sock)).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     c.hello(&token).unwrap();
-    for m in ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant"] {
-        match c.call(m, json!({"name": "app-000000", "grant": "request"})) {
+    for m in ["auth.pair_ticket", "app.keys", "app.revoke", "app.grant", "app.pair_pending", "app.pair_approve"] {
+        match c.call(m, json!({"name": "app-000000", "grant": "request", "request_id": "app-000000", "code": "ABC-DEF"})) {
             Ok(_) => println!("PROBE {} ok", m),
             Err(ClientError::Rpc { code, .. }) => println!("PROBE {} rpc {}", m, code),
             Err(e) => println!("PROBE {} err {}", m, e),
@@ -533,4 +539,120 @@ async fn a_request_reaches_the_engine_only_from_a_key_that_holds_the_grant_and_i
     // And the revoked key asks for nothing more.
     assert!(f.knock().unwrap().hello(&A, &name).is_err());
     assert_eq!(asked.lock().unwrap().len(), 2);
+}
+
+/// A request filed on a fresh connection: the connection, and the code and the name the daemon gave.
+fn request(f: &Fixture, seed: &[u8; 32]) -> (Knock, String, String) {
+    let mut k = f.knock().unwrap();
+    let r = k.pair_request(seed).unwrap();
+    let (code, name) = (r["code"].as_str().unwrap().to_string(), r["name"].as_str().unwrap().to_string());
+    (k, code, name)
+}
+
+/// AC-12, AC-15 and §13.1 items 1, 3, 5, 6, 7: a request waits for the code; the pending list never holds it; a wrong code or no code
+/// approves nothing; the right one records the key with `read` only, the waiting connection is told and goes on to prove the key.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_is_approved_only_by_the_code_typed_and_the_key_holds_read() {
+    let f = start(TtyPolicy::Disabled, |_| {}).await;
+    let (mut k, shown, name) = request(&f, &A);
+    assert!(shown.len() == 7 && shown.as_bytes()[3] == b'-' && shown.bytes().filter(|b| *b != b'-').all(|b| delphi_core::app_keys::CODE_ALPHABET.contains(&b)), "{shown}");
+    assert!(delphi_core::app_keys::is_name(&name));
+    let mut con = f.console();
+    let listed = con.call("app.pair_pending", json!({})).unwrap();
+    let rows = listed["pending"].as_array().unwrap();
+    assert_eq!((rows.len(), rows[0]["request_id"].as_str(), rows[0]["app_version"].as_str()), (1, Some(name.as_str()), Some("0.1.0")));
+    assert_eq!(rows[0]["fingerprint"].as_str().map(str::len), Some(12));
+    assert!(!listed.to_string().contains(&shown) && !listed.to_string().contains(&shown.replace('-', "")), "the code is never listed: {listed}");
+
+    // No code at all (an Enter alone), and a wrong one, approve nothing.
+    for typed in ["", "AAA-AAA"] {
+        assert_eq!(rpc_code(con.call("app.pair_approve", json!({"request_id": name, "code": typed}))), Some(code::FORBIDDEN), "{typed:?}");
+    }
+    assert!(f.keys().is_empty());
+    // A grant beyond `request` is not offered at this prompt, and an id that is not pending is not found.
+    assert_eq!(rpc_code(con.call("app.pair_approve", json!({"request_id": name, "code": shown, "grants": ["update"]}))), Some(code::INVALID_PARAMS));
+    assert_eq!(rpc_code(con.call("app.pair_approve", json!({"request_id": "app-ffffff", "code": shown}))), Some(code::NOT_FOUND));
+    assert!(f.keys().is_empty());
+
+    // The code as it was shown, typed lower case and without the dash, is the code (two wrong ones have been spent; a third
+    // would have cancelled the request).
+    let typed = shown.replace('-', "").to_lowercase();
+    let done = con.call("app.pair_approve", json!({"request_id": name, "code": typed})).unwrap();
+    assert_eq!((done["name"].as_str(), done["grants"].clone()), (Some(name.as_str()), json!(["read"])));
+    let keys = f.keys();
+    assert_eq!((keys.len(), keys[0].name.as_str(), keys[0].grants.clone()), (1, name.as_str(), vec!["read".to_string()]));
+    let told = k.c.next_notification().unwrap();
+    assert_eq!((told["method"].as_str(), told["params"]["outcome"].as_str(), told["params"]["name"].as_str()), (Some("app.pair_result"), Some("approved"), Some(name.as_str())));
+    // The same connection proves the key as any other does, and holds `read` and not `request`.
+    let hello = k.hello(&A, &name).unwrap();
+    assert_eq!(hello["grants"], json!(["read"]));
+    assert_eq!(rpc_code(k.c.call("app.page_rebuild", json!({}))), Some(code::FORBIDDEN));
+    assert!(k.c.call("session.ping", json!({})).is_ok());
+    // The code is spent with the request.
+    assert_eq!(rpc_code(con.call("app.pair_approve", json!({"request_id": name, "code": shown}))), Some(code::NOT_FOUND));
+    let kinds = f.kinds();
+    assert!(kinds.contains(&"app.pair_requested".to_string()) && kinds.contains(&"app.pair_approved".to_string()), "{kinds:?}");
+    let approved = f.audit.lock().unwrap().iter().find(|(k, _)| k == "app.pair_approved").unwrap().1.clone();
+    assert_eq!((approved["name"].as_str(), approved["grants"].clone()), (Some(name.as_str()), json!(["read"])));
+    assert!(!f.audit.lock().unwrap().iter().any(|(_, p)| p.to_string().contains(&shown)), "no event carries the code");
+
+    // `--grant request` at the prompt gives `request` too; `delphi app grant` gives it later to the first.
+    let (mut k2, shown2, name2) = request(&f, &B);
+    let done = con.call("app.pair_approve", json!({"request_id": name2, "code": shown2, "grants": ["request"]})).unwrap();
+    assert_eq!(done["grants"], json!(["read", "request"]));
+    assert_eq!(k2.c.next_notification().unwrap()["params"]["outcome"], "approved");
+    con.call("app.grant", json!({"name": name, "grant": "request"})).unwrap();
+    assert_eq!(f.keys().iter().find(|k| k.name == name).unwrap().grants, ["read", "request"]);
+}
+
+/// AC-14: a fourth pending request, a seventh in an hour, a third wrong code and an expired request are each refused with the
+/// limit named and an `app.refused` event.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_limits_on_requests_are_held_and_each_refusal_names_its_limit() {
+    // Three pending; a fourth from another key is refused; the same key's second request replaces its first.
+    let f = start(TtyPolicy::Disabled, |_| {}).await;
+    let seeds: [[u8; 32]; 4] = [[1; 32], [2; 32], [3; 32], [4; 32]];
+    let mut held: Vec<_> = seeds[..3].iter().map(|s| request(&f, s)).collect();
+    let mut k = f.knock().unwrap();
+    match k.pair_request(&seeds[3]) {
+        Err(ClientError::Rpc { code: c, message, .. }) => assert_eq!((c, message.contains("3 pairing requests")), (code::FORBIDDEN, true), "{message}"),
+        other => panic!("a fourth pending request must be refused: {other:?}"),
+    }
+    assert!(f.refusals().iter().any(|r| r["reason"] == "too_many_pending"));
+    // The first key asks again: its first is replaced, and there are still three.
+    let (_again, again_code, _) = request(&f, &seeds[0]);
+    assert_ne!(again_code, held[0].1);
+    let mut con = f.console();
+    assert_eq!(con.call("app.pair_pending", json!({})).unwrap()["pending"].as_array().unwrap().len(), 3);
+    assert_eq!(rpc_code(con.call("app.pair_approve", json!({"request_id": held[0].2, "code": held[0].1}))), Some(code::NOT_FOUND), "a replaced request is gone");
+
+    // Three wrong codes cancel the request, and the right one is then no use.
+    let mut victim = held.remove(1);
+    let wrong = if victim.1 == "AAA-AAA" { "BBB-BBB" } else { "AAA-AAA" };
+    for i in 1..=3 {
+        let r = con.call("app.pair_approve", json!({"request_id": victim.2, "code": wrong}));
+        assert_eq!(rpc_code(r), Some(code::FORBIDDEN), "wrong code {i}");
+    }
+    assert_eq!(rpc_code(con.call("app.pair_approve", json!({"request_id": victim.2, "code": victim.1}))), Some(code::NOT_FOUND));
+    assert_eq!(victim.0.c.next_notification().unwrap()["params"]["outcome"], "cancelled");
+    assert!(f.refusals().iter().any(|r| r["reason"] == "wrong_code_limit") && f.keys().is_empty());
+
+    // Seven in an hour: the same key asks again and again (each replaces the last), and the seventh is refused.
+    let g = start(TtyPolicy::Disabled, |_| {}).await;
+    for _ in 0..6 {
+        let _ = request(&g, &A);
+    }
+    let mut k = g.knock().unwrap();
+    match k.pair_request(&A) {
+        Err(ClientError::Rpc { code: c, message, .. }) => assert_eq!((c, message.contains("6 pairing requests")), (code::FORBIDDEN, true), "{message}"),
+        other => panic!("a seventh request in an hour must be refused: {other:?}"),
+    }
+    assert!(g.refusals().iter().any(|r| r["reason"] == "too_many_requests_this_hour"));
+
+    // A request left for its time is refused with that named, and the key is not recorded.
+    let h = start(TtyPolicy::Disabled, |c| c.pair_request_ttl = Duration::from_millis(400)).await;
+    let (mut kx, codex, namex) = request(&h, &A);
+    assert_eq!(kx.c.next_notification().unwrap()["params"]["outcome"], "expired");
+    assert_eq!(rpc_code(h.console().call("app.pair_approve", json!({"request_id": namex, "code": codex}))), Some(code::NOT_FOUND));
+    assert!(h.refusals().iter().any(|r| r["reason"] == "expired_request") && h.keys().is_empty());
 }
