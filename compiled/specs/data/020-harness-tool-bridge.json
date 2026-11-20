@@ -120,7 +120,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/020-harness-tool-bridge.md",
-    "sha256": "8249ec2f7b76ea2b91ad125c5a6820713cc73b64d8a09516b21a1a8104b3f80e"
+    "sha256": "bd54b024800223894e184bd53cf699eaa4efdf0a7d272812c914299d10ee2bea"
   },
   "source_status_at_hash": {
     "line": {
@@ -133,7 +133,7 @@
       },
       "text": "status: approved   # by the operator, 2026-10-25: the bridge, delegated approvals as the default, the account's own connectors on by default (the amendment to D-22 in §6), and the tool inventory. Nothing here needs to be ratified by an end user."
     },
-    "sha256": "8249ec2f7b76ea2b91ad125c5a6820713cc73b64d8a09516b21a1a8104b3f80e",
+    "sha256": "bd54b024800223894e184bd53cf699eaa4efdf0a7d272812c914299d10ee2bea",
     "word": "approved"
   },
   "spec": {
