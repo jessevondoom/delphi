@@ -2,7 +2,7 @@
 
 # Specs
 
-133 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
+134 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
 
 | Spec | Title | Status | Group | Supersedes / superseded by | Summary | Source |
 | :-- | :-- | :-- | :-- | :-- | :-- | :-- |
@@ -36,6 +36,7 @@
 | [061-shell-tool](./runtime-models-and-tools.md#061-shell-tool) | 061: The shell tool, shell permission modes and the `!` bang | approved (per source at `e8aed5b51027`) | [Runtime, models and tools](./runtime-models-and-tools.md) |  | none | [source](../../specs/061-shell-tool.md) |
 | [085-fixed-standing-limits-reminder](./runtime-models-and-tools.md#085-fixed-standing-limits-reminder) | 085: A fixed standing-limits reminder in the latest turn, for API and harness spans | approved (per source at `9a3ec37a70fb`) | [Runtime, models and tools](./runtime-models-and-tools.md) |  | yes | [source](../../specs/085-fixed-standing-limits-reminder.md) |
 | [125-load-sensitive-tests-made-deterministic](./runtime-models-and-tools.md#125-load-sensitive-tests-made-deterministic) | 125: Load-sensitive tests made deterministic | approved (per source at `4464ef67b6b4`) | [Runtime, models and tools](./runtime-models-and-tools.md) |  | yes | [source](../../specs/125-load-sensitive-tests-made-deterministic.md) |
+| [132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens](./runtime-models-and-tools.md#132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens) | 132: Carriers as seats: one contract, one probe, Copilot first, and Codex when its account opens | approved (per source at `9cf9dc149c97`) | [Runtime, models and tools](./runtime-models-and-tools.md) |  | yes | [source](../../specs/132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens.md) |
 | [003-collaboration-and-council](./orchestration-and-council.md#003-collaboration-and-council) | 003: Orchestrator DAG Execution & 3-Round Sparse Council State Machine | approved (per source at `e60ef64fa41e`) | [Orchestration and Council](./orchestration-and-council.md) |  | yes | [source](../../specs/003-collaboration-and-council.md) |
 | [041-agent-registry-routing-and-role-extensions](./orchestration-and-council.md#041-agent-registry-routing-and-role-extensions) | 041: Agent Registry, Routing and Role Extensions: Scaling the Fleet Without Taxing the Orchestrator | approved (per source at `e25f4a39ebfc`) | [Orchestration and Council](./orchestration-and-council.md) |  | yes | [source](../../specs/041-agent-registry-routing-and-role-extensions.md) |
 | [063-agent-fleet-behaviors-and-dynamic-orchestration](./orchestration-and-council.md#063-agent-fleet-behaviors-and-dynamic-orchestration) | 063: Agent Fleet Behaviors, Dynamic Orchestration, and Curated Knowledge | approved (per source at `754f51675ad6`) | [Orchestration and Council](./orchestration-and-council.md) |  | yes | [source](../../specs/063-agent-fleet-behaviors-and-dynamic-orchestration.md) |

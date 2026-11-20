@@ -2,7 +2,7 @@
 
 # Runtime, models and tools
 
-17 specs. [All groups](./index.md).
+18 specs. [All groups](./index.md).
 
 ## 002-adapter-and-routing
 
@@ -140,4 +140,14 @@ A model that has started down a route does not reliably turn back. Anthropic's a
 
 ```text
 Tests that fail on a pull request they have nothing to do with, and pass on a rerun, cost a macOS job each time and teach people to rerun instead of read. Over 2026-11-16 to 2026-11-18 tests of this kind reddened pull requests or `main` again and again. This spec fixes the four whose cause is shown (T1 to T4), and lists the rest (L1 to L3).
+```
+
+## 132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens
+
+**132: Carriers as seats: one contract, one probe, Copilot first, and Codex when its account opens** · approved (per source at `9cf9dc149c97`) · tier 0 · [source](../../specs/132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens.md)
+
+**source excerpt, untrusted** · `specs/132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens.md` line 27
+
+```text
+The operator asked on 2026-11-20 for Delphi to "support codex and copilot equally as well as gemini" as seats in a Council, a Panel, a red-team pass and `ask_family`, then said: "prioritize copilot even if we have to wait on codex for the account license to open up. copilot is extremely useful thanks to its variety of models". This spec defines:
 ```
