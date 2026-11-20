@@ -14,6 +14,7 @@ authorized_skills:
   - benchmark-profiling
   - primary-source-verification
   - hypothesis-flipping
+  - close-source-search
 memory_scope: "memory/agents/investigator/"
 max_turn_budget: 40
 search_use: explore
