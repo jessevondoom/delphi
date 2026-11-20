@@ -3,7 +3,8 @@ id: spec-131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-t
 title: "131: Gemini seats: a bounded prompt, the task at both ends, and a Council that counts who was heard"
 author: architect
 timestamp: 2026-11-20T00:00:00Z
-status: draft   # a proposal written 2026-11-20 for the operator to read; it is not permission to build. Nothing here is approved.
+status: approved   # by the operator, 2026-11-20, in a session, after the draft pull request (#794) was shown: "131 is approved". No Council has read this text (the Councils t_0002 to t_0004 could not use a Gemini seat; the cause is this spec's subject), so the approval rests on the operator reading the draft and the evidence in section 1. Open decisions take their recommendations unless the operator says otherwise. Spec 128's slices S4 and S5 here still wait for 128 to be built.
+approved_by: operator (2026-11-20)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +15,7 @@ tags: [spec, council, agy, gemini, prompt-budget, truncation, require-families, 
 
 # Spec 131: Gemini seats: a bounded prompt, the task at both ends, and a Council that counts who was heard
 
-> **Status: draft, 2026-11-20.** A proposal. A draft spec is not permission to build; no code, schema or config changes with it.
+> **Status: approved by the operator, 2026-11-20** ("131 is approved"; see the frontmatter), without a Council that read this text. Nothing is built; no code, schema or config changed with the approval itself.
 > **Extends, if approved:** `specs/128` (`128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md`, in draft pull request #792 when this was written and not yet on `main`, so not linked): it takes 128's one retry and its `harness.no_answer` event as given and adds to them. One sentence of 128 is amended (section 3.5, OD-3): its non-goal "a Round 1 seat keeps its tools". It also builds on [`specs/123`](123-the-council-and-panel-from-a-host-who-sat-what-it-cost-a-tail-and-the-loop.md) (receipts say who sat; `require_families`), [`specs/099`](099-round-2-readability-keep-a-valid-critique-ask-for-the-object-only-and-say-why.md) (what a readable Round 2 is) and [`specs/098`](098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) section 6.2 (`ask_family`).
 > **Number:** 131. 129 is the teaching-pipeline pull request (#793); 130 is on branch `worktree-app-onboarding-127` (the desktop app). Verify the number again before the pull request merges.
 

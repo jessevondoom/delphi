@@ -121,9 +121,9 @@ Three jobs, in this order of risk:
 
 ## 131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard
 
-**131: Gemini seats: a bounded prompt, the task at both ends, and a Council that counts who was heard** · draft (per source at `0aedff114b03`) · tier 0 · [source](../../specs/131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard.md)
+**131: Gemini seats: a bounded prompt, the task at both ends, and a Council that counts who was heard** · approved (per source at `63cef7001515`) · tier 0 · [source](../../specs/131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard.md)
 
-**source excerpt, untrusted** · `specs/131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard.md` line 25
+**source excerpt, untrusted** · `specs/131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard.md` line 26
 
 ```text
 Over three Councils (`t_0002`, `t_0003`, `t_0004`, 2026-11-19 and 2026-11-20) every seat on the Gemini family failed, and each Council still printed "two families met". This spec says how Delphi stops a Gemini-carried seat from being sent more than its carrier delivers, keeps the task readable when something is cut anyway, counts a family only when a seat was heard, and keeps a seat from acting on the project.
