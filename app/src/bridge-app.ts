@@ -2,6 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Bridge, KbReply, Listener } from './bridge.ts';
+import type { DaemonList } from './daemons.ts';
 import type { Asked } from './requests.ts';
 import type { Conn, Envelope, Info, OState } from './types.ts';
 
@@ -27,6 +28,9 @@ export function appBridge(): Bridge {
     reveal: (path: string) => invoke<void>('reveal', { path }),
     open: (path: string) => invoke<void>('open_file', { path }),
     openUrl: (url: string) => invoke<void>('open_url', { url }),
+    // The bridge reads the run folder and names the daemons; `attach` takes a hash from its last list and nothing else (`src-tauri/src/bridge.rs`).
+    daemons: (summaries) => invoke<DaemonList>('daemons', { summaries }).catch(said),
+    attach: (hash) => invoke<void>('attach', { hash }).catch(said),
     subscribe(l: Listener) {
       const offs = [
         listen<Envelope[]>('delphi://events', (m) => m.payload.forEach((e) => l.event(e))),
