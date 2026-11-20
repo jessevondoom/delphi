@@ -40,7 +40,12 @@ A spec is the contract Builder implements and Red-Team attacks. It should be sho
 4. Write acceptance criteria as observable, testable statements, numbered so tests and PRs can cite them.
 5. Write **Simpler Alternative Considered**: the cheapest thing that might work, and the concrete reason it does not. If you cannot find a reason, build the simpler thing.
 6. Write **Options considered**, beside it and not in its place: load `divergent-options` and record at least three options (one conventional, one that removes a named constraint, one by a named method), each with one sentence on how it would be tested, and which one was chosen. The simpler-alternative rule of step 5 is unchanged: this section does not satisfy it, and it still has to survive review by Builder, Strategist and Red-Team.
-7. Write the **Verification Plan**: the tests and checks that will prove each criterion.
+7. Write the **Verification Plan**: the tests and checks that will prove each criterion, by number.
+   - **Slices** (`specs/133` §2.3): each closes named criteria, is observable by a test, and is about 300 changed lines or fewer. Past about 8 slices, or at a second amendment, split into a new spec. These are guidance: say why when you exceed them. A tiny change (about 100 lines or fewer, 3 criteria or fewer) may leave out the Slices and Decisions tables, and says so.
+   - **Unknowns first:** a premise nobody has observed gets slice S0, a spike whose kill criterion is written into the spec before it runs. No other slice starts until its result is in the spec.
+   - **Decisions:** propose whether each is reversible; the operator decides. Only one marked reversible may take its recommendation by default (record the default in the tracker). One that changes a criterion, an interface, a data shape or authority blocks the slices it names until answered.
+   - **What is not verified:** list each claim nobody has observed.
+   - **Review before approval:** ask for a Strategist and a Red-Team review and name them in `reviewed_by` (`GOVERNANCE.md` §1.3). A spec with an Authority section also gets `spec-premortem`. Never record a review that did not happen.
 8. Start from `templates/spec-skeleton.md`, with provenance frontmatter and `status: draft`. An agent never marks a spec `approved`.
 9. Run `delphi check spec <file>`, then `delphi lint`: a spec numbered 125 or above with no "Options considered" heading gets a warning now and will fail later (spec 124 section 7).
 
