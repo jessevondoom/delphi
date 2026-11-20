@@ -151,12 +151,18 @@
       "line": 209,
       "number": "13",
       "title": "Options considered"
+    },
+    {
+      "level": 2,
+      "line": 219,
+      "number": "14",
+      "title": "Amendment A1 (2026-11-19): the same policy for the rest of the fleet"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/126-close-sources-in-a-host-the-scout-and-assistant-reach-the-operators-connectors-and-search-by-closeness.md",
-    "sha256": "e51ea78c5ae8800e9a5721d1ea9d81f284a9b910e6e6a012e399c4b917344855"
+    "sha256": "be9ef34f6cbefaf2b2293d6a5f6d9de892a2e388fb742f26446c4c2d29d72634"
   },
   "source_status_at_hash": {
     "line": {
@@ -169,7 +175,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-19, in a session after the draft pull request (#790) was shown: \"spec approved. merge 790\". The text was written from the operator's earlier words in the same session; the operator has not said they read it line by line. Open decisions OD-1 to OD-6 of section 12 take their recommendations unless the operator says otherwise. It takes effect when the pull request that carries it merges."
     },
-    "sha256": "e51ea78c5ae8800e9a5721d1ea9d81f284a9b910e6e6a012e399c4b917344855",
+    "sha256": "be9ef34f6cbefaf2b2293d6a5f6d9de892a2e388fb742f26446c4c2d29d72634",
     "word": "approved"
   },
   "spec": {

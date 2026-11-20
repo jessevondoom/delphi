@@ -373,6 +373,8 @@ pub fn render(s: &Snapshot, now: i64) -> String {
             }
         }
     }
+    // Spec 126 §6: what the close-source groups have, read from this map and no connector.
+    o.push_str(&format!("\n{}\n", delphi_engine::hostmap::reach_line(s)));
     o.push_str("\nBuilt-in tools of a CLI are not listed by any command; `delphi capabilities --ask` asks the model, and that answer is unverified.\n");
     o
 }

@@ -215,3 +215,35 @@ No new code path may act outside the sandbox, approve its own action, or let con
 | **C. Inherit minus a denylist (chosen, section 3)** | Reaches every connector the host has now or later, matches the operator's stated list, and keeps Delphi's own tool reach fixed through the generated Delphi denies (3.4). |
 | **D. Delphi proxies the connectors for the worker** | Rejected: `specs/113` §3 says Delphi gains no connector in a host, and a proxy would put the daemon between the operator's host permissions and their data (`specs/098` §7.2). |
 | **E. A hook that blocks connector write tools for the two workers** | Not available as a plugin-agent field (plugin agents ignore `hooks`); a session-level hook may work. Left to S4 and OD-2, not assumed. |
+
+## 14. Amendment A1 (2026-11-19): the same policy for the rest of the fleet
+
+> **Operator, 2026-11-19, in a session, after an audit of every role's worker file was shown:** "implement it all as you suggest, as a single, expanded 126 or as two specs. your call." It is one spec, because the repository does not allow a pull request that bundles two (`AGENTS.md`). Written from that audit and conversation; the operator has not said they read it line by line. OD-A1 to OD-A4 take their recommendations unless the operator says otherwise.
+
+The audit found the scout's defect (O-1) in more roles: a read-only worker's `tools:` allowlist leaves out tools its charter relies on. Checked in the committed worker files and charters on 2026-11-19:
+
+| # | Observation | Fix |
+| :-- | :-- | :-- |
+| A-1 | The validator's charter says it "reads the open web"; its worker has no `WebSearch`, `WebFetch` or connector. | denylist worker |
+| A-2 | The red-team's ladder says to use the host's search and fetch tools, and 098 §7.4 has it look up a dependency's advisories; its worker has neither. | denylist worker |
+| A-3 | The strategist must cite any claim about the outside (124 §4); its worker has no web or connector tool. | denylist worker |
+| A-4 | The architect has no prior-art or standards search. | denylist worker |
+| A-5 | The advocate audits a product it cannot look at: no browser tool, no connector (support threads, reviews). | denylist worker |
+| A-6 | No read-only worker has `ToolSearch` (deferred connector tools need it; unverified for subagents) or `Skill`. | the denylist workers inherit both |
+| A-7 | The orchestrator's worker cannot call `route` or `session_brief`, both read-only. | add the two to its list |
+| A-8 | The orchestrator's worker cannot spawn subagents (`Agent` is not on its list). By the host's docs a subagent can spawn subagents by default (three layers), and a type list `Agent(name)` is ignored in a subagent definition, so listing `Agent` would let it start any subagent type, a general-purpose one with edit and shell tools included. | **not changed** (OD-A1) |
+| A-9 | Every read-only worker is told "do not change files", while charters grant narrow write scopes. In a host those roles return text and the session saves it. | **not changed** (OD-A2) |
+| A-10 | A connector that is `pending` or needs sign-in counts as not available, and the orchestrator is told to stop. | unchanged; the reach report (§6) names it |
+
+**Policy.** On Claude Code, the validator, red-team, strategist, architect and advocate workers join the scout and assistant of §3: no `tools:` line, a `disallowedTools:` line. Their built-in denials are `Edit, Write, Bash, NotebookEdit, Agent`: they write nothing in a host (the validator's manifest says `write: []`), and the web and the connectors come through. Each also denies every Delphi tool outside `worker_tools(role)` (§3.4), so its Delphi reach is unchanged. The administrator, messenger, builder, investigator, writer and every other host stay as they are. The orchestrator's worker gains `route` and `session_brief` (A-7), on Claude Code and on Copilot, which lists Delphi tools by name. Every denylist worker's text gains one sentence: read with every tool your host gives you, connectors included; write through none of them; put no private text into a web query or URL.
+
+**Acceptance.** AC-A1: each of those roles' Claude Code worker file has no `tools:` line and a `disallowedTools:` line that starts with exactly its built-in denials. AC-A2: a Delphi tool is denied under both server names exactly when it is not on `worker_tools(role)`; a tool on neither list fails generation. AC-A3: no charter names a Delphi tool its worker denies. AC-A4: the orchestrator's list gains exactly `route` and `session_brief`. AC-A5: the administrator, builder, investigator and writer files, and every Copilot, Codex and Agy file other than the orchestrator's, are byte-identical. AC-A6: *live, operator-run, not claimed met:* with one connector connected, a validator started through its worker reads from it.
+
+| # | Decision | Recommendation (taken) |
+| :-- | :-- | :-- |
+| **OD-A1** | Give the orchestrator's worker `Agent`? | **No.** The type list is ignored in a subagent definition, so it could start any subagent, including one with edit and shell tools, which undoes the read-only design. The session that adopted the orchestrator spawns workers on its `route` answer. Revisit when a host can restrict the types. |
+| **OD-A2** | Let the read-only roles write their charter paths in a host? | **No, not here.** A path-scoped write cannot be stated in a worker file. |
+| **OD-A3** | The advocate's inherited browser tools can click and submit. Deny them? | Keep, with the worker sentence and the host's prompts; tool names differ per host and cannot be listed. |
+| **OD-A4** | The validator and red-team gain a web fetch, which could carry private text out. | Neither holds private text by default; the sentence and the host's prompts apply. |
+
+**Not verified:** the docs page on nesting was read in part (the fetch stopped before its end); the premise of §11 holds for these roles too.

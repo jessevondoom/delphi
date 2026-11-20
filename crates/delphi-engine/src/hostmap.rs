@@ -169,6 +169,115 @@ pub fn lookup(s: &Snapshot, need: &str) -> Vec<Hit> {
     hits
 }
 
+/// The three kinds of close source a host's connectors give a research role (`specs/126` §1, §6). A connector that fits none is not
+/// listed here; it is still in the map and still found by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Group {
+    Storage,
+    Comms,
+    Social,
+}
+
+impl Group {
+    pub const ALL: [Group; 3] = [Group::Storage, Group::Comms, Group::Social];
+    pub fn name(self) -> &'static str {
+        match self {
+            Group::Storage => "storage",
+            Group::Comms => "comms",
+            Group::Social => "social",
+        }
+    }
+}
+
+/// Words of a connector's name, by group: a short word must be a whole word of the name, a word of six letters or more may sit inside
+/// one (`sharepoint`, `confluence`). The table is advice for the report; it grants nothing and a miss only means "not listed".
+const GROUP_WORDS: [(Group, &[&str]); 3] = [
+    (Group::Storage, &["drive", "gdrive", "box", "notion", "dropbox", "sharepoint", "onedrive", "confluence"]),
+    (Group::Comms, &["zoom", "meet", "gmail", "mail", "email", "calendar", "outlook", "otter", "fathom", "gong", "fireflies", "granola", "transcript", "transcripts", "meeting", "meetings"]),
+    (Group::Social, &["slack", "discord", "teams", "mattermost", "telegram", "whatsapp", "reddit"]),
+];
+
+/// The group a connector's name puts it in, if any. Only the name is read, never its URL or command.
+pub fn group_of(name: &str) -> Option<Group> {
+    let lower = name.to_lowercase();
+    let tokens: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    GROUP_WORDS.iter().find(|(_, words)| words.iter().any(|w| tokens.contains(w) || (w.len() >= 6 && lower.contains(w)))).map(|(g, _)| *g)
+}
+
+/// A group named as the need itself ("storage", "comms", "social", and a few plain synonyms), for `external_available`.
+fn group_named(need: &str) -> Option<Group> {
+    match need.trim().to_lowercase().as_str() {
+        "storage" | "documents" | "shared documents" | "files" | "shared files" => Some(Group::Storage),
+        "comms" | "communications" | "transcripts" | "meeting transcripts" | "meetings" | "email" | "mail" => Some(Group::Comms),
+        "social" | "chat" | "team chat" | "messaging" => Some(Group::Social),
+        _ => None,
+    }
+}
+
+/// Every connector the map shows, with its state and where it is, for the group listings.
+fn connector_hits(s: &Snapshot) -> Vec<Hit> {
+    let mut hits = vec![];
+    for c in s.clis.iter().filter(|c| c.installed) {
+        for i in &c.mcp {
+            hits.push(Hit { kind: "connector", name: clean(&i.name), place: c.cli.clone(), state: state_of("connector", i, c.auth == "signed out") });
+        }
+    }
+    for p in &s.projects {
+        for i in &p.mcp {
+            hits.push(Hit { kind: "connector", name: clean(&i.name), place: format!("project {}", clean(&p.path)), state: state_of("connector", i, false) });
+        }
+    }
+    hits
+}
+
+/// One line for `delphi capabilities` and `delphi doctor`: what each group of close source has, by what the map shows. Strict like
+/// [`answer`]: a connector counts as usable only when its health check said connected; one that needs sign-in is named as waiting.
+pub fn reach_line(s: &Snapshot) -> String {
+    let hits = connector_hits(s);
+    let parts: Vec<String> = Group::ALL
+        .iter()
+        .map(|g| {
+            let mine: Vec<&Hit> = hits.iter().filter(|h| group_of(&h.name) == Some(*g)).collect();
+            let usable: std::collections::BTreeSet<&str> = mine.iter().filter(|h| h.state == State::Usable).map(|h| h.name.as_str()).collect();
+            let waiting: std::collections::BTreeSet<String> = mine.iter().filter(|h| h.state != State::Usable && !usable.contains(h.name.as_str())).map(|h| match &h.state {
+                State::Unusable(why) => format!("{}: {}", h.name, clean(why)),
+                _ => format!("{}: not verified", h.name),
+            }).collect();
+            if !usable.is_empty() {
+                format!("{} {} usable ({})", g.name(), usable.len(), usable.iter().copied().collect::<Vec<_>>().join(", "))
+            } else if !waiting.is_empty() {
+                format!("{} none usable, waiting ({})", g.name(), waiting.iter().cloned().collect::<Vec<_>>().join("; "))
+            } else {
+                format!("{} none connected", g.name())
+            }
+        })
+        .collect();
+    format!("close sources a research role can reach: {}", parts.join("; "))
+}
+
+/// The answer for a group asked by name: strict, the same way as [`answer`].
+fn group_answer(s: &Snapshot, g: Group, old: &str) -> String {
+    let hits: Vec<Hit> = connector_hits(s).into_iter().filter(|h| group_of(&h.name) == Some(g)).collect();
+    let list: String = hits
+        .iter()
+        .map(|h| {
+            let st = match &h.state {
+                State::Usable => "usable".to_string(),
+                State::Unverified => "configured, not verified".to_string(),
+                State::Unusable(why) => format!("not usable: {}", clean(why)),
+            };
+            format!("  - connector \"{}\" in {} ({st})\n", h.name, h.place)
+        })
+        .collect();
+    if hits.iter().any(|h| h.state == State::Usable) {
+        return format!("available: {} (a group of close sources)\n{list}A match means that CLI offers it; it can be used only by a task running on that CLI's seat.{old}", g.name());
+    }
+    if hits.is_empty() {
+        return format!("not available: no connector in the {} group is connected on this machine.{old} {STOP}", g.name());
+    }
+    format!("not available: the {} group is present but not confirmed usable:\n{list}{old}\n{STOP}", g.name())
+}
+
 const STOP: &str = "Only `available` is a yes. For anything else do not plan around it: if the task needs it, stop and report that the external tool was not available, and do not substitute or pretend.";
 
 /// The text the orchestrator is given. `map` is `None` when no map exists on this machine.
@@ -177,12 +286,16 @@ pub fn answer(map: Option<&Snapshot>, need: &str, now: i64) -> String {
     let Some(s) = map else {
         return format!("not available: there is no capabilities map on this machine, so nothing can be confirmed for \"{}\" (the operator can run `delphi capabilities`). {STOP}", clean(need));
     };
+    let age = now - s.taken_unix;
+    let old = if age > STALE_SECS { format!(" The map is {} days old; the operator can refresh it with `delphi capabilities --refresh`.", age / 86_400) } else { String::new() };
+    // Spec 126 §6: a group of close sources can be asked for by its name.
+    if let Some(g) = group_named(need) {
+        return group_answer(s, g, &old);
+    }
     if words(need).is_empty() {
         return "say what you need by name (for example `github`, `pdf`, `google drive`): a kind of tool alone cannot be looked up".into();
     }
     let hits = lookup(s, need);
-    let age = now - s.taken_unix;
-    let old = if age > STALE_SECS { format!(" The map is {} days old; the operator can refresh it with `delphi capabilities --refresh`.", age / 86_400) } else { String::new() };
     let line = |h: &Hit| {
         let st = match &h.state {
             State::Usable => "usable".to_string(),
@@ -295,6 +408,58 @@ mod tests {
         assert_eq!(home_of_local(Path::new("/h/workspaces/w/local")), Some(Path::new("/h")));
         assert_eq!(home_of_local(Path::new("/h/other/w/local")), None);
         assert_eq!(home_of_local(Path::new("/local")), None);
+    }
+
+    /// A map with a Slack-like, a Drive-like and a transcript-like connector, in the three states the strict reading knows.
+    fn close_map() -> Snapshot {
+        let mut m = map();
+        let claude = m.clis.iter_mut().find(|c| c.cli == "claude").expect("the fixture has a claude entry");
+        claude.mcp.push(item("claude.ai Google Drive", "https://drivemcp.example · Connected", "cli"));
+        claude.mcp.push(item("claude.ai Slack", "https://mcp.example · Needs authentication", "cli"));
+        claude.mcp.push(item("Zoom Transcripts", "https://zoom.example · Failed to connect", "cli"));
+        m
+    }
+
+    // Spec 126 §6, AC-6: a connector's name puts it in one group, by whole word or a long word inside one.
+    #[test]
+    fn a_connector_name_puts_it_in_a_group_and_a_miss_is_not_an_error() {
+        for (name, want) in [
+            ("claude.ai Google Drive", Some(Group::Storage)),
+            ("SharePoint Online", Some(Group::Storage)),
+            ("claude.ai Slack", Some(Group::Social)),
+            ("Microsoft Teams", Some(Group::Social)),
+            ("Discord", Some(Group::Social)),
+            ("Zoom Transcripts", Some(Group::Comms)),
+            ("Google Meet", Some(Group::Comms)),
+            ("Gmail", Some(Group::Comms)),
+            ("claude.ai Claude Docs", None),
+            ("plugin:delphi:delphi", None),
+            ("inbox-tool", None),
+        ] {
+            assert_eq!(group_of(name), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_reach_line_counts_each_group_strictly_and_names_what_is_waiting() {
+        let line = reach_line(&close_map());
+        assert!(line.contains("storage 1 usable (claude.ai Google Drive)"), "{line}");
+        assert!(line.contains("social none usable, waiting (claude.ai Slack: needs authentication)"), "{line}");
+        assert!(line.contains("comms none usable, waiting (Zoom Transcripts: failed to connect)"), "{line}");
+        let none = reach_line(&map());
+        assert!(none.contains("storage none connected") && none.contains("comms none connected") && none.contains("social none connected"), "{none}");
+    }
+
+    #[test]
+    fn a_group_can_be_asked_for_by_its_name_and_only_a_connected_one_is_a_yes() {
+        let m = close_map();
+        let a = answer(Some(&m), "storage", 2000);
+        assert!(a.starts_with("available: storage") && a.contains("Google Drive"), "{a}");
+        let s = answer(Some(&m), "chat", 2000);
+        assert!(s.starts_with("not available: the social group is present but not confirmed usable") && s.contains("needs authentication") && s.contains("do not plan around it"), "{s}");
+        let none = answer(Some(&map()), "comms", 2000);
+        assert!(none.starts_with("not available: no connector in the comms group"), "{none}");
+        assert!(answer(None, "social", 2000).starts_with("not available: there is no capabilities map"));
     }
 
     #[test]
