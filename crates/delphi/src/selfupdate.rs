@@ -1286,8 +1286,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         let dest = d.path().join("delphi");
-        let (mut net, api) = server("v0.2.0", "0.2.0", None);
-        let name = format!("delphi-v0.2.0-{}.tar.gz", T);
+        // The build for this machine: `run` looks for the machine's own target, so the fixture is made for it (Linux CI is not macOS).
+        let machine = target().expect("a platform with releases");
+        let (mut net, api) = server_for(machine, "v0.2.0", "0.2.0", None);
+        let name = format!("delphi-v0.2.0-{}.tar.gz", machine);
         let one = serde_json::json!({"tag_name": "v0.2.0", "prerelease": false, "draft": false, "assets": [
             {"name": name, "browser_download_url": format!("https://dl/{}", name)},
             {"name": format!("{}.sha256", name), "browser_download_url": format!("https://dl/{}.sha256", name)}]});
