@@ -198,7 +198,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/086-outside-council-panel-and-host-subagents.md",
-    "sha256": "fc177b02f63ba9dff8b6a34d6cf6a564b56cfcc30a8234ff3be6e3c687c9b151"
+    "sha256": "0255ac3568090540b0967404e04b2c578555c5f7d4da19b5c1da71a7b270da7b"
   },
   "source_status_at_hash": {
     "line": {
@@ -211,7 +211,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-06 (\"go\"); OD-1 and OD-6 answered, OD-2 to OD-5 take the recommendations"
     },
-    "sha256": "fc177b02f63ba9dff8b6a34d6cf6a564b56cfcc30a8234ff3be6e3c687c9b151",
+    "sha256": "0255ac3568090540b0967404e04b2c578555c5f7d4da19b5c1da71a7b270da7b",
     "word": "approved"
   },
   "spec": {

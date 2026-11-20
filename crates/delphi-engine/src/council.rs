@@ -1305,6 +1305,23 @@ impl Engine {
         h
     }
 
+    /// [`Self::run_seat`] for a seat that reads peer words (a Round 2 or repair seat): the handoff is in the engine's `toolless` set
+    /// for the whole run, so the span offers no tool and the carrier's gate allows nothing (`specs/086` §4.3, `specs/128` S1). The mark
+    /// is removed on every way out, including a dropped future.
+    pub(crate) async fn run_seat_toolless(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, h: HandoffEnvelope, slices: Vec<ContextSlice>, schema: Option<String>, timeout: Duration) -> Stance {
+        struct Mark<'a>(&'a std::sync::Mutex<std::collections::HashSet<String>>, String);
+        impl Drop for Mark<'_> {
+            fn drop(&mut self) {
+                if let Ok(mut s) = self.0.lock() {
+                    s.remove(&self.1);
+                }
+            }
+        }
+        self.toolless.lock().unwrap().insert(h.handoff_id.clone());
+        let _mark = Mark(&self.toolless, h.handoff_id.clone());
+        self.run_seat(m, task_id, h, slices, schema, timeout).await
+    }
+
     /// Run one seat's span under a timeout. A seat that fails, escalates or times out abstains; it never
     /// blocks the others.
     pub(crate) async fn run_seat(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, h: HandoffEnvelope, slices: Vec<ContextSlice>, schema: Option<String>, timeout: Duration) -> Stance {
@@ -1684,7 +1701,7 @@ impl Engine {
             let (engine, m2, tid) = (self.clone(), m.clone(), task_id.to_string());
             let h = self.council_handoff(m, task_id, &seat.role, "r2", seat, round2_objective(&seat.role, proposition), pointers.clone());
             let (role, sl) = (seat.role.clone(), slices.clone());
-            set.spawn(async move { (role, engine.run_seat(&m2, &tid, h, sl, Some(critique_schema()), timeout).await) });
+            set.spawn(async move { (role, engine.run_seat_toolless(&m2, &tid, h, sl, Some(critique_schema()), timeout).await) });
         }
         let mut round2: Round2 = BTreeMap::new();
         let mut round2_text: BTreeMap<String, String> = BTreeMap::new();
@@ -1715,7 +1732,7 @@ impl Engine {
                 let (engine, m2, tid) = (self.clone(), m.clone(), task_id.to_string());
                 let h = self.council_handoff(m, task_id, &seat.role, "r2b", seat, repair_objective(proposition), pointers.clone());
                 let role = seat.role.clone();
-                rset.spawn(async move { (role, engine.run_seat(&m2, &tid, h, sl, Some(critique_schema()), timeout).await) });
+                rset.spawn(async move { (role, engine.run_seat_toolless(&m2, &tid, h, sl, Some(critique_schema()), timeout).await) });
             }
             while let Some(joined) = rset.join_next().await {
                 let (role, stance) = joined.map_err(|e| EngineError::Join(e.to_string()))?;
@@ -2470,6 +2487,41 @@ pub(crate) mod tests {
         assert_eq!((red.payload["readable"].clone(), red.payload["repair"].clone()), (json!(true), json!("repaired")));
         assert_eq!(red.payload["recommendation"], "PROCEED-WITH-CHANGES");
         assert!(crit.iter().filter(|e| e.payload["role"] != "red-team").all(|e| e.payload["repair"].is_null()), "readable seats are never repaired");
+    }
+
+    /// `specs/128` S1: a daemon Council seat that reads peer words (Round 2, the repair turn) runs with the handoff in the engine's
+    /// toolless set; a Round 1 seat does not, and the mark is gone when the Council ends.
+    #[tokio::test]
+    async fn round_two_and_repair_seats_run_toolless_and_round_one_does_not() {
+        let f = crate::testkit::setup(vec![], 50.0, |_| {});
+        two_families(&f);
+        let seen: Arc<std::sync::Mutex<Vec<(&'static str, bool)>>> = Default::default();
+        let (eng, sn) = (f.engine.clone(), seen.clone());
+        f.model.respond_with(move |body| {
+            let t = body.to_string();
+            let role = who(body).to_string();
+            let marked = |suffix: &str| eng.toolless.lock().unwrap().iter().any(|id| id.ends_with(&format!("_{role}_{suffix}")));
+            if t.contains("COUNCIL, ROUND 1") {
+                sn.lock().unwrap().push(("r1", marked("r1")));
+                Step::text(&format!("OPTION: queue\nSTANCE-MARKER-{} says use a queue.", role))
+            } else if t.contains("COUNCIL, ROUND 2 REPAIR") {
+                sn.lock().unwrap().push(("r2b", marked("r2b")));
+                Step::text(RED_OK)
+            } else if t.contains("COUNCIL, ROUND 2") {
+                sn.lock().unwrap().push(("r2", marked("r2")));
+                Step::text(if role == "red-team" { "No verdict line here." } else { "Reasoning.\nRECOMMENDATION: PROCEED\nROUND 2 COMPLETE" })
+            } else {
+                Step::text("The Council recommends the queue.")
+            }
+        });
+        f.engine.run_council(&f.m, f.m.next_task_id(), "Should the retry queue be a table or a file?", CouncilOpts::default()).await.unwrap();
+        let seen = seen.lock().unwrap().clone();
+        for kind in ["r1", "r2", "r2b"] {
+            let of: Vec<bool> = seen.iter().filter(|(k, _)| *k == kind).map(|(_, m)| *m).collect();
+            assert!(!of.is_empty(), "{kind} ran");
+            assert!(of.iter().all(|m| *m == (kind != "r1")), "{kind}: toolless exactly for the seats that read peer words: {of:?}");
+        }
+        assert!(f.engine.toolless.lock().unwrap().is_empty(), "every mark is removed");
     }
 
     #[tokio::test]
