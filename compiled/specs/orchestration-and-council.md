@@ -2,7 +2,7 @@
 
 # Orchestration and Council
 
-11 specs. [All groups](./index.md).
+12 specs. [All groups](./index.md).
 
 ## 003-collaboration-and-council
 
@@ -117,4 +117,14 @@ A daemon Council escalates when a seat's Round 2 cannot be read. For the red-tea
 
 ```text
 Three jobs, in this order of risk:
+```
+
+## 128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes
+
+**128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes** · draft (per source at `ac8ae044d388`) · tier 0 · [source](../../specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md)
+
+**source excerpt, untrusted** · `specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md` line 24
+
+```text
+A host Council kept losing the red-team's Round 2: the ruling said "Red-Team's Round 2 could not be read" and escalated. Spec 099 fixed one reason (a valid critique followed by prose). This is another reason, and a second one that removed the red-team from Round 1.
 ```
