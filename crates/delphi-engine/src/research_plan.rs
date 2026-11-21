@@ -90,20 +90,27 @@ pub fn clean_query(question: &str, redactor: &Redactor) -> Option<String> {
             sentence_end = Some(out.len());
         }
     }
-    // A question too long to send whole is cut where a sentence ends, when that keeps at least half of what fits: a query that
-    // stops mid-sentence searches for half a thought (`specs/124` S11). Otherwise it is cut at the last word that fits, as before.
+    // A question too long to send whole is cut where a sentence ends, when that keeps at least half of what fits and the kept part
+    // holds the question (a `?`): a query that stops mid-sentence searches for half a thought, and one that keeps only the
+    // background and drops the ask searches for none (`specs/124` S11, §19). Otherwise it is cut at the last word that fits.
     if let Some(end) = sentence_end.filter(|_| cut) {
-        if out[..end].chars().count() * 2 >= MAX_QUERY_CHARS {
+        if out[..end].chars().count() * 2 >= MAX_QUERY_CHARS && out[..end].contains('?') {
             out.truncate(end);
         }
     }
     (!out.is_empty()).then_some(out)
 }
 
-/// Does this word end a sentence: it ends with `.`, `?`, `!` or `;` and has no dot inside it (`e.g.`, `U.S.`, `v1.2.` do not).
+/// Words that end in a full stop and do not end a sentence.
+const ABBREVIATIONS: [&str; 19] = ["vs", "etc", "dr", "mr", "mrs", "ms", "st", "jr", "sr", "prof", "fig", "figs", "approx", "inc", "ltd", "cf", "al", "ca", "vol"];
+
+/// Does this word end a sentence: it ends with `.`, `?`, `!` or `;` and has no dot inside it (`e.g.`, `U.S.`, `v1.2.` do not),
+/// and is not an abbreviation (`vs.`, `Dr.`, `etc.`).
 fn ends_sentence(word: &str) -> bool {
     let body = word.trim_end_matches(['.', '?', '!', ';', '"', '\'', ')']);
-    body.len() < word.len() && word[body.len()..].contains(['.', '?', '!', ';']) && !body.is_empty() && !body.contains('.')
+    let tail = &word[body.len()..];
+    let abbreviation = tail.starts_with('.') && !tail.contains(['?', '!', ';']) && ABBREVIATIONS.contains(&body.trim_start_matches(['(', '"', '\'']).to_ascii_lowercase().as_str());
+    body.len() < word.len() && tail.contains(['.', '?', '!', ';']) && !body.is_empty() && !body.contains('.') && !abbreviation
 }
 
 /// The queries a job sends, in order. `sites` are the trusted-list domains (`TrustedList::site_filters`).
@@ -376,6 +383,20 @@ mod tests {
         assert_eq!(clean_query("what runs on build.internal. and why does it matter so much", &r).as_deref(), Some("what runs on and why does it matter so much"));
         assert!(!ends_sentence("e.g.") && !ends_sentence("U.S.") && !ends_sentence("v1.2.") && !ends_sentence("word") && !ends_sentence("."));
         assert!(ends_sentence("sessions?") && ends_sentence("done.") && ends_sentence("(done.)") && ends_sentence("first;"));
+    }
+
+    // `specs/124` §19: the cut never drops the ask. Background sentences with no `?` are not a query on their own: the question is
+    // cut at the last word that fits, so the ask's first words are still sent; and an abbreviation ends no sentence.
+    #[test]
+    fn a_cut_keeps_the_ask_and_an_abbreviation_ends_no_sentence() {
+        let r = Redactor::new();
+        let background = format!("We run large language model agents {} across many sessions in production.", "really ".repeat(10).trim_end());
+        let long = format!("{background} Compare the published approaches of the last two years and say which of them were measured against a baseline.");
+        assert!(background.chars().count() >= 100 && long.chars().count() > 200);
+        let q = clean_query(&long, &r).unwrap();
+        assert!(q.starts_with(&background) && q.contains("Compare the published approaches") && q.chars().count() <= 200, "{q}");
+        assert!(!ends_sentence("vs.") && !ends_sentence("Dr.") && !ends_sentence("etc.") && !ends_sentence("(cf."));
+        assert!(ends_sentence("vs?") && ends_sentence("costs."));
     }
 
     #[test]

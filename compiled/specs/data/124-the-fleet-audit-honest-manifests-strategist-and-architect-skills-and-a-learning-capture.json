@@ -156,7 +156,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md",
-    "sha256": "2cdeab16b72823be141d353cdc0072b93b3e3ffc93b9e2c8a64c385dc06ad8fe"
+    "sha256": "9ef076b2ba55a3903afc413f4a649870492de94dc4f504228e0e025c464498ce"
   },
   "source_status_at_hash": {
     "line": {
@@ -169,7 +169,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-17, in a session, after seeing the build plan and this draft being written: \"i saw your drafting of the steps for 124 so i'll approve it when ready. if it's based on this conversation consider it approved and run hard at it\". Earlier the same day they answered the three questions: \"1. repo-wide. include the first set of recommendations too. 2. go with your pick. 3. no. now go\". The text was written from that conversation; the operator has not read it line by line. Open questions OD-1 to OD-4 of section 12 take their recommendations unless the operator says otherwise. It takes effect when the operator merges the pull request that carries it."
     },
-    "sha256": "2cdeab16b72823be141d353cdc0072b93b3e3ffc93b9e2c8a64c385dc06ad8fe",
+    "sha256": "9ef076b2ba55a3903afc413f4a649870492de94dc4f504228e0e025c464498ce",
     "word": "approved"
   },
   "spec": {
