@@ -87,7 +87,7 @@ export const INSTALL_COMMAND = 'curl -fsSL https://github.com/jessevondoom/delph
  * from, or when an installed `delphi` was found. This window never runs it.
  */
 export function selfInstallCommand(program: DaemonList['program']): string | null {
-  if (!program || program.installed || !program.bundled || !program.bundled.startsWith('/') || /[\u0000-\u001f]/.test(program.bundled)) return null;
+  if (!program || program.installed || !program.bundled || !program.bundled.startsWith('/') || /[\u0000-\u001f\u007f\u2028\u2029]/.test(program.bundled)) return null;
   const p = program.bundled;
   const quoted = /["$`\\!]/.test(p) ? `'${p.replace(/'/g, `'\\''`)}'` : `"${p}"`;
   return `${quoted} self-install`;

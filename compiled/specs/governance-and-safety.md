@@ -121,3 +121,13 @@ _No standard scope section; open the spec._
 **103: The private-read mark: closing the four unaudited egress channels** · approved (per source at `d4582bb0f15b`) · tier 0 · [source](../../specs/103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md)
 
 _No standard scope section; open the spec._
+
+## 134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment
+
+**134: Drift on a closed list and review on the record (a charter amendment)** · approved (per source at `06a0c2768576`) · tier 0 · [source](../../specs/134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md)
+
+**source excerpt, untrusted** · `specs/134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md` line 25
+
+```text
+Two rules in the charter say one thing and the record shows another.
+```
