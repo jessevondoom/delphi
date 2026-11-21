@@ -85,9 +85,9 @@ An operator who works in another tool has two ways to get a Council today, and n
 
 ## 089-panel-hardening-from-e2
 
-**089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart** · approved (per source at `70425409e39b`) · tier 0 · [source](../../specs/089-panel-hardening-from-e2.md)
+**089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart** · approved (per source at `e63a7d92a7ec`) · tier 0 · [source](../../specs/089-panel-hardening-from-e2.md)
 
-**source excerpt, untrusted** · `specs/089-panel-hardening-from-e2.md` line 26
+**source excerpt, untrusted** · `specs/089-panel-hardening-from-e2.md` line 27
 
 ```text
 E2 asked whether a Panel run by a host's subagents is as good as a daemon Council. It could not say: only 4 of 8 questions qualified (6 needed), and the finding matcher matched nothing even between two runs of the same Council. What it did show, at a cost of 2.10M tokens, is a short list of defects that make both arms less reliable than they should be. This spec plans their fixes, in an order that spends as few model tokens as possible and measures each fix without rerunning E2.
