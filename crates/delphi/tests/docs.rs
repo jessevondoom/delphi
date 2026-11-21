@@ -484,6 +484,7 @@ fn a_seat_receipt_satisfies_its_schema() {
         carrier: Carrier { kind: "copilot".into(), cli_version: None, tools_offered: vec!["view".into()], native_tools: None, dispatch_allowed: false },
         tool_grant: json!({ "builtin": "none" }),
         prompt_hash: prompt_hash("system", "user"),
+        prompt_bytes: Some(10),
         tokens_in: 10,
         tokens_out: 4,
         outcome: "model_mismatch".into(),
@@ -493,6 +494,8 @@ fn a_seat_receipt_satisfies_its_schema() {
     let mut unmapped = r.clone();
     unmapped.served = resolve(&FamilyTable::shipped(), None);
     must_pass("seat-receipt.schema.json", "a receipt with no served model", &unmapped.to_value());
+    unmapped.prompt_bytes = None;
+    must_pass("seat-receipt.schema.json", "an API seat's receipt, which counts no prompt bytes", &unmapped.to_value());
     let mut bad = ok.clone();
     bad["prompt"] = json!("the prompt text");
     must_fail("seat-receipt.schema.json", "a receipt carrying prompt text", &bad);

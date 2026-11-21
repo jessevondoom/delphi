@@ -38,6 +38,7 @@
     },
     "tool_grant": { "type": "object", "description": "What Delphi granted, by name." },
     "prompt_hash": { "type": "string", "pattern": "^blake3:[0-9a-f]{64}$" },
+    "prompt_bytes": { "type": "integer", "minimum": 0, "description": "The bytes of the prompt as handed to a CLI carrier (spec 131 S1); a count, never the text. Absent for an API seat." },
     "tokens_in": { "type": "integer", "minimum": 0 },
     "tokens_out": { "type": "integer", "minimum": 0 },
     "outcome": { "enum": ["ok", "error", "model_mismatch"] }

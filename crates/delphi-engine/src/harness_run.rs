@@ -217,6 +217,15 @@ const READ_ONLY_TOOLS: [&str; 4] = ["read_file", "list_dir", "search", "check"];
 /// The system sections a CLI seat is given: the prompt's own, with the skills index (`specs/124` §17) kept only when the seat
 /// holds Delphi's `read_file`, the one way it can open `skills/<name>/SKILL.md`. A seat with no bridge, and a Builder that
 /// keeps the CLI's own file tools in its worktree, cannot read a skill file, so it is not told to.
+/// The byte counts of a launch's prompt (`specs/131` S1), for `harness.started` and the seat receipt: `prompt_bytes` is the system and
+/// user text as handed to the carrier, `slice_bytes` the text of the context slices inside it, `slices` their number, and `fixed_bytes`
+/// everything else (governance, role, skills, lessons, the contract and the section tags). Diagnostic only: nothing is cut or refused here.
+pub(crate) fn prompt_counts(system: &str, user: &str, ipr: &Ipr) -> Value {
+    let prompt_bytes = system.len() + user.len();
+    let slice_bytes: usize = ipr.context_slices.iter().map(|s| s.text.len()).sum();
+    json!({"prompt_bytes": prompt_bytes, "fixed_bytes": prompt_bytes.saturating_sub(slice_bytes), "slice_bytes": slice_bytes, "slices": ipr.context_slices.len()})
+}
+
 fn harness_sections(ipr: &Ipr, delphi: &[ToolDef]) -> Vec<String> {
     if ipr.skills.is_none() || delphi.iter().any(|d| d.name == "read_file") {
         return ipr.system_sections();
@@ -796,7 +805,13 @@ impl Engine {
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
         let builtin = if builder { "standard" } else if native_for_note.is_empty() { "none" } else { "native" };
-        sc.m.append(sc.agent_ev("harness.started", json!({"endpoint_id": ep.id, "tools": builtin, "native_tools": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "approvals": if delegate { "delegate" } else { "delphi" }, "claudeai_connectors": launch.profile.claudeai_connectors, "cap_tokens": self.settings.harness_token_cap}), ep, &launch.model)).await?;
+        // What the prompt costs in bytes, counted where it is assembled (`specs/131` S1): counts only, never text.
+        let counts = prompt_counts(&launch.system_prompt, &launch.user_prompt, ipr);
+        let mut started = json!({"endpoint_id": ep.id, "tools": builtin, "native_tools": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "approvals": if delegate { "delegate" } else { "delphi" }, "claudeai_connectors": launch.profile.claudeai_connectors, "cap_tokens": self.settings.harness_token_cap});
+        if let (Some(o), Some(c)) = (started.as_object_mut(), counts.as_object()) {
+            o.extend(c.clone());
+        }
+        sc.m.append(sc.agent_ev("harness.started", started, ep, &launch.model)).await?;
         // The flags a granted launch relies on (`--disable-slash-commands`, `--disallowedTools`, `--max-turns`) are the 2.1 line's: the CLI's
         // version is read first, and a CLI that will not say or is older is not started (the other seat or the API serves the span).
         if granted && cli == Cli::Claude {
@@ -1118,6 +1133,7 @@ impl Engine {
                 carrier: crate::seat::Carrier { kind: cli.program().into(), cli_version: None, tools_offered: effective_tools, native_tools: Some(native_count), dispatch_allowed: bridge_defs.iter().any(|d| d.name == "dispatch_agent") },
                 tool_grant: json!({"builtin": builtin, "native": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "readonly": sc.readonly}),
                 prompt_hash: crate::seat::prompt_hash(&launch.system_prompt, &launch.user_prompt),
+                prompt_bytes: counts["prompt_bytes"].as_u64(),
                 tokens_in: usage.input + usage.cache_read + usage.cache_write,
                 tokens_out: usage.output,
                 outcome: if mismatch { "model_mismatch" } else if failure.is_some() { "error" } else { "ok" }.into(),
@@ -2655,6 +2671,32 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert_eq!(r["carrier"]["native_tools"], 3, "the carrier's own count is kept apart");
         assert_eq!(r["tool_grant"]["bridge"], json!([]));
         assert!(crate::seat::receipt_toolless(r));
+    }
+
+    /// `specs/131` S1 (AC-1): the prompt is counted where it is assembled, on `harness.started` and on the receipt, for an agy seat and a
+    /// Claude seat alike; the count is the system and user text the carrier was handed (the stand-in sees them in its stdin).
+    #[tokio::test]
+    async fn the_prompt_is_counted_in_bytes_on_the_start_event_and_the_receipt() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let prog = fake_cli(scripts.path(), &format!("printf '%s' \"$first\" > '{d}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"gemini-3.8-flash-low\",\"tools\":[]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"ok\",\"usage\":{{}}}}}}'", d = dump.display()));
+        let f = retry_fx(prog, Duration::from_secs(600));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Said(_)));
+        let started = &events_of(&f, "harness.started")[0].payload;
+        let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
+        let n = started["prompt_bytes"].as_u64().unwrap();
+        assert_eq!(r["prompt_bytes"].as_u64(), Some(n), "{r}");
+        assert_eq!(started["fixed_bytes"].as_u64().unwrap() + started["slice_bytes"].as_u64().unwrap(), n, "{started}");
+        assert!(started["slices"].is_u64());
+        // The stand-in's first stdin line is the one JSON user event: the counted text in its JSON wrapping (which `read` unescapes
+        // in part), so the two agree to within a few percent.
+        let sent = fs::read(&dump).unwrap().len() as u64;
+        assert!(n > 1000 && sent.abs_diff(n) < n / 10 + 200, "counted {n}, sent {sent}");
+        // A Claude seat carries the same counts.
+        let (c, _s) = fixture(&format!("{}\n{}", INIT, FINISH), |_| {});
+        assert_eq!(c.engine.run_task(&c.m, "architect", "Plan the change").await.unwrap().status, Status::Done);
+        let (cs, cr) = (&events_of(&c, "harness.started")[0].payload, &events_of(&c, crate::seat::RECEIPT_KIND)[0].payload);
+        assert!(cs["prompt_bytes"].as_u64().is_some_and(|b| b > 0) && cr["prompt_bytes"] == cs["prompt_bytes"], "{cs} {cr}");
     }
 
     /// D7 (`specs/086` §6.4): a seat opened with `tools: "readonly"` runs read-only on a CLI too: the bridge serves no write tool and

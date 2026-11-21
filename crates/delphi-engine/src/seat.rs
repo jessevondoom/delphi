@@ -201,6 +201,8 @@ pub struct Receipt {
     /// What Delphi granted, by name: never arguments.
     pub tool_grant: Value,
     pub prompt_hash: String,
+    /// The bytes of the prompt as handed to a CLI carrier (`specs/131` S1); `None` for an API seat, whose prompt is not counted here.
+    pub prompt_bytes: Option<u64>,
     pub tokens_in: u64,
     pub tokens_out: u64,
     /// `ok`, `error`, or `model_mismatch`.
@@ -213,7 +215,7 @@ impl Receipt {
         if let Some(n) = self.carrier.native_tools {
             carrier["native_tools"] = json!(n);
         }
-        json!({
+        let mut v = json!({
             "seat_id": self.seat_id,
             "requested": {"endpoint": self.requested_endpoint, "model": self.requested_model},
             "served": {"model": self.served.model, "carrier_claimed": true, "family": self.served.family, "family_source": self.served.family_source},
@@ -223,7 +225,11 @@ impl Receipt {
             "tokens_in": self.tokens_in,
             "tokens_out": self.tokens_out,
             "outcome": self.outcome,
-        })
+        });
+        if let Some(n) = self.prompt_bytes {
+            v["prompt_bytes"] = json!(n);
+        }
+        v
     }
 }
 
@@ -280,6 +286,7 @@ impl SeatBook {
                 carrier: Carrier { kind: "api".into(), cli_version: None, tools_offered: s.tools.clone(), native_tools: None, dispatch_allowed: dispatch },
                 tool_grant: json!({"builtin": "none", "native": [], "bridge": s.tools, "provider": s.provider}),
                 prompt_hash: s.prompt_hash,
+                prompt_bytes: None,
                 tokens_in: s.tokens_in,
                 tokens_out: s.tokens_out,
                 outcome: outcome.into(),
@@ -576,6 +583,7 @@ mod tests {
             carrier: Carrier { kind: "copilot".into(), cli_version: None, tools_offered: vec!["view".into()], native_tools: None, dispatch_allowed: false },
             tool_grant: json!({"builtin": "none"}),
             prompt_hash: prompt_hash("sys", secret),
+            prompt_bytes: Some(3 + secret.len() as u64),
             tokens_in: 10,
             tokens_out: 3,
             outcome: "model_mismatch".into(),
@@ -584,6 +592,7 @@ mod tests {
         assert_eq!((v["requested"]["model"].as_str(), v["served"]["model"].as_str(), v["served"]["family"].as_str(), v["served"]["family_source"].as_str(), v["served"]["carrier_claimed"].as_bool()), (Some("claude-sonnet-5.5"), Some("gpt-6-luna"), Some("openai"), Some("table"), Some(true)));
         assert_eq!((v["tokens_in"].as_u64(), v["tokens_out"].as_u64(), v["carrier"]["dispatch_allowed"].as_bool()), (Some(10), Some(3), Some(false)));
         assert!(!v.to_string().contains(secret), "the hash stands for the text; the text is not there");
+        assert_eq!(v["prompt_bytes"].as_u64(), Some(26), "a count of the prompt, never the prompt");
     }
 
     // specs/091 §5: "no event of that kind comes from a host". The host-facing modules name no event of this kind, so a host's
