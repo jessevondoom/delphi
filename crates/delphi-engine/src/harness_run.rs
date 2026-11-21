@@ -62,8 +62,9 @@ pub(crate) fn inside(root: &Path, p: &str) -> Option<PathBuf> {
 /// log is that seat's ledger (`specs/051` §8), and the vendor's server-side meter only reconciles it.
 fn cost_payload(cost: f64, metered: u64, vendor_meter: Option<(u64, u64)>) -> Value {
     let mut v = json!({"total_cost_usd_equivalent": cost, "metered_tokens": metered});
-    if let Some((premium_requests, nano_aiu)) = vendor_meter {
-        v["premium_requests"] = json!(premium_requests);
+    if let Some((premium_milli, nano_aiu)) = vendor_meter {
+        // Exact to the thousandth: a whole count stays an integer, a fraction (0.33) is written as one (`specs/132` §6.4).
+        v["premium_requests"] = if premium_milli % 1000 == 0 { json!(premium_milli / 1000) } else { json!(premium_milli as f64 / 1000.0) };
         v["nano_aiu"] = json!(nano_aiu);
     }
     v
@@ -989,7 +990,7 @@ impl Engine {
                         break;
                     }
                 }
-                Event::Meter { premium_requests, nano_aiu } => vendor_meter = Some((premium_requests, nano_aiu)),
+                Event::Meter { premium_milli, nano_aiu } => vendor_meter = Some((premium_milli, nano_aiu)),
                 Event::Usage(t) => {
                     metered += t.metered();
                     // The CLI's usage is logged once, when the span ends; the window's meter moves from this meanwhile.
@@ -2090,6 +2091,41 @@ open(sys.argv[1], "w").write(json.dumps(out))
         assert!(!format!("{:?}", f.m.replay().unwrap()).contains("ghp-cp-1"), "the token never reaches the log");
     }
 
+    /// specs/132 O12 (X1's classifier, built with C2): Codex's real out-of-quota stream marks the endpoint exhausted with its reset.
+    #[tokio::test]
+    async fn codex_out_of_its_plans_usage_limit_is_exhaustion_with_a_reset_time() {
+        let scripts = tempfile::tempdir().unwrap();
+        // A reset always ahead and within the 400 days believed: December 1st of next year.
+        let year = delphi_core::time::now_rfc3339()[..4].parse::<i32>().unwrap() + 1;
+        let text = format!("You\u{2019}ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Dec 1st, {year} 2:49 AM.");
+        let body = format!("cat > /dev/null\necho '{{\"type\":\"thread.started\",\"thread_id\":\"t1\"}}'\necho '{{\"type\":\"turn.started\"}}'\necho '{{\"type\":\"error\",\"message\":\"{text}\"}}'\necho '{{\"type\":\"turn.failed\",\"error\":{{\"message\":\"{text}\"}}}}'\nexit 1");
+        let prog = fake_cli(scripts.path(), &body);
+        let f = setup_with_exec(vec![], 5.0, |s| s.codex_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "codex");
+        *f.model.harness_key.lock().unwrap() = Some("sk-cx-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(out.status != Status::Done, "{:?}", out.status);
+        let ex = events_of(&f, "model.exhausted");
+        assert!(!ex.is_empty(), "the endpoint is marked out of quota");
+        assert_eq!(ex[0].payload["reason"], delphi_adapter::exhaust::PLAN_LIMIT);
+        assert!(ex[0].payload["reset_at"].as_i64().is_some(), "{}", ex[0].payload);
+    }
+
+    /// specs/132 AC-4: a stream with `totalPremiumRequests: 0.33` yields 0.33 in `harness.cost`.
+    #[tokio::test]
+    async fn a_fractional_premium_request_count_reaches_the_cost_event_exactly() {
+        let scripts = tempfile::tempdir().unwrap();
+        let body = fake_copilot_body(&scripts.path().join("dump"), "m-1").replace("\"totalPremiumRequests\":2", "\"totalPremiumRequests\":0.33");
+        let prog = fake_cli(scripts.path(), &body);
+        let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "copilot");
+        *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let c = &events_of(&f, "harness.cost")[0].payload;
+        assert_eq!(c["premium_requests"].as_f64(), Some(0.33), "{c}");
+    }
+
     /// specs/132 §6.2, AC-3 (L0 honesty): a Copilot reader with the default `bridge = true` has no MCP transport, so it is offered
     /// no Delphi tool: no bridge starts, the prompt names none, "Do not call tools" is the only tool sentence, and the receipt
     /// lists nothing offered. Codex, which has no bridge either, is held to the same.
@@ -2175,7 +2211,10 @@ open(sys.argv[1], "w").write(json.dumps(out))
     #[test]
     fn only_a_seat_with_a_vendor_meter_adds_it_to_the_cost_event() {
         assert!(cost_payload(0.5, 10, None).get("nano_aiu").is_none());
-        assert_eq!(cost_payload(0.0, 10, Some((1, 7)))["nano_aiu"], 7);
+        assert_eq!(cost_payload(0.0, 10, Some((1000, 7)))["nano_aiu"], 7);
+        // specs/132 AC-4: 0.33 in, 0.33 out; a whole count stays a whole number.
+        assert_eq!(cost_payload(0.0, 10, Some((330, 7)))["premium_requests"].as_f64(), Some(0.33));
+        assert_eq!(cost_payload(0.0, 10, Some((2000, 7)))["premium_requests"].as_u64(), Some(2));
     }
 
     #[tokio::test]

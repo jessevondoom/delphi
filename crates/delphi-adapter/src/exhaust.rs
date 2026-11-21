@@ -33,12 +33,15 @@ pub struct Exhaustion {
 pub const BILLING: &str = "billing error: credits or payment need attention";
 pub const SPEND_CAP: &str = "monthly spend cap reached";
 pub const SPEND_LIMIT: &str = "spend limit set on the account reached";
+/// A subscription plan's usage limit (Codex on a ChatGPT plan: "You've hit your usage limit ... try again at <date>"): the whole
+/// login is out, every model on it (`specs/132` X1, O12).
+pub const PLAN_LIMIT: &str = "the plan's usage limit is reached";
 
 impl Exhaustion {
     /// Is the whole endpoint out (credit, a spend cap or limit), rather than one model's quota? Offering another model on the same
     /// endpoint as a stand-in would only fail the same way and ask the operator for nothing (`specs/035` G-6).
     pub fn is_account_wide(&self) -> bool {
-        matches!(self.reason.as_str(), BILLING | SPEND_CAP | SPEND_LIMIT)
+        matches!(self.reason.as_str(), BILLING | SPEND_CAP | SPEND_LIMIT | PLAN_LIMIT)
     }
 }
 
@@ -95,6 +98,23 @@ pub fn parse_reset(text: &str, now: i64) -> Option<i64> {
     None
 }
 
+/// "try again at Nov 27th, 2026 2:49 AM" (Codex). The text names no zone, so it is read as this machine's local time
+/// (`specs/132` X1: unverified). `offset` gives the local offset in seconds east of UTC at an instant.
+pub fn parse_try_again_at(text: &str, offset: impl Fn(i64) -> i64) -> Option<i64> {
+    static AT: OnceLock<Regex> = OnceLock::new();
+    let c = re(&AT, r"(?i)try again at ([a-z]{3})[a-z]* (\d{1,2})(?:st|nd|rd|th)?,? (\d{4}),? (\d{1,2}):(\d{2}) ?([ap]m)").captures(text)?;
+    let month = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].iter().position(|m| c[1].eq_ignore_ascii_case(m))? + 1;
+    let mut hour: u32 = c[4].parse().ok().filter(|h| (1..=12).contains(h))?;
+    let pm = c[6].eq_ignore_ascii_case("pm");
+    if pm && hour != 12 {
+        hour += 12;
+    } else if !pm && hour == 12 {
+        hour = 0;
+    }
+    let naive = delphi_core::time::parse_rfc3339(&format!("{}-{:02}-{:02}T{:02}:{}:00Z", &c[3], month, c[2].parse::<u32>().ok()?, hour, &c[5]))?;
+    Some(naive - offset(naive))
+}
+
 fn exhausted(reason: &str, reset_at: Option<i64>, raw: &str) -> Option<Exhaustion> {
     Some(Exhaustion { reason: reason.into(), reset_at, raw: raw.chars().take(500).collect() })
 }
@@ -131,6 +151,10 @@ pub fn classify_cli_error(text: &str, now: i64) -> Option<Exhaustion> {
     let lower = text.to_ascii_lowercase();
     // A reset that is already due ("Resets in 0s") says nothing is spent: it is not a reset time.
     let reset = parse_reset(text, now).filter(|r| *r > now);
+    if lower.contains("hit your usage limit") {
+        let reset = parse_reset(text, now).or_else(|| parse_try_again_at(text, delphi_core::time::local_offset_secs)).filter(|r| *r > now && *r - now <= MAX_RESET.as_secs() as i64);
+        return exhausted(PLAN_LIMIT, reset, text);
+    }
     let says_quota = ["quota reached", "usage limit reached", "reached your usage limit", "hit your limit", "hit your session limit"].iter().any(|p| lower.contains(p));
     if says_quota || (lower.contains("resource_exhausted") && reset.is_some()) {
         return exhausted("quota reached", reset, text);
@@ -260,6 +284,25 @@ mod tests {
         assert!(classify_cli_error("permission denied", NOW).is_none());
         assert!(classify_cli_error("", NOW).is_none());
         assert!(classify_cli_error("Claude usage limit reached. Your limit will reset at 1pm", NOW).unwrap().reset_at.is_none());
+    }
+
+    /// The text the live `codex exec` run printed out of quota (P0, 2026-11-20, `codex-cli` 0.166.0; the apostrophe is curly).
+    const CODEX: &str = "You’ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Nov 27th, 2026 2:49 AM.";
+
+    #[test]
+    fn the_real_codex_usage_limit_text_is_account_wide_exhaustion_with_a_local_reset() {
+        let now = delphi_core::time::parse_rfc3339("2026-11-20T12:00:00Z").unwrap();
+        let e = classify_cli_error(CODEX, now).unwrap();
+        assert!(e.is_account_wide(), "{}", e.reason);
+        let utc = delphi_core::time::parse_rfc3339("2026-11-27T02:49:00Z").unwrap();
+        assert_eq!(e.reset_at, Some(utc - delphi_core::time::local_offset_secs(utc)), "Nov 27, 2026 02:49 local");
+        assert_eq!(parse_try_again_at(CODEX, |_| 0), Some(utc));
+        assert_eq!(parse_try_again_at(CODEX, |_| -5 * 3600), Some(utc + 5 * 3600), "read in New York, it is 07:49 UTC");
+        assert_eq!(parse_try_again_at("try again at Dec 1st, 2026 12:05 PM", |_| 0), delphi_core::time::parse_rfc3339("2026-12-01T12:05:00Z"));
+        // No date: still exhaustion, with no reset.
+        let e = classify_cli_error("You've hit your usage limit. Upgrade to Plus to continue using Codex.", now).unwrap();
+        assert!(e.is_account_wide() && e.reset_at.is_none());
+        assert!(!classify_cli_error(CLAUDE, now).unwrap().is_account_wide(), "Claude's session limit stays a model quota");
     }
 
     /// The text the live `claude` run printed with the session limit reached (`tests/fixtures/quota/`).
