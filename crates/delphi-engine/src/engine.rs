@@ -125,6 +125,8 @@ pub struct Settings {
     pub review_commands: Option<Vec<Vec<String>>>,
     /// `[forge] review_diff_chars` (`specs/135` §6.3): the most diff a review's seat is shown.
     pub review_diff_chars: usize,
+    /// `[forge] review_context_chars` (`specs/135` §14.3 item 1): the most call sites and Round 0 excerpts a review's seat is shown.
+    pub review_context_chars: usize,
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
@@ -241,6 +243,7 @@ impl Default for Settings {
             standing_foreign_tokens: 0,
             review_commands: None,
             review_diff_chars: crate::review_job::DEFAULT_DIFF_CHARS,
+            review_context_chars: crate::review_job::DEFAULT_CONTEXT_CHARS,
             thin_below: 3,
             continue_bar: Default::default(),
             archive: Default::default(),

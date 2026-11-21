@@ -144,6 +144,7 @@ per_watch_max_wakes_per_day = 10
 # [forge]
 # review_commands = [["cargo", "test", "--offline"]]   # unset (default): the [exec] test_command and check_command, when set; [] runs none
 # review_diff_chars = 40000          # the most diff the reviewer is shown (1000 to 200000); whole files past it are left out and named
+# review_context_chars = 12000       # call sites and what the reviewer asks to see in Round 0, found in the copy (0 to 100000; 0 turns both off)
 
 # What the engine adds around a role's model calls (specs/045). Not an access table: it adds notes and one verification turn,
 # never a tool or a permission. Every key shown is the default.

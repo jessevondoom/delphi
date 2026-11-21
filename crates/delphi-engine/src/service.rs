@@ -1647,7 +1647,9 @@ impl EngineService {
             let made = tokio::task::spawn_blocking(move || {
                 let guard = exec.open_investigation_at(&copy_key, &project, Some(&b2)).map_err(|e| e.to_string())?;
                 let (stat, diff) = exec.worktrees.investigation_diff(&guard.inv, &base2, &b2).map_err(|e| e.to_string())?;
-                Ok::<_, String>((guard, stat, diff))
+                // §14.3: the copy's text files, read in-process for the call sites and Round 0's search. Only the copy is read.
+                let corpus = rj::Corpus::load(&guard.inv.tree);
+                Ok::<_, String>((guard, stat, diff, corpus))
             })
             .await
             .unwrap_or_else(|e| Err(e.to_string()));
@@ -1657,11 +1659,11 @@ impl EngineService {
                     let _ = engine.finish_task(&mm, tid.clone(), crate::engine::SpanOutcome { status: crate::engine::Status::Escalated(why.clone()), text: String::new(), turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await;
                     json!({"ask_id": tid, "status": "failed", "reason": why})
                 }
-                Ok((guard, stat, diff)) => {
+                Ok((guard, stat, diff, corpus)) => {
                     let capped = rj::cap_diff(&diff, engine.settings.review_diff_chars);
                     let configured: Vec<Vec<String>> = engine.settings.review_commands.clone().unwrap_or_else(|| [engine.exec.cfg.test_command.clone(), engine.exec.cfg.check_command.clone()].into_iter().flatten().collect());
                     let sandbox = engine.exec.sandbox.is_some();
-                    let input = rj::Input { branch: &branch, base: &base, spec: spec.as_ref().map(|(s, t)| (s.as_str(), t.as_str())), slice: slice.as_deref(), stat: &stat, diff: &capped, spec_chars: 20_000 };
+                    let input = rj::Input { branch: &branch, base: &base, spec: spec.as_ref().map(|(s, t)| (s.as_str(), t.as_str())), slice: slice.as_deref(), stat: &stat, diff: &capped, spec_chars: 20_000, copy: Some(&corpus), context_chars: engine.settings.review_context_chars };
                     let seat = |brief: String| {
                         let (engine, mm, tid, proposition, family) = (engine.clone(), mm.clone(), tid.clone(), proposition.clone(), family.clone());
                         async move {
@@ -1728,6 +1730,7 @@ impl EngineService {
                                 "tests_run": out.tests_run,
                                 "tests_note": out.tests_note,
                                 "rounds": out.rounds,
+                                "context": out.context,
                                 "model": model,
                                 "tokens_in": tokens_in,
                                 "tokens_out": tokens_out,
@@ -11075,10 +11078,12 @@ mod tests {
         assert!(got["display"].as_str().is_some_and(|d| d.contains("(red-team, via delphi)")), "{got}");
         assert_eq!(got["receipt"][0]["tools_offered"].as_array().map(Vec::len), Some(0), "no tools: {got}");
         let briefs = briefs.lock().unwrap();
-        assert_eq!(briefs.len(), 2, "two rounds");
-        assert!(briefs.iter().all(|(_, tools)| *tools == 0), "the seat had no tools in either round");
-        assert!(briefs[0].0.contains("TESTS-PASSED-MARKER") && briefs[0].0.contains("REVIEWED_CHANGE"), "round 1 has the test output and the diff");
-        assert!(briefs[1].0.contains("refused, not run") && briefs[1].0.contains("FINAL answer"), "round 2 has the requested outputs");
+        assert_eq!(briefs.len(), 3, "round 0 (spec 135 §14.3), then two rounds");
+        assert!(briefs.iter().all(|(_, tools)| *tools == 0), "the seat had no tools in any round");
+        assert!(briefs[0].0.contains("ROUND 0") && briefs[0].0.contains("REVIEWED_CHANGE") && !briefs[0].0.contains("TESTS-PASSED-MARKER"), "round 0 sees the diff only, before any command ran");
+        assert!(got["context"].is_object(), "the result says what context was gathered: {got}");
+        assert!(briefs[1].0.contains("TESTS-PASSED-MARKER") && briefs[1].0.contains("REVIEWED_CHANGE"), "round 1 has the test output and the diff");
+        assert!(briefs[2].0.contains("refused, not run") && briefs[2].0.contains("FINAL answer"), "round 2 has the requested outputs");
         let left = std::fs::read_dir(f.engine.exec.worktrees.investigations_root()).map(|d| d.count()).unwrap_or(0);
         assert_eq!(left, 0, "the review copy is removed");
         // The project itself is untouched: still on its branch, nothing written.

@@ -56,7 +56,7 @@ fn requested_commands_are_plain_argv_not_denied_and_at_most_three() {
 }
 
 fn input<'a>(diff: &'a CappedDiff) -> Input<'a> {
-    Input { branch: "feature", base: "main", spec: Some(("135-x", "the spec says F2")), slice: Some("| 135 | F2 | review | built |"), stat: " a.rs | 1 +\n", diff, spec_chars: 1000 }
+    Input { branch: "feature", base: "main", spec: Some(("135-x", "the spec says F2")), slice: Some("| 135 | F2 | review | built |"), stat: " a.rs | 1 +\n", diff, spec_chars: 1000, copy: None, context_chars: 0 }
 }
 
 type Log = Arc<Mutex<Vec<String>>>;
@@ -216,4 +216,139 @@ async fn ac12_a_command_that_cannot_start_is_not_a_test_run_and_the_note_says_ho
     let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "accept", "findings": []}"#.to_string()));
     let out = review(&input(&d), &[], true, seat, failing_runner()).await;
     assert!(!out.tests_run && out.tests_note.as_deref().is_some_and(|n| n.contains("no command is configured")));
+}
+
+/// A copy of a small project, as the review would read it.
+fn corpus() -> Corpus {
+    let f = |p: &str, t: &str| (p.to_string(), t.to_string());
+    Corpus {
+        files: vec![
+            f("src/lib.rs", "pub fn changed_fn(x: u32) -> u32 {\n    x + 1\n}\n"),
+            f("src/user.rs", &format!("{}fn caller() {{\n    let y = changed_fn(3);\n    not_changed_fn(4);\n}}\n", "// filler\n".repeat(20))),
+            f("src/types.rs", "use crate::x;\n/// The type the seat asks for.\npub struct NeededType {\n    pub a: u32,\n}\nfn mentions(_: NeededType) {}\n"),
+            f("src/msgs.rs", "pub const M: &str = \"a literal message\";\n"),
+        ],
+    }
+}
+
+const DIFF14: &str = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n-pub fn changed_fn(x: u32) -> u32 {\n+pub fn changed_fn(x: u32) -> u32 {\n-    x\n+    x + 1\n }\n";
+
+#[test]
+fn the_diffs_functions_and_added_lines_are_read_from_its_hunks() {
+    let d = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -10,4 +10,5 @@ impl Foo { pub fn in_header(&self) {\n ctx\n-    fn removed_one() {}\n+    pub(crate) async fn added_one<T>(t: T) {}\n+    fn new() -> Self {}\n ctx2\n+let x = confn x;\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-fn not_rust()\n+fn not_rust_either()\n";
+    let s = diff_shape(d);
+    assert_eq!(s.fns, vec!["in_header", "removed_one", "added_one"], "`new` is too common to search for; only .rs files count");
+    assert_eq!(s.added["src/a.rs"], [11, 12, 14].into_iter().collect());
+    assert_eq!(s.added["README.md"], [1].into_iter().collect());
+}
+
+#[test]
+fn round_zeros_items_are_plain_identifiers_or_short_quoted_strings_at_most_five() {
+    let long = format!("\"{}\"", "x".repeat(81));
+    let answer = json!({"need": ["NeededType", "\"a literal message\"", "foo bar", "_ok", long, "past_five", 7]}).to_string();
+    let (ok, refused) = parse_needs(&answer).unwrap();
+    assert_eq!(ok, vec![Need::Ident("NeededType".into()), Need::Literal("a literal message".into()), Need::Ident("_ok".into())]);
+    assert_eq!(refused.len(), 4, "{refused:?}");
+    assert!(refused[0].contains("foo bar") && refused[0].contains("not a plain identifier"), "{refused:?}");
+    assert!(refused[1].contains("not a plain identifier") && refused[1].chars().count() < 200, "a long item is cut in the refusal: {refused:?}");
+    assert!(refused[2].contains("past_five") && refused[2].contains("past the fifth") && refused[3].contains("not a string"), "{refused:?}");
+    assert!(parse_needs(&json!({"need": ["a::b", "rm -rf /"]}).to_string()).unwrap().1.len() == 2, "a path or a shell line is not an identifier");
+    assert_eq!(parse_needs("{\"need\": []}").unwrap(), (vec![], vec![]), "asking for nothing is allowed");
+    assert_eq!(parse_needs("{\"verdict\": \"accept\"}").unwrap(), (vec![], vec![]));
+    assert!(parse_needs("{\"need\": \"NeededType\"}").is_err() && parse_needs("nothing").is_err());
+    assert!(parse_needs(&json!({"need": ["\"\"", "\"line\nbreak\""]}).to_string()).unwrap().1.len() == 2, "an empty or multi-line string is refused");
+}
+
+/// Spec 135 AC-14 (§14.3): with a scripted seat, Round 0's requested identifier and string and the diff's call sites reach Round 1's
+/// brief, fenced and within the cap; a refused item is named and not searched.
+#[tokio::test]
+async fn ac14_round_zeros_items_and_the_call_sites_reach_round_one_within_the_cap() {
+    let d = cap_diff(DIFF14, 10_000);
+    let c = corpus();
+    let briefs: Log = Default::default();
+    let b2 = briefs.clone();
+    let seat = move |brief: String| {
+        b2.lock().unwrap().push(brief.clone());
+        std::future::ready(Ok(if brief.contains("ROUND 0") {
+            r#"{"need": ["NeededType", "\"a literal message\"", "rm -rf /"]}"#.to_string()
+        } else {
+            r#"{"verdict": "accept", "findings": []}"#.to_string()
+        }))
+    };
+    let ran: Log = Default::default();
+    let i = Input { copy: Some(&c), context_chars: DEFAULT_CONTEXT_CHARS, ..input(&d) };
+    let out = review(&i, &[argv(&["cargo", "test"])], true, seat, runner(ran.clone())).await;
+    let briefs = briefs.lock().unwrap().clone();
+    assert_eq!(briefs.len(), 2, "round 0, then round 1");
+    assert!(briefs[0].contains("ROUND 0") && briefs[0].contains("changed_fn") && !briefs[0].contains("CALL SITES") && !briefs[0].contains("OUTPUT-OF"), "round 0 sees the diff only");
+    let b1 = &briefs[1];
+    let fenced = |label: &str| {
+        let start = b1.find(&format!("----- BEGIN {label}")).unwrap_or_else(|| panic!("no {label} section: {b1}"));
+        let end = b1[start..].find(&format!("----- END {label}")).unwrap() + start;
+        b1[start..end].to_string()
+    };
+    let sites = fenced("CALL SITES");
+    assert!(sites.contains("call site of changed_fn") && sites.contains("src/user.rs") && sites.contains("let y = changed_fn(3);"), "{sites}");
+    assert_eq!(sites.matches("call site of").count(), 1, "a longer name (not_changed_fn) is not a call site: {sites}");
+    let asked = fenced("WHAT YOU ASKED TO SEE");
+    assert!(asked.contains("src/types.rs") && asked.contains("pub struct NeededType"), "{asked}");
+    assert!(asked.contains("src/msgs.rs") && asked.contains("a literal message"), "{asked}");
+    assert!(asked.contains("Refused, not searched") && asked.contains("rm -rf /"), "{asked}");
+    assert!(b1.find("BEGIN CALL SITES").unwrap() > b1.find("BEGIN DIFF (").unwrap() && b1.contains("OUTPUT-OF-cargo-test"), "round 1 still has the diff and the tests");
+    assert_eq!(out.answer.unwrap().verdict, "accept");
+    assert_eq!(out.context["functions"], json!(["changed_fn"]));
+    assert_eq!((out.context["call_sites"].as_u64(), out.context["refused"].as_array().map(Vec::len)), (Some(1), Some(1)), "{}", out.context);
+    assert_eq!(out.context["asked"], json!([{"item": "NeededType", "hits": 2}, {"item": "\"a literal message\"", "hits": 1}]));
+    assert_eq!(*ran.lock().unwrap(), vec!["delphi: cargo test"]);
+
+    // Within the cap: a small cap keeps what fits whole and counts the rest.
+    let ctx = gather_context(&c, &d, Ok((vec![Need::Ident("NeededType".into()), Need::Literal("a literal message".into())], vec![])), 400);
+    let excerpts: usize = ctx.brief.split("----- BEGIN ").skip(1).map(|s| s.split_once('\n').map(|(_, b)| b.split("----- END ").next().unwrap_or("").chars().count()).unwrap_or(0)).sum();
+    assert!(excerpts <= 400, "{excerpts}: {}", ctx.brief);
+    assert!(ctx.report["left_out"].as_u64().unwrap() > 0 && ctx.brief.contains("left out to keep the context under 400"), "{}", ctx.brief);
+    // 0 turns the context and Round 0 off.
+    let n: Log = Default::default();
+    let n2 = n.clone();
+    let seat = move |b: String| {
+        n2.lock().unwrap().push(b);
+        std::future::ready(Ok::<String, String>(r#"{"verdict": "accept", "findings": []}"#.into()))
+    };
+    let out = review(&Input { copy: Some(&c), context_chars: 0, ..input(&d) }, &[], true, seat, runner(Default::default())).await;
+    assert_eq!((n.lock().unwrap().len(), out.context.clone()), (1, Value::Null));
+    // A seat that gives no answer in Round 0 stops the review before any command runs.
+    let ran: Log = Default::default();
+    let seat = |_b: String| std::future::ready(Err::<String, String>("quota".into()));
+    let out = review(&Input { copy: Some(&c), context_chars: 1000, ..input(&d) }, &[argv(&["cargo", "test"])], true, seat, runner(ran.clone())).await;
+    assert!(out.answer.is_none() && out.unanswered.as_deref().is_some_and(|u| u.contains("round 0")) && ran.lock().unwrap().is_empty());
+}
+
+/// AC-14: the search reads only the copy: a link to a file or a directory outside it is not followed; `.git` and build output are
+/// skipped; a link to a file inside the copy is read.
+#[test]
+fn ac14_nothing_outside_the_copy_is_read() {
+    let t = tempfile::tempdir().unwrap();
+    let (copy, outside) = (t.path().join("copy"), t.path().join("outside"));
+    for d in [copy.join("src"), copy.join(".git"), copy.join("target/debug"), outside.join("d")] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(copy.join("src/a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(copy.join(".git/HEAD"), "SECRET_GIT\n").unwrap();
+    std::fs::write(copy.join("target/debug/x.rs"), "SECRET_TARGET\n").unwrap();
+    std::fs::write(outside.join("secret.rs"), "SECRET_OUTSIDE\n").unwrap();
+    std::fs::write(outside.join("d/more.rs"), "SECRET_DIR\n").unwrap();
+    std::os::unix::fs::symlink(outside.join("secret.rs"), copy.join("src/out.rs")).unwrap();
+    std::os::unix::fs::symlink(outside.join("d"), copy.join("linkdir")).unwrap();
+    std::os::unix::fs::symlink(copy.join("src/a.rs"), copy.join("inside.rs")).unwrap();
+    std::os::unix::fs::symlink(copy.join(".git/HEAD"), copy.join("src/gitlink.rs")).unwrap();
+    std::os::unix::fs::symlink("../../outside/secret.rs", copy.join("src/rel.rs")).unwrap();
+    std::fs::write(copy.join("big.txt"), "x".repeat(600 * 1024)).unwrap();
+    std::fs::write(copy.join("bin.dat"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+    let c = Corpus::load(&copy);
+    let paths: Vec<&str> = c.files.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(paths, vec!["inside.rs", "src/a.rs"]);
+    assert!(c.files.iter().all(|(_, t)| !t.contains("SECRET")), "{c:?}");
+    // A search for what lies outside finds nothing.
+    let ctx = gather_context(&c, &cap_diff("", 100), Ok((vec![Need::Ident("SECRET_OUTSIDE".into()), Need::Literal("SECRET_DIR".into())], vec![])), 5_000);
+    assert_eq!(ctx.report["excerpts"], 0, "{}", ctx.report);
+    assert!(ctx.brief.contains("(nothing found)"));
 }

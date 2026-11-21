@@ -106,7 +106,8 @@
       "description": "A cross-family review of a host's branch, request_review (specs/135 section 6).",
       "properties": {
         "review_commands": { "type": "array", "maxItems": 8, "items": { "type": "array", "minItems": 1, "items": { "type": "string" } }, "description": "The commands a review runs, each an argv, in the OS sandbox with no network in a copy of the branch. Unset: the [exec] test_command and check_command, when set. An empty list runs none." },
-        "review_diff_chars": { "type": "integer", "minimum": 1000, "maximum": 200000, "description": "The most diff the reviewer is shown (default 40000); whole files past it are left out and named." }
+        "review_diff_chars": { "type": "integer", "minimum": 1000, "maximum": 200000, "description": "The most diff the reviewer is shown (default 40000); whole files past it are left out and named." },
+        "review_context_chars": { "type": "integer", "minimum": 0, "maximum": 100000, "description": "The most characters of call sites and Round 0 excerpts, found in the copy, the reviewer is shown (default 12000; specs/135 section 14.3). 0 turns both off." }
       }
     },
     "seats": {
