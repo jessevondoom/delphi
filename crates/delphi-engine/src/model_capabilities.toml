@@ -1,0 +1,278 @@
+# The seed table of model capabilities (specs/132 §5.2, C3): what was measured of each latest-generation model a carrier serves.
+#
+# It is DATA and ADVICE, never a grant: nothing here allows an endpoint, a model or a tool, and no row raises a seat's trust. It is the
+# default until a live read replaces it: a Copilot model's multiplier and price category come from the account's own catalog
+# (`copilot --acp` `session/new`, cached in local/copilot-catalog.json) when one has been read; a measured prompt budget from a
+# conformance probe record (specs/132 §4.1, C6) will replace `prompt_budget_tokens` when that is built. Spec 131 S2 (the per-carrier
+# input budget) is not built; it reads `prompt_budget_tokens` from here when it is.
+#
+# How it was measured (2026-11-20, the operator's accounts, Copilot CLI 1.0.112 and agy 1.5.13):
+# * the catalog (multiplier `copilotUsage`, `copilotPriceCategory`) was read free through `copilot --acp` initialize + session/new;
+# * the prompt budget is the SERVICE'S OWN REJECTION TEXT for a 5 MB request ("Request exceeds the model's prompt budget after
+#   reserving output (N tokens; limit L)"): L is `prompt_budget_tokens`; a rejected call bills no premium request;
+# * one paid call per model at <= 1x, with a prompt of about 90,000 tokens (50,000 for claude-haiku-5.5) and the instruction last:
+#   reply with only {"tail": "<token>"}. `tail_tested_tokens` is that size; delivery was NOT tested near each budget, and a one-line
+#   echo proves delivery and format, not quality at long context. `bytes_per_token` is for that filler text, not for code or prose;
+# * `token_accounting` (where the prompt's tokens were reported: input, cache_write or both) is set only where the survey noted it;
+# * the 15x and 14x models were read only (no paid call): `tail_tested_tokens = 0`, `json_in_text = "untested"`.
+#
+# Families: `kimi` (Moonshot) and `mai` (Microsoft) are their own families (operator's aim, 2026-11-20: off-family coverage; specs/132
+# OD-5). Every row's family must equal what model_families.toml resolves for its id (a test pins it).
+#
+# Rules: latest generation of each model line only (operator, 2026-11-20). An older generation of a line listed here is not added.
+
+version = 1
+measured = "2026-11-20"
+copilot_cli = "1.0.112"
+agy_cli = "1.5.13"
+
+# A carrier-wide fact, not a model's: agy cut a prompt at about 47,000 input tokens whatever the model (GPT-OSS at 200 KB and
+# 400 KB both reported 47,158 and 47,168 input tokens and lost the tail with status SUCCESS). For spec 131; not enforced here.
+[[carrier]]
+name = "agy"
+silent_input_cut_tokens = 47000
+note = "agy cuts the prompt silently at about 47k input tokens regardless of model; truncation shows only as an input-token count that does not grow with the prompt"
+
+[[carrier]]
+name = "copilot"
+note = "an over-budget prompt is refused loudly (session.error with the limit), never cut; input tokens are reported under input, cache_read or cache_write depending on the model, so a truncation check must sum all three"
+
+[[model]]
+id = "claude-sonnet-5.5"
+carrier = "copilot"
+vendor = "anthropic"
+family = "claude"
+multiplier = 1.0
+price_category = "medium"
+prompt_budget_tokens = 200000
+bytes_per_token = 2.27
+tail_tested_tokens = 90000
+json_in_text = "bare"
+token_accounting = "cache_write"
+note = "input counted as cache_write"
+
+[[model]]
+id = "claude-haiku-5.5"
+carrier = "copilot"
+vendor = "anthropic"
+family = "claude"
+multiplier = 1.0
+price_category = "low"
+prompt_budget_tokens = 100000
+bytes_per_token = 2.27
+tail_tested_tokens = 50000
+json_in_text = "bare"
+note = "the smallest budget of the set"
+
+[[model]]
+id = "claude-fable-5.1"
+carrier = "copilot"
+vendor = "anthropic"
+family = "claude"
+multiplier = 15.0
+price_category = "very_high"
+prompt_budget_tokens = 200000
+bytes_per_token = 2.28
+tail_tested_tokens = 0
+json_in_text = "untested"
+note = "read only, no paid call"
+
+[[model]]
+id = "claude-opus-5.5"
+carrier = "copilot"
+vendor = "anthropic"
+family = "claude"
+multiplier = 15.0
+price_category = "high"
+prompt_budget_tokens = 200000
+bytes_per_token = 2.28
+tail_tested_tokens = 0
+json_in_text = "untested"
+note = "read only, no paid call"
+
+[[model]]
+id = "gpt-6.2-sol"
+carrier = "copilot"
+vendor = "openai"
+family = "openai"
+multiplier = 1.0
+price_category = "medium"
+prompt_budget_tokens = 272000
+bytes_per_token = 4.37
+tail_tested_tokens = 90000
+json_in_text = "bare"
+note = "input reported as about 3,000 tokens"
+
+[[model]]
+id = "gpt-6.2-astra"
+carrier = "copilot"
+vendor = "openai"
+family = "openai"
+multiplier = 1.0
+price_category = "very_high"
+prompt_budget_tokens = 272000
+bytes_per_token = 4.37
+tail_tested_tokens = 90000
+json_in_text = "bare"
+note = ""
+
+[[model]]
+id = "gpt-6.1-terra"
+carrier = "copilot"
+vendor = "openai"
+family = "openai"
+multiplier = 1.0
+price_category = "low"
+prompt_budget_tokens = 272000
+bytes_per_token = 4.37
+tail_tested_tokens = 90000
+json_in_text = "bare"
+token_accounting = "cache_write"
+note = "reports input tokens as 3; cache_write holds them"
+
+[[model]]
+id = "gpt-6-luna"
+carrier = "copilot"
+vendor = "openai"
+family = "openai"
+multiplier = 1.0
+price_category = "low"
+prompt_budget_tokens = 272000
+bytes_per_token = 4.37
+tail_tested_tokens = 90000
+json_in_text = "bare"
+token_accounting = "cache_write"
+note = "reports input tokens as 3; cache_write holds them"
+
+[[model]]
+id = "gpt-5.3-codex"
+carrier = "copilot"
+vendor = "openai"
+family = "openai"
+multiplier = 1.0
+price_category = "medium"
+prompt_budget_tokens = 272000
+bytes_per_token = 4.37
+tail_tested_tokens = 90000
+json_in_text = "bare"
+note = ""
+
+[[model]]
+id = "gemini-4-argon"
+carrier = "copilot"
+vendor = "google"
+family = "gemini"
+multiplier = 1.0
+price_category = "medium"
+prompt_budget_tokens = 200000
+bytes_per_token = 3.65
+tail_tested_tokens = 90000
+json_in_text = "bare"
+note = "first Copilot run 2026-11-20"
+
+[[model]]
+id = "gemini-4-carbon"
+carrier = "copilot"
+vendor = "google"
+family = "gemini"
+multiplier = 1.0
+price_category = "medium"
+prompt_budget_tokens = 200000
+bytes_per_token = 4.37
+tail_tested_tokens = 90000
+json_in_text = "bare"
+note = ""
+
+[[model]]
+id = "gemini-4-hydrogen"
+carrier = "copilot"
+vendor = "google"
+family = "gemini"
+multiplier = 1.0
+price_category = "medium"
+prompt_budget_tokens = 983040
+bytes_per_token = 4.37
+tail_tested_tokens = 90000
+json_in_text = "bare"
+note = "about 1M tokens: the large-context seat"
+
+[[model]]
+id = "gemini-4-neon"
+carrier = "copilot"
+vendor = "google"
+family = "gemini"
+multiplier = 1.0
+price_category = "medium"
+prompt_budget_tokens = 200000
+bytes_per_token = 4.37
+tail_tested_tokens = 90000
+json_in_text = "bare"
+note = ""
+
+[[model]]
+id = "gemini-3.8-flash"
+carrier = "copilot"
+vendor = "google"
+family = "gemini"
+multiplier = 14.0
+price_category = "low"
+prompt_budget_tokens = 200000
+bytes_per_token = 4.38
+tail_tested_tokens = 0
+json_in_text = "untested"
+note = "read only in this survey; 14 premium requests a call in P0; the only member of its line"
+
+[[model]]
+id = "kimi-k3"
+carrier = "copilot"
+vendor = "moonshot"
+family = "kimi"
+multiplier = 1.0
+price_category = "medium"
+prompt_budget_tokens = 917504
+bytes_per_token = 4.38
+tail_tested_tokens = 90000
+json_in_text = "bare"
+note = "emits reasoning events"
+
+[[model]]
+id = "mai-code-2"
+carrier = "copilot"
+vendor = "microsoft"
+family = "mai"
+multiplier = 1.0
+price_category = "low"
+prompt_budget_tokens = 922000
+bytes_per_token = 4.37
+tail_tested_tokens = 90000
+json_in_text = "bare"
+note = "emits reasoning events"
+
+[[model]]
+id = "mai-code-2-flash"
+carrier = "copilot"
+vendor = "microsoft"
+family = "mai"
+multiplier = 1.0
+price_category = "low"
+prompt_budget_tokens = 922000
+bytes_per_token = 4.37
+tail_tested_tokens = 90000
+json_in_text = "bare"
+note = ""
+
+# GPT-OSS through agy: OpenAI's open-weight lineage. agy has no premium-request multiplier, so `multiplier` is 0 (not metered that
+# way) and `price_category` is empty. Its budget is agy's silent cut (above), not the model's: tail delivered at 100 KB, lost at
+# 200 KB and 400 KB. Under `--json-schema` it nested the JSON as a string inside `answer`.
+[[model]]
+id = "gpt-oss-120b-medium"
+carrier = "agy"
+vendor = "openai"
+family = "openai"
+multiplier = 0.0
+price_category = ""
+prompt_budget_tokens = 47000
+bytes_per_token = 0.0
+tail_tested_tokens = 0
+json_in_text = "nested-string"
+note = "budget is agy's silent ~47k-token cut; tail delivered at 100 KB, lost at 200 KB with status SUCCESS"

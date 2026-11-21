@@ -164,6 +164,11 @@ pub fn front_line(paths: &[String]) -> String {
     if paths.is_empty() { String::new() } else { format!("earlier_rulings: {}\n", paths.join(", ")) }
 }
 
+/// The record's front-matter line for a Council whose caller turned earlier rulings off (`specs/123` §17 item 2); empty otherwise.
+pub fn front_off(off: bool) -> &'static str {
+    if off { "earlier_rulings_off: by the caller\n" } else { "" }
+}
+
 /// The paths a record's extra front matter names (`front_line`).
 pub fn from_front(front: &str) -> Vec<String> {
     front.lines().find_map(|l| l.strip_prefix("earlier_rulings: ")).map(|l| l.split(", ").map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect()).unwrap_or_default()

@@ -225,13 +225,14 @@ fn run_async<T: Send>(f: impl std::future::Future<Output = T> + Send) -> T {
 }
 
 /// The word the runner turns into a coverage `reason` (`specs/098` §7.5 item 3). No engine configured is `no_search_provider`; every
-/// engine passed over for its key (missing, or refused) is `credential_unresolved`; any other failure of every engine is `no_results`.
+/// engine passed over for its key (missing, or refused) is `credential_unresolved`; any other failure of every engine (an outage, a
+/// limit, an answer that is not results) is `search_failed` (`specs/124` §19). An empty answer is not a failure.
 /// No provider text, key or error detail leaves this function.
 pub fn search_failure_token(e: &SearchError) -> &'static str {
     match e {
         SearchError::NotConfigured => "no_search_provider",
         SearchError::AllFailed(why) if !why.is_empty() && why.iter().all(|(_, w)| w == "no key" || w == "the key was refused") => "credential_unresolved",
-        SearchError::AllFailed(_) => "no_results",
+        SearchError::AllFailed(_) => "search_failed",
     }
 }
 
@@ -290,6 +291,16 @@ At most 6 claims. A claim whose quote is not in the page is thrown away.\n\nQUES
 }
 
 /// The claims of the scout's JSON reply whose quote is a run of at least three words that is in `page`.
+/// The page-reading call's reply as claims. A reply that is not a claim list at all (no JSON object with a `claims` array) is a
+/// failed call, not a page with no claim on it, so a run that ends empty counts it as `scout_call_failed` (`specs/124` §19).
+pub fn claims_from_reply(raw: &str, page: &str, url: &str) -> Result<Vec<Extracted>, String> {
+    let list = raw.find('{').zip(raw.rfind('}')).and_then(|(s, e)| serde_json::from_str::<Value>(&raw[s..=e.max(s)]).ok()).is_some_and(|v| v["claims"].is_array());
+    if !list {
+        return Err("the scout's reply was not a claim list".to_string());
+    }
+    Ok(parse_claims(raw, page, url))
+}
+
 pub fn parse_claims(raw: &str, page: &str, url: &str) -> Vec<Extracted> {
     let (Some(s), Some(e)) = (raw.find('{'), raw.rfind('}')) else { return vec![] };
     let Ok(v) = serde_json::from_str::<Value>(&raw[s..=e.max(s)]) else { return vec![] };
@@ -333,7 +344,7 @@ impl Scout for LiveScout {
             let key = e.scout_key().ok_or_else(|| crate::research_empty::NO_SCOUT_MODEL.to_string())?;
             let role = crate::role_call::load(e, crate::role_call::Step::JudgePage).await?;
             let raw = e.one_shot_raw(&key, &scout_ipr(&role, claim_contract(question, page, e.settings.research_limits.page_chars, subs)), CLAIM_OUTPUT).await.ok_or_else(|| "the scout's call failed".to_string())?;
-            Ok(parse_claims(&e.secrets.redact(&raw.text), &page.text, &page.url))
+            claims_from_reply(&e.secrets.redact(&raw.text), &page.text, &page.url)
         })
     }
 
@@ -886,8 +897,9 @@ mod tests {
         let key_missing = SearchError::AllFailed(vec![(Provider::Brave, "no key".into()), (Provider::Kagi, "the key was refused".into())]);
         assert_eq!(search_failure_token(&key_missing), "credential_unresolved");
         let mixed = SearchError::AllFailed(vec![(Provider::Brave, "no key".into()), (Provider::Mojeek, "the service is down".into())]);
-        assert_eq!(search_failure_token(&mixed), "no_results", "one engine that tried and failed is not a credential problem");
-        assert_eq!(search_failure_token(&SearchError::AllFailed(vec![])), "no_results");
+        assert_eq!(search_failure_token(&mixed), "search_failed", "one engine that tried and failed is not a credential problem, and an outage is not an empty answer");
+        assert_eq!(search_failure_token(&SearchError::AllFailed(vec![(Provider::Brave, "over its limit".into())])), "search_failed");
+        assert_eq!(search_failure_token(&SearchError::AllFailed(vec![])), "search_failed");
         for e in [&key_missing, &mixed] {
             assert!(!search_failure_token(e).contains("Brave") && !search_failure_token(e).contains("service"));
         }
@@ -923,6 +935,12 @@ mod tests {
         assert_eq!(c[0].subject, "aspirin");
         assert!(parse_claims("not json", page, "u").is_empty());
         assert_eq!(c[0].sub, 0, "no tag given, none kept");
+        // A reply that is not a claim list is a failed call; an empty list is a page with no claim (`specs/124` §19).
+        for bad in ["not json", "I could not read the page.", r#"{"answer": "aspirin lowers fever"}"#, "{ broken"] {
+            assert!(claims_from_reply(bad, page, "u").is_err(), "{bad}");
+        }
+        assert_eq!(claims_from_reply(r#"{"claims": []}"#, page, "u").map(|c| c.len()), Ok(0));
+        assert_eq!(claims_from_reply(raw, page, "https://who.int/a").map(|c| c.len()), Ok(1));
     }
 
     // specs/114 §4 item 3: with a plan, the page-reading call is handed the sub-questions and asked to tag each claim; the tag is

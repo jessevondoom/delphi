@@ -296,6 +296,52 @@ impl Default for HarnessProfile {
     }
 }
 
+/// The shipped family table (`specs/091` SR-2), the one list of family names: a new family is a table entry, never a change to
+/// routing or to this check (`specs/056` §3.6, `specs/132` OD-5). A workspace's own `model-families.toml` is read by the engine.
+const SHIPPED_FAMILY_TABLE: &str = include_str!("../../delphi-engine/src/model_families.toml");
+
+fn family_rows() -> Vec<(String, String)> {
+    let Ok(v) = toml::from_str::<toml::Value>(SHIPPED_FAMILY_TABLE) else { return vec![] };
+    v.get("family").and_then(|f| f.as_array()).into_iter().flatten().filter_map(|r| Some((r.get("pattern")?.as_str()?.to_ascii_lowercase(), r.get("family")?.as_str()?.to_string()))).collect()
+}
+
+/// Every family name a config may use: those of the family table, then `local` (a local server, whose models no vendor table maps).
+pub fn known_families() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (_, f) in family_rows() {
+        if !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    out.push("local".into());
+    out
+}
+
+/// The family the shipped table gives a model id, first match wins; `*` matches any run of characters.
+pub fn family_of_model(model: &str) -> Option<String> {
+    let m = model.to_ascii_lowercase();
+    let glob = |p: &str| -> bool {
+        let parts: Vec<&str> = p.split('*').collect();
+        if parts.len() == 1 {
+            return p == m;
+        }
+        let (first, last) = (parts[0], parts[parts.len() - 1]);
+        if !m.starts_with(first) || !m.ends_with(last) || m.len() < first.len() + last.len() {
+            return false;
+        }
+        let mut at = first.len();
+        let end = m.len() - last.len();
+        parts[1..parts.len() - 1].iter().all(|mid| match m[at..end].find(mid) {
+            Some(i) => {
+                at += i + mid.len();
+                true
+            }
+            None => false,
+        })
+    };
+    family_rows().into_iter().find(|(p, _)| glob(p)).map(|(_, f)| f)
+}
+
 pub(crate) fn host_of(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
     let auth = rest.split(['/', '?', '#']).next()?;
@@ -320,7 +366,7 @@ pub struct Access {
     /// `[access]`: only the ratified copy counts. 0 (the default) is off.
     #[serde(default)]
     pub standing_foreign_tokens: u64,
-    /// Role → model family (`claude`, `gemini`, `openai` or `local`) for roles that should not use the default (`primary`).
+    /// Role → model family (any family the family table names, or `local`) for roles that should not use the default (`primary`).
     #[serde(default)]
     pub role_family: BTreeMap<String, String>,
     /// The family roles are served by unless `role_family` says otherwise (`specs/035` D-1). Unset: `claude` when an allowed
@@ -446,6 +492,72 @@ impl Assignment {
     }
 }
 
+/// A carrier's cost class (`specs/132` §5.2): `low` under 1x, `standard` at 1x, `premium` over 1x. Ordered, so a cap admits
+/// every class at or below it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CostClass {
+    Low,
+    #[default]
+    Standard,
+    Premium,
+}
+
+impl CostClass {
+    pub fn parse(s: &str) -> Option<CostClass> {
+        match s {
+            "low" => Some(CostClass::Low),
+            "standard" => Some(CostClass::Standard),
+            "premium" => Some(CostClass::Premium),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CostClass::Low => "low",
+            CostClass::Standard => "standard",
+            CostClass::Premium => "premium",
+        }
+    }
+}
+
+/// `[routing] max_cost_class` (`specs/056` §10.5): the highest cost class that may serve a role. Ratified (`lock::PINNED_KEYS`), so
+/// the daemon reads it only from the ratified copy. Absent, every role's cap is `standard` (OD-A1). A cap only removes candidates.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CostCap {
+    pub default: CostClass,
+    pub roles: BTreeMap<String, CostClass>,
+}
+
+/// The core roles a per-role `max_cost_class` may name; any other role takes the `default`.
+pub const COST_CAP_ROLES: &[&str] = &["orchestrator", "builder", "architect", "investigator", "scout", "strategist", "red-team", "writer", "messenger", "validator", "administrator", "assistant", "advocate"];
+
+impl CostCap {
+    pub fn of(&self, role: &str) -> CostClass {
+        self.roles.get(role).copied().unwrap_or(self.default)
+    }
+
+    /// `"standard"` for every role, or `{ default = "standard", architect = "premium" }`. Every error is a sentence.
+    pub fn parse(v: &toml::Value) -> Result<CostCap, String> {
+        const VALUES: &str = "\"low\", \"standard\" or \"premium\"";
+        let class = |what: &str, v: &toml::Value| v.as_str().and_then(CostClass::parse).ok_or_else(|| format!("[routing] max_cost_class{what} must be {VALUES}, not {v}"));
+        match v {
+            toml::Value::String(_) => Ok(CostCap { default: class("", v)?, roles: BTreeMap::new() }),
+            toml::Value::Table(t) => {
+                let default = t.get("default").ok_or("[routing] max_cost_class as a table needs a `default` for the roles it does not name")?;
+                let mut cap = CostCap { default: class(".default", default)?, roles: BTreeMap::new() };
+                for (role, x) in t.iter().filter(|(k, _)| *k != "default") {
+                    if !COST_CAP_ROLES.contains(&role.as_str()) {
+                        return Err(format!("[routing] max_cost_class names `{role}`, which is not a role (one of {})", COST_CAP_ROLES.join(", ")));
+                    }
+                    cap.roles.insert(role.clone(), class(&format!(".{role}"), x)?);
+                }
+                Ok(cap)
+            }
+            other => Err(format!("[routing] max_cost_class must be {VALUES}, or a table of them with a `default`, not {other}")),
+        }
+    }
+}
+
 /// How the orchestrator learns of bundle agents (`specs/041` §4, §5.7): `flat` is the one-line-per-agent list as before (the
 /// default, until the labeled set meets the recall bar); `auto` swaps in the domain index and `search_agent_registry` once
 /// there are more agents than the list holds.
@@ -541,11 +653,13 @@ pub struct Routing {
     /// `[routing] emergency_endpoint` and `emergency_model` (`specs/056` §3.5): a local model that only saves state when
     /// every ratified seat is out of quota. Both set, or neither (off). Never part of ordinary routing.
     pub emergency: Option<(String, String)>,
+    /// `[routing] max_cost_class` (`specs/056` §10.5), ratified; `standard` for every role when absent.
+    pub max_cost_class: CostCap,
 }
 
 impl Default for Routing {
     fn default() -> Routing {
-        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None }
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None, max_cost_class: CostCap::default() }
     }
 }
 
@@ -1476,6 +1590,12 @@ impl Config {
                     None => errs.push("[routing] assignment must be \"static\" or \"discovered\"".into()),
                 }
             }
+            if let Some(v) = r.get("max_cost_class") {
+                match CostCap::parse(v) {
+                    Ok(cap) => cfg.routing.max_cost_class = cap,
+                    Err(e) => errs.push(e),
+                }
+            }
             if let Some(a) = r.get("registry") {
                 match a.as_str().and_then(RegistryMode::parse) {
                     Some(v) => cfg.routing.registry = v,
@@ -1581,6 +1701,15 @@ impl Config {
                     None => errs.push(format!("endpoint `{}`: gateway endpoints need a base_url", e.id)),
                 },
                 AccessPath::Harness => {
+                    // One login, several vendors (`specs/132` §5.1): a Copilot endpoint names only models of its own family, since
+                    // planning reads the endpoint's family. A model the table does not map is not judged here.
+                    if e.harness.as_deref() == Some("copilot") {
+                        for (tier, model) in &e.models {
+                            if let Some(f) = family_of_model(model).filter(|f| *f != e.family) {
+                                errs.push(format!("endpoint `{}`: its {} model `{}` is family `{}`, but the endpoint's family is `{}`; a Copilot endpoint names only models of its own family (declare one endpoint per family)", e.id, tier, model, f, e.family));
+                            }
+                        }
+                    }
                     if e.harness.as_deref().unwrap_or("").is_empty() {
                         errs.push(format!("endpoint `{}`: harness endpoints need `harness = \"claude\"|\"agy\"|\"codex\"|\"copilot\"` (`gemini` is accepted but the Gemini CLI no longer supports personal sign-in)", e.id));
                     }
@@ -1732,16 +1861,18 @@ impl Config {
                 }
             }
         }
+        let families = known_families();
+        let named = families.join("`, `");
         for (role, family) in &self.access.role_family {
-            if !matches!(family.as_str(), "claude" | "gemini" | "openai" | "local") {
-                errs.push(format!("[access] role_family.{} names unknown family `{}` (use `claude`, `gemini`, `openai` or `local`)", role, family));
+            if !families.contains(family) {
+                errs.push(format!("[access] role_family.{} names unknown family `{}` (use `{}`)", role, family, named));
             } else if !self.endpoints.iter().any(|e| &e.family == family && allowed.contains(&e.id)) {
                 errs.push(format!("[access] role_family.{} = `{}`, but no allowed endpoint serves that family", role, family));
             }
         }
         for (what, family) in self.access.primary.iter().map(|p| ("primary", p)).chain(self.access.failover.iter().map(|f| ("failover", f))) {
-            if !matches!(family.as_str(), "claude" | "gemini" | "openai" | "local") {
-                errs.push(format!("[access] {} names unknown family `{}` (use `claude`, `gemini`, `openai` or `local`)", what, family));
+            if !families.contains(family) {
+                errs.push(format!("[access] {} names unknown family `{}` (use `{}`)", what, family, named));
             } else if !self.endpoints.iter().any(|e| &e.family == family && allowed.contains(&e.id)) {
                 errs.push(format!("[access] {} = `{}`, but no allowed endpoint serves that family", what, family));
             }
@@ -2229,6 +2360,36 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         assert!(errs.contains("harness endpoints need") && errs.contains("\"codex\"|\"copilot\""), "{}", errs);
     }
 
+    /// specs/132 OD-5 and the Council's P1: family names come from the family table, so `kimi` and `mai` are accepted with no code
+    /// change, and an unknown name is still refused.
+    #[test]
+    fn family_names_come_from_the_family_table() {
+        let fams = known_families();
+        for f in ["claude", "gemini", "openai", "kimi", "mai", "local"] {
+            assert!(fams.iter().any(|x| x == f), "{f}: {fams:?}");
+        }
+        assert_eq!(family_of_model("kimi-k3").as_deref(), Some("kimi"));
+        assert_eq!(family_of_model("gpt-6.2-sol").as_deref(), Some("openai"));
+        assert_eq!(family_of_model("gemini-3.8-flash").as_deref(), Some("gemini"));
+        assert_eq!(family_of_model("qwen3:8b"), None);
+        let ep = "[[endpoints]]\nid = \"copilot-kimi\"\nfamily = \"kimi\"\npath = \"harness\"\nharness = \"copilot\"\ncredential = \"harness-login\"\nmodels = { fast = \"kimi-k3\", workhorse = \"kimi-k3\", frontier = \"kimi-k3\" }\n";
+        let ok = format!("{}\n{}", ep, SAMPLE).replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"copilot-kimi\"]\nrole_family = { red-team = \"kimi\" }");
+        Config::parse(&ok).unwrap();
+        let bad = ok.replace("red-team = \"kimi\"", "red-team = \"moonshot\"");
+        let errs = Config::parse(&bad).unwrap_err().join("; ");
+        assert!(errs.contains("unknown family `moonshot`") && errs.contains("`kimi`"), "{errs}");
+    }
+
+    /// specs/132 AC-6: a Copilot endpoint with `family = "gemini"` and a `claude-*` model fails the config check, naming both.
+    #[test]
+    fn a_mixed_vendor_copilot_endpoint_is_refused() {
+        let ep = "[[endpoints]]\nid = \"copilot-gemini\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"copilot\"\ncredential = \"harness-login\"\nmodels = { fast = \"gemini-4-argon\", workhorse = \"gemini-4-argon\", frontier = \"claude-opus-5.5\" }\n";
+        let errs = Config::parse(&format!("{}\n{}", ep, SAMPLE)).unwrap_err().join("; ");
+        assert!(errs.contains("`claude-opus-5.5` is family `claude`, but the endpoint's family is `gemini`"), "{errs}");
+        // The same models on an agy endpoint are not judged by this rule (agy names its own models).
+        assert!(Config::parse(&format!("{}\n{}", ep.replace("copilot\"\ncredential", "agy\"\ncredential"), SAMPLE)).is_ok());
+    }
+
     /// The operator's staged `agy-oss` endpoint (GPT-OSS through agy): an agy endpoint whose family is `openai` is accepted, and
     /// a role can be mapped to it.
     #[test]
@@ -2282,6 +2443,23 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         for bad in ["[routing]\nassignment = \"auto\"", "[routing]\nevidence_enough = 0", "[routing.reserve]\nvalidator = 1.5", "[routing.reserve]\nvalidator = 0.6\nbuilder = 0.6"] {
             assert!(with_routing(bad).is_err(), "{bad}");
         }
+    }
+
+    /// specs/056 §10.5 tests 5, 7 and 8 (the config half): absent is `standard`; one value or a table with a `default`; bad values fail
+    /// with a sentence.
+    #[test]
+    fn max_cost_class_is_standard_when_absent_per_role_with_a_default_and_checked() {
+        let cap = |extra: &str| with_routing(extra).map(|c| c.routing.max_cost_class);
+        let absent = cap("").unwrap();
+        assert_eq!((absent.of("architect"), absent.of("builder")), (CostClass::Standard, CostClass::Standard));
+        assert_eq!(cap("[routing]\nmax_cost_class = \"low\"").unwrap().of("architect"), CostClass::Low);
+        let per_role = cap("[routing]\nmax_cost_class = { default = \"standard\", architect = \"premium\" }").unwrap();
+        assert_eq!((per_role.of("architect"), per_role.of("builder"), per_role.of("some-one-off")), (CostClass::Premium, CostClass::Standard, CostClass::Standard));
+        for (bad, says) in [("\"cheap\"", "must be \"low\", \"standard\" or \"premium\""), ("3", "or a table of them"), ("{ architect = \"premium\" }", "needs a `default`"), ("{ default = \"low\", wizard = \"premium\" }", "`wizard`, which is not a role"), ("{ default = \"low\", architect = 2 }", "max_cost_class.architect must be")] {
+            let errs = cap(&format!("[routing]\nmax_cost_class = {bad}")).unwrap_err().join("; ");
+            assert!(errs.contains(says), "{bad}: {errs}");
+        }
+        assert!(CostClass::Low < CostClass::Standard && CostClass::Standard < CostClass::Premium);
     }
 
     #[test]

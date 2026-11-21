@@ -1161,7 +1161,16 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str, names: &HashMap<String, 
             }
         },
         "stop" | "restart" => {
-            match connect() { Ok((mut c, _)) => {
+            let attached = connect();
+            // A daemon answers but gave no console token (this process has no controlling terminal, specs/005 §2.1): "not running"
+            // was false here, and a restart could only fail to attach. Say what is true and change nothing.
+            if attached.is_err() {
+                if let Some(why) = untokened_daemon(&l.sock, action) {
+                    eprintln!("{why}");
+                    return 1;
+                }
+            }
+            match attached { Ok((mut c, _)) => {
                 let _ = c.call("daemon.shutdown", json!({}));
                 for _ in 0..100 {
                     if Client::connect(&l.sock).is_err() {
@@ -1198,9 +1207,33 @@ pub fn daemon(home: &Path, ws_dir: &Path, action: &str, names: &HashMap<String, 
     }
 }
 
+/// When a daemon answers on the console socket but this process got no console token: why `stop` or `restart` cannot act, and how
+/// to. `None` when nothing answers (no daemon runs). The daemon gives a console token only to a client with a controlling terminal
+/// (specs/005 §2.1), so an agent's shell or a script cannot stop it; that rule is kept, and only the message is made true.
+fn untokened_daemon(sock: &Path, action: &str) -> Option<String> {
+    Client::connect(sock).ok()?;
+    Some(format!(
+        "delphi daemon {action}: a daemon is running for this workspace, but it gives the console token {action} needs only to a program with a terminal, and this one has none. Run `delphi daemon {action}` in a terminal (with the same --home and --workspace). Nothing was changed."
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `delphi daemon stop` from a process with no terminal said "not running" while a daemon ran (spec 135 §14.1 item 4, F4 report
+    /// §4 item 4). A socket that answers is a running daemon: the message says so and that a terminal is needed; nothing answering is
+    /// "not running", as before.
+    #[test]
+    fn stop_without_a_terminal_does_not_say_a_running_daemon_is_not_running() {
+        let t = tempfile::tempdir().unwrap();
+        let sock = t.path().join("d.sock");
+        assert_eq!(untokened_daemon(&sock, "stop"), None, "nothing listens: not running");
+        let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let why = untokened_daemon(&sock, "stop").expect("a listener answers: a daemon runs");
+        assert!(why.contains("a daemon is running") && why.contains("terminal") && why.contains("Nothing was changed"), "{why}");
+        assert!(untokened_daemon(&sock, "restart").unwrap().contains("delphi daemon restart"));
+    }
 
     #[test]
     fn a_relaunch_goes_only_to_home_or_a_registered_project() {

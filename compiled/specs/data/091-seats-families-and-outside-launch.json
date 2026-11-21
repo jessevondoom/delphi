@@ -67,12 +67,18 @@
       "line": 106,
       "number": "10",
       "title": "Known limits"
+    },
+    {
+      "level": 2,
+      "line": 110,
+      "number": "11",
+      "title": "Amendments"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/091-seats-families-and-outside-launch.md",
-    "sha256": "b0a015c54c9ae8649bec0a6f824a85f96aef5b4ee3c257600fe6d317a819450b"
+    "sha256": "6feb71954557c9f41f0185a5479b77f4c6e6841be7ef87f5dd5683442ffe3b35"
   },
   "source_status_at_hash": {
     "line": {
@@ -85,7 +91,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"approve all of the above\"): the Council's option C with a thin receipt first, the two decisions of §9 and the recommended answers to OD-1 to OD-4."
     },
-    "sha256": "b0a015c54c9ae8649bec0a6f824a85f96aef5b4ee3c257600fe6d317a819450b",
+    "sha256": "6feb71954557c9f41f0185a5479b77f4c6e6841be7ef87f5dd5683442ffe3b35",
     "word": "approved"
   },
   "spec": {

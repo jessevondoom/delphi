@@ -37,12 +37,25 @@ pub fn is_protected(logical: &str) -> bool {
 /// answer an approval card from outside the terminal: a local edit must not be able to add an address. `[library]` is here because its acquisition job fetches from the outside on a schedule and spends the operator's tokens. `[grades]` is here because it moves which class of model serves a role (`specs/056` §4): a local edit, or an agent's, must not promote or nerf one.
 pub const ACCESS_KEYS: [&str; 12] = ["endpoints", "access", "auth", "harness", "connectors", "exec", "relay", "hooks", "update", "search", "library", "grades"];
 
+/// Single keys of an otherwise live table that are trusted only from the ratified copy, like the blocks above. `[seats] spread` is
+/// here because it decides how many model families a Council seats (`specs/132` §5.4 item 2): a local edit, or an agent's, must not
+/// narrow a Council to two families. `[routing] max_cost_class` is here because it decides whether a model over 1x may serve a role
+/// (`specs/056` §10.5): a local edit, or an agent's, must not lift or change it. A config without either key hashes exactly as before.
+pub const PINNED_KEYS: [(&str, &str); 2] = [("seats", "spread"), ("routing", "max_cost_class")];
+
 pub fn access_blocks(config: &str) -> String {
     let v: toml::Value = toml::from_str(config).unwrap_or(toml::Value::Table(Default::default()));
     let mut t = toml::value::Table::new();
     for k in ACCESS_KEYS {
         if let Some(x) = v.get(k) {
             t.insert(k.into(), x.clone());
+        }
+    }
+    for (table, key) in PINNED_KEYS {
+        if let Some(x) = v.get(table).and_then(|s| s.get(key)) {
+            if let toml::Value::Table(sub) = t.entry(table).or_insert_with(|| toml::Value::Table(Default::default())) {
+                sub.insert(key.into(), x.clone());
+            }
         }
     }
     toml::to_string(&toml::Value::Table(t)).unwrap_or_default()
@@ -130,6 +143,16 @@ mod tests {
         for h in ["[harness.claude]\nmode = \"x\"\n", "[connectors.slack]\nurl = \"https://x\"\n", "[relay.email]\noperator = [\"attacker@example.com\"]\n", "[[hooks.deny]]\nname = \"x\"\ntools = [\"*\"]\ncommand = [\"/bin/true\"]\n"] {
             assert_ne!(access_blocks(a), access_blocks(&format!("{}{}", a, h)), "{} is pinned", h);
         }
+        // specs/132 §5.4: `[seats] spread` is pinned, the rest of `[seats]` is not, and a config without it hashes as before.
+        assert_eq!(access_blocks(a), access_blocks(&format!("{a}[seats]\nmax_foreign_seats = 2\n")), "[seats] max_foreign_seats is a live setting");
+        let spread = access_blocks(&format!("{a}[seats]\nmax_foreign_seats = 2\nspread = \"two\"\n"));
+        assert_ne!(access_blocks(a), spread);
+        assert!(spread.contains("spread = \"two\"") && !spread.contains("max_foreign_seats"), "{spread}");
+        // specs/056 §10.5 test 5: `[routing] max_cost_class` is pinned, the rest of `[routing]` is not, and a lock made before it verifies unchanged.
+        assert_eq!(access_blocks(a), access_blocks(&format!("{a}[routing]\nassignment = \"discovered\"\n")), "[routing] assignment is a live setting");
+        let capped = access_blocks(&format!("{a}[routing]\nassignment = \"discovered\"\nmax_cost_class = \"premium\"\n"));
+        assert_ne!(access_blocks(a), capped);
+        assert!(capped.contains("max_cost_class = \"premium\"") && !capped.contains("assignment"), "{capped}");
     }
 
     #[test]

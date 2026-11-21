@@ -33,10 +33,13 @@ pub enum Class {
     /// The head does not contain the base tip, so its checks ran against an older base (spec 094 §11.3.1). Someone must update
     /// the branch (`delphi merge refresh <PR>`) and wait for CI on the new head.
     Behind,
+    /// `merge refresh` could not update the branch mechanically (a conflict outside its closed list, a gate path, a compile
+    /// that failed, a widened diff or a rejected push, §11.3.2). Nothing was pushed; `merge fix` takes it to the builder.
+    RefreshRefused,
 }
 
 /// Every class, in one place (the slug round trip and `from_slug` read it).
-const ALL: [Class; 11] = [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup, Class::Behind];
+const ALL: [Class; 12] = [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup, Class::Behind, Class::RefreshRefused];
 
 impl Class {
     pub fn slug(self) -> &'static str {
@@ -52,6 +55,7 @@ impl Class {
             Class::MergeFailed => "merge-failed",
             Class::Cleanup => "cleanup",
             Class::Behind => "behind",
+            Class::RefreshRefused => "refresh-refused",
         }
     }
     pub fn from_slug(s: &str) -> Option<Class> {
@@ -59,13 +63,16 @@ impl Class {
     }
     /// Can a builder fix this by changing the branch? (Others are for a person: a missing `gh`, a damaged list.)
     pub fn builder_can_fix(self) -> bool {
-        matches!(self, Class::Conflict | Class::CiRed | Class::NoChecks | Class::Spec | Class::StaleRecord | Class::MergeFailed | Class::Behind)
+        matches!(self, Class::Conflict | Class::CiRed | Class::NoChecks | Class::Spec | Class::StaleRecord | Class::MergeFailed | Class::Behind | Class::RefreshRefused)
     }
 }
 
 /// What a refusal reason is, if it is a problem. `None` means a state of the world to wait out or act on, not an error.
 pub fn classify_refusal(reason: &str) -> Option<Class> {
-    if reason.contains(super::check::BEHIND_MARK) {
+    // A refresh inside a merge command that was handed over (`refresh::Stop::HandOver`); checked first, its detail can say anything.
+    if reason.contains(super::refresh::HANDED_OVER) {
+        Some(Class::RefreshRefused)
+    } else if reason.contains(super::check::BEHIND_MARK) {
         Some(Class::Behind)
     } else if reason.contains("conflicts with") {
         Some(Class::Conflict)
@@ -244,6 +251,8 @@ mod tests {
             ("checks are still running: test", None),
             ("GitHub has not finished working out whether it merges (`UNKNOWN`)", None),
             (&super::super::check::behind_reason(7, 2, "main"), Some(Class::Behind)),
+            (&super::super::refresh::Stop::HandOver("README.md conflicts with `main`, 3 commit(s) behind".into()).line(7), Some(Class::RefreshRefused)),
+            ("#7: not refreshed: it is a draft", None),
         ] {
             assert_eq!(classify_refusal(r), want, "{r}");
         }
@@ -259,6 +268,7 @@ mod tests {
         assert_eq!(slugs.len(), ALL.len(), "every slug is distinct");
         assert_eq!(Class::from_slug("behind"), Some(Class::Behind));
         assert!(Class::Behind.builder_can_fix(), "`merge fix` takes a behind entry (§11.3.5)");
+        assert!(Class::RefreshRefused.builder_can_fix() && Class::from_slug("refresh-refused") == Some(Class::RefreshRefused));
     }
 
     #[test]

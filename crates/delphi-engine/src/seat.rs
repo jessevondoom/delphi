@@ -353,12 +353,42 @@ impl Diversity {
 
 /// The served family of every receipt of `task_id` that ended `ok`, and the tokens those seats used (in plus out).
 pub fn served_for_task(events: &[delphi_core::event::EventEnvelope], task_id: &str) -> (Vec<String>, u64) {
+    served_except(events, task_id, &[])
+}
+
+/// The roles whose Round 1 stance in `task_id` is an abstention, from the log's `council.stance` events.
+pub fn round1_abstained(events: &[delphi_core::event::EventEnvelope], task_id: &str) -> Vec<String> {
+    events
+        .iter()
+        .filter(|e| e.kind == "council.stance" && e.task_id.as_deref() == Some(task_id) && e.payload["round"] == 1 && e.payload["status"] == "abstained")
+        .filter_map(|e| e.payload["role"].as_str().map(String::from))
+        .collect()
+}
+
+/// The families that SAT in `task_id` (`specs/091` SR-3, amended 2026-11-21): [`served_for_task`] without the seats that abstained in
+/// Round 1, whether the log says so or `abstained` does. A receipt's `ok` describes the carrier's run, not the stance: an empty answer,
+/// an answer the checkout guard discarded, or one that failed a later check still has an `ok` receipt, and such a seat gave no stance.
+/// Tokens still count every receipt: the seat spent them.
+pub fn sat_for_task(events: &[delphi_core::event::EventEnvelope], task_id: &str, abstained: &[String]) -> (Vec<String>, u64) {
+    let mut skip = round1_abstained(events, task_id);
+    skip.extend(abstained.iter().cloned());
+    served_except(events, task_id, &skip)
+}
+
+/// Whether the host's own family counts as having sat: at least one seat the host ran (`host_roles`) gave a Round 1 stance, as the
+/// log's `council.stance` events say. A log with no Round 1 stance of a host seat yet (before the release) keeps the host's family.
+pub fn host_sat(events: &[delphi_core::event::EventEnvelope], task_id: &str, host_roles: &[&str]) -> bool {
+    let mine: Vec<&delphi_core::event::EventEnvelope> = events.iter().filter(|e| e.kind == "council.stance" && e.task_id.as_deref() == Some(task_id) && e.payload["round"] == 1 && e.payload["role"].as_str().is_some_and(|r| host_roles.contains(&r))).collect();
+    mine.is_empty() || mine.iter().any(|e| e.payload["status"] != "abstained")
+}
+
+fn served_except(events: &[delphi_core::event::EventEnvelope], task_id: &str, skip: &[String]) -> (Vec<String>, u64) {
     let mut fams = Vec::new();
     let mut seen: Vec<(Option<String>, String)> = Vec::new();
     let mut tokens = 0;
     for e in events.iter().filter(|e| e.kind == RECEIPT_KIND && e.task_id.as_deref() == Some(task_id)) {
         tokens += e.payload["tokens_in"].as_u64().unwrap_or(0) + e.payload["tokens_out"].as_u64().unwrap_or(0);
-        if e.payload["outcome"] == "ok" {
+        if e.payload["outcome"] == "ok" && !e.agent.as_ref().is_some_and(|a| skip.contains(a)) {
             // One entry per seat (role) and family: a seat's two rounds are two receipts but one seat.
             let entry = (e.agent.clone(), e.payload["served"]["family"].as_str().unwrap_or(UNKNOWN).to_string());
             if !seen.contains(&entry) {

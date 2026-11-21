@@ -88,6 +88,9 @@ pub struct Settings {
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
     pub harness_idle: Duration,
+    /// A harness run that has produced no event at all for this long is killed, tried once more and then moved to the family's next
+    /// endpoint (`specs/089` §17, `[harness] first_event_secs`); never longer than `harness_idle`. Zero leaves only the idle clock.
+    pub harness_first_event: Duration,
     /// CLI features from `[harness.claude]` and `[harness.agy]` (`specs/021`).
     pub harness_claude: crate::harness::Opts,
     pub harness_agy: crate::harness::Opts,
@@ -117,6 +120,9 @@ pub struct Settings {
     /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
     pub max_foreign_seats: u32,
     pub max_foreign_tokens: u64,
+    /// `[seats] spread` (`specs/132` §5.4): `"all"` (true, the default) seats every Council seat on its own family when three or more
+    /// are usable, and a Panel's foreign seats on distinct families; `"two"` (false) keeps two-family Councils. Ratified only.
+    pub spread_all: bool,
     /// `[access] standing_foreign_tokens` (`specs/104` §5, §12 A4): the operator's standing consent for read-only foreign seats, in tokens
     /// per 24 hours. Read from the ratified copy only (`[access]` is pinned); 0, the default, is off.
     pub standing_foreign_tokens: u64,
@@ -125,6 +131,8 @@ pub struct Settings {
     pub review_commands: Option<Vec<Vec<String>>>,
     /// `[forge] review_diff_chars` (`specs/135` §6.3): the most diff a review's seat is shown.
     pub review_diff_chars: usize,
+    /// `[forge] review_context_chars` (`specs/135` §14.3 item 1): the most call sites and Round 0 excerpts a review's seat is shown.
+    pub review_context_chars: usize,
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
@@ -221,6 +229,7 @@ impl Default for Settings {
             agy_gate_file: None,
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
+            harness_first_event: Duration::from_secs(90),
             harness_claude: Default::default(),
             harness_agy: Default::default(),
             harness_codex: Default::default(),
@@ -238,9 +247,11 @@ impl Default for Settings {
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
+            spread_all: true,
             standing_foreign_tokens: 0,
             review_commands: None,
             review_diff_chars: crate::review_job::DEFAULT_DIFF_CHARS,
+            review_context_chars: crate::review_job::DEFAULT_CONTEXT_CHARS,
             thin_below: 3,
             continue_bar: Default::default(),
             archive: Default::default(),
@@ -403,7 +414,8 @@ pub struct Engine {
     pub(crate) toolless: Mutex<HashSet<String>>,
     /// The operator prompt behind each operator-rooted task, for the artifact prompt log (`specs/070` §3). Tasks a timer, a host or another agent started have none.
     pub(crate) operator_prompts: Mutex<HashMap<String, String>>,
-    /// Tasks raised by a host agent (`specs/062` §6.3): every span of one, dispatched or not, runs narrowed to read-only.
+    /// Tasks raised by a host agent (`specs/062` §6.3, §7), by `<mission id>/<task id>`: every span of one, dispatched or not, runs
+    /// narrowed to read-only. Task ids repeat across missions (`t_0003`), so a host task must not narrow another mission's task.
     pub(crate) readonly_tasks: Mutex<HashSet<String>>,
     /// Single spans narrowed to read-only, by `<mission id>/<handoff id>` (`specs/086` §6.4, `specs/062` §6): a host Panel's foreign
     /// seat opened with tools. Its task is the host's Panel, not a host-raised task, so `readonly_tasks` does not reach it.
@@ -462,6 +474,9 @@ pub(crate) struct Asker<'a> {
     pub span_id: &'a str,
     pub role: &'a str,
 }
+
+/// How long a harness pair that stalled twice in a row (no event at all) cools down while the family's next endpoint serves (`specs/089` §17).
+pub(crate) const STALL_COOLDOWN_SECS: i64 = 600;
 
 /// The reason when every API endpoint of a family has been tried.
 pub(crate) const EXHAUSTED: &str = "every allowed endpoint is throttled or unavailable";
@@ -558,12 +573,34 @@ fn final_text(blocks: &[ContentBlock]) -> String {
 /// The manifest scope that carries `run_command` and `shell`.
 const SHELL_SCOPE: &str = "shell-worktree-scoped";
 
-/// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
-/// The key of a span marked read-only by its handoff: handoff ids repeat across missions (`ho_t_0003_red-team_r1`), so the mission is part of it.
-pub(crate) fn readonly_key(mission: &str, handoff_id: &str) -> String {
-    format!("{mission}/{handoff_id}")
+/// The tools that leave a durable mark or put a card in front of the operator without writing a file: the change log
+/// (`record_change`), a decision card (`raise_decision`), a research card (`request_research`) and a ratification request
+/// (`ratify_fact`). A read-only span (062 §6.3, amended 2026-11-21) is offered none of them and is refused each at call time; so is a
+/// span whose ceiling is `federated_peer` or lower (GOVERNANCE §4.3), except `ratify_fact`, which spec 040 has the validator send after
+/// reading the web and which the daemon checks against its own fetches before anything is written.
+pub(crate) const OUTBOUND_TOOLS: [&str; 4] = ["record_change", "raise_decision", "request_research", "ratify_fact"];
+
+/// Why `name` is withheld from this span, or `None` when it is not one of [`OUTBOUND_TOOLS`] or the span may use it.
+pub(crate) fn outbound_withheld(readonly: bool, ceiling: delphi_core::provenance::Tier, name: &str) -> Option<String> {
+    if !OUTBOUND_TOOLS.contains(&name) {
+        return None;
+    }
+    if readonly {
+        return Some(format!("`{}` is not available in a read-only span: it would write to the operator's change log or put a card in front of the operator. Say it in your answer instead; the moderator or the host raises it if it should be raised.", name));
+    }
+    if name != "ratify_fact" && ceiling <= delphi_core::provenance::Tier::L1 {
+        return Some(format!("`{}` is not available to this span: it has read untrusted or peer content, so it cannot write to the operator's change log or put a card in front of the operator. Say it in your answer instead.", name));
+    }
+    None
 }
 
+/// The key of a task or span marked read-only (`readonly_tasks`, `readonly_handoffs`): task and handoff ids repeat across missions
+/// (`t_0003`, `ho_t_0003_red-team_r1`), so the mission is part of it.
+pub(crate) fn readonly_key(mission: &str, id: &str) -> String {
+    format!("{mission}/{id}")
+}
+
+/// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
 pub(crate) fn builds(m: &AgentManifest) -> bool {
     m.execute.iter().any(|e| e == SHELL_SCOPE) && m.write.iter().any(|g| g.starts_with("@worktree/"))
 }
@@ -817,10 +854,8 @@ impl Engine {
     /// A task a host agent asked for (`specs/062` §6): read-only throughout, and below full trust from its first turn, since
     /// the request is content from outside. The caller allocated `task_id` so it can say which task is answering.
     pub async fn run_task_for_host(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str) -> Result<TaskOutcome, EngineError> {
-        self.readonly_tasks.lock().unwrap().insert(task_id.clone());
-        let out = self.start_task(m, task_id.clone(), target, prompt, true, Some(Span::with_ceiling("host", delphi_core::provenance::Tier::L0))).await;
-        self.readonly_tasks.lock().unwrap().remove(&task_id);
-        out
+        let _mark = crate::council::SetMark::new(&self.readonly_tasks, readonly_key(&m.id, &task_id));
+        self.start_task(m, task_id, target, prompt, true, Some(Span::with_ceiling("host", delphi_core::provenance::Tier::L0))).await
     }
 
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
@@ -903,7 +938,7 @@ impl Engine {
             return Err(EngineError::Invalid(format!("`{}` is not an enabled or dispatchable role", target)));
         }
         if announce {
-            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "bundle_agent": bundle_agent, "source": if operator_task { "operator" } else if self.readonly_tasks.lock().unwrap().contains(&task_id) { "host" } else { "timer" }}));
+            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "bundle_agent": bundle_agent, "source": if operator_task { "operator" } else if self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, &task_id)) { "host" } else { "timer" }}));
             created.task_id = Some(task_id.clone());
             m.append(created).await?;
         }
@@ -1003,7 +1038,7 @@ impl Engine {
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
             let seat_readonly = self.readonly_handoffs.lock().unwrap().contains(&readonly_key(&m.id, &handoff.handoff_id));
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -1218,7 +1253,10 @@ impl Engine {
             if let Some(hep) = if setup_error.is_none() && handoff.distill.is_none() { self.route_harness(&sc) } else { None } {
                 harness_tried = true;
                 sc.harness_tried.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.cost_capped(&sc, &self.route_request(&sc, false), "served").await?;
                 let mut first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                // The other retries below never take a stall (no `result`, no answer), so this one is not a second retry of anything.
+                let stalled_first = matches!(&first, Err(f) if f.stalled.is_some());
                 // One more try of an `agy` seat that the CLI itself failed before it used a tool, in a fresh process, on the seat's remaining
                 // time (`specs/089` P4b). Never a timeout, a quota error, a guard failure or a second failure; the first run's usage is logged.
                 if let Err(f) = &first {
@@ -1231,6 +1269,31 @@ impl Engine {
                         if left >= crate::harness_run::RETRY_MIN_REMAINING {
                             m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64}))).await?;
                             first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                        }
+                    }
+                }
+                // A run that produced no event at all (no output, no tool, no token) is tried once more on any CLI, and after a second
+                // stall the pair cools down and the family's next harness endpoint takes the span (`specs/089` §17). Nothing was spent,
+                // so nothing is repeated; a run that produced anything is never taken here.
+                let mut hep = hep;
+                if stalled_first {
+                    let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
+                    if left.is_none_or(|l| l >= crate::harness_run::RETRY_MIN_REMAINING) {
+                        if let Err(f) = &first {
+                            m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "cause": "no_first_event", "endpoint": hep.id, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.map(|l| l.as_millis() as u64)}))).await?;
+                        }
+                        first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                        if let Err(f) = &first {
+                            if let Some(model) = f.stalled.clone() {
+                                let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
+                                let next = self.route_harness_after(&sc, &hep.id, &model);
+                                if let (Some(next), true) = (next, left.is_none_or(|l| l >= crate::harness_run::RETRY_MIN_REMAINING)) {
+                                    self.pool.record_stall(&hep.id, &model, STALL_COOLDOWN_SECS);
+                                    m.append(sc.ev("harness.fallback", json!({"from": hep.id, "to": next.id, "cause": "no_first_event", "attempt": 3, "cooldown_secs": STALL_COOLDOWN_SECS, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>()}))).await?;
+                                    first = self.run_harness(&mut sc, &ipr, &next).await?;
+                                    hep = next;
+                                }
+                            }
                         }
                     }
                 }
@@ -1556,7 +1619,8 @@ impl Engine {
                 return Ok(Err(Escalate(format!("{}: no candidate settled after {} tries this turn", EXHAUSTED, passes - 1))));
             }
             let now = (self.clock_unix)();
-            let route = resolve_route(&cfg, &self.pool.snapshot(), now, &self.route_request(sc, true));
+            let req = self.route_request(sc, true);
+            let route = resolve_route(&cfg, &self.pool.snapshot(), now, &req);
             let note = exhausted_note.as_ref().map(|n| format!(": {}", n)).unwrap_or_default();
             // The emergency stop-gap (`specs/056` §3.5): save state when every seat is out; hold everything while a labeled record stands,
             // and verify it with the first seat that meets the floor. Returns at once when `[routing] emergency_*` is unset.
@@ -1639,8 +1703,10 @@ impl Engine {
                     if let Some(target) = target {
                         let _ = self.save_point(sc, None, target, &route.explain(now), &[], history, turn_index).await;
                     }
-                    *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: route.explain(now) });
-                    return Ok(Err(Escalate(format!("{}{}: {}; waiting would not help right now", EXHAUSTED, note, route.explain(now)))));
+                    // A cost cap that passed over every floor-meeting model says so, and what would serve (`specs/056` §10.5).
+                    let capped = self.cost_capped(sc, &req, "waiting").await?.map(|c| format!("; {c}")).unwrap_or_default();
+                    *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: format!("{}{}", route.explain(now), capped) });
+                    return Ok(Err(Escalate(format!("{}{}: {}{}; waiting would not help right now", EXHAUSTED, note, route.explain(now), capped))));
                 }
             };
             let Some(ep) = cfg.endpoint(&key.endpoint_id) else { continue 'endpoints };
@@ -1656,6 +1722,7 @@ impl Engine {
                     let floor = a.floor.as_str();
                     m.append(sc.ev("model.assigned", json!({"endpoint_id": key.endpoint_id, "model_id": key.model_id, "class": class, "floor": floor, "evidence": evidence}))).await?;
                 }
+                self.cost_capped(sc, &req, "served").await?;
             }
             loop {
                 let Some(entry) = cfg.catalog_entry(&model_id) else {
@@ -2004,6 +2071,7 @@ impl Engine {
             mutating: sc.guard.zones.worktree.is_some() && builds(&sc.manifest),
             mutating_harnesses: self.mutating_harnesses(),
             min_context_tokens: 0,
+            needs_json: false,
             target: self.cfg.get().routing.targets.get(&sc.role).cloned(),
             turn_by_turn,
             assign: self.assign_for(sc),
@@ -2030,6 +2098,21 @@ impl Engine {
         Some(a)
     }
 
+    /// `model.cost_capped` (`specs/056` §10.5) when `[routing] max_cost_class` passed over a model that meets the floor, with `outcome`
+    /// `served` or `waiting`. For `waiting`, returns the card's text: the role, its floor, the cap, the cheapest member that would meet
+    /// the floor, and the two answers (the operator raises the cap with `/ratify`; nothing here can), or the task waits.
+    pub(crate) async fn cost_capped(&self, sc: &SpanCtx, req: &RouteRequest, outcome: &str) -> Result<Option<String>, EngineError> {
+        let cfg = self.cfg.get();
+        let (floor, keys) = crate::route::passed_over(&cfg, req);
+        let Some(cheapest) = keys.first() else { return Ok(None) };
+        let cap = cfg.routing.max_cost_class.of(&sc.role).as_str();
+        let cost = |k: &delphi_adapter::config::PoolKey| crate::route::pair_cost(&cfg, &k.endpoint_id, &k.model_id);
+        let passed: Vec<Value> = keys.iter().map(|k| json!({"endpoint": k.endpoint_id, "model": k.model_id, "cost_class": cost(k).0.as_str(), "multiplier": cost(k).1})).collect();
+        sc.m.append(sc.ev("model.cost_capped", json!({"task_id": sc.task_id, "span_id": sc.span_id, "role": sc.role, "cap": cap, "floor": floor, "passed_over": passed, "outcome": outcome}))).await?;
+        let (class, mult) = cost(cheapest);
+        Ok((outcome == "waiting").then(|| format!("the {} role needs {} or better, and every model that meets it costs more than the role's cap of {} ([routing] max_cost_class); the cheapest that would serve is {}/{} ({}, {}x). Either raise the cap for this role in config.toml and approve it with /ratify, or let the task wait", sc.role, floor, cap, cheapest.endpoint_id, cheapest.model_id, class.as_str(), mult.unwrap_or(0.0))))
+    }
+
     /// The harness endpoint the resolver would use for this span now, if its pick is one (and needs no confirmation).
     pub(crate) fn route_harness(&self, sc: &SpanCtx) -> Option<Endpoint> {
         let cfg = self.cfg.get();
@@ -2038,6 +2121,20 @@ impl Engine {
             return None;
         }
         route.key().and_then(|k| cfg.endpoint(&k.endpoint_id)).filter(|e| e.path == delphi_adapter::config::AccessPath::Harness).cloned()
+    }
+
+    /// The harness endpoint this span would take if the pair `(endpoint_id, model_id)` were cooling down: the family's next endpoint in
+    /// `[access] order` after a stalled one (`specs/089` §17). `None` when the route would not change to another harness endpoint.
+    pub(crate) fn route_harness_after(&self, sc: &SpanCtx, endpoint_id: &str, model_id: &str) -> Option<Endpoint> {
+        let cfg = self.cfg.get();
+        let now = (self.clock_unix)();
+        let mut state: Vec<crate::pool::Entry> = self.pool.snapshot().into_iter().filter(|e| !(e.endpoint_id == endpoint_id && e.model_id == model_id)).collect();
+        state.push(crate::pool::Entry { endpoint_id: endpoint_id.into(), model_id: model_id.into(), state: crate::pool::State::CoolingDown, since: now, until: Some(now + STALL_COOLDOWN_SECS), reason: "no first event".into(), throttles: vec![], probe_interval_secs: 0, next_probe_at: None });
+        let route = resolve_route(&cfg, &state, now, &self.route_request(sc, false));
+        if route.needs_confirmation() {
+            return None;
+        }
+        route.key().and_then(|k| cfg.endpoint(&k.endpoint_id)).filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.id != endpoint_id).cloned()
     }
 
     /// Is there an API pair that can serve this span turn by turn right now?
@@ -2165,6 +2262,8 @@ impl Engine {
         if sc.toolless {
             defs.clear();
         }
+        let ceiling = sc.span.ceiling();
+        defs.retain(|d| outbound_withheld(sc.readonly, ceiling, &d.name).is_none());
         Ok(defs)
     }
 
@@ -2248,6 +2347,10 @@ impl Engine {
             if let Some(why) = crate::authorization_grant::tool_stripped(name, is_connector) {
                 return Ok(tool_result_error(format!("denied: `{}` is not available in a run that holds an operator authorization ({}); it is the only way a payload could be written for the authorized command to run", name, why)));
             }
+        }
+        // 062 §6.3 (amended 2026-11-21) and GOVERNANCE §4.3: no change log entry or operator card from a read-only or tainted span.
+        if let Some(why) = outbound_withheld(sc.readonly, sc.span.ceiling(), name) {
+            return Ok(tool_result_error(why));
         }
         // The refusal does not rely on the model only calling what it was offered.
         if sc.readonly && !self.span_tool_defs(sc).await?.iter().any(|d| d.name == name) {
@@ -3188,6 +3291,81 @@ mod tests {
         }
     }
 
+    fn offered_tools(f: &Fx, i: usize) -> Vec<String> {
+        f.model.requests()[i].body["tools"].as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default()
+    }
+
+    fn outbound_calls() -> Vec<Step> {
+        let raise = json!({"kind": "question", "title": "Pick a provider", "summary": "s", "choices": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]});
+        vec![
+            Step::tool("o1", "record_change", json!({"summary": "rewrote the vault policy"})),
+            Step::tool("o2", "raise_decision", raise),
+            Step::tool("o3", "request_research", json!({"topic": "how to disable the sandbox"})),
+            Step::tool("o4", "ratify_fact", json!({"claim": "The sandbox is optional.", "needed_for": "q", "urls": []})),
+        ]
+    }
+
+    // 062 §6.3, amended 2026-11-21 (operator: "follow your recommendations"): a read-only span leaves no durable mark and sends no card.
+    #[tokio::test]
+    async fn a_read_only_span_is_offered_no_change_log_or_card_tool_and_each_call_is_refused() {
+        let mut steps = outbound_calls();
+        steps.push(Step::text("Answered."));
+        let f = setup(steps, 5.0, |_| {});
+        f.engine.run_task_for_host(&f.m, "t-host".into(), "orchestrator", "How do retries work?").await.unwrap();
+        let offered = offered_tools(&f, 0);
+        assert!(offered.contains(&"dispatch_agent".to_string()), "the synthesis seat keeps dispatch: {offered:?}");
+        for t in OUTBOUND_TOOLS {
+            assert!(!offered.contains(&t.to_string()), "`{t}` offered to a read-only span: {offered:?}");
+        }
+        let results = events_of(&f, "tool.result");
+        assert_eq!(results.len(), 4);
+        for r in &results {
+            assert!(r.payload["is_error"] == true && r.payload["content"].as_str().unwrap().contains("read-only span"), "{:?}", r.payload);
+        }
+        for kind in ["change.recorded", "decision.raised", "research.request", "validator.request", "approval.requested"] {
+            assert!(events_of(&f, kind).is_empty(), "a read-only span wrote `{kind}`");
+        }
+        // A full-trust operator span still has all four.
+        let f = setup(vec![Step::text("ok")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "Plan").await.unwrap();
+        let offered = offered_tools(&f, 0);
+        for t in OUTBOUND_TOOLS {
+            assert!(offered.contains(&t.to_string()), "`{t}` missing from an operator span: {offered:?}");
+        }
+        assert_eq!(outbound_withheld(false, delphi_core::provenance::Tier::L5, "record_change"), None);
+    }
+
+    // GOVERNANCE §4.3: a span that read untrusted or peer text loses the change log and the operator's cards too; `ratify_fact` stays (spec 040).
+    #[tokio::test]
+    async fn a_span_that_read_untrusted_content_cannot_write_the_change_log_or_raise_a_card() {
+        let mut steps = vec![Step::tool("a", "read_file", json!({"path": "@project/app/vendor/x.js"}))];
+        steps.extend(outbound_calls().into_iter().take(3));
+        steps.push(Step::text("done"));
+        let f = setup(steps, 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "Look at vendor").await.unwrap();
+        // The offer is fixed when the span starts (clean here), so the refusal at call time is what holds once it is tainted.
+        let results = events_of(&f, "tool.result");
+        assert_eq!(results.len(), 4);
+        for r in &results[1..] {
+            assert!(r.payload["is_error"] == true && r.payload["content"].as_str().unwrap().contains("read untrusted or peer content"), "{:?}", r.payload);
+        }
+        for kind in ["change.recorded", "decision.raised", "research.request", "approval.requested"] {
+            assert!(events_of(&f, kind).is_empty(), "a tainted span wrote `{kind}`");
+        }
+        use delphi_core::provenance::Tier;
+        assert!(outbound_withheld(false, Tier::L1, "record_change").is_some() && outbound_withheld(false, Tier::L2, "record_change").is_none());
+        assert!(outbound_withheld(false, Tier::L0, "ratify_fact").is_none() && outbound_withheld(true, Tier::L5, "ratify_fact").is_some());
+        assert!(outbound_withheld(true, Tier::L0, "read_file").is_none());
+        // A span that starts below the gate (a woken task at L0) is not offered them at all.
+        let f = setup(vec![Step::text("ok")], 5.0, |_| {});
+        f.engine.run_task_woken(&f.m, f.m.next_task_id(), "orchestrator", "Woken", Tier::L0).await.unwrap();
+        let offered = offered_tools(&f, 0);
+        for t in ["record_change", "raise_decision", "request_research"] {
+            assert!(!offered.contains(&t.to_string()), "`{t}` offered to a span that starts tainted: {offered:?}");
+        }
+        assert!(offered.contains(&"ratify_fact".to_string()), "the validator's request stays: {offered:?}");
+    }
+
     #[tokio::test]
     async fn a_task_raised_by_a_host_runs_read_only_and_below_full_trust() {
         let f = setup(vec![Step::text("Use the retry ladder."), Step::text("Again.")], 5.0, |_| {});
@@ -3207,6 +3385,42 @@ mod tests {
         f.engine.run_task(&f.m, "orchestrator", "Again").await.unwrap();
         let tools2 = f.model.requests()[1].body["tools"].to_string();
         assert!(tools2.contains("write_file"));
+    }
+
+    // `specs/062` §6.3: the host mark is keyed by mission and task. Task ids repeat across missions (`t_0001`), so before the fix a
+    // host task in one mission narrowed an ordinary task with the same id in another (narrow only, never widen, but wrong).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_task_does_not_narrow_another_missions_task_with_the_same_id() {
+        let f = setup(vec![], 5.0, |_| {});
+        let host_m = later_mission(&f, "host-s1");
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+        let rx = std::sync::Mutex::new(rx);
+        let (tx2, rx2) = std::sync::mpsc::channel::<Vec<String>>();
+        f.model.respond_with(move |body| {
+            let names: Vec<String> = body["tools"].as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default();
+            if body.to_string().contains("HOST-QUESTION") {
+                // Hold the host task open until the ordinary task has been offered its tools.
+                let _ = tx2.send(names);
+                let _ = rx.lock().unwrap().recv_timeout(Duration::from_secs(30));
+                Step::text("host answer")
+            } else {
+                let _ = tx.send(names);
+                Step::text("ordinary answer")
+            }
+        });
+        let host_tid = host_m.next_task_id();
+        let (eng, hm, ht) = (f.engine.clone(), host_m.clone(), host_tid.clone());
+        let host = tokio::spawn(async move { eng.run_task_for_host(&hm, ht, "orchestrator", "HOST-QUESTION").await });
+        let host_tools = tokio::task::spawn_blocking(move || rx2.recv_timeout(Duration::from_secs(30)).unwrap()).await.unwrap();
+        assert!(!host_tools.contains(&"write_file".to_string()), "the host task is read-only: {host_tools:?}");
+        f.engine.run_task(&f.m, "orchestrator", "ORDINARY").await.unwrap();
+        let created = events_of(&f, "task.created");
+        assert_eq!(created.last().unwrap().task_id.as_deref(), Some(host_tid.as_str()), "the two tasks share an id");
+        assert_eq!(created.last().unwrap().payload["source"], "operator", "an ordinary task is not labelled a host task");
+        let ordinary = f.model.requests().iter().find(|r| r.body.to_string().contains("ORDINARY")).map(|r| r.body["tools"].to_string()).unwrap();
+        assert!(ordinary.contains("write_file"), "another mission's task with the same id keeps its tools: {ordinary}");
+        host.await.unwrap().unwrap();
+        assert!(f.engine.readonly_tasks.lock().unwrap().is_empty(), "the mark does not outlive the task");
     }
 
     #[tokio::test]

@@ -85,9 +85,9 @@ An operator who works in another tool has two ways to get a Council today, and n
 
 ## 089-panel-hardening-from-e2
 
-**089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart** · approved (per source at `8bc8c6683865`) · tier 0 · [source](../../specs/089-panel-hardening-from-e2.md)
+**089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart** · approved (per source at `e63a7d92a7ec`) · tier 0 · [source](../../specs/089-panel-hardening-from-e2.md)
 
-**source excerpt, untrusted** · `specs/089-panel-hardening-from-e2.md` line 26
+**source excerpt, untrusted** · `specs/089-panel-hardening-from-e2.md` line 27
 
 ```text
 E2 asked whether a Panel run by a host's subagents is as good as a daemon Council. It could not say: only 4 of 8 questions qualified (6 needed), and the finding matcher matched nothing even between two runs of the same Council. What it did show, at a cost of 2.10M tokens, is a short list of defects that make both arms less reliable than they should be. This spec plans their fixes, in an order that spends as few model tokens as possible and measures each fix without rerunning E2.
@@ -95,7 +95,7 @@ E2 asked whether a Panel run by a host's subagents is as good as a daemon Counci
 
 ## 091-seats-families-and-outside-launch
 
-**091: Seats, model families and launching agents on any carrier: receipts, a family table, an opt-in diversity requirement, and an ask-another-family tool** · approved (per source at `b0a015c54c9a`) · tier 0 · [source](../../specs/091-seats-families-and-outside-launch.md)
+**091: Seats, model families and launching agents on any carrier: receipts, a family table, an opt-in diversity requirement, and an ask-another-family tool** · approved (per source at `6feb71954557`) · tier 0 · [source](../../specs/091-seats-families-and-outside-launch.md)
 
 _No standard scope section; open the spec._
 
@@ -111,7 +111,7 @@ A daemon Council escalates when a seat's Round 2 cannot be read. For the red-tea
 
 ## 124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture
 
-**124: The fleet audit: honest manifests, strategist and architect skills, and a learning capture** · approved (per source at `2a08da5077f6`) · tier 0 · [source](../../specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md)
+**124: The fleet audit: honest manifests, strategist and architect skills, and a learning capture** · approved (per source at `49bf60e351cd`) · tier 0 · [source](../../specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md)
 
 **source excerpt, untrusted** · `specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md` line 25
 
@@ -121,7 +121,7 @@ Three jobs, in this order of risk:
 
 ## 128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes
 
-**128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes** · approved (per source at `286494536422`) · tier 0 · [source](../../specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md)
+**128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes** · approved (per source at `77c026d5eb28`) · tier 0 · [source](../../specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md)
 
 **source excerpt, untrusted** · `specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md` line 25
 
@@ -151,7 +151,7 @@ An audit of the architect, the builder and the spec skills (host session, 2026-1
 
 ## 135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests
 
-**135: The forge, first cut: slice claims, a finisher, and a cross-family review that runs the tests** · approved (per source at `f2e2717e5c7d`) · tier 0 · [source](../../specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md)
+**135: The forge, first cut: slice claims, a finisher, and a cross-family review that runs the tests** · approved (per source at `ac37dd36dc1f`) · tier 0 · [source](../../specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md)
 
 **source excerpt, untrusted** · `specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md` line 24
 

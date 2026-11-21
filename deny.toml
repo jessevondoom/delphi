@@ -72,6 +72,11 @@ allow = [
     # CDLA-Permissive-2.0 is the permissive licence of the Mozilla CA root data (webpki-roots, via lettre).
     "0BSD",
     "CDLA-Permissive-2.0",
+    # Read on 2026-11-21: MIT-0 is the MIT licence with the attribution requirement removed, a strictly more permissive
+    # variant of MIT. It is the licence of borrow-or-share 0.2.4 (via fluent-uri and referencing), which jsonschema 0.30.0
+    # (MIT) brings in; spec 132 C5 (PR #852) makes jsonschema a normal dependency of delphi-engine (default features off).
+    # Operator decision 2026-11-21: "go with A, allow MIT-0".
+    "MIT-0",
 ]
 
 [bans]

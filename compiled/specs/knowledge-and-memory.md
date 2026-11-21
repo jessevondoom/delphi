@@ -220,7 +220,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library
 
-**112: One research record: a single runner, topics that persist, and claims that reach the library** · approved (per source at `f4bf5b0c241b`) · tier 0 · [source](../../specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md)
+**112: One research record: a single runner, topics that persist, and claims that reach the library** · approved (per source at `8eb1fbed39d1`) · tier 0 · [source](../../specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md)
 
 **source excerpt, untrusted** · `specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md` lines 25-33
 
@@ -342,7 +342,7 @@ The operator asked (2026-11-11) for Delphi to keep a history of what happened in
 
 ## 119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof
 
-**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `62b8d485b6ef`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
+**119: Research readiness: setup, private text for retrieval, health checks, and a live proof** · approved (per source at `c8492d589536`) · tier 0 · [source](../../specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md)
 
 **source excerpt, untrusted** · `specs/119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md` lines 26-34
 

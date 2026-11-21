@@ -829,7 +829,14 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
         v["relay_note"] = json!(crate::council_panel::RELAYED_NOTE);
     }
     if panel {
-        v["counts_as_independent_review"] = json!(started.map(|e| e.payload["counts_as_independent_review"] != false).unwrap_or(true));
+        let counts = started.map(|e| e.payload["counts_as_independent_review"] != false).unwrap_or(true);
+        v["counts_as_independent_review"] = json!(counts);
+        // §12 A8 as amended 2026-11-21: why it does not count. A Panel started before the reasons were kept did not count only for its witness.
+        v["not_independent_because"] = match started.map(|e| &e.payload["not_independent_because"]).filter(|b| b.is_array()) {
+            Some(b) => b.clone(),
+            None if counts => json!([]),
+            None => json!([crate::council_panel::NOT_WITNESSED]),
+        };
     }
     // Spec 123 §4 item 3: what it has cost in tokens, against its ceiling (null when off). A Panel's count is only the seats Delphi ran.
     let spent = crate::council::council_tokens(events, task_id);
@@ -891,9 +898,13 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
         // seats' receipts count for who sat (`specs/123` §3). A Panel keeps every receipt.
         let planned: Vec<&str> = started.and_then(|e| e.payload["seats"].as_array()).into_iter().flatten().filter_map(|s| s["role"].as_str()).collect();
         let receipts = crate::seat::seat_receipts(events, task_id, if panel { &[][..] } else { &planned[..] });
-        let (served, _) = crate::seat::served_for_task(&receipts, task_id);
+        // A seat counts only if it gave a stance (SR-3, amended 2026-11-21): a seat that abstained in Round 1 adds no family, whatever
+        // its receipt's outcome; the host's family counts only if one of the host's own seats said something.
+        let (served, _) = crate::seat::sat_for_task(&receipts, task_id, &crate::seat::round1_abstained(events, task_id));
+        let host_roles: Vec<&str> = started.and_then(|e| e.payload["seats"].as_array()).into_iter().flatten().filter(|s| s["family"] == "host-reported").filter_map(|s| s["role"].as_str()).collect();
         let host_fam = started.and_then(|e| e.payload["host_family"].as_str());
-        let div = crate::seat::Diversity::of(if panel { host_fam } else { None }, &served);
+        let host_sat = host_fam.filter(|_| crate::seat::host_sat(events, task_id, &host_roles));
+        let div = crate::seat::Diversity::of(if panel { host_sat } else { None }, &served);
         let have = !served.is_empty() || (panel && host_fam.is_some());
         let homogeneous = if have && panel { json!(div.homogeneous()) } else if have { json!(ve.payload["homogeneous"].as_bool().unwrap_or(false) || div.homogeneous()) } else { ve.payload["homogeneous"].clone() };
         // The families named on the card: the served ones, or for a daemon Council with no receipt yet, the plan's.
@@ -1042,7 +1053,8 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
     let homog = r["homogeneous"].as_bool().unwrap_or(false);
     if v["venue"] == "panel" && v["counts_as_independent_review"] == false {
         // Spec 104 section 13 G5: a Panel that does not count as an independent review says so first; one that counts, and every daemon Council, say nothing extra.
-        s.push_str(crate::council_panel::NOT_INDEPENDENT_REVIEW);
+        let because: Vec<String> = v["not_independent_because"].as_array().into_iter().flatten().filter_map(|b| b.as_str().map(str::to_string)).collect();
+        s.push_str(&crate::council_panel::not_independent_line(&because));
         s.push_str("\n\n");
     }
     if v["venue"] == "panel" {

@@ -196,7 +196,10 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
     check_harnesses(Some(&ws.dir), &cfg, &run_cli, opts.require_providers, &mut r);
     let codex_meter = || delphi_engine::quota::read_codex("codex", std::time::Duration::from_secs(8));
-    check_seat_quota(&cfg, &run_cli, &codex_meter, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0), &mut r);
+    let now_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    check_seat_quota(&cfg, &run_cli, &codex_meter, now_unix, &mut r);
+    let copilot_catalog = || delphi_engine::model_catalog::read_live("copilot", std::time::Duration::from_secs(20));
+    check_copilot_catalog(Some(&ws.dir), &cfg, &run_cli, &copilot_catalog, now_unix, &mut r);
     check_coverage_drift(&cfg, &help_page, &mut r);
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
 
@@ -215,6 +218,10 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         (None, "required") => r.fail("9 sandbox", "", "`[exec] sandbox = \"required\"` but no OS sandbox is available (sandbox-exec on macOS, bubblewrap on Linux): no command will run"),
         (None, "prefer") => r.warn("9 sandbox", "", "`[exec] sandbox = \"prefer\"` but no OS sandbox is available: commands run directly and ask for approval"),
         (None, _) => r.push(Level::Ok, "9 sandbox", "", "off (no OS sandbox is available either): commands ask for approval"),
+    }
+    if delphi_sandbox::detect().is_some() {
+        let user_home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from).unwrap_or_default();
+        check_review_commands(&cfg, &user_home, &mut r);
     }
     // 9b. The authorized-test sandbox (specs/092 S2b): optional. A canary battery under the profile an operator-authorized test would
     // use. Nothing calls it from a run yet; an absent or failing profile only means such a test would refuse to start, so it is
@@ -364,6 +371,22 @@ fn check_removed_settings(cfg_text: &str, r: &mut Report) {
     }
 }
 
+/// `specs/135` §14.2: each command a cross-family review runs (`[forge] review_commands`, or the `[exec]` test and check commands) must
+/// name a program the investigation sandbox can start: on `[exec] env.PATH` and inside a system or `[exec] toolchain` directory. A warning
+/// per command that would not; nothing when none is configured. Only the file system is read.
+fn check_review_commands(cfg_text: &str, user_home: &Path, r: &mut Report) {
+    let Ok(root) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let exec = delphi_engine::exec::ExecConfig::from_root(&root, user_home);
+    let configured = delphi_engine::boot::settings_from(&root).review_commands.unwrap_or_else(|| [exec.test_command.clone(), exec.check_command.clone()].into_iter().flatten().collect());
+    let path = exec.env.get("PATH").cloned().unwrap_or_else(|| "/usr/bin:/bin".into());
+    let roots: Vec<PathBuf> = delphi_sandbox::system_read_only().into_iter().chain(exec.toolchain.iter().cloned()).collect();
+    for argv in &configured {
+        if let Some(why) = delphi_engine::review_job::program_problem(argv, &path, &roots) {
+            r.warn("9c review-commands", "config.toml", format!("a review command will not start in the sandbox ({}): {why}. See `[exec] toolchain` and `[exec] env.PATH` (specs/135 section 14.2)", argv.join(" ")));
+        }
+    }
+}
+
 /// The project history (`specs/102` §7 item 6): on or off, how many records, whether the chain verifies, whether the key is usable. It reads
 /// the store's metadata and verifies the chain; it prints no record text and makes no file (a fresh install says "off (default)").
 fn check_history(ws: &Workspace, cfg_text: &str, r: &mut Report) {
@@ -446,6 +469,10 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
                 r.push(Level::Ok, CHECK, p.name(), fact);
             }
         }
+    }
+    // spec 119 §17 (defect D2): the runner's scout makes single-turn model calls, which no harness endpoint serves.
+    if delphi_adapter::config::Config::parse(cfg_text).is_ok_and(|c| !c.endpoints.is_empty() && !delphi_engine::research::scout_configured(&c)) {
+        r.push(Level::Ok, CHECK, "config.toml", "scout: no configured endpoint can serve the scout's single model calls (a harness never does), so Delphi's own runner keeps no claim; in a host session with a web search, research uses the host's search instead");
     }
     let trusted = match delphi_engine::research_setup::lists(&ws.dir, home) {
         Ok(l) => format!("trusted list: {} host(s)", l.len()),
@@ -870,6 +897,53 @@ fn check_harnesses(ws: Option<&Path>, cfg_text: &str, run: &dyn Fn(&str, &[&str]
     }
 }
 
+/// The account's Copilot catalog against every Copilot endpoint's `models` (`specs/132` §5.2, C3): one line per endpoint, each tier's
+/// model found or missing, with the vendor's multiplier and cost class shown for information only (the cost class never decides a tier,
+/// a class or a capability). The catalog is the cached one in `local/` when it was read on the installed CLI version within a day;
+/// otherwise `read` is asked once (`copilot --acp` `session/new`, no prompt sent) and its answer cached.
+fn check_copilot_catalog(ws: Option<&Path>, cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, read: &dyn Fn() -> Option<serde_json::Value>, now: i64, r: &mut Report) {
+    use delphi_engine::model_catalog as mc;
+    let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let Some(list) = v.get("endpoints").and_then(|e| e.as_array()) else { return };
+    let eps: Vec<&toml::Value> = list.iter().filter(|e| e.get("path").and_then(|p| p.as_str()) == Some("harness") && e.get("harness").and_then(|h| h.as_str()) == Some("copilot")).collect();
+    if eps.is_empty() {
+        return;
+    }
+    let version = run("copilot", &["--version"]).and_then(|(_, out)| out.lines().next().map(|l| l.trim().to_string())).filter(|l| !l.is_empty());
+    let catalog = match (ws, &version) {
+        (Some(ws), Some(ver)) => mc::refresh(&ws.join("local"), ver, now, read),
+        _ => None,
+    };
+    for e in eps {
+        let id = e.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+        let loc = format!("{id} models");
+        let Some(models) = e.get("models").and_then(|m| m.as_table()) else { continue };
+        let Some(cat) = &catalog else {
+            r.push(Level::Skipped, "10 harness", loc, "the account's Copilot catalog could not be read (CLI missing or signed out, or no answer in time), so this endpoint's models were not checked");
+            continue;
+        };
+        let (mut shown, mut missing) = (Vec::new(), Vec::new());
+        for (tier, model) in models {
+            let Some(model) = model.as_str() else { continue };
+            let c = mc::model_cost(Some(cat), model);
+            let cost = match (&c.multiplier, c.class) {
+                (Some(m), Some(class)) => format!(" {m} {class}"),
+                _ => String::new(),
+            };
+            shown.push(format!("{tier} `{model}`{cost}"));
+            if let Some(why) = mc::refusal(cat, id, tier, model) {
+                missing.push(why);
+            }
+        }
+        let head = format!("Copilot catalog ({}, {} models): {}. The cost class is the vendor's multiplier, shown for information only", cat.cli_version, cat.models.len(), shown.join(", "));
+        if missing.is_empty() {
+            r.push(Level::Ok, "10 harness", loc, format!("{head}; every model is in the catalog"));
+        } else {
+            r.warn("10 harness", loc, format!("{head}. {}", missing.join(" ")));
+        }
+    }
+}
+
 /// What each subscription seat's own meter says (`specs/051` §6.2): plan, share used, reset time, and whether the limit is reached. Read-only
 /// and never a model call. Codex is read over its app-server on stdio; Copilot only when `[harness.copilot] quota_source = "gh"`. A seat that
 /// reports nothing is shown as unknown, never as empty or as out, and no plan name is acted on.
@@ -976,6 +1050,8 @@ fn check_pool(ws: &Workspace, home: &Path, cfg_text: &str, r: &mut Report) {
     }
     // Spec 056 M6: the emergency stop-gap, one line either way; not being configured is a note, not a failure.
     r.push(if cfg.routing.emergency.is_some() { Level::Ok } else { Level::Skipped }, "11 model pool", "", delphi_engine::emergency::line(&cfg));
+    // Spec 056 §10.5: the cost cap, the models over it, and which ones count as `standard` for want of a label.
+    r.push(Level::Ok, "11 model pool", "cost cap", delphi_engine::route::cost_cap_line(&cfg));
     // Spec 056 M1: a model no class rule places is trialled on low-risk tasks only, until its results or the operator place it.
     match delphi_engine::models::ClassRules::load(&ws.dir) {
         Err(e) => r.warn("11 model pool", "model-classes.toml", e),
@@ -1547,6 +1623,13 @@ mod tests {
         assert!(!f.iter().map(|x| x.message.as_str()).collect::<String>().contains("delphi-kagi"), "no credential reference is echoed");
         // No engine at all, a custom threshold, and an unreadable table.
         assert!(findings("[search]\nproviders = []\n")[0].message.contains("research sends no web search of its own"));
+        // Spec 119 §17 (defect D2): with only harness endpoints no model can serve the scout, and the doctor says so as a fact; with
+        // an API endpoint that has prices, or no endpoint table at all, it says nothing about the scout.
+        let harness = "[models.claude]\nfast = \"haiku-x\"\n[[endpoints]]\nid = \"sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n";
+        let scout = |cfg: &str| findings(cfg).into_iter().find(|x| x.message.starts_with("scout:"));
+        assert!(scout(harness).is_some_and(|x| x.level == Level::Ok && x.message.contains("a harness never does")), "{:?}", findings(harness));
+        let api = "[models.claude]\nfast = \"haiku-x\"\n[models.catalog.\"haiku-x\"]\nmax_output_tokens = 8000\ninput_usd_per_mtok = 1.0\noutput_usd_per_mtok = 5.0\n[[endpoints]]\nid = \"direct\"\nfamily = \"claude\"\npath = \"api\"\ncredential = \"env:K\"\n";
+        assert!(scout(api).is_none() && scout("").is_none(), "{:?}", findings(api));
         // Spec 119 §2 item 3 and §13.2 item 9: a missing engine is a fact while no research ran without a web search, and a warning once
         // one did in the last 30 days; a run older than that does not count, and an engine that is there is never warned about.
         let none = "[search]\nproviders = []\n";
@@ -1565,6 +1648,45 @@ mod tests {
         assert!(findings("[research]\nthin_below = 5\n").iter().any(|x| x.message.contains("fewer than 5 kept claims")));
         let f = findings("[search]\nproviders = [\"nonesuch\"]\n");
         assert_eq!((f[0].level, f[0].location.as_str()), (Level::Warn, "config.toml"), "{f:?}");
+    }
+
+    /// Spec 135 AC-16 (§14.2): a review command whose program is not on the sandbox PATH, or not in a system or toolchain directory, is
+    /// warned about; one that is found is not.
+    #[test]
+    fn doctor_warns_when_a_review_commands_program_is_not_on_the_sandbox_path() {
+        let t = tempfile::tempdir().unwrap();
+        let (tc, elsewhere) = (t.path().join("tc"), t.path().join("elsewhere"));
+        for d in [tc.join("bin"), elsewhere.clone()] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(tc.join("bin/mytool"), "").unwrap();
+        std::fs::write(elsewhere.join("stray"), "").unwrap();
+        let warned = |cfg: &str| {
+            let mut r = Report::default();
+            check_review_commands(cfg, t.path(), &mut r);
+            r.findings.into_iter().filter(|f| f.check == "9c review-commands").map(|f| (f.level, f.message)).collect::<Vec<_>>()
+        };
+        // The default PATH, with no toolchain: `mytool` is not found; `/bin/echo` is a system program.
+        let w = warned("[forge]\nreview_commands = [[\"mytool\", \"test\"], [\"/bin/echo\", \"x\"]]\n");
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0].0, Level::Warn);
+        assert!(w[0].1.contains("`mytool` is not on the sandbox's PATH") && w[0].1.contains("[exec] toolchain"), "{w:?}");
+        // On the PATH but not in a toolchain directory: still refused by the sandbox.
+        let on_path = "[exec]\nenv = { PATH = \"~/tc/bin:/usr/bin:/bin\" }\n[forge]\nreview_commands = [[\"mytool\"]]\n";
+        assert!(warned(on_path)[0].1.contains("not inside a system or `[exec] toolchain` directory"), "{:?}", warned(on_path));
+        // Configured as F4 should have been: no warning. `~` is the operator's home.
+        assert!(warned("[exec]\ntoolchain = [\"~/tc\"]\nenv = { PATH = \"~/tc/bin:/usr/bin:/bin\" }\n[forge]\nreview_commands = [[\"mytool\", \"test\"]]\n").is_empty());
+        // `/usr/bin/env` is looked through, with its assignments; a PATH it sets is the one searched.
+        assert!(warned("[forge]\nreview_commands = [[\"/usr/bin/env\", \"RUST_LOG=1\", \"mytool\"]]\n")[0].1.contains("`mytool`"));
+        let via_env = format!("[exec]\ntoolchain = [\"~/tc\"]\n[forge]\nreview_commands = [[\"/usr/bin/env\", \"PATH={}\", \"mytool\"]]\n", tc.join("bin").display());
+        assert!(warned(&via_env).is_empty(), "{:?}", warned(&via_env));
+        // An absolute path outside every executable directory, and one that does not exist.
+        let abs = format!("[forge]\nreview_commands = [[\"{}\"], [\"/nonexistent/x\"]]\n", elsewhere.join("stray").display());
+        let w = warned(&abs);
+        assert!(w.len() == 2 && w[0].1.contains("cannot execute it") && w[1].1.contains("does not exist"), "{w:?}");
+        // The `[exec]` gates stand in when `[forge]` names none; nothing configured, nothing said.
+        assert_eq!(warned("[exec]\ntest_command = [\"mytool\"]\n").len(), 1);
+        assert!(warned("").is_empty() && warned("[forge]\nreview_commands = []\n[exec]\ntest_command = [\"mytool\"]\n").is_empty());
     }
 
     // `specs/098` §13.2: one line per removed key an old config still carries, none for a clean config, and nothing else changes.
@@ -2208,6 +2330,44 @@ mod tests {
         assert!(on[1].0 == Level::Ok && on[1].1.contains("business plan") && on[1].1.contains("10% of 100 credits used"), "{:?}", on);
         let silent = say(&cfg, &|_: &str, _: &[&str]| None, &|| None);
         assert!(silent[0].0 == Level::Skipped && silent[0].1.contains("unknown"), "{:?}", silent);
+    }
+
+    /// specs/132 AC-5: with a fake `session/new` answer the catalog is cached with its CLI version; a configured model missing from it
+    /// is a warning naming the unusable tier; the cost class is shown (14x is `premium`); a fresh cache is not read again.
+    #[test]
+    fn copilot_endpoints_are_checked_against_the_accounts_catalog() {
+        let ws = tempfile::tempdir().unwrap();
+        let cfg = "[[endpoints]]\nid=\"copilot-gemini\"\nfamily=\"gemini\"\npath=\"harness\"\nharness=\"copilot\"\ncredential=\"harness-login\"\nmodels = { fast = \"gemini-3.8-flash\", workhorse = \"gemini-3.8-flash\", frontier = \"gemini-4-argon\" }\n\
+                   [[endpoints]]\nid=\"copilot-claude\"\nfamily=\"claude\"\npath=\"harness\"\nharness=\"copilot\"\ncredential=\"harness-login\"\nmodels = { fast = \"claude-haiku-4.5\", workhorse = \"claude-sonnet-5.5\", frontier = \"claude-sonnet-5.5\" }\n";
+        let run = |p: &str, a: &[&str]| -> CliRun { (p == "copilot" && a == ["--version"]).then(|| (0, "GitHub Copilot CLI 1.0.112.\nRun 'copilot update'\n".into())) };
+        let answer = serde_json::json!({"result": {"models": {"availableModels": [
+            {"modelId": "auto"},
+            {"modelId": "claude-sonnet-5.5", "_meta": {"copilotUsage": "1x", "copilotEnablement": "enabled"}},
+            {"modelId": "claude-haiku-4.5", "_meta": {"copilotUsage": "0.33x", "copilotEnablement": "enabled"}},
+            {"modelId": "gemini-3.8-flash", "_meta": {"copilotUsage": "14x", "copilotEnablement": "enabled"}}
+        ]}}});
+        let reads = std::cell::Cell::new(0);
+        let read = || {
+            reads.set(reads.get() + 1);
+            Some(answer.clone())
+        };
+        let say = |r: &mut Report| check_copilot_catalog(Some(ws.path()), cfg, &run, &read, 1_793_000_000, r);
+        let mut r = Report::default();
+        say(&mut r);
+        let gem = r.findings.iter().find(|f| f.location == "copilot-gemini models").unwrap();
+        assert_eq!(gem.level, Level::Warn, "{:?}", r.findings);
+        assert!(gem.message.contains("workhorse `gemini-3.8-flash` 14x premium") && gem.message.contains("frontier model `gemini-4-argon` is not in this account's Copilot catalog") && gem.message.contains("frontier tier is unusable"), "{}", gem.message);
+        let cl = r.findings.iter().find(|f| f.location == "copilot-claude models").unwrap();
+        assert!(cl.level == Level::Ok && cl.message.contains("fast `claude-haiku-4.5` 0.33x low") && cl.message.contains("information only"), "{}", cl.message);
+        let cached = delphi_engine::model_catalog::load(&ws.path().join("local")).unwrap();
+        assert_eq!((cached.cli_version.as_str(), cached.models.len()), ("GitHub Copilot CLI 1.0.112.", 3));
+        let mut again = Report::default();
+        say(&mut again);
+        assert_eq!(reads.get(), 1, "a fresh cache for this CLI version is not read again");
+        // No catalog to judge by: the models are not checked, and nothing is called missing.
+        let mut none = Report::default();
+        check_copilot_catalog(Some(tempfile::tempdir().unwrap().path()), cfg, &run, &|| None, 1_793_000_000, &mut none);
+        assert!(none.findings.iter().all(|f| f.level == Level::Skipped && f.message.contains("not checked")), "{:?}", none.findings);
     }
 
     #[test]

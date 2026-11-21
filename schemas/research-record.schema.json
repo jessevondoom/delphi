@@ -218,6 +218,17 @@
     },
     "result": { "type": "object", "description": "What the newest finished run returned, without its `answer` (kept in `answer.md`) and its `search_log` (kept in `search-log.json`); `research_result` is answered from the three together (schemas/research-result.schema.json)." },
     "result_run": { "$ref": "#/$defs/run_id", "description": "The run `result` belongs to." },
+    "results": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "Optional (specs/112 section 2, amendment 2026-11-21). Each finished run's own result, newest last, at most eight, so `research_result` answers an earlier run of the same topic with its own result. Each is the run's result with the run's own `answer` and without its `search_log`. A record written before this list existed has none.",
+      "items": {
+        "type": "object",
+        "required": ["run", "result"],
+        "properties": { "run": { "$ref": "#/$defs/run_id" }, "result": { "type": "object" } },
+        "additionalProperties": false
+      }
+    },
     "refresh_days": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "Optional. The days after which this topic's newest run is old and the topic is listed as due (specs/112 section 5). Held between `[research] refresh_days_min` and `refresh_days_max`; without it the topic uses `[research] refresh_days`." }
   },
   "additionalProperties": false,
