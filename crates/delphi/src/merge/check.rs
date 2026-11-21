@@ -23,11 +23,25 @@ pub struct Verdict {
     pub specs: Vec<SpecState>,
     /// Every reason this pull request cannot merge now; empty when it can.
     pub refusals: Vec<String>,
+    /// How many commits of the base tip the head does not contain (0 when current, or when the pull request is not open).
+    pub behind_by: u64,
+}
+
+/// The words every freshness refusal carries; `errors::classify_refusal` finds the class `behind` by them.
+pub const BEHIND_MARK: &str = "commit(s) behind";
+
+/// The freshness refusal (spec 094 §11.3.1): what is wrong and what to do about it.
+pub fn behind_reason(n: u64, behind_by: u64, base_ref: &str) -> String {
+    format!("it is {behind_by} {BEHIND_MARK} `{base_ref}`, so its checks ran against an older base: refresh it (`delphi merge refresh {n}`) and wait for CI on the new head")
 }
 
 impl Verdict {
     pub fn ready(&self) -> bool {
         self.refusals.is_empty()
+    }
+    /// Ready except for being behind the base. Queueing asks this (the queue is advice, §11.3.1): the merge checks freshness.
+    pub fn ready_but_maybe_behind(&self) -> bool {
+        self.refusals.iter().all(|r| r.contains(BEHIND_MARK))
     }
     pub fn gate_changing(&self) -> bool {
         !self.gate_hits.is_empty()
@@ -142,6 +156,12 @@ pub fn evaluate(forge: &dyn Forge, n: u64) -> Result<Verdict, ForgeError> {
         "CONFLICTING" => refusals.push(format!("it conflicts with `{}`: merge the base into the branch and resolve (the builder's git skill covers this)", pr.base_ref)),
         other => refusals.push(format!("GitHub has not finished working out whether it merges (`{}`): try again in a moment", if other.is_empty() { "unknown" } else { other })),
     }
+    // Freshness (§11.3.1): CI tested the head merged with the base as it was at the last push; a head that does not contain the
+    // base tip was never tested against what it would land on. A failed compare is an error (`?`), never a pass.
+    let behind_by = if pr.state == "OPEN" { forge.behind_by(&pr.base_ref, &pr.head_sha)? } else { 0 };
+    if behind_by > 0 {
+        refusals.push(behind_reason(n, behind_by, &pr.base_ref));
+    }
 
     let checks = forge.checks(n)?;
     if checks.is_empty() {
@@ -181,5 +201,5 @@ pub fn evaluate(forge: &dyn Forge, n: u64) -> Result<Verdict, ForgeError> {
     // The first Missing if any, else the first state: a single-spec reader still sees a blocked bundle as blocked.
     let spec = specs.iter().find(|s| matches!(s, SpecState::Missing(_))).or(specs.first()).cloned().expect("at least one spec state");
 
-    Ok(Verdict { pr, paths, gate_hits, gates_source, checks, spec, specs, refusals })
+    Ok(Verdict { pr, paths, gate_hits, gates_source, checks, spec, specs, refusals, behind_by })
 }
