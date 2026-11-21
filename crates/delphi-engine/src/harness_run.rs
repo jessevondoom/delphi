@@ -232,6 +232,16 @@ pub(crate) fn prompt_counts(system: &str, user: &str, ipr: &Ipr) -> Value {
     json!({"prompt_bytes": prompt_bytes, "fixed_bytes": prompt_bytes.saturating_sub(slice_bytes), "slice_bytes": slice_bytes, "slices": ipr.context_slices.len()})
 }
 
+/// The task at the top as well as the bottom (`specs/131` S3): a carrier that takes its whole prompt as one text (agy, codex, copilot) gets
+/// the `task` section first, so a tail its carrier cuts still leaves the task; the contract at the end is unchanged. A Claude seat's system
+/// text goes by flag and its prompt is left exactly as it was.
+pub(crate) fn with_task_head(cli: Cli, head: Option<&str>, system: String) -> String {
+    match head {
+        Some(h) if cli != Cli::Claude => format!("{h}\n\n{system}"),
+        _ => system,
+    }
+}
+
 fn harness_sections(ipr: &Ipr, delphi: &[ToolDef]) -> Vec<String> {
     if ipr.skills.is_none() || delphi.iter().any(|d| d.name == "read_file") {
         return ipr.system_sections();
@@ -823,7 +833,8 @@ impl Engine {
         let bridge_on = bridge_rx.is_some() && !bridge_defs.is_empty();
         let native_for_note = if cli == Cli::Agy { if bridge_on { agy_native.clone() } else { vec![] } } else if tools == Tools::None { lp.native_tools.clone() } else { vec![] };
         let note = harness_note(builder, &bridge_defs, &native_for_note, cli == Cli::Agy, sc.toolless);
-        let system_prompt = format!("{}\n\n{}", harness_sections(ipr, &bridge_defs).join("\n\n"), note);
+        let head = (!sc.task.trim().is_empty()).then(|| ipr.task_section(&sc.task));
+        let system_prompt = with_task_head(cli, head.as_deref(), format!("{}\n\n{}", harness_sections(ipr, &bridge_defs).join("\n\n"), note));
         // The carrier's byte budget (`specs/131` S2): counted on the whole prompt before the CLI starts. Over it, the slices that came from
         // pointers are shortened (never the system text, the contract or a peer's text); if what may not be cut is alone over it, the seat
         // does not start and nothing is spent.
@@ -836,7 +847,7 @@ impl Engine {
             crate::prompt_budget::Fit::CannotFit { fixed } => {
                 let reason = crate::prompt_budget::cannot_fit(fixed, budget);
                 sc.m.append(sc.agent_ev("harness.prompt_refused", json!({"budget": budget, "fixed_bytes": fixed, "reason": reason}), ep, &model)).await?;
-                return Ok(Err(HarnessErr { reason, retryable: false, cli_error: false, kind: FailKind::Other }));
+                return Ok(Err(HarnessErr { reason, retryable: false, cli_error: false, kind: FailKind::Other, stalled: None }));
             }
         };
         let launch = Launch { cli, program, model, system_prompt, user_prompt: sent.first_user_text(), cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
@@ -2903,6 +2914,37 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         let sent = fs::read_to_string(&dump).unwrap();
         assert_eq!(sent.matches("[cut by Delphi: the carrier takes at most 150000 bytes of prompt; lines 1 to ").count(), 10);
         assert!(sent.trim_end().trim_end_matches(['}', '"']).ends_with("</contract>"), "the contract is still the end of the prompt");
+    }
+
+    /// `specs/131` S3 (AC-5): an agy seat's one user event starts with the task and ends with the contract, and with the last 70 KB gone
+    /// the objective and the task note are still there.
+    #[tokio::test]
+    async fn an_agy_seat_has_the_task_at_both_ends_and_a_cut_tail_still_leaves_it() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        let sent = fs::read_to_string(&dump).unwrap();
+        let content = sent.split_once("\"content\":\"").map(|(_, c)| c).unwrap_or("");
+        assert!(content.starts_with("<task nonce="), "{}", content.chars().take(200).collect::<String>());
+        assert!(sent.trim_end().trim_end_matches(['}', '"']).ends_with("</contract>"));
+        let kept = &sent[..sent.len() - 70_000];
+        assert!(kept.contains(delphi_adapter::ipr::TASK_HEAD_NOTE) && kept.contains("Proposition: review these"), "the task survives a cut tail");
+        assert!(!kept.contains("</contract>"), "the contract itself was in the part that was cut");
+    }
+
+    #[test]
+    fn only_a_carrier_that_takes_one_text_gets_the_task_head() {
+        for cli in [Cli::Agy, Cli::Codex, Cli::Copilot] {
+            assert_eq!(with_task_head(cli, Some("<task>T</task>"), "SYS".into()), "<task>T</task>\n\nSYS");
+        }
+        assert_eq!(with_task_head(Cli::Claude, Some("<task>T</task>"), "SYS".into()), "SYS", "a Claude seat's prompt is unchanged");
+        assert_eq!(with_task_head(Cli::Agy, None, "SYS".into()), "SYS");
     }
 
     /// `specs/131` S2 (AC-4): when the text that may not be cut is alone over the budget, the CLI is never started and the seat abstains
