@@ -73,7 +73,7 @@ Rarely, and when it would, the chore is small. From `gh run list` (182 failed `c
 
 ## 4. F2 problems the run exposed
 
-1. **Rust tests cannot run in the investigation sandbox.** `cargo` is not on the sandbox's `PATH` (`execvp() of 'cargo' failed`, exit 71), and given an absolute path the profile refuses to execute it under `~/.rustup` ("Operation not permitted", exit 126). Running them needs the profile to execute the toolchain and read the cargo registry. That widens the sandbox, so it is a spec decision for the operator.
+1. **Rust tests cannot run in the investigation sandbox.** `cargo` is not on the sandbox's `PATH` (`execvp() of 'cargo' failed`, exit 71), and given an absolute path the profile refuses to execute it under `~/.rustup` ("Operation not permitted", exit 126). Running them needs the profile to execute the toolchain and read the cargo registry. That widens the sandbox, so it is a spec decision for the operator. **Correction (2026-11-21, spec 135 §14.2):** no code widening is needed. The sandbox already takes `[exec] toolchain` (read-only and executable) and `[exec] env.PATH` from the operator's configuration; the scratch configuration set neither.
 2. **`tests_run: true` when no command started.** The flag should mean a command ran to an exit status, not that the sandbox exists.
 3. **`[forge]` is read when the daemon starts, not live.** The F2 pull request said otherwise. A config change needs a daemon restart; the reference should say so.
 4. **`delphi daemon stop` did not find a scratch daemon that `daemon restart` had started** (same `--home` and `--workspace`). It had to be stopped by its pid.

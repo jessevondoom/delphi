@@ -245,3 +245,45 @@ The report (`missions/2026-11-20-forge/F4-REPORT.md`) decides whether F3 gets a 
 | 11 | the workspace gates |
 
 Not verified by this spec's build: a live review by a real foreign seat, and cargo inside the sandbox (F4, on the operator's yes).
+
+## 14. Amendment (operator, 2026-11-21): after F4
+
+Approved by the operator in advance, in a host session, on the recommendations of the F4 report (`missions/2026-11-20-forge/F4-REPORT.md` §5): "go on 1 and 2. 3: yes. 4: yes please. 5: good plan. go. 6: yes go." This text was written afterwards by an architect agent; the operator has not read it line by line. Item 1 of the report (the `arg_keys` log defect) is built under spec 039, not here.
+
+### 14.1 F2c: honest results (report item 2)
+
+1. `tests_run` is true only when at least one configured command ran to an exit status. A command the sandbox could not start (exit 126 or 127 from the runner, or `sandbox-exec`'s exit 71 with `execvp`) is reported with `started: false`, and the result's note says how to fix it: the `[exec] toolchain` directories (read-only and executable inside the sandbox) and `[exec] env.PATH` (section 14.2).
+2. `[forge]` is read when the daemon starts, like `[exec]`; a change takes effect after `delphi daemon restart`. The config reference says so (the F2 pull request said otherwise).
+3. The result carries the served model and the seat's tokens (in and out) from the receipt, at the top level, so a host can report cost.
+4. `delphi daemon stop` did not find a daemon that `delphi daemon restart` had started under a scratch `--home` (F4 report §4 item 4). The cause is found and fixed under the spec that owns `delphi daemon`; if no approved spec owns it, it is reported, not built.
+
+### 14.2 Toolchains in the investigation sandbox (report item 3)
+
+Correction to the F4 report §4 item 1: no code widening is needed. The sandbox already takes `[exec] toolchain` (read-only and executable) and `[exec] env` from the operator's configuration (`exec.rs` `spec`). F4's scratch configuration set neither. The operator's "yes" is to configuring them: `[exec] toolchain = ["~/.cargo", "~/.rustup"]` and `env = { PATH = "~/.cargo/bin:/usr/bin:/bin" }`. Still no network and nothing writable but the copy and its scratch. `config.example.toml` gains the lines, commented, and `delphi doctor` warns when `[forge] review_commands` names a program that is not on the sandbox `PATH`.
+
+### 14.3 F2d: context before judgement (report item 4)
+
+A review gains a round before Round 1, and Round 1 gains deterministic context:
+
+1. **Call sites, by code.** For each function the diff defines or changes, the daemon finds its call sites in the review copy outside the diff (a word-boundary search for `name(`, in-process, no shell) and includes up to 3 per function, 12 lines each, capped at `[forge] review_context_chars` (default 12 000) in all.
+2. **Round 0, the seat asks.** Before judging, the seat is shown the diff and asked only: which functions, types or literal strings outside the diff it needs to see (at most 5, each a plain identifier or a quoted string of at most 80 characters). The daemon searches the copy for each (fixed-string, in-process), and returns up to 3 hits per item with 12 lines of context, within the same cap. A Round 0 answer that names nothing is allowed.
+3. Round 1 then sees the diff, the call sites, the Round 0 excerpts, the tests and the spec, as now. Round 2 is unchanged.
+4. Everything from the copy goes to the seat as data, fenced, as the diff does. The search reads only the review copy.
+
+### 14.4 F1b: the finisher runs the gates (report item 5)
+
+`delphi forge finish --gates` runs the three gates of `AGENTS.md` after regenerating, in order, stopping at the first that fails. A failing `cargo test` is rerun once for the failing tests only (by name, `--exact`); a test that passes on the rerun is reported `flaky` with its name, and the gate counts as passed with that note, as `finalize.rs` does for a Builder. The commands run as the operator's own process (not sandboxed: the finisher is a terminal command the operator or their host runs), are listed in `spawn_sites.toml` as class `operator-cli`, and print their last 40 lines on failure. `--body` includes the gate results. This changes a gate file (`spawn_sites.toml`), so its pull request is merged by the operator at a terminal.
+
+The other half of report item 5, a recheck in the merge step, already exists: `delphi merge` refuses a pull request whose head does not contain the base tip (spec 094 §11.3.1), so CI runs again on the combination.
+
+### 14.5 F4b: the rerun (report item 6)
+
+After 14.1 to 14.4 are merged: the same three pull requests, the same four families, the same ground truth, with the toolchain configured (14.2) and a review command that runs the affected crate's tests. The report gains a section comparing the two runs.
+
+### 14.6 Acceptance
+
+- **AC-12 (14.1):** a review whose command cannot start reports `tests_run: false`, `started: false` and the fix; one that exits non-zero reports `tests_run: true`.
+- **AC-13 (14.1):** the result carries the served model and token counts.
+- **AC-14 (14.3):** with a scripted seat, Round 0's requested identifier and the diff's call sites reach Round 1's brief, within the cap; an item that is not a plain identifier or short string is refused; nothing outside the copy is read.
+- **AC-15 (14.4):** `finish --gates` with a fake runner: a test that fails then passes is `flaky` and the gate passes; one that fails twice fails the gate; the first failing gate stops the rest.
+- **AC-16 (14.2):** `delphi doctor` warns when a review command's program is not found on the configured sandbox `PATH`.
