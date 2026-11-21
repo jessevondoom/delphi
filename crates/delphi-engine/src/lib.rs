@@ -124,6 +124,7 @@ pub mod harness;
 pub mod coverage;
 pub mod harness_opts;
 pub mod harness_run;
+pub(crate) mod json_answer;
 #[cfg(test)]
 mod investigation_tests;
 pub mod inventory;
