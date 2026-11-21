@@ -1287,7 +1287,7 @@ impl EngineService {
     }
 
     /// `host.request_council` (`specs/062` §7): raise an on-demand Council on a host's question, in the host session's own mission, and
-    /// return its id at once. The seats are text-only, so they advise and change nothing; the ruling is read with `host.council_status`
+    /// return its id at once. The seats run read-only (§6.3, §7.3), so they advise and change nothing; the ruling is read with `host.council_status`
     /// and `host.council_result`, and binds nothing in the host.
     async fn host_request_council(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         use crate::host_rpc as h;
@@ -1313,7 +1313,7 @@ impl EngineService {
         };
         let (engine, tid, mm) = (self.engine.clone(), task_id.clone(), m.clone());
         let job = tokio::spawn(async move {
-            if let Err(e) = engine.run_council(&mm, tid.clone(), &proposition, opts).await {
+            if let Err(e) = engine.run_council_for_host(&mm, tid.clone(), &proposition, opts).await {
                 elog_task_failed(&mm.id, &tid, &e);
                 let mut ev = EventEnvelope::new(&mm.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
