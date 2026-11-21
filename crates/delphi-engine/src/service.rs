@@ -864,7 +864,14 @@ impl EngineService {
         // the request asks for Delphi's own runner. `tool` is the host's own word for itself: a host that names another only gets
         // itself asked to search, or not.
         let daemon_runner = h::research_runner_is_daemon(&p).map_err(host_err)?;
-        let host_tool = crate::mcp_hosts::host_search_tools(&c.tool).0.filter(|_| !daemon_runner);
+        // Spec 119 §17 (defect D2): Delphi's runner reads pages with the scout's single-turn model calls, which no harness endpoint
+        // serves. When no model can serve them, `runner: "daemon"` from a host that has a search tool is given to the host's tools
+        // before anything is searched, and the reply says so; elsewhere the run is not refused (§13.2) but the reply says at once
+        // that the runner keeps no claim.
+        let no_scout = self.engine.scout_key().is_none();
+        let host_has_search = crate::mcp_hosts::host_search_tools(&c.tool).0;
+        let switched = daemon_runner && no_scout && host_has_search.is_some();
+        let host_tool = host_has_search.filter(|_| !daemon_runner || switched);
         let search = self.engine.cfg.get().search.clone();
         let sources = crate::research_setup::sources(&search, host_tool.is_some());
         let host = (sources == crate::research_run::Sources::Host).then(|| crate::research_run::HostTurn { tool: c.tool.clone(), engines: crate::research_setup::engine_state(&search) != crate::research_setup::EngineState::None, wait: self.host_wait() });
@@ -954,6 +961,16 @@ impl EngineService {
             reply["queries"] = json!(queries);
             reply["host_tool"] = json!(host_tool);
             reply["host_note"] = json!(crate::research_setup::HOST_SEARCH_NOTE);
+        }
+        if switched {
+            reply["runner_switched"] = json!({"from": "daemon", "to": "host", "reason": "no_model_seat"});
+            reply["runner_note"] = json!(crate::research_setup::RUNNER_SWITCHED_NOTE);
+        }
+        if no_scout {
+            reply["scout"] = json!("no_model_seat");
+            if !switched {
+                reply["scout_note"] = json!(crate::research_setup::NO_SCOUT_NOTE);
+            }
         }
         if let Some(id) = continued {
             reply["continued"] = json!(true);
@@ -6800,6 +6817,57 @@ mod tests {
             codex["tool"] = json!("codex");
             let r = c.call("host.request_research", codex).unwrap();
             assert_eq!((r["sources"].as_str(), r.get("host_search")), (Some("local"), None), "{r}");
+        })
+        .await;
+    }
+
+    // specs/119 §17 (defect D2): Delphi's runner reads pages with the scout's single-turn model calls, and a harness endpoint never
+    // serves a single turn. With only harness endpoints, `runner: "daemon"` asked from a host that has a search tool is switched to
+    // the host's own tools before any search, and the reply says so in fixed words; a host with no search tool is not refused (§13.2)
+    // but is told at once that the runner will keep no claim. With an API endpoint the daemon's runner is used as asked.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_only_harness_endpoints_a_daemon_run_is_switched_to_the_host_before_any_search() {
+        const HARNESS_ONLY: &str = "[models.claude]\nfast = \"haiku-x\"\nworkhorse = \"sonnet-x\"\nfrontier = \"opus-x\"\n[[endpoints]]\nid = \"sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n";
+        const ENGINE: &str = "[search]\nproviders = [\"searxng\"]\n[search.searxng]\nurl = \"https://search.invalid\"\n";
+        let f = setup(vec![], 5.0, |_| {});
+        let cwd = f.root.to_string_lossy().to_string();
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{HARNESS_ONLY}\n{ENGINE}")).unwrap());
+        assert!(f.engine.scout_key().is_none() && !crate::research::scout_configured(&f.engine.cfg.get()), "a harness serves no single turn");
+        let s = serve(&f).await;
+        let web = Arc::new(RecordingWeb::default());
+        *s.svc.research_web.lock().unwrap() = Some((web.clone(), vec![delphi_adapter::research::search::ProviderSpec { provider: delphi_adapter::research::search::Provider::Searxng, key: None, base_url: Some("https://search.invalid".into()), cx: None }], "[[source]]\nhost = \"en.wikipedia.org\"\nreuse = \"full\"\n".to_string()));
+        *s.svc.research_host_wait.lock().unwrap() = Some(Duration::from_secs(60));
+        let (hsock, htok, engine) = (s.host_sock.clone(), s.host.clone(), f.engine.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let ask = |tool: &str| json!({"session": "abcdef0123456789", "tool": tool, "cwd": cwd, "question": "does aspirin reduce fever", "new": true, "runner": "daemon"});
+            let cancel = |c: &mut Client, tool: &str, r: &Value| {
+                let _ = c.call("host.cancel_job", json!({"session": "abcdef0123456789", "tool": tool, "cwd": cwd, "research_id": r["research_id"]}));
+            };
+
+            // Claude Code has a search tool: the run is the host's, and the reply says why, before any engine is asked.
+            let r = c.call("host.request_research", ask("claude-code")).unwrap();
+            assert_eq!((r["status"].as_str(), r["sources"].as_str(), r["host_search"].as_str()), (Some("queued"), Some("host"), Some("asked")), "{r}");
+            assert_eq!(r["runner_switched"], json!({"from": "daemon", "to": "host", "reason": "no_model_seat"}), "{r}");
+            assert_eq!((r["runner_note"].as_str(), r["scout"].as_str()), (Some(crate::research_setup::RUNNER_SWITCHED_NOTE), Some("no_model_seat")), "{r}");
+            assert!(web.seen.lock().unwrap().is_empty(), "no engine was asked: {:?}", web.seen.lock().unwrap());
+            cancel(&mut c, "claude-code", &r);
+
+            // Codex has no search tool: not refused (§13.2), and told at once that Delphi's runner keeps no claim.
+            let r = c.call("host.request_research", ask("codex")).unwrap();
+            assert_eq!((r["status"].as_str(), r["sources"].as_str(), r.get("runner_switched")), (Some("queued"), Some("engines"), None), "{r}");
+            assert_eq!((r["scout"].as_str(), r["scout_note"].as_str()), (Some("no_model_seat"), Some(crate::research_setup::NO_SCOUT_NOTE)), "{r}");
+            cancel(&mut c, "codex", &r);
+
+            // An API endpoint serves the scout: the daemon's runner runs as asked, and nothing is said about the scout.
+            engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}\n{ENGINE}", crate::testkit::CONFIG)).unwrap());
+            assert!(engine.scout_key().is_some() && crate::research::scout_configured(&engine.cfg.get()));
+            let r = c.call("host.request_research", ask("claude-code")).unwrap();
+            assert_eq!((r["status"].as_str(), r["sources"].as_str(), r.get("host_search")), (Some("queued"), Some("engines"), None), "{r}");
+            assert!(r.get("runner_switched").is_none() && r.get("scout").is_none() && r.get("scout_note").is_none(), "{r}");
+            cancel(&mut c, "claude-code", &r);
         })
         .await;
     }

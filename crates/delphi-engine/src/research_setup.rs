@@ -64,6 +64,14 @@ pub const MARK_NOTE: &str = "this session has read private material. The researc
 /// What the reply to a request says when the host is asked to search (`specs/119` §2.1 item 3, §13.1): one instruction, fixed words.
 pub const HOST_SEARCH_NOTE: &str = "run each of `queries` with your own web search tool and hand back what each found with research_feed {research_id, query, results} (the query exactly as given; title, url and snippet per result; at most 10 results; an empty list when a query found nothing). Delphi reads the results that are on the operator's trusted list itself. It never fetches any other address on your word: read those with your own fetch tool and hand over what you found with record_research under this run's topic_id. Then read research_result. When `queries` is empty the plan is still being made: research_status lists the queries under `host_search`. To have Delphi's own runner search instead, ask again with runner: \"daemon\".";
 
+/// What the reply to a request says when no model can serve the scout (`specs/119` §17, defect D2): fixed words. Delphi's runner
+/// reads each page with one of the scout's single-turn model calls, and a harness endpoint never serves a single turn.
+pub const NO_SCOUT_NOTE: &str = "no model can serve Delphi's scout now: every configured endpoint is a harness (a harness runs whole tasks, never the scout's single calls), or none has quota left. Delphi's runner therefore reads no page and keeps no claim; the result lists what its searches found. Read those sources with your own tools and hand over what you find with record_research under this run's topic_id. `delphi doctor` shows the endpoints (check 17).";
+
+/// What the reply says when `runner: "daemon"` was asked and the run was given to the host's own search tool instead
+/// (`specs/119` §17, defect D2): fixed words.
+pub const RUNNER_SWITCHED_NOTE: &str = "you asked for Delphi's own runner (runner: \"daemon\"), but no model can serve its scout now, so it would keep no claim. This run uses your own search tool instead (runner: host): follow host_note. Nothing was searched before this reply.";
+
 /// What the reply to a feed says: fixed words.
 pub const FEED_NOTE: &str = "taken. Delphi reads the results that are on the operator's trusted list; the others are leads it does not fetch (research_result lists them as `host_leads`). Hand back each remaining query, then read research_result.";
 
