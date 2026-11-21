@@ -390,6 +390,8 @@ fn host_err(e: crate::host_rpc::HostErr) -> RpcError {
 
 /// How often the daemon looks for a topic page to rebuild while idle (`specs/117` §2 item 3).
 const TOPICS_TICK_SECS: i64 = 600;
+/// How often the daemon looks at the forge tools record (`specs/135` §14.7 rule 3): for notices, and for a probe while idle.
+const FORGE_TICK_SECS: i64 = 60;
 
 /// The encyclopedia's reads (`specs/117` §3) are the operator's: the console, or the desktop app on a key the operator paired (whose
 /// `read` grant lists them). The narrator, a relay and a host are refused.
@@ -1686,10 +1688,13 @@ impl EngineService {
                     let configured: Vec<Vec<String>> = engine.settings.review_commands.clone().unwrap_or_else(|| [engine.exec.cfg.test_command.clone(), engine.exec.cfg.check_command.clone()].into_iter().flatten().collect());
                     let sandbox = engine.exec.sandbox.is_some();
                     let input = rj::Input { branch: &branch, base: &base, spec: spec.as_ref().map(|(s, t)| (s.as_str(), t.as_str())), slice: slice.as_deref(), stat: &stat, diff: &capped, spec_chars: 20_000, copy: Some(&corpus), context_chars: engine.settings.review_context_chars };
+                    // §14.7: the seat may be given its CLI's own read tools on this copy; `run_harness` decides per carrier and version,
+                    // gates every call and watches the stream. Without them it is tool-less, as before.
+                    let read_root = guard.inv.tree.clone();
                     let seat = |brief: String| {
-                        let (engine, mm, tid, proposition, family) = (engine.clone(), mm.clone(), tid.clone(), proposition.clone(), family.clone());
+                        let (engine, mm, tid, proposition, family, root) = (engine.clone(), mm.clone(), tid.clone(), proposition.clone(), family.clone(), read_root.clone());
                         async move {
-                            match engine.panel_foreign_run_seat(&mm, &tid, brief, &proposition, role, &family, 1, None, true).await {
+                            match engine.panel_foreign_run_seat_reading(&mm, &tid, brief, &proposition, role, &family, 1, None, true, Some(&root)).await {
                                 crate::council::Stance::Said(t) => Ok(t),
                                 crate::council::Stance::Abstained(w) => Err(w),
                             }
@@ -1729,7 +1734,20 @@ impl EngineService {
                             crate::standing::settle(&engine.ws.dir, &standing_id, crate::seat::served_for_task(&events, &tid).1, now);
                             let redact = |s: &str| engine.secrets.redact(s);
                             // §14.1 item 1: when the tests gave no evidence, the note says why and, for a command that could not start, how to fix it.
-                            let mut note = "advice to you: it binds nothing and no gate reads it. The reviewer had no tools; every command was run by Delphi under the OS sandbox with no network, in a copy of the branch that is now deleted. The family shown is the served one from the receipt, not the one requested.".to_string();
+                            // §14.7: whether the seat was given its CLI's read tools, from its receipts (what the gate allowed), and why not.
+                            let forge_tools: Vec<Value> = events.iter().filter(|e| e.kind == "forge.tools" && e.task_id.as_deref() == Some(tid.as_str())).map(|e| e.payload.clone()).collect();
+                            let read_with: Vec<String> = events.iter().filter(|e| e.kind == crate::seat::RECEIPT_KIND && e.task_id.as_deref() == Some(tid.as_str())).filter_map(|e| e.payload["tool_grant"]["forge_read"]["tools"].as_array().cloned()).flatten().filter_map(|v| v.as_str().map(String::from)).fold(Vec::new(), |mut acc, t| {
+                                if !acc.contains(&t) {
+                                    acc.push(t);
+                                }
+                                acc
+                            });
+                            let tools_line = if read_with.is_empty() {
+                                "The reviewer had no tools".to_string()
+                            } else {
+                                format!("The reviewer could read the copy with its own read tools ({}), each call checked by Delphi's gate, and had no other tool", read_with.join(", "))
+                            };
+                            let mut note = format!("advice to you: it binds nothing and no gate reads it. {tools_line}; every command was run by Delphi under the OS sandbox with no network, in a copy of the branch that is now deleted. The family shown is the served one from the receipt, not the one requested.");
                             if let Some(t) = &out.tests_note {
                                 note.push_str(&format!(" Tests: {t}."));
                             }
@@ -1753,6 +1771,7 @@ impl EngineService {
                                 "tests_note": out.tests_note,
                                 "rounds": out.rounds,
                                 "context": out.context,
+                                "tools": {"read": read_with, "seats": forge_tools},
                                 "model": model,
                                 "tokens_in": tokens_in,
                                 "tokens_out": tokens_out,
@@ -2873,6 +2892,7 @@ impl EngineService {
                 svc.acquire_tick().await;
                 svc.background_validate_tick().await;
                 svc.topics_tick().await;
+                svc.forge_probe_tick().await;
                 svc.merge_ledger_tick().await;
                 svc.health_tick().await;
                 svc.consolidate_tick().await;
@@ -2993,6 +3013,53 @@ impl EngineService {
         tokio::spawn(async move {
             let _ = svc.engine.background_validate_tick(&m, svc.last_operator.load(SeqCst), tasks).await;
             svc.background_running.store(false, SeqCst);
+        });
+    }
+
+    /// Forge seat tools (`specs/135` §14.7 rule 3), every `FORGE_TICK_SECS`: a CLI version that is newly bridge-only (a failed probe, or
+    /// the watchdog) becomes a console notice once; and while the operator has been quiet for `fact_background::IDLE_SECS` and no task
+    /// runs, one carrier version that wants a probe is probed in the background (one small call). Nobody is asked; nothing waits on it.
+    async fn forge_probe_tick(self: &Arc<Self>) {
+        use std::sync::atomic::{AtomicBool, AtomicI64, Ordering::SeqCst};
+        static CHECKED: AtomicI64 = AtomicI64::new(0);
+        static RUNNING: AtomicBool = AtomicBool::new(false);
+        static NOTICED: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+        let now = (self.engine.clock_unix)();
+        if now - CHECKED.load(SeqCst) < FORGE_TICK_SECS {
+            return;
+        }
+        CHECKED.store(now, SeqCst);
+        let store = crate::forge_tools::store_path(&self.engine.ws.dir);
+        let dropped: Vec<String> = crate::forge_tools::load(&store).into_iter().filter(|r| r.state == crate::forge_tools::State::ProbedFail).map(|r| format!("forge: {} {} gets no read tools in reviews ({}); `delphi doctor` shows the record", r.harness, r.version, r.reason.as_deref().unwrap_or("its probe failed"))).collect();
+        {
+            let mut seen = NOTICED.lock().unwrap();
+            let seen = seen.get_or_insert_with(Default::default);
+            let fresh: Vec<String> = dropped.into_iter().filter(|n| seen.insert(n.clone())).collect();
+            if !fresh.is_empty() {
+                self.notices.lock().unwrap().extend(fresh);
+            }
+        }
+        if now - self.last_operator.load(SeqCst) < crate::fact_background::IDLE_SECS || !self.running.lock().unwrap().is_empty() {
+            return;
+        }
+        if crate::forge_tools::probe_due(&crate::forge_tools::load(&store), now).is_none() || RUNNING.swap(true, SeqCst) {
+            return;
+        }
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let e = &svc.engine;
+            let programs: std::collections::BTreeMap<String, String> = [("claude", &e.settings.harness_program), ("agy", &e.settings.agy_program), ("codex", &e.settings.codex_program), ("copilot", &e.settings.copilot_program)].into_iter().map(|(h, p)| (h.to_string(), p.clone())).collect();
+            let prober = crate::forge_tools::LiveProbe { cfg: (*e.cfg.get()).clone(), programs, read: e.settings.forge_tools.clone() };
+            if let Some((h, v, outcome)) = crate::forge_tools::probe_one_due(&store, now, &prober).await {
+                // The probe's cost goes in the log with the other seat costs, and in the record `delphi doctor` reads.
+                if let Ok(m) = svc.mission(None).await {
+                    let _ = m.append(EventEnvelope::new(&m.id, "forge.tools_probe", json!({"harness": h, "version": v, "outcome": outcome.label(), "tokens": outcome.tokens()}))).await;
+                }
+                if let crate::forge_tools::ProbeOutcome::Fail { .. } = outcome {
+                    delphi_core::elog::warn("forge", "forge_probe_failed", &format!("the background probe of {h} failed; that CLI version gets no read tools in reviews"), json!({"harness": h, "status": "bridge-only"}));
+                }
+            }
+            RUNNING.store(false, SeqCst);
         });
     }
 
