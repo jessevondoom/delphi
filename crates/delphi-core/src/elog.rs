@@ -48,6 +48,8 @@ pub const COMPONENTS: &[&str] = &["cli", "daemon", "engine", "harness", "provide
 pub const CONTEXT_KEYS: &[&str] = &[
     "mission", "task", "span", "command", "args_shape", "exit_code", "harness", "provider", "status", "duration_ms", "tool", "method", "kind",
     "model", "role", "attempt", "stderr_tail", "error_type", "reason", "from", "to", "retry_after_s", "bytes", "count", "store", "phase", "view",
+    // `tool_failed`'s argument NAMES (spec 039, amended 2026-11-07); never a value. Missing until 2026-11-21, so it was dropped.
+    "arg_keys",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
