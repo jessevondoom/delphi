@@ -15,6 +15,7 @@ pub mod fix;
 pub mod forge;
 pub mod gates;
 pub mod record;
+pub mod refresh;
 
 #[cfg(test)]
 mod auto_tests;
@@ -24,6 +25,8 @@ mod cleanup_tests;
 mod fake;
 #[cfg(test)]
 mod flow_tests;
+#[cfg(test)]
+mod refresh_tests;
 
 use approve::{attest, StdTerminal, Target, Terminal};
 use check::{evaluate, Verdict, QUEUE_LABEL, REVIEW_LABEL};
@@ -227,7 +230,8 @@ pub fn merge_many(ctx: &mut Ctx, numbers: &[u64], batch: Option<&Attestation>) -
 /// Add a ready, ordinary pull request to the queue. A gate-changing one is labelled for a human instead.
 pub fn queue_one(forge: &dyn Forge, n: u64) -> Result<String, String> {
     let v = evaluate(forge, n).map_err(|e| e.to_string())?;
-    if !v.ready() {
+    // The queue is advice and does not require freshness (§11.3.1): the merge itself refuses a head that is behind.
+    if !v.ready_but_maybe_behind() {
         return Err(format!("#{n} is not ready to queue: {}", v.refusals.join("; ")));
     }
     if v.gate_changing() {
@@ -235,7 +239,8 @@ pub fn queue_one(forge: &dyn Forge, n: u64) -> Result<String, String> {
         return Err(format!("#{n} changes a gate ({}), so it is not queueable; labelled `{REVIEW_LABEL}`. A human merges it with `delphi merge {n}` at a terminal", v.gate_hits.join(", ")));
     }
     forge.set_label(n, QUEUE_LABEL, true).map_err(|e| e.to_string())?;
-    Ok(format!("#{n} queued (head {})", short(&v.pr.head_sha)))
+    let behind = if v.behind_by > 0 { format!("; it is {} commit(s) behind `{}`, so refresh it (`delphi merge refresh {n}`) before it can merge", v.behind_by, v.pr.base_ref) } else { String::new() };
+    Ok(format!("#{n} queued (head {}){behind}", short(&v.pr.head_sha)))
 }
 
 /// One line per queued pull request: what `delphi merge --all` would do with it.
@@ -244,7 +249,7 @@ pub fn status_lines(forge: &dyn Forge) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for n in list {
         let v = evaluate(forge, n).map_err(|e| e.to_string())?;
-        out.push(if !v.refusals.is_empty() {
+        out.push(if !v.ready() {
             format!("#{n}: not ready: {}", v.refusals.join("; "))
         } else if v.gate_changing() {
             format!("#{n}: ready, but it changes a gate ({}): needs a human", v.gate_hits.join(", "))
@@ -269,6 +274,7 @@ enum Sub {
     Status,
     Log,
     Fix(u64),
+    Refresh(u64),
     Cleanup(Vec<u64>),
 }
 
@@ -349,11 +355,12 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     }
     let sub = match (words.first().copied(), all, auto) {
         (_, true, true) => return Err("--all and --auto are different modes; pick one".into()),
-        (Some(w), false, false) if matches!(w, "queue" | "status" | "log" | "fix" | "cleanup") => match w {
+        (Some(w), false, false) if matches!(w, "queue" | "status" | "log" | "fix" | "refresh" | "cleanup") => match w {
             "queue" => Sub::Queue(words.get(1).and_then(|n| pr_number(n)).ok_or("usage: delphi merge queue <PR>")?),
             "status" => Sub::Status,
             "log" => Sub::Log,
             "fix" => Sub::Fix(words.get(1).and_then(|n| pr_number(n)).ok_or("usage: delphi merge fix <PR> [--done | --needs-human \"<why>\"]")?),
+            "refresh" => Sub::Refresh(words.get(1).and_then(|n| pr_number(n)).ok_or("usage: delphi merge refresh <PR>")?),
             _ => Sub::Cleanup(words[1..].iter().map(|w| pr_number(w).ok_or(format!("`{w}` is not a pull request number"))).collect::<Result<Vec<_>, _>>()?),
         },
         (_, true, false) if words.is_empty() => Sub::All,
@@ -406,6 +413,7 @@ pub fn cli(args: &[String]) -> i32 {
         },
         Sub::Log => log_cmd(&p),
         Sub::Fix(n) => fix_cmd(&p, &forge, n),
+        Sub::Refresh(n) => refresh_cmd(&p, &forge, n),
         Sub::Cleanup(ref numbers) => cleanup::run(&forge, numbers, p.merged, p.dry_run, p.yes),
         Sub::Auto => auto_cmd(&p, &forge),
         Sub::Merge(ref numbers) => run_merges(&p, &forge, numbers.clone(), false),
@@ -492,6 +500,39 @@ fn fix_cmd(p: &Parsed, forge: &Gh, n: u64) -> i32 {
         }
         Err(e) => {
             eprintln!("delphi merge fix: {e}");
+            1
+        }
+    }
+}
+
+/// `refresh <PR>`: update a behind pull request's branch by a merge of its base (§11.3.2). It never merges the pull request and
+/// needs no approval of its own; an agent may run it, as it may run `fix`.
+fn refresh_cmd(p: &Parsed, forge: &Gh, n: u64) -> i32 {
+    let home = crate::home::delphi_home(p.home.as_deref());
+    let repo = match std::env::current_dir() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("delphi merge refresh: {e}");
+            return 2;
+        }
+    };
+    let (errors, ledger, runner) = (Errors::at(&home), Ledger::at(&home), refresh::Runner::new(&repo));
+    let env = refresh::Env { forge, errors: &errors, ledger: &ledger, home: &home, git: &runner, now: delphi_core::time::now_rfc3339(), before_push: None };
+    match refresh::refresh(&env, n) {
+        Ok(refresh::Done::Current) => {
+            println!("#{n}: already contains the tip of its base; nothing to refresh");
+            0
+        }
+        Ok(refresh::Done::Refreshed(r)) => {
+            let list = |v: &[String]| if v.is_empty() { "none".to_string() } else { v.join(", ") };
+            println!("#{n}: refreshed: head {} (was {}), base {}", short(&r.new_head), short(&r.old_head), short(&r.base_sha));
+            println!("  settled by rule: {}", list(&r.settled));
+            println!("  regenerated by the spec compile: {}", list(&r.regenerated));
+            println!("  CI runs again on the new head; merge it once it is green (`delphi merge {n}`, on the operator's word)");
+            0
+        }
+        Err(stop) => {
+            eprintln!("delphi merge refresh: {}", stop.line(n));
             1
         }
     }
@@ -603,6 +644,8 @@ mod parse_tests {
         assert_eq!((p.caps.max_prs, p.caps.run_for.as_secs(), p.caps.idle.as_secs(), p.caps.poll.as_secs(), p.caps.pause_after_errors), (3, 7200, 600, 30, 1));
         assert_eq!(parse(&a("merge queue 7")).unwrap().sub, Sub::Queue(7));
         assert_eq!(parse(&a("merge status")).unwrap().sub, Sub::Status);
+        assert_eq!(parse(&a("merge refresh #806")).unwrap().sub, Sub::Refresh(806));
+        assert!(parse(&a("merge refresh")).is_err() && parse(&a("merge refresh x")).is_err());
         assert_eq!(parse(&a("--home /x merge 5")).unwrap().home.as_deref(), Some("/x"));
         let q = vec!["5".to_string(), "--operator-said".to_string(), "merge #5 now".to_string()];
         assert_eq!(parse(&q).unwrap().quote.as_deref(), Some("merge #5 now"));

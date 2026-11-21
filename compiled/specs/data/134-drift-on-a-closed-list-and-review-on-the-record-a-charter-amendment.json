@@ -1,0 +1,152 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 17,
+      "number": null,
+      "title": "Spec 134: Drift on a closed list and review on the record"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 32,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 38,
+      "number": "1.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "1.3",
+      "title": "Options considered"
+    },
+    {
+      "level": 2,
+      "line": 53,
+      "number": "2",
+      "title": "Design"
+    },
+    {
+      "level": 3,
+      "line": 55,
+      "number": "2.1",
+      "title": "`GOVERNANCE.md`"
+    },
+    {
+      "level": 3,
+      "line": 69,
+      "number": "2.2",
+      "title": "`agents/builder/AGENT.md` §3"
+    },
+    {
+      "level": 3,
+      "line": 73,
+      "number": "2.3",
+      "title": "`agents/architect/AGENT.md` §3"
+    },
+    {
+      "level": 3,
+      "line": 77,
+      "number": "2.4",
+      "title": "`skills/spec-driven-build/SKILL.md` step 7"
+    },
+    {
+      "level": 3,
+      "line": 81,
+      "number": "2.5",
+      "title": "`context/invariant-enforcement.md`"
+    },
+    {
+      "level": 2,
+      "line": 85,
+      "number": "3",
+      "title": "Authority"
+    },
+    {
+      "level": 2,
+      "line": 92,
+      "number": "4",
+      "title": "Slices (one pull request, gate-changing; each slice its own commit, trailer and tracker row)"
+    },
+    {
+      "level": 2,
+      "line": 101,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 110,
+      "number": "6",
+      "title": "Verification Plan"
+    },
+    {
+      "level": 2,
+      "line": 119,
+      "number": "7",
+      "title": "What is not verified"
+    },
+    {
+      "level": 2,
+      "line": 127,
+      "number": "8",
+      "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "9",
+      "title": "Review"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md",
+    "sha256": "06a0c27685765be10e7d2553233d7588edbfe86b78b45a2d1fcc4d82822f09c7"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 515,
+        "end_line": 6,
+        "line": 6,
+        "start": 219
+      },
+      "text": "status: approved   # by the operator, 2026-11-20, in a host session after the plan was shown: \"follow your plan and go. i'll approve specs from this plan and ratify and changes\". The charter text takes effect when the operator merges the pull request at a terminal (GOVERNANCE.md is a gate file)."
+    },
+    "sha256": "06a0c27685765be10e7d2553233d7588edbfe86b78b45a2d1fcc4d82822f09c7",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "134",
+    "stem": "134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "134: Drift on a closed list and review on the record (a charter amendment)"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 1706,
+      "end_line": 25,
+      "line": 25,
+      "start": 1638
+    },
+    "text": "Two rules in the charter say one thing and the record shows another."
+  }
+}

@@ -2,7 +2,7 @@
 
 # Runtime, models and tools
 
-18 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group runtime-models-and-tools` lists this group.
 
 ## 002-adapter-and-routing
 

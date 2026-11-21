@@ -24,6 +24,12 @@ pub struct State {
     pub push_after_read: Option<String>,
     /// After any merge, every other open pull request becomes `CONFLICTING` (the base moved under them).
     pub conflict_others_on_merge: bool,
+    /// How far each head commit is behind its base (`behind_by`); a head not listed is current.
+    pub behind: BTreeMap<String, u64>,
+    /// When set, every compare fails with this detail.
+    pub fail_compare: Option<String>,
+    /// After any merge, every other open pull request's head is one commit behind (the base moved under them).
+    pub behind_others_on_merge: bool,
 }
 
 #[derive(Default)]
@@ -57,6 +63,7 @@ impl FakeForge {
                 body: String::new(),
                 commit_messages: vec![format!("Do the thing\n\nImplements-Spec: {SPEC_PATH}\n\nCo-Authored-By: x")],
                 created_at: format!("2026-11-07T10:{:02}:00Z", n % 60),
+                cross_repo: false,
             },
         );
         s.paths.insert(n, paths.iter().map(|p| p.to_string()).collect());
@@ -125,6 +132,12 @@ impl Forge for FakeForge {
                 }
             }
         }
+        if s.behind_others_on_merge {
+            let heads: Vec<String> = s.prs.iter().filter(|(k, p)| **k != n && p.state == "OPEN").map(|(_, p)| p.head_sha.clone()).collect();
+            for h in heads {
+                *s.behind.entry(h).or_insert(0) += 1;
+            }
+        }
         Ok(())
     }
     fn comment(&self, n: u64, body: &str) -> Result<(), ForgeError> {
@@ -147,5 +160,12 @@ impl Forge for FakeForge {
     }
     fn merged_branches(&self, limit: usize) -> Result<Vec<(u64, String)>, ForgeError> {
         Ok(self.st.borrow().prs.values().filter(|p| p.state == "MERGED").map(|p| (p.number, p.head_ref.clone())).take(limit).collect())
+    }
+    fn behind_by(&self, _base_ref: &str, head_sha: &str) -> Result<u64, ForgeError> {
+        let s = self.st.borrow();
+        if let Some(d) = s.fail_compare.clone() {
+            return Err(ForgeError::Failed { what: "compare the branch with its base".into(), detail: d });
+        }
+        Ok(s.behind.get(head_sha).copied().unwrap_or(0))
     }
 }

@@ -65,9 +65,28 @@ pub fn parse_rfc3339(s: &str) -> Option<i64> {
     Some(days * 86_400 + h * 3_600 + mi * 60 + sec - offset)
 }
 
+/// This machine's offset from UTC, in seconds east, at the instant `at` (Unix seconds). For a clock time a provider states with no
+/// zone, which can only be read as local time.
+pub fn local_offset_secs(at: i64) -> i64 {
+    // time_t is 64-bit on every platform Delphi ships for.
+    let t: libc::time_t = at;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers are to live locals; localtime_r is the thread-safe form.
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return 0;
+    }
+    // `c_long`, 64-bit on every platform Delphi ships for.
+    tm.tm_gmtoff
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_local_offset_is_within_a_day() {
+        assert!(local_offset_secs(1_790_000_000).abs() <= 14 * 3600);
+    }
 
     #[test]
     fn known_instants() {

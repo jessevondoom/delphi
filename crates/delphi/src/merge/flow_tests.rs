@@ -497,3 +497,89 @@ fn the_log_view_filters_by_open_and_by_pull_request() {
     assert_eq!((all.len(), open.len(), seven.len()), (2, 1, 1));
     assert_eq!(open[0].pr, 7);
 }
+
+// ---- freshness (spec 094 §11.3.1, AC-9) ----------------------------------------------------------------------------------
+
+#[test]
+fn a_pull_request_behind_the_base_is_refused_with_class_behind_and_its_count_and_nothing_merges() {
+    let w = world();
+    w.forge.with_ready_pr(7, "head7", &["a.rs"]);
+    w.forge.st.borrow_mut().behind.insert("head7".into(), 2);
+    let v = evaluate(&w.forge, 7).unwrap();
+    assert_eq!(v.behind_by, 2);
+    assert!(!v.ready() && v.ready_but_maybe_behind(), "{:?}", v.refusals);
+    let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    match &out {
+        Outcome::Refused { reasons, .. } => {
+            let r = reasons.iter().find(|r| r.contains("behind")).expect("a freshness reason");
+            assert!(r.contains("2 commit(s) behind `main`") && r.contains("delphi merge refresh 7") && r.contains("wait for CI"), "{r}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(merged(&w).is_empty() && kinds(&w).is_empty(), "nothing merged, nothing recorded");
+    assert_eq!(error_classes(&w), vec![(7, "behind".to_string(), "open".to_string(), 1)]);
+    // Current again (the branch was refreshed and is green on its new head): it merges.
+    w.forge.st.borrow_mut().behind.clear();
+    let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    assert!(matches!(out, Outcome::Merged { .. }), "{out:?}");
+}
+
+#[test]
+fn a_failed_compare_is_a_forge_failure_never_a_pass() {
+    let w = world();
+    w.forge.with_ready_pr(7, "head7", &["a.rs"]);
+    w.forge.st.borrow_mut().fail_compare = Some("HTTP 502".into());
+    assert!(evaluate(&w.forge, 7).is_err());
+    let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    assert!(matches!(&out, Outcome::Failed { detail, .. } if detail.contains("compare")), "{out:?}");
+    assert!(merged(&w).is_empty());
+}
+
+#[test]
+fn freshness_is_required_of_a_gate_changing_pull_request_too_and_a_dry_run_shows_it() {
+    let w = world();
+    w.forge.with_ready_pr(7, "head7", &["AGENTS.md"]);
+    w.forge.st.borrow_mut().behind.insert("head7".into(), 1);
+    let out = with_ctx(&w, &mut FakeTerminal::new(true, &["7"]), None, false, |c| merge_one(c, 7, None));
+    assert!(matches!(&out, Outcome::Refused { reasons, .. } if reasons.iter().any(|r| r.contains("1 commit(s) behind"))), "{out:?}");
+    assert!(merged(&w).is_empty());
+    let w2 = world();
+    w2.forge.with_ready_pr(8, "head8", &["a.rs"]);
+    w2.forge.st.borrow_mut().behind.insert("head8".into(), 3);
+    let out = with_ctx(&w2, &mut FakeTerminal::new(false, &[]), None, true, |c| merge_one(c, 8, None));
+    assert!(matches!(&out, Outcome::Refused { reasons, .. } if reasons.iter().any(|r| r.contains("3 commit(s) behind"))), "{out:?}");
+    assert!(out.line().contains("refresh"), "{}", out.line());
+    assert!(error_classes(&w2).is_empty(), "a dry run logs nothing");
+}
+
+#[test]
+fn after_one_merge_of_a_batch_the_next_pull_request_is_behind_and_is_refused_not_merged_on_stale_checks() {
+    // The failure of 2026-11-20: two green pull requests, each tested against the base before the other merged.
+    let w = world();
+    w.forge.with_ready_pr(1, "h1", &["a.rs"]);
+    w.forge.with_ready_pr(2, "h2", &["b.rs"]);
+    w.forge.st.borrow_mut().behind_others_on_merge = true;
+    let att = Attestation::ChatQuote("merge all".into());
+    let outs = with_ctx(&w, &mut FakeTerminal::new(false, &[]), None, false, |c| merge_many(c, &[1, 2], Some(&att)));
+    assert!(matches!(outs[0], Outcome::Merged { .. }), "{outs:?}");
+    assert!(matches!(&outs[1], Outcome::Refused { reasons, .. } if reasons.iter().any(|r| r.contains("behind `main`"))), "{outs:?}");
+    assert_eq!(merged(&w), vec![(1, "h1".to_string())]);
+}
+
+#[test]
+fn a_behind_pull_request_can_still_be_queued_and_status_names_it_as_behind() {
+    let w = world();
+    w.forge.with_ready_pr(1, "h1", &["a.rs"]);
+    w.forge.edit(1, |p| p.labels.clear());
+    w.forge.st.borrow_mut().behind.insert("h1".into(), 4);
+    let msg = queue_one(&w.forge, 1).unwrap();
+    assert!(msg.contains("queued") && msg.contains("4 commit(s) behind") && msg.contains("delphi merge refresh 1"), "{msg}");
+    let lines = status_lines(&w.forge).unwrap();
+    assert!(lines[0].contains("not ready") && lines[0].contains("4 commit(s) behind `main`"), "{lines:?}");
+    // Behind and red: queueing still refuses on the red check.
+    w.forge.with_ready_pr(2, "h2", &["a.rs"]);
+    w.forge.edit(2, |p| p.labels.clear());
+    w.forge.st.borrow_mut().behind.insert("h2".into(), 1);
+    w.forge.st.borrow_mut().checks.insert(2, vec![Check { name: "ui".into(), bucket: "fail".into() }]);
+    assert!(queue_one(&w.forge, 2).unwrap_err().contains("checks failed"));
+}

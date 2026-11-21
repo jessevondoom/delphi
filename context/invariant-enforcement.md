@@ -74,7 +74,8 @@ A row moves from ❌ to ✅ when its check ships with the test named in the spec
 | Theme packs load only when ratified; voice only (≤400 chars, no directive language) | GOV §5.8, spec 001 §6.4 | Theme loader + deterministic linter | Daemon | ❌ |
 | Persona slot always below governance in the prompt | spec 002 §2 | IPR builder | Daemon | ❌ |
 | Agents use structured handoffs, not transcripts | GOV §3.1 | Envelope schema validation at dispatch | Daemon | ❌ |
-| Spec drift halts the build | GOV §1.4 | `spec_drift_detected` field → DAG halt | Daemon (field) / **Prompt-only** (detection) | ❌ |
+| Spec drift halts the build; only the closed list of §1.4 proceeds, listed under Deviations; Builder never edits a spec (mitigated, not closed: the builder's write scope `@worktree/**` includes a worktree's `specs/`) | GOV §1.4, spec 134 | `spec_drift_detected` field → DAG halt (no reader yet); a merge-time check of builder diffs under `specs/**` is a follow-up (spec 134 §7) | **Prompt-only** | ❌ |
+| An approved software spec cites its review in `reviewed_by` | GOV §1.3, spec 134 | `check_reviewed_by` in `delphi lint` resolves every cited review (spec 104 §13 G5); requiring one waits for the deferred check of spec 133 §2.4 | CI (cited reviews) / **Prompt-only** (that one is cited; the operator's waiver in a status line is free text no check reads) | ◐ |
 | Orchestrator preserves dissent; doesn't soften critique | GOV §2.1 | Covered mechanically by the Minority Report row above | Daemon (partial) | ❌ |
 | Red-Team gives falsifiable failure modes + remediation | GOV §2.7 | Output schema requires both fields | Daemon (schema) / **Prompt-only** (quality) | ❌ |
 | Scout outputs < 300-line pointer maps | `[H-002]` | Output length check | Daemon | ❌ |

@@ -252,13 +252,14 @@ const APP_EXE: &str = "Contents/MacOS/delphi-app";
 const MAX_APP_ENTRIES: usize = 2000;
 
 /// Where `delphi update` keeps the desktop app (`specs/122` §4 item 2): `~/Applications`, on macOS only, unless
-/// `DELPHI_NO_APP=1`, or while `<home>/app/opt-out` exists (`delphi app opt-out`, spec 122 §10.3). Never in a test, which
+/// `DELPHI_NO_APP=1`, or while `<delphi_home>/app/opt-out` exists (`delphi app opt-out`, spec 122 §10.3); `delphi_home` is the one
+/// `delphi update --home` resolved, so the home that wrote the opt-out is the home read. Never in a test, which
 /// passes its own folder to the `_with` functions.
-fn app_dir() -> Option<PathBuf> {
+fn app_dir(delphi_home: &Path) -> Option<PathBuf> {
     if cfg!(test) || !cfg!(target_os = "macos") || std::env::var("DELPHI_NO_APP").is_ok_and(|v| v == "1") {
         return None;
     }
-    app_dir_for(std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from).as_deref(), &crate::home::delphi_home(None))
+    app_dir_for(std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from).as_deref(), delphi_home)
 }
 
 /// `~/Applications` for the user home `user_home`, unless the Delphi home `delphi_home` holds the opt-out file.
@@ -270,12 +271,25 @@ fn app_dir_for(user_home: Option<&Path>, delphi_home: &Path) -> Option<PathBuf> 
 }
 
 /// The one line `delphi update` says when the opt-out file is why the desktop app was left alone (macOS only).
-fn opt_out_note() -> Option<String> {
+fn opt_out_note(delphi_home: &Path) -> Option<String> {
     if cfg!(test) || !cfg!(target_os = "macos") || std::env::var("DELPHI_NO_APP").is_ok_and(|v| v == "1") {
         return None;
     }
-    let file = crate::app_cmd::opt_out_path(&crate::home::delphi_home(None));
-    crate::app_cmd::opted_out(&crate::home::delphi_home(None)).then(|| format!("The desktop app was left alone: {} exists (`delphi app opt-in` removes it).", file.display()))
+    let file = crate::app_cmd::opt_out_path(delphi_home);
+    crate::app_cmd::opted_out(delphi_home).then(|| format!("The desktop app was left alone: {} exists (`delphi app opt-in` removes it).", file.display()))
+}
+
+/// The app bundle `exe` sits in, when it is a program inside a `*.app/Contents/` folder (spec 122 §10.1 item 4): the copy of
+/// `delphi` the desktop app carries. `delphi update` refuses to rewrite it, since that would break the bundle's seal and could
+/// swap the bundle it runs from; the bundle is replaced as a whole, by an installed `delphi`.
+pub fn inside_app_bundle(exe: &Path) -> Option<PathBuf> {
+    let parts: Vec<_> = exe.components().collect();
+    parts.windows(2).position(|w| w[0].as_os_str().to_string_lossy().ends_with(".app") && w[1].as_os_str() == "Contents").map(|i| parts[..=i].iter().collect())
+}
+
+/// The refusal `delphi update` prints for a program inside the app's bundle.
+pub fn inside_app_refusal(exe: &Path, bundle: &Path) -> String {
+    format!("this delphi is inside the desktop app ({}), and updating it would break the app's seal; nothing was changed. Run `\"{}\" self-install`, then `delphi update`", bundle.display(), exe.display())
 }
 
 /// One entry of the bundle: its path inside `Delphi.app`, and for a file its bytes and whether it is executable.
@@ -463,9 +477,9 @@ fn replace_beside(dest: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 /// Download, verify and swap in `rel` for `dest`, and on macOS the desktop app in `~/Applications` with it.
-pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path) -> Result<Installed> {
-    let mut done = install_with(net, rel, target, dest, app_dir().as_deref())?;
-    done.notes.extend(opt_out_note());
+pub fn install(net: &dyn Net, rel: &Release, target: &str, dest: &Path, delphi_home: &Path) -> Result<Installed> {
+    let mut done = install_with(net, rel, target, dest, app_dir(delphi_home).as_deref())?;
+    done.notes.extend(opt_out_note(delphi_home));
     Ok(done)
 }
 
@@ -566,8 +580,8 @@ fn retry_if_busy<T>(mut start: impl FnMut() -> std::io::Result<T>) -> std::io::R
 }
 
 /// Put `delphi.prev` back, and on macOS the kept desktop app. Returns lines about the app for the operator.
-pub fn rollback(dest: &Path) -> Result<Vec<String>> {
-    rollback_with(dest, app_dir().as_deref())
+pub fn rollback(dest: &Path, delphi_home: &Path) -> Result<Vec<String>> {
+    rollback_with(dest, app_dir(delphi_home).as_deref())
 }
 
 /// [`rollback`], with the app's folder given (`None`: leave any app alone).
@@ -659,15 +673,15 @@ pub enum Event {
 /// The program step, ignoring what follows. Returns the process exit code.
 #[cfg(test)]
 pub fn run(args: &[String], net: &dyn Net, dest: &Path, api: &str) -> i32 {
-    run_with(args, net, dest, api, &mut |_| {})
+    run_with(args, net, dest, api, &crate::home::delphi_home(None), &mut |_| {})
 }
 
 /// The program step of `delphi update`: `after` is told what happened once it is done and the executable at `dest`
 /// is the one to carry on with. It is not called after `--check` finds an update, or after an error.
-pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, after: &mut dyn FnMut(Event)) -> i32 {
+pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, delphi_home: &Path, after: &mut dyn FnMut(Event)) -> i32 {
     let flag = |n: &str| args.iter().position(|a| a == n).and_then(|i| args.get(i + 1)).cloned();
     if args.iter().any(|a| a == "--rollback") {
-        return match rollback(dest) {
+        return match rollback(dest, delphi_home) {
             Ok(notes) => {
                 println!("Restored the previous version.");
                 for n in notes {
@@ -718,7 +732,7 @@ pub fn run_with(args: &[String], net: &dyn Net, dest: &Path, api: &str, after: &
         println!("An update is available. Run `delphi update{}` to install it.", if dev { " --dev" } else { "" });
         return 0;
     }
-    match install(net, &rel, target, dest) {
+    match install(net, &rel, target, dest, delphi_home) {
         Ok(i) => {
             if dev {
                 println!("This is a development build of main, not a release; `delphi update` returns to the latest release.");
@@ -753,6 +767,9 @@ mod tests {
     }
 
     use super::*;
+
+    /// The Delphi home these tests pass; the app is never handled in a test, so it is not read.
+    const NO_HOME_STR: &str = "/nowhere";
     use std::collections::BTreeMap;
 
     #[test]
@@ -873,12 +890,12 @@ mod tests {
         }
         let (net, api) = server("v0.2.0", "0.2.0", None);
         let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
-        let done = install(&net, &rel, T, &dest).unwrap();
+        let done = install(&net, &rel, T, &dest, Path::new(NO_HOME_STR)).unwrap();
         assert_eq!(done.tag, "v0.2.0");
         assert!(std::fs::read_to_string(&dest).unwrap().contains("0.2.0"));
         assert!(std::fs::read_to_string(d.path().join("delphi.prev")).unwrap().contains("0.1.0"));
         assert!(std::fs::read_dir(d.path()).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".delphi-new")), "no temp file is left behind");
-        rollback(&dest).unwrap();
+        rollback(&dest, Path::new(NO_HOME_STR)).unwrap();
         assert!(std::fs::read_to_string(&dest).unwrap().contains("0.1.0"));
     }
 
@@ -889,20 +906,20 @@ mod tests {
         std::fs::write(&dest, "old").unwrap();
         let (bad_sum, api) = server("v0.2.0", "0.2.0", Some(&"0".repeat(64)));
         let rel = find(&bad_sum, &api, "0.1.0", None).unwrap().unwrap();
-        let e = install(&bad_sum, &rel, T, &dest).unwrap_err().to_string();
+        let e = install(&bad_sum, &rel, T, &dest, Path::new(NO_HOME_STR)).unwrap_err().to_string();
         assert!(e.contains("does not match its checksum"), "{}", e);
         let (liar, api) = server("v0.2.0", "0.0.1", None);
         let rel = find(&liar, &api, "0.1.0", None).unwrap().unwrap();
-        let e = install(&liar, &rel, T, &dest).unwrap_err().to_string();
+        let e = install(&liar, &rel, T, &dest, Path::new(NO_HOME_STR)).unwrap_err().to_string();
         assert!(e.contains("reports") && e.contains("not v0.2.0"), "{}", e);
         let (mut no_sum, api) = server("v0.2.0", "0.2.0", None);
         no_sum.0.retain(|k, _| !k.ends_with(".sha256"));
         let mut rel = find(&no_sum, &api, "0.1.0", None).unwrap().unwrap();
         rel.assets.retain(|(n, _)| !n.ends_with(".sha256"));
-        assert!(install(&no_sum, &rel, T, &dest).unwrap_err().to_string().contains("refusing to install without one"));
+        assert!(install(&no_sum, &rel, T, &dest, Path::new(NO_HOME_STR)).unwrap_err().to_string().contains("refusing to install without one"));
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "old");
         assert!(!d.path().join("delphi.prev").exists());
-        assert!(rollback(&dest).is_err(), "nothing to roll back to");
+        assert!(rollback(&dest, Path::new(NO_HOME_STR)).is_err(), "nothing to roll back to");
     }
 
     #[test]
@@ -935,10 +952,10 @@ mod tests {
         net.0.insert(format!("https://dl/{}.sha256", name), format!("{}  {}\n", sha256_hex(&tgz), name).into_bytes());
         net.0.insert(format!("https://dl/{}", name), tgz);
         let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
-        install(&net, &rel, T, &dest).unwrap();
+        install(&net, &rel, T, &dest, Path::new(NO_HOME_STR)).unwrap();
         assert_eq!(std::fs::read_to_string(d.path().join("delphi-ui")).unwrap(), "new ui");
         assert_eq!(std::fs::read_to_string(d.path().join("delphi-ui.prev")).unwrap(), "old ui");
-        rollback(&dest).unwrap();
+        rollback(&dest, Path::new(NO_HOME_STR)).unwrap();
         assert_eq!(std::fs::read_to_string(d.path().join("delphi-ui")).unwrap(), "old ui");
     }
 
@@ -950,7 +967,7 @@ mod tests {
         std::fs::write(d.path().join("delphi-ui"), "keep").unwrap();
         let (net, api) = server("v0.2.0", "0.2.0", None);
         let rel = find(&net, &api, "0.1.0", None).unwrap().unwrap();
-        install(&net, &rel, T, &dest).unwrap();
+        install(&net, &rel, T, &dest, Path::new(NO_HOME_STR)).unwrap();
         assert_eq!(std::fs::read_to_string(d.path().join("delphi-ui")).unwrap(), "keep");
     }
 
@@ -1029,7 +1046,18 @@ mod tests {
         ]
     }
 
-    /// A temporary home: the program at `bin/delphi` reporting 0.1.0, and an empty `Applications` path (not made).
+    /// Spec 122 §10.1 item 5: the copy inside an app bundle is recognised, and the refusal names `self-install`.
+    #[test]
+    fn a_program_inside_an_app_bundle_is_found_and_one_outside_is_not() {
+        assert_eq!(inside_app_bundle(Path::new("/Applications/Delphi.app/Contents/Resources/delphi")), Some(PathBuf::from("/Applications/Delphi.app")));
+        assert_eq!(inside_app_bundle(Path::new("/u/Applications/Other.app/Contents/MacOS/delphi")), Some(PathBuf::from("/u/Applications/Other.app")));
+        for outside in ["/u/.local/bin/delphi", "/opt/Delphi.app/delphi", "/opt/Delphi.application/Contents/delphi", "/opt/Contents/delphi"] {
+            assert_eq!(inside_app_bundle(Path::new(outside)), None, "{outside}");
+        }
+        let line = inside_app_refusal(Path::new("/A/Delphi.app/Contents/Resources/delphi"), Path::new("/A/Delphi.app"));
+        assert!(line.contains("\"/A/Delphi.app/Contents/Resources/delphi\" self-install") && line.contains("nothing was changed"), "{line}");
+    }
+
     /// Spec 122 §10.3 (AC-9): the opt-out file in the Delphi home is why `delphi update` leaves the app alone.
     #[test]
     fn the_opt_out_file_leaves_the_app_alone_until_opt_in() {
@@ -1043,6 +1071,7 @@ mod tests {
         assert_eq!(app_dir_for(Some(&user), &dh), Some(user.join("Applications")));
     }
 
+    /// A temporary home: the program at `bin/delphi` reporting 0.1.0, and an empty `Applications` path (not made).
     fn home() -> (tempfile::TempDir, PathBuf, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
@@ -1210,7 +1239,7 @@ mod tests {
             }
         }
         let enforcing = EnforcingNet(net);
-        let err = install(&enforcing, &rel, T, &dest).unwrap_err().to_string();
+        let err = install(&enforcing, &rel, T, &dest, Path::new(NO_HOME_STR)).unwrap_err().to_string();
         assert!(err.contains("the download is larger than allowed"), "expected size error, got: {}", err);
     }
 
@@ -1238,7 +1267,7 @@ mod tests {
         let (net, api) = dev_server("0.2.4-dev.gabc1234");
         let rel = find_dev(&net, &api, "0.2.4", T).unwrap().unwrap();
         assert_eq!(rel.tag, "v0.2.4-dev.gabc1234", "the tag is the version the binary reports, not `dev`");
-        install(&net, &rel, T, &dest).unwrap();
+        install(&net, &rel, T, &dest, Path::new(NO_HOME_STR)).unwrap();
         assert!(std::fs::read_to_string(&dest).unwrap().contains("0.2.4-dev.gabc1234"));
         assert!(std::fs::read_to_string(d.path().join("delphi.prev")).unwrap().contains("'delphi 0.2.4'"));
         assert!(find_dev(&net, &api, "0.2.4-dev.gabc1234", T).unwrap().is_none(), "already that build");
@@ -1344,14 +1373,14 @@ mod tests {
         }
         let (net, api) = server_for(target().unwrap(), "v99.0.0", "99.0.0", None);
         let mut seen: Vec<Event> = Vec::new();
-        assert_eq!(run_with(&["--check".into()], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert_eq!(run_with(&["--check".into()], &net, &dest, &api, Path::new(NO_HOME_STR), &mut |e| seen.push(e)), 0);
         assert!(seen.is_empty(), "--check that finds an update changes nothing and follows up on nothing");
-        assert_eq!(run_with(&[], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert_eq!(run_with(&[], &net, &dest, &api, Path::new(NO_HOME_STR), &mut |e| seen.push(e)), 0);
         assert_eq!(seen, vec![Event::Installed]);
-        assert_eq!(run_with(&["--rollback".into()], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert_eq!(run_with(&["--rollback".into()], &net, &dest, &api, Path::new(NO_HOME_STR), &mut |e| seen.push(e)), 0);
         assert_eq!(seen, vec![Event::Installed, Event::RolledBack]);
         let (net, api) = server_for(target().unwrap(), "v0.1.0", "0.1.0", None);
-        assert_eq!(run_with(&[], &net, &dest, &api, &mut |e| seen.push(e)), 0);
+        assert_eq!(run_with(&[], &net, &dest, &api, Path::new(NO_HOME_STR), &mut |e| seen.push(e)), 0);
         assert_eq!(seen.last(), Some(&Event::UpToDate), "nothing newer: the workspaces are still refreshed against this program");
     }
 }
