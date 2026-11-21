@@ -2,7 +2,7 @@
 
 # Governance and safety
 
-13 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group governance-and-safety` lists this group.
 
 ## 001-governance-and-manifests
 
