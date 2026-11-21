@@ -138,6 +138,12 @@ per_watch_max_wakes_per_day = 10
 # (`red_team_kind` was removed, specs/098 section 13.2: `council_open` always accepts `kind: red_team`.)
 # max_foreign_tokens = 100000        # per Council: the foreign seat's token ceiling must fit under this, and Round 2 is skipped once Round 1 used it
 
+# A cross-family review of a host's branch (`request_review`, specs/135 section 6). Delphi runs these commands in the OS sandbox,
+# with no network, in a copy of the branch; a seat of another family with no tools reviews the diff with their output.
+# [forge]
+# review_commands = [["cargo", "test", "--offline"]]   # unset (default): the [exec] test_command and check_command, when set; [] runs none
+# review_diff_chars = 40000          # the most diff the reviewer is shown (1000 to 200000); whole files past it are left out and named
+
 # What the engine adds around a role's model calls (specs/045). Not an access table: it adds notes and one verification turn,
 # never a tool or a permission. Every key shown is the default.
 # [loop]

@@ -101,6 +101,14 @@
         "source_ladder": { "type": "boolean", "deprecated": true, "description": "Removed (specs/098 section 13.2): ignored. The source ladder is in the scout, investigator and red-team manifests and is always served, and `delphi mcp --print-claude-md` always includes the research reflex. The key stays here so an old config still validates; delphi doctor names it." }
       }
     },
+    "forge": {
+      "type": "object",
+      "description": "A cross-family review of a host's branch, request_review (specs/135 section 6).",
+      "properties": {
+        "review_commands": { "type": "array", "maxItems": 8, "items": { "type": "array", "minItems": 1, "items": { "type": "string" } }, "description": "The commands a review runs, each an argv, in the OS sandbox with no network in a copy of the branch. Unset: the [exec] test_command and check_command, when set. An empty list runs none." },
+        "review_diff_chars": { "type": "integer", "minimum": 1000, "maximum": 200000, "description": "The most diff the reviewer is shown (default 40000); whole files past it are left out and named." }
+      }
+    },
     "seats": {
       "type": "object",
       "description": "Foreign seats and model families (spec 091 SR-3, SR-4).",

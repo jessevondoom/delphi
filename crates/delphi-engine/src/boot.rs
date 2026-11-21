@@ -89,6 +89,19 @@ pub fn settings_from(root: &toml::Value) -> Settings {
             s.max_foreign_tokens = n as u64;
         }
     }
+    // Spec 135 §6: a review's commands (a list of argv lists, at most 8, each non-empty) and its diff cap (1,000 to 200,000
+    // characters). A value of the wrong shape keeps the default.
+    if let Some(fg) = root.get("forge") {
+        if let Some(list) = fg.get("review_commands").and_then(|v| v.as_array()) {
+            let parsed: Option<Vec<Vec<String>>> = list.iter().map(|a| a.as_array().map(|w| w.iter().map(|x| x.as_str().map(String::from)).collect::<Option<Vec<_>>>()).unwrap_or(None).filter(|w| !w.is_empty())).collect();
+            if let Some(cmds) = parsed.filter(|c| c.len() <= 8) {
+                s.review_commands = Some(cmds);
+            }
+        }
+        if let Some(n) = fg.get("review_diff_chars").and_then(|v| v.as_integer()).filter(|v| (1_000..=200_000).contains(v)) {
+            s.review_diff_chars = n as usize;
+        }
+    }
     // Spec 104 §12 A4: `[access]` is one of the pinned blocks, so this is the ratified copy's value; a live edit does not count.
     if let Some(n) = root.get("access").and_then(|a| a.get("standing_foreign_tokens")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
         s.standing_foreign_tokens = n as u64;
@@ -751,6 +764,20 @@ mod tests {
         for bad in ["young_domain_days = -1", "burst_hours = \"day\"", "similar_above = 1.5", "similar_above = 0.0", "unfamiliar_counts = \"yes\""] {
             let got = settings_from(&toml::from_str(&format!("[research]\n{bad}\n")).unwrap()).support;
             assert_eq!((got.young_domain_days, got.burst_hours, got.similar_above, got.unfamiliar_counts), (180, 24, 0.8, true), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_forge_block_sets_a_reviews_commands_and_diff_cap_and_a_bad_value_keeps_the_default() {
+        let d = settings_from(&toml::from_str("").unwrap());
+        assert_eq!((d.review_commands.clone(), d.review_diff_chars), (None, 40_000));
+        let s = settings_from(&toml::from_str("[forge]\nreview_commands = [[\"cargo\", \"test\", \"--offline\"], [\"cargo\", \"clippy\"]]\nreview_diff_chars = 20000\n").unwrap());
+        assert_eq!(s.review_commands, Some(vec![vec!["cargo".to_string(), "test".into(), "--offline".into()], vec!["cargo".to_string(), "clippy".into()]]));
+        assert_eq!(s.review_diff_chars, 20_000);
+        assert_eq!(settings_from(&toml::from_str("[forge]\nreview_commands = []\n").unwrap()).review_commands, Some(vec![]), "an empty list runs nothing");
+        for bad in ["review_commands = [[]]", "review_commands = [\"cargo test\"]", "review_commands = [[1]]", "review_diff_chars = 10", "review_diff_chars = 9000000"] {
+            let s = settings_from(&toml::from_str(&format!("[forge]\n{bad}\n")).unwrap());
+            assert_eq!((s.review_commands, s.review_diff_chars), (None, 40_000), "{bad}");
         }
     }
 
