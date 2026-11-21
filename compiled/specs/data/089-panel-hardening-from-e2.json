@@ -139,12 +139,18 @@
       "line": 286,
       "number": "16",
       "title": "P7 result (a headless host can survive the foreign seat's wait)"
+    },
+    {
+      "level": 2,
+      "line": 302,
+      "number": "17",
+      "title": "Amendment (2026-11-21): a first-event clock, one retry of a silent run, then the family's next endpoint"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/089-panel-hardening-from-e2.md",
-    "sha256": "8bc8c668386580100009903f5756bcfa2e443b37dab21bfb20be551d643842bd"
+    "sha256": "70425409e39b5e506cc573cd91edc955a48f42fffca71c1460aa3c38499addd2"
   },
   "source_status_at_hash": {
     "line": {
@@ -157,7 +163,7 @@
       },
       "text": "status: approved   # by the operator's instruction of 2026-11-06 (\"begin work on the remaining slices\"); OD-1, OD-2, OD-3 and OD-5 take the recommendations; P4b and the E3 run wait for the operator's explicit go (§10)"
     },
-    "sha256": "8bc8c668386580100009903f5756bcfa2e443b37dab21bfb20be551d643842bd",
+    "sha256": "70425409e39b5e506cc573cd91edc955a48f42fffca71c1460aa3c38499addd2",
     "word": "approved"
   },
   "spec": {

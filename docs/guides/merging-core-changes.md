@@ -10,6 +10,7 @@ How a pull request to Delphi's own repository goes from "ready" to "merged and c
 | S6 | `merge --auto` |
 | S7 (this page) | the agent rules, this guide, the vocabulary table |
 | S9 (§11) | freshness: a PR whose head is behind its base is refused, class `behind` |
+| S10 (§11) | `merge refresh <PR>`: a mechanical update of a behind PR, class `refresh-refused` |
 
 Delphi stays optional. The label, the PR comment and the merge commit are visible in plain GitHub, and a native merge always works.
 
@@ -29,6 +30,22 @@ The command derives the head commit, base commit, changed paths, the linked spec
 ### Freshness (S9)
 
 CI tests a PR against the base as it was at the PR's last push, and nothing runs again when the base moves. Two spec PRs that each change the compiled index's count line from 136 to 137 merge with no conflict, and `main` then says 137 where there are 138 specs (this broke `main` on 2026-11-20). So the command also refuses a PR whose head does not contain the base tip: it asks GitHub's compare API how far the head is behind (`behind_by`, not `mergeStateStatus`, which says `BEHIND` only under strict branch protection). The refusal gives the count and says what to do: refresh the branch (`delphi merge refresh <PR>`) and wait for CI on the new head. A failed compare is a failure, never a pass. The rule applies to every PR, gate-changing ones included, and `--dry-run` and `merge status` show it. `merge queue` does not require freshness: the queue is advice, and it says when a PR it queues is behind. In a batch (`--all`, `--auto`), every PR after the first merge is behind, so it is refused until it is refreshed and green again; refreshing and waiting inside the batch is slice S11, not built yet.
+
+### `delphi merge refresh <PR>` (S10)
+
+Run it in the repository on a PR that is behind. It does what an author did by hand three times on 2026-11-20:
+
+1. It refuses at once a PR that is closed, a draft, from a fork, gate-changing (update that one yourself with `gh pr update-branch <PR>`, or hand it to `merge fix`), or already current.
+2. In a temporary worktree of its own under `$DELPHI_HOME/merge/refresh/`, on the PR's head commit, it merges `origin/<base>` in (`git merge --no-ff`, a merge commit; never a rebase). It removes the worktree at the end whatever happened.
+3. It settles only these conflicts: `compiled/groups.toml` and the spec tracker by keeping both sides' lines, the base's first; the generated views and JSON under `compiled/specs/` by taking the base's side.
+4. It always reruns the spec compile (the code of `delphi specs compile`) and checks the result, conflict or not. A merge with no conflict can still leave a view that is not what the compile writes; the count line of 2026-11-20 was one, before the spec 088 amendment took the counts out of the views.
+5. It checks that it widened nothing: outside `compiled/`, the PR's added and removed lines against the new base are exactly those against the old one. Two edits of the same tracker row fail this check.
+6. It commits `Merge <base> into <branch> (delphi merge refresh)` and pushes with a plain push. A branch that moved meanwhile rejects the push; nothing is overwritten and nothing is retried.
+7. It writes a `refreshed` row to the ledger and a comment on the PR, and moves an open `behind` entry to `fixed-pending-ci`.
+
+Any other conflicted file, a gate path, more than 10 conflicted files, a failed compile, a widened change or a rejected push stops it with nothing pushed and an entry of class `refresh-refused`. Run `delphi merge fix <PR>` to hand that to the builder.
+
+**It needs no approval of its own.** It never merges a PR and has no path to one. It pushes one ordinary commit that changes nothing the PR did not already change, apart from generated files and the two append-only files. Anyone who may push to the branch may run it, an agent included, as with `merge fix`. CI then runs on the new head, and the PR merges only through `delphi merge` on your word. Cargo.lock and `docs/reference/` conflicts need a build of the merged code, so they go to `merge fix`.
 
 ## The approval record
 
