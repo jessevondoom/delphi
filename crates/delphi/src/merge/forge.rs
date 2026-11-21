@@ -28,6 +28,8 @@ pub struct PrInfo {
     /// Every commit's full message on the pull request, for the `Implements-Spec:` trailer.
     pub commit_messages: Vec<String>,
     pub created_at: String,
+    /// The head branch lives in another repository (a fork). `merge refresh` pushes only to this repository's branches.
+    pub cross_repo: bool,
 }
 
 /// One check run on the head commit. `bucket` is `gh`'s own classification: `pass`, `fail`, `pending`, `skipping` or `cancel`.
@@ -151,7 +153,7 @@ impl Forge for Gh {
         let num = n.to_string();
         let v = self.json(
             "read the pull request",
-            &["pr", "view", &num, "--json", "number,title,state,isDraft,mergeable,headRefOid,headRefName,baseRefName,baseRefOid,labels,additions,deletions,body,commits,createdAt"],
+            &["pr", "view", &num, "--json", "number,title,state,isDraft,mergeable,headRefOid,headRefName,baseRefName,baseRefOid,labels,additions,deletions,body,commits,createdAt,isCrossRepository"],
             &[],
         )?;
         Ok(PrInfo {
@@ -170,6 +172,8 @@ impl Forge for Gh {
             body: s(&v, "body"),
             commit_messages: v["commits"].as_array().into_iter().flatten().map(|c| format!("{}\n\n{}", s(c, "messageHeadline"), s(c, "messageBody"))).collect(),
             created_at: s(&v, "createdAt"),
+            // Unknown is treated as a fork: refresh refuses rather than pushing somewhere it cannot see.
+            cross_repo: v["isCrossRepository"].as_bool().unwrap_or(true),
         })
     }
 

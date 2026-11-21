@@ -838,8 +838,8 @@ From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` 
 | S6 | `--auto` session mode | 8-10 | merged (#572); never run live (STOP file, Ctrl-C, real GitHub) |
 | S7 | agent rules, deny rule, operator guide, vocabulary | 3-4 | merged (#570) |
 | S8 | hardening pass | | deferred (own spec) |
-| S9 | §11 amendment (2026-11-20, approved in advance on the operator's words, text not yet read by the operator): freshness precondition, `behind_by` from the compare API, class `behind` | 4-6 | built (PR open, gate-changing: the operator merges it at a terminal); fake-forge tests only, the compare call never run against GitHub |
-| S10 | §11: `delphi merge refresh <PR>`: mechanical update for `compiled/`, `groups.toml` and the tracker, recompile, widening check, plain push | 10-14 | not built |
+| S9 | §11 amendment (2026-11-20, approved in advance on the operator's words, text not yet read by the operator): freshness precondition, `behind_by` from the compare API, class `behind` | 4-6 | merged (#821); fake-forge tests only, the compare call never run against GitHub |
+| S10 | §11: `delphi merge refresh <PR>`: mechanical update for `compiled/`, `groups.toml` and the tracker, recompile, widening check, plain push | 10-14 | built (PR open, gate-changing: the operator merges it at a terminal); fixture-repository tests with a local bare remote; never run against GitHub, and the V3 replay of 2026-11-20 not run |
 | S11 | §11: `<PR>`/`--all`/`--auto` refresh and wait, attestation carry-over, check of the base after each merge, `repair-base` | 8-10 | not built |
 | S12 | §11: guide, skill row and eval fixture; the operator's strict `required_status_checks` ruleset setting (OD-10, no code) | 2-3 | not built; setting not switched on |
 

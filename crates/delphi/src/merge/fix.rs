@@ -16,7 +16,8 @@ pub struct Git {
 }
 
 impl Git {
-    fn run(&self, args: &[&str]) -> Result<String, String> {
+    /// `refresh` runs its git commands through here too, so the module keeps one process-start site for git.
+    pub(super) fn run(&self, args: &[&str]) -> Result<String, String> {
         let out = Command::new("git").arg("-C").arg(&self.repo).args(args).stdin(std::process::Stdio::null()).output().map_err(|e| format!("cannot run git: {e}"))?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).to_string())
