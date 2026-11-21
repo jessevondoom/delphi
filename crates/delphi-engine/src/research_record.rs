@@ -133,6 +133,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let name = path.file_name().and_then(|n| n.to_str()).ok_or("no file name")?;
     let tmp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+    // The temporary file is Delphi's own write too: a checkout snapshot taken between its creation and its rename must not blame a
+    // seat (`specs/128` S3, amended 2026-11-21).
+    crate::own_writes::note_temp(&tmp, bytes);
     #[cfg(unix)]
     {
         use std::io::Write;
