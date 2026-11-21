@@ -6,7 +6,7 @@
 
 ## 006-installer-and-updater
 
-**006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine** · approved (per source at `8cb36ea98265`) · tier 0 · [source](../../specs/006-installer-and-updater.md)
+**006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine** · approved (per source at `11715c533dbd`) · tier 0 · [source](../../specs/006-installer-and-updater.md)
 
 **source excerpt, untrusted** · `specs/006-installer-and-updater.md` lines 23-27
 
