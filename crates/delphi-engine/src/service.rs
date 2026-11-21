@@ -235,8 +235,8 @@ fn spawn_foreign(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, id: 
         };
         // Round 2 is more spend: judge it by the receipts of Round 1, never by the request (`specs/091` SR-3, SR-4). A refusal here only narrows.
         let stop = if round > 1 {
-            let (host_family, required) = { panels.lock().unwrap().get(&key).map(|p| (p.host_family.clone(), p.require_families)).unwrap_or_default() };
-            let unmet = required.and_then(|n| engine.panel_diversity(&m, &id, host_family.as_deref()).unmet(n, "by the receipts of Round 1"));
+            let (host_family, required, round1, foreign) = { panels.lock().unwrap().get(&key).map(|p| (p.host_family.clone(), p.require_families, p.stances().cloned(), p.foreign_seats().iter().map(|s| s.role.clone()).collect::<Vec<_>>())).unwrap_or_default() };
+            let unmet = required.and_then(|n| engine.panel_diversity(&m, &id, host_family.as_deref(), round1.as_ref(), &foreign).unmet(n, "by the receipts of Round 1"));
             unmet.or_else(|| (engine.panel_foreign_tokens(&m, &id) >= engine.settings.max_foreign_tokens).then(|| format!("foreign-seat budget: Round 1 used {} tokens, the cap is [seats] max_foreign_tokens = {} per Council; Round 2 was not run", engine.panel_foreign_tokens(&m, &id), engine.settings.max_foreign_tokens)))
         } else {
             None
@@ -10805,6 +10805,44 @@ mod tests {
         let (_, got) = blocking(move || drive_panel(hsock, htok, cwd, json!({"question": "q?", "tool": "mystery-host", "operator_confirmed": true, "foreign_seats": [{"role": "red-team"}, {"role": "strategist"}]}), &["architect"]).unwrap()).await;
         assert_eq!((got["ruling"]["families"].clone(), got["ruling"]["homogeneous"].clone()), (json!(["gemini"]), json!(true)), "{got}");
         assert!(got["display"].as_str().unwrap().contains("1 family: gemini (homogeneous)"), "{}", got["display"]);
+    }
+
+    // specs/091 SR-3 (amended 2026-11-21): a seat counts toward families only if it gave a stance. Delphi's gemini seat runs (its
+    // receipt says `ok`, served gemini) but answers Round 1 with nothing, so it abstains: only the host's claude sat.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_foreign_seat_that_abstained_adds_no_family_and_the_panel_is_homogeneous() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text(R2_GOOD) } else { Step::text("") });
+        f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (_, got) = blocking(move || drive_panel(hsock, htok, cwd, json!({"question": "q?", "model": "claude-opus", "operator_confirmed": true, "foreign_seat": "red-team"}), &["architect", "strategist"]).unwrap()).await;
+        let events = replay_log(&delphi_core::sessions::dir(&f.engine.ws.dir, "host-abcdef0123456789"));
+        assert!(events.iter().any(|e| e.kind == crate::seat::RECEIPT_KIND && e.payload["outcome"] == "ok" && e.payload["served"]["family"] == "gemini"), "the seat ran and its receipt says ok");
+        assert!(events.iter().any(|e| e.kind == "council.stance" && e.payload["role"] == "red-team" && e.payload["status"] == "abstained"), "and it abstained");
+        let started = events.iter().find(|e| e.kind == "council.started").unwrap();
+        assert_eq!((started.payload["families"].clone(), started.payload["homogeneous"].clone()), (json!(["claude"]), json!(true)), "{}", started.payload);
+        assert_eq!((got["ruling"]["families"].clone(), got["ruling"]["homogeneous"].clone()), (json!(["claude"]), json!(true)), "{got}");
+        let verdict = events.iter().find(|e| e.kind == "council.verdict").unwrap();
+        assert_eq!(verdict.payload["homogeneous"], true, "the record is labelled homogeneous too: {}", verdict.payload);
+        assert!(got["display"].as_str().unwrap().contains("1 family: claude (homogeneous)"), "{}", got["display"]);
+    }
+
+    // The same rule for a required count: Round 1's only gemini seat abstained, so `require_families = 2` is not met.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_abstained_foreign_seat_does_not_meet_require_families() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text(R2_GOOD) } else { Step::text("") });
+        f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (_, got) = blocking(move || drive_panel(hsock, htok, cwd, json!({"question": "q?", "model": "claude-opus", "operator_confirmed": true, "require_families": 2, "foreign_seat": "red-team"}), &["architect", "strategist"]).unwrap()).await;
+        assert_eq!((got["ruling"]["families"].clone(), got["ruling"]["require_families_met"].clone()), (json!(["claude"]), json!(false)), "{got}");
+        assert!(!f.model.requests().iter().any(|q| q.body.to_string().contains("COUNCIL, ROUND 2")), "Round 2 of the foreign seat was not run: the requirement was judged unmet after Round 1");
     }
 
     // ── specs/098 §6.2 (S6): a red-team review and `ask_family` ─────────────────────────────────────────────

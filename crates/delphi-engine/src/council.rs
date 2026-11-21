@@ -1448,10 +1448,21 @@ impl Engine {
     }
 
     /// The families that actually sat in a Panel: the host's own (host-reported) plus the SERVED family of each of Delphi's seats that
-    /// ended `ok`, from the receipts (`specs/091` SR-3). `unknown` never counts.
-    pub fn panel_diversity(&self, m: &MissionState, task_id: &str, host_family: Option<&str>) -> crate::seat::Diversity {
-        let (served, _) = m.replay().map(|evs| crate::seat::served_for_task(&evs, task_id)).unwrap_or_default();
-        crate::seat::Diversity::of(host_family, &served)
+    /// ended `ok`, from the receipts (`specs/091` SR-3). `unknown` never counts. A seat counts only if it gave a stance (SR-3, amended
+    /// 2026-11-21): with `round1` (the released Round 1), a seat Delphi ran that abstained adds no family, and the host's family counts
+    /// only if one of the host's own seats (those not in `foreign`) said something. Without it, the log's Round 1 stances decide.
+    pub fn panel_diversity(&self, m: &MissionState, task_id: &str, host_family: Option<&str>, round1: Option<&BTreeMap<String, Stance>>, foreign: &[String]) -> crate::seat::Diversity {
+        let abstained: Vec<String> = round1.into_iter().flatten().filter(|(_, s)| s.text().is_none()).map(|(r, _)| r.clone()).collect();
+        let evs = m.replay().unwrap_or_default();
+        let host_said = match round1 {
+            Some(st) => st.iter().any(|(r, s)| !foreign.contains(r) && s.text().is_some()),
+            None => {
+                let host_roles: Vec<&str> = evs.iter().filter(|e| e.kind == "council.stance" && e.task_id.as_deref() == Some(task_id) && e.payload["round"] == 1).filter_map(|e| e.payload["role"].as_str()).filter(|r| !foreign.iter().any(|f| f == r)).collect();
+                crate::seat::host_sat(&evs, task_id, &host_roles)
+            }
+        };
+        let (served, _) = crate::seat::sat_for_task(&evs, task_id, &abstained);
+        crate::seat::Diversity::of(host_family.filter(|_| host_said), &served)
     }
 
     /// Tokens the Panel's foreign seat has used so far, from its receipts.
@@ -1502,7 +1513,8 @@ impl Engine {
             e.task_id = Some(task_id.to_string());
             e
         };
-        let div = self.panel_diversity(m, task_id, host.0.as_deref());
+        let foreign_roles: Vec<String> = foreign.iter().map(|(r, _)| r.clone()).collect();
+        let div = self.panel_diversity(m, task_id, host.0.as_deref(), Some(stances), &foreign_roles);
         let mut started = json!({"proposition": proposition, "venue": "panel", "blind": blind, "foreign": foreign.first().map(|(r, f)| json!({"role": r, "family": f})), "seats": stances.keys().map(|r| json!({"role": r, "family": foreign.iter().find(|(fr, _)| fr == r).map(|(_, f)| f.as_str()).unwrap_or("host-reported"), "model": models.get(r)})).collect::<Vec<_>>(), "homogeneous": div.homogeneous(), "families": div.families, "families_unknown": div.unknown, "host_family": host.0, "require_families": host.1, "notes": ["a host Panel: isolation and model names are host-reported; Delphi holds the barrier"]});
         if let Some(c) = claims.0 {
             started["operator_confirmed"] = json!(c);
@@ -1552,7 +1564,7 @@ impl Engine {
         let foreign = panel.foreign();
         let plan = Assignment {
             seats: panel.seats().iter().map(|r| SeatPlan { role: r.clone(), family: panel.foreign_seats().iter().find(|s| &s.role == r).map(|s| s.family.clone()).unwrap_or_else(|| "host-reported".into()), avoid: vec![], tier: None }).collect(),
-            homogeneous: self.panel_diversity(m, &task_id, panel.host_family.as_deref()).homogeneous(),
+            homogeneous: self.panel_diversity(m, &task_id, panel.host_family.as_deref(), panel.stances(), &panel.foreign_seats().iter().map(|s| s.role.clone()).collect::<Vec<_>>()).homogeneous(),
             notes: {
                 let mut n = vec!["a host Panel: isolation and model names are host-reported".to_string()];
                 if panel.relay()["relayed"] == true {
@@ -1702,6 +1714,13 @@ impl Engine {
         let answered: Vec<&String> = stances.iter().filter(|(_, s)| s.text().is_some()).map(|(r, _)| r).collect();
         if answered.len() < 2 {
             return Ok((Status::Escalated(format!("only {} seat(s) answered Round 1, too few to deliberate; nothing was decided", answered.len())), String::new()));
+        }
+        // `specs/091` SR-3 (amended 2026-11-21): a seat counts toward families only if it gave a stance. The plan spanned two families;
+        // if the seats that answered do not, the record is labelled homogeneous.
+        let said_families: std::collections::BTreeSet<&str> = plan.seats.iter().filter(|s| answered.contains(&&s.role)).map(|s| s.family.as_str()).collect();
+        if !plan.homogeneous && said_families.len() < 2 {
+            plan.homogeneous = true;
+            plan.notes.push(format!("only one model family answered Round 1 ({}): the seats on the other family abstained, so the verdict is labeled homogeneous", said_families.iter().next().copied().unwrap_or("none")));
         }
         if let Some(why) = over_budget(self, "Round 1") {
             return Ok((Status::Escalated(why), String::new()));
@@ -2899,6 +2918,38 @@ pub(crate) mod tests {
         let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(w) if w.contains("too few")), "{:?}", out.status);
         assert!(!f.m.dir.join("councils").exists());
+    }
+
+    /// `specs/091` SR-3 (amended 2026-11-21): a seat counts toward families only if it gave a stance. The plan spans two families; the
+    /// seats on gemini answer Round 1 with nothing, so the record and the verdict are labelled homogeneous.
+    #[tokio::test]
+    async fn a_daemon_council_whose_other_family_gave_no_stance_is_homogeneous() {
+        // The plan is deterministic: learn which seats it puts on gemini from one ordinary run.
+        let (probe, _, _) = fixture(RED_OK, None);
+        probe.engine.run_council(&probe.m, probe.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        let on_gemini: Vec<String> = events_of(&probe, "council.started")[0].payload["seats"].as_array().unwrap().iter().filter(|s| s["family"] == "gemini").filter_map(|s| s["role"].as_str().map(String::from)).collect();
+        assert!(on_gemini.len() == 1, "the plan seats one role on gemini: {on_gemini:?}");
+        let (f, _, _) = fixture(RED_OK, None);
+        f.model.respond_with(move |body| {
+            let t = body.to_string();
+            let gem = on_gemini.iter().any(|r| r == who(body));
+            if t.contains("COUNCIL, ROUND 1") {
+                Step::text(if gem { "" } else { "OPTION: queue\nuse a queue." })
+            } else if t.contains("COUNCIL, ROUND 2") {
+                Step::text("Reasoning.\nRECOMMENDATION: PROCEED\nROUND 2 COMPLETE")
+            } else {
+                Step::text("The Council recommends the queue.")
+            }
+        });
+        f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        let started = events_of(&f, "council.started");
+        assert_eq!(started[0].payload["homogeneous"], false, "the plan spanned two families: {}", started[0].payload);
+        let stances = events_of(&f, "council.stance");
+        assert!(stances.iter().any(|e| e.payload["status"] == "abstained"), "a gemini seat abstained");
+        let verdict = events_of(&f, "council.verdict");
+        assert_eq!(verdict[0].payload["homogeneous"], true, "{}", verdict[0].payload);
+        let doc = std::fs::read_to_string(std::fs::read_dir(f.m.dir.join("councils")).unwrap().flatten().next().unwrap().path()).unwrap();
+        assert!(doc.contains("**Homogeneous (low diversity):**") && doc.contains("only one model family answered Round 1 (claude)"), "{doc}");
     }
 
     /// Spec 123 §5 (AC-4): a timed-out seat names its family and endpoint; a failed one keeps at most 300 characters of its redacted

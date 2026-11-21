@@ -336,6 +336,9 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     s.harness_copilot = crate::harness_opts::parse(root, crate::harness::Cli::Copilot).0;
     s.learning = crate::learn::LearningSettings::parse(root).0;
     s.history = crate::history_record::Settings::parse(root).0;
+    if let Some(v) = root.get("harness").and_then(|h| h.get("first_event_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
+        s.harness_first_event = Duration::from_secs(v as u64);
+    }
     if let Some(v) = root.get("harness").and_then(|h| h.get("connector_settle_secs")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
         s.connector_settle = Duration::from_secs(v as u64);
     }
@@ -595,9 +598,11 @@ mod tests {
 
     #[test]
     fn harness_blocks_become_cli_options_and_a_typo_is_a_notice() {
-        let root: toml::Value = toml::from_str("[harness]\nsubscription_budget_tokens = 9000\n[harness.claude]\neffort = \"low\"\npartial_messages = true\n[harness.agy]\nmode = \"yolo\"\n").unwrap();
+        let root: toml::Value = toml::from_str("[harness]\nsubscription_budget_tokens = 9000\nfirst_event_secs = 45\n[harness.claude]\neffort = \"low\"\npartial_messages = true\n[harness.agy]\nmode = \"yolo\"\n").unwrap();
         let s = settings_from(&root);
         assert_eq!((s.harness_token_cap, s.harness_claude.effort.as_deref(), s.harness_claude.partial_messages, s.harness_agy.mode.clone()), (9000, Some("low"), true, None));
+        assert_eq!(s.harness_first_event, Duration::from_secs(45));
+        assert_eq!(settings_from(&toml::from_str("[harness]\n").unwrap()).harness_first_event, Duration::from_secs(90), "the default");
         let bad = crate::harness_opts::problems(&root);
         assert!(bad.len() == 1 && bad[0].contains("[harness.agy] mode"), "{:?}", bad);
     }

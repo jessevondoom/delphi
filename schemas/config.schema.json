@@ -322,6 +322,7 @@
       "description": "`[harness.claude]`, `[harness.agy]`, `[harness.codex]` and `[harness.copilot]` narrow the subscription-CLI defaults; scalar keys on `[harness]` itself (for example connector_settle_secs, subscription_budget_tokens) apply to all.",
       "properties": {
         "connector_settle_secs": { "type": "integer", "minimum": 0 },
+        "first_event_secs": { "type": "integer", "minimum": 0, "description": "A CLI run with no event at all after this many seconds is killed, tried once more, then moved to the family's next endpoint (spec 089 §17). Default 90; 0 leaves only the idle clock." },
         "subscription_budget_tokens": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": { "$ref": "#/$defs/harnessProfile" }
