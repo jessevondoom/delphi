@@ -308,58 +308,48 @@ pub fn cli(args: &[String]) -> i32 {
 fn compile_cmd(args: &[String]) -> i32 {
     let check_only = args.iter().any(|a| a == "--check");
     let repo = crate::flag(args, "--repo").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-    let groups = match fs::read_to_string(repo.join(GROUPS_FILE)) {
-        Ok(t) => match parse_groups(&t) {
-            Ok(g) => g,
-            Err(e) => {
-                eprintln!("delphi specs compile: {}", e);
-                return 1;
+    match compile_in(&repo, check_only) {
+        Ok(line) => {
+            println!("{}", line);
+            0
+        }
+        Err((code, lines)) => {
+            for l in &lines {
+                eprintln!("{}", l);
             }
-        },
-        Err(e) => {
-            eprintln!("delphi specs compile: cannot read {} under {}: {}", GROUPS_FILE, repo.display(), e);
-            return 2;
+            code
         }
+    }
+}
+
+/// `delphi specs compile [--check]` in `repo`, as a function (spec 135 §5.1 calls it from the finisher): the line printed on
+/// success, or the exit code and the lines printed on failure (1 a spec or the groups failed or the files are stale, 2 a file
+/// could not be read or written).
+pub fn compile_in(repo: &Path, check_only: bool) -> Result<String, (i32, Vec<String>)> {
+    let groups = match fs::read_to_string(repo.join(GROUPS_FILE)) {
+        Ok(t) => parse_groups(&t).map_err(|e| (1, vec![format!("delphi specs compile: {}", e)]))?,
+        Err(e) => return Err((2, vec![format!("delphi specs compile: cannot read {} under {}: {}", GROUPS_FILE, repo.display(), e)])),
     };
-    let sources = match read_sources(&repo) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("delphi specs compile: {}", e);
-            return 2;
-        }
-    };
+    let sources = read_sources(repo).map_err(|e| (2, vec![format!("delphi specs compile: {}", e)]))?;
     let out = match build(&sources, &groups) {
         Ok(o) => o,
         Err(errors) => {
-            for e in &errors {
-                eprintln!("delphi specs compile: {}", e);
-            }
-            eprintln!("delphi specs compile: {} problem(s); nothing was written and {} is as it was", errors.len(), TREE_DIR);
-            return 1;
+            let mut lines: Vec<String> = errors.iter().map(|e| format!("delphi specs compile: {}", e)).collect();
+            lines.push(format!("delphi specs compile: {} problem(s); nothing was written and {} is as it was", errors.len(), TREE_DIR));
+            return Err((1, lines));
         }
     };
     if check_only {
-        let diffs = check(&repo, &groups, &out);
+        let diffs = check(repo, &groups, &out);
         if diffs.is_empty() {
-            println!("delphi specs compile --check: {} spec(s) and {} view(s), {} is current", out.data.len(), out.views.len(), TREE_DIR);
-            return 0;
+            return Ok(format!("delphi specs compile --check: {} spec(s) and {} view(s), {} is current", out.data.len(), out.views.len(), TREE_DIR));
         }
-        for d in &diffs {
-            eprintln!("delphi specs compile --check: {}", d);
-        }
-        eprintln!("delphi specs compile --check: {} difference(s); run `delphi specs compile` and commit the result", diffs.len());
-        return 1;
+        let mut lines: Vec<String> = diffs.iter().map(|d| format!("delphi specs compile --check: {}", d)).collect();
+        lines.push(format!("delphi specs compile --check: {} difference(s); run `delphi specs compile` and commit the result", diffs.len()));
+        return Err((1, lines));
     }
-    match write_all(&repo, &out) {
-        Ok(()) => {
-            println!("delphi specs compile: wrote {} spec file(s) and {} view(s) to {}", out.data.len(), out.views.len(), TREE_DIR);
-            0
-        }
-        Err(e) => {
-            eprintln!("delphi specs compile: {}", e);
-            2
-        }
-    }
+    write_all(repo, &out).map_err(|e| (2, vec![format!("delphi specs compile: {}", e)]))?;
+    Ok(format!("delphi specs compile: wrote {} spec file(s) and {} view(s) to {}", out.data.len(), out.views.len(), TREE_DIR))
 }
 
 #[cfg(test)]

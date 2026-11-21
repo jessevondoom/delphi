@@ -742,6 +742,23 @@ Check a repository's Delphi files.
   delphi lint --repo <path>
 ```
 
+## Work
+
+### `delphi forge`
+
+Claim a spec slice before building it; finish it before its PR.
+
+```
+  delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--repo <dir>] [--home <dir>]
+  delphi forge release <spec> <slice> [--by <holder>] [--repo <dir>] [--home <dir>]
+  delphi forge list [--all] [--json] [--repo <dir>] [--home <dir>]
+  delphi forge finish [--check] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]
+```
+
+Spec 135. claim records that a slice of an approved spec is being built, in <home>/forge/claims.json under a lock, so another session that claims it is refused and told who holds it (exit 1). A claim belongs to a holder (--by, by default the branch checked out at --repo) and lasts --ttl (default 8h); claiming again renews it, --take takes over a live claim of another holder (printed and recorded), and an expired claim is replaced. A draft spec is refused; the tracker is read for warnings only (a slice it does not list, a slice it says is merged). A claim binds only sessions that ask, on this machine and home; nothing refuses a pull request for a claimed slice. release removes your claim; list shows the live claims of this repository (--all: every repository and the expired ones). finish does the deterministic chores before a pull request, in-process: it regenerates docs/reference, the ecosystem files and the compiled specs (--check compares and exits 1 on drift), checks that the slice's tracker row no longer says not built (the slice comes from --spec/--slice or this branch's claim), prints the three gates (it runs none), and with --body prints a pull request body and renews the claim. No daemon and no process are started.
+
+## Inspect
+
 ### `delphi specs`
 
 Compile the specs into one JSON file each, and read them.
