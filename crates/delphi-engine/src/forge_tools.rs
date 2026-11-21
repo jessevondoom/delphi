@@ -27,6 +27,8 @@ pub const GRACE_SECS: i64 = 5 * 24 * 3600;
 pub const RETRY_SECS: i64 = 3600;
 /// A version whose probe failed once is probed once more after this long; a second fail is final (as hardened after review).
 pub const FAIL_RETRY_SECS: i64 = 24 * 3600;
+/// Undecided probes of one version before Delphi gives up on it (bridge-only, as a final fail). Each waits [`FAIL_RETRY_SECS`].
+pub const MAX_UNDECIDED: u32 = 3;
 /// The state file, under the workspace's `local/`.
 pub const STORE_FILE: &str = "forge-tools.json";
 
@@ -386,6 +388,10 @@ pub struct VersionRecord {
     /// The watchdog dropped this version: final, whatever a later probe of it says.
     #[serde(default)]
     pub watchdog: bool,
+    /// Probes of this version that could not decide. Each waits a day before the next; the third makes the version bridge-only (a fail, no
+    /// grace), so a carrier that never tries the write step does not cost a probe an hour for ever.
+    #[serde(default)]
+    pub undecided: u32,
 }
 
 pub fn store_path(ws_dir: &Path) -> PathBuf {
@@ -434,7 +440,7 @@ pub fn observe(recs: &mut Vec<VersionRecord>, harness: &str, version: Option<&st
     }
     let earlier_pass = recs.iter().any(|r| r.harness == harness && r.state == State::ProbedPass);
     let (state, grace_until) = if earlier_pass { (State::Grace, Some(now + GRACE_SECS)) } else { (State::Unprobed, None) };
-    recs.push(VersionRecord { harness: harness.into(), version: version.into(), state, first_seen: now, grace_until, probed_at: None, attempted_at: None, probe_tokens: 0, reason: None, fails: 0, watchdog: false });
+    recs.push(VersionRecord { harness: harness.into(), version: version.into(), state, first_seen: now, grace_until, probed_at: None, attempted_at: None, probe_tokens: 0, reason: None, fails: 0, watchdog: false, undecided: 0 });
     observe(recs, harness, Some(version), now)
 }
 
@@ -448,7 +454,7 @@ pub fn probe_due(recs: &[VersionRecord], now: i64) -> Option<(String, String)> {
             State::ProbedFail => !r.watchdog && r.fails == 1 && r.probed_at.is_some_and(|t| now - t >= FAIL_RETRY_SECS),
             State::ProbedPass => false,
         })
-        .find(|r| r.attempted_at.is_none_or(|a| now - a >= RETRY_SECS))
+        .find(|r| r.attempted_at.is_none_or(|a| now - a >= if r.undecided > 0 { FAIL_RETRY_SECS } else { RETRY_SECS }))
         .map(|r| (r.harness.clone(), r.version.clone()))
 }
 
@@ -493,7 +499,16 @@ pub fn record_probe(recs: &mut [VersionRecord], harness: &str, version: &str, ou
             let when = if r.fails >= 2 || r.watchdog { "final" } else { "tried once more after a day" };
             (r.state, r.grace_until, r.probed_at, r.reason) = (State::ProbedFail, None, Some(now), Some(format!("probe failed ({when}): {reason}")));
         }
-        ProbeOutcome::Undecided { reason, .. } => r.reason = Some(format!("last probe undecided: {reason}")),
+        ProbeOutcome::Undecided { reason, .. } => {
+            r.undecided += 1;
+            if r.undecided >= MAX_UNDECIDED {
+                // Given up: bridge-only like a final fail, no grace and no further probe of this version.
+                r.fails = r.fails.max(2);
+                (r.state, r.grace_until, r.probed_at, r.reason) = (State::ProbedFail, None, Some(now), Some(format!("gave up after {} undecided probes: {reason}", r.undecided)));
+            } else {
+                r.reason = Some(format!("last probe undecided ({} of {MAX_UNDECIDED}): {reason}", r.undecided));
+            }
+        }
     }
 }
 
@@ -502,7 +517,7 @@ pub fn drop_version(recs: &mut Vec<VersionRecord>, harness: &str, version: &str,
     let reason = format!("watchdog: {reason}");
     match recs.iter_mut().find(|r| r.harness == harness && r.version == version) {
         Some(r) => (r.state, r.grace_until, r.reason, r.watchdog) = (State::ProbedFail, None, Some(reason), true),
-        None => recs.push(VersionRecord { harness: harness.into(), version: version.into(), state: State::ProbedFail, first_seen: now, grace_until: None, probed_at: None, attempted_at: None, probe_tokens: 0, reason: Some(reason), fails: 0, watchdog: true }),
+        None => recs.push(VersionRecord { harness: harness.into(), version: version.into(), state: State::ProbedFail, first_seen: now, grace_until: None, probed_at: None, attempted_at: None, probe_tokens: 0, reason: Some(reason), fails: 0, watchdog: true, undecided: 0 }),
     }
 }
 
@@ -997,6 +1012,54 @@ mod tests {
         assert!(matches!(observe(&mut s, "claude", Some("c1"), t0), Access::BridgeOnly(_)), "the dropped version stays dropped");
     }
 
+    /// Follow-up to review item 2: the working-directory exemption does not reach past the directory: a `..` out of it, a symlink in it
+    /// that points out, and a sibling whose name starts with the directory's are all watched.
+    #[test]
+    fn the_working_directory_exemption_does_not_reach_past_it() {
+        let base = tempfile::tempdir().unwrap();
+        let b = std::fs::canonicalize(base.path()).unwrap();
+        let cwd = b.join("harness-empty");
+        let evil = b.join("harness-empty-evil");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&evil).unwrap();
+        std::fs::write(evil.join("x"), "secret").unwrap();
+        std::os::unix::fs::symlink(&evil, cwd.join("out")).unwrap();
+        let mut w = Watchdog::new(default_read("claude"), Some(cwd.clone()));
+        for (i, path) in [format!("{}/../x", cwd.display()), cwd.join("out/x").display().to_string(), format!("{}-evil/x", cwd.display()), "../harness-empty-evil/x".to_string()].into_iter().enumerate() {
+            let id = format!("e{i}");
+            w.saw_use(&id, "Read", &json!({"file_path": path}));
+            assert!(w.ran(&id, false).is_some(), "{path} must be watched");
+        }
+        w.saw_use("in", "Read", &json!({"file_path": cwd.join("y").display().to_string()}));
+        assert_eq!(w.ran("in", false), None, "inside the directory itself");
+    }
+
+    /// Follow-up (token cost): an undecided probe is tried again at most once a day, and after three undecided results the version is
+    /// given up on: bridge-only, no grace, never probed again.
+    #[test]
+    fn undecided_probes_back_off_to_a_day_and_give_up_after_three() {
+        let t0 = 50_000_000;
+        let mut r: Vec<VersionRecord> = Vec::new();
+        observe(&mut r, "claude", Some("p"), t0);
+        record_probe(&mut r, "claude", "p", &ProbeOutcome::Pass { tokens: 1 }, t0);
+        assert_eq!(observe(&mut r, "claude", Some("q"), t0), Access::Read, "grace");
+        let und = ProbeOutcome::Undecided { reason: "the write step was not tried".into(), tokens: 3 };
+        let mut t = t0;
+        for n in 1..=2 {
+            record_probe(&mut r, "claude", "q", &und, t);
+            assert_eq!(probe_due(&r, t + 2 * H), None, "after undecided #{n}: not hourly");
+            assert_eq!(probe_due(&r, t + D - 1), None);
+            assert_eq!(probe_due(&r, t + D), Some(("claude".into(), "q".into())), "after undecided #{n}: once a day");
+            assert_eq!(observe(&mut r, "claude", Some("q"), t + D), Access::Read, "still in the grace");
+            t += D;
+        }
+        record_probe(&mut r, "claude", "q", &und, t);
+        assert!(matches!(observe(&mut r, "claude", Some("q"), t), Access::BridgeOnly(w) if w.contains("gave up")));
+        assert_eq!(probe_due(&r, t + 30 * D), None, "given up: never probed again");
+        let q = r.iter().find(|x| x.version == "q").unwrap();
+        assert_eq!((q.state, q.grace_until, q.undecided, q.probe_tokens), (State::ProbedFail, None, 3, 9));
+    }
+
     /// AC-18 in the store: a changed CLI version keeps the read tools for the grace and is due for a probe; a fail drops it at once; a
     /// pass ends the grace; a version with no passed predecessor waits for its probe; the grace runs out without one.
     #[test]
@@ -1019,8 +1082,9 @@ mod tests {
         // another update: still a grace (agy 1 passed), and it runs out if no probe ever passes
         assert_eq!(observe(&mut r, "agy", Some("agy 3"), t0 + 4 * H), Access::Read);
         record_probe(&mut r, "agy", "agy 3", &ProbeOutcome::Undecided { reason: "no answer".into(), tokens: 0 }, t0 + 4 * H);
-        assert_eq!(probe_due(&r, t0 + 4 * H + 10), None, "an undecided probe waits before it is tried again");
-        assert_eq!(probe_due(&r, t0 + 5 * H), Some(("agy".into(), "agy 3".into())));
+        assert_eq!(probe_due(&r, t0 + 5 * H), None, "an undecided probe waits a day before it is tried again");
+        let only3: Vec<VersionRecord> = r.iter().filter(|x| x.version == "agy 3").cloned().collect();
+        assert_eq!(probe_due(&only3, t0 + 4 * H + D), Some(("agy".into(), "agy 3".into())));
         assert_eq!(observe(&mut r, "agy", Some("agy 3"), t0 + 4 * H + GRACE_SECS - 1), Access::Read);
         assert!(matches!(observe(&mut r, "agy", Some("agy 3"), t0 + 4 * H + GRACE_SECS + 1), Access::BridgeOnly(_)));
         assert_eq!(probe_due(&r, t0 + 4 * H + GRACE_SECS + 1), Some(("agy".into(), "agy 2".into())), "agy 3's grace is over; only agy 2's one retry of its failed probe is left");
