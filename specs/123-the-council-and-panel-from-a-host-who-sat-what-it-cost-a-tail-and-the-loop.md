@@ -104,7 +104,7 @@ Nothing else of `CouncilOpts` (seats, lenses) is opened to a host here. The argu
 2. **What.** From each, the record's Decision section and its Minority Report, at most 1,500 characters each, as a fenced context slice labelled `council/earlier/<file>` at tier L3 (the tier Round 1 stances have in Round 2).
 3. **When.** Only in Round 2, the repair turn and the synthesis. Never in Round 1, which stays blind (`specs/026` §3.1). The record of this Council lists the earlier records it was shown under "Earlier rulings shown", and `council.started` lists their paths.
 4. **The Panel.** The moderator's round 3 brief gains the same block; the Round 1 and Round 2 briefs do not.
-5. `[council] earlier_rulings = false` turns it off.
+5. `[council] earlier_rulings = false` turns it off. A caller can also turn it off for one Council or Panel (§17 item 2).
 
 ## 10. Not built here, and why
 
@@ -181,3 +181,10 @@ What building S1 to S5 showed the text above got wrong or left open. Each is the
 4. **§4 item 2, the money ceiling.** `council_budget_usd` was never read from `config.toml` before (the 20.0 default always applied); it is now read, so a workspace that sets it gets the value it set.
 5. **§7, what the tail prints at the end.** Only the state and the record's path, never the escalation or error reason, which may be model text.
 6. **§9 and §15 item 2, records stay inside their project** (`specs/115`). A Council or Panel is shown earlier rulings, and a host's search returns Council records, only from missions it may see: a record of a home-only mission (no project scope) is shared, as the home layer is; a record of a project's mission is shown only inside that same project. A record of another project is never shown or returned.
+
+## 17. Amendment (2026-11-21): a seat held at the barrier, and earlier rulings off per call
+
+Two defects found in a review of 2026-11-20 (D5, D6). Neither widens what a host may do.
+
+1. **§3, the state of a seat Delphi runs in a Panel (D5).** Before the Round 1 barrier releases, `council_status` reported such a seat as `answered` while its stance was only held. It now reports `waiting_on_barrier` (the word the seat progress list already uses), and `abstained` as soon as the seat abstains: an abstention carries no stance text, so showing it early does not break the blind round.
+2. **§9 item 4, earlier rulings off for one call (D6).** `council_open` and `request_council` take an optional `earlier_rulings` (boolean, default `true`). `false` picks no earlier records for that Panel's round 3 brief or that Council's Round 2, repair turn and synthesis, whatever `[council] earlier_rulings` says; the record's front matter gains `earlier_rulings_off: by the caller` and a daemon Council's `council.started` carries `earlier_off: true`. A value that is not a boolean is refused before anything is recorded. Use: an experiment whose runs must not see each other's rulings.
