@@ -56,11 +56,13 @@ Chosen: A. B was the audit's R1; the Council's seats rejected it because it hand
 
 §1.3 keeps its sentence and gains, after "linked to the task (`Implements-Spec: specs/NNN-*.md`)":
 
-> The review is recorded: an approved software spec numbered above 134 cites the Council or witnessed Panel that reviewed it in `reviewed_by` (`[council:<id>, panel:<id>]`, `specs/104` §13 G5), with the record committed under `missions/`. One that cites none is not approved for software, unless the operator waives the review in their own words, given in their own turn and quoted in its status line; an agent never writes a waiver.
+> Above `specs/134` the review is cited: `reviewed_by` names a Council or witnessed Panel whose record is committed (`specs/104` §13 G5), or the status line quotes the operator's own waiver.
 
 §1.4 becomes:
 
-> **Drift Remediation:** if implementation and specification diverge, the agent stops and requests a spec amendment instead of silently working around the spec in code (`FM-1.1`). Only a closed list proceeds, and only when it changes no criterion, interface, data shape, behaviour or authority: wording or a typo in the spec, or a stale path, line pointer or file name. Each is listed under **Deviations** in the pull request; the orchestrator (in a host session, the operator) routes the list to Architect, who makes each correction as a spec amendment. Builder never edits a spec. Anything else stops, including a spec that is silent, and a test or a guard is never weakened to fit.
+> **Drift Remediation:** if implementation and specification diverge, the agent stops and requests a spec amendment instead of silently working around the spec in code (`FM-1.1`). Only a typo, wording slip or stale path, pointer or file name that changes no criterion, interface, data shape, behaviour or authority proceeds, listed under **Deviations** for Architect to amend (`specs/134`). Builder never edits a spec; a silent spec stops; no test or guard is weakened to fit.
+
+The charter text is kept short on purpose: the orchestrator's charter excerpt must stay under half the charter (`specs/106` A3, `pack_size_tests`), and a longer first draft broke it by about 220 bytes. The detail lives in 2.2 to 2.4: who routes the Deviations list (the orchestrator; in a host session, the operator), that the waiver is given in the operator's own turn and that an agent never writes one, and the stop on a silent spec.
 
 The §2 table's builder counterweight changes from "*No Spec, No Build*; drift halt; audited against base-branch REVIEW.md" to "*No Spec, No Build*; drift halt (closed list, §1.4); audited against base-branch REVIEW.md". The status line gains a v0.9 entry.
 
@@ -92,7 +94,7 @@ This spec narrows two roles and widens none.
 | Slice | Criteria closed | Files | Lines (est.) | Depends on | Blocked by |
 | :-- | :-- | :-- | --: | :-- | :-- |
 | S0 | (the spec) | this file, `compiled/`, `compiled/groups.toml`, tracker | (docs) | none | none |
-| S1 | AC-1, AC-2, AC-3, AC-4, AC-5, AC-6 | `GOVERNANCE.md`, `agents/builder/AGENT.md`, `agents/architect/AGENT.md` §3, `skills/spec-driven-build/SKILL.md` step 7, `context/invariant-enforcement.md`, the builder and architect pack goldens | 30-60 | S0 | none |
+| S1 | AC-1, AC-2, AC-3, AC-4, AC-5, AC-6 | `GOVERNANCE.md`, `agents/builder/AGENT.md`, `agents/architect/AGENT.md` §3, `skills/spec-driven-build/SKILL.md` step 7, `context/invariant-enforcement.md`, the builder and architect pack goldens, `MEASURED` in `crates/delphi/src/pack_size_tests.rs` (re-measured, §7 item 2) | 30-60 | S0 | none |
 
 One slice, because the charter text and the role files that restate it must change together or contradict each other. Spec 133's pull request edits other hunks of `agents/architect/AGENT.md` and `skills/spec-driven-build/SKILL.md`; whichever merges second rebases.
 
@@ -117,7 +119,7 @@ One slice, because the charter text and the role files that restate it must chan
 ## 7. What is not verified
 
 1. **That builders follow the closed list.** Both rules stay prompt-only. The tally of `specs/133` §2.4 reads the Deviations lists of the next pull requests; nothing reads them sooner.
-2. **The charter's size.** The text grows the charter by roughly 600 bytes; every pack that serves it grows with it. The pack-size tests are run with the gates; the sizes recorded in spec 106 §9 are not re-measured here.
+2. **The charter's size.** The charter grows from 21,239 to 21,890 bytes, and every compact pack with it, because each carries the charter excerpt. The first draft's longer text broke two checks of `pack_size_tests` (the orchestrator's excerpt must stay under half the charter, `specs/106` A3; each compact pack within its measured size plus 10 percent); the charter text was shortened until the excerpt fit (10,938 of at most 10,944 bytes: a 7-byte margin, so the next sentence added to §1 will need a cut elsewhere or a decision on A3), and `MEASURED` was measured again for every role, as spec 124 S2/S3 did. Spec 106 §9's table is not amended by text.
 3. **That an existing workspace takes the new charter cleanly.** As with #777, a workspace's ratified copy of `GOVERNANCE.md` will differ from the release's after an update; that path is not exercised here.
 4. **Builder-edits-specs is mitigated, not closed.** Nothing stops a builder's commit under `specs/**`. Follow-up, with its trigger: a merge-time check (a gate-file change under spec 094) that flags a pull request whose builder-authored commits touch `specs/**`; it is specified when the first Deviations list shows a builder edit to a spec, or with the R4 spec of `specs/133` §2.4, whichever comes first.
 5. **The operator's waiver is unchecked.** It is free text in a status line; the invariant map says so.

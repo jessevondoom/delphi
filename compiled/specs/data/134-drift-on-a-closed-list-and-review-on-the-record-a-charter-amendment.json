@@ -46,67 +46,67 @@
     },
     {
       "level": 3,
-      "line": 67,
+      "line": 69,
       "number": "2.2",
       "title": "`agents/builder/AGENT.md` §3"
     },
     {
       "level": 3,
-      "line": 71,
+      "line": 73,
       "number": "2.3",
       "title": "`agents/architect/AGENT.md` §3"
     },
     {
       "level": 3,
-      "line": 75,
+      "line": 77,
       "number": "2.4",
       "title": "`skills/spec-driven-build/SKILL.md` step 7"
     },
     {
       "level": 3,
-      "line": 79,
+      "line": 81,
       "number": "2.5",
       "title": "`context/invariant-enforcement.md`"
     },
     {
       "level": 2,
-      "line": 83,
+      "line": 85,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 90,
+      "line": 92,
       "number": "4",
       "title": "Slices (one pull request, gate-changing; each slice its own commit, trailer and tracker row)"
     },
     {
       "level": 2,
-      "line": 99,
+      "line": 101,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 108,
+      "line": 110,
       "number": "6",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 117,
+      "line": 119,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 125,
+      "line": 127,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 132,
+      "line": 134,
       "number": "9",
       "title": "Review"
     }
@@ -114,7 +114,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md",
-    "sha256": "846e2933be66b486797ba20cb646b27fb9fee341416db51287715c0d8bc06731"
+    "sha256": "435ecf7f57d3239f11660cc25705004fefcd297b94ee4d3c5a9c64427b43b353"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +127,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, in a host session after the plan was shown: \"follow your plan and go. i'll approve specs from this plan and ratify and changes\". The charter text takes effect when the operator merges the pull request at a terminal (GOVERNANCE.md is a gate file)."
     },
-    "sha256": "846e2933be66b486797ba20cb646b27fb9fee341416db51287715c0d8bc06731",
+    "sha256": "435ecf7f57d3239f11660cc25705004fefcd297b94ee4d3c5a9c64427b43b353",
     "word": "approved"
   },
   "spec": {
