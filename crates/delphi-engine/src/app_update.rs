@@ -1496,8 +1496,15 @@ mod tests {
         assert_eq!(r.svc.app_requests_cancel(KEY, true), json!({"cancelled": [], "left_running": [{"request": request, "method": "app.update_apply"}]}));
         assert!(r.svc.update_running(), "the apply goes on");
         assert_eq!(r.svc.app_requests_cancel(OTHER, true)["left_running"], json!([]), "another key's revoke names no update it did not start");
+        // End it as a stopping daemon does. That ends the child the daemon recorded, so the child must have started: until it has,
+        // a shutdown has nothing to end and the stand-in would sleep on.
+        let end = std::time::Instant::now() + Duration::from_secs(30);
+        while r.svc.update.lock().unwrap().child.is_none() {
+            assert!(std::time::Instant::now() < end, "the child never started");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         r.svc.update_shutdown().await;
-        let end = std::time::Instant::now() + Duration::from_secs(10);
+        let end = std::time::Instant::now() + Duration::from_secs(30);
         while r.svc.update_running_for(KEY).is_some() {
             assert!(std::time::Instant::now() < end, "an apply that ended is still named as running");
             tokio::time::sleep(Duration::from_millis(20)).await;
