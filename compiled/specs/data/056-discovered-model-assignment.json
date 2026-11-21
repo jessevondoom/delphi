@@ -100,33 +100,111 @@
     },
     {
       "level": 2,
-      "line": 130,
+      "line": 131,
       "number": "7",
       "title": "Decisions (ratified by the operator, 2026-10-29: \"ratify and build it\", all recommendations accepted)"
     },
     {
       "level": 2,
-      "line": 143,
+      "line": 144,
       "number": "8",
       "title": "Tests"
     },
     {
       "level": 2,
-      "line": 159,
+      "line": 160,
       "number": "9",
       "title": "What this spec does not claim"
     },
     {
       "level": 2,
-      "line": 165,
+      "line": 166,
       "number": "10",
       "title": "Amendments"
+    },
+    {
+      "level": 3,
+      "line": 173,
+      "number": "10.1",
+      "title": "Scope of this amendment"
+    },
+    {
+      "level": 3,
+      "line": 181,
+      "number": "10.2",
+      "title": "A1: classification uses measured attributes (§2.1, §2.2)"
+    },
+    {
+      "level": 3,
+      "line": 203,
+      "number": "10.3",
+      "title": "A2: price never sets class"
+    },
+    {
+      "level": 3,
+      "line": 211,
+      "number": "10.4",
+      "title": "A3: calibration results feed routing only, and why that stays inside spec 078"
+    },
+    {
+      "level": 3,
+      "line": 228,
+      "number": "10.5",
+      "title": "A4: `max_cost_class`, a ratified cap bounded by the role floor"
+    },
+    {
+      "level": 3,
+      "line": 260,
+      "number": "10.6",
+      "title": "A5: the benchmark gate (OD-5 made precise; slice M7)"
+    },
+    {
+      "level": 3,
+      "line": 304,
+      "number": "10.7",
+      "title": "A6: public scores are advisory text, never an input"
+    },
+    {
+      "level": 3,
+      "line": 314,
+      "number": "10.8",
+      "title": "A7: one family's tier pins, and the open-weights model on agy"
+    },
+    {
+      "level": 3,
+      "line": 319,
+      "number": "10.9",
+      "title": "A8: calibration run rules (slice M5)"
+    },
+    {
+      "level": 3,
+      "line": 333,
+      "number": "10.10",
+      "title": "Slices as amended"
+    },
+    {
+      "level": 3,
+      "line": 354,
+      "number": "10.11",
+      "title": "Verification plan, open decisions, and what is not verified"
+    },
+    {
+      "level": 4,
+      "line": 373,
+      "number": null,
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 3,
+      "line": 396,
+      "number": "10.12",
+      "title": "Council record"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/056-discovered-model-assignment.md",
-    "sha256": "611f0326ad1d1b636b86aafd70997af6e415535a34fd67569ea2e5b6c83324ca"
+    "sha256": "f0da7ad813e4a6b723454e1630f48920954d863c2f5b6d3daa589872c902217e"
   },
   "source_status_at_hash": {
     "line": {
@@ -139,7 +217,7 @@
       },
       "text": "status: approved   # by the operator, 2026-10-29: \"ratify and build it\", accepting every recommendation in §7 (OD-1 to OD-8)"
     },
-    "sha256": "611f0326ad1d1b636b86aafd70997af6e415535a34fd67569ea2e5b6c83324ca",
+    "sha256": "f0da7ad813e4a6b723454e1630f48920954d863c2f5b6d3daa589872c902217e",
     "word": "approved"
   },
   "spec": {
