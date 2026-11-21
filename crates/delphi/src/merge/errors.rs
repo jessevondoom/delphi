@@ -69,7 +69,10 @@ impl Class {
 
 /// What a refusal reason is, if it is a problem. `None` means a state of the world to wait out or act on, not an error.
 pub fn classify_refusal(reason: &str) -> Option<Class> {
-    if reason.contains(super::check::BEHIND_MARK) {
+    // A refresh inside a merge command that was handed over (`refresh::Stop::HandOver`); checked first, its detail can say anything.
+    if reason.contains(super::refresh::HANDED_OVER) {
+        Some(Class::RefreshRefused)
+    } else if reason.contains(super::check::BEHIND_MARK) {
         Some(Class::Behind)
     } else if reason.contains("conflicts with") {
         Some(Class::Conflict)
@@ -248,6 +251,8 @@ mod tests {
             ("checks are still running: test", None),
             ("GitHub has not finished working out whether it merges (`UNKNOWN`)", None),
             (&super::super::check::behind_reason(7, 2, "main"), Some(Class::Behind)),
+            (&super::super::refresh::Stop::HandOver("README.md conflicts with `main`, 3 commit(s) behind".into()).line(7), Some(Class::RefreshRefused)),
+            ("#7: not refreshed: it is a draft", None),
         ] {
             assert_eq!(classify_refusal(r), want, "{r}");
         }
