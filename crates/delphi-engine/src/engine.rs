@@ -522,6 +522,9 @@ pub(crate) struct SpanCtx {
     pub(crate) harness_tried: std::sync::atomic::AtomicBool,
     /// The JSON Schema this span's answer must match, when its handoff named one.
     pub(crate) output_schema: Option<String>,
+    /// The fixed message of a JSON-in-text answer's one retry (`specs/132` §6.1 item 4), set by the engine before that retry and
+    /// taken by the next harness run.
+    pub(crate) json_retry: Option<String>,
     /// The bundle agent this span runs as (`specs/023` §5B): its host role's manifest applies unchanged, and its `tools`
     /// list only ever removes tools from that role's.
     pub(crate) bundle_agent: Option<crate::bundle_load::LoadedAgent>,
@@ -1014,7 +1017,7 @@ impl Engine {
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
             let seat_readonly = self.readonly_handoffs.lock().unwrap().contains(&readonly_key(&m.id, &handoff.handoff_id));
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), json_retry: None, bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -1242,7 +1245,10 @@ impl Engine {
                     let retry_kind = (f.cli_error && f.kind != crate::harness_run::FailKind::AnswerRefused) || f.kind == crate::harness_run::FailKind::AnswerNotFound;
                     if let (true, true, Some(left)) = (retry_kind, f.retryable, left) {
                         if left >= crate::harness_run::RETRY_MIN_REMAINING {
-                            m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64}))).await?;
+                            m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64, "json_retry": f.retry_note.is_some()}))).await?;
+                            // A JSON-in-text answer that was not found or did not validate is retried with the fixed message (`specs/132`
+                            // §6.1); this is the seat's one retry whatever its cause (OD-3), so a second failure is final.
+                            sc.json_retry = f.retry_note.clone();
                             first = self.run_harness(&mut sc, &ipr, &hep).await?;
                         }
                     }
