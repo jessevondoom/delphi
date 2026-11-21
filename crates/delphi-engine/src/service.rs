@@ -1614,8 +1614,10 @@ impl EngineService {
             Some(f) => f.to_string(),
             None => self.engine.panel_foreign_family(role, host_family).ok_or_else(|| err(code::INVALID_PARAMS, "no model family other than your host's is configured and usable: Delphi has no other family to review with. Nothing was spent"))?,
         };
-        // One seat in two rounds: the ceiling of a Panel's foreign seat, which already covers both rounds.
-        if let Some(why) = crate::seat::over_budget(1, self.engine.panel_foreign_ceiling_tokens(), self.engine.settings.max_foreign_seats, self.engine.settings.max_foreign_tokens) {
+        // One seat in up to three calls (Round 0 of §14.3, Rounds 1 and 2): checked and reserved before anything is spent. The Panel's
+        // own ceiling (two rounds) is not changed.
+        let ceiling = rj::review_ceiling_tokens(self.engine.panel_foreign_ceiling_tokens());
+        if let Some(why) = crate::seat::over_budget(1, ceiling, self.engine.settings.max_foreign_seats, self.engine.settings.max_foreign_tokens) {
             return Err(err(code::INVALID_PARAMS, why));
         }
         let m = {
@@ -1623,7 +1625,6 @@ impl EngineService {
             self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?
         };
         let task_id = m.next_task_id();
-        let ceiling = self.engine.panel_foreign_ceiling_tokens();
         let consent = self.standing_consent(confirmed, &c.mission(), &format!("{}/{}", m.id, task_id), ceiling)?;
         let proposition = format!("Review of branch {branch} against {base} in project {project_name}");
         let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": proposition, "target": "review", "flow": "council", "venue": "panel", "consent": consent, "branch": branch, "base": base}));
@@ -11156,6 +11157,34 @@ mod tests {
         assert!(errs[2].contains("the base itself") && errs[2].contains("Nothing was spent"), "{}", errs[2]);
         assert!(errs[3].contains("not inside a project registered"), "{}", errs[3]);
         assert!(errs[4].contains("not a branch name"), "{}", errs[4]);
+        assert!(f.model.requests().is_empty(), "nothing was spent");
+        assert!(!f.engine.exec.worktrees.investigations_root().exists() || std::fs::read_dir(f.engine.exec.worktrees.investigations_root()).unwrap().next().is_none(), "no copy was made");
+    }
+
+    /// Spec 135 §14.3: a review calls its seat up to three times (Round 0, Rounds 1 and 2), so the token check before spending covers
+    /// three calls. A cap that fits a Panel's two-round ceiling exactly refuses a review, and nothing is spent.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_review_whose_three_calls_do_not_fit_the_token_cap_is_refused_before_anything_is_spent() {
+        let f = setup(vec![], 50.0, |s| {
+            roomy(s);
+            s.max_foreign_tokens = 2 * s.max_tokens + 2 * 12_000;
+        });
+        crate::council::tests::two_families(&f);
+        let panel = f.engine.panel_foreign_ceiling_tokens();
+        assert_eq!(f.engine.settings.max_foreign_tokens, panel, "the cap is exactly a Panel's two-round ceiling");
+        assert!(crate::seat::over_budget(1, panel, f.engine.settings.max_foreign_seats, panel).is_none(), "a Panel's foreign seat still fits");
+        assert_eq!(crate::review_job::review_ceiling_tokens(panel), panel + panel.div_ceil(2));
+        let proj = review_repo(&f);
+        let cwd = proj.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let e = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.hello(&htok).unwrap();
+            c.call("host.review", pbody(&cwd, json!({"model": "claude-opus", "operator_confirmed": true}))).unwrap_err().to_string()
+        })
+        .await;
+        assert!(e.contains("max_foreign_tokens") && e.contains("Nothing was spent"), "{e}");
         assert!(f.model.requests().is_empty(), "nothing was spent");
         assert!(!f.engine.exec.worktrees.investigations_root().exists() || std::fs::read_dir(f.engine.exec.worktrees.investigations_root()).unwrap().next().is_none(), "no copy was made");
     }

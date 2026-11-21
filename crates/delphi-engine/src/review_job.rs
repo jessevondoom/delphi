@@ -17,6 +17,12 @@ pub const MAX_REQUESTED: usize = 3;
 pub const TAIL_CHARS: usize = 4_000;
 /// The default of `[forge] review_diff_chars` (§6.3): below agy's silent cut of about 47k tokens, with room for the brief.
 pub const DEFAULT_DIFF_CHARS: usize = 40_000;
+
+/// The token ceiling a review reserves before anything is spent: its seat is called up to three times (Round 0 of §14.3, then Rounds
+/// 1 and 2), and `panel_two_rounds` (a Panel's foreign-seat ceiling) covers two such calls, so a review reserves half as much again.
+pub fn review_ceiling_tokens(panel_two_rounds: u64) -> u64 {
+    panel_two_rounds.saturating_add(panel_two_rounds.div_ceil(2))
+}
 /// Programs that would turn an argv into a shell line or run another program named in their arguments: refused (§6.2 item 5).
 const WRAPPERS: [&str; 12] = ["sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "env", "xargs", "nohup", "sudo"];
 
