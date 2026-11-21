@@ -16,6 +16,7 @@ tags: [spec, council, panel, mcp, host-agents, reliability, measurement]
 # Spec 089: Panel hardening from the E2 run
 
 > **Status: approved, 2026-11-06,** on the operator's instruction to begin work on the slices. That instruction did not answer the five decisions one by one, so this spec reads it as follows (§10): OD-1, OD-2, OD-3 and OD-5 take the recommendations; **OD-4 and the E3 run are not taken** and need the operator's explicit go, because one narrows a safety guard and the other spends about 1.5M tokens. P1, P2, P3, P4a and P5 may be built now; P4b and P6 wait.
+> **Amended 2026-11-21:** OD-4 decided by the operator; the guard no longer discards a toolless seat's answer (§18).
 > **Extends:** [`specs/086`](086-outside-council-panel-and-host-subagents.md) (the Panel, its skill and its S5 experiment), and its pre-registered experiment `dev/train/e2/` (`dev/train/e2/REPORT.md`, saved by PR #518, and `dev/train/e2/PREREG.md`). Reads [`specs/003`](003-collaboration-and-council.md) §4 and [`specs/047`](047-codex-harness-and-coverage.md) only where named.
 > **Origin:** the E2 report (2026-11-06): verdict `INCOMPLETE`, and nine concrete defects and gaps, seven in the product and two in the measurement.
 
@@ -180,11 +181,13 @@ Order: P1 and P2 first (small, deterministic, no operator decision); P5 in paral
 
 **Status (2026-11-06):** OD-1, OD-2, OD-3 and OD-5 are taken as recommended. OD-4 is **open**: P4a (diagnosis, which changes no guard) goes ahead; P4b (changing the guard) needs the operator's explicit go after the reproduction is shown. The E3 run (P6) also needs an explicit go.
 
+**Status (2026-11-21):** OD-4 is **decided** by the operator ("follow your recommendations"): the guard is narrowed by seat kind, not by timing (§18).
+
 
 - **OD-1 (confirmation).** Ask for a yes only when the host proposes a Panel the operator did not ask for, or for a foreign seat or high stakes (recommended), or keep "always confirm" and make the skill and card say so more firmly? *Recommendation:* the former; E2 shows hosts skip the second ask anyway.
 - **OD-2 (agy retry).** One automatic retry of a harness seat after a CLI error, tokens counted? *Recommendation:* yes, for CLI errors only.
 - **OD-3 (question limit).** Keep 2,000 characters and improve the message and skill (recommended), or raise it? *Recommendation:* keep.
-- **OD-4 (the guard).** May P4b narrow the `agy` project-checkout guard once the reproduction shows it fires on unrelated writes? It is a safety guard; the change would be reviewed before it is built. *Recommendation:* yes, after the reproduction.
+- **OD-4 (the guard).** May P4b narrow the `agy` project-checkout guard once the reproduction shows it fires on unrelated writes? It is a safety guard; the change would be reviewed before it is built. *Recommendation:* yes, after the reproduction. **Decided 2026-11-21** (the operator, verbatim: "follow your recommendations"; this reverses the decline of 2026-11-06 in §14): narrow the guard by seat kind only, as §18 describes.
 - **OD-5 (E3).** Plan P6 now (a pre-registration, no tokens) and decide the run later? *Recommendation:* yes.
 
 ---
@@ -193,7 +196,7 @@ Order: P1 and P2 first (small, deterministic, no operator decision); P5 in paral
 
 - F1 adds a check that can refuse a host's submission; it grants nothing and removes nothing. The Minority Report, escalation and trust labels are untouched.
 - F2's `operator_confirmed` and `options_source` are host-reported and displayed as such; neither raises trust nor satisfies a gate.
-- F4 touches a guard that exists to keep an `agy` run from changing a checkout. It is reviewed on its own (OD-4) and keeps failing closed on a real change.
+- F4 touches a guard that exists to keep an `agy` run from changing a checkout. It is reviewed on its own (OD-4) and keeps failing closed on a real change. Since 2026-11-21 (§18) it no longer discards the answer of a seat that holds no tool at all; a seat with any tool keeps the guard exactly as before.
 - F5 and F6 run no model and take no action outside the repository.
 
 ## 12. Not verified
@@ -261,7 +264,7 @@ Everything in 13.4 waits for the operator's explicit go on OD-4 (spec 089 §10);
 
 ## 14. P4b result (retry and a clearer message; the guard is unchanged by decision)
 
-**Operator decisions, 2026-11-06.** OD-4 (narrowing the checkout guard) is **declined**. The guard keeps deciding exactly what it decided: its conditions, `retryable = false` and the tests that pin it are untouched. Reasons: the verified-gate path that would make a narrower guard safe is not active by default; the change would loosen a safety check for a benefit the default configuration does not get; and only two of the seven E2 failures plausibly came from it, which is unproven. The first-output watchdog is **deferred**: the logs show no first-output stall, and no timeout changed.
+**Operator decisions, 2026-11-06.** OD-4 (narrowing the checkout guard) is **declined** (superseded 2026-11-21: see §18). The guard keeps deciding exactly what it decided: its conditions, `retryable = false` and the tests that pin it are untouched. Reasons: the verified-gate path that would make a narrower guard safe is not active by default; the change would loosen a safety check for a benefit the default configuration does not get; and only two of the seven E2 failures plausibly came from it, which is unproven. The first-output watchdog is **deferred**: the logs show no first-output stall, and no timeout changed.
 
 **Built.**
 - **One retry** of an `agy` Council or Panel seat. It lives in `Engine::drive` around the harness run (`engine.rs`), inside the one span, so there is one node, one set of `injected`/`schemas` entries and one outcome for the seat; `run_seat` records the seat's deadline in `seat_deadlines`, keyed by handoff id, and removes it when the seat ends. The failure is typed (`HarnessErr.cli_error`), not matched on text. Conditions, all required: the CLI is `agy`; the run ended on the CLI's own `result` error; it is not a quota/exhaustion error; the seat used no tool at all (not even a read-only one); the guard did not fire (a guard failure is never `cli_error`); and at least 10 s (`RETRY_MIN_REMAINING`) remain on the seat's own clock, which keeps running (the retry gets the remaining time, not a new 600 s). Never a timeout, a "stopped responding" kill, an empty answer or a second failure. A second failure abstains the seat with the second reason (or falls to the family's API route as any retryable failure does). Event `harness.retry` {task_id, role, attempt: 2, reason (redacted, 200 characters), remaining_ms}. Both attempts log their `agent.usage`, so the first attempt's tokens count. No delay is added between the attempts.
@@ -297,3 +300,17 @@ Everything in 13.4 waits for the operator's explicit go on OD-4 (spec 089 §10);
 **Not changed.** What the foreign seat does or costs, the barrier, the shape check, any authority rule.
 
 **Cannot do.** It cannot make a host keep polling: a host that ends its turn after one waiting answer still loses the Panel. It makes the instruction explicit, the response a success rather than a refusal, and the wait server-side (up to 25 s per call). Whether A2 now completes is unmeasured: no live run was made in this slice (the operator's separate decision). Tests use the scripted model only.
+
+
+## 18. Amendment (2026-11-21): OD-4 decided; the checkout guard is narrowed by seat kind (P4b)
+
+**Authority.** The operator, 2026-11-21, answering OD-4 with this recommendation, verbatim: "follow your recommendations". This replaces the decline of 2026-11-06 (§14). Section 13.4 item 1 (timing samples and process-group inference) is **not** built: the narrowing is by what the seat can do, not by when a path changed.
+
+**Rule.**
+1. A **toolless** seat (a span whose handoff is marked toolless: a Panel foreign seat with `tools: "none"`, every Round 2 or repair reader, an `ask_family` seat, any other span in the engine's `toolless` set) holds no tool and its `agy` gate allows nothing (§13.1, spec 128). It cannot write, so a change to a registered project checkout during its run is not its own. The guard no longer discards its answer. It writes the fixed-form advisory event `harness.checkout_changed` {`task_id`, `seat: "toolless"`, `discarded: false`, `changed_paths` (redacted), `ignored_count`, `own_writes_count`, `note`} and the answer is kept.
+2. Belt and braces: the advisory applies only when that run also called no Delphi tool and the gate reported no allowed call. A toolless run where either happened is treated as a seat with tools (rule 3).
+3. A seat **with tools**, read-only or not, keeps the guard exactly as before: any difference not explained by another session's worktree or Delphi's own writes (spec 128 S3, the own-writes ledger) discards the answer with `retryable = false` and writes `harness.checkout_guard` with `discarded: true`.
+
+**Tests** (`harness_run.rs`): a toolless Panel foreign seat whose run sees an unrelated write to the registered project keeps its answer and writes the advisory; the same seat with tools is discarded; the ordinary architect span (P4a's former characterization test, renamed `a_seat_with_tools_still_discards_its_answer_on_an_unrelated_checkout_write`) is still discarded; the spec 128 S3 ledger tests and `an_agy_run_that_touches_a_project_checkout_is_discarded` are unchanged.
+
+**Not verified.** That the two E2 guard failures were in fact unrelated writes; no live `agy` run was made. The rule rests on the gate denying every tool to a toolless `agy` seat (spec 128, the P0 fix of 2026-11-08); a gate that fails open on a toolless seat would now be seen only by rule 2's checks, not by the checkout guard.
