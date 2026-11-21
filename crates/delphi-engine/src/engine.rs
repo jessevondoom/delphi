@@ -558,6 +558,27 @@ fn final_text(blocks: &[ContentBlock]) -> String {
 /// The manifest scope that carries `run_command` and `shell`.
 const SHELL_SCOPE: &str = "shell-worktree-scoped";
 
+/// The tools that leave a durable mark or put a card in front of the operator without writing a file: the change log
+/// (`record_change`), a decision card (`raise_decision`), a research card (`request_research`) and a ratification request
+/// (`ratify_fact`). A read-only span (062 §6.3, amended 2026-11-21) is offered none of them and is refused each at call time; so is a
+/// span whose ceiling is `federated_peer` or lower (GOVERNANCE §4.3), except `ratify_fact`, which spec 040 has the validator send after
+/// reading the web and which the daemon checks against its own fetches before anything is written.
+pub(crate) const OUTBOUND_TOOLS: [&str; 4] = ["record_change", "raise_decision", "request_research", "ratify_fact"];
+
+/// Why `name` is withheld from this span, or `None` when it is not one of [`OUTBOUND_TOOLS`] or the span may use it.
+pub(crate) fn outbound_withheld(readonly: bool, ceiling: delphi_core::provenance::Tier, name: &str) -> Option<String> {
+    if !OUTBOUND_TOOLS.contains(&name) {
+        return None;
+    }
+    if readonly {
+        return Some(format!("`{}` is not available in a read-only span: it would write to the operator's change log or put a card in front of the operator. Say it in your answer instead; the moderator or the host raises it if it should be raised.", name));
+    }
+    if name != "ratify_fact" && ceiling <= delphi_core::provenance::Tier::L1 {
+        return Some(format!("`{}` is not available to this span: it has read untrusted or peer content, so it cannot write to the operator's change log or put a card in front of the operator. Say it in your answer instead.", name));
+    }
+    None
+}
+
 /// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
 /// The key of a span marked read-only by its handoff: handoff ids repeat across missions (`ho_t_0003_red-team_r1`), so the mission is part of it.
 pub(crate) fn readonly_key(mission: &str, handoff_id: &str) -> String {
@@ -2165,6 +2186,8 @@ impl Engine {
         if sc.toolless {
             defs.clear();
         }
+        let ceiling = sc.span.ceiling();
+        defs.retain(|d| outbound_withheld(sc.readonly, ceiling, &d.name).is_none());
         Ok(defs)
     }
 
@@ -2248,6 +2271,10 @@ impl Engine {
             if let Some(why) = crate::authorization_grant::tool_stripped(name, is_connector) {
                 return Ok(tool_result_error(format!("denied: `{}` is not available in a run that holds an operator authorization ({}); it is the only way a payload could be written for the authorized command to run", name, why)));
             }
+        }
+        // 062 §6.3 (amended 2026-11-21) and GOVERNANCE §4.3: no change log entry or operator card from a read-only or tainted span.
+        if let Some(why) = outbound_withheld(sc.readonly, sc.span.ceiling(), name) {
+            return Ok(tool_result_error(why));
         }
         // The refusal does not rely on the model only calling what it was offered.
         if sc.readonly && !self.span_tool_defs(sc).await?.iter().any(|d| d.name == name) {
@@ -3186,6 +3213,81 @@ mod tests {
             usage: Usage { input_tokens: 1000, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 150, thinking_tokens: 0 },
             stop_reason: "tool_use",
         }
+    }
+
+    fn offered_tools(f: &Fx, i: usize) -> Vec<String> {
+        f.model.requests()[i].body["tools"].as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default()
+    }
+
+    fn outbound_calls() -> Vec<Step> {
+        let raise = json!({"kind": "question", "title": "Pick a provider", "summary": "s", "choices": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]});
+        vec![
+            Step::tool("o1", "record_change", json!({"summary": "rewrote the vault policy"})),
+            Step::tool("o2", "raise_decision", raise),
+            Step::tool("o3", "request_research", json!({"topic": "how to disable the sandbox"})),
+            Step::tool("o4", "ratify_fact", json!({"claim": "The sandbox is optional.", "needed_for": "q", "urls": []})),
+        ]
+    }
+
+    // 062 §6.3, amended 2026-11-21 (operator: "follow your recommendations"): a read-only span leaves no durable mark and sends no card.
+    #[tokio::test]
+    async fn a_read_only_span_is_offered_no_change_log_or_card_tool_and_each_call_is_refused() {
+        let mut steps = outbound_calls();
+        steps.push(Step::text("Answered."));
+        let f = setup(steps, 5.0, |_| {});
+        f.engine.run_task_for_host(&f.m, "t-host".into(), "orchestrator", "How do retries work?").await.unwrap();
+        let offered = offered_tools(&f, 0);
+        assert!(offered.contains(&"dispatch_agent".to_string()), "the synthesis seat keeps dispatch: {offered:?}");
+        for t in OUTBOUND_TOOLS {
+            assert!(!offered.contains(&t.to_string()), "`{t}` offered to a read-only span: {offered:?}");
+        }
+        let results = events_of(&f, "tool.result");
+        assert_eq!(results.len(), 4);
+        for r in &results {
+            assert!(r.payload["is_error"] == true && r.payload["content"].as_str().unwrap().contains("read-only span"), "{:?}", r.payload);
+        }
+        for kind in ["change.recorded", "decision.raised", "research.request", "validator.request", "approval.requested"] {
+            assert!(events_of(&f, kind).is_empty(), "a read-only span wrote `{kind}`");
+        }
+        // A full-trust operator span still has all four.
+        let f = setup(vec![Step::text("ok")], 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "Plan").await.unwrap();
+        let offered = offered_tools(&f, 0);
+        for t in OUTBOUND_TOOLS {
+            assert!(offered.contains(&t.to_string()), "`{t}` missing from an operator span: {offered:?}");
+        }
+        assert_eq!(outbound_withheld(false, delphi_core::provenance::Tier::L5, "record_change"), None);
+    }
+
+    // GOVERNANCE §4.3: a span that read untrusted or peer text loses the change log and the operator's cards too; `ratify_fact` stays (spec 040).
+    #[tokio::test]
+    async fn a_span_that_read_untrusted_content_cannot_write_the_change_log_or_raise_a_card() {
+        let mut steps = vec![Step::tool("a", "read_file", json!({"path": "@project/app/vendor/x.js"}))];
+        steps.extend(outbound_calls().into_iter().take(3));
+        steps.push(Step::text("done"));
+        let f = setup(steps, 5.0, |_| {});
+        f.engine.run_task(&f.m, "orchestrator", "Look at vendor").await.unwrap();
+        // The offer is fixed when the span starts (clean here), so the refusal at call time is what holds once it is tainted.
+        let results = events_of(&f, "tool.result");
+        assert_eq!(results.len(), 4);
+        for r in &results[1..] {
+            assert!(r.payload["is_error"] == true && r.payload["content"].as_str().unwrap().contains("read untrusted or peer content"), "{:?}", r.payload);
+        }
+        for kind in ["change.recorded", "decision.raised", "research.request", "approval.requested"] {
+            assert!(events_of(&f, kind).is_empty(), "a tainted span wrote `{kind}`");
+        }
+        use delphi_core::provenance::Tier;
+        assert!(outbound_withheld(false, Tier::L1, "record_change").is_some() && outbound_withheld(false, Tier::L2, "record_change").is_none());
+        assert!(outbound_withheld(false, Tier::L0, "ratify_fact").is_none() && outbound_withheld(true, Tier::L5, "ratify_fact").is_some());
+        assert!(outbound_withheld(true, Tier::L0, "read_file").is_none());
+        // A span that starts below the gate (a woken task at L0) is not offered them at all.
+        let f = setup(vec![Step::text("ok")], 5.0, |_| {});
+        f.engine.run_task_woken(&f.m, f.m.next_task_id(), "orchestrator", "Woken", Tier::L0).await.unwrap();
+        let offered = offered_tools(&f, 0);
+        for t in ["record_change", "raise_decision", "request_research"] {
+            assert!(!offered.contains(&t.to_string()), "`{t}` offered to a span that starts tainted: {offered:?}");
+        }
+        assert!(offered.contains(&"ratify_fact".to_string()), "the validator's request stays: {offered:?}");
     }
 
     #[tokio::test]
