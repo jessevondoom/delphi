@@ -389,6 +389,9 @@ pub const COPILOT_FAMILY_ENDPOINTS: &[(&str, &str, [&str; 3])] = &[
     ("claude", "copilot-claude", ["claude-haiku-5.5", "claude-sonnet-5.5", "claude-opus-5.5"]),
     ("openai", "copilot-openai", ["gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra"]),
     ("gemini", "copilot-gemini", ["gemini-4-argon", "gemini-4-argon", "gemini-4-argon"]),
+    // Off-family lineages (`specs/132` C3, OD-5 as the operator aimed it on 2026-11-20): their own families in the family table.
+    ("kimi", "copilot-kimi", ["kimi-k3", "kimi-k3", "kimi-k3"]),
+    ("mai", "copilot-mai", ["mai-code-2-flash", "mai-code-2", "mai-code-2"]),
 ];
 
 /// GitHub Copilot subscription through `copilot`: read-only seats on several families behind one login. Asked once; every family
@@ -1018,6 +1021,22 @@ mod tests {
         let _ = copilot_harness(&mut ui2, &e, &d, &mut doc);
         assert_eq!(doc.to_string(), before);
         assert!(ui2.asked.is_empty());
+    }
+
+    /// specs/132 C3: every model setup offers is a measured row of the seed table, of the endpoint's own family, and every family
+    /// passes the config check (kimi and mai come from the family table).
+    #[test]
+    fn setups_copilot_models_are_in_the_seed_table_and_their_families_are_known() {
+        let seed = delphi_engine::model_catalog::Seed::shipped();
+        let families = delphi_adapter::config::known_families();
+        for (family, id, models) in COPILOT_FAMILY_ENDPOINTS {
+            assert!(families.iter().any(|f| f == family), "{id}: {family} is not a known family");
+            for m in models {
+                let row = seed.model("copilot", m).unwrap_or_else(|| panic!("{id}: `{m}` is not in the seed table"));
+                assert_eq!(row.family, *family, "{id}: `{m}`");
+            }
+        }
+        assert!(COPILOT_FAMILY_ENDPOINTS.iter().any(|(f, _, _)| *f == "kimi") && COPILOT_FAMILY_ENDPOINTS.iter().any(|(f, _, _)| *f == "mai"));
     }
 
     #[test]

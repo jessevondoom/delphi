@@ -56,6 +56,8 @@ Objective: every piece of research Delphi does, whoever asked, leaves one record
 5. `research_result` and `research_status` read the record from disk. A result is available for as long as the record exists, not for an hour.
 6. Record text is data. The question and the answer carry the taint of what they were made from, as a page does today.
 
+**Amendment (2026-11-21, defect D3 of the Stage 0 experiment).** The same question text is the same topic (item 1), so two runs of one question, even at once and even with `new: true`, share one record. Until now the record kept one `result`, and the earlier run's id answered `superseded_by`: concurrent callers each lost their own run. The record now also keeps `results`, a list of `{run, result}` entries, one per finished run that returned a result, newest last and at most eight. Each entry is that run's result with its own answer (not the topic's combined `answer.md`) and without its search log, which stays in `search-log.json` for the newest run only. `result` and `result_run` stay as before, the newest run's, for existing readers. `research_result(run)` for the newest run reads as before; for an earlier run it returns that run's entry; a run whose entry was dropped by the bound, or that finished before this amendment, still answers `superseded_by`. A record without `results` loads as before. `new: true` only stops a run from being folded into a different, overlapping topic (114 §3 item 3); its tool description says so.
+
 ## 3. Claims reach the library
 
 1. Each claim a run keeps is written as a library claim (`library/claims/<id>.json`) with status left to be derived, as 055 and 100 say: it starts `noted`.

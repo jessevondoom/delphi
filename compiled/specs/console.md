@@ -2,7 +2,7 @@
 
 # Console
 
-22 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group console` lists this group.
 
 ## 005-console-and-narrator-tui
 

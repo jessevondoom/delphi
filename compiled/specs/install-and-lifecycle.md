@@ -2,7 +2,7 @@
 
 # Install and lifecycle
 
-10 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group install-and-lifecycle` lists this group.
 
 ## 006-installer-and-updater
 

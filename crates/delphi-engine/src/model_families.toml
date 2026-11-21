@@ -75,6 +75,20 @@ family = "gemini"
 owner = "operator"
 expires = "2027-02-05"
 
+# Off-family lineages served through Copilot (operator, 2026-11-20: off-family coverage; specs/132 OD-5): Moonshot's Kimi and
+# Microsoft's MAI models are their own families, so they count as diversity.
+[[family]]
+pattern = "kimi-*"
+family = "kimi"
+owner = "operator"
+expires = "2027-02-05"
+
+[[family]]
+pattern = "mai-*"
+family = "mai"
+owner = "operator"
+expires = "2027-02-05"
+
 [[family]]
 pattern = "claude-*"
 family = "claude"
