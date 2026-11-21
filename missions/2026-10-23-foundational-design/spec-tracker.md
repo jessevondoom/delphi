@@ -115,6 +115,7 @@ Asked for by the operator on 2026-10-27. Built in one slice and approved after t
 | :-- | :-- | :-- |
 | E1 | `$DELPHI_HOME/logs/delphi.log.jsonl`, `delphi logs`, `delphi debug bundle`, `delphi doctor` check 14, console error boundary | merged (#256) |
 | E2 | `tool_failed` records why a call failed (`timeout`, `denied`, `invalid_args`, `tool_error`, from the first line of the result) and the names of its arguments, never a value or a hash of one; the same kind is stored as `failure` on `tool.result` and `harness.bridge_call` and counted per tool as `invalid_args` and `denied` by `observe::ToolCount` and `toolreport` (spec 033 §6). Amended 2026-11-07 at the operator's approval (Council action 2) | built 2026-11-07 (PR pending): `tools::failure_kind`, `tools::arg_keys`, `engine.rs`, `harness_run.rs`, `observe.rs`, `toolreport.rs`. Not built: `repeat_calls` (a hash of arguments can be guessed back; the loop nudge is the signal); a kind for a CLI seat's own native tools (`harness.tool` carries no outcome); a column for the kind in the console or `delphi tools`. Logs written before this carry no kind |
+| fix 2026-11-21 | the console's error log (`ui/src/elog.ts`, `delphiHome`) treats an empty `DELPHI_HOME` as unset, as the Rust side and `install.sh` do (`specs/006` §2.2 item 3); whitespace is still a value | fixed (PR pending) |
 
 ## Operator-authorized tests (spec 092, approved 2026-11-07)
 
