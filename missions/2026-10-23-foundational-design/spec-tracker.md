@@ -1273,3 +1273,13 @@ The operator asked on 2026-11-16 for a better Council and Panel experience in th
 | 133 | R4 | the deferred `check spec` extension: tally the next three specs and their pull requests (§2.4), then encode the checks that held; also the Council-id collision (§7 item 3) | DUE 2026-12-18 at the latest (or when the third spec above 134 merges); owner: the operator's first session on or after the trigger |
 | 133 | S1 | the build contract: criteria and tests before code, the criterion named in the test, one slice only, the criterion/test/result table with Deviations and Follow-ups in the pull request, tracker rows by search | built 2026-11-20 (same pull request, not merged) |
 | 133 | S2 | the skeleton (`reviewed_by`, Authority, Slices, What is not verified, Decisions with reversibility), the authoring rules of §2.3, the architect's traversal map only across crates or processes | built 2026-11-20 (same pull request, not merged) |
+
+## The forge, first cut (spec 135, approved in advance 2026-11-20)
+
+| Spec | Slice | Content | State |
+| :-- | :-- | :-- | :-- |
+| 135 | S0 | the spec: slice claims (F0), the finisher (F1), a cross-family review that runs the tests (F2), the F4 experiment; F0b, F1b, F3 deferred | approved in advance 2026-11-20 by the operator in a session ("build F0 to F2 then we can try F4?"), on the plan shown, not the text; takes effect when its pull request merges; no Council has read it |
+| 135 | F0 | `delphi forge claim\|release\|list`, `slice_claims.rs`, `tracker.rs` | approved in advance on the plan; not built |
+| 135 | F1 | `delphi forge finish`, `finisher.rs` | approved in advance on the plan; not built |
+| 135 | F2 | `request_review` / `host.review`, `review_job.rs`, `create_investigation_at`, `[forge]` config | approved in advance on the plan; not built |
+| 135 | F4 | the experiment (section 7): F2 on known defects, F1 on known drift, F0 by use | not run; waits for F0-F2 and the operator's yes |
