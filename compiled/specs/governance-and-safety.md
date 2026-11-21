@@ -76,9 +76,9 @@ _No standard scope section; open the spec._
 
 ## 088-spec-compile-and-current-set
 
-**088: A spec compile step: per-spec machine files and grouped human views of the current set** · approved (per source at `56c21e2f7919`) · tier 0 · [source](../../specs/088-spec-compile-and-current-set.md)
+**088: A spec compile step: per-spec machine files and grouped human views of the current set** · approved (per source at `c380dfe9cbc6`) · tier 0 · [source](../../specs/088-spec-compile-and-current-set.md)
 
-**source excerpt, untrusted** · `specs/088-spec-compile-and-current-set.md` line 27
+**source excerpt, untrusted** · `specs/088-spec-compile-and-current-set.md` line 28
 
 ```text
 Development is fast and specs are corrected as it goes. An agent or a validator that asks "what is currently required?" has to read the specs themselves, and they do not fit in a context: on 2026-11-07 `specs/` held 99 markdown files (98 specs and the interface blueprints) and about 331,000 words, and 68 of them mention superseding or amending something. Today the current state is kept readable by **folding by hand**: when a spec's amendments are folded into its body, the removed text moves verbatim to `specs/history/` and every section number survives as a stub. That works, but it is manual, it rewrites approved files, it is done spec by spec, and nothing checks across specs.
