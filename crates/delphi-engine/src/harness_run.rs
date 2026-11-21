@@ -2584,6 +2584,24 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert!(crate::seat::receipt_toolless(r));
     }
 
+    /// D7 (`specs/086` §6.4): a seat opened with `tools: "readonly"` runs read-only on a CLI too: the bridge serves no write tool and
+    /// the receipt says `readonly`.
+    #[tokio::test]
+    async fn a_readonly_agy_seat_bridges_no_write_tool_and_its_receipt_says_readonly() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), "echo '{\"event\":\"init\",\"init\":{\"model\":\"gemini-3.8-flash-low\",\"tools\":[]}}'\necho '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"ok\",\"usage\":{}}}'");
+        let f = retry_fx(prog, Duration::from_secs(600));
+        let s = seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
+        assert_eq!(r["tool_grant"]["readonly"], true, "{r}");
+        let bridge: Vec<&str> = r["tool_grant"]["bridge"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(bridge.contains(&"read_file"), "{bridge:?}");
+        for w in ["write_file", "write_archive", "write_html", "run_command", "shell"] {
+            assert!(!bridge.contains(&w), "`{w}` bridged to a readonly seat: {bridge:?}");
+        }
+    }
+
     #[tokio::test]
     async fn an_agy_seat_that_the_cli_failed_is_tried_once_more_and_keeps_the_second_answer() {
         let scripts = tempfile::tempdir().unwrap();

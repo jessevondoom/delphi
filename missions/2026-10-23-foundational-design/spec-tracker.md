@@ -794,6 +794,7 @@ From the operator's request to refine the outside Council (Claude Code, Copilot,
 | S7 | Round 2 reader (C1a): first complete critique wins, identical repeats tolerated, a conflicting later block or object refuses the reply, `trailer` counts and bytes on `council.critique` (daemon and Panel share one reader; reply to the 2026-11-07 Councils 002/003) | 3 | built (PR open) |
 | S8 | seat diagnostics (C1c): `parsed` (R1 `OPTION:` line, R2 critique) and `declined` (the shared refusal tagger, moved to `delphi_engine::refusal`) in the Council record's Seats table and on `council.stance`/`council.critique`; diagnostics only, never a score or input to ranking or routing (spec 078); receipt untouched | 3 | built (PR open) |
 | S9 | tidy-ups (2026-11-08): the `Projects here:` hint can no longer be read as a pointer (no `@project/<` token in it, and the parser skips that line); `council_open` lists `foreign_seats` and the `[seats]` budget keys in its schema; a Panel's `council_status` phase follows its own rounds (round 2, then the moderator's verdict) | 1 | built (PR open) |
+| F-D7 | fix (2026-11-20, Stage 0 defect D7): a foreign seat opened with `tools: "readonly"`, or with tools through `foreign_seat` or the red-team review default, was offered and could call its role's write tools; its span is now marked read-only by handoff (062 §6.3 narrowing, call-time refusal, `tool_grant.readonly: true`) from its first turn | 1 | built (PR open) |
 
 ## Spec 090: renumber the three shared spec numbers, once (2026-11-07, approved)
 
