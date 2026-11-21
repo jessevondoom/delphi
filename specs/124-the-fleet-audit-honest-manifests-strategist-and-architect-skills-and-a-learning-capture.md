@@ -113,6 +113,8 @@ Acceptance: AC-3.
 3. **Use.** `roadmap-sequencing` consumes a trace: a milestone with no action in it is flagged.
 4. **Sources.** The skill text cites primary works (Rumelt, Lafley and Martin, Kim and Mauborgne, Helmer, Wardley) only after the operator has ratified those sources; until then it says they were taken from secondary summaries.
 
+**Amendment, 2026-11-21 (review fixes V1, written by the builder, not read by the operator):** the fixed layout of item 2 is read more widely, and the two skills say so: a section heading may carry a number or more words and may be level 3 under a heading outside the layout; an item line may follow a list marker, a number or a task box, write its references after the colon, separate its text with a dash, write an id with leading zeros or a range of ids (`P1–P3`); a field counts only for the item it is written under. A line that starts with an id of its section and cannot be read is reported as `TRACE-DOC-02` (advice, like every trace finding), and a `text` wrapped whole in one code fence is read inside it. A labelled forecast (§5 item 1) may be a numbered item or a heading with a date or a colon, may wrap onto the next line, and keeps its `Tripwire:` across one blank line.
+
 Acceptance: AC-4.
 
 ## 7. Divergent options by default (slice S6)
