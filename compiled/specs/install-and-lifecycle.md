@@ -62,7 +62,7 @@ _No standard scope section; open the spec._
 
 ## 122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program
 
-**122: The desktop app in the release: built on macOS, installed and updated with the program** · approved (per source at `7f69db72c91e`) · tier 0 · [source](../../specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md)
+**122: The desktop app in the release: built on macOS, installed and updated with the program** · approved (per source at `adb03b5cfc8e`) · tier 0 · [source](../../specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md)
 
 **source excerpt, untrusted** · `specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md` line 23
 

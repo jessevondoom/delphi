@@ -32,12 +32,12 @@ fn self_install_copies_the_program_and_refuses_what_is_not_one() {
     let o = run(&["self-install"], t.path(), &[]);
     assert!(o.status.success() && text(&o.stdout).contains("same program already"), "{}", text(&o.stdout));
 
-    // An earlier build: this program with a byte more. Real delphi bytes carry the marker, so it is replaced.
+    // Another build of the same version: this program with a byte more. Real delphi bytes carry the marker, so it is replaced.
     let mut older = std::fs::read(DELPHI).unwrap();
     older.push(0);
     std::fs::write(&dest, &older).unwrap();
     let o = run(&["self-install"], t.path(), &[]);
-    assert!(o.status.success() && text(&o.stdout).contains("earlier delphi there was replaced"), "{}{}", text(&o.stdout), text(&o.stderr));
+    assert!(o.status.success() && text(&o.stdout).contains(&format!("another build of delphi {} there was replaced", env!("CARGO_PKG_VERSION"))), "{}{}", text(&o.stdout), text(&o.stderr));
     assert_eq!(std::fs::read(&dest).unwrap(), std::fs::read(DELPHI).unwrap());
 
     // Not a delphi: refused, and left as it was.
@@ -56,6 +56,31 @@ fn self_install_copies_the_program_and_refuses_what_is_not_one() {
     assert_eq!(o.status.code(), Some(1));
     assert!(text(&o.stderr).contains("symbolic link"), "{}", text(&o.stderr));
     assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+}
+
+/// V3-2: the built program carries its version as a fixed text, and a delphi whose text names a newer version is kept unless
+/// `--allow-downgrade` is given.
+#[test]
+fn self_install_keeps_a_newer_delphi_unless_allow_downgrade() {
+    let t = tempfile::tempdir().unwrap();
+    let dest = t.path().join("bin/delphi");
+    std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    let ours = std::fs::read(DELPHI).unwrap();
+    let tag = format!("\0delphi-version:{}\0", env!("CARGO_PKG_VERSION")).into_bytes();
+    let at = ours.windows(tag.len()).position(|w| w == tag.as_slice()).expect("the program carries its version text");
+    // The same program, its version text changed to a newer one of the same length (the major version raised by 1..9).
+    let newer: String = env!("CARGO_PKG_VERSION").chars().enumerate().map(|(i, c)| if i == 0 { char::from_digit(c.to_digit(10).unwrap() % 9 + 1, 10).unwrap() } else { c }).collect();
+    assert_eq!(newer.len(), env!("CARGO_PKG_VERSION").len());
+    let mut theirs = ours.clone();
+    theirs[at..at + tag.len()].copy_from_slice(format!("\0delphi-version:{newer}\0").as_bytes());
+    std::fs::write(&dest, &theirs).unwrap();
+    let o = run(&["self-install"], t.path(), &[]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o.stdout));
+    assert!(text(&o.stderr).contains(&format!("is delphi {newer}, newer than this")) && text(&o.stderr).contains("--allow-downgrade"), "{}", text(&o.stderr));
+    assert_eq!(std::fs::read(&dest).unwrap(), theirs, "left as it was");
+    let o = run(&["self-install", "--allow-downgrade"], t.path(), &[]);
+    assert!(o.status.success() && text(&o.stdout).contains(&format!("a newer delphi {newer}")), "{}{}", text(&o.stdout), text(&o.stderr));
+    assert_eq!(std::fs::read(&dest).unwrap(), ours);
 }
 
 #[test]
