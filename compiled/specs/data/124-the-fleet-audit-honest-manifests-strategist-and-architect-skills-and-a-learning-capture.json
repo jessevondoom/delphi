@@ -46,109 +46,109 @@
     },
     {
       "level": 2,
-      "line": 118,
+      "line": 120,
       "number": "7",
       "title": "Divergent options by default (slice S6)"
     },
     {
       "level": 2,
-      "line": 128,
+      "line": 130,
       "number": "8",
       "title": "Architect rigor (slice S7)"
     },
     {
       "level": 2,
-      "line": 134,
+      "line": 136,
       "number": "9",
       "title": "Strategist breadth (slice S8)"
     },
     {
       "level": 2,
-      "line": 140,
+      "line": 142,
       "number": "10",
       "title": "Architect safeguards (slice S9)"
     },
     {
       "level": 2,
-      "line": 146,
+      "line": 148,
       "number": "11",
       "title": "Not built here, and why"
     },
     {
       "level": 2,
-      "line": 156,
+      "line": 158,
       "number": "12",
       "title": "Open questions for the operator"
     },
     {
       "level": 2,
-      "line": 167,
+      "line": 169,
       "number": "13",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 175,
+      "line": 177,
       "number": "14",
       "title": "Slices and pull requests"
     },
     {
       "level": 2,
-      "line": 194,
+      "line": 196,
       "number": "15",
       "title": "Acceptance"
     },
     {
       "level": 2,
-      "line": 206,
+      "line": 208,
       "number": "16",
       "title": "Amendment (operator, 2026-11-17 and 2026-11-18): the answers to the open decisions"
     },
     {
       "level": 3,
-      "line": 215,
+      "line": 217,
       "number": "16.1",
       "title": "Slices"
     },
     {
       "level": 3,
-      "line": 222,
+      "line": 224,
       "number": "16.2",
       "title": "Acceptance"
     },
     {
       "level": 2,
-      "line": 228,
+      "line": 230,
       "number": "17",
       "title": "Amendment (written 2026-11-18, from S12's evidence): a daemon seat is shown its role's skills"
     },
     {
       "level": 3,
-      "line": 232,
+      "line": 234,
       "number": "17.1",
       "title": "What S12 and the trace found (O-12)"
     },
     {
       "level": 3,
-      "line": 246,
+      "line": 248,
       "number": "17.2",
       "title": "The change"
     },
     {
       "level": 3,
-      "line": 255,
+      "line": 257,
       "number": "17.3",
       "title": "Slice and acceptance"
     },
     {
       "level": 2,
-      "line": 264,
+      "line": 266,
       "number": "18",
       "title": "Corrections from the build (2026-11-18)"
     },
     {
       "level": 2,
-      "line": 274,
+      "line": 276,
       "number": "19",
       "title": "Amendment (2026-11-21, from the Stage 0 review of S11): the `empty` words tell the truth, and the two planner changes"
     }
@@ -156,7 +156,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md",
-    "sha256": "ae64b8021142eb7446da1332bbbe3705c83aac935631abc333202838ccbf7d2c"
+    "sha256": "49bf60e351cd0bc3b8006024207066e681914deb46f80f1c26bf32d9cdf8143f"
   },
   "source_status_at_hash": {
     "line": {
@@ -169,7 +169,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-17, in a session, after seeing the build plan and this draft being written: \"i saw your drafting of the steps for 124 so i'll approve it when ready. if it's based on this conversation consider it approved and run hard at it\". Earlier the same day they answered the three questions: \"1. repo-wide. include the first set of recommendations too. 2. go with your pick. 3. no. now go\". The text was written from that conversation; the operator has not read it line by line. Open questions OD-1 to OD-4 of section 12 take their recommendations unless the operator says otherwise. It takes effect when the operator merges the pull request that carries it."
     },
-    "sha256": "ae64b8021142eb7446da1332bbbe3705c83aac935631abc333202838ccbf7d2c",
+    "sha256": "49bf60e351cd0bc3b8006024207066e681914deb46f80f1c26bf32d9cdf8143f",
     "word": "approved"
   },
   "spec": {
