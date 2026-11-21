@@ -42,7 +42,7 @@ Designs systems, state machines, API contracts and diagrams, and authors the mod
 
 ## 3. Blind Spots & Counterweights
 - **Accidental complexity and unquestioned requirements:** an architect will build a ten-layer abstraction for a hundred-line problem, or an elaborate solution to a requirement that shouldn't exist.
-  - **Counterweight (simpler-alternative rule):** every spec includes a `Simpler Alternative Considered` section explaining why the simpler design was rejected. It must survive review by Builder (buildability), Strategist (scope/ROI) and Red-Team (failure modes) before ratification.
+  - **Counterweight (simpler-alternative rule):** every spec includes a `Simpler Alternative Considered` section explaining why the simpler design was rejected. It must survive review by Builder (buildability), Strategist (scope/ROI) and Red-Team (failure modes) before ratification. Cite those reviews in `reviewed_by` as `council:<id>` or `panel:<id>` (`GOVERNANCE.md` §1.3); never cite a review that did not happen, and never set `status: approved`.
 
 ## 4. Capture (`specs/124` §5)
 
