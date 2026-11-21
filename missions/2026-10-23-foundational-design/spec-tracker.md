@@ -1266,3 +1266,13 @@ The operator asked on 2026-11-16 for a better Council and Panel experience in th
 | 132 | X5 | Codex L1: probe for a deny-capable gate, build only if found | approved in advance on the plan; not built; waits for X2 |
 | 132 | X6 | Codex live proofs (operator-run) | approved in advance on the plan; not run; waits for X3 and X4 |
 | 132 | F1 | drift and meters for every carrier | approved in advance on the plan; not built |
+
+## The forge, first cut (spec 135, approved in advance 2026-11-20)
+
+| Spec | Slice | Content | State |
+| :-- | :-- | :-- | :-- |
+| 135 | S0 | the spec: slice claims (F0), the finisher (F1), a cross-family review that runs the tests (F2), the F4 experiment; F0b, F1b, F3 deferred | approved in advance 2026-11-20 by the operator in a session ("build F0 to F2 then we can try F4?"), on the plan shown, not the text; takes effect when its pull request merges; no Council has read it |
+| 135 | F0 | `delphi forge claim\|release\|list`, `slice_claims.rs`, `tracker.rs` | approved in advance on the plan; not built |
+| 135 | F1 | `delphi forge finish`, `finisher.rs` | approved in advance on the plan; not built |
+| 135 | F2 | `request_review` / `host.review`, `review_job.rs`, `create_investigation_at`, `[forge]` config | approved in advance on the plan; not built |
+| 135 | F4 | the experiment (section 7): F2 on known defects, F1 on known drift, F0 by use | not run; waits for F0-F2 and the operator's yes |

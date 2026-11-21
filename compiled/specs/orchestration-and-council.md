@@ -2,7 +2,7 @@
 
 # Orchestration and Council
 
-13 specs. [All groups](./index.md).
+14 specs. [All groups](./index.md).
 
 ## 003-collaboration-and-council
 
@@ -137,4 +137,14 @@ A host Council kept losing the red-team's Round 2: the ruling said "Red-Team's R
 
 ```text
 Over three Councils (`t_0002`, `t_0003`, `t_0004`, 2026-11-19 and 2026-11-20) every seat on the Gemini family failed, and each Council still printed "two families met". This spec says how Delphi stops a Gemini-carried seat from being sent more than its carrier delivers, keeps the task readable when something is cut anyway, counts a family only when a seat was heard, and keeps a seat from acting on the project.
+```
+
+## 135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests
+
+**135: The forge, first cut: slice claims, a finisher, and a cross-family review that runs the tests** · approved (per source at `f2e2717e5c7d`) · tier 0 · [source](../../specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md)
+
+**source excerpt, untrusted** · `specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md` line 24
+
+```text
+The idea discussed with the operator was a "forge": a host calls Delphi with an approved slice and gets a pull request back, built by seats of several model families. Read against what actually goes wrong, most of the value is not in many writers. It is in four recurring failures, three of which need no model at all:
 ```
