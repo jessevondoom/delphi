@@ -1834,7 +1834,11 @@ impl EngineService {
             let family = match item["family"].as_str().filter(|f| !f.is_empty()) {
                 Some(f) if self.engine.panel_family_usable(f) && Some(f) != host_family => f.to_string(),
                 Some(f) => return Err(bad(format!("family `{f}` is not a configured, usable family other than your host's: ask for another, or leave `family` out"))),
-                None => self.engine.panel_foreign_family(role, host_family).ok_or_else(|| bad("a seat run by Delphi needs a model family other than your host's, and none is configured: ask without foreign_seats, or add another family (see `delphi setup`)".into()))?,
+                None => {
+                    // `specs/132` §5.4 item 4: N foreign seats on N distinct usable families when that many exist.
+                    let taken: Vec<String> = out.iter().map(|s| s.family.clone()).collect();
+                    self.engine.panel_foreign_family_beside(role, host_family, &taken).ok_or_else(|| bad("a seat run by Delphi needs a model family other than your host's, and none is configured: ask without foreign_seats, or add another family (see `delphi setup`)".into()))?
+                }
             };
             out.push(crate::council_panel::ForeignSeat { role: role.to_string(), family, tools_none });
         }

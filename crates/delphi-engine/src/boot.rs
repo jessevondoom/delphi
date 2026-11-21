@@ -88,6 +88,8 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         if let Some(n) = sc.get("max_foreign_tokens").and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
             s.max_foreign_tokens = n as u64;
         }
+        // Spec 132 §5.4 item 2: pinned (`lock::PINNED_KEYS`), so this is the ratified copy's value. Anything but "two" keeps "all".
+        s.spread_all = sc.get("spread").and_then(|v| v.as_str()) != Some("two");
     }
     // Spec 135 §6: a review's commands (a list of argv lists, at most 8, each non-empty) and its diff cap (1,000 to 200,000
     // characters). A value of the wrong shape keeps the default.
@@ -391,8 +393,23 @@ pub fn effective_config(ws_dir: &Path, live_text: &str) -> Result<(String, Vec<S
     for k in delphi_core::lock::ACCESS_KEYS {
         table.remove(k);
     }
+    // A pinned key of a live table (`[seats] spread`, `specs/132` §5.4): the live value is dropped, the ratified one put back, and the
+    // rest of that table stays live.
+    for (t, k) in delphi_core::lock::PINNED_KEYS {
+        if let Some(toml::Value::Table(sub)) = table.get_mut(t) {
+            sub.remove(k);
+        }
+    }
     if let Ok(toml::Value::Table(t)) = toml::from_str::<toml::Value>(&trusted_blocks) {
         for (k, v) in t {
+            if let Some((_, key)) = delphi_core::lock::PINNED_KEYS.iter().find(|(p, _)| *p == k) {
+                if let Some(x) = v.get(key) {
+                    if let toml::Value::Table(sub) = table.entry(k).or_insert_with(|| toml::Value::Table(Default::default())) {
+                        sub.insert(key.to_string(), x.clone());
+                    }
+                }
+                continue;
+            }
             table.insert(k, v);
         }
     }
@@ -887,6 +904,31 @@ mod tests {
         assert!(b.engine.settings.is_dispatchable("investigator"));
         assert!(!b.engine.settings.is_dispatchable("scout"));
         drop(t);
+    }
+
+    // specs/132 §5.4 item 2: `[seats] spread` is "all" by default and counts only from the ratified copy; the rest of `[seats]` is live.
+    #[test]
+    fn seats_spread_is_all_by_default_and_counts_only_from_the_ratified_copy() {
+        assert!(settings_from(&toml::from_str("").unwrap()).spread_all);
+        assert!(settings_from(&toml::from_str("[seats]\nspread = \"sideways\"\n").unwrap()).spread_all, "an unknown value keeps all");
+        let w = tempfile::tempdir().unwrap();
+        let ratified = "[seats]\nspread = \"two\"\n";
+        let blocks = access_blocks(ratified);
+        fs::create_dir_all(w.path().join("local/ratified")).unwrap();
+        let mut l = lock::LockFile::default();
+        l.files.insert(crate::ratify::CONFIG_KEY.into(), hash(blocks.as_bytes()));
+        lock::write(&w.path().join("local/ratified.lock"), &l).unwrap();
+        fs::write(w.path().join("local/ratified").join(crate::ratify::CONFIG_COPY), &blocks).unwrap();
+        let read = |dir: &Path, live: &str| {
+            let (eff, _) = effective_config(dir, live).unwrap();
+            let s = settings_from(&toml::from_str(&eff).unwrap());
+            (s.spread_all, s.max_foreign_seats)
+        };
+        assert_eq!(read(w.path(), "[seats]\nspread = \"two\"\nmax_foreign_seats = 3\n"), (false, 3), "ratified two, and the live keys beside it still count");
+        assert_eq!(read(w.path(), "[seats]\nspread = \"all\"\nmax_foreign_seats = 2\n"), (false, 2), "a live edit of spread counts for nothing");
+        assert_eq!(read(w.path(), "[seats]\nmax_foreign_seats = 2\n"), (false, 2), "nor does removing it");
+        let none = tempfile::tempdir().unwrap();
+        assert_eq!(read(none.path(), "[seats]\nspread = \"two\"\n"), (true, 1), "with nothing ratified a live \"two\" does not narrow a Council");
     }
 
     fn pin_config(ws: &WorkspacePaths) {
