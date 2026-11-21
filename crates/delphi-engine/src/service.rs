@@ -1393,6 +1393,8 @@ impl EngineService {
             }
         }
         let has_options = p.get("options").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+        // Spec 123 §17 item 2: a caller's `earlier_rulings: false`, judged before anything is recorded.
+        let earlier_off = crate::council::earlier_rulings_off(&p).map_err(|why| err(code::INVALID_PARAMS, why))?;
         let briefs: Vec<Value>;
         let (task_id, m) = {
             let _gate = self.host_gate.lock().await;
@@ -1430,7 +1432,8 @@ impl EngineService {
             panel.host_family = host_family.map(String::from);
             panel.require_families = required;
             panel.kind = kind.clone();
-            if self.engine.settings.council_earlier_rulings {
+            panel.earlier_off = earlier_off;
+            if self.engine.settings.council_earlier_rulings && !earlier_off {
                 panel.earlier = crate::council_earlier::pick(&self.engine.ws.dir, &m.dir, crate::council::headline(&proposition));
             }
             for seat in &planned_foreign {
@@ -3675,7 +3678,7 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "`proposition` must be 1 to 20,000 characters"));
         }
         let seats: Vec<String> = p["seats"].as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default();
-        let opts = crate::council::CouncilOpts { seats, author_family: p["author_family"].as_str().map(String::from), lenses: p["lenses"].as_bool().unwrap_or(false), tier: p["tier"].as_str().map(String::from), require_families: None };
+        let opts = crate::council::CouncilOpts { seats, author_family: p["author_family"].as_str().map(String::from), lenses: p["lenses"].as_bool().unwrap_or(false), tier: p["tier"].as_str().map(String::from), require_families: None, earlier_off: false };
         let task_id = m.next_task_id();
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: "council".into(), prompt: proposition.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
@@ -7167,6 +7170,59 @@ mod tests {
         assert_eq!(events.iter().filter(|e| e.kind == "council.stance").count(), 3);
         assert_eq!(events.iter().find(|e| e.kind == "council.verdict").unwrap().payload["venue"], "panel", "the verdict says it came from a Panel");
         assert!(events.iter().filter(|e| e.kind == "council.stance").all(|e| e.payload["brief_hash"].as_str().is_some_and(|h| h.len() == 64)), "each stance records the brief it was given");
+    }
+
+    /// Spec 123 §17 item 2: `council_open` with `earlier_rulings: false` keeps an earlier matching record out of the moderator's round 3
+    /// brief, and the record says the caller turned it off; the default still shows it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_panel_opened_with_earlier_rulings_false_shows_the_moderator_none() {
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            let good = "RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE";
+            let q = "Should the retry queue be a table or a file?";
+            assert_eq!(rpc_code(c.call("host.council_open", p(json!({"question": q, "earlier_rulings": "no"})))), Some(code::INVALID_PARAMS));
+            // Runs a Panel to its end and gives the moderator's round 3 brief.
+            let mut run = |extra: Value| -> String {
+                let mut open = json!({"question": q});
+                for (k, v) in extra.as_object().unwrap() {
+                    open[k] = v.clone();
+                }
+                let id = c.call("host.council_open", p(open)).unwrap()["council_id"].as_str().unwrap().to_string();
+                for round in [1, 2] {
+                    for seat in ["architect", "red-team", "strategist"] {
+                        c.call("host.council_submit", p(json!({"council_id": id, "seat": seat, "round": round, "text": if round == 1 { "OPTION: table\nBecause." } else { good }}))).unwrap();
+                    }
+                }
+                let b3 = c.call("host.council_brief", p(json!({"council_id": id, "seat": "orchestrator", "round": 3}))).unwrap()["brief"].as_str().unwrap().to_string();
+                c.call("host.council_submit", p(json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "The seats agree.\nDECISION: use a table\nNEXT builder: write the table"}))).unwrap();
+                b3
+            };
+            assert!(!run(json!({})).contains("council/earlier/"), "the first Panel has nothing earlier");
+            assert!(!run(json!({"earlier_rulings": false})).contains("council/earlier/"), "turned off for this Panel");
+            assert!(run(json!({})).contains("council/earlier/"), "the default still shows the earlier record");
+        })
+        .await;
+        let dir = delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789").join("councils");
+        let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).collect();
+        files.sort();
+        assert_eq!(files.len(), 3);
+        let docs: Vec<String> = files.iter().map(|f| std::fs::read_to_string(f).unwrap()).collect();
+        assert!(docs[1].contains("earlier_rulings_off: by the caller") && !docs[1].contains("earlier_rulings: "), "{}", docs[1]);
+        assert!(!docs[2].contains("earlier_rulings_off") && docs[2].contains("earlier_rulings: "), "{}", docs[2]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
