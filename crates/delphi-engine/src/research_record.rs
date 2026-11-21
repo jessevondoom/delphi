@@ -566,6 +566,17 @@ impl Topic {
                     o.remove("answer");
                     o.remove("search_log");
                 }
+                // Each run's own result, with its own answer, so an earlier run of the same topic (two callers asking the same
+                // question at once) still reads back its own (spec 112 §2, amendment 2026-11-21). Newest last, at most RESULTS_KEPT.
+                let mut own = kept.clone();
+                if let Some(a) = r["answer"].as_str() {
+                    own["answer"] = json!(a.chars().take(ANSWER_CAP).collect::<String>());
+                }
+                let mut list: Vec<Value> = rec["results"].as_array().cloned().unwrap_or_default();
+                list.retain(|e| e["run"].as_str() != Some(run_id));
+                list.push(json!({"run": run_id, "result": own}));
+                let drop = list.len().saturating_sub(RESULTS_KEPT);
+                rec["results"] = json!(list.split_off(drop));
                 rec["result"] = kept;
                 rec["result_run"] = json!(run_id);
                 rec["gaps"] = json!(gaps_of(r, state));
@@ -616,6 +627,8 @@ pub fn gaps_of(result: &Value, state: &str) -> Vec<String> {
 const EARLIER: &str = "From earlier runs of this topic:";
 /// What `answer.md` holds at most, in characters, as the runner caps one answer.
 const ANSWER_CAP: usize = 7900;
+/// How many runs' own results a topic record keeps in `results`, newest last (spec 112 §2, amendment 2026-11-21).
+const RESULTS_KEPT: usize = 8;
 
 /// A run's answer with the topic's earlier answer below it, under one heading however many runs came before. The same text twice
 /// is written once.
@@ -654,8 +667,9 @@ fn finished(state: &str) -> bool {
 }
 
 /// What `research_result` returns for `run_id`, from the topic's files (§2.5): the runner's result with its answer and search
-/// log put back and the run's `status`. `None` while the run has not finished (or is not one of this topic's). A run whose result
-/// a later run of the same topic replaced says so instead of returning the newer result under the older id.
+/// log put back and the run's `status`. `None` while the run has not finished (or is not one of this topic's). An earlier run of
+/// the same topic answers from `results`, with its own answer; one whose entry is gone (past the bound, or a record written before
+/// `results`) says it was superseded instead of returning the newer result under the older id.
 pub fn result_of(topic: &Topic, run_id: &str) -> Option<Value> {
     let rec = topic.read().ok()?;
     let run = run_of(&rec, run_id)?;
@@ -667,6 +681,9 @@ pub fn result_of(topic: &Topic, run_id: &str) -> Option<Value> {
             v["search_log"] = log;
         }
         v
+    } else if let Some(own) = rec["results"].as_array().and_then(|l| l.iter().find(|e| e["run"].as_str() == Some(run_id))).map(|e| e["result"].clone()).filter(Value::is_object) {
+        // An earlier run of the topic: its own result and answer, as it finished.
+        own
     } else if rec["result_run"].is_string() && rec["result_run"].as_str() != Some(run_id) && matches!(state, "done" | "partial") {
         json!({"superseded_by": rec["result_run"], "note": "a later run of the same topic replaced this result; ask for that run, or read the topic with `delphi research show`"})
     } else {
@@ -1164,7 +1181,7 @@ mod tests {
         assert!(result_of(&t, "r-other").is_none() && status_of(&t, "r-other", false).is_none());
         assert!(t.finish("r-t-1", "running", None, &[], None, 0).is_err() && t.finish("r-t-1", "bogus", None, &[], None, 0).is_err());
         // A second run of the topic that drew claims puts its answer first and keeps what the first wrote below it; the first run's
-        // id then says it was superseded instead of returning the newer result.
+        // id still returns its own result.
         let first = t.answer();
         Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-2")).unwrap();
         t.finish("r-t-2", "done", Some(&result("a newer answer")), &["abc123abc123".to_string(), "def456def456".to_string()], None, 10).unwrap();
@@ -1182,7 +1199,7 @@ mod tests {
         assert!(t.answer().starts_with("a third answer\n\nFrom earlier runs of this topic:\na newer answer\n"), "{}", t.answer());
         let last = t.answer();
         let old = result_of(&t, "r-t-1").unwrap();
-        assert_eq!((old["status"].as_str(), old["superseded_by"].as_str(), old.get("answer").is_none()), (Some("partial"), Some("r-t-2c"), true));
+        assert_eq!((old["status"].as_str(), old.get("superseded_by").is_none(), old["answer"].as_str()), (Some("partial"), true, Some(answer)), "an earlier run reads back its own answer");
         let rec = t.read().unwrap();
         assert_eq!(rec["claims"], json!(["abc123abc123", "def456def456"]), "claim ids gather across runs, once each");
         assert_eq!(rec["usage"]["ms"], 1244);
@@ -1192,6 +1209,62 @@ mod tests {
         let failed = result_of(&t, "r-t-3").unwrap();
         assert_eq!((failed["status"].as_str(), failed["error"].as_str()), (Some("failed"), Some("the job ran out of time")));
         assert_eq!(t.answer(), last, "a failed run leaves the last answer in place");
+    }
+
+    #[test]
+    fn two_runs_of_the_same_question_each_read_back_their_own_result() {
+        // Two callers ask the same question at once (the same topic): both runs are in flight, then both finish. Each run id
+        // answers with its own run's answer and claims, not `superseded_by` (spec 112 §2 item 5, amendment 2026-11-21).
+        let ws = tempfile::tempdir().unwrap();
+        let t = Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-a")).unwrap();
+        Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-b")).unwrap();
+        let mut a = result("answer of run a");
+        a["claims"] = json!([{"id": "aaaaaaaaaaaa", "assertion": "from a", "knowledge_status": "noted"}]);
+        let mut b = result("answer of run b");
+        b["claims"] = json!([{"id": "bbbbbbbbbbbb", "assertion": "from b", "knowledge_status": "noted"}]);
+        t.finish("r-a", "done", Some(&a), &["aaaaaaaaaaaa".to_string()], None, 1).unwrap();
+        t.finish("r-b", "done", Some(&b), &["bbbbbbbbbbbb".to_string()], None, 1).unwrap();
+        let ra = result_of(&t, "r-a").unwrap();
+        assert!(ra.get("superseded_by").is_none(), "{ra}");
+        assert_eq!((ra["answer"].as_str(), ra["claims"][0]["id"].as_str(), ra["status"].as_str()), (Some("answer of run a"), Some("aaaaaaaaaaaa"), Some("done")));
+        let rb = result_of(&t, "r-b").unwrap();
+        assert_eq!(rb["claims"][0]["id"].as_str(), Some("bbbbbbbbbbbb"));
+        assert!(rb["answer"].as_str().unwrap().starts_with("answer of run b"), "the newest run reads the topic's answer as before: {rb}");
+        let rec = t.read().unwrap();
+        assert_eq!(rec["result_run"], "r-b", "`result` stays the newest run's, for readers of it");
+        assert!(rec["result"].get("answer").is_none());
+        // The kept results are bounded: past RESULTS_KEPT, the oldest run's result is dropped and its id says it was superseded.
+        for i in 0..RESULTS_KEPT {
+            let id = format!("r-c{i}");
+            Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", &id)).unwrap();
+            t.finish(&id, "done", Some(&result(&format!("answer {i}"))), &[], None, 1).unwrap();
+        }
+        let rec = t.read().unwrap();
+        assert_eq!(rec["results"].as_array().unwrap().len(), RESULTS_KEPT);
+        let old = result_of(&t, "r-a").unwrap();
+        assert_eq!(old["superseded_by"].as_str(), Some(format!("r-c{}", RESULTS_KEPT - 1).as_str()));
+        assert_eq!(result_of(&t, "r-c0").unwrap()["answer"], "answer 0");
+    }
+
+    #[test]
+    fn a_record_written_before_per_run_results_still_loads() {
+        // A record.json from before `results` existed: one `result`, its `result_run`, and two finished runs.
+        let ws = tempfile::tempdir().unwrap();
+        let t = Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-o1")).unwrap();
+        Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-o2")).unwrap();
+        t.finish("r-o1", "done", Some(&result("first")), &[], None, 1).unwrap();
+        t.finish("r-o2", "done", Some(&result("second")), &[], None, 1).unwrap();
+        let mut rec = t.read().unwrap();
+        rec.as_object_mut().unwrap().remove("results");
+        t.write(&rec).unwrap();
+        let newest = result_of(&t, "r-o2").unwrap();
+        assert!(newest["answer"].as_str().unwrap().starts_with("second") && newest["status"] == "done", "{newest}");
+        assert_eq!(result_of(&t, "r-o1").unwrap()["superseded_by"], "r-o2", "an old record has no per-run result for the earlier run");
+        // A third run on the old record starts the list without losing the newest result.
+        Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-o3")).unwrap();
+        t.finish("r-o3", "done", Some(&result("third")), &[], None, 1).unwrap();
+        assert!(result_of(&t, "r-o3").unwrap()["answer"].as_str().unwrap().starts_with("third"));
+        assert_eq!(t.read().unwrap()["results"].as_array().unwrap().len(), 1);
     }
 
     #[test]
