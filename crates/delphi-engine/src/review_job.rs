@@ -83,22 +83,48 @@ pub struct CommandResult {
     pub requested_by: &'static str,
     pub refused: Option<String>,
     pub timed_out: bool,
+    /// False when the sandbox could not start the program at all (§14.1 item 1): it never ran, whatever its exit says.
+    pub started: bool,
     pub tail: String,
+}
+
+/// How to make a review's commands start in the sandbox (`specs/135` §14.1 item 1, §14.2).
+pub const START_FIX: &str = "the sandbox finds programs only on `[exec] env.PATH` and executes only the system directories and the \
+     `[exec] toolchain` directories (read-only). For Rust: `[exec] toolchain = [\"~/.cargo\", \"~/.rustup\"]` and \
+     `env = { PATH = \"~/.cargo/bin:/usr/bin:/bin\" }`. `[exec]` is ratified (`/ratify`), and the daemon reads it when it starts \
+     (`delphi daemon restart`); `delphi doctor` checks that each review command's program is found";
+
+/// Did the sandbox fail to start the program (§14.1 item 1)? The runner's 126 (found, not executable) or 127 (not found);
+/// `sandbox-exec`'s 71 with its `execvp() of '...' failed` line (macOS); bubblewrap's exit 1 with `bwrap: execvp` (Linux).
+pub fn could_not_start(exit: Option<i32>, output: &str) -> bool {
+    match exit {
+        Some(126 | 127) => true,
+        Some(71) => output.contains("execvp"),
+        Some(1) => output.contains("bwrap: execvp"),
+        _ => false,
+    }
 }
 
 impl CommandResult {
     pub fn refused(argv: Vec<String>, requested_by: &'static str, why: impl Into<String>) -> CommandResult {
-        CommandResult { argv, exit: None, elapsed_ms: 0, requested_by, refused: Some(why.into()), timed_out: false, tail: String::new() }
+        CommandResult { argv, exit: None, elapsed_ms: 0, requested_by, refused: Some(why.into()), timed_out: false, started: false, tail: String::new() }
     }
 
     pub fn ran(&self) -> bool {
         self.refused.is_none()
     }
 
+    /// It ran to an exit status: the only kind that counts as tests run (§14.1 item 1).
+    pub fn finished(&self) -> bool {
+        self.ran() && self.started && self.exit.is_some()
+    }
+
     pub fn to_json(&self) -> Value {
         let mut v = json!({"argv": self.argv, "exit": self.exit, "elapsed_ms": self.elapsed_ms, "requested_by": self.requested_by, "tail": self.tail});
         if let Some(r) = &self.refused {
             v["refused"] = json!(r);
+        } else {
+            v["started"] = json!(self.started);
         }
         if self.timed_out {
             v["timed_out"] = json!(true);
@@ -111,6 +137,7 @@ impl CommandResult {
         let cmd = self.argv.join(" ");
         match &self.refused {
             Some(r) => format!("$ {cmd}\n(refused, not run: {r})\n"),
+            None if !self.started => format!("$ {cmd}\n(the sandbox could not start this program: it did not run, so it says nothing about the code)\n{}\n", self.tail),
             None => format!("$ {cmd}\n(exit {}{}, {} ms)\n{}\n", self.exit.map(|c| c.to_string()).unwrap_or_else(|| "none".into()), if self.timed_out { ", timed out" } else { "" }, self.elapsed_ms, self.tail),
         }
     }
@@ -190,6 +217,44 @@ pub fn filter_requested(run: &[Vec<String>]) -> (Vec<Vec<String>>, Vec<CommandRe
         }
     }
     (ok, refused)
+}
+
+/// Why a review command's program would not start in the investigation sandbox (`specs/135` §14.2), or `None` when it would or cannot
+/// be told here. `path` is the sandbox's `PATH` (`[exec] env.PATH`); `exec_roots` the directories the sandbox may execute (the system
+/// ones and `[exec] toolchain`). A leading `env` (with its `NAME=value` words and options) is looked through, and a `PATH=` it sets is
+/// the one searched. A relative path with a `/` is inside the copy and is not checked. Only the file system is read; nothing runs.
+pub fn program_problem(argv: &[String], path: &str, exec_roots: &[std::path::PathBuf]) -> Option<String> {
+    use std::path::{Path, PathBuf};
+    let roots: Vec<PathBuf> = exec_roots.iter().map(|r| std::fs::canonicalize(r).unwrap_or_else(|_| r.clone())).collect();
+    let executable = |p: &Path| std::fs::canonicalize(p).ok().filter(|c| c.is_file() && roots.iter().any(|r| c.starts_with(r)));
+    let mut path = path.to_string();
+    let mut at = 0;
+    if argv.first().and_then(|a| a.rsplit('/').next()) == Some("env") {
+        at = 1;
+        while let Some(w) = argv.get(at).filter(|w| w.starts_with('-') || w.contains('=')) {
+            if let Some(p) = w.strip_prefix("PATH=") {
+                path = p.to_string();
+            }
+            at += 1;
+        }
+    }
+    let program = argv.get(at)?;
+    if program.contains('/') {
+        if !program.starts_with('/') {
+            return None;
+        }
+        return match executable(Path::new(program)) {
+            Some(_) => None,
+            None if Path::new(program).is_file() => Some(format!("`{program}` is not inside a system or `[exec] toolchain` directory: the sandbox cannot execute it")),
+            None => Some(format!("`{program}` does not exist")),
+        };
+    }
+    let found = path.split(':').filter(|d| d.starts_with('/')).map(|d| Path::new(d).join(program)).find(|p| p.is_file());
+    match found {
+        Some(p) if executable(&p).is_some() => None,
+        Some(p) => Some(format!("`{program}` is found at {} but that is not inside a system or `[exec] toolchain` directory: the sandbox cannot execute it", p.display())),
+        None => Some(format!("`{program}` is not on the sandbox's PATH (`{path}`): set `[exec] env.PATH`")),
+    }
 }
 
 /// The branch checked out at `cwd`, read from its `.git` (a worktree's `.git` file is followed to its own `HEAD`): no git process runs.
@@ -310,7 +375,10 @@ pub struct Outcome {
     /// The last text the seat gave when no answer could be read, or why it gave none.
     pub unanswered: Option<String>,
     pub commands: Vec<CommandResult>,
+    /// At least one configured command ran to an exit status (§14.1 item 1).
     pub tests_run: bool,
+    /// Why there is no test evidence: nothing configured, no sandbox, or a configured command that could not start and how to fix it.
+    pub tests_note: Option<String>,
     pub rounds: u8,
 }
 
@@ -352,14 +420,21 @@ where
             commands.push(cmd(argv.clone(), "delphi").await);
         }
     }
-    let tests_run = commands.iter().any(CommandResult::ran);
-    let b1 = brief_round1(input, &commands, tests_note);
+    let tests_run = commands.iter().any(CommandResult::finished);
+    let not_started: Vec<String> = commands.iter().filter(|c| c.ran() && !c.started).map(|c| format!("`{}`", c.argv.first().map(String::as_str).unwrap_or(""))).collect();
+    let tests_note = if !not_started.is_empty() {
+        format!("{} configured command(s) could not start in the sandbox ({}): {START_FIX}", not_started.len(), not_started.join(", "))
+    } else {
+        tests_note.to_string()
+    };
+    let b1 = brief_round1(input, &commands, &tests_note);
+    let tests_note = Some(tests_note).filter(|n| !n.is_empty());
     let (first, first_text) = match ask(&seat, b1.clone(), true).await {
         Ok(x) => x,
-        Err(text) => return Outcome { answer: None, unanswered: Some(text), commands, tests_run, rounds: 1 },
+        Err(text) => return Outcome { answer: None, unanswered: Some(text), commands, tests_run, tests_note: tests_note.clone(), rounds: 1 },
     };
     if first.run.is_empty() {
-        return Outcome { answer: Some(first), unanswered: None, commands, tests_run, rounds: 1 };
+        return Outcome { answer: Some(first), unanswered: None, commands, tests_run, tests_note: tests_note.clone(), rounds: 1 };
     }
     let (allowed, mut requested) = filter_requested(&first.run);
     for argv in allowed {
@@ -372,12 +447,12 @@ where
     commands.extend(requested.iter().cloned());
     if !requested.iter().any(CommandResult::ran) {
         // Nothing the seat asked for ran: its Round 1 answer is final, with the refusals listed.
-        return Outcome { answer: Some(Answer { run: vec![], ..first }), unanswered: None, commands, tests_run, rounds: 1 };
+        return Outcome { answer: Some(Answer { run: vec![], ..first }), unanswered: None, commands, tests_run, tests_note: tests_note.clone(), rounds: 1 };
     }
     match ask(&seat, brief_round2(&b1, &first_text, &requested), false).await {
-        Ok((a, _)) => Outcome { answer: Some(a), unanswered: None, commands, tests_run, rounds: 2 },
+        Ok((a, _)) => Outcome { answer: Some(a), unanswered: None, commands, tests_run, tests_note: tests_note.clone(), rounds: 2 },
         // Round 2 gave nothing readable: Round 1's answer stands, and the result says Round 2 is missing.
-        Err(text) => Outcome { answer: Some(Answer { run: vec![], ..first }), unanswered: Some(format!("round 2 gave no readable answer; round 1's stands: {}", text.chars().take(500).collect::<String>())), commands, tests_run, rounds: 2 },
+        Err(text) => Outcome { answer: Some(Answer { run: vec![], ..first }), unanswered: Some(format!("round 2 gave no readable answer; round 1's stands: {}", text.chars().take(500).collect::<String>())), commands, tests_run, tests_note: tests_note.clone(), rounds: 2 },
     }
 }
 
