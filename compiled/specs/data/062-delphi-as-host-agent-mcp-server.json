@@ -136,115 +136,115 @@
     },
     {
       "level": 3,
-      "line": 146,
+      "line": 148,
       "number": "6.4",
       "title": "Amendment (operator, 2026-11-16): the operator's role answers, and the answer is signed by its author"
     },
     {
       "level": 2,
-      "line": 157,
+      "line": 159,
       "number": "7",
       "title": "Councils"
     },
     {
       "level": 3,
-      "line": 159,
+      "line": 161,
       "number": "7.1",
       "title": "`request_council`"
     },
     {
       "level": 3,
-      "line": 163,
+      "line": 165,
       "number": "7.2",
       "title": "Asynchronous by default"
     },
     {
       "level": 3,
-      "line": 167,
+      "line": 169,
       "number": "7.3",
       "title": "A legible ruling"
     },
     {
       "level": 3,
-      "line": 173,
+      "line": 175,
       "number": "7.4",
       "title": "Amendment (2026-11-21, Stage 0 fix): \"text-only\" means read-only, from the first turn"
     },
     {
       "level": 2,
-      "line": 182,
+      "line": 184,
       "number": "8",
       "title": "Learning back"
     },
     {
       "level": 3,
-      "line": 184,
+      "line": 186,
       "number": "8.1",
       "title": "Proposals"
     },
     {
       "level": 3,
-      "line": 190,
+      "line": 192,
       "number": "8.2",
       "title": "Rules (the daemon enforces; the MCP process cannot)"
     },
     {
       "level": 3,
-      "line": 199,
+      "line": 201,
       "number": "8.3",
       "title": "Transcript ingest (optional)"
     },
     {
       "level": 2,
-      "line": 209,
+      "line": 211,
       "number": "9",
       "title": "No limits, no quotas (amended 2026-10-31, S6)"
     },
     {
       "level": 2,
-      "line": 223,
+      "line": 225,
       "number": "10",
       "title": "Plugin, skill and host configuration"
     },
     {
       "level": 2,
-      "line": 229,
+      "line": 231,
       "number": "11",
       "title": "Slices (one per pull request; none starts before approval)"
     },
     {
       "level": 2,
-      "line": 253,
+      "line": 255,
       "number": "12",
       "title": "Decisions and open questions"
     },
     {
       "level": 2,
-      "line": 278,
+      "line": 280,
       "number": "13",
       "title": "Documentation and generated files"
     },
     {
       "level": 2,
-      "line": 289,
+      "line": 291,
       "number": "14",
       "title": "Authority invariants (what the tests prove)"
     },
     {
       "level": 2,
-      "line": 302,
+      "line": 304,
       "number": "15",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 313,
+      "line": 315,
       "number": "16",
       "title": "Verification"
     },
     {
       "level": 2,
-      "line": 317,
+      "line": 319,
       "number": "17",
       "title": "Known limits"
     }
@@ -252,7 +252,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/062-delphi-as-host-agent-mcp-server.md",
-    "sha256": "d7edefb8c7bd0de84db275f74cdd5233e5b0b89b28b410d47be2770a262434be"
+    "sha256": "8b5e6a4aa3d5f772e78f437a7f567cf26f0c5d18d4e797708cd994e80955444d"
   },
   "source_status_at_hash": {
     "line": {
@@ -265,7 +265,7 @@
       },
       "text": "status: approved   # §6.4 (2026-11-16) is an amendment written from the operator's words of that day and takes effect when the operator merges its pull request; by the operator, 2026-10-31 (\"approve the spec if it was built on the rules you showed\"): D-1..D-5 ratified; D-6..D-9 follow the architect's recommendations; Q-1..Q-5 stay open and each blocks only the slice named in §12. The text as written is approved when this pull request merges."
     },
-    "sha256": "d7edefb8c7bd0de84db275f74cdd5233e5b0b89b28b410d47be2770a262434be",
+    "sha256": "8b5e6a4aa3d5f772e78f437a7f567cf26f0c5d18d4e797708cd994e80955444d",
     "word": "approved"
   },
   "spec": {
@@ -280,10 +280,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2775,
+      "end": 2922,
       "end_line": 23,
       "line": 23,
-      "start": 2580
+      "start": 2727
     },
     "text": "An operator uses Delphi and also another coding tool (Claude Code, Copilot CLI, Codex, others): a **host**. This spec lets a host, on the same machine, use Delphi without leaving its own session:"
   }

@@ -31,6 +31,8 @@ use std::path::{Path, PathBuf};
 
 /// The append-only spec tracker, settled by a union like the groups file.
 pub const TRACKER: &str = "missions/2026-10-23-foundational-design/spec-tracker.md";
+/// The words every hand-over line carries; `errors::classify_refusal` finds the class `refresh-refused` by them.
+pub const HANDED_OVER: &str = "not refreshed, and nothing was pushed";
 /// More conflicted files than this is not a mechanical update; it goes to `merge fix`.
 pub const MAX_CONFLICTS: usize = 10;
 /// The only directory whose changed paths may differ after a refresh (the compile writes there; the groups file lives there).
@@ -240,7 +242,7 @@ impl Stop {
     pub fn line(&self, n: u64) -> String {
         match self {
             Stop::Refused(why) => format!("#{n}: not refreshed: {why}"),
-            Stop::HandOver(why) => format!("#{n}: not refreshed, and nothing was pushed: {why}. This is not a mechanical update; hand it to the builder with `delphi merge fix {n}`"),
+            Stop::HandOver(why) => format!("#{n}: {HANDED_OVER}: {why}. This is not a mechanical update; hand it to the builder with `delphi merge fix {n}`"),
         }
     }
 }

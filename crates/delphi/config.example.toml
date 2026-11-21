@@ -90,6 +90,11 @@ max_parallel_agents = 4
 # a card only when no pool member meets a role's floor. `delphi capabilities --models` shows each model's class.
 # assignment = "static"
 # evidence_enough = 8                # measured results per (role, kind, model) after which a model is scored by them alone
+# Cost cap (specs/056 §10.5), under either assignment: the highest cost class that may serve a role, "low" (under 1x), "standard" (1x)
+# or "premium" (over 1x). Only Copilot labels a cost class; every other carrier counts as "standard". Absent, it is "standard": a model over
+# 1x serves only a role you raise. Ratified: an edit counts only after /ratify. A cap never serves a role below its floor or the tier asked
+# for; the task waits and says what to raise.
+# max_cost_class = "standard"        # or per role: { default = "standard", architect = "premium" }
 # Emergency stop-gap (specs/056 §3.5; off unless both are set). A local model (an endpoint with cost_model = "local") that, only when every
 # ratified seat is out of quota, reads and writes one hand-off record of the mission's state, marked unverified until a capable model re-checks it.
 # It never serves ordinary work, approves, ratifies or leaves the sandbox.

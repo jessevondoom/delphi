@@ -8,7 +8,9 @@
 //!
 //! It stops on the first of: the cap on merged pull requests, the time cap, the `STOP` file under `$DELPHI_HOME/merge/`, Ctrl-C,
 //! too many errors in a row, or a long enough stretch with nothing to do. Waiting (running checks, a pull request that is not yet
-//! green) is not an error and is retried each poll; a pull request that errored is parked until its head commit changes.
+//! green) is not an error and is retried each poll; a pull request that errored is parked until its head commit changes. A pull
+//! request that is behind and otherwise ready is refreshed and left (§11.3.3): its new head comes back through the queue once CI
+//! is green; only a refresh that fails counts as an error.
 
 use super::check::QUEUE_LABEL;
 use super::errors::classify_refusal;
@@ -197,6 +199,8 @@ pub fn run(ctx: &mut Ctx, caps: &Caps, att: &Attestation, clock: &dyn Clock, sto
                     consecutive += 1;
                     last_activity = clock.now_secs();
                 }
+                // Refreshed (§11.3.3): CI runs on the new head and the queue brings it back; not an error, and not parked.
+                Outcome::Refreshed { .. } => last_activity = clock.now_secs(),
                 // Waiting (checks running, not green yet): not an error, tried again at the next poll.
                 Outcome::Refused { .. } | Outcome::Declined { .. } | Outcome::DryRun { .. } => {}
             }

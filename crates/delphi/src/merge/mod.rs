@@ -16,6 +16,7 @@ pub mod forge;
 pub mod gates;
 pub mod record;
 pub mod refresh;
+pub mod wait;
 
 #[cfg(test)]
 mod auto_tests;
@@ -27,9 +28,11 @@ mod fake;
 mod flow_tests;
 #[cfg(test)]
 mod refresh_tests;
+#[cfg(test)]
+mod wait_tests;
 
 use approve::{attest, StdTerminal, Target, Terminal};
-use check::{evaluate, Verdict, QUEUE_LABEL, REVIEW_LABEL};
+use check::{evaluate, Verdict, BEHIND_MARK, QUEUE_LABEL, REVIEW_LABEL};
 use errors::{classify_failure, classify_refusal, log_central, Errors};
 use forge::{Forge, ForgeError, Gh};
 use record::{Attestation, Ledger, Record};
@@ -47,12 +50,14 @@ pub enum Outcome {
     /// The operator did not approve (or the approval was not acceptable).
     Declined { pr: u64, why: String },
     Failed { pr: u64, detail: String, head: String },
+    /// Behind, so this run refreshed it (§11.3.3); CI runs on the new head. `waited`: its checks did not finish in the wait.
+    Refreshed { pr: u64, head: String, waited: bool },
 }
 
 impl Outcome {
     /// Counts as success for the exit code: merged, would merge, or deliberately left for a human.
     pub fn ok(&self) -> bool {
-        matches!(self, Outcome::Merged { .. } | Outcome::DryRun { .. } | Outcome::NeedsHuman { .. })
+        matches!(self, Outcome::Merged { .. } | Outcome::DryRun { .. } | Outcome::NeedsHuman { .. } | Outcome::Refreshed { .. })
     }
     pub fn line(&self) -> String {
         match self {
@@ -62,6 +67,8 @@ impl Outcome {
             Outcome::NeedsHuman { pr, paths } => format!("#{pr}: left for a human, it changes a gate ({}); labelled `{REVIEW_LABEL}`. Merge it yourself: delphi merge {pr}", paths.join(", ")),
             Outcome::Declined { pr, why } => format!("#{pr}: not merged: {why}"),
             Outcome::Failed { pr, detail, .. } => format!("#{pr}: FAILED: {detail}"),
+            Outcome::Refreshed { pr, head, waited: false } => format!("#{pr}: it was behind, so it was refreshed (new head {}); CI runs on it, and it merges at the next run once green", short(head)),
+            Outcome::Refreshed { pr, head, waited: true } => format!("#{pr}: it was behind, so it was refreshed (new head {}), but its checks did not finish within the wait; run `delphi merge {pr}` again once they are green", short(head)),
         }
     }
 }
@@ -84,6 +91,8 @@ pub struct Ctx<'a> {
     /// How long to wait before asking again when GitHub has not finished working out mergeability.
     pub settle: Duration,
     pub now: fn() -> String,
+    /// Refresh a pull request that is behind and otherwise ready (§11.3.3); `None` refuses it instead (tests of the refusal).
+    pub refresh: Option<wait::Refreshing<'a>>,
 }
 
 /// Evaluate, and ask again a few times while the only objection is that GitHub is still computing mergeability (it is, right after
@@ -100,10 +109,6 @@ fn verdict(ctx: &Ctx, n: u64) -> Result<Verdict, ForgeError> {
         }
         return Ok(v);
     }
-}
-
-fn queued(v: &Verdict) -> bool {
-    v.pr.labels.iter().any(|l| l == QUEUE_LABEL)
 }
 
 /// Merge pull request `n`. `batch` is the approval already obtained for a whole `--all` run; without it, this asks. Whatever
@@ -125,13 +130,14 @@ fn note(ctx: &Ctx, out: &Outcome) {
         // A merge resolves what was open for it; that happens in `finish`, before cleanup, so a cleanup problem stays open.
         Outcome::Merged { .. } => {}
         Outcome::Refused { pr, reasons, head } => {
-            for class in reasons.iter().filter_map(|r| classify_refusal(r)) {
+            // A refresh that was handed over has already written its `refresh-refused` entry.
+            for class in reasons.iter().filter_map(|r| classify_refusal(r)).filter(|c| *c != errors::Class::RefreshRefused) {
                 let detail = reasons.iter().filter(|r| classify_refusal(r) == Some(class)).cloned().collect::<Vec<_>>().join("; ");
                 put(*pr, head, class, &detail);
             }
         }
         Outcome::Failed { pr, detail, head } => put(*pr, head, classify_failure(detail), detail),
-        Outcome::DryRun { .. } | Outcome::NeedsHuman { .. } | Outcome::Declined { .. } => {}
+        Outcome::DryRun { .. } | Outcome::NeedsHuman { .. } | Outcome::Declined { .. } | Outcome::Refreshed { .. } => {}
     }
 }
 
@@ -149,12 +155,11 @@ fn decide_one(ctx: &mut Ctx, n: u64, batch: Option<&Attestation>) -> Outcome {
         Ok(v) => v,
         Err(e) => return Outcome::Failed { pr: n, detail: e.to_string(), head: String::new() },
     };
-    let mut reasons = v.refusals.clone();
     // A gate-changing pull request is never queueable, so only an ordinary one must carry the label.
-    if !v.gate_changing() && !queued(&v) {
-        reasons.insert(0, format!("it is not queued (no `{QUEUE_LABEL}` label; an agent queues it with `delphi merge queue {n}`)"));
-    }
-    if !reasons.is_empty() {
+    let reasons = wait::reasons(&v);
+    // Behind and otherwise ready: refreshed below, once the approval is in hand. Never on a dry run.
+    let refresh = ctx.refresh.filter(|_| !ctx.dry_run && wait::refreshable(&v));
+    if !reasons.is_empty() && refresh.is_none() {
         return Outcome::Refused { pr: n, reasons, head: v.pr.head_sha };
     }
     if v.gate_changing() && batch.is_some() {
@@ -179,6 +184,9 @@ fn decide_one(ctx: &mut Ctx, n: u64, batch: Option<&Attestation>) -> Outcome {
             Err(why) => return Outcome::Declined { pr: n, why },
         },
     };
+    if let Some(r) = refresh {
+        return wait::refresh_and_merge(ctx, r, v, att);
+    }
     let rec = v.record(att, ctx.session.clone(), (ctx.now)());
     finish(ctx, &v, rec)
 }
@@ -186,13 +194,23 @@ fn decide_one(ctx: &mut Ctx, n: u64, batch: Option<&Attestation>) -> Outcome {
 /// Write the record, merge exactly the head that was derived, and leave the evidence.
 fn finish(ctx: &mut Ctx, v: &Verdict, rec: Record) -> Outcome {
     let n = v.pr.number;
-    if let Err(e) = ctx.ledger.append(&rec.to_json("approved")) {
+    // A head this run made by a refresh carries the approval given for the head it replaced (OD-8); the ledger says which.
+    let carried_from = ctx.refresh.and_then(|r| r.made.borrow().get(&v.pr.head_sha).cloned());
+    let row = |kind: &str| {
+        let mut row = rec.to_json(kind);
+        if let Some(old) = &carried_from {
+            row["carried_from"] = serde_json::json!(old);
+        }
+        row
+    };
+    if let Err(e) = ctx.ledger.append(&row("approved")) {
         return Outcome::Failed { pr: n, detail: format!("cannot write the ledger ({e}); not merging without a record"), head: v.pr.head_sha.clone() };
     }
     match ctx.forge.merge(n, &v.pr.head_sha) {
         Ok(()) => {
-            let _ = ctx.ledger.append(&rec.to_json("merged"));
-            if let Err(e) = ctx.forge.comment(n, &rec.comment()) {
+            let _ = ctx.ledger.append(&row("merged"));
+            let carried = carried_from.as_ref().map(|old| format!("\n\nThis head was made by `delphi merge refresh` in the same run, from `{old}`; the approval given for that head carried over (spec 094 §11.3.3).")).unwrap_or_default();
+            if let Err(e) = ctx.forge.comment(n, &format!("{}{carried}", rec.comment())) {
                 eprintln!("delphi merge: #{n} merged, but the comment could not be posted: {e}");
             }
             // The merge resolves what was open for this pull request. Cleanup then runs and never changes the outcome of the
@@ -206,7 +224,7 @@ fn finish(ctx: &mut Ctx, v: &Verdict, rec: Record) -> Outcome {
             Outcome::Merged { pr: n, head: v.pr.head_sha.clone() }
         }
         Err(e) => {
-            let mut row = rec.to_json("failed");
+            let mut row = row("failed");
             row["detail"] = serde_json::json!(e.to_string());
             let _ = ctx.ledger.append(&row);
             Outcome::Failed { pr: n, detail: e.to_string(), head: v.pr.head_sha.clone() }
@@ -249,7 +267,9 @@ pub fn status_lines(forge: &dyn Forge) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for n in list {
         let v = evaluate(forge, n).map_err(|e| e.to_string())?;
-        out.push(if !v.ready() {
+        out.push(if v.behind_by > 0 && wait::refreshable(&v) {
+            format!("#{n}: {} {BEHIND_MARK} `{}`; will be refreshed at merge, then merged once CI is green on the new head", v.behind_by, v.pr.base_ref)
+        } else if !v.ready() {
             format!("#{n}: not ready: {}", v.refusals.join("; "))
         } else if v.gate_changing() {
             format!("#{n}: ready, but it changes a gate ({}): needs a human", v.gate_hits.join(", "))
@@ -301,6 +321,10 @@ struct Parsed {
     caps: auto::Caps,
     /// Any of the `--auto` limit flags was given.
     caps_given: bool,
+    /// `<PR>` and `--all`: how long to wait for CI on a refreshed head (`--wait`); `None` is `--no-wait`.
+    wait: Option<Duration>,
+    /// `--wait` or `--no-wait` was given.
+    wait_given: bool,
 }
 
 fn pr_number(s: &str) -> Option<u64> {
@@ -313,6 +337,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     let (mut open, mut json, mut pr, mut done, mut needs_human) = (false, false, None, false, None);
     let mut caps = auto::Caps::default();
     let mut caps_given = false;
+    let (mut wait, mut wait_given) = (Some(wait::DEFAULT_WAIT), false);
     let mut words: Vec<&str> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -347,6 +372,14 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
                 caps.poll = auto::parse_duration(it.next().ok_or("--poll needs a duration (90s, 45m, 4h)")?)?;
                 caps_given = true;
             }
+            "--wait" => {
+                let d = auto::parse_duration(it.next().ok_or("--wait needs a duration (90s, 45m, 4h)")?)?;
+                if d > Duration::from_secs(4 * 3600) {
+                    return Err("--wait must be at most 4 hours".into());
+                }
+                (wait, wait_given) = (Some(d), true);
+            }
+            "--no-wait" => (wait, wait_given) = (None, true),
             "--merged" => merged = true,
             "--yes" => yes = true,
             f if f.starts_with("--") => return Err(format!("unknown option `{f}` (see `delphi help merge`)")),
@@ -375,10 +408,13 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     if caps_given && sub != Sub::Auto {
         return Err("--max-prs, --for, --pause-after-errors, --idle and --poll belong to `delphi merge --auto`".into());
     }
+    if wait_given && !matches!(sub, Sub::Merge(_) | Sub::All) {
+        return Err("--wait and --no-wait belong to `delphi merge <PR>` and `--all` (a session never waits; it comes back at its next poll)".into());
+    }
     if sub == Sub::Auto {
         caps.validate()?;
     }
-    Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human, merged, yes, caps, caps_given })
+    Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human, merged, yes, caps, caps_given, wait, wait_given })
 }
 
 pub fn cli(args: &[String]) -> i32 {
@@ -577,7 +613,17 @@ fn auto_cmd(p: &Parsed, forge: &Gh) -> i32 {
         libc::signal(libc::SIGTERM, handler);
     }
     let git = cleanup::Git::here();
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: None, dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339 };
+    let made = std::cell::RefCell::new(std::collections::HashMap::new());
+    let refresher = match in_repo(forge, &error_log, &ledger, &home) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("delphi merge --auto: {e}");
+            return 2;
+        }
+    };
+    // A session refreshes a behind pull request and moves on; its next poll merges it once CI is green (§11.3.3).
+    let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: None, poll: p.caps.poll, made: &made };
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: None, dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh) };
     let stop = || INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) || stop_file.exists();
     let summary = auto::run(&mut ctx, &p.caps, &att, &auto::SystemClock, &stop, &mut |l| println!("{l}"));
     summary.lines().iter().for_each(|l| println!("{l}"));
@@ -586,6 +632,12 @@ fn auto_cmd(p: &Parsed, forge: &Gh) -> i32 {
     } else {
         0
     }
+}
+
+/// The refresh a merge command runs: in the repository the command was started in, as `delphi merge refresh` does.
+fn in_repo<'a>(forge: &'a Gh, errors: &'a Errors, ledger: &'a Ledger, home: &'a std::path::Path) -> Result<wait::InRepo<'a>, String> {
+    let repo = std::env::current_dir().map_err(|e| e.to_string())?;
+    Ok(wait::InRepo { forge, errors, ledger, home, git: refresh::Runner::new(&repo) })
 }
 
 fn run_merges(p: &Parsed, forge: &Gh, numbers: Vec<u64>, batch: bool) -> i32 {
@@ -612,7 +664,16 @@ fn run_merges(p: &Parsed, forge: &Gh, numbers: Vec<u64>, batch: bool) -> i32 {
         None
     };
     let git = cleanup::Git::here();
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339 };
+    let made = std::cell::RefCell::new(std::collections::HashMap::new());
+    let refresher = match in_repo(forge, &error_log, &ledger, &home) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("delphi merge: {e}");
+            return 2;
+        }
+    };
+    let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: p.wait, poll: Duration::from_secs(30), made: &made };
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh) };
     let outcomes = if batch { merge_many(&mut ctx, &numbers, batch_att.as_ref()) } else { numbers.iter().map(|n| merge_one(&mut ctx, *n, None)).collect() };
     outcomes.iter().for_each(|o| println!("{}", o.line()));
     if outcomes.iter().any(|o| matches!(o, Outcome::Failed { detail, .. } if detail.contains("cannot run `gh`"))) {
@@ -647,13 +708,16 @@ mod parse_tests {
         assert_eq!(parse(&a("merge refresh #806")).unwrap().sub, Sub::Refresh(806));
         assert!(parse(&a("merge refresh")).is_err() && parse(&a("merge refresh x")).is_err());
         assert_eq!(parse(&a("--home /x merge 5")).unwrap().home.as_deref(), Some("/x"));
+        assert_eq!(parse(&a("merge 5")).unwrap().wait, Some(wait::DEFAULT_WAIT));
+        assert_eq!(parse(&a("merge 5 --wait 10m")).unwrap().wait, Some(Duration::from_secs(600)));
+        assert_eq!(parse(&a("merge --all --no-wait")).unwrap().wait, None);
         let q = vec!["5".to_string(), "--operator-said".to_string(), "merge #5 now".to_string()];
         assert_eq!(parse(&q).unwrap().quote.as_deref(), Some("merge #5 now"));
     }
 
     #[test]
     fn nonsense_is_a_usage_error() {
-        for bad in ["merge", "merge --all --auto", "merge --auto --max-prs 0", "merge --auto --for 48h", "merge --auto --poll 1s", "merge --max-prs 3 5", "merge --auto --for soon", "merge --all 5", "merge abc", "merge 0", "merge --bogus 5", "merge queue", "merge queue x"] {
+        for bad in ["merge", "merge --all --auto", "merge --auto --max-prs 0", "merge --auto --for 48h", "merge --auto --poll 1s", "merge --max-prs 3 5", "merge --auto --for soon", "merge --all 5", "merge abc", "merge 0", "merge --bogus 5", "merge queue", "merge queue x", "merge --auto --no-wait", "merge status --wait 5m", "merge 5 --wait 5h", "merge 5 --wait"] {
             assert!(parse(&a(bad)).is_err(), "{bad}");
         }
         assert!(parse(&["5".to_string(), "--operator-said".to_string()]).is_err());

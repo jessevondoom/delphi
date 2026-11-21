@@ -6,7 +6,7 @@
 //! is usable the task waits (or escalates when no pool member meets it at all). Every choice is among
 //! pool members the operator ratified; nothing here reaches outside that set.
 
-use crate::models::{Candidate, Class, ClassRules, Presence};
+use crate::models::{measured_ineligible, Candidate, Class, ClassRules, Measured, Presence};
 use crate::pool::Entry;
 use crate::route::{availability, ineligible, Avail, Blocked, Route, RouteRequest};
 use delphi_adapter::config::{Config, PoolKey};
@@ -18,13 +18,68 @@ pub struct Evidence {
     pub model_id: String,
     pub runs: u32,
     pub accepted: u32,
-    pub cost_micro_usd: u64,
+    /// Cost in tokens times the carrier's multiplier (`specs/056` §10.3), never money.
+    pub cost_tokens: u64,
 }
 
 impl Evidence {
     fn score(&self) -> f64 {
-        self.accepted as f64 / (self.cost_micro_usd.max(1)) as f64
+        self.accepted as f64 / (self.cost_tokens.max(1)) as f64
     }
+}
+
+/// The evidence file, in the workspace's `local/`: local only, never committed, bundled or put in a prompt (`specs/056` §10.4).
+pub const EVIDENCE_FILE: &str = "local/model-evidence.json";
+
+/// A call's tokens, all four kinds, because carriers put a prompt's tokens in different places (`specs/056` §10.2, token accounting).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Tokens {
+    pub input: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub output: u64,
+}
+
+impl Tokens {
+    /// The cost unit for ranking (`specs/056` §10.3): input + cache read + cache write + output, times the carrier's multiplier where it
+    /// has one (1 where it has none). The only place a multiplier enters; never dollars.
+    pub fn cost(&self, multiplier: Option<f64>) -> u64 {
+        let sum = self.input + self.cache_read + self.cache_write + self.output;
+        (sum as f64 * multiplier.filter(|m| m.is_finite() && *m > 0.0).unwrap_or(1.0)).round() as u64
+    }
+}
+
+/// One result to count: a retrospective row or a calibration case, by role, task kind and pair.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvidenceRow {
+    pub role: String,
+    pub kind: String,
+    pub endpoint_id: String,
+    pub model_id: String,
+    pub accepted: bool,
+    pub tokens: Tokens,
+    pub multiplier: Option<f64>,
+}
+
+/// Add `rows` to `<ws>/local/model-evidence.json`, one entry per `(role, kind, endpoint, model)` with runs, accepted and `cost_tokens`
+/// summed. The file is replaced atomically; an unreadable one is started afresh rather than trusted.
+pub fn record_evidence(ws_dir: &std::path::Path, rows: &[EvidenceRow]) -> std::io::Result<()> {
+    let path = ws_dir.join(EVIDENCE_FILE);
+    let old: serde_json::Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let mut entries: Vec<serde_json::Value> = old["entries"].as_array().cloned().unwrap_or_default();
+    for r in rows {
+        let same = |e: &serde_json::Value| e["role"] == r.role.as_str() && e["kind"] == r.kind.as_str() && e["endpoint_id"] == r.endpoint_id.as_str() && e["model_id"] == r.model_id.as_str();
+        let i = entries.iter().position(same).unwrap_or_else(|| {
+            entries.push(serde_json::json!({"role": r.role, "kind": r.kind, "endpoint_id": r.endpoint_id, "model_id": r.model_id, "runs": 0, "accepted": 0, "cost_tokens": 0}));
+            entries.len() - 1
+        });
+        let add = |e: &mut serde_json::Value, k: &str, n: u64| e[k] = e[k].as_u64().unwrap_or(0).saturating_add(n).into();
+        add(&mut entries[i], "runs", 1);
+        add(&mut entries[i], "accepted", r.accepted as u64);
+        add(&mut entries[i], "cost_tokens", r.tokens.cost(r.multiplier));
+    }
+    let text = serde_json::to_string_pretty(&serde_json::json!({"version": 1, "cost_unit": "tokens x multiplier", "entries": entries})).unwrap_or_default();
+    delphi_core::lock::write_atomic(&path, text.as_bytes())
 }
 
 /// What discovered assignment needs to know about one dispatch.
@@ -36,6 +91,8 @@ pub struct Assign {
     pub plan_following: bool,
     /// Class of every ready pool member; a member absent here (or marked gone) is not selectable.
     pub classes: Vec<(String, String, Class)>,
+    /// The measured attributes of every ready pool member (`specs/056` §10.2); a member absent here has none.
+    pub measured: Vec<(String, String, Measured)>,
     pub gone: Vec<(String, String)>,
     pub evidence: Vec<Evidence>,
     /// Results after which a model is scored by evidence alone.
@@ -68,6 +125,7 @@ impl Assign {
             plan_making: policy.is_some_and(|p| p.plan_making),
             plan_following: policy.is_some_and(|p| p.plan_following),
             classes: candidates.iter().filter(|c| c.presence == Presence::Ready && c.class != Class::Emergency).map(|c| (c.endpoint_id.clone(), c.model_id.clone(), c.class)).collect(),
+            measured: candidates.iter().filter(|c| c.presence == Presence::Ready).map(|c| (c.endpoint_id.clone(), c.model_id.clone(), c.measured.clone())).collect(),
             gone: candidates.iter().filter(|c| c.presence == Presence::Gone).map(|c| (c.endpoint_id.clone(), c.model_id.clone())).collect(),
             evidence: vec![],
             enough,
@@ -81,6 +139,21 @@ impl Assign {
             return None;
         }
         self.classes.iter().find(|(e, m, _)| e == &k.endpoint_id && m == &k.model_id).map(|(_, _, c)| *c)
+    }
+
+    /// Would this member meet the role's floor, as [`pick`] judges it (`specs/056` §10.5 names such members when a cap passes them over).
+    pub fn meets_floor(&self, k: &PoolKey) -> bool {
+        match self.class_of(k) {
+            Some(c) => match level(c) {
+                Some(l) => l >= level(self.floor).unwrap_or(1),
+                None => c == Class::Unclassified && self.plan_following,
+            },
+            None => false,
+        }
+    }
+
+    fn measured_of(&self, k: &PoolKey) -> Measured {
+        self.measured.iter().find(|(e, m, _)| e == &k.endpoint_id && m == &k.model_id).map(|(_, _, m)| m.clone()).unwrap_or_default()
     }
 
     fn evidence_of(&self, k: &PoolKey) -> Option<&Evidence> {
@@ -103,9 +176,9 @@ impl Assign {
     }
 }
 
-/// Measured results for `role` from `<ws>/local/model-evidence.json` (written from retrospectives, `specs/056` M4); empty when absent.
+/// Measured results for `role` from `<ws>/local/model-evidence.json` ([`record_evidence`], `specs/056` M4); empty when absent.
 pub fn read_evidence(ws_dir: &std::path::Path, role: &str) -> Vec<Evidence> {
-    let Ok(text) = std::fs::read_to_string(ws_dir.join("local/model-evidence.json")) else { return vec![] };
+    let Ok(text) = std::fs::read_to_string(ws_dir.join(EVIDENCE_FILE)) else { return vec![] };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return vec![] };
     let mut out: Vec<Evidence> = Vec::new();
     for e in v["entries"].as_array().into_iter().flatten().filter(|e| e["role"].as_str() == Some(role)) {
@@ -115,9 +188,9 @@ pub fn read_evidence(ws_dir: &std::path::Path, role: &str) -> Vec<Evidence> {
             Some(x) => {
                 x.runs += n("runs") as u32;
                 x.accepted += n("accepted") as u32;
-                x.cost_micro_usd += n("cost_micro_usd");
+                x.cost_tokens += n("cost_tokens");
             }
-            None => out.push(Evidence { endpoint_id: ep.into(), model_id: m.into(), runs: n("runs") as u32, accepted: n("accepted") as u32, cost_micro_usd: n("cost_micro_usd") }),
+            None => out.push(Evidence { endpoint_id: ep.into(), model_id: m.into(), runs: n("runs") as u32, accepted: n("accepted") as u32, cost_tokens: n("cost_tokens") }),
         }
     }
     out
@@ -142,6 +215,10 @@ pub fn pick(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest, a: &Ass
     let mut rejected: Vec<(PoolKey, String)> = Vec::new();
     for (i, k) in cfg.pool_entries().into_iter().enumerate() {
         if let Some(why) = ineligible(cfg, &k, req) {
+            rejected.push((k, why));
+            continue;
+        }
+        if let Some(why) = measured_ineligible(&a.measured_of(&k), req.min_context_tokens, req.needs_json) {
             rejected.push((k, why));
             continue;
         }
@@ -300,7 +377,7 @@ assignment = "discovered"
         let c = cfg();
         let mut a = assign_for(&c, "builder");
         for (ep, m, accepted, cost) in [("ep-a", "m-mid-a", 8, 800_000u64), ("ep-b", "m-mid-b", 8, 200_000)] {
-            a.evidence.push(Evidence { endpoint_id: ep.into(), model_id: m.into(), runs: 8, accepted, cost_micro_usd: cost });
+            a.evidence.push(Evidence { endpoint_id: ep.into(), model_id: m.into(), runs: 8, accepted, cost_tokens: cost });
         }
         let r = resolve(&c, &[], &req("builder", a));
         assert_eq!(r.key().unwrap().model_id, "m-mid-b");
@@ -388,6 +465,81 @@ assignment = "discovered"
         assert!(class_of("builder", -1).starts_with("m-small"), "nerfed to quick, which is its floor");
         assert!(class_of("builder", 2).starts_with("m-big"), "the pool has nothing above deep");
         assert!(class_of("validator", -2).starts_with("m-mid"), "a floor of steady holds");
+    }
+
+    /// Give one pool member a measured record.
+    fn with_measured(mut a: Assign, model: &str, m: Measured) -> Assign {
+        let k = a.classes.iter().find(|(_, id, _)| id == model).map(|(e, id, _)| (e.clone(), id.clone())).unwrap();
+        a.measured.retain(|(e, id, _)| !(e == &k.0 && id == &k.1));
+        a.measured.push((k.0, k.1, m));
+        a
+    }
+
+    /// `specs/056` §10.2 use 1: under `discovered` a prompt over the measured budget, or a schema answer without a valid JSON-in-text
+    /// record, rules the pair out for that dispatch and the next one serves.
+    #[test]
+    fn a_measured_budget_or_json_record_rules_a_pair_out_under_discovered() {
+        let c = cfg();
+        let small = Measured { prompt_budget_tokens: 50_000, json_in_text: "bare".into(), ..Default::default() };
+        let a = with_measured(assign_for(&c, "builder"), "m-mid-a", small);
+        let r = RouteRequest { min_context_tokens: 80_000, ..req("builder", a.clone()) };
+        assert_eq!(resolve(&c, &[], &r).key().unwrap().model_id, "m-mid-b", "the prompt does not fit m-mid-a's measured budget");
+        assert_eq!(resolve(&c, &[], &req("builder", a.clone())).key().unwrap().model_id, "m-mid-a", "no prompt size given: nothing is ruled out");
+        let nested = || Measured { json_in_text: "nested-string".into(), ..Default::default() };
+        let mut every = with_measured(a, "m-mid-b", nested());
+        for (e, m, _) in every.classes.clone().into_iter().filter(|(_, m, _)| m != "m-mid-b" && m != "m-mid-a") {
+            every.measured.retain(|(x, y, _)| !(x == &e && y == &m));
+            every.measured.push((e, m, Measured { json_in_text: "bare".into(), ..Default::default() }));
+        }
+        let pick = resolve(&c, &[], &RouteRequest { needs_json: true, ..req("builder", every) });
+        assert_ne!(pick.key().unwrap().model_id, "m-mid-b", "{pick:?}");
+        let only_nested = with_measured(assign_for(&c, "builder"), "m-mid-b", nested());
+        match resolve(&c, &[], &RouteRequest { needs_json: true, ..req("builder", only_nested) }) {
+            Route::NoModel { ineligible, .. } => assert!(ineligible.iter().any(|(k, why)| k.model_id == "m-mid-a" && why.contains("no record")) && ineligible.iter().any(|(_, why)| why.contains("nested-string")), "{ineligible:?}"),
+            other => panic!("an empty record is never a pass: {other:?}"),
+        }
+    }
+
+    /// M1a exit: `static` routes are byte-identical whatever the measured attributes say, over every role and tier.
+    #[test]
+    fn static_routes_are_unchanged_by_the_measured_attributes() {
+        let mut c = cfg();
+        c.routing.assignment = delphi_adapter::config::Assignment::Static;
+        let mut golden = Vec::new();
+        for role in ["architect", "builder", "validator", "scout"] {
+            for tier in ["fast", "workhorse", "frontier"] {
+                let mut a = assign_for(&c, role);
+                for (e, m, _) in a.classes.clone() {
+                    a.measured.push((e, m, Measured { prompt_budget_tokens: 1, json_in_text: "untested".into(), served_match: Some(false), ..Default::default() }));
+                }
+                let plain = RouteRequest { role: role.into(), tier: tier.into(), ..Default::default() };
+                let with = RouteRequest { assign: Some(a), min_context_tokens: 0, needs_json: true, ..plain.clone() };
+                let (x, y) = (resolve(&c, &[], &plain), resolve(&c, &[], &with));
+                assert_eq!(format!("{x:?}"), format!("{y:?}"), "{role} {tier}");
+                golden.push(format!("{role}/{tier}={}", x.key().unwrap().model_id));
+            }
+        }
+        assert_eq!(golden.iter().filter(|g| g.ends_with("=m-small-a")).count(), 4);
+        assert_eq!(golden.iter().filter(|g| g.ends_with("=m-mid-a")).count(), 4);
+        assert_eq!(golden.iter().filter(|g| g.ends_with("=m-big-a")).count(), 4);
+    }
+
+    /// M4's evidence path: rows are summed per `(role, kind, pair)`, cost in tokens times the multiplier (never dollars), and read back
+    /// by role for ranking.
+    #[test]
+    fn evidence_is_recorded_in_tokens_times_the_multiplier_and_read_back_by_role() {
+        let d = tempfile::tempdir().unwrap();
+        let t = Tokens { input: 1000, cache_read: 200, cache_write: 300, output: 500 };
+        assert_eq!((t.cost(None), t.cost(Some(1.0)), t.cost(Some(0.33)), t.cost(Some(15.0)), t.cost(Some(f64::NAN))), (2000, 2000, 660, 30_000, 2000));
+        let row = |role: &str, m: &str, accepted: bool, mult: Option<f64>| EvidenceRow { role: role.into(), kind: "review".into(), endpoint_id: "ep-a".into(), model_id: m.into(), accepted, tokens: t, multiplier: mult };
+        record_evidence(d.path(), &[row("red-team", "m-big-a", true, Some(15.0)), row("red-team", "m-big-a", false, Some(15.0))]).unwrap();
+        record_evidence(d.path(), &[row("red-team", "m-mid-a", true, None), row("builder", "m-mid-a", true, None)]).unwrap();
+        let e = read_evidence(d.path(), "red-team");
+        let big = e.iter().find(|x| x.model_id == "m-big-a").unwrap();
+        assert_eq!((big.runs, big.accepted, big.cost_tokens), (2, 1, 60_000));
+        assert_eq!((e.len(), read_evidence(d.path(), "builder").len()), (2, 1));
+        let text = std::fs::read_to_string(d.path().join(EVIDENCE_FILE)).unwrap();
+        assert!(!text.contains("usd") && text.contains("tokens x multiplier"), "{text}");
     }
 
     fn resolve(c: &Config, st: &[Entry], r: &RouteRequest) -> Route {

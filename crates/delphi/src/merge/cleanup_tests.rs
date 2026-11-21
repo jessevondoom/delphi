@@ -255,7 +255,7 @@ fn a_cleanup_failure_does_not_change_the_merge_outcome() {
     let mut term = FakeTerminal::new(false, &[]);
     // An earlier conflict entry for the same pull request: the merge resolves it, and the cleanup problem is a new, open one.
     errors.record(7, "head6", crate::merge::errors::Class::Conflict, "it conflicts with `main`", "t0").unwrap();
-    let mut ctx = Ctx { forge: &f, ledger: &ledger, errors: &errors, term: &mut term, quote: Some("please merge #7".into()), dry_run: false, git: Some(&broken), session: None, settle: std::time::Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string() };
+    let mut ctx = Ctx { forge: &f, ledger: &ledger, errors: &errors, term: &mut term, quote: Some("please merge #7".into()), dry_run: false, git: Some(&broken), session: None, settle: std::time::Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string(), refresh: None };
     assert_eq!(merge_one(&mut ctx, 7, None), Outcome::Merged { pr: 7, head: "head7".into() });
     let by_class = |class: &str| errors.entries().into_iter().find(|e| e.class == class).map(|e| e.state);
     assert_eq!(by_class("conflict").as_deref(), Some("resolved"), "the merge settled the earlier problem");

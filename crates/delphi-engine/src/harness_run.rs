@@ -621,6 +621,10 @@ impl Engine {
             return Ok(Err(HarnessErr::retry(format!("the `{}` harness is not implemented (only `claude`, `agy`, `codex` and `copilot`)", ep.harness.as_deref().unwrap_or("?")))));
         };
         let Some(model) = self.cfg.get().resolve_model(ep, &sc.tier) else { return Ok(Err(HarnessErr::retry(format!("endpoint `{}` has no model for the `{}` tier", ep.id, sc.tier)))) };
+        // The seat launches the tier's model, which may not be the pair the router chose: the cost cap holds here too (`specs/056` §10.5).
+        if let Some(why) = crate::route::over_cap(&self.cfg.get(), &ep.id, &model, &sc.role) {
+            return Ok(Err(HarnessErr::retry(format!("launch refused: `{model}` on `{}`: {why}", ep.id))));
+        }
         let wt: Option<Worktree> = self.exec.known_worktree(&sc.task_id);
         // A Builder: the shell scope AND a write scope in the worktree. A role that holds the scope to investigate (`specs/116` §8.1)
         // is not one: it never gets the CLI's own tools in the task's worktree.
@@ -926,6 +930,8 @@ impl Engine {
         let first_event = Some(self.settings.harness_first_event).filter(|d| !d.is_zero()).map_or(self.settings.harness_idle, |d| d.min(self.settings.harness_idle));
         // The names of the tools the run called, for `harness.no_answer` (`specs/128` S2): names and counts only, never arguments or text.
         let mut tool_names: Vec<String> = Vec::new();
+        // Calls the `agy` gate allowed: a toolless seat's gate allows none (`specs/089` §18 rule 2).
+        let mut gate_allowed = 0u32;
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
         let mut live = LiveRedactor::new(sc.m.secrets());
         loop {
@@ -970,6 +976,9 @@ impl Engine {
                 Some(note) = async { match gate_rx.as_mut() { Some(rx) => rx.recv().await, None => std::future::pending().await } } => {
                     if let Some(w) = watchdog.as_mut() {
                         w.gate_decided(&note.tool, None, note.allowed);
+                    }
+                    if note.allowed {
+                        gate_allowed += 1;
                     }
                     if !note.allowed || !note.tool.starts_with(AGY_TOOL_PREFIX) {
                         let summary = self.secrets.redact(&note.summary);
@@ -1306,8 +1315,16 @@ impl Engine {
                         notes.push(format!("ignored {} paths Delphi wrote itself", owned));
                     }
                     let note = notes.join("; ");
-                    batch.push(sc.ev("harness.checkout_guard", json!({"task_id": sc.task_id, "discarded": !only_ignored, "changed_paths": redacted, "ignored_count": ignored, "own_writes_count": owned, "note": note})));
-                    if !only_ignored {
+                    // `specs/089` §18 (OD-4, 2026-11-21): a toolless seat holds no tool and its gate allows nothing, so it cannot have
+                    // written; a change during its run is someone else's. Its answer is kept and an advisory says what changed. Only when
+                    // the run also called no Delphi tool and the gate allowed nothing; a seat with any tool keeps the guard as it was.
+                    let cannot_write = sc.toolless && !any_tool && gate_allowed == 0;
+                    if cannot_write && !only_ignored {
+                        batch.push(sc.ev("harness.checkout_changed", json!({"task_id": sc.task_id, "seat": "toolless", "discarded": false, "changed_paths": redacted, "ignored_count": ignored, "own_writes_count": owned, "note": note})));
+                    } else {
+                        batch.push(sc.ev("harness.checkout_guard", json!({"task_id": sc.task_id, "discarded": !only_ignored, "changed_paths": redacted, "ignored_count": ignored, "own_writes_count": owned, "note": note})));
+                    }
+                    if !only_ignored && !cannot_write {
                         failure = Some((self.secrets.redact(&format!("the agy run changed a project checkout; its output is discarded (`git status` differs from before): {}", paths_note(&paths))).chars().take(600).collect(), false));
                     }
                 }
@@ -2634,14 +2651,13 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"ok","usage":{}}
         assert!(!out.text.contains("ok"), "the output is discarded");
     }
 
-    /// CHARACTERIZATION (spec 089 P4a, hypothesis H-1): documents CURRENT behaviour that slice P4b is expected to change,
-    /// so this test is expected to be rewritten (to assert the output is kept) if the operator approves OD-4.
-    /// The fake `agy` here does nothing wrong: it never touches any path. A writer that is not the seat (here the test,
-    /// standing in for an editor, a build or another session's commit) creates a file in the registered project while the
-    /// run is in flight, and the guard still discards the seat's good answer. The guard compares `git status` of every
-    /// registered checkout before and after and cannot tell who wrote.
+    /// Spec 089 P4a reproduced H-1 with this test; P4b (OD-4, decided 2026-11-21) narrowed the guard BY SEAT KIND only, so a span
+    /// WITH tools (here an ordinary architect span) still fails closed. The fake `agy` here does nothing wrong: it never touches any
+    /// path. A writer that is not the seat (the test, standing in for an editor, a build or another session's commit) creates a file
+    /// in the registered project while the run is in flight, and the guard discards the answer: for a seat that could write, the
+    /// guard cannot tell who wrote. (A toolless seat keeps its answer: see the next tests.)
     #[tokio::test]
-    async fn characterization_an_unrelated_write_to_a_registered_checkout_during_an_agy_run_discards_a_good_answer() {
+    async fn a_seat_with_tools_still_discards_its_answer_on_an_unrelated_checkout_write() {
         let scripts = tempfile::tempdir().unwrap();
         let prog = fake_cli(
             scripts.path(),
@@ -2667,7 +2683,56 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
             Status::Escalated(r) => assert!(r.contains("changed a project checkout"), "{}", r),
             other => panic!("{:?}", other),
         }
-        assert!(!out.text.contains("a good answer"), "today the good answer is discarded; P4b would keep it");
+        assert!(!out.text.contains("a good answer"), "a seat with tools is discarded on any checkout change");
+        assert!(events_of(&f, "harness.checkout_changed").is_empty(), "no advisory: the guard decided");
+        assert_eq!(events_of(&f, "harness.checkout_guard")[0].payload["discarded"], json!(true));
+    }
+
+    /// `specs/089` P4b (OD-4, 2026-11-21): a TOOLLESS seat cannot write (its gate allows nothing), so a checkout change during its
+    /// run is not its own. The answer is kept and a fixed-form advisory event names the paths, `discarded: false`.
+    #[tokio::test]
+    async fn a_toolless_seat_keeps_its_answer_on_an_unrelated_checkout_write_and_says_so_in_an_advisory() {
+        let (f, s) = seat_with_concurrent_write(true).await;
+        assert!(matches!(&s, crate::council::Stance::Said(t) if t.contains("a good answer")), "{s:?}");
+        let a = events_of(&f, "harness.checkout_changed");
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].payload["discarded"], json!(false), "{}", a[0].payload);
+        assert_eq!(a[0].payload["seat"], json!("toolless"));
+        assert_eq!(a[0].payload["changed_paths"], json!(["written-by-someone-else.txt"]), "{}", a[0].payload);
+        assert!(events_of(&f, "harness.checkout_guard").is_empty(), "the guard did not decide anything");
+    }
+
+    /// The same Panel foreign seat run WITH tools (not marked toolless) is still discarded.
+    #[tokio::test]
+    async fn the_same_seat_with_tools_is_still_discarded_on_an_unrelated_checkout_write() {
+        let (f, s) = seat_with_concurrent_write(false).await;
+        assert!(matches!(&s, crate::council::Stance::Abstained(r) if r.contains("changed a project checkout")), "{s:?}");
+        assert!(events_of(&f, "harness.checkout_changed").is_empty());
+        assert_eq!(events_of(&f, "harness.checkout_guard")[0].payload["discarded"], json!(true));
+    }
+
+    /// A Panel foreign `agy` seat (`toolless` as given) that answers after two seconds, while the test writes an unrelated file into
+    /// the registered project 700 ms in.
+    async fn seat_with_concurrent_write(toolless: bool) -> (Fx, crate::council::Stance) {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(
+            scripts.path(),
+            r#"echo '{"event":"init","init":{}}'
+sleep 2
+echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer","usage":{}}}'"#,
+        );
+        let f = retry_fx(prog, Duration::from_secs(600));
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let unrelated = f.root.join("proj/written-by-someone-else.txt");
+        let writer = async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            fs::write(unrelated, "not the seat\n").unwrap();
+        };
+        let (s, ()) = tokio::join!(f.engine.panel_foreign_run_seat(&f.m, &tid, "COUNCIL, ROUND 1 (blind). Proposition: q".into(), "q", "architect", "gemini", 1, None, toolless), writer);
+        (f, s)
     }
 
     /// The same run with no writer at all keeps the answer: the guard is silent when the checkout is unchanged.

@@ -947,6 +947,33 @@ mod tests {
         assert_eq!(read(none.path(), "[seats]\nspread = \"two\"\n"), (true, 1), "with nothing ratified a live \"two\" does not narrow a Council");
     }
 
+    // specs/056 §10.5 test 3: a live edit of `[routing] max_cost_class` changes nothing until it is ratified; the rest of `[routing]`
+    // stays live, and a workspace that never ratified the key keeps the `standard` default whatever the live file says.
+    #[test]
+    fn max_cost_class_counts_only_from_the_ratified_copy() {
+        use delphi_adapter::config::CostClass;
+        let ratify = |dir: &Path, text: &str| {
+            let blocks = access_blocks(text);
+            fs::create_dir_all(dir.join("local/ratified")).unwrap();
+            let mut l = lock::LockFile::default();
+            l.files.insert(crate::ratify::CONFIG_KEY.into(), hash(blocks.as_bytes()));
+            lock::write(&dir.join("local/ratified.lock"), &l).unwrap();
+            fs::write(dir.join("local/ratified").join(crate::ratify::CONFIG_COPY), &blocks).unwrap();
+        };
+        let read = |dir: &Path, live: &str| {
+            let cfg = Config::parse(&effective_config(dir, live).unwrap().0).unwrap();
+            (cfg.routing.max_cost_class.of("architect"), cfg.routing.assignment)
+        };
+        let w = tempfile::tempdir().unwrap();
+        ratify(w.path(), "");
+        let live = "[routing]\nassignment = \"discovered\"\nmax_cost_class = \"premium\"\n";
+        assert_eq!(read(w.path(), live), (CostClass::Standard, delphi_adapter::config::Assignment::Discovered), "the live cap is a pending proposal; the live assignment counts");
+        ratify(w.path(), live);
+        assert_eq!(read(w.path(), live).0, CostClass::Premium, "after /ratify it counts");
+        assert_eq!(read(w.path(), "[routing]\nmax_cost_class = \"low\"\n").0, CostClass::Premium, "a later live edit, lowering or raising, waits for /ratify too");
+        assert_eq!(read(w.path(), "").0, CostClass::Premium, "and so does taking the key out");
+    }
+
     fn pin_config(ws: &WorkspacePaths) {
         let text = fs::read_to_string(ws.dir.join("config.toml")).unwrap();
         let blocks = access_blocks(&text);

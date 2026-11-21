@@ -13,6 +13,7 @@
 # * one paid call per model at <= 1x, with a prompt of about 90,000 tokens (50,000 for claude-haiku-5.5) and the instruction last:
 #   reply with only {"tail": "<token>"}. `tail_tested_tokens` is that size; delivery was NOT tested near each budget, and a one-line
 #   echo proves delivery and format, not quality at long context. `bytes_per_token` is for that filler text, not for code or prose;
+# * `token_accounting` (where the prompt's tokens were reported: input, cache_write or both) is set only where the survey noted it;
 # * the 15x and 14x models were read only (no paid call): `tail_tested_tokens = 0`, `json_in_text = "untested"`.
 #
 # Families: `kimi` (Moonshot) and `mai` (Microsoft) are their own families (operator's aim, 2026-11-20: off-family coverage; specs/132
@@ -47,6 +48,7 @@ prompt_budget_tokens = 200000
 bytes_per_token = 2.27
 tail_tested_tokens = 90000
 json_in_text = "bare"
+token_accounting = "cache_write"
 note = "input counted as cache_write"
 
 [[model]]
@@ -125,6 +127,7 @@ prompt_budget_tokens = 272000
 bytes_per_token = 4.37
 tail_tested_tokens = 90000
 json_in_text = "bare"
+token_accounting = "cache_write"
 note = "reports input tokens as 3; cache_write holds them"
 
 [[model]]
@@ -138,6 +141,7 @@ prompt_budget_tokens = 272000
 bytes_per_token = 4.37
 tail_tested_tokens = 90000
 json_in_text = "bare"
+token_accounting = "cache_write"
 note = "reports input tokens as 3; cache_write holds them"
 
 [[model]]

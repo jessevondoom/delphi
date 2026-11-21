@@ -1,14 +1,16 @@
 # Model class rules (specs/056 §2.2). A ratified data file: a new vendor needs a row here, not a release.
 # The first rule whose conditions all hold places a model. No model names: only attributes.
 # Attributes: local (runs on this machine), tier (the endpoint's mapping: fast, workhorse, frontier),
-# can_think (the catalog allows a thinking budget), cost_class (metered, subscription, local), min_context (tokens).
+# can_think (the catalog allows a thinking budget), min_context (tokens). A rule may not name a cost (a cost class, multiplier or
+# price): price never sets a class (specs/056 §10.3), so such a rule fails to parse; cost is an input to ranking only.
 # [roles.<id>]: the lowest class that can do the role's job (floor), the class it starts at (preferred), and whether it makes plans
 # (plan_making: bought at high quality) or follows one (plan_following: may start below preferred by the ratchet, and may trial an
 # unclassified model on a task with a deterministic gate). A role not listed uses [roles.default]. The floor is never crossed.
 # A workspace may replace this file with <workspace>/model-classes.toml (a ratified edit).
 version = 1
 
-# A model whose context window is at least this many times the median of its family (three or more known) is also wide.
+# A model whose MEASURED prompt budget is at least this many times the median of its family's (three or more known) is also wide,
+# and only with a retrieval record of every planted string at 0.8 of that budget or more (specs/056 §10.2). A declared window is not enough.
 [wide]
 min_context_ratio = 3.0
 
