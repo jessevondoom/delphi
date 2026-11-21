@@ -32,7 +32,7 @@ _No standard scope section; open the spec._
 
 ## 039-error-log
 
-**039: The central error log** · approved (per source at `6ceda78a3df1`) · tier 0 · [source](../../specs/039-error-log.md)
+**039: The central error log** · approved (per source at `9dbb823ba51d`) · tier 0 · [source](../../specs/039-error-log.md)
 
 _No standard scope section; open the spec._
 
