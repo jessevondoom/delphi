@@ -42,7 +42,7 @@ A strategy says what is in the way, what approach is chosen, and what will be do
 - **Coherent actions:** steps that carry a policy out and do not work against each other.
 
 ## Layout
-`strategy_trace` reads exactly this. Ids are `D`, `P` and `A` with a number. A policy names the diagnosis claims it answers in parentheses; an action names the policies it carries out.
+`strategy_trace` reads exactly this. Ids are `D`, `P` and `A` with a number. A policy names the diagnosis claims it answers in parentheses; an action names the policies it carries out. A section heading is level 1 or 2 (level 3 under a heading outside the layout) and may carry a number or more words (`## 3. Actions and owners`). An item line starts with its id, after a list marker, a number or a task box if any: `D1: …`, `P1 (D1, D2): …`, `P1: (D1) …`, `A1 (P1–P3) - …` (a range names every id in it). A field goes on the item's line or on a line directly under it, indented or starting with the field; a blank line ends a list item. A line that starts with an id but cannot be read is reported (`TRACE-DOC-02`): keep an item's references on its own line.
 
 ```markdown
 # Strategy: faster checkout
@@ -70,7 +70,7 @@ A statement about what will be true at a later date is a **forecast**. Write it 
   Tripwire: p99 above 1.5 s at the 2027-02-15 review.
 ```
 
-`strategy_trace` reports a line labelled `Forecast` that has no date (`YYYY-MM-DD`) or no `Tripwire:` (`TRACE-FOR-01`). It cannot see a forecast that was not labelled.
+`strategy_trace` reports a line labelled `Forecast` that has no date (`YYYY-MM-DD`) or no `Tripwire:` (`TRACE-FOR-01`). It reads the label after a list marker or a number or as a heading with a date or a colon, the lines of its paragraph, lines indented under it and a `Tripwire:` line after a blank line; a heading, another list item or other text after a blank line ends the forecast. Any `YYYY-MM-DD` before the tripwire counts as its date, so put the forecast's own date in the parentheses. It cannot see a forecast that was not labelled.
 
 ## Steps
 1. Write the diagnosis first, from evidence you can point at. A claim about the outside carries its source, or is marked as an assumption.

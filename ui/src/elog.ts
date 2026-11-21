@@ -106,9 +106,15 @@ let logger: Logger | null = null;
 const seen = new WeakSet<object>();
 let lastCrash: { key: string; at: number } | null = null;
 
+/** The Delphi home: `DELPHI_HOME`, else `~/.delphi`. An empty value counts as unset, as in `crates/delphi/src/home.rs` and
+ *  `install.sh`'s `${DELPHI_HOME:-...}` (`specs/006` §2.2 item 3); whitespace is a value and is used as given. */
+export function delphiHome(env: Record<string, string | undefined> = process.env): string {
+  return env.DELPHI_HOME || join(homedir(), '.delphi');
+}
+
 /** Start logging in this process. `home` is the Delphi home (`DELPHI_HOME`, else `~/.delphi`). */
 export function initElog(opts: { home?: string; component?: string; version: string; env?: Record<string, string | undefined> }): void {
-  const home = opts.home ?? process.env.DELPHI_HOME ?? join(homedir(), '.delphi');
+  const home = opts.home || delphiHome();
   logger = { settings: settingsFor(home, opts.env ?? process.env), home, component: opts.component ?? 'ui', version: opts.version, drops: 0 };
 }
 

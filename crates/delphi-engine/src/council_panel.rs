@@ -107,6 +107,9 @@ pub struct Panel {
     released: Option<BTreeMap<String, Stance>>,
     /// Seats that have answered Round 1, in order.
     answered: Vec<String>,
+    /// Seats that abstained in Round 1 (a subset of `answered`). An abstention carries no stance text, so it is shown before the barrier
+    /// releases without breaking the blind round (`specs/123` §17 item 1).
+    abstained1: Vec<String>,
     /// Round 2 replies, raw, by seat.
     round2: BTreeMap<String, String>,
     verdict: Option<String>,
@@ -138,12 +141,55 @@ pub struct Panel {
     /// Earlier rulings whose headline matches this Panel's (`specs/123` §9 item 4), picked when it opened: shown in the moderator's round 3
     /// brief only, never in Round 1 or Round 2.
     pub earlier: Vec<crate::council_earlier::Earlier>,
+    /// The caller passed `earlier_rulings: false` (`specs/123` §17 item 2): none were picked, and the record says so.
+    pub earlier_off: bool,
+}
+
+/// The one line a Panel that does not count as an independent review opens its ruling card and `council_result` with (`specs/104` §13 G5),
+/// when the only reason is the missing witness. [`not_independent_line`] gives the line for any set of reasons.
+pub const NOT_INDEPENDENT_REVIEW: &str = "This Panel does not count as an independent review: its seats' first answers were submitted together and the moderator did not witness that they ran apart.";
+
+/// Why a Panel does not count as an independent review (`specs/104` §12 A8, amended 2026-11-21): the short forms the record and the
+/// result carry in `not_independent_because`.
+pub const NOT_WITNESSED: &str = "not witnessed";
+pub const SINGLE_FAMILY: &str = "single family";
+
+/// The clause the card and the lint say one reason with; an unknown reason is said as it is, on one line.
+pub fn not_independent_clause(reason: &str) -> String {
+    match reason {
+        NOT_WITNESSED => "its seats' first answers were submitted together and the moderator did not witness that they ran apart".to_string(),
+        SINGLE_FAMILY => "only one model family gave stances (single family), so its seats may share blind spots".to_string(),
+        other => one_line(other),
+    }
+}
+
+/// The fixed line a Panel that does not count opens its card with, naming every reason. With no reason given (a record written before
+/// the reasons were kept) it is the witness line.
+pub fn not_independent_line(reasons: &[String]) -> String {
+    if reasons.is_empty() {
+        return NOT_INDEPENDENT_REVIEW.to_string();
+    }
+    format!("This Panel does not count as an independent review: {}.", reasons.iter().map(|r| not_independent_clause(r)).collect::<Vec<_>>().join("; and "))
+}
+
+/// [`Panel::relay`] with the families taken into account (`specs/104` §12 A8, amended 2026-11-21): a Panel in which fewer than two
+/// model families gave stances (`homogeneous`, `[H-008]`) does not count as an independent review, witnessed or not. Sets
+/// `counts_as_independent_review` and `not_independent_because` (the reasons; empty when it counts).
+pub fn judge_independence(relay: &serde_json::Value, homogeneous: bool) -> serde_json::Value {
+    let mut v = relay.clone();
+    let mut because: Vec<&str> = Vec::new();
+    if relay["counts_as_independent_review"] == false {
+        because.push(NOT_WITNESSED);
+    }
+    if homogeneous {
+        because.push(SINGLE_FAMILY);
+    }
+    v["counts_as_independent_review"] = serde_json::json!(because.is_empty());
+    v["not_independent_because"] = serde_json::json!(because);
+    v
 }
 
 /// The ruling's note for a Panel whose Round 1 arrived in a batch (`specs/104` §12 A3).
-/// The one line a Panel that does not count as an independent review opens its ruling card and `council_result` with (`specs/104` §13 G5).
-pub const NOT_INDEPENDENT_REVIEW: &str = "This Panel does not count as an independent review: its seats' first answers were submitted together and the moderator did not witness that they ran apart.";
-
 pub const RELAYED_NOTE: &str = "Round 1 arrived in a moderator's batch: Delphi held the release barrier, but could not see whether the host kept its seats apart before submitting";
 
 /// Text for one front-matter line: no line breaks, no control characters.
@@ -163,7 +209,7 @@ pub struct BatchStance {
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, kind: None, aborts: Vec::new(), submissions: BTreeMap::new(), round1_batches: Vec::new(), earlier: Vec::new() }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), abstained1: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, kind: None, aborts: Vec::new(), submissions: BTreeMap::new(), round1_batches: Vec::new(), earlier: Vec::new(), earlier_off: false }
     }
 
     /// Remember the task that runs one of Delphi's seats, so it can be stopped.
@@ -343,7 +389,8 @@ impl Panel {
         }
     }
 
-    /// The state of the seat Delphi runs: `running`, `answered` or `abstained` (a Round 1 abstention shows once the barrier releases).
+    /// The state of the seat Delphi runs: `running`, `waiting_on_barrier` (its Round 1 stance is held until every seat is in),
+    /// `answered` or `abstained` (a Round 1 abstention shows at once: it carries no stance, `specs/123` §17 item 1).
     pub fn foreign_state(&self) -> Option<(String, &'static str)> {
         self.foreign.first().map(|s| (s.role.clone(), self.state_of(&s.role)))
     }
@@ -355,7 +402,8 @@ impl Panel {
 
     fn state_of(&self, seat: &str) -> &'static str {
         match &self.released {
-            None => if self.barrier_has(seat) { "answered" } else { "running" },
+            None if self.abstained1.iter().any(|s| s == seat) => "abstained",
+            None => if self.barrier_has(seat) { "waiting_on_barrier" } else { "running" },
             Some(rel) => {
                 if rel.get(seat).and_then(Stance::text).is_none() {
                     "abstained"
@@ -480,7 +528,8 @@ impl Panel {
     }
 
     /// What the record and the card say about how Round 1 arrived (`specs/104` §12 A3, A8): `relayed` when any Round 1 stance came in a
-    /// batch; the independence line; and whether the Panel counts as an independent review (no Round 1 batch, or every one witnessed).
+    /// batch; the independence line; and whether the witness allows the Panel to count as an independent review (no Round 1 batch, or
+    /// every one witnessed). The families are not known here: the daemon applies them with [`judge_independence`].
     pub fn relay(&self) -> serde_json::Value {
         let relayed = !self.round1_batches.is_empty();
         let witnessed = relayed && self.round1_batches.iter().all(Option::is_some);
@@ -531,6 +580,9 @@ impl Panel {
                     BarrierError::Held => PanelErr::NotYet("Round 1 is open".into()),
                 })?;
                 self.answered.push(seat.to_string());
+                if abstain.is_some() {
+                    self.abstained1.push(seat.to_string());
+                }
                 note_model(self);
                 if self.barrier.complete() {
                     let all = self.barrier.release().map_err(|_| PanelErr::Closed("Round 1 is closed".into()))?;
@@ -650,6 +702,24 @@ mod tests {
         assert_eq!(p.submit("architect", 1, "A", None, Some("opus")).unwrap(), Step::Waiting(vec!["red-team".into(), "strategist".into()]));
         assert_eq!(p.submit("red-team", 1, "R", None, Some("sonnet")).unwrap(), Step::Waiting(vec!["strategist".into()]));
         assert!(matches!(p.submit("strategist", 1, "S", None, None).unwrap(), Step::Released(m) if m.len() == 3));
+    }
+
+    /// Spec 104 section 12 A8 (amended 2026-11-21): a witness is necessary, not enough; a single-family Panel does not count, and the
+    /// card line names each reason.
+    #[test]
+    fn a_witnessed_single_family_panel_is_not_an_independent_review_and_two_families_still_are() {
+        let witnessed = serde_json::json!({"relayed": true, "independence": "witnessed by the moderator (host-reported): x", "counts_as_independent_review": true});
+        let unwitnessed = serde_json::json!({"relayed": true, "independence": "not witnessed", "counts_as_independent_review": false});
+        let single = serde_json::json!({"relayed": false, "independence": null, "counts_as_independent_review": true});
+        let j = judge_independence(&witnessed, true);
+        assert_eq!((j["counts_as_independent_review"].clone(), j["not_independent_because"].clone()), (serde_json::json!(false), serde_json::json!(["single family"])));
+        let j = judge_independence(&witnessed, false);
+        assert_eq!((j["counts_as_independent_review"].clone(), j["not_independent_because"].clone()), (serde_json::json!(true), serde_json::json!([])));
+        assert_eq!(judge_independence(&single, false)["counts_as_independent_review"], true);
+        assert_eq!(judge_independence(&unwitnessed, true)["not_independent_because"], serde_json::json!(["not witnessed", "single family"]));
+        assert_eq!(not_independent_line(&[]), NOT_INDEPENDENT_REVIEW);
+        assert_eq!(not_independent_line(&[NOT_WITNESSED.to_string()]), NOT_INDEPENDENT_REVIEW, "the witness-only line is unchanged");
+        assert!(not_independent_line(&[SINGLE_FAMILY.to_string()]).contains("(single family)"));
     }
 
     #[test]
@@ -888,7 +958,7 @@ mod tests {
         assert_eq!(p.waiting_on(), Some("delphi_seat"));
         assert_eq!(p.submit_by_delphi_seat("red-team", 1, "R", None, Some("gem")).unwrap(), Step::Waiting(vec!["strategist".into()]));
         assert_eq!(p.pending_delphi_seat().as_deref(), Some("strategist"), "the next one outstanding");
-        assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "answered"), ("strategist".to_string(), "running")]);
+        assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "waiting_on_barrier"), ("strategist".to_string(), "running")]);
         assert!(matches!(p.submit_by_delphi_seat("strategist", 1, "S", None, None).unwrap(), Step::Released(m) if m.len() == 3));
         // Round 2: both read the same peers through the server, nobody through anybody.
         let b = p.brief_for_delphi_seat("strategist", 2).unwrap();
@@ -900,5 +970,19 @@ mod tests {
         assert_eq!(p.submit_by_delphi_seat("strategist", 2, "", Some("no answer within 600s"), None).unwrap(), Step::RoundTwoDone);
         assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "answered"), ("strategist".to_string(), "abstained")]);
         assert_eq!(p.waiting_on(), Some("host_seats"), "only the verdict is left");
+    }
+
+    // specs/123 §17 item 1: a seat Delphi runs that is in the barrier reports `waiting_on_barrier`, not `answered`; one that abstained
+    // reports `abstained` at once (an abstention carries no stance text, so the barrier stays blind).
+    #[test]
+    fn a_delphi_seat_in_the_barrier_is_waiting_and_its_abstention_shows_at_once() {
+        let mut p = Panel::new("q");
+        p.reserve_seat(ForeignSeat { role: "red-team".into(), family: "gemini".into(), tools_none: true }).unwrap();
+        p.reserve_seat(ForeignSeat { role: "strategist".into(), family: "openai".into(), tools_none: false }).unwrap();
+        p.submit_by_delphi_seat("red-team", 1, "R", None, None).unwrap();
+        p.submit_by_delphi_seat("strategist", 1, "", Some("no answer within 600s"), None).unwrap();
+        assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "waiting_on_barrier"), ("strategist".to_string(), "abstained")], "the host's architect is still out");
+        p.submit("architect", 1, "A", None, None).unwrap();
+        assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "running"), ("strategist".to_string(), "abstained")], "released: red-team owes Round 2");
     }
 }

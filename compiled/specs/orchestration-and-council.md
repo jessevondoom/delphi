@@ -95,7 +95,7 @@ E2 asked whether a Panel run by a host's subagents is as good as a daemon Counci
 
 ## 091-seats-families-and-outside-launch
 
-**091: Seats, model families and launching agents on any carrier: receipts, a family table, an opt-in diversity requirement, and an ask-another-family tool** · approved (per source at `b0a015c54c9a`) · tier 0 · [source](../../specs/091-seats-families-and-outside-launch.md)
+**091: Seats, model families and launching agents on any carrier: receipts, a family table, an opt-in diversity requirement, and an ask-another-family tool** · approved (per source at `6feb71954557`) · tier 0 · [source](../../specs/091-seats-families-and-outside-launch.md)
 
 _No standard scope section; open the spec._
 
@@ -111,7 +111,7 @@ A daemon Council escalates when a seat's Round 2 cannot be read. For the red-tea
 
 ## 124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture
 
-**124: The fleet audit: honest manifests, strategist and architect skills, and a learning capture** · approved (per source at `2a08da5077f6`) · tier 0 · [source](../../specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md)
+**124: The fleet audit: honest manifests, strategist and architect skills, and a learning capture** · approved (per source at `49bf60e351cd`) · tier 0 · [source](../../specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md)
 
 **source excerpt, untrusted** · `specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md` line 25
 

@@ -120,6 +120,9 @@ pub struct Settings {
     /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
     pub max_foreign_seats: u32,
     pub max_foreign_tokens: u64,
+    /// `[seats] spread` (`specs/132` §5.4): `"all"` (true, the default) seats every Council seat on its own family when three or more
+    /// are usable, and a Panel's foreign seats on distinct families; `"two"` (false) keeps two-family Councils. Ratified only.
+    pub spread_all: bool,
     /// `[access] standing_foreign_tokens` (`specs/104` §5, §12 A4): the operator's standing consent for read-only foreign seats, in tokens
     /// per 24 hours. Read from the ratified copy only (`[access]` is pinned); 0, the default, is off.
     pub standing_foreign_tokens: u64,
@@ -242,6 +245,7 @@ impl Default for Settings {
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
+            spread_all: true,
             standing_foreign_tokens: 0,
             review_commands: None,
             review_diff_chars: crate::review_job::DEFAULT_DIFF_CHARS,
@@ -407,7 +411,8 @@ pub struct Engine {
     pub(crate) toolless: Mutex<HashSet<String>>,
     /// The operator prompt behind each operator-rooted task, for the artifact prompt log (`specs/070` §3). Tasks a timer, a host or another agent started have none.
     pub(crate) operator_prompts: Mutex<HashMap<String, String>>,
-    /// Tasks raised by a host agent (`specs/062` §6.3): every span of one, dispatched or not, runs narrowed to read-only.
+    /// Tasks raised by a host agent (`specs/062` §6.3, §7), by `<mission id>/<task id>`: every span of one, dispatched or not, runs
+    /// narrowed to read-only. Task ids repeat across missions (`t_0003`), so a host task must not narrow another mission's task.
     pub(crate) readonly_tasks: Mutex<HashSet<String>>,
     /// Single spans narrowed to read-only, by `<mission id>/<handoff id>` (`specs/086` §6.4, `specs/062` §6): a host Panel's foreign
     /// seat opened with tools. Its task is the host's Panel, not a host-raised task, so `readonly_tasks` does not reach it.
@@ -565,12 +570,13 @@ fn final_text(blocks: &[ContentBlock]) -> String {
 /// The manifest scope that carries `run_command` and `shell`.
 const SHELL_SCOPE: &str = "shell-worktree-scoped";
 
-/// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
-/// The key of a span marked read-only by its handoff: handoff ids repeat across missions (`ho_t_0003_red-team_r1`), so the mission is part of it.
-pub(crate) fn readonly_key(mission: &str, handoff_id: &str) -> String {
-    format!("{mission}/{handoff_id}")
+/// The key of a task or span marked read-only (`readonly_tasks`, `readonly_handoffs`): task and handoff ids repeat across missions
+/// (`t_0003`, `ho_t_0003_red-team_r1`), so the mission is part of it.
+pub(crate) fn readonly_key(mission: &str, id: &str) -> String {
+    format!("{mission}/{id}")
 }
 
+/// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
 pub(crate) fn builds(m: &AgentManifest) -> bool {
     m.execute.iter().any(|e| e == SHELL_SCOPE) && m.write.iter().any(|g| g.starts_with("@worktree/"))
 }
@@ -824,10 +830,8 @@ impl Engine {
     /// A task a host agent asked for (`specs/062` §6): read-only throughout, and below full trust from its first turn, since
     /// the request is content from outside. The caller allocated `task_id` so it can say which task is answering.
     pub async fn run_task_for_host(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str) -> Result<TaskOutcome, EngineError> {
-        self.readonly_tasks.lock().unwrap().insert(task_id.clone());
-        let out = self.start_task(m, task_id.clone(), target, prompt, true, Some(Span::with_ceiling("host", delphi_core::provenance::Tier::L0))).await;
-        self.readonly_tasks.lock().unwrap().remove(&task_id);
-        out
+        let _mark = crate::council::SetMark::new(&self.readonly_tasks, readonly_key(&m.id, &task_id));
+        self.start_task(m, task_id, target, prompt, true, Some(Span::with_ceiling("host", delphi_core::provenance::Tier::L0))).await
     }
 
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
@@ -910,7 +914,7 @@ impl Engine {
             return Err(EngineError::Invalid(format!("`{}` is not an enabled or dispatchable role", target)));
         }
         if announce {
-            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "bundle_agent": bundle_agent, "source": if operator_task { "operator" } else if self.readonly_tasks.lock().unwrap().contains(&task_id) { "host" } else { "timer" }}));
+            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "bundle_agent": bundle_agent, "source": if operator_task { "operator" } else if self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, &task_id)) { "host" } else { "timer" }}));
             created.task_id = Some(task_id.clone());
             m.append(created).await?;
         }
@@ -1010,7 +1014,7 @@ impl Engine {
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
             let seat_readonly = self.readonly_handoffs.lock().unwrap().contains(&readonly_key(&m.id, &handoff.handoff_id));
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -2038,6 +2042,7 @@ impl Engine {
             mutating: sc.guard.zones.worktree.is_some() && builds(&sc.manifest),
             mutating_harnesses: self.mutating_harnesses(),
             min_context_tokens: 0,
+            needs_json: false,
             target: self.cfg.get().routing.targets.get(&sc.role).cloned(),
             turn_by_turn,
             assign: self.assign_for(sc),
@@ -3255,6 +3260,42 @@ mod tests {
         f.engine.run_task(&f.m, "orchestrator", "Again").await.unwrap();
         let tools2 = f.model.requests()[1].body["tools"].to_string();
         assert!(tools2.contains("write_file"));
+    }
+
+    // `specs/062` §6.3: the host mark is keyed by mission and task. Task ids repeat across missions (`t_0001`), so before the fix a
+    // host task in one mission narrowed an ordinary task with the same id in another (narrow only, never widen, but wrong).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_task_does_not_narrow_another_missions_task_with_the_same_id() {
+        let f = setup(vec![], 5.0, |_| {});
+        let host_m = later_mission(&f, "host-s1");
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+        let rx = std::sync::Mutex::new(rx);
+        let (tx2, rx2) = std::sync::mpsc::channel::<Vec<String>>();
+        f.model.respond_with(move |body| {
+            let names: Vec<String> = body["tools"].as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default();
+            if body.to_string().contains("HOST-QUESTION") {
+                // Hold the host task open until the ordinary task has been offered its tools.
+                let _ = tx2.send(names);
+                let _ = rx.lock().unwrap().recv_timeout(Duration::from_secs(30));
+                Step::text("host answer")
+            } else {
+                let _ = tx.send(names);
+                Step::text("ordinary answer")
+            }
+        });
+        let host_tid = host_m.next_task_id();
+        let (eng, hm, ht) = (f.engine.clone(), host_m.clone(), host_tid.clone());
+        let host = tokio::spawn(async move { eng.run_task_for_host(&hm, ht, "orchestrator", "HOST-QUESTION").await });
+        let host_tools = tokio::task::spawn_blocking(move || rx2.recv_timeout(Duration::from_secs(30)).unwrap()).await.unwrap();
+        assert!(!host_tools.contains(&"write_file".to_string()), "the host task is read-only: {host_tools:?}");
+        f.engine.run_task(&f.m, "orchestrator", "ORDINARY").await.unwrap();
+        let created = events_of(&f, "task.created");
+        assert_eq!(created.last().unwrap().task_id.as_deref(), Some(host_tid.as_str()), "the two tasks share an id");
+        assert_eq!(created.last().unwrap().payload["source"], "operator", "an ordinary task is not labelled a host task");
+        let ordinary = f.model.requests().iter().find(|r| r.body.to_string().contains("ORDINARY")).map(|r| r.body["tools"].to_string()).unwrap();
+        assert!(ordinary.contains("write_file"), "another mission's task with the same id keeps its tools: {ordinary}");
+        host.await.unwrap().unwrap();
+        assert!(f.engine.readonly_tasks.lock().unwrap().is_empty(), "the mark does not outlive the task");
     }
 
     #[tokio::test]

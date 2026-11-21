@@ -13,14 +13,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub use delphi_core::lock::{access_blocks, is_protected};
 
 pub fn delphi_home(explicit: Option<&str>) -> PathBuf {
+    resolve_home(explicit, std::env::var("DELPHI_HOME").ok(), std::env::var("HOME").ok())
+}
+
+/// The rule behind [`delphi_home`], on values rather than the environment so it can be tested
+/// without racing other tests. An empty `DELPHI_HOME` counts as unset, as `install.sh`'s
+/// `${DELPHI_HOME:-$HOME/.delphi}` does (`specs/006` §2.2 item 3, amendment 2026-11-21).
+fn resolve_home(explicit: Option<&str>, delphi_home: Option<String>, user_home: Option<String>) -> PathBuf {
     if let Some(h) = explicit {
         return PathBuf::from(h);
     }
-    if let Ok(h) = std::env::var("DELPHI_HOME") {
+    if let Some(h) = delphi_home.filter(|h| !h.is_empty()) {
         return PathBuf::from(h);
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".delphi")
+    PathBuf::from(user_home.unwrap_or_else(|| ".".into())).join(".delphi")
 }
 
 pub fn hash(bytes: &[u8]) -> String {
@@ -532,6 +538,16 @@ mod tests {
             .filter(|e| e.file_type().is_file())
             .map(|e| (e.path().strip_prefix(dir).unwrap().to_string_lossy().to_string(), hash(&fs::read(e.path()).unwrap())))
             .collect()
+    }
+
+    // specs/006 §2.2 item 3 (amendment 2026-11-21): an empty DELPHI_HOME is unset, as in install.sh.
+    #[test]
+    fn empty_delphi_home_falls_back_to_the_default() {
+        let user = Some("/u".to_string());
+        assert_eq!(resolve_home(None, Some(String::new()), user.clone()), PathBuf::from("/u/.delphi"));
+        assert_eq!(resolve_home(None, None, user.clone()), PathBuf::from("/u/.delphi"));
+        assert_eq!(resolve_home(None, Some("/d".into()), user.clone()), PathBuf::from("/d"));
+        assert_eq!(resolve_home(Some("/flag"), Some("/d".into()), user), PathBuf::from("/flag"));
     }
 
     // specs/006 §6 test 6 (layout and clean project part; doctor part in doctor.rs)

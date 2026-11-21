@@ -63,13 +63,28 @@ A run that keeps no claim says why. Its result carries `empty`: `reason` is one 
 
 | `empty.reason` | what happened | what to do |
 | :-- | :-- | :-- |
-| `leads_unread` | a connected tool's own search found pages that are not on your trusted list. Delphi never fetches those on a tool's word; they are listed in `host_leads` | the tool reads them itself and hands over what it found with `record_research`; or add the sources worth trusting to your trusted list |
+| `leads_unread` | a connected tool's own search found pages that are not on your trusted list. Delphi never fetches those on a tool's word; they are listed in `host_leads`. When the session is under the private-read mark Delphi fetches none of them, trusted or not, and `text` says so | the tool reads them itself and hands over what it found with `record_research`; or add the sources worth trusting to your trusted list |
 | `trusted_fetch_failed` | pages on the trusted list could not be fetched; `why` counts each failure by a fixed word (`http_403`, `not_text` for a PDF or other non-text page, `network`, `too_large`, `redirect`) | read them with the tool's own reader and use `record_research`, or run again later |
-| `no_model_seat`, `plan_no_model_seat` | no model could serve the scout, so no page could be read, or the whole question was searched as one query | run again when a model is available (`delphi doctor`) |
+| `no_model_seat`, `plan_no_model_seat` | no model could serve the scout, so no page could be read, or the run used the fixed plan instead of sub-questions | run again when a model is available (`delphi doctor`) |
 | `no_claims_on_pages` | pages were read and nothing quotable on the question was found | ask a narrower question |
-| `no_results`, `no_search_provider`, `credential_unresolved` | the searches found nothing, or none could be run | ask a shorter question; see the next section for engines |
+| `no_results` | the searches ran and found nothing | ask a shorter, more specific question |
+| `search_failed` | every engine failed (down, over its limit, or an answer that is not results) | run again later; if it keeps failing, check the engines (next section) |
+| `no_search_provider`, `credential_unresolved` | no search could be run: no engine is set up, or no engine's key could be used | see the next section for engines |
+| `no_search_run` | no query was sent and none failed, for example when every query was cleaned of private details | ask the question in other words, without paths, hosts or credentials |
+| `claims_not_stored` | claims were drawn but the library kept no record of them, so none can be cited | run again; if it happens again, run `delphi doctor` |
+
+When an answer is written from claims Delphi held before the run, `next` says so instead of asking you to ask again.
 
 The words are counted by code and are information only: none of them makes Delphi fetch, trust or permit anything.
+
+### Every endpoint is a harness
+
+Delphi's own research runner reads each page with a single model call for the scout, and a harness endpoint (`path = "harness"`: a command-line tool that runs a whole task) never serves a single call. When every endpoint is a harness, or none has quota left, no model can serve the scout and Delphi's runner keeps no claim. `request_research` now says so before anything is searched:
+
+- asked with `runner: "daemon"` from a tool that has a web search of its own (Claude Code), the run is given to that tool's search instead; the reply carries `runner_switched: {from: daemon, to: host, reason: no_model_seat}` and the usual `queries` and `host_note`;
+- otherwise the run is not refused, and the reply carries `scout: no_model_seat` with a note: read the sources the result lists with your own tools and hand them over with `record_research`.
+
+`delphi doctor` check 17 says when no configured endpoint can serve the scout. Adding an API endpoint (`path = "api"`) for the primary family's fast tier lets Delphi's runner read pages again.
 
 ## Research ran with no web search
 

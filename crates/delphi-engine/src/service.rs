@@ -235,8 +235,8 @@ fn spawn_foreign(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, id: 
         };
         // Round 2 is more spend: judge it by the receipts of Round 1, never by the request (`specs/091` SR-3, SR-4). A refusal here only narrows.
         let stop = if round > 1 {
-            let (host_family, required) = { panels.lock().unwrap().get(&key).map(|p| (p.host_family.clone(), p.require_families)).unwrap_or_default() };
-            let unmet = required.and_then(|n| engine.panel_diversity(&m, &id, host_family.as_deref()).unmet(n, "by the receipts of Round 1"));
+            let (host_family, required, round1, foreign) = { panels.lock().unwrap().get(&key).map(|p| (p.host_family.clone(), p.require_families, p.stances().cloned(), p.foreign_seats().iter().map(|s| s.role.clone()).collect::<Vec<_>>())).unwrap_or_default() };
+            let unmet = required.and_then(|n| engine.panel_diversity(&m, &id, host_family.as_deref(), round1.as_ref(), &foreign).unmet(n, "by the receipts of Round 1"));
             unmet.or_else(|| (engine.panel_foreign_tokens(&m, &id) >= engine.settings.max_foreign_tokens).then(|| format!("foreign-seat budget: Round 1 used {} tokens, the cap is [seats] max_foreign_tokens = {} per Council; Round 2 was not run", engine.panel_foreign_tokens(&m, &id), engine.settings.max_foreign_tokens)))
         } else {
             None
@@ -864,7 +864,14 @@ impl EngineService {
         // the request asks for Delphi's own runner. `tool` is the host's own word for itself: a host that names another only gets
         // itself asked to search, or not.
         let daemon_runner = h::research_runner_is_daemon(&p).map_err(host_err)?;
-        let host_tool = crate::mcp_hosts::host_search_tools(&c.tool).0.filter(|_| !daemon_runner);
+        // Spec 119 §17 (defect D2): Delphi's runner reads pages with the scout's single-turn model calls, which no harness endpoint
+        // serves. When no model can serve them, `runner: "daemon"` from a host that has a search tool is given to the host's tools
+        // before anything is searched, and the reply says so; elsewhere the run is not refused (§13.2) but the reply says at once
+        // that the runner keeps no claim.
+        let no_scout = self.engine.scout_key().is_none();
+        let host_has_search = crate::mcp_hosts::host_search_tools(&c.tool).0;
+        let switched = daemon_runner && no_scout && host_has_search.is_some();
+        let host_tool = host_has_search.filter(|_| !daemon_runner || switched);
         let search = self.engine.cfg.get().search.clone();
         let sources = crate::research_setup::sources(&search, host_tool.is_some());
         let host = (sources == crate::research_run::Sources::Host).then(|| crate::research_run::HostTurn { tool: c.tool.clone(), engines: crate::research_setup::engine_state(&search) != crate::research_setup::EngineState::None, wait: self.host_wait() });
@@ -954,6 +961,16 @@ impl EngineService {
             reply["queries"] = json!(queries);
             reply["host_tool"] = json!(host_tool);
             reply["host_note"] = json!(crate::research_setup::HOST_SEARCH_NOTE);
+        }
+        if switched {
+            reply["runner_switched"] = json!({"from": "daemon", "to": "host", "reason": "no_model_seat"});
+            reply["runner_note"] = json!(crate::research_setup::RUNNER_SWITCHED_NOTE);
+        }
+        if no_scout {
+            reply["scout"] = json!("no_model_seat");
+            if !switched {
+                reply["scout_note"] = json!(crate::research_setup::NO_SCOUT_NOTE);
+            }
         }
         if let Some(id) = continued {
             reply["continued"] = json!(true);
@@ -1287,7 +1304,7 @@ impl EngineService {
     }
 
     /// `host.request_council` (`specs/062` §7): raise an on-demand Council on a host's question, in the host session's own mission, and
-    /// return its id at once. The seats are text-only, so they advise and change nothing; the ruling is read with `host.council_status`
+    /// return its id at once. The seats run read-only (§6.3, §7.3), so they advise and change nothing; the ruling is read with `host.council_status`
     /// and `host.council_result`, and binds nothing in the host.
     async fn host_request_council(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         use crate::host_rpc as h;
@@ -1313,7 +1330,7 @@ impl EngineService {
         };
         let (engine, tid, mm) = (self.engine.clone(), task_id.clone(), m.clone());
         let job = tokio::spawn(async move {
-            if let Err(e) = engine.run_council(&mm, tid.clone(), &proposition, opts).await {
+            if let Err(e) = engine.run_council_for_host(&mm, tid.clone(), &proposition, opts).await {
                 elog_task_failed(&mm.id, &tid, &e);
                 let mut ev = EventEnvelope::new(&mm.id, "task.failed", json!({"error": engine.secrets.redact(&e.to_string())}));
                 ev.task_id = Some(tid.clone());
@@ -1393,6 +1410,8 @@ impl EngineService {
             }
         }
         let has_options = p.get("options").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+        // Spec 123 §17 item 2: a caller's `earlier_rulings: false`, judged before anything is recorded.
+        let earlier_off = crate::council::earlier_rulings_off(&p).map_err(|why| err(code::INVALID_PARAMS, why))?;
         let briefs: Vec<Value>;
         let (task_id, m) = {
             let _gate = self.host_gate.lock().await;
@@ -1430,7 +1449,8 @@ impl EngineService {
             panel.host_family = host_family.map(String::from);
             panel.require_families = required;
             panel.kind = kind.clone();
-            if self.engine.settings.council_earlier_rulings {
+            panel.earlier_off = earlier_off;
+            if self.engine.settings.council_earlier_rulings && !earlier_off {
                 panel.earlier = crate::council_earlier::pick(&self.engine.ws.dir, &m.dir, crate::council::headline(&proposition));
             }
             for seat in &planned_foreign {
@@ -1834,7 +1854,11 @@ impl EngineService {
             let family = match item["family"].as_str().filter(|f| !f.is_empty()) {
                 Some(f) if self.engine.panel_family_usable(f) && Some(f) != host_family => f.to_string(),
                 Some(f) => return Err(bad(format!("family `{f}` is not a configured, usable family other than your host's: ask for another, or leave `family` out"))),
-                None => self.engine.panel_foreign_family(role, host_family).ok_or_else(|| bad("a seat run by Delphi needs a model family other than your host's, and none is configured: ask without foreign_seats, or add another family (see `delphi setup`)".into()))?,
+                None => {
+                    // `specs/132` §5.4 item 4: N foreign seats on N distinct usable families when that many exist.
+                    let taken: Vec<String> = out.iter().map(|s| s.family.clone()).collect();
+                    self.engine.panel_foreign_family_beside(role, host_family, &taken).ok_or_else(|| bad("a seat run by Delphi needs a model family other than your host's, and none is configured: ask without foreign_seats, or add another family (see `delphi setup`)".into()))?
+                }
             };
             out.push(crate::council_panel::ForeignSeat { role: role.to_string(), family, tools_none });
         }
@@ -3671,7 +3695,7 @@ impl EngineService {
             return Err(err(code::INVALID_PARAMS, "`proposition` must be 1 to 20,000 characters"));
         }
         let seats: Vec<String> = p["seats"].as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default();
-        let opts = crate::council::CouncilOpts { seats, author_family: p["author_family"].as_str().map(String::from), lenses: p["lenses"].as_bool().unwrap_or(false), tier: p["tier"].as_str().map(String::from), require_families: None };
+        let opts = crate::council::CouncilOpts { seats, author_family: p["author_family"].as_str().map(String::from), lenses: p["lenses"].as_bool().unwrap_or(false), tier: p["tier"].as_str().map(String::from), require_families: None, earlier_off: false };
         let task_id = m.next_task_id();
         self.running.lock().unwrap().insert(task_id.clone(), Running { target: "council".into(), prompt: proposition.chars().take(120).collect(), started: Instant::now() });
         let (engine, running, tid, mid) = (self.engine.clone(), self.running.clone(), task_id.clone(), m.id.clone());
@@ -6797,6 +6821,57 @@ mod tests {
         .await;
     }
 
+    // specs/119 §17 (defect D2): Delphi's runner reads pages with the scout's single-turn model calls, and a harness endpoint never
+    // serves a single turn. With only harness endpoints, `runner: "daemon"` asked from a host that has a search tool is switched to
+    // the host's own tools before any search, and the reply says so in fixed words; a host with no search tool is not refused (§13.2)
+    // but is told at once that the runner will keep no claim. With an API endpoint the daemon's runner is used as asked.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_only_harness_endpoints_a_daemon_run_is_switched_to_the_host_before_any_search() {
+        const HARNESS_ONLY: &str = "[models.claude]\nfast = \"haiku-x\"\nworkhorse = \"sonnet-x\"\nfrontier = \"opus-x\"\n[[endpoints]]\nid = \"sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n";
+        const ENGINE: &str = "[search]\nproviders = [\"searxng\"]\n[search.searxng]\nurl = \"https://search.invalid\"\n";
+        let f = setup(vec![], 5.0, |_| {});
+        let cwd = f.root.to_string_lossy().to_string();
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{HARNESS_ONLY}\n{ENGINE}")).unwrap());
+        assert!(f.engine.scout_key().is_none() && !crate::research::scout_configured(&f.engine.cfg.get()), "a harness serves no single turn");
+        let s = serve(&f).await;
+        let web = Arc::new(RecordingWeb::default());
+        *s.svc.research_web.lock().unwrap() = Some((web.clone(), vec![delphi_adapter::research::search::ProviderSpec { provider: delphi_adapter::research::search::Provider::Searxng, key: None, base_url: Some("https://search.invalid".into()), cx: None }], "[[source]]\nhost = \"en.wikipedia.org\"\nreuse = \"full\"\n".to_string()));
+        *s.svc.research_host_wait.lock().unwrap() = Some(Duration::from_secs(60));
+        let (hsock, htok, engine) = (s.host_sock.clone(), s.host.clone(), f.engine.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let ask = |tool: &str| json!({"session": "abcdef0123456789", "tool": tool, "cwd": cwd, "question": "does aspirin reduce fever", "new": true, "runner": "daemon"});
+            let cancel = |c: &mut Client, tool: &str, r: &Value| {
+                let _ = c.call("host.cancel_job", json!({"session": "abcdef0123456789", "tool": tool, "cwd": cwd, "research_id": r["research_id"]}));
+            };
+
+            // Claude Code has a search tool: the run is the host's, and the reply says why, before any engine is asked.
+            let r = c.call("host.request_research", ask("claude-code")).unwrap();
+            assert_eq!((r["status"].as_str(), r["sources"].as_str(), r["host_search"].as_str()), (Some("queued"), Some("host"), Some("asked")), "{r}");
+            assert_eq!(r["runner_switched"], json!({"from": "daemon", "to": "host", "reason": "no_model_seat"}), "{r}");
+            assert_eq!((r["runner_note"].as_str(), r["scout"].as_str()), (Some(crate::research_setup::RUNNER_SWITCHED_NOTE), Some("no_model_seat")), "{r}");
+            assert!(web.seen.lock().unwrap().is_empty(), "no engine was asked: {:?}", web.seen.lock().unwrap());
+            cancel(&mut c, "claude-code", &r);
+
+            // Codex has no search tool: not refused (§13.2), and told at once that Delphi's runner keeps no claim.
+            let r = c.call("host.request_research", ask("codex")).unwrap();
+            assert_eq!((r["status"].as_str(), r["sources"].as_str(), r.get("runner_switched")), (Some("queued"), Some("engines"), None), "{r}");
+            assert_eq!((r["scout"].as_str(), r["scout_note"].as_str()), (Some("no_model_seat"), Some(crate::research_setup::NO_SCOUT_NOTE)), "{r}");
+            cancel(&mut c, "codex", &r);
+
+            // An API endpoint serves the scout: the daemon's runner runs as asked, and nothing is said about the scout.
+            engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}\n{ENGINE}", crate::testkit::CONFIG)).unwrap());
+            assert!(engine.scout_key().is_some() && crate::research::scout_configured(&engine.cfg.get()));
+            let r = c.call("host.request_research", ask("claude-code")).unwrap();
+            assert_eq!((r["status"].as_str(), r["sources"].as_str(), r.get("host_search")), (Some("queued"), Some("engines"), None), "{r}");
+            assert!(r.get("runner_switched").is_none() && r.get("scout").is_none() && r.get("scout_note").is_none(), "{r}");
+            cancel(&mut c, "claude-code", &r);
+        })
+        .await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_host_asks_for_help_and_is_told_who_answered_with_no_limit_on_how_often() {
         let f = setup(vec![Step::text("Read specs/001 first; the ladder has three rungs."), Step::text("Second."), Step::text("Third."), Step::text("Sequence the pricing work after the launch.")], 5.0, |_| {});
@@ -7147,7 +7222,8 @@ mod tests {
             let card = got["display"].as_str().unwrap();
             assert!(card.contains("**Panel ruling**") && card.contains("isolation: host-reported") && card.contains("opus") && card.contains("Delphi spent none"), "{card}");
             // Spec 087 §5.2: the identity line leads the card in `display`, and `signature` is that line alone.
-            assert!(card.starts_with("⟦") && card.contains("(orchestrator, via delphi)\n\n**Panel ruling**"), "{card}");
+            // This Panel is the host's family alone, so the card says first that it is not an independent review (spec 104 §12 A8, amended 2026-11-21).
+            assert!(card.starts_with("⟦") && card.contains("(orchestrator, via delphi)\n\nThis Panel does not count as an independent review: only one model family gave stances (single family), so its seats may share blind spots.\n\n**Panel ruling**"), "{card}");
             assert!(card.contains("**Options:** source not stated (host-reported)") && !card.contains("Foreign seat confirmed"), "{card}");
             assert!(got["signature"].as_str().unwrap().ends_with("(orchestrator, via delphi)") && !got["signature"].as_str().unwrap().contains('\n'), "{got}");
             assert!(got["ruling"]["dissent"].as_str().unwrap().contains("Unanimous"), "{got}");
@@ -7162,6 +7238,59 @@ mod tests {
         assert_eq!(events.iter().filter(|e| e.kind == "council.stance").count(), 3);
         assert_eq!(events.iter().find(|e| e.kind == "council.verdict").unwrap().payload["venue"], "panel", "the verdict says it came from a Panel");
         assert!(events.iter().filter(|e| e.kind == "council.stance").all(|e| e.payload["brief_hash"].as_str().is_some_and(|h| h.len() == 64)), "each stance records the brief it was given");
+    }
+
+    /// Spec 123 §17 item 2: `council_open` with `earlier_rulings: false` keeps an earlier matching record out of the moderator's round 3
+    /// brief, and the record says the caller turned it off; the default still shows it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_panel_opened_with_earlier_rulings_false_shows_the_moderator_none() {
+        let f = setup(vec![], 5.0, |_| {});
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = |extra: Value| {
+                let mut b = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd});
+                for (k, v) in extra.as_object().unwrap() {
+                    b[k] = v.clone();
+                }
+                b
+            };
+            let good = "RECOMMENDATION: PROCEED-WITH-CHANGES\nFINDING P2 naming\nCONCUR: yes\nROUND 2 COMPLETE";
+            let q = "Should the retry queue be a table or a file?";
+            assert_eq!(rpc_code(c.call("host.council_open", p(json!({"question": q, "earlier_rulings": "no"})))), Some(code::INVALID_PARAMS));
+            // Runs a Panel to its end and gives the moderator's round 3 brief.
+            let mut run = |extra: Value| -> String {
+                let mut open = json!({"question": q});
+                for (k, v) in extra.as_object().unwrap() {
+                    open[k] = v.clone();
+                }
+                let id = c.call("host.council_open", p(open)).unwrap()["council_id"].as_str().unwrap().to_string();
+                for round in [1, 2] {
+                    for seat in ["architect", "red-team", "strategist"] {
+                        c.call("host.council_submit", p(json!({"council_id": id, "seat": seat, "round": round, "text": if round == 1 { "OPTION: table\nBecause." } else { good }}))).unwrap();
+                    }
+                }
+                let b3 = c.call("host.council_brief", p(json!({"council_id": id, "seat": "orchestrator", "round": 3}))).unwrap()["brief"].as_str().unwrap().to_string();
+                c.call("host.council_submit", p(json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "The seats agree.\nDECISION: use a table\nNEXT builder: write the table"}))).unwrap();
+                b3
+            };
+            assert!(!run(json!({})).contains("council/earlier/"), "the first Panel has nothing earlier");
+            assert!(!run(json!({"earlier_rulings": false})).contains("council/earlier/"), "turned off for this Panel");
+            assert!(run(json!({})).contains("council/earlier/"), "the default still shows the earlier record");
+        })
+        .await;
+        let dir = delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789").join("councils");
+        let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).collect();
+        files.sort();
+        assert_eq!(files.len(), 3);
+        let docs: Vec<String> = files.iter().map(|f| std::fs::read_to_string(f).unwrap()).collect();
+        assert!(docs[1].contains("earlier_rulings_off: by the caller") && !docs[1].contains("earlier_rulings: "), "{}", docs[1]);
+        assert!(!docs[2].contains("earlier_rulings_off") && docs[2].contains("earlier_rulings: "), "{}", docs[2]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -10787,6 +10916,44 @@ mod tests {
         assert!(got["display"].as_str().unwrap().contains("1 family: gemini (homogeneous)"), "{}", got["display"]);
     }
 
+    // specs/091 SR-3 (amended 2026-11-21): a seat counts toward families only if it gave a stance. Delphi's gemini seat runs (its
+    // receipt says `ok`, served gemini) but answers Round 1 with nothing, so it abstains: only the host's claude sat.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_foreign_seat_that_abstained_adds_no_family_and_the_panel_is_homogeneous() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text(R2_GOOD) } else { Step::text("") });
+        f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (_, got) = blocking(move || drive_panel(hsock, htok, cwd, json!({"question": "q?", "model": "claude-opus", "operator_confirmed": true, "foreign_seat": "red-team"}), &["architect", "strategist"]).unwrap()).await;
+        let events = replay_log(&delphi_core::sessions::dir(&f.engine.ws.dir, "host-abcdef0123456789"));
+        assert!(events.iter().any(|e| e.kind == crate::seat::RECEIPT_KIND && e.payload["outcome"] == "ok" && e.payload["served"]["family"] == "gemini"), "the seat ran and its receipt says ok");
+        assert!(events.iter().any(|e| e.kind == "council.stance" && e.payload["role"] == "red-team" && e.payload["status"] == "abstained"), "and it abstained");
+        let started = events.iter().find(|e| e.kind == "council.started").unwrap();
+        assert_eq!((started.payload["families"].clone(), started.payload["homogeneous"].clone()), (json!(["claude"]), json!(true)), "{}", started.payload);
+        assert_eq!((got["ruling"]["families"].clone(), got["ruling"]["homogeneous"].clone()), (json!(["claude"]), json!(true)), "{got}");
+        let verdict = events.iter().find(|e| e.kind == "council.verdict").unwrap();
+        assert_eq!(verdict.payload["homogeneous"], true, "the record is labelled homogeneous too: {}", verdict.payload);
+        assert!(got["display"].as_str().unwrap().contains("1 family: claude (homogeneous)"), "{}", got["display"]);
+    }
+
+    // The same rule for a required count: Round 1's only gemini seat abstained, so `require_families = 2` is not met.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_abstained_foreign_seat_does_not_meet_require_families() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text(R2_GOOD) } else { Step::text("") });
+        f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (_, got) = blocking(move || drive_panel(hsock, htok, cwd, json!({"question": "q?", "model": "claude-opus", "operator_confirmed": true, "require_families": 2, "foreign_seat": "red-team"}), &["architect", "strategist"]).unwrap()).await;
+        assert_eq!((got["ruling"]["families"].clone(), got["ruling"]["require_families_met"].clone()), (json!(["claude"]), json!(false)), "{got}");
+        assert!(!f.model.requests().iter().any(|q| q.body.to_string().contains("COUNCIL, ROUND 2")), "Round 2 of the foreign seat was not run: the requirement was judged unmet after Round 1");
+    }
+
     // ── specs/098 §6.2 (S6): a red-team review and `ask_family` ─────────────────────────────────────────────
 
     fn red_on(s: &mut crate::engine::Settings) {
@@ -11165,9 +11332,10 @@ mod tests {
     }
 
     /// Spec 104 §6, §12 A3, A6, A8: a three-seat Panel completes in four calls with the ruling the per-seat path gives; a batch Panel is
-    /// labelled relayed, counts as an independent review only with the moderator's witness, and a per-seat Panel is unchanged.
+    /// labelled relayed and witnessed or not, and a per-seat Panel is unchanged. All three Panels here are the host's family alone (no
+    /// seat Delphi runs), so none counts as an independent review (§12 A8, amended 2026-11-21): the witnessed one for that reason only.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_three_seat_panel_completes_in_four_calls_and_only_a_witnessed_batch_counts_as_independent() {
+    async fn a_three_seat_panel_completes_in_four_calls_and_a_single_family_panel_is_not_independent_even_witnessed() {
         let f = setup(vec![], 50.0, roomy);
         let ws_dir = f.engine.ws.dir.clone();
         let cwd = f.root.to_string_lossy().to_string();
@@ -11188,32 +11356,82 @@ mod tests {
         }
         let positions = |v: &Value| v["ruling"]["seat_positions"].as_array().unwrap().iter().map(|p| (p["seat"].clone(), p["position"].clone())).collect::<Vec<_>>();
         assert_eq!(positions(&batch), positions(&single));
-        // The per-seat path is unchanged: not relayed, and it counts.
+        // Every Panel here is the host's family alone: homogeneous, and so not an independent review (§12 A8, amended 2026-11-21).
+        for v in [&single, &batch, &unwitnessed] {
+            assert_eq!((v["ruling"]["homogeneous"].clone(), v["counts_as_independent_review"].clone()), (json!(true), json!(false)), "{v}");
+        }
+        // The per-seat path: not relayed; the family is its only reason.
         assert!(single["isolation"].is_null() && single["independence"].is_null(), "{single}");
-        assert_eq!(single["counts_as_independent_review"], true);
-        // A witnessed batch: relayed, the witness shown as host-reported (one flat line), and it counts.
+        assert_eq!(single["not_independent_because"], json!(["single family"]), "{single}");
+        // A witnessed batch: relayed, the witness shown as host-reported (one flat line); witnessed, yet one family: it does not count.
         assert_eq!((batch["isolation"].as_str(), batch["blind_round_1"].as_str()), (Some("host-reported, relayed"), Some("host-reported")), "{batch}");
         assert_eq!(batch["independence"], "witnessed by the moderator (host-reported): three subagents in parallel, each with only its brief");
-        assert_eq!(batch["counts_as_independent_review"], true);
-        // Spec 104 section 13 G5: only the uncounted Panel's card opens with the fixed line.
-        let line = "This Panel does not count as an independent review: its seats' first answers were submitted together and the moderator did not witness that they ran apart.";
-        assert!(single["display"].as_str().is_some_and(|c| !c.contains("does not count as an independent review")), "{single}");
-        assert!(batch["display"].as_str().is_some_and(|c| !c.contains("does not count as an independent review")), "{batch}");
+        assert_eq!(batch["not_independent_because"], json!(["single family"]), "{batch}");
+        // Spec 104 section 13 G5: the uncounted Panel's card opens with the fixed line, naming each reason.
+        let family_line = "This Panel does not count as an independent review: only one model family gave stances (single family), so its seats may share blind spots.";
+        let both_line = "This Panel does not count as an independent review: its seats' first answers were submitted together and the moderator did not witness that they ran apart; and only one model family gave stances (single family), so its seats may share blind spots.";
         // It opens the card: the identity line, then this line, then the ruling.
-        assert!(unwitnessed["display"].as_str().is_some_and(|c| c.matches(line).count() == 1 && c.find(line) < c.find("**Panel ruling**") && c.split("\n\n").nth(1) == Some(line)), "{unwitnessed}");
+        let opens = |v: &Value, line: &str| v["display"].as_str().is_some_and(|c| c.matches(line).count() == 1 && c.find(line) < c.find("**Panel ruling**") && c.split("\n\n").nth(1) == Some(line));
+        assert!(opens(&single, family_line), "{single}");
+        assert!(opens(&batch, family_line), "{batch}");
+        assert!(opens(&unwitnessed, both_line), "{unwitnessed}");
         let card = batch["display"].as_str().unwrap();
         assert!(card.contains("isolation: host-reported, relayed · blind_round_1: host-reported") && card.contains("**independence:** witnessed by the moderator") && card.contains("could not see whether the host kept its seats apart"), "{card}");
-        // Without the witness: not witnessed, and it does not count.
-        assert_eq!((unwitnessed["independence"].as_str(), unwitnessed["counts_as_independent_review"].clone()), (Some("not witnessed"), json!(false)), "{unwitnessed}");
+        // Without the witness: not witnessed, and that is a reason too.
+        assert_eq!((unwitnessed["independence"].as_str(), unwitnessed["not_independent_because"].clone()), (Some("not witnessed"), json!(["not witnessed", "single family"])), "{unwitnessed}");
         // The record says how each stance arrived.
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         let subs: Vec<&str> = events.iter().filter(|e| e.kind == "council.stance" || e.kind == "council.critique").filter_map(|e| e.payload["submission"].as_str()).collect();
         assert!(subs.contains(&"single") && subs.contains(&"batch"), "{subs:?}");
         let record = std::fs::read_to_string(ws_dir.join(batch["ruling"]["record"].as_str().unwrap())).unwrap_or_default();
-        assert!(record.is_empty() || (record.contains("isolation: host-reported, relayed") && record.contains("counts_as_independent_review: true")), "{record}");
+        assert!(record.is_empty() || (record.contains("isolation: host-reported, relayed") && record.contains("counts_as_independent_review: false\nnot_independent_because: single family\n")), "{record}");
         // The record carries the council id the lint resolves a `reviewed_by` citation by.
         let id = batch["council_id"].as_str().unwrap();
         assert!(record.is_empty() || record.contains(&format!("\ncouncil_id: {id}\n")), "{record}");
+    }
+
+    /// Spec 104 §12 A8 (amended 2026-11-21): a witnessed batch Panel in which two families gave stances (the host's claude, and gemini
+    /// on the seat Delphi runs) still counts as an independent review, and its card says nothing extra.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_witnessed_two_family_panel_still_counts_as_an_independent_review() {
+        let f = setup(vec![], 50.0, roomy);
+        let _seen = foreign_fx(&f, |_| Some("gemini-4-argon".to_string()));
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let got = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let open = c.call("host.council_open", pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus", "foreign_seat": "red-team", "operator_confirmed": true}))).unwrap();
+            let id = open["council_id"].clone();
+            let st = |seat: &str, text: &str| json!({"seat": seat, "text": text, "model": "opus"});
+            let witness = json!({"independent": true, "how": "two subagents in parallel, each with only its brief"});
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "round": 1, "stances": [st("architect", "OPTION: file"), st("strategist", "OPTION: file")], "witness": witness}))).unwrap();
+            let wait_brief = |c: &mut Client, seat: &str, round: u64| {
+                let opened = (0..300).any(|_| {
+                    let ok = c.call("host.council_brief", pbody(&cwd, json!({"council_id": id, "seat": seat, "round": round}))).is_ok_and(|b| b["brief"].is_string());
+                    if !ok {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    ok
+                });
+                assert!(opened, "round {round} never opened");
+            };
+            wait_brief(&mut c, "architect", 2);
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "round": 2, "stances": [st("architect", R2_GOOD), st("strategist", R2_GOOD)]}))).unwrap();
+            wait_brief(&mut c, "orchestrator", 3);
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "DECISION: use a table\nNEXT builder: write the table"}))).unwrap();
+            c.call("host.council_result", pbody(&cwd, json!({"council_id": id}))).unwrap()
+        })
+        .await;
+        assert_eq!((got["ruling"]["families"].clone(), got["ruling"]["homogeneous"].clone()), (json!(["claude", "gemini"]), json!(false)), "{got}");
+        assert_eq!(got["independence"], "witnessed by the moderator (host-reported): two subagents in parallel, each with only its brief", "{got}");
+        assert_eq!((got["counts_as_independent_review"].clone(), got["not_independent_because"].clone()), (json!(true), json!([])), "{got}");
+        assert!(got["display"].as_str().is_some_and(|c| !c.contains("does not count as an independent review")), "{got}");
+        let record = std::fs::read_to_string(ws_dir.join(got["ruling"]["record"].as_str().unwrap())).unwrap_or_default();
+        assert!(record.is_empty() || (record.contains("counts_as_independent_review: true\n") && !record.contains("not_independent_because")), "{record}");
     }
 
     /// Spec 104 §6 item 2, §12 A3 (b), A6, A8: a batch is checked whole. A seat named twice, a seat Delphi runs, a malformed witness and

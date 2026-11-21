@@ -450,6 +450,10 @@ fn check_research(home: &Path, ws: &Workspace, cfg_text: &str, r: &mut Report) {
             }
         }
     }
+    // spec 119 §17 (defect D2): the runner's scout makes single-turn model calls, which no harness endpoint serves.
+    if delphi_adapter::config::Config::parse(cfg_text).is_ok_and(|c| !c.endpoints.is_empty() && !delphi_engine::research::scout_configured(&c)) {
+        r.push(Level::Ok, CHECK, "config.toml", "scout: no configured endpoint can serve the scout's single model calls (a harness never does), so Delphi's own runner keeps no claim; in a host session with a web search, research uses the host's search instead");
+    }
     let trusted = match delphi_engine::research_setup::lists(&ws.dir, home) {
         Ok(l) => format!("trusted list: {} host(s)", l.len()),
         Err(e) => format!("trusted list: could not be read ({})", e.chars().take(120).collect::<String>()),
@@ -1597,6 +1601,13 @@ mod tests {
         assert!(!f.iter().map(|x| x.message.as_str()).collect::<String>().contains("delphi-kagi"), "no credential reference is echoed");
         // No engine at all, a custom threshold, and an unreadable table.
         assert!(findings("[search]\nproviders = []\n")[0].message.contains("research sends no web search of its own"));
+        // Spec 119 §17 (defect D2): with only harness endpoints no model can serve the scout, and the doctor says so as a fact; with
+        // an API endpoint that has prices, or no endpoint table at all, it says nothing about the scout.
+        let harness = "[models.claude]\nfast = \"haiku-x\"\n[[endpoints]]\nid = \"sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n";
+        let scout = |cfg: &str| findings(cfg).into_iter().find(|x| x.message.starts_with("scout:"));
+        assert!(scout(harness).is_some_and(|x| x.level == Level::Ok && x.message.contains("a harness never does")), "{:?}", findings(harness));
+        let api = "[models.claude]\nfast = \"haiku-x\"\n[models.catalog.\"haiku-x\"]\nmax_output_tokens = 8000\ninput_usd_per_mtok = 1.0\noutput_usd_per_mtok = 5.0\n[[endpoints]]\nid = \"direct\"\nfamily = \"claude\"\npath = \"api\"\ncredential = \"env:K\"\n";
+        assert!(scout(api).is_none() && scout("").is_none(), "{:?}", findings(api));
         // Spec 119 §2 item 3 and §13.2 item 9: a missing engine is a fact while no research ran without a web search, and a warning once
         // one did in the last 30 days; a run older than that does not count, and an engine that is there is never warned about.
         let none = "[search]\nproviders = []\n";
