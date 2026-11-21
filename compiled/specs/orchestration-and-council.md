@@ -85,7 +85,7 @@ An operator who works in another tool has two ways to get a Council today, and n
 
 ## 089-panel-hardening-from-e2
 
-**089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart** · approved (per source at `8bc8c6683865`) · tier 0 · [source](../../specs/089-panel-hardening-from-e2.md)
+**089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart** · approved (per source at `70425409e39b`) · tier 0 · [source](../../specs/089-panel-hardening-from-e2.md)
 
 **source excerpt, untrusted** · `specs/089-panel-hardening-from-e2.md` line 26
 
