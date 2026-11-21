@@ -137,6 +137,55 @@ pub fn parse_session_new(v: &Value) -> Vec<CatalogModel> {
         .collect()
 }
 
+/// What is known of one configured model: its multiplier and cost class, for display and as a Panel plan's cost input only (never a
+/// tier, class or capability decision), and whether a fresh catalog lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelCost {
+    pub model: String,
+    /// The vendor's multiplier as shown (`"0.33x"`, `"1x"`, `"14x"`); `None` when neither the catalog nor the seed table gives one.
+    pub multiplier: Option<String>,
+    pub class: Option<&'static str>,
+    /// `Some(false)`: a fresh catalog lacks the model or lists it disabled, so the tier is unusable. `None`: no fresh catalog to judge by.
+    pub in_catalog: Option<bool>,
+}
+
+/// The model's cost from `fresh` (a catalog the caller found usable for the installed CLI) or, failing that, from the seed table.
+pub fn model_cost(fresh: Option<&Catalog>, model: &str) -> ModelCost {
+    let listed = fresh.and_then(|c| c.model(model));
+    let multiplier = listed.and_then(|m| m.multiplier).or_else(|| Seed::shipped().model("copilot", model).map(|m| m.multiplier).filter(|m| *m > 0.0));
+    ModelCost { model: model.into(), multiplier: multiplier.map(|m| format!("{m}x")), class: multiplier.map(cost_class), in_catalog: fresh.map(|_| listed.is_some_and(|m| m.enabled)) }
+}
+
+/// Why a seat on this endpoint's tier cannot run, judged by a fresh catalog: its model is missing from the account's list, or listed
+/// but not enabled. Never a swap to another model: the tier is unusable and the caller says so.
+pub fn refusal(fresh: &Catalog, endpoint: &str, tier: &str, model: &str) -> Option<String> {
+    match fresh.model(model) {
+        Some(m) if m.enabled => None,
+        Some(_) => Some(format!("endpoint `{endpoint}`: its {tier} model `{model}` is listed but not enabled in this account's Copilot catalog (read on {}), so the {tier} tier is unusable; enable it in the account or change the endpoint's `models`", fresh.cli_version)),
+        None => Some(format!("endpoint `{endpoint}`: its {tier} model `{model}` is not in this account's Copilot catalog (read on {}), so the {tier} tier is unusable; Delphi never swaps in another model. Change the endpoint's `models`", fresh.cli_version)),
+    }
+}
+
+/// The cached catalog, when it was read on `cli_version` and is young enough.
+pub fn fresh(local_dir: &Path, cli_version: &str, now: i64) -> Option<Catalog> {
+    load(local_dir).filter(|c| c.usable_for(cli_version, now))
+}
+
+/// The cached catalog if fresh; otherwise `read` once (a `session/new` answer), cache what it returns, and use that. `None` when
+/// neither works.
+pub fn refresh(local_dir: &Path, cli_version: &str, now: i64, read: &dyn Fn() -> Option<Value>) -> Option<Catalog> {
+    if let Some(c) = fresh(local_dir, cli_version, now) {
+        return Some(c);
+    }
+    let models = parse_session_new(&read()?);
+    if models.is_empty() {
+        return None;
+    }
+    let c = Catalog { cli_version: cli_version.into(), read_unix: now, models };
+    let _ = save(local_dir, &c);
+    Some(c)
+}
+
 pub fn cache_path(local_dir: &Path) -> PathBuf {
     local_dir.join(CATALOG_FILE)
 }
@@ -280,6 +329,37 @@ mod tests {
         assert!(back.usable_for("1.0.112", 1000 + 3600));
         assert!(!back.usable_for("1.0.113", 1000), "another CLI version is not reused");
         assert!(!back.usable_for("1.0.112", 1000 + CATALOG_MAX_AGE_SECS + 1));
+    }
+
+    /// The cost comes from the fresh catalog, else the seed table; only a fresh catalog can call a model missing.
+    #[test]
+    fn a_models_cost_and_presence_come_from_the_fresh_catalog_then_the_seed() {
+        let c = Catalog { cli_version: "v".into(), read_unix: 0, models: parse_session_new(&session_new()) };
+        let g = model_cost(Some(&c), "gemini-3.8-flash");
+        assert_eq!((g.multiplier.as_deref(), g.class, g.in_catalog), (Some("14x"), Some("premium"), Some(true)));
+        assert_eq!(model_cost(Some(&c), "kimi-k3").in_catalog, Some(false), "listed but disabled");
+        let argon = model_cost(Some(&c), "gemini-4-argon");
+        assert_eq!((argon.multiplier.as_deref(), argon.class, argon.in_catalog), (Some("1x"), Some("standard"), Some(false)), "missing, cost from the seed");
+        assert_eq!(model_cost(None, "gemini-4-argon").in_catalog, None);
+        assert_eq!(model_cost(None, "no-such-model").class, None);
+        assert!(refusal(&c, "e", "fast", "claude-sonnet-5.5").is_none());
+        assert!(refusal(&c, "e", "fast", "gemini-4-argon").unwrap().contains("fast model `gemini-4-argon` is not in this account's Copilot catalog"));
+        assert!(refusal(&c, "e", "frontier", "kimi-k3").unwrap().contains("not enabled"));
+    }
+
+    #[test]
+    fn refresh_reads_once_and_then_uses_the_cache() {
+        let d = tempfile::tempdir().unwrap();
+        let reads = std::cell::Cell::new(0);
+        let read = || {
+            reads.set(reads.get() + 1);
+            Some(session_new())
+        };
+        assert_eq!(refresh(d.path(), "1.0.112", 1000, &read).unwrap().models.len(), 4);
+        assert_eq!(refresh(d.path(), "1.0.112", 2000, &read).unwrap().read_unix, 1000);
+        assert_eq!(reads.get(), 1);
+        assert_eq!(refresh(d.path(), "1.0.113", 2000, &read).unwrap().cli_version, "1.0.113", "a new CLI version is read again");
+        assert!(refresh(tempfile::tempdir().unwrap().path(), "1.0.112", 0, &|| None).is_none());
     }
 
     /// The live read with a stand-in `copilot --acp`: it answers `initialize`, then `session/new`; no prompt is sent.
