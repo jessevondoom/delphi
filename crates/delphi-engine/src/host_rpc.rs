@@ -829,7 +829,14 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
         v["relay_note"] = json!(crate::council_panel::RELAYED_NOTE);
     }
     if panel {
-        v["counts_as_independent_review"] = json!(started.map(|e| e.payload["counts_as_independent_review"] != false).unwrap_or(true));
+        let counts = started.map(|e| e.payload["counts_as_independent_review"] != false).unwrap_or(true);
+        v["counts_as_independent_review"] = json!(counts);
+        // §12 A8 as amended 2026-11-21: why it does not count. A Panel started before the reasons were kept did not count only for its witness.
+        v["not_independent_because"] = match started.map(|e| &e.payload["not_independent_because"]).filter(|b| b.is_array()) {
+            Some(b) => b.clone(),
+            None if counts => json!([]),
+            None => json!([crate::council_panel::NOT_WITNESSED]),
+        };
     }
     // Spec 123 §4 item 3: what it has cost in tokens, against its ceiling (null when off). A Panel's count is only the seats Delphi ran.
     let spent = crate::council::council_tokens(events, task_id);
@@ -1046,7 +1053,8 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
     let homog = r["homogeneous"].as_bool().unwrap_or(false);
     if v["venue"] == "panel" && v["counts_as_independent_review"] == false {
         // Spec 104 section 13 G5: a Panel that does not count as an independent review says so first; one that counts, and every daemon Council, say nothing extra.
-        s.push_str(crate::council_panel::NOT_INDEPENDENT_REVIEW);
+        let because: Vec<String> = v["not_independent_because"].as_array().into_iter().flatten().filter_map(|b| b.as_str().map(str::to_string)).collect();
+        s.push_str(&crate::council_panel::not_independent_line(&because));
         s.push_str("\n\n");
     }
     if v["venue"] == "panel" {

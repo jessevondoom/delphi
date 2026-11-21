@@ -7151,7 +7151,8 @@ mod tests {
             let card = got["display"].as_str().unwrap();
             assert!(card.contains("**Panel ruling**") && card.contains("isolation: host-reported") && card.contains("opus") && card.contains("Delphi spent none"), "{card}");
             // Spec 087 §5.2: the identity line leads the card in `display`, and `signature` is that line alone.
-            assert!(card.starts_with("⟦") && card.contains("(orchestrator, via delphi)\n\n**Panel ruling**"), "{card}");
+            // This Panel is the host's family alone, so the card says first that it is not an independent review (spec 104 §12 A8, amended 2026-11-21).
+            assert!(card.starts_with("⟦") && card.contains("(orchestrator, via delphi)\n\nThis Panel does not count as an independent review: only one model family gave stances (single family), so its seats may share blind spots.\n\n**Panel ruling**"), "{card}");
             assert!(card.contains("**Options:** source not stated (host-reported)") && !card.contains("Foreign seat confirmed"), "{card}");
             assert!(got["signature"].as_str().unwrap().ends_with("(orchestrator, via delphi)") && !got["signature"].as_str().unwrap().contains('\n'), "{got}");
             assert!(got["ruling"]["dissent"].as_str().unwrap().contains("Unanimous"), "{got}");
@@ -11207,9 +11208,10 @@ mod tests {
     }
 
     /// Spec 104 §6, §12 A3, A6, A8: a three-seat Panel completes in four calls with the ruling the per-seat path gives; a batch Panel is
-    /// labelled relayed, counts as an independent review only with the moderator's witness, and a per-seat Panel is unchanged.
+    /// labelled relayed and witnessed or not, and a per-seat Panel is unchanged. All three Panels here are the host's family alone (no
+    /// seat Delphi runs), so none counts as an independent review (§12 A8, amended 2026-11-21): the witnessed one for that reason only.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_three_seat_panel_completes_in_four_calls_and_only_a_witnessed_batch_counts_as_independent() {
+    async fn a_three_seat_panel_completes_in_four_calls_and_a_single_family_panel_is_not_independent_even_witnessed() {
         let f = setup(vec![], 50.0, roomy);
         let ws_dir = f.engine.ws.dir.clone();
         let cwd = f.root.to_string_lossy().to_string();
@@ -11230,32 +11232,82 @@ mod tests {
         }
         let positions = |v: &Value| v["ruling"]["seat_positions"].as_array().unwrap().iter().map(|p| (p["seat"].clone(), p["position"].clone())).collect::<Vec<_>>();
         assert_eq!(positions(&batch), positions(&single));
-        // The per-seat path is unchanged: not relayed, and it counts.
+        // Every Panel here is the host's family alone: homogeneous, and so not an independent review (§12 A8, amended 2026-11-21).
+        for v in [&single, &batch, &unwitnessed] {
+            assert_eq!((v["ruling"]["homogeneous"].clone(), v["counts_as_independent_review"].clone()), (json!(true), json!(false)), "{v}");
+        }
+        // The per-seat path: not relayed; the family is its only reason.
         assert!(single["isolation"].is_null() && single["independence"].is_null(), "{single}");
-        assert_eq!(single["counts_as_independent_review"], true);
-        // A witnessed batch: relayed, the witness shown as host-reported (one flat line), and it counts.
+        assert_eq!(single["not_independent_because"], json!(["single family"]), "{single}");
+        // A witnessed batch: relayed, the witness shown as host-reported (one flat line); witnessed, yet one family: it does not count.
         assert_eq!((batch["isolation"].as_str(), batch["blind_round_1"].as_str()), (Some("host-reported, relayed"), Some("host-reported")), "{batch}");
         assert_eq!(batch["independence"], "witnessed by the moderator (host-reported): three subagents in parallel, each with only its brief");
-        assert_eq!(batch["counts_as_independent_review"], true);
-        // Spec 104 section 13 G5: only the uncounted Panel's card opens with the fixed line.
-        let line = "This Panel does not count as an independent review: its seats' first answers were submitted together and the moderator did not witness that they ran apart.";
-        assert!(single["display"].as_str().is_some_and(|c| !c.contains("does not count as an independent review")), "{single}");
-        assert!(batch["display"].as_str().is_some_and(|c| !c.contains("does not count as an independent review")), "{batch}");
+        assert_eq!(batch["not_independent_because"], json!(["single family"]), "{batch}");
+        // Spec 104 section 13 G5: the uncounted Panel's card opens with the fixed line, naming each reason.
+        let family_line = "This Panel does not count as an independent review: only one model family gave stances (single family), so its seats may share blind spots.";
+        let both_line = "This Panel does not count as an independent review: its seats' first answers were submitted together and the moderator did not witness that they ran apart; and only one model family gave stances (single family), so its seats may share blind spots.";
         // It opens the card: the identity line, then this line, then the ruling.
-        assert!(unwitnessed["display"].as_str().is_some_and(|c| c.matches(line).count() == 1 && c.find(line) < c.find("**Panel ruling**") && c.split("\n\n").nth(1) == Some(line)), "{unwitnessed}");
+        let opens = |v: &Value, line: &str| v["display"].as_str().is_some_and(|c| c.matches(line).count() == 1 && c.find(line) < c.find("**Panel ruling**") && c.split("\n\n").nth(1) == Some(line));
+        assert!(opens(&single, family_line), "{single}");
+        assert!(opens(&batch, family_line), "{batch}");
+        assert!(opens(&unwitnessed, both_line), "{unwitnessed}");
         let card = batch["display"].as_str().unwrap();
         assert!(card.contains("isolation: host-reported, relayed · blind_round_1: host-reported") && card.contains("**independence:** witnessed by the moderator") && card.contains("could not see whether the host kept its seats apart"), "{card}");
-        // Without the witness: not witnessed, and it does not count.
-        assert_eq!((unwitnessed["independence"].as_str(), unwitnessed["counts_as_independent_review"].clone()), (Some("not witnessed"), json!(false)), "{unwitnessed}");
+        // Without the witness: not witnessed, and that is a reason too.
+        assert_eq!((unwitnessed["independence"].as_str(), unwitnessed["not_independent_because"].clone()), (Some("not witnessed"), json!(["not witnessed", "single family"])), "{unwitnessed}");
         // The record says how each stance arrived.
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         let subs: Vec<&str> = events.iter().filter(|e| e.kind == "council.stance" || e.kind == "council.critique").filter_map(|e| e.payload["submission"].as_str()).collect();
         assert!(subs.contains(&"single") && subs.contains(&"batch"), "{subs:?}");
         let record = std::fs::read_to_string(ws_dir.join(batch["ruling"]["record"].as_str().unwrap())).unwrap_or_default();
-        assert!(record.is_empty() || (record.contains("isolation: host-reported, relayed") && record.contains("counts_as_independent_review: true")), "{record}");
+        assert!(record.is_empty() || (record.contains("isolation: host-reported, relayed") && record.contains("counts_as_independent_review: false\nnot_independent_because: single family\n")), "{record}");
         // The record carries the council id the lint resolves a `reviewed_by` citation by.
         let id = batch["council_id"].as_str().unwrap();
         assert!(record.is_empty() || record.contains(&format!("\ncouncil_id: {id}\n")), "{record}");
+    }
+
+    /// Spec 104 §12 A8 (amended 2026-11-21): a witnessed batch Panel in which two families gave stances (the host's claude, and gemini
+    /// on the seat Delphi runs) still counts as an independent review, and its card says nothing extra.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_witnessed_two_family_panel_still_counts_as_an_independent_review() {
+        let f = setup(vec![], 50.0, roomy);
+        let _seen = foreign_fx(&f, |_| Some("gemini-4-argon".to_string()));
+        let ws_dir = f.engine.ws.dir.clone();
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let got = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let open = c.call("host.council_open", pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus", "foreign_seat": "red-team", "operator_confirmed": true}))).unwrap();
+            let id = open["council_id"].clone();
+            let st = |seat: &str, text: &str| json!({"seat": seat, "text": text, "model": "opus"});
+            let witness = json!({"independent": true, "how": "two subagents in parallel, each with only its brief"});
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "round": 1, "stances": [st("architect", "OPTION: file"), st("strategist", "OPTION: file")], "witness": witness}))).unwrap();
+            let wait_brief = |c: &mut Client, seat: &str, round: u64| {
+                let opened = (0..300).any(|_| {
+                    let ok = c.call("host.council_brief", pbody(&cwd, json!({"council_id": id, "seat": seat, "round": round}))).is_ok_and(|b| b["brief"].is_string());
+                    if !ok {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    ok
+                });
+                assert!(opened, "round {round} never opened");
+            };
+            wait_brief(&mut c, "architect", 2);
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "round": 2, "stances": [st("architect", R2_GOOD), st("strategist", R2_GOOD)]}))).unwrap();
+            wait_brief(&mut c, "orchestrator", 3);
+            c.call("host.council_submit", pbody(&cwd, json!({"council_id": id, "seat": "orchestrator", "round": 3, "text": "DECISION: use a table\nNEXT builder: write the table"}))).unwrap();
+            c.call("host.council_result", pbody(&cwd, json!({"council_id": id}))).unwrap()
+        })
+        .await;
+        assert_eq!((got["ruling"]["families"].clone(), got["ruling"]["homogeneous"].clone()), (json!(["claude", "gemini"]), json!(false)), "{got}");
+        assert_eq!(got["independence"], "witnessed by the moderator (host-reported): two subagents in parallel, each with only its brief", "{got}");
+        assert_eq!((got["counts_as_independent_review"].clone(), got["not_independent_because"].clone()), (json!(true), json!([])), "{got}");
+        assert!(got["display"].as_str().is_some_and(|c| !c.contains("does not count as an independent review")), "{got}");
+        let record = std::fs::read_to_string(ws_dir.join(got["ruling"]["record"].as_str().unwrap())).unwrap_or_default();
+        assert!(record.is_empty() || (record.contains("counts_as_independent_review: true\n") && !record.contains("not_independent_because")), "{record}");
     }
 
     /// Spec 104 §6 item 2, §12 A3 (b), A6, A8: a batch is checked whole. A seat named twice, a seat Delphi runs, a malformed witness and
