@@ -45,7 +45,7 @@ A direction becomes work only when each choice narrows the next, down to an acti
 Then **tactics** (the few moves that put a choice into effect), then **actions** (the dated steps).
 
 ## Layout
-The cascade is a strategy document in the layout of `strategy-kernel`, with the choices written above it and tactics between policies and actions. `strategy_trace` reads only `## Diagnosis`, `## Guiding policies` and `## Actions`; the other sections are for the reader.
+The cascade is a strategy document in the layout of `strategy-kernel`, with the choices written above it and tactics between policies and actions. `strategy_trace` reads only `## Diagnosis`, `## Guiding policies` and `## Actions` (headings and item lines as `strategy-kernel` describes them); the other sections are for the reader.
 
 ```markdown
 # Strategy: faster checkout
