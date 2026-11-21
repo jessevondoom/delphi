@@ -227,7 +227,8 @@ pub fn merge_many(ctx: &mut Ctx, numbers: &[u64], batch: Option<&Attestation>) -
 /// Add a ready, ordinary pull request to the queue. A gate-changing one is labelled for a human instead.
 pub fn queue_one(forge: &dyn Forge, n: u64) -> Result<String, String> {
     let v = evaluate(forge, n).map_err(|e| e.to_string())?;
-    if !v.ready() {
+    // The queue is advice and does not require freshness (§11.3.1): the merge itself refuses a head that is behind.
+    if !v.ready_but_maybe_behind() {
         return Err(format!("#{n} is not ready to queue: {}", v.refusals.join("; ")));
     }
     if v.gate_changing() {
@@ -235,7 +236,8 @@ pub fn queue_one(forge: &dyn Forge, n: u64) -> Result<String, String> {
         return Err(format!("#{n} changes a gate ({}), so it is not queueable; labelled `{REVIEW_LABEL}`. A human merges it with `delphi merge {n}` at a terminal", v.gate_hits.join(", ")));
     }
     forge.set_label(n, QUEUE_LABEL, true).map_err(|e| e.to_string())?;
-    Ok(format!("#{n} queued (head {})", short(&v.pr.head_sha)))
+    let behind = if v.behind_by > 0 { format!("; it is {} commit(s) behind `{}`, so refresh it (`delphi merge refresh {n}`) before it can merge", v.behind_by, v.pr.base_ref) } else { String::new() };
+    Ok(format!("#{n} queued (head {}){behind}", short(&v.pr.head_sha)))
 }
 
 /// One line per queued pull request: what `delphi merge --all` would do with it.
@@ -244,7 +246,7 @@ pub fn status_lines(forge: &dyn Forge) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for n in list {
         let v = evaluate(forge, n).map_err(|e| e.to_string())?;
-        out.push(if !v.refusals.is_empty() {
+        out.push(if !v.ready() {
             format!("#{n}: not ready: {}", v.refusals.join("; "))
         } else if v.gate_changing() {
             format!("#{n}: ready, but it changes a gate ({}): needs a human", v.gate_hits.join(", "))
