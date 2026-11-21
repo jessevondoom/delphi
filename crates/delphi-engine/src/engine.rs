@@ -1250,6 +1250,7 @@ impl Engine {
             if let Some(hep) = if setup_error.is_none() && handoff.distill.is_none() { self.route_harness(&sc) } else { None } {
                 harness_tried = true;
                 sc.harness_tried.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.cost_capped(&sc, &self.route_request(&sc, false), "served").await?;
                 let mut first = self.run_harness(&mut sc, &ipr, &hep).await?;
                 // The other retries below never take a stall (no `result`, no answer), so this one is not a second retry of anything.
                 let stalled_first = matches!(&first, Err(f) if f.stalled.is_some());
@@ -1615,7 +1616,8 @@ impl Engine {
                 return Ok(Err(Escalate(format!("{}: no candidate settled after {} tries this turn", EXHAUSTED, passes - 1))));
             }
             let now = (self.clock_unix)();
-            let route = resolve_route(&cfg, &self.pool.snapshot(), now, &self.route_request(sc, true));
+            let req = self.route_request(sc, true);
+            let route = resolve_route(&cfg, &self.pool.snapshot(), now, &req);
             let note = exhausted_note.as_ref().map(|n| format!(": {}", n)).unwrap_or_default();
             // The emergency stop-gap (`specs/056` §3.5): save state when every seat is out; hold everything while a labeled record stands,
             // and verify it with the first seat that meets the floor. Returns at once when `[routing] emergency_*` is unset.
@@ -1698,8 +1700,10 @@ impl Engine {
                     if let Some(target) = target {
                         let _ = self.save_point(sc, None, target, &route.explain(now), &[], history, turn_index).await;
                     }
-                    *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: route.explain(now) });
-                    return Ok(Err(Escalate(format!("{}{}: {}; waiting would not help right now", EXHAUSTED, note, route.explain(now)))));
+                    // A cost cap that passed over every floor-meeting model says so, and what would serve (`specs/056` §10.5).
+                    let capped = self.cost_capped(sc, &req, "waiting").await?.map(|c| format!("; {c}")).unwrap_or_default();
+                    *sc.parked.lock().unwrap() = Some(ParkInfo { back_at: *back_at, why: format!("{}{}", route.explain(now), capped) });
+                    return Ok(Err(Escalate(format!("{}{}: {}{}; waiting would not help right now", EXHAUSTED, note, route.explain(now), capped))));
                 }
             };
             let Some(ep) = cfg.endpoint(&key.endpoint_id) else { continue 'endpoints };
@@ -1715,6 +1719,7 @@ impl Engine {
                     let floor = a.floor.as_str();
                     m.append(sc.ev("model.assigned", json!({"endpoint_id": key.endpoint_id, "model_id": key.model_id, "class": class, "floor": floor, "evidence": evidence}))).await?;
                 }
+                self.cost_capped(sc, &req, "served").await?;
             }
             loop {
                 let Some(entry) = cfg.catalog_entry(&model_id) else {
@@ -2088,6 +2093,21 @@ impl Engine {
         let rank = |t: &str| match t { "fast" => 0, "frontier" => 2, _ => 1 };
         a.step = rank(&sc.tier) - rank(&self.default_tier_of(&sc.role, &sc.manifest)) + cfg.grades.of(&sc.role, None);
         Some(a)
+    }
+
+    /// `model.cost_capped` (`specs/056` §10.5) when `[routing] max_cost_class` passed over a model that meets the floor, with `outcome`
+    /// `served` or `waiting`. For `waiting`, returns the card's text: the role, its floor, the cap, the cheapest member that would meet
+    /// the floor, and the two answers (the operator raises the cap with `/ratify`; nothing here can), or the task waits.
+    pub(crate) async fn cost_capped(&self, sc: &SpanCtx, req: &RouteRequest, outcome: &str) -> Result<Option<String>, EngineError> {
+        let cfg = self.cfg.get();
+        let (floor, keys) = crate::route::passed_over(&cfg, req);
+        let Some(cheapest) = keys.first() else { return Ok(None) };
+        let cap = cfg.routing.max_cost_class.of(&sc.role).as_str();
+        let cost = |k: &delphi_adapter::config::PoolKey| crate::route::pair_cost(&cfg, &k.endpoint_id, &k.model_id);
+        let passed: Vec<Value> = keys.iter().map(|k| json!({"endpoint": k.endpoint_id, "model": k.model_id, "cost_class": cost(k).0.as_str(), "multiplier": cost(k).1})).collect();
+        sc.m.append(sc.ev("model.cost_capped", json!({"task_id": sc.task_id, "span_id": sc.span_id, "role": sc.role, "cap": cap, "floor": floor, "passed_over": passed, "outcome": outcome}))).await?;
+        let (class, mult) = cost(cheapest);
+        Ok((outcome == "waiting").then(|| format!("the {} role needs {} or better, and every model that meets it costs more than the role's cap of {} ([routing] max_cost_class); the cheapest that would serve is {}/{} ({}, {}x). Either raise the cap for this role in config.toml and approve it with /ratify, or let the task wait", sc.role, floor, cap, cheapest.endpoint_id, cheapest.model_id, class.as_str(), mult.unwrap_or(0.0))))
     }
 
     /// The harness endpoint the resolver would use for this span now, if its pick is one (and needs no confirmation).
