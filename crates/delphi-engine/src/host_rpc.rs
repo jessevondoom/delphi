@@ -891,9 +891,13 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
         // seats' receipts count for who sat (`specs/123` §3). A Panel keeps every receipt.
         let planned: Vec<&str> = started.and_then(|e| e.payload["seats"].as_array()).into_iter().flatten().filter_map(|s| s["role"].as_str()).collect();
         let receipts = crate::seat::seat_receipts(events, task_id, if panel { &[][..] } else { &planned[..] });
-        let (served, _) = crate::seat::served_for_task(&receipts, task_id);
+        // A seat counts only if it gave a stance (SR-3, amended 2026-11-21): a seat that abstained in Round 1 adds no family, whatever
+        // its receipt's outcome; the host's family counts only if one of the host's own seats said something.
+        let (served, _) = crate::seat::sat_for_task(&receipts, task_id, &crate::seat::round1_abstained(events, task_id));
+        let host_roles: Vec<&str> = started.and_then(|e| e.payload["seats"].as_array()).into_iter().flatten().filter(|s| s["family"] == "host-reported").filter_map(|s| s["role"].as_str()).collect();
         let host_fam = started.and_then(|e| e.payload["host_family"].as_str());
-        let div = crate::seat::Diversity::of(if panel { host_fam } else { None }, &served);
+        let host_sat = host_fam.filter(|_| crate::seat::host_sat(events, task_id, &host_roles));
+        let div = crate::seat::Diversity::of(if panel { host_sat } else { None }, &served);
         let have = !served.is_empty() || (panel && host_fam.is_some());
         let homogeneous = if have && panel { json!(div.homogeneous()) } else if have { json!(ve.payload["homogeneous"].as_bool().unwrap_or(false) || div.homogeneous()) } else { ve.payload["homogeneous"].clone() };
         // The families named on the card: the served ones, or for a daemon Council with no receipt yet, the plan's.
