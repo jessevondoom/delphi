@@ -124,7 +124,7 @@ _No standard scope section; open the spec._
 
 ## 134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment
 
-**134: Drift on a closed list and review on the record (a charter amendment)** · approved (per source at `435ecf7f57d3`) · tier 0 · [source](../../specs/134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md)
+**134: Drift on a closed list and review on the record (a charter amendment)** · approved (per source at `06a0c2768576`) · tier 0 · [source](../../specs/134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md)
 
 **source excerpt, untrusted** · `specs/134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md` line 25
 

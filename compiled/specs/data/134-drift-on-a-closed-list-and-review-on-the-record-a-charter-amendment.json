@@ -106,7 +106,7 @@
     },
     {
       "level": 2,
-      "line": 134,
+      "line": 136,
       "number": "9",
       "title": "Review"
     }
@@ -114,7 +114,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md",
-    "sha256": "435ecf7f57d3239f11660cc25705004fefcd297b94ee4d3c5a9c64427b43b353"
+    "sha256": "06a0c27685765be10e7d2553233d7588edbfe86b78b45a2d1fcc4d82822f09c7"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +127,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, in a host session after the plan was shown: \"follow your plan and go. i'll approve specs from this plan and ratify and changes\". The charter text takes effect when the operator merges the pull request at a terminal (GOVERNANCE.md is a gate file)."
     },
-    "sha256": "435ecf7f57d3239f11660cc25705004fefcd297b94ee4d3c5a9c64427b43b353",
+    "sha256": "06a0c27685765be10e7d2553233d7588edbfe86b78b45a2d1fcc4d82822f09c7",
     "word": "approved"
   },
   "spec": {

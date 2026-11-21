@@ -126,6 +126,8 @@ One slice, because the charter text and the role files that restate it must chan
 
 ## 8. Decisions for the operator
 
+Answered by the operator, 2026-11-21: "follow your recommendations then merge 819". OD-1 and OD-2 take their recommendations (keep the quoted waiver; keep `spec_drift_detected` as the stop signal).
+
 | OD | Question | Recommendation | Reversible? (operator decides) | Blocks |
 | :-- | :-- | :-- | :-- | :-- |
 | OD-1 | Keep the operator's quoted waiver of review in §1.3, which the Council did not discuss | yes: approval is the operator's (§1.1), and a waiver quoted in the status line is visible; strike the clause to make review absolute | yes | none |
