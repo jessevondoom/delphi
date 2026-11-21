@@ -303,6 +303,12 @@ impl Engine {
     /// Rebuild one topic's page now (`specs/117` §2 item 2): the operator's `delphi pages rebuild`, or the idle rebuild. The writer and the
     /// validator are the search page's; the validator's tokens are journalled against the background share, as a search page's are.
     pub async fn topic_rebuild(self: &Arc<Self>, slug: &str) -> Result<crate::library::topics::TopicEntry, String> {
+        self.topic_rebuild_cancellable(slug, None).await
+    }
+
+    /// [`Engine::topic_rebuild`] that `cancel` can stop before its writer's model call or before the page is written (a rebuild the
+    /// desktop app asked for, stopped by revoking its key: `specs/129` §10.2). The tokens it spent are journalled however it ends.
+    pub async fn topic_rebuild_cancellable(self: &Arc<Self>, slug: &str, cancel: Option<&crate::library::topics::Cancel>) -> Result<crate::library::topics::TopicEntry, String> {
         let settings = self.cfg.get().library.pages.clone();
         if !settings.enabled {
             return Err("generated pages are off ([library.pages] enabled = false)".into());
@@ -323,13 +329,14 @@ impl Engine {
         let week = crate::fact_serve::shares_of(&self.ws.dir, "pages").install_week;
         let gate = move || share_allows(&state, week, now);
         let before = ledger.spent();
-        let req = crate::library::topics::TopicRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, gathered, gaps };
-        let built = lib.topic_rebuild(req, &writer, &validator, &ledger, &gate).await?;
+        let req = crate::library::topics::TopicRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, gathered, gaps, cancel };
+        let built = lib.topic_rebuild(req, &writer, &validator, &ledger, &gate).await;
+        // Written whether the rebuild was built, failed or was stopped after its writer was called: the tokens were spent.
         let used = ledger.spent().saturating_sub(before);
         if used > 0 {
             Journal::new(&state_dir(&self.ws.dir)).append("span", json!({"mission": BACKGROUND, "tokens": used, "page": true}), now);
         }
-        Ok(built)
+        built
     }
 
     /// The idle rebuild (`specs/117` §2 item 3): make a topic for each research topic that has none, then rebuild the due topic that

@@ -383,16 +383,31 @@ fn agy_harness(ui: &mut dyn Ui, env: &dyn Env, d: &Detected, doc: &mut DocumentM
     Some("agy-sub")
 }
 
-/// GitHub Copilot subscription through `copilot`: Builders and reviewers; file edits and commands judged via ACP approval bridge.
-fn copilot_harness(ui: &mut dyn Ui, _env: &dyn Env, d: &Detected, doc: &mut DocumentMut) -> Option<&'static str> {
-    if has_endpoint(doc, "copilot-sub") || d.copilot_version.is_none() {
-        return None;
+/// The Copilot endpoints `delphi setup` offers (`specs/132` §5.1, §6.5): one per family, each naming only that vendor's models,
+/// because the family of an answer is the served model's and planning reads the endpoint's. Latest generation per model line only.
+pub const COPILOT_FAMILY_ENDPOINTS: &[(&str, &str, [&str; 3])] = &[
+    ("claude", "copilot-claude", ["claude-haiku-5.5", "claude-sonnet-5.5", "claude-opus-5.5"]),
+    ("openai", "copilot-openai", ["gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra"]),
+    ("gemini", "copilot-gemini", ["gemini-4-argon", "gemini-4-argon", "gemini-4-argon"]),
+];
+
+/// GitHub Copilot subscription through `copilot`: read-only seats on several families behind one login. Asked once; every family
+/// endpoint the workspace does not have yet is added. An existing endpoint (an older `copilot-sub` too) is never changed.
+fn copilot_harness(ui: &mut dyn Ui, _env: &dyn Env, d: &Detected, doc: &mut DocumentMut) -> Vec<&'static str> {
+    let missing: Vec<_> = COPILOT_FAMILY_ENDPOINTS.iter().filter(|(_, id, _)| !has_endpoint(doc, id)).collect();
+    if d.copilot_version.is_none() || has_endpoint(doc, "copilot-sub") || missing.is_empty() {
+        return vec![];
     }
-    if !ui.yes_no("Use your GitHub Copilot subscription through `copilot`? (Builders and reviewers; Delphi's ACP approval bridge judges file edits and commands)", true) {
-        return None;
+    let families: Vec<&str> = missing.iter().map(|(f, _, _)| *f).collect();
+    if !ui.yes_no(&format!("Use your GitHub Copilot subscription through `copilot`? (read-only seats (no Builder) on {}, one endpoint per family; its output is treated as untrusted)", families.join(", ")), true) {
+        return vec![];
     }
-    add_endpoint(doc, "claude", "copilot-sub", &[("path", "harness"), ("harness", "copilot"), ("credential", "harness-login"), ("cost_model", "subscription")], &[("fast", "claude-haiku-4.5"), ("workhorse", "claude-sonnet-5.5"), ("frontier", "claude-opus-5.5")]);
-    Some("copilot-sub")
+    let mut added = Vec::new();
+    for (family, id, [fast, workhorse, frontier]) in missing {
+        add_endpoint(doc, family, id, &[("path", "harness"), ("harness", "copilot"), ("credential", "harness-login"), ("cost_model", "subscription")], &[("fast", fast), ("workhorse", workhorse), ("frontier", frontier)]);
+        added.push(*id);
+    }
+    added
 }
 
 /// A local Ollama server: slow, but it costs nothing and never runs out, so it is declared last and the pool falls to it
@@ -652,9 +667,7 @@ pub fn run(ui: &mut dyn Ui, env: &dyn Env, o: &Opts) -> Result<Outcome> {
     if let Some(id) = codex_harness(ui, env, &detected, &mut doc) {
         added.push(id.into());
     }
-    if let Some(id) = copilot_harness(ui, env, &detected, &mut doc) {
-        added.push(id.into());
-    }
+    added.extend(copilot_harness(ui, env, &detected, &mut doc).into_iter().map(String::from));
     // A step that fails late (after its secret is already in the keychain) must not throw away the endpoints the
     // earlier steps set up: the config is written first and the error is returned after.
     let mut late: Option<anyhow::Error> = None;
@@ -969,17 +982,42 @@ mod tests {
     }
 
     #[test]
-    fn copilot_is_detected_and_offered_with_acp_bridge_for_builders() {
+    fn copilot_is_offered_once_as_one_read_only_endpoint_per_family_never_a_mixed_one() {
         let mut e = FakeEnv::default();
-        e.programs.insert("copilot --version".into(), "GitHub Copilot CLI 1.0.105.\n".into());
+        e.programs.insert("copilot --version".into(), "GitHub Copilot CLI 1.0.112.\n".into());
         let d = detect(&e);
-        assert_eq!(d.copilot_version.as_deref(), Some("1.0.105"));
+        assert_eq!(d.copilot_version.as_deref(), Some("1.0.112"));
         let mut doc = DocumentMut::new();
         let mut ui = Script::default();
-        assert_eq!(copilot_harness(&mut ui, &e, &d, &mut doc), Some("copilot-sub"));
-        let text = doc.to_string();
-        assert!(text.contains("harness = \"copilot\"") && text.contains("family = \"claude\"") && text.contains("credential = \"harness-login\""), "{}", text);
-        assert!(text.contains("claude-sonnet-5.5"), "{}", text);
+        let _ = copilot_harness(&mut ui, &e, &d, &mut doc);
+        assert_eq!(ui.asked.len(), 1, "asked once: {:?}", ui.asked);
+        assert!(ui.asked[0].contains("read-only seats (no Builder)") && !ui.asked[0].contains("Builders"), "{:?}", ui.asked);
+        let v: toml::Value = toml::from_str(&doc.to_string()).unwrap();
+        let eps = v["endpoints"].as_array().unwrap();
+        let mut families = Vec::new();
+        for ep in eps {
+            assert_eq!((ep["harness"].as_str(), ep["credential"].as_str()), (Some("copilot"), Some("harness-login")), "{ep}");
+            let family = ep["family"].as_str().unwrap();
+            let prefix = match family {
+                "claude" => "claude-",
+                "openai" => "gpt-",
+                "gemini" => "gemini-",
+                "kimi" => "kimi-",
+                "mai" => "mai-",
+                other => panic!("unexpected family {other}"),
+            };
+            for (_, m) in ep["models"].as_table().unwrap() {
+                assert!(m.as_str().unwrap().starts_with(prefix), "endpoint {} mixes vendors: {m}", ep["id"]);
+            }
+            families.push(family.to_string());
+        }
+        assert!(["claude", "openai", "gemini"].iter().all(|f| families.iter().any(|x| x == f)), "{families:?}");
+        // An endpoint the operator already has is never changed.
+        let mut ui2 = Script::default();
+        let before = doc.to_string();
+        let _ = copilot_harness(&mut ui2, &e, &d, &mut doc);
+        assert_eq!(doc.to_string(), before);
+        assert!(ui2.asked.is_empty());
     }
 
     #[test]
