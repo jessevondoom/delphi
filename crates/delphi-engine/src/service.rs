@@ -1814,8 +1814,8 @@ impl EngineService {
     }
 
     /// The seats of a `foreign_seats` request (`specs/086` §6.4): each `{role, family?, tools?}`, roles distinct, among the Panel's three.
-    /// `tools` is `none` (the default: no tools in any round) or `readonly` (what the role's manifest allows in Round 1, still none
-    /// once a seat reads a peer). A family it names must be configured and usable; none named takes the role's own, avoiding the host's.
+    /// `tools` is `none` (the default: no tools in any round) or `readonly` (the role's read tools in Round 1, narrowed as a
+    /// host-raised span is by `specs/062` §6.3: no write, command or connector; still none once a seat reads a peer). A family it names must be configured and usable; none named takes the role's own, avoiding the host's.
     /// Nothing is spent here.
     fn plan_foreign_seats(&self, v: &Value, host_family: Option<&str>) -> Result<Vec<crate::council_panel::ForeignSeat>, RpcError> {
         let bad = |m: String| err(code::INVALID_PARAMS, m);
@@ -5203,6 +5203,12 @@ impl Extension for ServiceExt {
     fn app_update_admin(&self, method: &str, params: Value) -> RpcFuture {
         let (svc, method) = (self.0.clone(), method.to_string());
         Box::pin(async move { svc.app_update_admin(&method, params).await })
+    }
+
+    /// `specs/129` §10.2: a key revoked, or its `request` grant taken away, cancels the requests it started that have not ended.
+    fn app_requests_cancel(&self, key: &str, whole: bool) -> RpcFuture {
+        let out = self.0.app_requests_cancel(key, whole);
+        Box::pin(async move { Some(Ok(out)) })
     }
 
     fn call(&self, method: &str, params: Value, ctx: CallContext) -> RpcFuture {
@@ -11513,6 +11519,16 @@ mod tests {
 
     const APP_KEY: &str = "app-0a1b2c";
 
+    /// The app's keys on record as the daemon writes them, each holding `read` and `request`: the engine looks at the record again
+    /// after it admits a request (`specs/129` §10.2), as the server looked before it handed the request over.
+    fn app_keys_hold_request(f: &Fx, names: &[&str]) {
+        let keys: Vec<delphi_core::app_keys::AppKey> = names
+            .iter()
+            .map(|n| delphi_core::app_keys::AppKey { name: n.to_string(), public_key: "ab".repeat(32), paired_at: "2026-11-20T00:00:00.000Z".into(), last_used: "2026-11-20T00:00:00.000Z".into(), app_version: "0.6.5".into(), grants: vec!["read".into(), "request".into()], update_auto: false })
+            .collect();
+        delphi_core::app_keys::KeyStore::at(&f.engine.ws.home).save(&keys).unwrap();
+    }
+
     /// The `app.request` events of one request, as (state, payload), oldest first.
     fn app_states(f: &Fx, request: &str) -> Vec<(String, Value)> {
         events_of(f, "app.request").into_iter().filter(|e| e.payload["request"] == request).map(|e| (e.payload["state"].as_str().unwrap_or("").to_string(), e.payload)).collect()
@@ -11543,6 +11559,7 @@ mod tests {
         let svc = s.svc.clone();
         svc.adopt(f.m.clone());
         let ext = svc.extension();
+        app_keys_hold_request(&f, &[APP_KEY]);
         r4_web(&svc, &["https://k4-continue.example/study"]);
         let console = CallContext { scope: Scope::Console, client_id: 2 };
         let started = svc.research_start(json!({"topic": "does aspirin lower fever in adults over seventy"}), console).await.unwrap();
@@ -11648,6 +11665,7 @@ mod tests {
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         let ext = svc.extension();
+        app_keys_hold_request(&f, &[APP_KEY, "app-0000ff"]);
         let mut counted = 0;
 
         // A dispute: the claim's record gains the operator's mark, exactly as `pages.dispute` writes it.
@@ -11701,6 +11719,160 @@ mod tests {
         assert!(ext.app_request("app-0000ff", "app.page_dispute", json!({"claim": c, "note": "another key, its own hour"})).await.unwrap().is_ok());
     }
 
+    // ── `specs/129` §10.2: revoking a key cancels the requests it started ───────────────────────────────────────────────────
+
+    /// Hold every place of the research queue with a job that never ends, so a run a request starts waits, queued, until it is
+    /// cancelled.
+    fn hold_the_research_queue(f: &Fx, svc: &EngineService) {
+        for i in 0..f.engine.settings.research_limits.concurrent.max(1) {
+            svc.research_jobs.submit(&format!("hold-{i}"), "a-test", delphi_core::research::Depth::Quick, |_| async { std::future::pending::<Result<crate::research_jobs::Finish, String>>().await });
+        }
+    }
+
+    /// Make the next request wait at `at` ("admitted" or "checked") until the test lets it go; returns (it got there, let it go).
+    fn pause_app_request(svc: &EngineService, at: &'static str) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+        let (reached, go) = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
+        svc.app_asked.lock().unwrap().pause = Some((at, reached.clone(), go.clone()));
+        (reached, go)
+    }
+
+    /// As the server revokes: the key leaves the record, then its requests are cancelled.
+    fn revoke_on_record(f: &Fx, svc: &EngineService, key: &str, keep: &[&str]) -> Value {
+        app_keys_hold_request(f, keep);
+        svc.app_requests_cancel(key, true)
+    }
+
+    /// AC-10 as amended by `specs/129` §10.2: revoking a key cancels every request of it that has not ended, through the research
+    /// queue's own cancel; the revoke's answer counts and names them; each one's `app.request` record says `cancelled` with the
+    /// reason `revoked` and its request id, never what was typed. Another key's requests go on.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn revoking_a_key_cancels_the_requests_it_started_and_names_each_by_its_id() {
+        const OTHER: &str = "app-0000ff";
+        let f = setup(vec![], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        r4_web(&svc, &["https://s2-revoke.example/study"]);
+        app_keys_hold_request(&f, &[APP_KEY, OTHER]);
+        hold_the_research_queue(&f, &svc);
+        let ext = svc.extension();
+        let ask = |key: &'static str, q: &'static str| {
+            let ext = ext.clone();
+            async move { ext.app_request(key, "app.research_ask", json!({"question": q})).await.unwrap().unwrap() }
+        };
+        // The console's research runs one at a time, so the key has one run, queued behind the held places.
+        let mine = ask(APP_KEY, "which lighthouse on the coast was built first").await;
+        assert_eq!(mine["state"], "queued", "{mine}");
+        let id = mine["request"].as_str().unwrap().to_string();
+
+        let out = revoke_on_record(&f, &svc, APP_KEY, &[OTHER]);
+        assert_eq!(out, json!({"cancelled": [id], "left_running": []}));
+        assert_eq!(app_ended(&f, &id).await, ["queued", "cancelled"]);
+        let last = app_states(&f, &id).pop().unwrap().1;
+        assert_eq!(last, json!({"name": APP_KEY, "request": id, "method": "app.research_ask", "ids": {}, "state": "cancelled", "reason": "revoked"}));
+        assert_eq!(svc.research_jobs.status(mine["research_id"].as_str().unwrap(), crate::research_console::SESSION).unwrap()["status"], "cancelled", "through the queue's own cancel");
+        assert!(events_of(&f, "app.request").iter().all(|e| !e.payload.to_string().contains("lighthouse")), "never what was typed");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !svc.app_asked.lock().unwrap().unended(APP_KEY).is_empty() {
+            assert!(std::time::Instant::now() < deadline, "a cancelled request still counts as running");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Another key asks next and is untouched by a second revoke of the first, which has nothing left to cancel.
+        let theirs = ask(OTHER, "what lights a lighthouse lamp").await;
+        assert_eq!(theirs["state"], "queued", "{theirs}");
+        assert_eq!(svc.app_requests_cancel(APP_KEY, true), json!({"cancelled": [], "left_running": []}));
+        assert_eq!(svc.research_jobs.status(theirs["research_id"].as_str().unwrap(), crate::research_console::SESSION).unwrap()["status"], "queued");
+        assert_eq!(svc.app_asked.lock().unwrap().unended(OTHER).len(), 1);
+    }
+
+    /// `specs/129` §10.2, the race: a request that arrives while its key is being revoked is refused or cancelled, and never left
+    /// running. Each order is made to happen, not hoped for: the request is held at a step of its own while the revoke runs.
+    /// (1) The revoke ran before the request was admitted (it had passed the server's look): the second look at the record refuses
+    /// it. (2) It was admitted and the revoke ran before the second look: cancelled. (3) It passed the second look and the revoke ran
+    /// before its work started: cancelled, and the work never starts (a dispute is not written; a rebuild is not begun). (4) Taking
+    /// `request` away does the same as a revoke.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_that_arrives_during_a_revoke_is_refused_or_cancelled_never_left_running() {
+        let f = setup(vec![], 5.0, |_| {});
+        let claim = library_with_a_claim(&f);
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        r4_web(&svc, &["https://s2-race.example/study"]);
+        hold_the_research_queue(&f, &svc);
+        let ext = svc.extension();
+        let disputes = || lib.claim(&claim).unwrap()["contested_by"].as_array().map_or(0, |a| a.len());
+        let terminal = |id: &str| app_states(&f, id).into_iter().filter(|(s, _)| matches!(s.as_str(), "done" | "failed" | "cancelled" | "refused")).collect::<Vec<_>>();
+
+        // (1) Revoked before admission.
+        app_keys_hold_request(&f, &[]);
+        let refused = ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": claim, "note": "after the revoke"})).await.unwrap().unwrap_err();
+        assert_eq!(refused.code, code::FORBIDDEN);
+        assert!(refused.message.contains("no longer paired"), "{}", refused.message);
+        assert_eq!(disputes(), 0);
+        let rec = events_of(&f, "app.request").pop().unwrap().payload;
+        assert_eq!((rec["state"].as_str(), rec["name"].as_str()), (Some("refused"), Some(APP_KEY)));
+        assert!(svc.app_asked.lock().unwrap().unended(APP_KEY).is_empty());
+
+        // (2) and (3), for each kind of request: held after admission or after the second look; the revoke runs; let go.
+        let cases: [(&str, &'static str, Value); 6] = [
+            ("app.page_dispute", "admitted", json!({"claim": claim, "note": "held"})),
+            ("app.page_dispute", "checked", json!({"claim": claim, "note": "held"})),
+            ("app.page_rebuild", "admitted", json!({"slug": "lighthouse-lamps"})),
+            ("app.page_rebuild", "checked", json!({"slug": "lighthouse-lamps"})),
+            ("app.research_ask", "admitted", json!({"question": "which lighthouse was lit first"})),
+            ("app.research_ask", "checked", json!({"question": "which lighthouse was lit first"})),
+        ];
+        for (n, (method, at, params)) in cases.into_iter().enumerate() {
+            let key: &'static str = Box::leak(format!("app-00{n:04x}").into_boxed_str());
+            app_keys_hold_request(&f, &[key]);
+            let (reached, go) = pause_app_request(&svc, at);
+            let asked = {
+                let (ext, method) = (ext.clone(), method.to_string());
+                tokio::spawn(async move { ext.app_request(key, &method, params).await.unwrap() })
+            };
+            reached.notified().await;
+            let held = svc.app_asked.lock().unwrap().unended(key);
+            assert_eq!(held.len(), 1, "{method} at {at}: the request is running, so the revoke finds it");
+            let out = revoke_on_record(&f, &svc, key, &[]);
+            assert_eq!(out, json!({"cancelled": held, "left_running": []}), "{method} at {at}");
+            go.notify_one();
+            let answer = asked.await.unwrap().unwrap_err();
+            assert_eq!((answer.code, answer.message.as_str()), (code::FORBIDDEN, app_requests::CANCELLED), "{method} at {at}");
+            let ended = terminal(&held[0]);
+            assert_eq!(ended.len(), 1, "{method} at {at}: one end, {ended:?}");
+            assert_eq!(ended[0].1, json!({"name": key, "request": held[0], "method": method, "ids": ended[0].1["ids"], "state": "cancelled", "reason": "revoked"}));
+            assert!(app_states(&f, &held[0]).iter().all(|(s, _)| s == "cancelled"), "{method} at {at}: it never started");
+            assert!(svc.app_asked.lock().unwrap().unended(key).is_empty(), "{method} at {at}: nothing of it is left running");
+        }
+        assert_eq!(disputes(), 0, "no held dispute was written");
+        assert!(!f.engine.ws.home.join("library/pages/lighthouse-lamps.md").exists(), "no held rebuild was begun");
+        // No held research request queued a run: each stopped before it launched one.
+        assert_eq!(svc.research_status(CallContext { scope: Scope::Console, client_id: 2 }).await.unwrap_err().code, code::NOT_FOUND, "no research run was started");
+
+        // (4) Taking `request` away cancels as a revoke does, held after the second look.
+        app_keys_hold_request(&f, &[APP_KEY]);
+        let (reached, go) = pause_app_request(&svc, "checked");
+        let asked = {
+            let (ext, claim) = (ext.clone(), claim.clone());
+            tokio::spawn(async move { ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": claim, "note": "held"})).await.unwrap() })
+        };
+        reached.notified().await;
+        let held = svc.app_asked.lock().unwrap().unended(APP_KEY);
+        let mut keys = delphi_core::app_keys::KeyStore::at(&f.engine.ws.home).load().unwrap();
+        keys[0].grants.retain(|g| g != "request");
+        delphi_core::app_keys::KeyStore::at(&f.engine.ws.home).save(&keys).unwrap();
+        assert_eq!(svc.app_requests_cancel(APP_KEY, false), json!({"cancelled": held, "left_running": []}));
+        go.notify_one();
+        assert_eq!(asked.await.unwrap().unwrap_err().message, app_requests::CANCELLED);
+        assert_eq!(terminal(&held[0])[0].1["reason"], "revoked");
+        assert_eq!(disputes(), 0);
+        // And with the grant taken, a request that had passed the server's look is refused by the engine's.
+        let refused = ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": claim, "note": "no grant"})).await.unwrap().unwrap_err();
+        assert!(refused.message.contains("no longer holds `request`"), "{}", refused.message);
+        assert_eq!(disputes(), 0);
+    }
+
     // ── `specs/120` K6: the red-team's fixtures, and the daemon's half of the end-to-end check ─────────────────────────────
 
     /// A daemon as `delphi __core` serves it, app socket included: the engine answers, and what happens on the app socket is
@@ -11718,7 +11890,8 @@ mod tests {
         let (sock, app_sock, narrator_sock) = (dir.path().join("d.sock"), dir.path().join("a.sock"), dir.path().join("n.sock"));
         let bind = |p: &PathBuf| tokio::net::UnixListener::bind(p).unwrap();
         let (console_l, app_l, narrator_l) = (bind(&sock), bind(&app_sock), bind(&narrator_sock));
-        let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
+        // The daemon's home is the engine's, as under `delphi __core`: the key record the server writes is the one the engine reads.
+        let mut cfg = DaemonConfig::new(f.engine.ws.home.clone(), f.engine.ws.dir.clone());
         cfg.tty_policy = TtyPolicy::Disabled;
         let daemon = Daemon::with_hub(cfg, f.engine.hub.clone()).unwrap();
         let svc = EngineService::new(f.engine.clone(), "m1");

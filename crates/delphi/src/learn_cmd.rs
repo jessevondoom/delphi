@@ -57,13 +57,132 @@ pub fn render_list_with(notes: &[LiveNote], r: &Recurrence) -> String {
         if let Some(words) = n.shown_words() {
             out.push_str(&format!("{:<w$}  ({})\n", "", words, w = width));
         }
-        // A host note that recurred in two or more sessions is marked, with the one command that keeps it (`specs/108` M2).
-        if count >= 2 && crate::learn_keep::KEEPABLE.contains(&n.trigger.as_str()) {
-            out.push_str(&format!("{:<w$}  * recurring: keep it with `{}`\n", "", keep_command(n), w = width));
+        // A note that can become a lesson is shown as a card, with the one command that accepts it (`specs/129` §7; a host note
+        // reported by two or more sessions is the `recurring` kind, `specs/108` M2).
+        if let Some(c) = staged_card(n, count) {
+            out.push_str(&render_card(&c, width));
         }
     }
     out.push_str(&format!("{} note(s). Staged notes are never loaded into a prompt; `delphi learn show <ref>` for one, `delphi learn drop <ref>` to discard it.\n", notes.len()));
     out
+}
+
+/// A note as a card (`specs/129` §4, §7): what it would become, where it came from, how long it has, and the exact command that
+/// accepts it. Derived from the note each time; nothing is stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Card {
+    /// `recurring` (a host note reported by two or more sessions) or `other`; `teach` and `ask` need the label of a later slice.
+    pub kind: &'static str,
+    pub role: String,
+    pub goal: String,
+    pub origin: String,
+    pub recurrence: String,
+    pub expires: String,
+    /// Seven days or fewer left.
+    pub soon: bool,
+    pub accept: String,
+    /// What the accept needs: the daemon stopped (a staged note) or nothing (a note of the provisional tier).
+    pub needs: &'static str,
+}
+
+impl Card {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"kind": self.kind, "role": self.role, "goal": self.goal, "origin": self.origin, "recurrence": self.recurrence, "expires": self.expires, "expires_soon": self.soon, "accept": self.accept, "needs": self.needs})
+    }
+}
+
+/// A card with seven days or fewer left is marked (`specs/129` §7).
+pub const SOON_DAYS: i64 = 7;
+
+/// `expires <date> (<n> days)`, or that it does not, and whether it is soon.
+fn expiry(valid_until: Option<&str>) -> (String, bool) {
+    let Some(d) = valid_until.and_then(|d| d.get(..10)) else { return ("does not expire".into(), false) };
+    let day = |s: &str| delphi_core::time::parse_rfc3339(&format!("{}T00:00:00Z", s)).map(|t| t / 86_400);
+    match (day(d), day(&delphi_core::bundles::today())) {
+        (Some(end), Some(now)) => {
+            let left = end - now;
+            (format!("expires {} ({} day{} left)", d, left.max(0), if left == 1 { "" } else { "s" }), left <= SOON_DAYS)
+        }
+        _ => (format!("expires {}", d), false),
+    }
+}
+
+/// The lesson's goal as the note's words give it (`G:`), or `none given`.
+fn note_goal(claim: &str) -> String {
+    delphi_engine::customize::parse_lesson(claim).ok().and_then(|l| l.goal).unwrap_or_else(|| delphi_engine::customize::GOAL_NONE.to_string())
+}
+
+fn recurrence_words(trigger: &str, count: usize) -> String {
+    match count {
+        0 | 1 => "once".into(),
+        // A host supplies its own session id, so the count is a report (`specs/129` §5.3).
+        n if delphi_engine::learn::is_host_trigger(trigger) => format!("reported by {n} sessions (host-supplied)"),
+        n => format!("{n} missions"),
+    }
+}
+
+/// The card of a staged note `learn keep` can keep; `None` for a note it cannot (a denied card, a retry and the like).
+pub fn staged_card(n: &LiveNote, count: usize) -> Option<Card> {
+    if !crate::learn_keep::KEEPABLE.contains(&n.trigger.as_str()) {
+        return None;
+    }
+    let host = delphi_engine::learn::is_host_trigger(&n.trigger);
+    let claim = if host { delphi_engine::learn::host_claim(&n.summary).0 } else { n.summary.clone() };
+    let (expires, soon) = expiry(n.valid_until.as_deref());
+    Some(Card {
+        kind: if host && count >= 2 { "recurring" } else { "other" },
+        role: n.role.clone().unwrap_or_else(|| "—".into()),
+        goal: note_goal(&claim),
+        origin: format!("{} (session {})", delphi_engine::customize::origin_of_trigger(&n.trigger), n.mission),
+        recurrence: recurrence_words(&n.trigger, count),
+        expires,
+        soon,
+        accept: keep_command(n),
+        needs: "stop the daemon first (`delphi daemon stop`): a staged note is closed in its session's log",
+    })
+}
+
+/// The card of a note of the provisional tier: its keep works while the daemon runs (`specs/116` §3 item 2).
+pub fn provisional_card(n: &delphi_engine::provisional_notes::Note, count: usize) -> Card {
+    let host = delphi_engine::learn::is_host_trigger(&n.trigger);
+    let claim = if host { delphi_engine::learn::host_claim(&n.text).0 } else { n.text.clone() };
+    let (expires, soon) = expiry(Some(&n.valid_until));
+    let plain = !n.role.is_empty() && n.role.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    let accept = match (plain, delphi_engine::customize::parse_lesson(&claim).is_ok()) {
+        (true, true) => format!("delphi learn keep {} --as lesson --role {}", n.reference(), n.role),
+        (true, false) => format!("delphi learn keep {} --as lesson --role {} --text \"T: <when it applies> D: <what to do>\"", n.reference(), n.role),
+        (false, _) => format!("delphi learn keep {} --as rule", n.reference()),
+    };
+    Card {
+        kind: if host && count >= 2 { "recurring" } else { "other" },
+        role: n.role.clone(),
+        goal: note_goal(&claim),
+        origin: format!("{} (session {})", delphi_engine::customize::origin_of_trigger(&n.trigger), n.mission),
+        recurrence: recurrence_words(&n.trigger, count),
+        expires,
+        soon,
+        accept,
+        needs: "it works while the daemon runs",
+    }
+}
+
+/// A card as `list` prints it, under its note.
+pub fn render_card(c: &Card, width: usize) -> String {
+    format!(
+        "{:<w$}  card: {} · role {} · goal {} · origin {} · {} · {}{}\n{:<w$}  accept: {}   ({})\n",
+        "",
+        c.kind,
+        c.role,
+        c.goal,
+        c.origin,
+        c.recurrence,
+        c.expires,
+        if c.soon { " [expires soon]" } else { "" },
+        "",
+        c.accept,
+        c.needs,
+        w = width
+    )
 }
 
 /// The notes of the provisional tier, in the order of review (`specs/116` §3 item 1): the most used first, then the oldest.
@@ -77,7 +196,7 @@ pub fn provisional(ws_dir: &Path, opts: &Options) -> Vec<delphi_engine::provisio
 }
 
 /// The provisional notes as `list` prints them, after the staged ones; nothing when there are none.
-pub fn render_provisional(notes: &[delphi_engine::provisional_notes::Note]) -> String {
+pub fn render_provisional(notes: &[delphi_engine::provisional_notes::Note], r: &Recurrence) -> String {
     if notes.is_empty() {
         return String::new();
     }
@@ -86,6 +205,7 @@ pub fn render_provisional(notes: &[delphi_engine::provisional_notes::Note]) -> S
     for n in notes {
         let from = if n.tainted() { "  [from untrusted content: never given automatically]" } else { "" };
         out.push_str(&format!("{:<w$}  {:<12}  {:<10}  uses {:<3}  until {}  {}{}\n", n.reference(), n.role, n.kind, n.uses, n.valid_until, n.text, from, w = width));
+        out.push_str(&render_card(&provisional_card(n, r.count(&n.trigger, &n.text)), width));
     }
     out.push_str(&format!(
         "{} provisional note(s). `delphi learn keep <ref> --as lesson --role <role> | --as rule` keeps one (it works while the daemon runs); `delphi learn wrong <ref>` marks one wrong; one left alone expires.\n",
@@ -185,13 +305,20 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
                         let mut v = n.to_json();
                         let c = r.count(&n.trigger, &n.summary);
                         v["recurrence"] = serde_json::json!({"count": c, "label": count_label(&n.trigger, c)});
+                        if let Some(card) = staged_card(n, c) {
+                            v["card"] = card.to_json();
+                        }
                         v
                     })
                     .collect();
-                rows.extend(tier.iter().map(|n| n.to_json()));
+                rows.extend(tier.iter().map(|n| {
+                    let mut v = n.to_json();
+                    v["card"] = provisional_card(n, r.count(&n.trigger, &n.text)).to_json();
+                    v
+                }));
                 return serde_json::to_string_pretty(&rows).map(|s| s + "\n").map_err(|e| e.to_string());
             }
-            Ok(render_list_with(&notes, &r) + &render_provisional(&tier))
+            Ok(render_list_with(&notes, &r) + &render_provisional(&tier, &r))
         }
         "show" => {
             let reference = reference.ok_or("show needs a note: delphi learn show <mission>/<id>")?;
@@ -218,14 +345,14 @@ pub fn run_in(ws_dir: &Path, verb: &str, reference: Option<&str>, opts: &Options
         }
         // `specs/116` §3 item 3: the operator marks a provisional note wrong (see `learn_keep.rs`).
         "wrong" => crate::learn_keep::wrong(ws_dir, reference),
-        other => Err(format!("`{}` is not a learn verb (list, show, drop, wrong, keep, ingest)", other)),
+        other => Err(format!("`{}` is not a learn verb (list, show, drop, wrong, keep, lessons, unteach, ingest)", other)),
     }
 }
 
 pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
     let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--mission", "--workspace", "--home"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
     let Some(verb) = positional.first() else {
-        eprintln!("delphi learn: list | show <mission>/<id> | drop <mission>/<id> | wrong <mission>/<id> | keep <mission>/<id> --as lesson --role <role> | --as rule");
+        eprintln!("delphi learn: list | show <mission>/<id> | drop <mission>/<id> | wrong <mission>/<id> | keep <mission>/<id> --as lesson --role <role> | --as rule | lessons [<role>] | unteach <role> <lesson id>");
         return 2;
     };
     match run_in(ws_dir, verb, positional.get(1).copied(), opts) {
@@ -242,7 +369,7 @@ pub fn cli(ws_dir: &Path, args: &[String], opts: &Options) -> i32 {
 
 /// `delphi learn keep` (see `learn_keep.rs`): a terminal command only.
 pub fn keep_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
-    let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--as", "--role", "--scope", "--text", "--workspace", "--home"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
+    let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--as", "--role", "--scope", "--text", "--goal", "--workspace", "--home"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
     match crate::learn_keep::run(home, ws_dir, args, positional.get(1).copied()) {
         Ok(text) => {
             print!("{}", text);
@@ -250,6 +377,35 @@ pub fn keep_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
         }
         Err(e) => {
             eprintln!("delphi learn keep: {}", e);
+            1
+        }
+    }
+}
+
+/// `delphi learn lessons [<role>] [--json]` (see `learn_teach.rs`).
+pub fn lessons_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
+    let positional: Vec<&str> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--workspace", "--home"].contains(&args[*i - 1].as_str()))).map(|(_, a)| a.as_str()).collect();
+    match crate::learn_teach::lessons_run(home, ws_dir, positional.get(1).copied(), args.iter().any(|a| a == "--json")) {
+        Ok(text) => {
+            print!("{}", text);
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi learn lessons: {}", e);
+            1
+        }
+    }
+}
+
+/// `delphi learn unteach <role> <lesson id>` (see `learn_teach.rs`): a terminal command only.
+pub fn unteach_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
+    match crate::learn_teach::unteach_run(home, ws_dir, args) {
+        Ok(text) => {
+            print!("{}", text);
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi learn unteach: {}", e);
             1
         }
     }
@@ -424,8 +580,9 @@ mod tests {
         }
         let listed = run_in(t.path(), "list", None, &opts()).unwrap();
         assert!(listed.contains("[3 missions]") && listed.contains("[reported by 4 host sessions]"), "{}", listed);
-        assert!(listed.contains("* recurring: keep it with `delphi learn keep host-0000000000000000/h1 --as lesson --role builder --text"), "a recurring host note is marked with its keep command: {}", listed);
-        assert_eq!(listed.matches("* recurring").count(), 4, "one per host note, none for the operator's own: {}", listed);
+        assert!(listed.contains("accept: delphi learn keep host-0000000000000000/h1 --as lesson --role builder --text"), "a recurring host note is shown with its keep command: {}", listed);
+        assert_eq!(listed.matches("card: recurring").count(), 4, "one per host note, none for the operator's own: {}", listed);
+        assert!(listed.contains("reported by 4 sessions (host-supplied)"), "the count is labelled as the host's report: {}", listed);
         let first_host = listed.find("host-").unwrap();
         let last_daemon = listed.rfind("m_c/n3").unwrap().max(listed.rfind("m_a/n3").unwrap());
         assert!(last_daemon < first_host, "host notes sort after the operator's own: {}", listed);

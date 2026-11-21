@@ -143,6 +143,69 @@ pub struct TopicRequest<'a> {
     pub gathered: Gathered,
     /// The gaps of the topic's research records: the page's open questions, written by the daemon ([`Library::topic_gaps`]).
     pub gaps: Vec<String>,
+    /// A rebuild the desktop app asked for can be stopped by revoking its key (`specs/120` §2 item 8 as amended by `specs/129`
+    /// §10.2). The flag is read where the rebuild asks its gate, before the writer's model call, and once more before the page file is
+    /// written; past that last check the rebuild runs to its end. `None`: nothing can stop it.
+    pub cancel: Option<&'a Cancel>,
+}
+
+/// What [`Library::topic_rebuild`] says when its [`Cancel`] stopped it.
+pub const CANCELLED: &str = "cancelled: the key that asked for it was revoked";
+
+/// Whether a piece of work may still be stopped, read and set without a lock. It starts going; a revoke stops it ([`Cancel::stop`])
+/// unless the work has already passed its last check ([`Cancel::commit`]), in which case it runs to its end and the revoke is noted
+/// ([`Cancel::revoked_late`]).
+#[derive(Debug, Default)]
+pub struct Cancel(std::sync::atomic::AtomicU8);
+
+/// What [`Cancel::stop`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stopped {
+    /// The work had not passed its last check: it stops there.
+    Now,
+    /// The work had passed its last check and runs to its end.
+    TooLate,
+    /// It was stopped already.
+    Already,
+}
+
+const GOING: u8 = 0;
+const STOPPED: u8 = 1;
+const COMMITTED: u8 = 2;
+const COMMITTED_REVOKED: u8 = 3;
+
+impl Cancel {
+    /// Stop the work, if it has not passed its last check.
+    pub fn stop(&self) -> Stopped {
+        use std::sync::atomic::Ordering::SeqCst;
+        match self.0.compare_exchange(GOING, STOPPED, SeqCst, SeqCst) {
+            Ok(_) => Stopped::Now,
+            Err(COMMITTED) => match self.0.compare_exchange(COMMITTED, COMMITTED_REVOKED, SeqCst, SeqCst) {
+                Ok(_) => Stopped::TooLate,
+                Err(_) => Stopped::Already,
+            },
+            Err(_) => Stopped::Already,
+        }
+    }
+
+    /// Has it been stopped (before its last check)?
+    pub fn stopped(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst) == STOPPED
+    }
+
+    /// The work's last check: `true` when it goes on to its end (nothing can stop it after this), `false` when it was stopped.
+    pub fn commit(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        match self.0.compare_exchange(GOING, COMMITTED, SeqCst, SeqCst) {
+            Ok(_) => true,
+            Err(v) => v != STOPPED,
+        }
+    }
+
+    /// Was a revoke asked for after the work passed its last check?
+    pub fn revoked_late(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst) == COMMITTED_REVOKED
+    }
 }
 
 /// The most key terms a page carries (`specs/117` §2 item 5).
@@ -562,6 +625,10 @@ impl Library {
             if self.pages_today(r.now) >= r.settings.per_day {
                 return Err(format!("today's page budget ({} pages) is spent; the topic stays due", r.settings.per_day));
             }
+            // A rebuild that was stopped asks no model (`specs/129` §10.2): the flag is read where the gate is asked.
+            if r.cancel.is_some_and(Cancel::stopped) {
+                return Err(CANCELLED.into());
+            }
             gate()?;
             self.count_page(r.now);
             let topics: Vec<(String, String)> = self.topic_sides().into_iter().filter(|(s, _)| s != r.slug).map(|(s, v)| (s, v["title"].as_str().unwrap_or("").to_string())).collect();
@@ -574,6 +641,10 @@ impl Library {
                 Err(e) => self.claims_only_page(&title, &format!("the writer could not write the page: {}", e), None, Vec::new(), 0, r.style, SCOPE)?,
             }
         };
+        // The last check: a rebuild stopped by now leaves the page as it was; past here it is written whatever is asked.
+        if r.cancel.is_some_and(|c| !c.commit()) {
+            return Err(CANCELLED.into());
+        }
         self.topic_store(r.slug, side, &g, checked, proposal.as_ref(), r.now, r.settings, &r.gaps)
     }
 
@@ -808,7 +879,66 @@ mod rebuild_tests {
         let g = l.topic_gather_library(&side, Some(ws));
         let cfg = PagesConfig::default();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![] }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+        rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+    }
+
+    /// A writer that stops the rebuild while it writes, as a revoke arriving during the model call does.
+    struct StopWhileWriting<'c>(&'c Cancel, EchoWriter);
+    impl PageWriter for StopWhileWriting<'_> {
+        fn write<'a>(&'a self, b: &'a str) -> WriterFuture<'a> {
+            assert_eq!(self.0.stop(), Stopped::Now);
+            self.1.write(b)
+        }
+        fn rewrite<'a>(&'a self, d: &'a str, f: &'a [String]) -> WriterFuture<'a> {
+            self.1.rewrite(d, f)
+        }
+    }
+
+    /// `specs/129` §10.2 (the premise S2 checks: a rebuild had no cancel handle). A rebuild the app asked for reads its key's revoke
+    /// at its gate, before the writer's model call, and once more before the page is written. Stopped before the gate it calls no
+    /// model; stopped while the writer works it writes no page; past its last check it writes the page and the revoke is only noted.
+    #[test]
+    fn a_cancelled_rebuild_stops_at_its_checks_and_one_past_its_last_check_runs_to_its_end() {
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let l = Library::in_home(home.path());
+        let doc = home.path().join("t.md");
+        std::fs::write(&doc, "# Tides\n\nThe tide comes in twice a day.\n").unwrap();
+        let s = l.add_file(&doc, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
+        let anchor = AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() };
+        let c1 = l.add_claim("Ocean tides come twice a day.", &ClaimOpts::default(), &[anchor]).unwrap()["id"].as_str().unwrap().to_string();
+        let b = crate::research_record::Begin { question: "When do ocean tides come?", asked_by: crate::research_record::Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r1" };
+        crate::research_record::Topic::begin(&ws, &b).unwrap().finish("r1", "done", Some(&json!({"claims": [&c1]})), std::slice::from_ref(&c1), None, 0).unwrap();
+        let slug = l.topics_from_research(&ws, 1_000).remove(0);
+        let page = l.pages_dir().join(format!("{slug}.md"));
+        let cfg = PagesConfig::default();
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let go = |w: &dyn PageWriter, cancel: &Cancel| {
+            let g = l.topic_gather_library(&l.topic_side(&slug).unwrap(), Some(&ws));
+            assert!(!g.is_empty(), "the material is there, so a model would be called");
+            rt.block_on(l.topic_rebuild(TopicRequest { slug: &slug, now: 2_000, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], cancel: Some(cancel) }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(())))
+        };
+
+        let stopped = Cancel::default();
+        assert_eq!(stopped.stop(), Stopped::Now);
+        let w = EchoWriter(AtomicUsize::new(0));
+        assert_eq!(go(&w, &stopped).unwrap_err(), CANCELLED);
+        assert_eq!(w.0.load(Ordering::SeqCst), 0, "a rebuild stopped before its gate calls no model");
+        assert!(!page.exists());
+
+        let during = Cancel::default();
+        let w = StopWhileWriting(&during, EchoWriter(AtomicUsize::new(0)));
+        assert_eq!(go(&w, &during).unwrap_err(), CANCELLED);
+        assert_eq!(w.1 .0.load(Ordering::SeqCst), 1);
+        assert!(!page.exists(), "a rebuild stopped while its writer worked writes no page");
+        assert_eq!(l.topic_pages(&DueCtx { ws: Some(&ws), now: 2_001, index: false })[0].due.as_deref(), Some("not built yet"), "and the topic stays due");
+
+        let fresh = Cancel::default();
+        let built = go(&EchoWriter(AtomicUsize::new(0)), &fresh).unwrap();
+        assert!(page.exists() && built.version == 1);
+        assert_eq!(fresh.stop(), Stopped::TooLate, "past its last check, a revoke is too late and only noted");
+        assert!(fresh.revoked_late());
     }
 
     /// AC-1: a research run adds a claim to the topic; the page is due; the rebuild keeps the same file, lists the old text as a
@@ -961,7 +1091,7 @@ mod section_tests {
             let side = l.topic_side(&e.slug).unwrap();
             let g = l.topic_gather_library(&side, None);
             let lib = Library::in_home(home.path()).with_topic_slugs(l.topic_slugs());
-            rt.block_on(lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+            rt.block_on(lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
         };
         // A see-also slug that is no topic fails the check twice: the page falls back to the claims alone.
         let wrong = build(&Sections("sun"), vec![]);

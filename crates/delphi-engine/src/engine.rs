@@ -405,6 +405,9 @@ pub struct Engine {
     pub(crate) operator_prompts: Mutex<HashMap<String, String>>,
     /// Tasks raised by a host agent (`specs/062` §6.3): every span of one, dispatched or not, runs narrowed to read-only.
     pub(crate) readonly_tasks: Mutex<HashSet<String>>,
+    /// Single spans narrowed to read-only, by `<mission id>/<handoff id>` (`specs/086` §6.4, `specs/062` §6): a host Panel's foreign
+    /// seat opened with tools. Its task is the host's Panel, not a host-raised task, so `readonly_tasks` does not reach it.
+    pub(crate) readonly_handoffs: Mutex<HashSet<String>>,
     /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
     pub(crate) approver_calls: Mutex<HashMap<String, u32>>,
     /// How the team is spread over the providers for now (`/pace`, `specs/035` D-21). Kept in memory on purpose: it lasts until the
@@ -556,6 +559,11 @@ fn final_text(blocks: &[ContentBlock]) -> String {
 const SHELL_SCOPE: &str = "shell-worktree-scoped";
 
 /// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
+/// The key of a span marked read-only by its handoff: handoff ids repeat across missions (`ho_t_0003_red-team_r1`), so the mission is part of it.
+pub(crate) fn readonly_key(mission: &str, handoff_id: &str) -> String {
+    format!("{mission}/{handoff_id}")
+}
+
 pub(crate) fn builds(m: &AgentManifest) -> bool {
     m.execute.iter().any(|e| e == SHELL_SCOPE) && m.write.iter().any(|g| g.starts_with("@worktree/"))
 }
@@ -994,7 +1002,8 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| self.default_tier_of(&role, &manifest));
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
+            let seat_readonly = self.readonly_handoffs.lock().unwrap().contains(&readonly_key(&m.id, &handoff.handoff_id));
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -1028,6 +1037,10 @@ impl Engine {
                 sc.manifest.write = Vec::new();
                 sc.guard.write_globs = Vec::new();
                 sc.manifest.execute.retain(|e| e == "agent-dispatch" || e == "org-context");
+                // A read-only seat is marked by its handoff, not its task, so a span it dispatched would not inherit the mark.
+                if seat_readonly {
+                    sc.manifest.execute.retain(|e| e == "org-context");
+                }
             }
             // A bundle `distill` span is narrowed before anything is read or offered (`distill.rs`).
             if let Some(stage) = &handoff.distill {
