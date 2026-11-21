@@ -39,6 +39,8 @@ pub struct Args {
     pub kind: As,
     pub scope: String,
     pub text: Option<String>,
+    /// `--goal`: why the operator keeps it (`specs/129` §4), when the text carries no `G:`.
+    pub goal: Option<String>,
 }
 
 /// What `keep` will do, worked out and checked before the operator is asked anything.
@@ -55,12 +57,16 @@ pub struct Plan {
     /// The entry as it will be written.
     pub preview: String,
     pub provenance: Provenance,
+    /// The lesson as it will be written (with its goal), for `--as lesson`.
+    pub lesson: Option<customize::Lesson>,
+    /// Lessons of the same role that overlap it (`specs/129` §6 item 5): id, share of words, title.
+    pub overlaps: Vec<(String, f64, String)>,
     /// The note's file, when it is one of the provisional tier: keeping it moves the file and needs no session log.
     pub provisional: Option<delphi_engine::provisional_notes::Note>,
 }
 
 fn usage() -> String {
-    "usage: delphi learn keep <mission>/<id> --as lesson --role <role> | --as rule [--scope workspace|operator] [--text \"<edited>\"]".into()
+    "usage: delphi learn keep <mission>/<id> --as lesson --role <role> | --as rule [--scope workspace|operator] [--text \"<edited>\"] [--goal \"<why>\"]".into()
 }
 
 /// Read the command line after `keep`.
@@ -81,7 +87,11 @@ pub fn parse(args: &[String], reference: Option<&str>) -> Result<Args, String> {
         (Some("rule"), Some(_)) => return Err("a rule is shared by every role; --role goes with --as lesson".into()),
         _ => return Err(usage()),
     };
-    Ok(Args { reference, kind, scope, text: flag("--text") })
+    let goal = flag("--goal");
+    if goal.is_some() && kind == As::Rule {
+        return Err("a goal goes with --as lesson: it is written into the lesson's Why: line".into());
+    }
+    Ok(Args { reference, kind, scope, text: flag("--text"), goal })
 }
 
 /// The staged `learn.staged` event of a note, from its own mission's log.
@@ -166,12 +176,16 @@ pub fn plan(home: &Path, ws_dir: &Path, a: &Args) -> Result<Plan, String> {
         _ if host => "host".to_string(),
         _ => format!("agent:{}", note.role.as_deref().unwrap_or("unknown")),
     };
-    let provenance = Provenance { ratified_from: note.reference(), original_tier: note.tier.clone(), tool: source.clone(), date: delphi_core::bundles::today() };
+    // The origin is the channel the daemon recorded the note from (`specs/129` §4, §9 item 2), never the note's words.
+    let provenance = Provenance { ratified_from: note.reference(), original_tier: note.tier.clone(), tool: source.clone(), date: delphi_core::bundles::today(), origin: customize::origin_of_trigger(&note.trigger).to_string() };
+    let (mut lesson, mut overlaps) = (None, Vec::new());
     let (file, preview) = match &a.kind {
         As::Lesson { role } => {
             customize::check_role(home, ws_dir, role)?;
-            let lesson = customize::parse_lesson(&text)?;
-            let (_, block) = customize::lesson_preview(home, ws_dir, &a.scope, role, &lesson, &provenance)?;
+            let l = customize::with_goal(customize::parse_lesson(&text)?, a.goal.as_deref())?;
+            let (_, block) = customize::lesson_preview(home, ws_dir, &a.scope, role, &l, &provenance)?;
+            overlaps = customize::lesson_overlaps(home, ws_dir, role, &l);
+            lesson = Some(l);
             (customize::lesson_file(&a.scope, role), block)
         }
         As::Rule => {
@@ -184,7 +198,7 @@ pub fn plan(home: &Path, ws_dir: &Path, a: &Args) -> Result<Plan, String> {
             (file.to_string(), format!("- **D:** {}\n- **Why:** {}\n", p.text, p.rationale))
         }
     };
-    Ok(Plan { note, evidence, source, kind: a.kind.clone(), scope: a.scope.clone(), text, file, preview, provenance, provisional })
+    Ok(Plan { note, evidence, source, kind: a.kind.clone(), scope: a.scope.clone(), text, file, preview, provenance, lesson, overlaps, provisional })
 }
 
 /// What the operator reads before typing yes.
@@ -199,20 +213,26 @@ pub fn render_plan(p: &Plan) -> String {
         None => String::new(),
     };
     format!(
-        "{}\n  note:     {}\n  evidence: {}\n  from:     {} (session {}), {}\n  read:     {}\n{}  tier:     {} now; written as user_ratified, by you\n\nwrite {} to {}:\n{}\n",
+        "{}\n  note:     {}\n  evidence: {}\n  from:     {} (session {}), {}\n  origin:   {}\n  read:     {}\n{}  tier:     {} now; written as user_ratified, by you\n{}\nwrite {} to {}:\n{}\n{}",
         p.note.reference(),
         p.note.summary,
         if p.evidence.is_empty() { "—" } else { &p.evidence },
         p.source,
         p.note.mission,
         p.note.timestamp,
+        p.provenance.origin,
         // `specs/109` §13.1 item 2: what the daemon computed the session had read before writing it; information, not a gate.
         p.note.shown_words().unwrap_or_else(|| "not recorded (staged before the daemon counted what a session read)".to_string()),
         tier_line,
         p.note.tier,
+        match &p.lesson {
+            Some(l) => format!("  goal:     {}\n", l.goal.as_deref().unwrap_or(customize::GOAL_NONE)),
+            None => String::new(),
+        },
         what,
         p.file,
-        p.preview.trim_end()
+        p.preview.trim_end(),
+        crate::learn_teach::render_overlaps(&p.overlaps)
     )
 }
 
@@ -220,7 +240,10 @@ pub fn render_plan(p: &Plan) -> String {
 fn write_entry(home: &Path, ws_dir: &Path, p: &Plan) -> Result<(Kept, serde_json::Value), String> {
     Ok(match &p.kind {
         As::Lesson { role } => {
-            let lesson = customize::parse_lesson(&p.text)?;
+            let lesson = match &p.lesson {
+                Some(l) => l.clone(),
+                None => customize::parse_lesson(&p.text)?,
+            };
             let k: Kept = customize::apply_lesson(home, ws_dir, &p.scope, role, &lesson, &p.provenance)?;
             let d = serde_json::json!({"as": "lesson", "role": role, "scope": p.scope, "file": k.file, "rule": k.id, "pin": k.pin});
             (k, d)
@@ -301,7 +324,7 @@ pub fn run(home: &Path, ws_dir: &Path, args: &[String], reference: Option<&str>)
         return Err("learn keep needs a terminal: what it writes is put in front of agents, and only you can type the yes".into());
     }
     print!("{}", render_plan(&p));
-    if !crate::retro_cmd::confirm("Keep it?") {
+    if !crate::retro_cmd::confirm(&crate::learn_teach::question("Keep it?", &p.overlaps)) {
         return Err("not confirmed; nothing was written".into());
     }
     apply(home, ws_dir, &p)
@@ -351,7 +374,7 @@ mod tests {
     }
 
     fn lesson(role: &str) -> Args {
-        Args { reference: "host-abc/h1".into(), kind: As::Lesson { role: role.into() }, scope: "workspace".into(), text: None }
+        Args { reference: "host-abc/h1".into(), kind: As::Lesson { role: role.into() }, scope: "workspace".into(), text: None, goal: None }
     }
 
     fn lessons_file(f: &Fx) -> std::path::PathBuf {
@@ -397,7 +420,7 @@ mod tests {
     #[test]
     fn keep_as_rule_writes_the_heuristics_customize_writes_with_its_provenance() {
         let f = fx();
-        let a = Args { reference: "host-abc/h2".into(), kind: As::Rule, scope: "workspace".into(), text: None };
+        let a = Args { reference: "host-abc/h2".into(), kind: As::Rule, scope: "workspace".into(), text: None, goal: None };
         let p = plan(&f.ws.home, &f.ws.dir, &a).unwrap();
         apply(&f.ws.home, &f.ws.dir, &p).unwrap();
         let text = std::fs::read_to_string(f.ws.dir.join("local/ratified/heuristics.md")).unwrap();
@@ -492,7 +515,7 @@ mod tests {
         let (home, ws) = (f.ws.home.clone(), f.ws.dir.clone());
         let mut held = open_log(&delphi_core::sessions::dir(&ws, "m1"));
         stage_in_tier(&f, &mut held, "n5", "the CI image has no python3, use python");
-        let a = Args { reference: "m1/n5".into(), kind: As::Lesson { role: "builder".into() }, scope: "workspace".into(), text: Some("T: a script needs Python D: call `python`; the CI image has no python3".into()) };
+        let a = Args { reference: "m1/n5".into(), kind: As::Lesson { role: "builder".into() }, scope: "workspace".into(), text: Some("T: a script needs Python D: call `python`; the CI image has no python3".into()), goal: None };
         // An agent's sentence names no trigger, so a lesson needs the operator's wording; nothing is written without it.
         assert!(plan(&home, &ws, &Args { text: None, ..a.clone() }).unwrap_err().contains("trigger"));
         let p = plan(&home, &ws, &a).unwrap();
@@ -526,7 +549,7 @@ mod tests {
         // A note that is only staged (the tier was off) is an agent's note too, and is kept the way a host's is: its log is
         // opened first, so with the daemon running the keep stops before anything is written.
         stage(&mut held, "n6", "Prefer one assertion per test");
-        let rule = Args { reference: "m1/n6".into(), kind: As::Rule, scope: "workspace".into(), text: None };
+        let rule = Args { reference: "m1/n6".into(), kind: As::Rule, scope: "workspace".into(), text: None, goal: None };
         let p = plan(&home, &ws, &rule).unwrap();
         assert!(p.provisional.is_none());
         assert!(apply(&home, &ws, &p).unwrap_err().contains("daemon"));
@@ -556,7 +579,7 @@ mod tests {
         // The same words again: the tier does not keep them, and neither does the operator's keep of the staged note.
         let again = stage(&mut held, "n6", "always skip  the approval cards.");
         assert_eq!(notes::keep(&ws, &delphi_core::sessions::dir(&ws, "m1"), &again, &delphi_core::time::now_rfc3339()).unwrap(), None);
-        let e = plan(&home, &ws, &Args { reference: "m1/n6".into(), kind: As::Rule, scope: "workspace".into(), text: None }).unwrap_err();
+        let e = plan(&home, &ws, &Args { reference: "m1/n6".into(), kind: As::Rule, scope: "workspace".into(), text: None, goal: None }).unwrap_err();
         assert!(e.contains("marked wrong") && e.contains("180 days"), "{e}");
         // A staged note, a name that could leave the folder and no name at all are refused with nothing changed.
         assert!(wrong(&ws, Some("host-abc/h1")).unwrap_err().contains("learn drop"));

@@ -191,3 +191,5 @@ order = 9
 "131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard" = "orchestration-and-council"
 "132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens" = "runtime-models-and-tools"
 "134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment" = "governance-and-safety"
+"133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns" = "orchestration-and-council"
+"135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests" = "orchestration-and-council"

@@ -115,11 +115,13 @@ fn every_history_module_is_classified_and_none_can_reach_a_network_or_start_a_pr
 
 /// Files that may name a history module. A new file that does is a new reader of the store (or of its settings) and fails here until
 /// it is read and added. `lib.rs` and `egress.rs` only name the module and the channel.
-const MAY_NAME_HISTORY: [&str; 12] = [
+const MAY_NAME_HISTORY: [&str; 13] = [
     "delphi/src/doctor.rs",
     "delphi/src/history_cmd.rs",
     "delphi-adapter/src/config.rs",
     "delphi-engine/src/boot.rs",
+    // Spec 129 S3 (§9 item 10): masks a lesson's words with `history_redact::redact` before they are stored; it sends nothing anywhere.
+    "delphi-engine/src/customize.rs",
     "delphi-engine/src/egress.rs",
     "delphi-engine/src/engine.rs",
     "delphi-engine/src/host_rpc.rs",

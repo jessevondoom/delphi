@@ -1,6 +1,6 @@
 //! `delphi capabilities`: what each model CLI on this machine says it can use (`specs/038`).
 //!
-//! The operator-level map of connections and tools. For every CLI Delphi can drive (`claude`, `agy`, `gemini`, `ollama`) it asks
+//! The operator-level map of connections and tools. For every CLI Delphi can drive (`claude`, `agy`, `codex`, `copilot`, `gemini`, `ollama`) it asks
 //! the CLI's own list commands (MCP servers, plugins, models, extensions, agents), reads the skill and agent directories on
 //! disk, and keeps one snapshot in `<home>/capabilities.json`. Every entry says where it came from: `cli` (the CLI reported it),
 //! `disk` (a directory scan) or `model` (a model was asked and answered, which can be wrong). No model is called unless `--ask`.
@@ -275,6 +275,15 @@ fn discover_codex(r: &dyn Runner) -> CliEntry {
     e
 }
 
+/// `copilot` (`specs/132` §6.3): its version, and whether a login config exists. The login itself sits in the OS keychain, and the
+/// config file may hold a token on a machine without one, so the file is never opened: only its presence is told (`specs/051` §2.3).
+/// The model catalog needs an ACP session (`copilot_catalog`), so it is not read here; nothing is run that could call a model.
+fn discover_copilot(r: &dyn Runner, user: &Path) -> CliEntry {
+    let Some(mut e) = entry(r, "copilot") else { return CliEntry { cli: "copilot".into(), ..Default::default() } };
+    e.auth = if user.join(".copilot/config.json").is_file() { "login config present (~/.copilot/config.json; not read)".into() } else { "no login config in ~/.copilot (the login may still be in the keychain)".into() };
+    e
+}
+
 fn discover_gemini(r: &dyn Runner, user: &Path) -> CliEntry {
     let Some(mut e) = entry(r, "gemini") else { return CliEntry { cli: "gemini".into(), ..Default::default() } };
     e.mcp = listed(r, &mut e, &["mcp", "list"]).map(|o| parse_plain_list(&o)).unwrap_or_default();
@@ -304,7 +313,7 @@ fn ask(r: &dyn Runner, e: &mut CliEntry) {
 }
 
 pub fn collect(r: &dyn Runner, user_home: &Path, now: i64, with_ask: bool) -> Snapshot {
-    let mut clis = vec![discover_claude(r, user_home), discover_agy(r, user_home), discover_codex(r), discover_gemini(r, user_home), discover_ollama(r)];
+    let mut clis = vec![discover_claude(r, user_home), discover_agy(r, user_home), discover_codex(r), discover_copilot(r, user_home), discover_gemini(r, user_home), discover_ollama(r)];
     if with_ask {
         clis.iter_mut().filter(|c| c.installed).for_each(|c| ask(r, c));
     }
@@ -477,6 +486,28 @@ mod tests {
         assert_eq!(c.models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["gpt-a", "gpt-b"], "hidden models are left out, best-ranked first");
         assert!(!format!("{:?}", s).contains("SECRET"));
         assert!(parse_codex_mcp("[]").is_empty() && parse_codex_mcp("No MCP servers configured yet.").is_empty());
+    }
+
+    /// specs/132 O14, AC-2: `delphi capabilities` lists Copilot with its version and whether a login config exists, never a token.
+    #[test]
+    fn copilot_is_listed_with_its_version_and_login_presence_and_no_token() {
+        let mut f = Fake { on_path: vec!["copilot"], ..Default::default() };
+        f.answers.insert("copilot --version".into(), done("GitHub Copilot CLI 1.0.112.\nRun 'copilot update' to check for updates.\n"));
+        let home = tempfile::tempdir().unwrap();
+        let s = collect(&f, home.path(), 1, false);
+        let c = s.clis.iter().find(|c| c.cli == "copilot").expect("copilot is discovered");
+        assert!(c.installed && c.version.contains("1.0.112"), "{c:?}");
+        assert!(c.auth.contains("no login config"), "{c:?}");
+        std::fs::create_dir_all(home.path().join(".copilot")).unwrap();
+        std::fs::write(home.path().join(".copilot/config.json"), r#"{"logged_in_users":[{"login":"someone"}],"token":"gho_SECRET"}"#).unwrap();
+        let s = collect(&f, home.path(), 1, false);
+        let c = s.clis.iter().find(|c| c.cli == "copilot").unwrap();
+        assert!(c.auth.contains("login config present"), "{c:?}");
+        let shown = format!("{:?}{}", s, render(&s, 1));
+        assert!(!shown.contains("SECRET") && !shown.contains("someone"), "nothing from inside the file is kept");
+        // Not installed: listed as such.
+        let s = collect(&Fake::default(), home.path(), 1, false);
+        assert!(s.clis.iter().any(|c| c.cli == "copilot" && !c.installed));
     }
 
     #[test]
