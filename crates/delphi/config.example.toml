@@ -137,6 +137,7 @@ per_watch_max_wakes_per_day = 10
 # max_foreign_seats = 1              # per Council; 0 turns the foreign seat off
 # (`red_team_kind` was removed, specs/098 section 13.2: `council_open` always accepts `kind: red_team`.)
 # max_foreign_tokens = 100000        # per Council: the foreign seat's token ceiling must fit under this, and Round 2 is skipped once Round 1 used it
+# spread = "all"                     # ratified (like [access]): with three or more usable families every Council seat sits on its own family, and a Panel's foreign seats on distinct ones; "two" keeps two-family Councils (specs/132 section 5.4)
 
 # A cross-family review of a host's branch (`request_review`, specs/135 section 6). Delphi runs these commands in the OS sandbox,
 # with no network, in a copy of the branch; a seat of another family with no tools reviews the diff with their output.

@@ -93,12 +93,19 @@ pub fn assign(roles: &[String], preferred: &dyn Fn(&str) -> String, available: &
             f.len()
         };
         if distinct(&seats) < 2 {
-            // Move one non-architect seat (Red-Team first) to another family so the Council spans two.
-            let pick = seats.iter().rposition(|s| s.role == "red-team").or_else(|| seats.iter().rposition(|s| s.role != "architect")).unwrap_or(seats.len().saturating_sub(1));
-            if let Some(s) = seats.get_mut(pick) {
-                if let Some(f) = other_than(&s.family.clone(), &fams) {
-                    notes.push(format!("{} moved to {} so the Council spans two families", s.role, f));
-                    s.family = f;
+            // Move one non-architect seat (Red-Team first) to another family so the Council spans two. A critic is not moved onto the
+            // named author's family ([H-008]); then the architect, who is not the author, moves instead (`specs/132` C4 found this).
+            let critic_of = |s: &SeatPlan| author_family.is_some() && (s.role == "red-team" || s.role == "strategist");
+            let target_for = |s: &SeatPlan| fams.iter().find(|f| **f != s.family && !(critic_of(s) && Some(f.as_str()) == proposer.as_deref())).cloned();
+            let pick = seats
+                .iter()
+                .rposition(|s| s.role == "red-team" && target_for(s).is_some())
+                .or_else(|| seats.iter().rposition(|s| s.role != "architect" && target_for(s).is_some()))
+                .or_else(|| seats.iter().rposition(|s| target_for(s).is_some()));
+            if let Some(i) = pick {
+                if let Some(f) = target_for(&seats[i]) {
+                    notes.push(format!("{} moved to {} so the Council spans two families", seats[i].role, f));
+                    seats[i].family = f;
                 }
             }
         }
@@ -125,15 +132,54 @@ pub fn assign(roles: &[String], preferred: &dyn Fn(&str) -> String, available: &
     Assignment { seats, homogeneous, notes }
 }
 
+/// A Panel foreign seat's family when the host did not name one: never the host's; the role's configured family unless another
+/// foreign seat holds it (`taken`); else the first usable family no foreign seat holds; else, only then, a shared one.
+pub fn foreign_family(available: &[String], wanted: &str, host_family: Option<&str>, taken: &[String]) -> Option<String> {
+    let ok = |f: &str| Some(f) != host_family;
+    let free = |f: &str| ok(f) && !taken.iter().any(|t| t == f);
+    if available.iter().any(|f| f == wanted) && free(wanted) {
+        return Some(wanted.to_string());
+    }
+    available.iter().find(|f| free(f)).or_else(|| available.iter().find(|f| f.as_str() == wanted && ok(f))).or_else(|| available.iter().find(|f| ok(f))).cloned()
+}
+
 /// `require_families` (`specs/123` §6): move seats onto families the plan does not use yet until it seats `want` families or no family
 /// is left. A seat moves only off a family another seat also holds (the architect last), and a critic is never moved onto the author's
 /// family. Deterministic; it never lowers a tier.
 pub fn spread_families(plan: &mut Assignment, available: &[String], want: usize, author: Option<&str>) {
+    spread_onto(plan, available, want, author, true, &format!("require_families = {want}"));
+}
+
+/// `[seats] spread = "all"` (`specs/132` §5.4 item 1): when three or more families are usable, every seat that shares a family with
+/// another is moved onto a usable family no seat holds yet, until each seat is on its own family or no unused family is left. The
+/// architect moves only when it is not the author (`author_family` was given). Called after [`assign`], so its rules (critics off
+/// the author's family, at least two families) already hold. Deterministic; it never lowers a tier; every move is a note.
+pub fn spread_all(plan: &mut Assignment, available: &[String], author_family: Option<&str>) {
+    let mut fams = available.to_vec();
+    fams.sort();
+    fams.dedup();
+    if fams.len() < 3 {
+        return;
+    }
+    let want = plan.seats.len();
+    spread_onto(plan, &fams, want, author_family, author_family.is_some(), "spread = all: each seat on its own family while one is unused");
+}
+
+/// Move seats onto families the plan does not use yet until it seats `want` families or no family is left. A seat moves only off a
+/// family another seat also holds: red-team first, then strategist, then any other seat, the architect last and only when
+/// `move_architect`. A critic is never moved onto the author's family.
+fn spread_onto(plan: &mut Assignment, available: &[String], want: usize, author: Option<&str>, move_architect: bool, why: &str) {
     let used = |p: &Assignment| {
         let mut f: Vec<String> = p.seats.iter().map(|s| s.family.clone()).collect();
         f.sort();
         f.dedup();
         f
+    };
+    let order = |r: &str| match r {
+        "red-team" => 0,
+        "strategist" => 1,
+        "architect" => 3,
+        _ => 2,
     };
     let mut fams = available.to_vec();
     fams.sort();
@@ -148,9 +194,11 @@ pub fn spread_families(plan: &mut Assignment, available: &[String], want: usize,
         }
         let critic = |r: &str| r == "red-team" || r == "strategist";
         let shared = |s: &SeatPlan| plan.seats.iter().filter(|o| o.family == s.family).count() > 1;
-        let pick = plan.seats.iter().rposition(|s| s.role != "architect" && shared(s) && !(critic(&s.role) && author == Some(target.as_str()))).or_else(|| plan.seats.iter().position(|s| s.role == "architect" && shared(s)));
+        let movable = |s: &SeatPlan| shared(s) && (s.role != "architect" || move_architect) && !(critic(&s.role) && (author == Some(target.as_str()) || s.avoid.contains(&target)));
+        // Lowest order first; among equals the last seat, as before.
+        let pick = (0..plan.seats.len()).rev().filter(|&i| movable(&plan.seats[i])).min_by_key(|&i| order(&plan.seats[i].role));
         if let Some(i) = pick {
-            plan.notes.push(format!("{} moved from {} to {} (require_families = {want})", plan.seats[i].role, plan.seats[i].family, target));
+            plan.notes.push(format!("{} moved from {} to {} ({why})", plan.seats[i].role, plan.seats[i].family, target));
             plan.seats[i].family = target;
         }
     }
@@ -1414,13 +1462,14 @@ impl Engine {
     /// The family for the seat Delphi runs in a Panel: not the host's (when known), preferring the role's configured family.
     /// `None` when no other usable family is configured, and the Panel refuses to promise a foreign seat it cannot seat.
     pub fn panel_foreign_family(&self, role: &str, host_family: Option<&str>) -> Option<String> {
-        let available = self.available_families();
-        let wanted = self.cfg.get().family_for_role(role).to_string();
-        let ok = |f: &String| Some(f.as_str()) != host_family;
-        if available.contains(&wanted) && ok(&wanted) {
-            return Some(wanted);
-        }
-        available.into_iter().find(ok)
+        self.panel_foreign_family_beside(role, host_family, &[])
+    }
+
+    /// The same, for one of several foreign seats: under `[seats] spread = "all"` (`specs/132` §5.4 item 4) a family that another
+    /// foreign seat of this Panel already holds (`taken`) is used only when no other usable family is left.
+    pub fn panel_foreign_family_beside(&self, role: &str, host_family: Option<&str>, taken: &[String]) -> Option<String> {
+        let taken = if self.settings.spread_all { taken } else { &[] };
+        foreign_family(&self.available_families(), self.cfg.get().family_for_role(role), host_family, taken)
     }
 
     /// What `council_frame` may propose (`specs/086` §6.4, C3b): every allowed endpoint that could serve a seat right now, with the
@@ -1644,6 +1693,10 @@ impl Engine {
                     _ => want.clone(),
                 });
             }
+        }
+        // `specs/132` §5.4: with three or more usable families, every seat on its own family unless the operator ratified `spread = "two"`.
+        if self.settings.spread_all {
+            spread_all(&mut plan, &available, opts.author_family.as_deref());
         }
         // `specs/123` §6: a host's `require_families`. The daemon refused it at once when too few families were usable; a family that
         // stopped answering since then is refused here, still before anything is recorded or spent.
@@ -2324,6 +2377,32 @@ pub(crate) mod tests {
             .replace("allowed_endpoints = [\"direct\", \"backup\", ], ", "")
             .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\"]");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    fn three_families(f: &Fx) {
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[models.gemini]\nfast = \"gem-f\"\nworkhorse = \"gem-w\"\nfrontier = \"gem-p\"\n[models.catalog.\"gem-w\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[models.catalog.\"gem-p\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[models.openai]\nfast = \"oai-f\"\nworkhorse = \"oai-w\"\nfrontier = \"oai-p\"\n[models.catalog.\"oai-w\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[models.catalog.\"oai-p\"]\nmax_output_tokens = 64000\nmin_thinking_budget = 128\nmax_thinking_budget = 32000\ninput_usd_per_mtok = 2.0\noutput_usd_per_mtok = 12.0\n[[endpoints]]\nid = \"gem\"\nfamily = \"gemini\"\npath = \"api\"\ncredential = \"env:K\"\n[[endpoints]]\nid = \"oai\"\nfamily = \"openai\"\npath = \"api\"\ncredential = \"env:K\"\n[access]")
+            .replace("allowed_endpoints = [\"direct\", \"backup\", ], ", "")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"direct\", \"backup\", \"gem\", \"oai\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+    }
+
+    // specs/132 §11 AC-7 through the engine: `[seats] spread` decides whether a daemon Council seats three families or two.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_daemon_council_spreads_over_three_families_unless_spread_is_two() {
+        for (all, want) in [(true, 3usize), (false, 2)] {
+            let f = crate::testkit::setup(vec![], 50.0, |s| s.spread_all = all);
+            three_families(&f);
+            f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text("RECOMMENDATION: PROCEED\nROUND 2 COMPLETE") } else { Step::text("OPTION: x\nmy stance") });
+            let _ = f.engine.run_council(&f.m, f.m.next_task_id(), "Table or file?", CouncilOpts::default()).await.unwrap();
+            let started = &events_of(&f, "council.started")[0].payload;
+            let fams: std::collections::BTreeSet<&str> = started["seats"].as_array().unwrap().iter().map(|s| s["family"].as_str().unwrap()).collect();
+            assert_eq!(fams.len(), want, "spread_all = {all}: {started}");
+            // A Panel's two foreign seats with no family named: distinct under "all", the role's family for both under "two".
+            let a = f.engine.panel_foreign_family_beside("strategist", Some("claude"), &[]).unwrap();
+            let b = f.engine.panel_foreign_family_beside("red-team", Some("claude"), std::slice::from_ref(&a)).unwrap();
+            assert_eq!(a != b, all, "{a} {b}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3109,6 +3188,55 @@ pub(crate) mod tests {
         let mut p = Assignment { seats: roles.iter().map(|r| SeatPlan { role: r.clone(), family: if r == "red-team" { "claude".into() } else { "openai".into() }, avoid: vec![], tier: None }).collect(), homogeneous: false, notes: vec![] };
         spread_families(&mut p, &two, 3, Some("gemini"));
         assert!(p.seats.iter().all(|s| s.role == "architect" || s.family != "gemini"), "{p:?}");
+    }
+
+    // specs/132 §11 AC-7: three usable families and every role mapped to claude seat three families, red-team moved first.
+    #[test]
+    fn spread_all_seats_every_seat_on_its_own_family_when_three_are_usable() {
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let roles = v(&["architect", "strategist", "red-team"]);
+        let three = v(&["claude", "gemini", "openai"]);
+        let mut plan = assign(&roles, &|_| "claude".to_string(), &three, &|_| "workhorse".to_string(), None);
+        let today = plan.clone();
+        spread_all(&mut plan, &three, None);
+        let fam = |p: &Assignment, r: &str| p.seats.iter().find(|s| s.role == r).unwrap().family.clone();
+        assert_eq!((fam(&plan, "architect"), fam(&plan, "red-team"), fam(&plan, "strategist")), ("claude".into(), "gemini".into(), "openai".into()), "{plan:?}");
+        assert!(plan.notes[0].starts_with("red-team moved") && plan.notes.iter().any(|n| n.starts_with("strategist moved from claude to openai (spread = all")), "red-team first, every move a note: {:?}", plan.notes);
+        assert!(plan.seats.iter().all(|s| s.tier.is_none()), "no tier is lowered or set");
+        // `spread = "two"` is today's plan: assign alone, two families.
+        assert_eq!(today.seats.iter().map(|s| s.family.as_str()).collect::<std::collections::BTreeSet<_>>().len(), 2);
+        // Two usable families: nothing changes.
+        let two = v(&["claude", "gemini"]);
+        let mut p2 = assign(&roles, &|_| "claude".to_string(), &two, &|_| "workhorse".to_string(), None);
+        let before = p2.clone();
+        spread_all(&mut p2, &two, None);
+        assert_eq!(p2, before);
+        // With an author family, critics never land on it, and the architect (not the author) is the one that moves onto it.
+        let mut pa = assign(&roles, &|_| "gemini".to_string(), &three, &|_| "workhorse".to_string(), Some("claude"));
+        spread_all(&mut pa, &three, Some("claude"));
+        assert!(pa.seats.iter().filter(|s| s.role != "architect").all(|s| s.family != "claude"), "{pa:?}");
+        assert_eq!(pa.seats.iter().map(|s| s.family.as_str()).collect::<std::collections::BTreeSet<_>>().len(), 3, "{pa:?}");
+        // assign itself: with two families and every role on the non-author one, the architect moves, never a critic onto the author's.
+        let p = assign(&roles, &|_| "gemini".to_string(), &two, &|_| "workhorse".to_string(), Some("claude"));
+        assert_eq!((fam(&p, "architect"), fam(&p, "red-team"), fam(&p, "strategist")), ("claude".into(), "gemini".into(), "gemini".into()), "{p:?}");
+        // Five seats on three families: no family is left unused, and the architect, the author, keeps its family.
+        let five = v(&["architect", "strategist", "red-team", "builder", "investigator"]);
+        let mut p5 = assign(&five, &|_| "claude".to_string(), &three, &|_| "workhorse".to_string(), None);
+        spread_all(&mut p5, &three, None);
+        assert_eq!(p5.seats.iter().map(|s| s.family.as_str()).collect::<std::collections::BTreeSet<_>>().len(), 3, "{p5:?}");
+        assert_eq!(fam(&p5, "architect"), "claude");
+    }
+
+    // specs/132 §5.4 item 4: a Panel's foreign seats go to distinct usable families when that many exist.
+    #[test]
+    fn foreign_seats_take_distinct_families_while_one_is_free() {
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let three = v(&["claude", "gemini", "openai"]);
+        assert_eq!(foreign_family(&three, "gemini", Some("claude"), &[]).as_deref(), Some("gemini"), "the role's family first");
+        assert_eq!(foreign_family(&three, "gemini", Some("claude"), &v(&["gemini"])).as_deref(), Some("openai"), "not one another seat holds");
+        assert_eq!(foreign_family(&three, "gemini", Some("claude"), &v(&["gemini", "openai"])).as_deref(), Some("gemini"), "shared only when none is free");
+        assert_eq!(foreign_family(&three, "claude", Some("claude"), &[]).as_deref(), Some("gemini"), "never the host's");
+        assert_eq!(foreign_family(&v(&["claude"]), "claude", Some("claude"), &[]), None);
     }
 
     // specs/123 §6: the daemon Council's card says whether the receipts met require_families.

@@ -120,6 +120,9 @@ pub struct Settings {
     /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
     pub max_foreign_seats: u32,
     pub max_foreign_tokens: u64,
+    /// `[seats] spread` (`specs/132` §5.4): `"all"` (true, the default) seats every Council seat on its own family when three or more
+    /// are usable, and a Panel's foreign seats on distinct families; `"two"` (false) keeps two-family Councils. Ratified only.
+    pub spread_all: bool,
     /// `[access] standing_foreign_tokens` (`specs/104` §5, §12 A4): the operator's standing consent for read-only foreign seats, in tokens
     /// per 24 hours. Read from the ratified copy only (`[access]` is pinned); 0, the default, is off.
     pub standing_foreign_tokens: u64,
@@ -242,6 +245,7 @@ impl Default for Settings {
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
+            spread_all: true,
             standing_foreign_tokens: 0,
             review_commands: None,
             review_diff_chars: crate::review_job::DEFAULT_DIFF_CHARS,
