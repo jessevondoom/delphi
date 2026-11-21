@@ -107,6 +107,9 @@ pub struct Panel {
     released: Option<BTreeMap<String, Stance>>,
     /// Seats that have answered Round 1, in order.
     answered: Vec<String>,
+    /// Seats that abstained in Round 1 (a subset of `answered`). An abstention carries no stance text, so it is shown before the barrier
+    /// releases without breaking the blind round (`specs/123` §17 item 1).
+    abstained1: Vec<String>,
     /// Round 2 replies, raw, by seat.
     round2: BTreeMap<String, String>,
     verdict: Option<String>,
@@ -138,6 +141,8 @@ pub struct Panel {
     /// Earlier rulings whose headline matches this Panel's (`specs/123` §9 item 4), picked when it opened: shown in the moderator's round 3
     /// brief only, never in Round 1 or Round 2.
     pub earlier: Vec<crate::council_earlier::Earlier>,
+    /// The caller passed `earlier_rulings: false` (`specs/123` §17 item 2): none were picked, and the record says so.
+    pub earlier_off: bool,
 }
 
 /// The one line a Panel that does not count as an independent review opens its ruling card and `council_result` with (`specs/104` §13 G5),
@@ -204,7 +209,7 @@ pub struct BatchStance {
 impl Panel {
     pub fn new(proposition: &str) -> Panel {
         let seats: Vec<String> = PANEL_SEATS.iter().map(|s| s.to_string()).collect();
-        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, kind: None, aborts: Vec::new(), submissions: BTreeMap::new(), round1_batches: Vec::new(), earlier: Vec::new() }
+        Panel { proposition: proposition.to_string(), barrier: Barrier::new(&seats), seats, released: None, answered: Vec::new(), abstained1: Vec::new(), round2: BTreeMap::new(), verdict: None, models: BTreeMap::new(), opened: std::time::Instant::now(), foreign: Vec::new(), rejections: BTreeMap::new(), blind: "unknown".into(), operator_confirmed: None, options_source: None, host_family: None, require_families: None, kind: None, aborts: Vec::new(), submissions: BTreeMap::new(), round1_batches: Vec::new(), earlier: Vec::new(), earlier_off: false }
     }
 
     /// Remember the task that runs one of Delphi's seats, so it can be stopped.
@@ -384,7 +389,8 @@ impl Panel {
         }
     }
 
-    /// The state of the seat Delphi runs: `running`, `answered` or `abstained` (a Round 1 abstention shows once the barrier releases).
+    /// The state of the seat Delphi runs: `running`, `waiting_on_barrier` (its Round 1 stance is held until every seat is in),
+    /// `answered` or `abstained` (a Round 1 abstention shows at once: it carries no stance, `specs/123` §17 item 1).
     pub fn foreign_state(&self) -> Option<(String, &'static str)> {
         self.foreign.first().map(|s| (s.role.clone(), self.state_of(&s.role)))
     }
@@ -396,7 +402,8 @@ impl Panel {
 
     fn state_of(&self, seat: &str) -> &'static str {
         match &self.released {
-            None => if self.barrier_has(seat) { "answered" } else { "running" },
+            None if self.abstained1.iter().any(|s| s == seat) => "abstained",
+            None => if self.barrier_has(seat) { "waiting_on_barrier" } else { "running" },
             Some(rel) => {
                 if rel.get(seat).and_then(Stance::text).is_none() {
                     "abstained"
@@ -573,6 +580,9 @@ impl Panel {
                     BarrierError::Held => PanelErr::NotYet("Round 1 is open".into()),
                 })?;
                 self.answered.push(seat.to_string());
+                if abstain.is_some() {
+                    self.abstained1.push(seat.to_string());
+                }
                 note_model(self);
                 if self.barrier.complete() {
                     let all = self.barrier.release().map_err(|_| PanelErr::Closed("Round 1 is closed".into()))?;
@@ -948,7 +958,7 @@ mod tests {
         assert_eq!(p.waiting_on(), Some("delphi_seat"));
         assert_eq!(p.submit_by_delphi_seat("red-team", 1, "R", None, Some("gem")).unwrap(), Step::Waiting(vec!["strategist".into()]));
         assert_eq!(p.pending_delphi_seat().as_deref(), Some("strategist"), "the next one outstanding");
-        assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "answered"), ("strategist".to_string(), "running")]);
+        assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "waiting_on_barrier"), ("strategist".to_string(), "running")]);
         assert!(matches!(p.submit_by_delphi_seat("strategist", 1, "S", None, None).unwrap(), Step::Released(m) if m.len() == 3));
         // Round 2: both read the same peers through the server, nobody through anybody.
         let b = p.brief_for_delphi_seat("strategist", 2).unwrap();
@@ -960,5 +970,19 @@ mod tests {
         assert_eq!(p.submit_by_delphi_seat("strategist", 2, "", Some("no answer within 600s"), None).unwrap(), Step::RoundTwoDone);
         assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "answered"), ("strategist".to_string(), "abstained")]);
         assert_eq!(p.waiting_on(), Some("host_seats"), "only the verdict is left");
+    }
+
+    // specs/123 §17 item 1: a seat Delphi runs that is in the barrier reports `waiting_on_barrier`, not `answered`; one that abstained
+    // reports `abstained` at once (an abstention carries no stance text, so the barrier stays blind).
+    #[test]
+    fn a_delphi_seat_in_the_barrier_is_waiting_and_its_abstention_shows_at_once() {
+        let mut p = Panel::new("q");
+        p.reserve_seat(ForeignSeat { role: "red-team".into(), family: "gemini".into(), tools_none: true }).unwrap();
+        p.reserve_seat(ForeignSeat { role: "strategist".into(), family: "openai".into(), tools_none: false }).unwrap();
+        p.submit_by_delphi_seat("red-team", 1, "R", None, None).unwrap();
+        p.submit_by_delphi_seat("strategist", 1, "", Some("no answer within 600s"), None).unwrap();
+        assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "waiting_on_barrier"), ("strategist".to_string(), "abstained")], "the host's architect is still out");
+        p.submit("architect", 1, "A", None, None).unwrap();
+        assert_eq!(p.foreign_states(), vec![("red-team".to_string(), "running"), ("strategist".to_string(), "abstained")], "released: red-team owes Round 2");
     }
 }
