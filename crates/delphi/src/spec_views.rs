@@ -62,10 +62,11 @@ fn excerpt(src: &str, q: &Value) -> String {
     delphi_engine::spec_lookup::fenced_excerpt(src, q["span"]["line"].as_u64().unwrap_or(0), q["span"]["end_line"].as_u64().unwrap_or(0), q["text"].as_str().unwrap_or(""))
 }
 
+/// The index. No line depends on the whole set (spec 088 §13.3): the opening states no count, and a row names its group by id,
+/// which is the spec's own fact, never by the group's title, which is another entry's.
 fn index(docs: &[&Value], groups: &[Group]) -> String {
-    let mut out = format!("{}\n\n# Specs\n\n{} specs in {} groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.\n\n", BANNER, docs.len(), groups.len());
+    let mut out = format!("{}\n\n# Specs\n\nThe files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page. `delphi specs list` counts them.\n\n", BANNER);
     out.push_str("| Spec | Title | Status | Group | Supersedes / superseded by | Summary | Source |\n| :-- | :-- | :-- | :-- | :-- | :-- | :-- |\n");
-    let title_of = |id: &str| groups.iter().find(|g| g.id == id).map(|g| g.title.clone()).unwrap_or_else(|| id.to_string());
     for g in groups {
         for v in sorted(docs.iter().copied().filter(|v| text(v, &["spec", "group"]) == g.id).collect()) {
             let stem = text(v, &["spec", "stem"]);
@@ -79,12 +80,12 @@ fn index(docs: &[&Value], groups: &[Group]) -> String {
                 }
             };
             out.push_str(&format!(
-                "| [{stem}](./{gid}.md#{stem}) | {title} | {status} | [{gtitle}](./{gid}.md) | {sup} | {summary} | [source](../../{path}) |\n",
+                "| [{stem}](./{gid}.md#{stem}) | {title} | {status} | [{gcell}](./{gid}.md) | {sup} | {summary} | [source](../../{path}) |\n",
                 stem = stem,
                 gid = g.id,
                 title = cell(text(v, &["spec", "title"])),
                 status = cell(&status_label(v)),
-                gtitle = cell(&title_of(&g.id)),
+                gcell = cell(&g.id),
                 sup = cell(&sup),
                 summary = if v["summary"].is_null() { "none" } else { "yes" },
                 path = text(v, &["source", "path"]),
@@ -94,8 +95,9 @@ fn index(docs: &[&Value], groups: &[Group]) -> String {
     out
 }
 
+/// One group's page. Its opening depends on this group's entry alone; the count is `delphi specs list --group`'s (§13.4).
 fn group_page(g: &Group, docs: Vec<&Value>) -> String {
-    let mut out = format!("{}\n\n# {}\n\n{} specs. [All groups](./index.md).\n", BANNER, g.title, docs.len());
+    let mut out = format!("{}\n\n# {}\n\n[All groups](./index.md). `delphi specs list --group {}` lists this group.\n", BANNER, g.title, g.id);
     for v in sorted(docs) {
         let stem = text(v, &["spec", "stem"]);
         let path = text(v, &["source", "path"]);
@@ -134,6 +136,25 @@ pub fn render(docs: &BTreeMap<String, Value>, groups: &Groups) -> Result<BTreeMa
         files.insert(format!("{}.md", g.id), group_page(g, all.iter().copied().filter(|v| text(v, &["spec", "group"]) == g.id).collect()));
     }
     Ok(files)
+}
+
+/// The guard of spec 088 §13.3 (tests 20 to 22): every page of `smaller` is a line subsequence of the same page in `larger`, so the
+/// larger set only added lines. Returns each page whose lines were not all kept, with the first line that was not, or a page that is
+/// gone. A line that depends on the whole set (a count, a total) changes when a spec is added, so it is never kept, and is named.
+#[cfg(test)]
+pub(crate) fn lines_not_kept(smaller: &BTreeMap<String, String>, larger: &BTreeMap<String, String>) -> Vec<String> {
+    let mut bad = Vec::new();
+    for (name, page) in smaller {
+        let Some(big) = larger.get(name) else {
+            bad.push(format!("{}: the page is gone", name));
+            continue;
+        };
+        let mut rest = big.lines();
+        if let Some(line) = page.lines().find(|line| !rest.any(|l| l == *line)) {
+            bad.push(format!("{}: the line {:?} is not kept", name, line));
+        }
+    }
+    bad
 }
 
 #[cfg(test)]
@@ -255,7 +276,108 @@ mod tests {
         items[0].1["spec"]["title"] = json!("A | B\nC");
         let out = render_of(items);
         assert!(out["index.md"].contains("A \\| B C"), "{}", out["index.md"]);
-        assert!(out["index.md"].contains("[First \\| group](./first.md)"));
+        // The group cell is the group's id (§13.4); its title is only the heading of its own page.
+        assert!(out["index.md"].contains("| [first](./first.md) |"), "{}", out["index.md"]);
+        assert!(!out["index.md"].contains("First \\| group") && out["first.md"].contains("\n# First | group\n"));
+    }
+
+    // ── no whole-set aggregate (spec 088 §13, tests 20 and 21) ─────────────────────────────────────
+
+    fn three_groups() -> Groups {
+        Groups {
+            groups: vec![
+                Group { id: "alpha".into(), title: "Alpha group".into(), order: 1 },
+                Group { id: "beta".into(), title: "Beta group".into(), order: 2 },
+                Group { id: "gamma".into(), title: "Gamma group".into(), order: 3 },
+            ],
+            specs: BTreeMap::new(),
+        }
+    }
+
+    /// Six specs in three groups, with and without summaries, one unnumbered, one with supersession.
+    fn six() -> Vec<(String, Value)> {
+        let mut items = vec![
+            doc("001-a", Some("001"), "alpha", Some("A.")),
+            doc("002-b", Some("002"), "beta", None),
+            doc("003-c", Some("003"), "alpha", Some("C, in\ntwo lines.")),
+            doc("004-d", Some("004"), "gamma", Some("D.")),
+            doc("005-e", Some("005"), "beta", Some("E.")),
+            doc("blueprints", None, "alpha", None),
+        ];
+        items[4].1["spec"]["supersedes"] = json!("002");
+        items
+    }
+
+    type Renderer = fn(&BTreeMap<String, Value>, &Groups) -> Result<BTreeMap<String, String>, String>;
+
+    /// Renders the set with and without each spec in turn: every page of the smaller rendering must be kept, line for line and in
+    /// order, in the larger one, and the index must grow by exactly one row. The first failure is returned.
+    fn adding_each_spec_only_adds_lines(items: &[(String, Value)], groups: &Groups, renderer: Renderer) -> Result<(), String> {
+        let full: BTreeMap<String, Value> = items.iter().cloned().collect();
+        let larger = renderer(&full, groups)?;
+        for (stem, _) in items {
+            let mut fewer = full.clone();
+            fewer.remove(stem);
+            let smaller = renderer(&fewer, groups)?;
+            let bad = lines_not_kept(&smaller, &larger);
+            if !bad.is_empty() {
+                return Err(format!("adding {}: {}", stem, bad.join("; ")));
+            }
+            let (s, l) = (smaller["index.md"].lines().count(), larger["index.md"].lines().count());
+            if l != s + 1 {
+                return Err(format!("adding {} changed the index by {} lines, not one row", stem, l as i64 - s as i64));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn adding_a_spec_only_adds_lines_and_changes_none() {
+        assert_eq!(adding_each_spec_only_adds_lines(&six(), &three_groups(), render), Ok(()));
+        // And from nothing: the empty set's pages are kept in any set.
+        let empty = render(&BTreeMap::new(), &three_groups()).unwrap();
+        assert_eq!(lines_not_kept(&empty, &render(&six().into_iter().collect(), &three_groups()).unwrap()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn renaming_a_group_changes_only_its_page_heading() {
+        let docs: BTreeMap<String, Value> = six().into_iter().collect();
+        let before = render(&docs, &three_groups()).unwrap();
+        let mut renamed = three_groups();
+        renamed.groups[1].title = "Beta, renamed".into();
+        let after = render(&docs, &renamed).unwrap();
+        assert_eq!(before.keys().collect::<Vec<_>>(), after.keys().collect::<Vec<_>>());
+        let mut changed = Vec::new();
+        for (name, page) in &before {
+            let (a, b): (Vec<&str>, Vec<&str>) = (page.lines().collect(), after[name].lines().collect());
+            assert_eq!(a.len(), b.len(), "{} keeps its length", name);
+            changed.extend(a.iter().zip(&b).filter(|(x, y)| x != y).map(|(x, y)| (name.clone(), x.to_string(), y.to_string())));
+        }
+        assert_eq!(changed, vec![("beta.md".to_string(), "# Beta group".to_string(), "# Beta, renamed".to_string())]);
+    }
+
+    /// The renderer as it was before S3c (§13.1): the same pages with a count line in the index. The guard must reject it.
+    fn counting_renderer(docs: &BTreeMap<String, Value>, groups: &Groups) -> Result<BTreeMap<String, String>, String> {
+        let mut out = render(docs, groups)?;
+        let index = out["index.md"].replacen("# Specs\n\n", &format!("# Specs\n\n{} specs in {} groups.\n\n", docs.len(), groups.groups.len()), 1);
+        out.insert("index.md".into(), index);
+        Ok(out)
+    }
+
+    #[test]
+    fn the_guard_rejects_a_line_that_counts_the_set() {
+        let page = |s: &str| BTreeMap::from([("index.md".to_string(), s.to_string())]);
+        // A count line is changed, not added, when a spec is added: the guard names it.
+        let bad = lines_not_kept(&page("# Specs\n2 specs.\n| a |\n| b |\n"), &page("# Specs\n3 specs.\n| a |\n| c |\n| b |\n"));
+        assert_eq!(bad.len(), 1);
+        assert!(bad[0].contains("\"2 specs.\""), "{:?}", bad);
+        // A row inserted between two unchanged rows is an addition: it passes.
+        assert_eq!(lines_not_kept(&page("# Specs\n| a |\n| b |\n"), &page("# Specs\n| a |\n| c |\n| b |\n")), Vec::<String>::new());
+        // A page that disappears is named too.
+        assert_eq!(lines_not_kept(&page("x\n"), &BTreeMap::new()), vec!["index.md: the page is gone".to_string()]);
+        // The whole check, run on a renderer that counts, fails on the count line.
+        let e = adding_each_spec_only_adds_lines(&six(), &three_groups(), counting_renderer).unwrap_err();
+        assert!(e.contains("index.md") && e.contains("5 specs in 3 groups."), "{}", e);
     }
 
     #[test]

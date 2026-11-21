@@ -2,7 +2,7 @@
 
 # Hosts and MCP
 
-15 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group hosts-and-mcp` lists this group.
 
 ## 025-plugin-skill-and-tool-compatibility
 

@@ -1136,6 +1136,8 @@ pub struct Session {
     /// The app-server transport's writer: replies and the handshake go through it (it owns the child's stdin).
     out: Option<mpsc::Sender<String>>,
     cli: Cli,
+    /// The process was killed because no event came within the wait given to [`Session::next`].
+    idle_killed: bool,
 }
 
 /// How much of a CLI's stderr the error log can ever see.
@@ -1246,7 +1248,7 @@ impl Session {
                         }
                     }
                 });
-                return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx), cli: l.cli });
+                return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx), cli: l.cli, idle_killed: false });
             }
             let mut parser = CodexAppServer::new(&format!("{}\n\n{}\n", l.system_prompt, l.user_prompt), &l.model, &l.cwd, l.opts.effort.clone());
             let (out_tx, mut out_rx) = mpsc::channel::<String>(16);
@@ -1284,7 +1286,7 @@ impl Session {
                     }
                 }
             });
-            return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx), cli: l.cli });
+            return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx), cli: l.cli, idle_killed: false });
         }
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -1317,7 +1319,7 @@ impl Session {
         stdin.flush().await.map_err(|e| e.to_string())?;
         // `codex exec` and `copilot` read their prompt to the end of stdin, so the input closes with the one turn.
         let stdin = if matches!(cli, Cli::Codex | Cli::Copilot) { None } else { Some(stdin) };
-        Ok(Session { child, stdin, rx, pgid, exited: false, stderr_tail, stderr_task, out: None, cli: l.cli })
+        Ok(Session { child, stdin, rx, pgid, exited: false, stderr_tail, stderr_task, out: None, cli: l.cli, idle_killed: false })
     }
 
     /// The tail of the CLI's stderr (empty unless the error log was on when it started). Raw: the caller redacts it.
@@ -1327,6 +1329,11 @@ impl Session {
             let _ = tokio::time::timeout(Duration::from_millis(300), h).await;
         }
         self.stderr_tail.lock().map(|t| String::from_utf8_lossy(&t).into_owned()).unwrap_or_default()
+    }
+
+    /// Whether the process was killed because no event came within the wait given to [`Session::next`].
+    pub fn idle_killed(&self) -> bool {
+        self.idle_killed
     }
 
     /// The next event; after the process ends, one [`Event::Exit`] and then `None`.
@@ -1353,6 +1360,7 @@ impl Session {
             Err(_) => {
                 self.kill().await;
                 self.exited = true;
+                self.idle_killed = true;
                 Some(Event::Exit { code: None })
             }
         }
