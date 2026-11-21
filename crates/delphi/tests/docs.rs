@@ -493,6 +493,13 @@ fn a_seat_receipt_satisfies_its_schema() {
     let mut unmapped = r.clone();
     unmapped.served = resolve(&FamilyTable::shipped(), None);
     must_pass("seat-receipt.schema.json", "a receipt with no served model", &unmapped.to_value());
+    // specs/089 §17: a run killed by the first-event clock says so on its receipt; no other failure word is accepted.
+    let mut stalled = ok.clone();
+    stalled["outcome"] = json!("error");
+    stalled["failure"] = json!("no_first_event");
+    must_pass("seat-receipt.schema.json", "a stalled run's receipt", &stalled);
+    stalled["failure"] = json!("the CLI said: something");
+    must_fail("seat-receipt.schema.json", "a free-text failure", &stalled);
     let mut bad = ok.clone();
     bad["prompt"] = json!("the prompt text");
     must_fail("seat-receipt.schema.json", "a receipt carrying prompt text", &bad);

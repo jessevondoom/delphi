@@ -88,6 +88,9 @@ pub struct Settings {
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
     pub harness_idle: Duration,
+    /// A harness run that has produced no event at all for this long is killed, tried once more and then moved to the family's next
+    /// endpoint (`specs/089` §17, `[harness] first_event_secs`); never longer than `harness_idle`. Zero leaves only the idle clock.
+    pub harness_first_event: Duration,
     /// CLI features from `[harness.claude]` and `[harness.agy]` (`specs/021`).
     pub harness_claude: crate::harness::Opts,
     pub harness_agy: crate::harness::Opts,
@@ -221,6 +224,7 @@ impl Default for Settings {
             agy_gate_file: None,
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
+            harness_first_event: Duration::from_secs(90),
             harness_claude: Default::default(),
             harness_agy: Default::default(),
             harness_codex: Default::default(),
@@ -462,6 +466,9 @@ pub(crate) struct Asker<'a> {
     pub span_id: &'a str,
     pub role: &'a str,
 }
+
+/// How long a harness pair that stalled twice in a row (no event at all) cools down while the family's next endpoint serves (`specs/089` §17).
+pub(crate) const STALL_COOLDOWN_SECS: i64 = 600;
 
 /// The reason when every API endpoint of a family has been tried.
 pub(crate) const EXHAUSTED: &str = "every allowed endpoint is throttled or unavailable";
@@ -1219,6 +1226,8 @@ impl Engine {
                 harness_tried = true;
                 sc.harness_tried.store(true, std::sync::atomic::Ordering::SeqCst);
                 let mut first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                // The other retries below never take a stall (no `result`, no answer), so this one is not a second retry of anything.
+                let stalled_first = matches!(&first, Err(f) if f.stalled.is_some());
                 // One more try of an `agy` seat that the CLI itself failed before it used a tool, in a fresh process, on the seat's remaining
                 // time (`specs/089` P4b). Never a timeout, a quota error, a guard failure or a second failure; the first run's usage is logged.
                 if let Err(f) = &first {
@@ -1231,6 +1240,31 @@ impl Engine {
                         if left >= crate::harness_run::RETRY_MIN_REMAINING {
                             m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64}))).await?;
                             first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                        }
+                    }
+                }
+                // A run that produced no event at all (no output, no tool, no token) is tried once more on any CLI, and after a second
+                // stall the pair cools down and the family's next harness endpoint takes the span (`specs/089` §17). Nothing was spent,
+                // so nothing is repeated; a run that produced anything is never taken here.
+                let mut hep = hep;
+                if stalled_first {
+                    let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
+                    if left.is_none_or(|l| l >= crate::harness_run::RETRY_MIN_REMAINING) {
+                        if let Err(f) = &first {
+                            m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "cause": "no_first_event", "endpoint": hep.id, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.map(|l| l.as_millis() as u64)}))).await?;
+                        }
+                        first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                        if let Err(f) = &first {
+                            if let Some(model) = f.stalled.clone() {
+                                let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
+                                let next = self.route_harness_after(&sc, &hep.id, &model);
+                                if let (Some(next), true) = (next, left.is_none_or(|l| l >= crate::harness_run::RETRY_MIN_REMAINING)) {
+                                    self.pool.record_stall(&hep.id, &model, STALL_COOLDOWN_SECS);
+                                    m.append(sc.ev("harness.fallback", json!({"from": hep.id, "to": next.id, "cause": "no_first_event", "attempt": 3, "cooldown_secs": STALL_COOLDOWN_SECS, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>()}))).await?;
+                                    first = self.run_harness(&mut sc, &ipr, &next).await?;
+                                    hep = next;
+                                }
+                            }
                         }
                     }
                 }
@@ -2038,6 +2072,20 @@ impl Engine {
             return None;
         }
         route.key().and_then(|k| cfg.endpoint(&k.endpoint_id)).filter(|e| e.path == delphi_adapter::config::AccessPath::Harness).cloned()
+    }
+
+    /// The harness endpoint this span would take if the pair `(endpoint_id, model_id)` were cooling down: the family's next endpoint in
+    /// `[access] order` after a stalled one (`specs/089` §17). `None` when the route would not change to another harness endpoint.
+    pub(crate) fn route_harness_after(&self, sc: &SpanCtx, endpoint_id: &str, model_id: &str) -> Option<Endpoint> {
+        let cfg = self.cfg.get();
+        let now = (self.clock_unix)();
+        let mut state: Vec<crate::pool::Entry> = self.pool.snapshot().into_iter().filter(|e| !(e.endpoint_id == endpoint_id && e.model_id == model_id)).collect();
+        state.push(crate::pool::Entry { endpoint_id: endpoint_id.into(), model_id: model_id.into(), state: crate::pool::State::CoolingDown, since: now, until: Some(now + STALL_COOLDOWN_SECS), reason: "no first event".into(), throttles: vec![], probe_interval_secs: 0, next_probe_at: None });
+        let route = resolve_route(&cfg, &state, now, &self.route_request(sc, false));
+        if route.needs_confirmation() {
+            return None;
+        }
+        route.key().and_then(|k| cfg.endpoint(&k.endpoint_id)).filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.id != endpoint_id).cloned()
     }
 
     /// Is there an API pair that can serve this span turn by turn right now?
