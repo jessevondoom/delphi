@@ -31,6 +31,7 @@ A workspace has exactly one daemon and at most one interactive console, and a se
 | 2026-11-21 | **Q5.** A **scan of the home's workspaces folder** is enough as the list of workspaces that are not running | 4.4 |
 | 2026-11-21 | Operator: "draw up a whole plan so we can run it through a council" | this file; section 7 |
 | 2026-11-21 | Operator: "merges take a while can we convene a council to review now?", then restarted the daemon for a formal Council | G1 ran against this branch (PR #843 unmerged) |
+| 2026-11-21 | Operator: the app is to move to an interactive model and "ultimately ... a primary human interface"; it "should be able to answer a red card"; "a signed app is not a requirement ... i don't want to support signed mac apps". Agreed: **park S6b** and make `launch` slice 1 of a coming control-plane spec (a signed action request and a per-target action table), not a one-off; **the console seat is a driver seat** the app can hold later | 4.2, 4.6, section 6 |
 | 2026-11-21 | **G1 ruling: PROCEED-WITH-CHANGES.** C1 accept the gap; C2 `--take` now; C3 free at once, reclaim by seat id; C4 next call; C5 terminal only; C6 signed; C7 launcher in `delphi`; C8 name the callers. Red-team abstained | section 10; 4.1, 4.2, 4.6, 6 amended |
 
 ## 3. What is true on `main` today (b9c2b5f2)
@@ -62,6 +63,8 @@ Read from the code, with anchors; where a claim was not checked it says so.
 4. **Grant runs keep their rule.** `connect_or_spawn_granted`'s "an authorized run needs a daemon of its own" (`spawn.rs:197`) is unchanged and uses the same words.
 
 ### 4.2 One interactive console per workspace (Q1)
+
+**Named a driver seat** (operator, 2026-11-21): the seat belongs to whoever types into the workspace, not to a terminal. In spec 136 only the terminal console can hold it; the coming control-plane spec lets the app hold it, hand it over and be taken from, under the same rules. Nothing below assumes a tty except the console's own entry point.
 
 1. **What "console" means here.** The interactive console: `delphi` and `delphi chat` holding a terminal. **Not** the short commands of section 3 item 6 (`delphi pages`, `decisions`, `timers`, `research`, `app approve`, ...), not `delphi run`, not `delphi mcp` (host), not the relay, not the narrator readers (`delphi status`, hooks, the unpaired app), not the paired app. All of those keep attaching as today; a host plugin session must never be refused because a console is open.
 2. **How.** `hello` on the console socket gains an optional `interactive: true` that only the interactive console sends. The spec names the senders: the terminal-holding entry points of `delphi` and `delphi chat` only (the `chat.rs` attach sites at 689/1022/1181 are to be sorted one by one; the short-command site at 1127 never sends it). Never `delphi run`, the research follow, `pages`, `decisions`, `timers`, `private_read`, `app approve`, `delphi mcp`, the relay or the app. A test per caller asserts it (G1, C8). The daemon keeps one **console seat**: `{pid, tty, since}`. A second `interactive` hello while the seat is held is refused with `console_held {pid, tty, since}`; a `hello` without it is admitted as today. The seat is freed when its connection closes (a crash closes it). No new socket, no new scope, no new token.
@@ -186,7 +189,8 @@ Rules the spec writes down:
 | — | **cut line**: S1 to S5 deliver one daemon, one console, the list and the per-home key with **no new authority**. Everything below may slip without blocking them | | | | |
 | 5 | G2 the red-team pass on `launch` (spec 120 §5 item 1), on a seat that actually answers (G1's Gemini red-team abstained) | S0 | 2-4 h | a readable answer on 4.6 (signing domain, replay, name re-resolution, the per-key limit, the spawn-site gate), with fixtures for S6b | asks for it; decides |
 | 6 | S6a the spawn-site scan extended to `app/src-tauri/`, listing the three existing sites; the "starts no process" wording of 111 §2 and 130 §1.1/AC-9 corrected | S0 | 2-3 h | AC-10 (first half) | merges **at a terminal** (gate file) |
-| 7 | S6b `launch`: the grant and its named table exception, `delphi app launch`, the signing domain, the per-key limit, the bridge command and Start button | S3, S4, S5, S6a, G2 | 14-20 h (red-team rework) | AC-8, AC-9, AC-10 (second half), AC-15; one start from the real app | gives `launch` at a terminal; merges **at a terminal** (two gate files) |
+| **parked** (2026-11-21) | S6b moves to the control-plane spec as its slice 1, rebuilt on a signed action request and a per-target action table (no table exception). Until then a stopped workspace is started by `delphi daemon start` or the copied command. The row below is kept for reference | | | | |
+| — | ~~S6b~~ `launch`: the grant and its named table exception, `delphi app launch`, the signing domain, the per-key limit, the bridge command and Start button | S3, S4, S5, S6a, G2 | 14-20 h (red-team rework) | AC-8, AC-9, AC-10 (second half), AC-15; one start from the real app | gives `launch` at a terminal; merges **at a terminal** (two gate files) |
 
 Total: 48 to 74 hours of building and gate work (raised after G1: S2's pty tests and S6b's red-team rework).
 
