@@ -320,6 +320,12 @@ pub(crate) fn progress_line_of(v: &Value) -> String {
 /// What a foreign seat without the operator's yes is refused with (`specs/098` §6.2; `specs/104` §5 adds why the standing consent did not apply).
 const ASK_YES: &str = "a foreign seat spends the operator's Delphi tokens: ask the operator, and pass operator_confirmed: true only if they said yes";
 
+/// One review copy at a time (`specs/135` §6.2 item 2): a second review waits for the first to finish.
+fn review_slot() -> &'static tokio::sync::Semaphore {
+    static SLOT: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
+
 /// The answer of an `ask_family` job that is still running (`specs/104` §2 item 1).
 fn ask_working(id: &str) -> Value {
     json!({"ask_id": id, "status": "working", "retry_after_seconds": 20, "note": "the other family is still answering: call ask_result with this ask_id (wait: true holds up to 25 seconds); reading it spends nothing more. cancel_job with the ask_id stops it."})
@@ -1556,6 +1562,183 @@ impl EngineService {
         Ok(self.signed_ask(v))
     }
 
+    /// `host.review` (`specs/135` §6, slice F2): a review of the branch checked out at the host's `cwd` by a seat of another family. Delphi
+    /// runs the review's commands in a sandboxed investigation copy of the branch and hands the seat, which has no tools, the diff and the
+    /// results; the seat may ask for up to three more commands, which code checks and runs. It answers at once with an `ask_id`; the
+    /// result is read with `host.ask_result` and the job stopped with `host.cancel_job`, as an `ask_family` job is. Advice only.
+    async fn host_review(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        use crate::review_job as rj;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let mut c = h::Caller::parse(&p).map_err(host_err)?;
+        c.projects = self.engine.projects.clone();
+        let confirmed = p["operator_confirmed"].as_bool() == Some(true);
+        if !confirmed && self.engine.settings.standing_foreign_tokens == 0 {
+            return Err(err(code::INVALID_PARAMS, ASK_YES));
+        }
+        // §6.2 item 1: everything is checked before anything is spent.
+        let bad = |m: String| err(code::INVALID_PARAMS, format!("{m}. Nothing was spent"));
+        let base = p["base"].as_str().filter(|b| !b.is_empty()).unwrap_or("main").to_string();
+        if !crate::worktree::valid_branch(&base) {
+            return Err(bad(format!("`base` is not a branch name Delphi accepts: {}", base.chars().take(80).collect::<String>())));
+        }
+        let (project_name, project) = rj::project_of(&self.engine.projects, &c.cwd).ok_or_else(|| bad("your working directory is not inside a project registered with Delphi: a review copies a registered project's branch".into()))?;
+        let branch = rj::branch_of(&c.cwd).map_err(bad)?;
+        if branch == base {
+            return Err(bad(format!("the branch checked out is `{base}`, the base itself: check out the branch to review, or name another `base`")));
+        }
+        let spec = match p["spec"].as_str().filter(|s| !s.is_empty()) {
+            None => None,
+            Some(q) => {
+                let stems = crate::spec_lookup::spec_stems(&project).map_err(bad)?;
+                let stem = crate::spec_lookup::resolve(&stems, q).map_err(bad)?;
+                let text = std::fs::read_to_string(project.join("specs").join(format!("{stem}.md"))).map_err(|e| bad(format!("cannot read the spec: {e}")))?;
+                Some((stem, text))
+            }
+        };
+        let slice = match p["slice"].as_str().filter(|s| !s.is_empty()) {
+            None => None,
+            Some(sl) => {
+                let num = spec.as_ref().and_then(|(stem, _)| delphi_core::specdoc::spec_number(&format!("{stem}.md"))).ok_or_else(|| bad("`slice` needs `spec`".into()))?;
+                let tracker = std::fs::read_to_string(project.join(rj::TRACKER)).unwrap_or_default();
+                Some(rj::slice_row(&tracker, &num, sl).unwrap_or_else(|| format!("(the tracker has no row for {num} {})", sl.chars().take(16).collect::<String>())))
+            }
+        };
+        let host_family = crate::council_panel::host_family(p["model"].as_str(), &c.tool);
+        let role = "red-team";
+        let family = match p["family"].as_str().filter(|f| !f.is_empty()) {
+            Some(f) if Some(f) == host_family => return Err(err(code::INVALID_PARAMS, "a review exists to hear a family other than your own: name another, or leave `family` out")),
+            Some(f) if !self.engine.panel_family_usable(f) => return Err(err(code::INVALID_PARAMS, format!("`{f}` is not a configured, usable model family on this machine"))),
+            Some(f) => f.to_string(),
+            None => self.engine.panel_foreign_family(role, host_family).ok_or_else(|| err(code::INVALID_PARAMS, "no model family other than your host's is configured and usable: Delphi has no other family to review with. Nothing was spent"))?,
+        };
+        // One seat in two rounds: the ceiling of a Panel's foreign seat, which already covers both rounds.
+        if let Some(why) = crate::seat::over_budget(1, self.engine.panel_foreign_ceiling_tokens(), self.engine.settings.max_foreign_seats, self.engine.settings.max_foreign_tokens) {
+            return Err(err(code::INVALID_PARAMS, why));
+        }
+        let m = {
+            let _gate = self.host_gate.lock().await;
+            self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?
+        };
+        let task_id = m.next_task_id();
+        let ceiling = self.engine.panel_foreign_ceiling_tokens();
+        let consent = self.standing_consent(confirmed, &c.mission(), &format!("{}/{}", m.id, task_id), ceiling)?;
+        let proposition = format!("Review of branch {branch} against {base} in project {project_name}");
+        let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": proposition, "target": "review", "flow": "council", "venue": "panel", "consent": consent, "branch": branch, "base": base}));
+        created.task_id = Some(task_id.clone());
+        m.append(created).await.map_err(engine_err)?;
+        let key = (c.session.clone(), task_id.clone());
+        {
+            let mut asks = self.asks.lock().unwrap();
+            asks.retain(|_, r| r.result.is_none() || r.at.elapsed() < Duration::from_secs(3600));
+            asks.insert(key.clone(), AskRun { result: None, at: Instant::now() });
+        }
+        let (engine, asks, tid, mm, k, host_family) = (self.engine.clone(), self.asks.clone(), task_id.clone(), m.clone(), key.clone(), host_family.map(String::from));
+        let standing_id = format!("{}/{}", m.id, task_id);
+        let job = tokio::spawn(async move {
+            // §6.2 item 2: one review copy at a time; a second request waits here.
+            let _slot = review_slot().acquire().await;
+            let copy_key = format!("rv{}", &blake3::hash(format!("{}/{}", mm.id, tid).as_bytes()).to_hex()[..24]);
+            let exec = engine.exec.clone();
+            let (b2, base2) = (branch.clone(), base.clone());
+            // The copy, the stat and the diff: the daemon's git, all of it before any sandboxed command.
+            let made = tokio::task::spawn_blocking(move || {
+                let guard = exec.open_investigation_at(&copy_key, &project, Some(&b2)).map_err(|e| e.to_string())?;
+                let (stat, diff) = exec.worktrees.investigation_diff(&guard.inv, &base2, &b2).map_err(|e| e.to_string())?;
+                Ok::<_, String>((guard, stat, diff))
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+            let result = match made {
+                Err(e) => {
+                    let why = engine.secrets.redact(&format!("could not make the review copy: {e}"));
+                    let _ = engine.finish_task(&mm, tid.clone(), crate::engine::SpanOutcome { status: crate::engine::Status::Escalated(why.clone()), text: String::new(), turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await;
+                    json!({"ask_id": tid, "status": "failed", "reason": why})
+                }
+                Ok((guard, stat, diff)) => {
+                    let capped = rj::cap_diff(&diff, engine.settings.review_diff_chars);
+                    let configured: Vec<Vec<String>> = engine.settings.review_commands.clone().unwrap_or_else(|| [engine.exec.cfg.test_command.clone(), engine.exec.cfg.check_command.clone()].into_iter().flatten().collect());
+                    let sandbox = engine.exec.sandbox.is_some();
+                    let input = rj::Input { branch: &branch, base: &base, spec: spec.as_ref().map(|(s, t)| (s.as_str(), t.as_str())), slice: slice.as_deref(), stat: &stat, diff: &capped, spec_chars: 20_000 };
+                    let seat = |brief: String| {
+                        let (engine, mm, tid, proposition, family) = (engine.clone(), mm.clone(), tid.clone(), proposition.clone(), family.clone());
+                        async move {
+                            match engine.panel_foreign_run_seat(&mm, &tid, brief, &proposition, role, &family, 1, None, true).await {
+                                crate::council::Stance::Said(t) => Ok(t),
+                                crate::council::Stance::Abstained(w) => Err(w),
+                            }
+                        }
+                    };
+                    let cmd = |argv: Vec<String>, by: &'static str| {
+                        let (exec, inv) = (engine.exec.clone(), guard.inv.clone());
+                        async move {
+                            let a2 = argv.clone();
+                            let ran = tokio::task::spawn_blocking(move || exec.run_investigation(&inv, &a2, None)).await;
+                            match ran {
+                                Ok(Ok(r)) => rj::CommandResult { argv, exit: r.outcome.status.and_then(|s| s.code()), elapsed_ms: r.elapsed.as_millis() as u64, requested_by: by, refused: None, timed_out: r.outcome.timed_out, tail: rj::tail(&format!("{}{}", r.outcome.stdout, r.outcome.stderr), rj::TAIL_CHARS) },
+                                Ok(Err(e)) => rj::CommandResult { argv, exit: None, elapsed_ms: 0, requested_by: by, refused: None, timed_out: false, tail: format!("could not run: {e}") },
+                                Err(e) => rj::CommandResult { argv, exit: None, elapsed_ms: 0, requested_by: by, refused: None, timed_out: false, tail: format!("could not run: {e}") },
+                            }
+                        }
+                    };
+                    let out = rj::review(&input, &configured, sandbox, seat, cmd).await;
+                    // §6.2 item 7: the copy is removed whatever happened.
+                    let _ = tokio::task::spawn_blocking(move || drop(guard)).await;
+                    let status = if out.answer.is_some() { crate::engine::Status::Done } else { crate::engine::Status::Escalated(out.unanswered.clone().unwrap_or_default()) };
+                    let text = out.answer.as_ref().map(|a| format!("verdict: {}; {} finding(s)", a.verdict, a.findings.len())).unwrap_or_default();
+                    let finished = engine.finish_task(&mm, tid.clone(), crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await;
+                    match (finished, mm.replay()) {
+                        (Ok(_), Ok(events)) => {
+                            let receipts: Vec<Value> = crate::seat::seat_summaries(&events, &tid).into_iter().map(|s| s.to_value()).collect();
+                            let served = receipts.first().and_then(|r| r["family"].as_str()).unwrap_or("unknown").to_string();
+                            let now = (engine.clock_unix)();
+                            crate::standing::settle(&engine.ws.dir, &standing_id, crate::seat::served_for_task(&events, &tid).1, now);
+                            let redact = |s: &str| engine.secrets.redact(s);
+                            let commands: Vec<Value> = out.commands.iter().map(|c| {
+                                let mut v = c.to_json();
+                                v["tail"] = json!(redact(&c.tail));
+                                v
+                            }).collect();
+                            json!({
+                                "consent": consent,
+                                "ask_id": tid,
+                                "id": tid,
+                                "status": if out.answer.is_some() { "answered" } else { "unanswered" },
+                                "answered_by": role,
+                                "advice_only": true,
+                                "verdict": out.answer.as_ref().map(|a| a.verdict.clone()),
+                                "findings": out.answer.as_ref().map(|a| a.findings.clone()).unwrap_or_default(),
+                                "unanswered": out.unanswered.as_deref().map(redact),
+                                "commands": commands,
+                                "tests_run": out.tests_run,
+                                "rounds": out.rounds,
+                                "branch": branch,
+                                "base": base,
+                                "diff": {"files": capped.files.len(), "shown": capped.files.len() - capped.dropped.len(), "truncated": capped.truncated(), "left_out": capped.dropped},
+                                "receipt": receipts,
+                                "family_requested": family,
+                                "family_served": served,
+                                "host_family": host_family.map(|f| json!({"family": f, "source": "host-declared"})),
+                                "note": "advice to you: it binds nothing and no gate reads it. The reviewer had no tools; every command was run by Delphi under the OS sandbox with no network, in a copy of the branch that is now deleted. The family shown is the served one from the receipt, not the one requested."
+                            })
+                        }
+                        (Err(e), _) => json!({"ask_id": tid, "status": "failed", "reason": engine.secrets.redact(&e.to_string())}),
+                        (_, Err(e)) => json!({"ask_id": tid, "status": "failed", "reason": engine.secrets.redact(&e.to_string())}),
+                    }
+                }
+            };
+            if let Some(r) = asks.lock().unwrap().get_mut(&k) {
+                r.result = Some(result);
+                r.at = Instant::now();
+            }
+        });
+        self.host_aborts.lock().unwrap().insert((m.id.clone(), task_id.clone()), job.abort_handle());
+        let v = self.wait_ask(&key, Duration::ZERO).await;
+        Ok(self.signed_ask(v))
+    }
+
     /// Spec 104 §5 (§12 A2, A4): the consent a foreign seat runs under. With the operator's yes for this call it is `operator` and the
     /// standing amount is not touched. Without it, the ratified `[access] standing_foreign_tokens` must be above 0, the session must not
     /// carry a live private-read mark (spec 103: no host text goes to another vendor without a yes then), and `ceiling` must fit in the
@@ -1631,8 +1814,8 @@ impl EngineService {
     }
 
     /// The seats of a `foreign_seats` request (`specs/086` §6.4): each `{role, family?, tools?}`, roles distinct, among the Panel's three.
-    /// `tools` is `none` (the default: no tools in any round) or `readonly` (what the role's manifest allows in Round 1, still none
-    /// once a seat reads a peer). A family it names must be configured and usable; none named takes the role's own, avoiding the host's.
+    /// `tools` is `none` (the default: no tools in any round) or `readonly` (the role's read tools in Round 1, narrowed as a
+    /// host-raised span is by `specs/062` §6.3: no write, command or connector; still none once a seat reads a peer). A family it names must be configured and usable; none named takes the role's own, avoiding the host's.
     /// Nothing is spent here.
     fn plan_foreign_seats(&self, v: &Value, host_family: Option<&str>) -> Result<Vec<crate::council_panel::ForeignSeat>, RpcError> {
         let bad = |m: String| err(code::INVALID_PARAMS, m);
@@ -1917,7 +2100,7 @@ impl EngineService {
             let raised_council = events.iter().any(|e| e.kind == h::COUNCIL_EVENT && e.payload["task_id"] == id.as_str());
             let raised_help = self.helps.lock().unwrap().get(&id).is_some_and(|r| r.session == c.session) && events.iter().any(|e| e.kind == h::HELP_EVENT && e.payload["task_id"] == id.as_str());
             let ask_key = (c.session.clone(), id.clone());
-            let raised_ask = self.asks.lock().unwrap().get(&ask_key).is_some_and(|r| r.result.is_none()) && events.iter().any(|e| e.kind == "task.created" && e.task_id.as_deref() == Some(id.as_str()) && e.payload["target"] == "ask_family");
+            let raised_ask = self.asks.lock().unwrap().get(&ask_key).is_some_and(|r| r.result.is_none()) && events.iter().any(|e| e.kind == "task.created" && e.task_id.as_deref() == Some(id.as_str()) && matches!(e.payload["target"].as_str(), Some("ask_family" | "review")));
             let ended = events.iter().any(|e| e.task_id.as_deref() == Some(id.as_str()) && matches!(e.kind.as_str(), "task.completed" | "task.failed" | "task.cancelled"));
             if !(raised_council || raised_help || raised_ask) || ended {
                 return Err(refuse());
@@ -5022,6 +5205,12 @@ impl Extension for ServiceExt {
         Box::pin(async move { svc.app_update_admin(&method, params).await })
     }
 
+    /// `specs/129` §10.2: a key revoked, or its `request` grant taken away, cancels the requests it started that have not ended.
+    fn app_requests_cancel(&self, key: &str, whole: bool) -> RpcFuture {
+        let out = self.0.app_requests_cancel(key, whole);
+        Box::pin(async move { Some(Ok(out)) })
+    }
+
     fn call(&self, method: &str, params: Value, ctx: CallContext) -> RpcFuture {
         let (svc, method) = (self.0.clone(), method.to_string());
         Box::pin(async move {
@@ -5066,6 +5255,7 @@ impl Extension for ServiceExt {
                 "host.council_open" => svc.host_council_open(params, ctx).await,
                 "host.ask_family" => svc.host_ask_family(params, ctx).await,
                 "host.ask_result" => svc.host_ask_result(params, ctx).await,
+                "host.review" => svc.host_review(params, ctx).await,
                 "host.council_frame" => svc.host_council_frame(params, ctx).await,
                 "host.council_brief" => svc.host_council_brief(params, ctx).await,
                 "host.council_submit" => svc.host_council_submit(params, ctx).await,
@@ -10788,6 +10978,124 @@ mod tests {
         assert_eq!(events.iter().filter(|e| e.kind == "task.completed").count(), 1, "the job finished its task once");
     }
 
+    /// Spec 135 §6 (F2): make the testkit project a repository whose checked-out branch `feature` changes one file.
+    fn review_repo(f: &Fx) -> PathBuf {
+        let proj = std::fs::canonicalize(f.root.join("proj")).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git").arg("-C").arg(&proj).args(["-c", "user.name=t", "-c", "user.email=t@localhost.invalid", "-c", "commit.gpgSign=false"]).args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "--quiet", "-b", "main"]);
+        git(&["add", "--all"]);
+        git(&["commit", "--quiet", "-m", "init"]);
+        git(&["checkout", "--quiet", "-b", "feature"]);
+        std::fs::write(proj.join("src/lib.rs"), "pub fn needle() {}\npub fn REVIEWED_CHANGE() {}\n").unwrap();
+        git(&["commit", "--quiet", "-am", "the change"]);
+        proj
+    }
+
+    /// `request_review` as the MCP process drives it: the id at once, then `ask_result` until the review is in.
+    fn review(c: &mut Client, body: Value) -> Value {
+        let first = c.call("host.review", body.clone()).unwrap();
+        assert_eq!(first["status"], "working", "the daemon hands back the id at once: {first}");
+        let read = json!({"session": body["session"], "tool": body["tool"], "cwd": body["cwd"], "ask_id": first["ask_id"], "wait": true});
+        for _ in 0..20 {
+            let v = c.call("host.ask_result", read.clone()).unwrap();
+            if v["status"] != "working" {
+                return v;
+            }
+        }
+        panic!("the review never finished")
+    }
+
+    /// Spec 135 AC-8: Delphi runs the configured command in a copy of the branch, the seat's requested commands run (the denied one is
+    /// refused), Round 2 sees their output, the seat has no tools, and the copy is gone afterwards.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_review_runs_the_tests_in_a_copy_of_the_branch_and_a_seat_of_another_family_reviews_with_their_output() {
+        let f = setup(vec![], 50.0, |s| {
+            roomy(s);
+            s.review_commands = Some(vec![vec!["/bin/echo".into(), "TESTS-PASSED-MARKER".into()]]);
+        });
+        crate::council::tests::two_families(&f);
+        if f.engine.exec.sandbox.is_none() {
+            eprintln!("no OS sandbox on this machine: the AC-10 path is covered in review_job_tests");
+            return;
+        }
+        let briefs: Arc<std::sync::Mutex<Vec<(String, usize)>>> = Default::default();
+        let b2 = briefs.clone();
+        f.model.respond_with(move |body| {
+            let t = body.to_string();
+            b2.lock().unwrap().push((t.clone(), body["tools"].as_array().map_or(0, |a| a.len())));
+            if t.contains("FINAL answer") {
+                Step::text(r#"{"verdict": "changes", "findings": [{"severity": "medium", "file": "src/lib.rs", "line": 2, "claim": "a function name in capitals", "evidence": "REVIEWED_CHANGE"}]}"#)
+            } else {
+                Step::text(r#"{"verdict": "unsure", "findings": [], "run": [["/bin/cat", "src/lib.rs"], ["git", "push"]]}"#)
+            }
+        });
+        f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+        let proj = review_repo(&f);
+        let cwd = proj.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let got = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            review(&mut c, pbody(&cwd, json!({"model": "claude-opus", "operator_confirmed": true})))
+        })
+        .await;
+        assert_eq!((got["status"].as_str(), got["verdict"].as_str(), got["family_served"].as_str()), (Some("answered"), Some("changes"), Some("gemini")), "{got}");
+        assert_eq!((got["branch"].as_str(), got["base"].as_str(), got["tests_run"].as_bool(), got["rounds"].as_u64()), (Some("feature"), Some("main"), Some(true), Some(2)), "{got}");
+        assert_eq!(got["findings"][0]["claim"], "a function name in capitals", "{got}");
+        let cmds = got["commands"].as_array().unwrap();
+        let by: Vec<(&str, &str, bool)> = cmds.iter().map(|c| (c["argv"][0].as_str().unwrap(), c["requested_by"].as_str().unwrap(), c.get("refused").is_some())).collect();
+        assert_eq!(by, vec![("/bin/echo", "delphi", false), ("git", "seat", true), ("/bin/cat", "seat", false)], "{got}");
+        assert!(cmds[0]["tail"].as_str().unwrap().contains("TESTS-PASSED-MARKER") && cmds[2]["tail"].as_str().unwrap().contains("REVIEWED_CHANGE"), "the commands ran in the copy of the branch: {cmds:?}");
+        assert!(got["display"].as_str().is_some_and(|d| d.contains("(red-team, via delphi)")), "{got}");
+        assert_eq!(got["receipt"][0]["tools_offered"].as_array().map(Vec::len), Some(0), "no tools: {got}");
+        let briefs = briefs.lock().unwrap();
+        assert_eq!(briefs.len(), 2, "two rounds");
+        assert!(briefs.iter().all(|(_, tools)| *tools == 0), "the seat had no tools in either round");
+        assert!(briefs[0].0.contains("TESTS-PASSED-MARKER") && briefs[0].0.contains("REVIEWED_CHANGE"), "round 1 has the test output and the diff");
+        assert!(briefs[1].0.contains("refused, not run") && briefs[1].0.contains("FINAL answer"), "round 2 has the requested outputs");
+        let left = std::fs::read_dir(f.engine.exec.worktrees.investigations_root()).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(left, 0, "the review copy is removed");
+        // The project itself is untouched: still on its branch, nothing written.
+        assert_eq!(crate::review_job::branch_of(&proj).unwrap(), "feature");
+    }
+
+    /// Spec 135 AC-9: refused before anything is spent: no yes, the host's own family, a branch equal to the base, a directory outside a
+    /// registered project.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_review_is_refused_before_anything_is_spent() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        let proj = review_repo(&f);
+        let (cwd, outside) = (proj.to_string_lossy().to_string(), f.root.to_string_lossy().to_string());
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let errs = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.hello(&htok).unwrap();
+            let mut call = |cwd: &str, extra: Value| c.call("host.review", pbody(cwd, extra)).unwrap_err().to_string();
+            vec![
+                call(&cwd, json!({"model": "claude-opus"})),
+                call(&cwd, json!({"model": "claude-opus", "family": "claude", "operator_confirmed": true})),
+                call(&cwd, json!({"model": "claude-opus", "base": "feature", "operator_confirmed": true})),
+                call(&outside, json!({"model": "claude-opus", "operator_confirmed": true})),
+                call(&cwd, json!({"model": "claude-opus", "base": "-x", "operator_confirmed": true})),
+            ]
+        })
+        .await;
+        assert!(errs[0].contains("operator_confirmed"), "{}", errs[0]);
+        assert!(errs[1].contains("other than your own"), "{}", errs[1]);
+        assert!(errs[2].contains("the base itself") && errs[2].contains("Nothing was spent"), "{}", errs[2]);
+        assert!(errs[3].contains("not inside a project registered"), "{}", errs[3]);
+        assert!(errs[4].contains("not a branch name"), "{}", errs[4]);
+        assert!(f.model.requests().is_empty(), "nothing was spent");
+        assert!(!f.engine.exec.worktrees.investigations_root().exists() || std::fs::read_dir(f.engine.exec.worktrees.investigations_root()).unwrap().next().is_none(), "no copy was made");
+    }
+
     /// Spec 104 §3 item 2: the progress line is built from status fields only: the phase, the workers, or the state word.
     #[test]
     fn the_progress_line_is_built_from_status_fields_and_is_one_short_line() {
@@ -11211,6 +11519,16 @@ mod tests {
 
     const APP_KEY: &str = "app-0a1b2c";
 
+    /// The app's keys on record as the daemon writes them, each holding `read` and `request`: the engine looks at the record again
+    /// after it admits a request (`specs/129` §10.2), as the server looked before it handed the request over.
+    fn app_keys_hold_request(f: &Fx, names: &[&str]) {
+        let keys: Vec<delphi_core::app_keys::AppKey> = names
+            .iter()
+            .map(|n| delphi_core::app_keys::AppKey { name: n.to_string(), public_key: "ab".repeat(32), paired_at: "2026-11-20T00:00:00.000Z".into(), last_used: "2026-11-20T00:00:00.000Z".into(), app_version: "0.6.5".into(), grants: vec!["read".into(), "request".into()], update_auto: false })
+            .collect();
+        delphi_core::app_keys::KeyStore::at(&f.engine.ws.home).save(&keys).unwrap();
+    }
+
     /// The `app.request` events of one request, as (state, payload), oldest first.
     fn app_states(f: &Fx, request: &str) -> Vec<(String, Value)> {
         events_of(f, "app.request").into_iter().filter(|e| e.payload["request"] == request).map(|e| (e.payload["state"].as_str().unwrap_or("").to_string(), e.payload)).collect()
@@ -11241,6 +11559,7 @@ mod tests {
         let svc = s.svc.clone();
         svc.adopt(f.m.clone());
         let ext = svc.extension();
+        app_keys_hold_request(&f, &[APP_KEY]);
         r4_web(&svc, &["https://k4-continue.example/study"]);
         let console = CallContext { scope: Scope::Console, client_id: 2 };
         let started = svc.research_start(json!({"topic": "does aspirin lower fever in adults over seventy"}), console).await.unwrap();
@@ -11346,6 +11665,7 @@ mod tests {
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         let ext = svc.extension();
+        app_keys_hold_request(&f, &[APP_KEY, "app-0000ff"]);
         let mut counted = 0;
 
         // A dispute: the claim's record gains the operator's mark, exactly as `pages.dispute` writes it.
@@ -11399,6 +11719,160 @@ mod tests {
         assert!(ext.app_request("app-0000ff", "app.page_dispute", json!({"claim": c, "note": "another key, its own hour"})).await.unwrap().is_ok());
     }
 
+    // ── `specs/129` §10.2: revoking a key cancels the requests it started ───────────────────────────────────────────────────
+
+    /// Hold every place of the research queue with a job that never ends, so a run a request starts waits, queued, until it is
+    /// cancelled.
+    fn hold_the_research_queue(f: &Fx, svc: &EngineService) {
+        for i in 0..f.engine.settings.research_limits.concurrent.max(1) {
+            svc.research_jobs.submit(&format!("hold-{i}"), "a-test", delphi_core::research::Depth::Quick, |_| async { std::future::pending::<Result<crate::research_jobs::Finish, String>>().await });
+        }
+    }
+
+    /// Make the next request wait at `at` ("admitted" or "checked") until the test lets it go; returns (it got there, let it go).
+    fn pause_app_request(svc: &EngineService, at: &'static str) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+        let (reached, go) = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
+        svc.app_asked.lock().unwrap().pause = Some((at, reached.clone(), go.clone()));
+        (reached, go)
+    }
+
+    /// As the server revokes: the key leaves the record, then its requests are cancelled.
+    fn revoke_on_record(f: &Fx, svc: &EngineService, key: &str, keep: &[&str]) -> Value {
+        app_keys_hold_request(f, keep);
+        svc.app_requests_cancel(key, true)
+    }
+
+    /// AC-10 as amended by `specs/129` §10.2: revoking a key cancels every request of it that has not ended, through the research
+    /// queue's own cancel; the revoke's answer counts and names them; each one's `app.request` record says `cancelled` with the
+    /// reason `revoked` and its request id, never what was typed. Another key's requests go on.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn revoking_a_key_cancels_the_requests_it_started_and_names_each_by_its_id() {
+        const OTHER: &str = "app-0000ff";
+        let f = setup(vec![], 5.0, |_| {});
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        r4_web(&svc, &["https://s2-revoke.example/study"]);
+        app_keys_hold_request(&f, &[APP_KEY, OTHER]);
+        hold_the_research_queue(&f, &svc);
+        let ext = svc.extension();
+        let ask = |key: &'static str, q: &'static str| {
+            let ext = ext.clone();
+            async move { ext.app_request(key, "app.research_ask", json!({"question": q})).await.unwrap().unwrap() }
+        };
+        // The console's research runs one at a time, so the key has one run, queued behind the held places.
+        let mine = ask(APP_KEY, "which lighthouse on the coast was built first").await;
+        assert_eq!(mine["state"], "queued", "{mine}");
+        let id = mine["request"].as_str().unwrap().to_string();
+
+        let out = revoke_on_record(&f, &svc, APP_KEY, &[OTHER]);
+        assert_eq!(out, json!({"cancelled": [id], "left_running": []}));
+        assert_eq!(app_ended(&f, &id).await, ["queued", "cancelled"]);
+        let last = app_states(&f, &id).pop().unwrap().1;
+        assert_eq!(last, json!({"name": APP_KEY, "request": id, "method": "app.research_ask", "ids": {}, "state": "cancelled", "reason": "revoked"}));
+        assert_eq!(svc.research_jobs.status(mine["research_id"].as_str().unwrap(), crate::research_console::SESSION).unwrap()["status"], "cancelled", "through the queue's own cancel");
+        assert!(events_of(&f, "app.request").iter().all(|e| !e.payload.to_string().contains("lighthouse")), "never what was typed");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !svc.app_asked.lock().unwrap().unended(APP_KEY).is_empty() {
+            assert!(std::time::Instant::now() < deadline, "a cancelled request still counts as running");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Another key asks next and is untouched by a second revoke of the first, which has nothing left to cancel.
+        let theirs = ask(OTHER, "what lights a lighthouse lamp").await;
+        assert_eq!(theirs["state"], "queued", "{theirs}");
+        assert_eq!(svc.app_requests_cancel(APP_KEY, true), json!({"cancelled": [], "left_running": []}));
+        assert_eq!(svc.research_jobs.status(theirs["research_id"].as_str().unwrap(), crate::research_console::SESSION).unwrap()["status"], "queued");
+        assert_eq!(svc.app_asked.lock().unwrap().unended(OTHER).len(), 1);
+    }
+
+    /// `specs/129` §10.2, the race: a request that arrives while its key is being revoked is refused or cancelled, and never left
+    /// running. Each order is made to happen, not hoped for: the request is held at a step of its own while the revoke runs.
+    /// (1) The revoke ran before the request was admitted (it had passed the server's look): the second look at the record refuses
+    /// it. (2) It was admitted and the revoke ran before the second look: cancelled. (3) It passed the second look and the revoke ran
+    /// before its work started: cancelled, and the work never starts (a dispute is not written; a rebuild is not begun). (4) Taking
+    /// `request` away does the same as a revoke.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_that_arrives_during_a_revoke_is_refused_or_cancelled_never_left_running() {
+        let f = setup(vec![], 5.0, |_| {});
+        let claim = library_with_a_claim(&f);
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        r4_web(&svc, &["https://s2-race.example/study"]);
+        hold_the_research_queue(&f, &svc);
+        let ext = svc.extension();
+        let disputes = || lib.claim(&claim).unwrap()["contested_by"].as_array().map_or(0, |a| a.len());
+        let terminal = |id: &str| app_states(&f, id).into_iter().filter(|(s, _)| matches!(s.as_str(), "done" | "failed" | "cancelled" | "refused")).collect::<Vec<_>>();
+
+        // (1) Revoked before admission.
+        app_keys_hold_request(&f, &[]);
+        let refused = ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": claim, "note": "after the revoke"})).await.unwrap().unwrap_err();
+        assert_eq!(refused.code, code::FORBIDDEN);
+        assert!(refused.message.contains("no longer paired"), "{}", refused.message);
+        assert_eq!(disputes(), 0);
+        let rec = events_of(&f, "app.request").pop().unwrap().payload;
+        assert_eq!((rec["state"].as_str(), rec["name"].as_str()), (Some("refused"), Some(APP_KEY)));
+        assert!(svc.app_asked.lock().unwrap().unended(APP_KEY).is_empty());
+
+        // (2) and (3), for each kind of request: held after admission or after the second look; the revoke runs; let go.
+        let cases: [(&str, &'static str, Value); 6] = [
+            ("app.page_dispute", "admitted", json!({"claim": claim, "note": "held"})),
+            ("app.page_dispute", "checked", json!({"claim": claim, "note": "held"})),
+            ("app.page_rebuild", "admitted", json!({"slug": "lighthouse-lamps"})),
+            ("app.page_rebuild", "checked", json!({"slug": "lighthouse-lamps"})),
+            ("app.research_ask", "admitted", json!({"question": "which lighthouse was lit first"})),
+            ("app.research_ask", "checked", json!({"question": "which lighthouse was lit first"})),
+        ];
+        for (n, (method, at, params)) in cases.into_iter().enumerate() {
+            let key: &'static str = Box::leak(format!("app-00{n:04x}").into_boxed_str());
+            app_keys_hold_request(&f, &[key]);
+            let (reached, go) = pause_app_request(&svc, at);
+            let asked = {
+                let (ext, method) = (ext.clone(), method.to_string());
+                tokio::spawn(async move { ext.app_request(key, &method, params).await.unwrap() })
+            };
+            reached.notified().await;
+            let held = svc.app_asked.lock().unwrap().unended(key);
+            assert_eq!(held.len(), 1, "{method} at {at}: the request is running, so the revoke finds it");
+            let out = revoke_on_record(&f, &svc, key, &[]);
+            assert_eq!(out, json!({"cancelled": held, "left_running": []}), "{method} at {at}");
+            go.notify_one();
+            let answer = asked.await.unwrap().unwrap_err();
+            assert_eq!((answer.code, answer.message.as_str()), (code::FORBIDDEN, app_requests::CANCELLED), "{method} at {at}");
+            let ended = terminal(&held[0]);
+            assert_eq!(ended.len(), 1, "{method} at {at}: one end, {ended:?}");
+            assert_eq!(ended[0].1, json!({"name": key, "request": held[0], "method": method, "ids": ended[0].1["ids"], "state": "cancelled", "reason": "revoked"}));
+            assert!(app_states(&f, &held[0]).iter().all(|(s, _)| s == "cancelled"), "{method} at {at}: it never started");
+            assert!(svc.app_asked.lock().unwrap().unended(key).is_empty(), "{method} at {at}: nothing of it is left running");
+        }
+        assert_eq!(disputes(), 0, "no held dispute was written");
+        assert!(!f.engine.ws.home.join("library/pages/lighthouse-lamps.md").exists(), "no held rebuild was begun");
+        // No held research request queued a run: each stopped before it launched one.
+        assert_eq!(svc.research_status(CallContext { scope: Scope::Console, client_id: 2 }).await.unwrap_err().code, code::NOT_FOUND, "no research run was started");
+
+        // (4) Taking `request` away cancels as a revoke does, held after the second look.
+        app_keys_hold_request(&f, &[APP_KEY]);
+        let (reached, go) = pause_app_request(&svc, "checked");
+        let asked = {
+            let (ext, claim) = (ext.clone(), claim.clone());
+            tokio::spawn(async move { ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": claim, "note": "held"})).await.unwrap() })
+        };
+        reached.notified().await;
+        let held = svc.app_asked.lock().unwrap().unended(APP_KEY);
+        let mut keys = delphi_core::app_keys::KeyStore::at(&f.engine.ws.home).load().unwrap();
+        keys[0].grants.retain(|g| g != "request");
+        delphi_core::app_keys::KeyStore::at(&f.engine.ws.home).save(&keys).unwrap();
+        assert_eq!(svc.app_requests_cancel(APP_KEY, false), json!({"cancelled": held, "left_running": []}));
+        go.notify_one();
+        assert_eq!(asked.await.unwrap().unwrap_err().message, app_requests::CANCELLED);
+        assert_eq!(terminal(&held[0])[0].1["reason"], "revoked");
+        assert_eq!(disputes(), 0);
+        // And with the grant taken, a request that had passed the server's look is refused by the engine's.
+        let refused = ext.app_request(APP_KEY, "app.page_dispute", json!({"claim": claim, "note": "no grant"})).await.unwrap().unwrap_err();
+        assert!(refused.message.contains("no longer holds `request`"), "{}", refused.message);
+        assert_eq!(disputes(), 0);
+    }
+
     // ── `specs/120` K6: the red-team's fixtures, and the daemon's half of the end-to-end check ─────────────────────────────
 
     /// A daemon as `delphi __core` serves it, app socket included: the engine answers, and what happens on the app socket is
@@ -11416,7 +11890,8 @@ mod tests {
         let (sock, app_sock, narrator_sock) = (dir.path().join("d.sock"), dir.path().join("a.sock"), dir.path().join("n.sock"));
         let bind = |p: &PathBuf| tokio::net::UnixListener::bind(p).unwrap();
         let (console_l, app_l, narrator_l) = (bind(&sock), bind(&app_sock), bind(&narrator_sock));
-        let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
+        // The daemon's home is the engine's, as under `delphi __core`: the key record the server writes is the one the engine reads.
+        let mut cfg = DaemonConfig::new(f.engine.ws.home.clone(), f.engine.ws.dir.clone());
         cfg.tty_policy = TtyPolicy::Disabled;
         let daemon = Daemon::with_hub(cfg, f.engine.hub.clone()).unwrap();
         let svc = EngineService::new(f.engine.clone(), "m1");

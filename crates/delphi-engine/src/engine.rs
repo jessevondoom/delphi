@@ -88,6 +88,9 @@ pub struct Settings {
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
     pub harness_idle: Duration,
+    /// A harness run that has produced no event at all for this long is killed, tried once more and then moved to the family's next
+    /// endpoint (`specs/089` §17, `[harness] first_event_secs`); never longer than `harness_idle`. Zero leaves only the idle clock.
+    pub harness_first_event: Duration,
     /// CLI features from `[harness.claude]` and `[harness.agy]` (`specs/021`).
     pub harness_claude: crate::harness::Opts,
     pub harness_agy: crate::harness::Opts,
@@ -120,6 +123,11 @@ pub struct Settings {
     /// `[access] standing_foreign_tokens` (`specs/104` §5, §12 A4): the operator's standing consent for read-only foreign seats, in tokens
     /// per 24 hours. Read from the ratified copy only (`[access]` is pinned); 0, the default, is off.
     pub standing_foreign_tokens: u64,
+    /// `[forge] review_commands` (`specs/135` §6.2 item 3): the commands a review runs in its sandboxed copy. `None`: the `[exec]`
+    /// test and check commands, when they are set.
+    pub review_commands: Option<Vec<Vec<String>>>,
+    /// `[forge] review_diff_chars` (`specs/135` §6.3): the most diff a review's seat is shown.
+    pub review_diff_chars: usize,
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
@@ -216,6 +224,7 @@ impl Default for Settings {
             agy_gate_file: None,
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
+            harness_first_event: Duration::from_secs(90),
             harness_claude: Default::default(),
             harness_agy: Default::default(),
             harness_codex: Default::default(),
@@ -234,6 +243,8 @@ impl Default for Settings {
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
             standing_foreign_tokens: 0,
+            review_commands: None,
+            review_diff_chars: crate::review_job::DEFAULT_DIFF_CHARS,
             thin_below: 3,
             continue_bar: Default::default(),
             archive: Default::default(),
@@ -398,6 +409,9 @@ pub struct Engine {
     pub(crate) operator_prompts: Mutex<HashMap<String, String>>,
     /// Tasks raised by a host agent (`specs/062` §6.3): every span of one, dispatched or not, runs narrowed to read-only.
     pub(crate) readonly_tasks: Mutex<HashSet<String>>,
+    /// Single spans narrowed to read-only, by `<mission id>/<handoff id>` (`specs/086` §6.4, `specs/062` §6): a host Panel's foreign
+    /// seat opened with tools. Its task is the host's Panel, not a host-raised task, so `readonly_tasks` does not reach it.
+    pub(crate) readonly_handoffs: Mutex<HashSet<String>>,
     /// Model calls spent on provisional decisions, by task (`[optimistic] max_approver_calls`).
     pub(crate) approver_calls: Mutex<HashMap<String, u32>>,
     /// How the team is spread over the providers for now (`/pace`, `specs/035` D-21). Kept in memory on purpose: it lasts until the
@@ -452,6 +466,9 @@ pub(crate) struct Asker<'a> {
     pub span_id: &'a str,
     pub role: &'a str,
 }
+
+/// How long a harness pair that stalled twice in a row (no event at all) cools down while the family's next endpoint serves (`specs/089` §17).
+pub(crate) const STALL_COOLDOWN_SECS: i64 = 600;
 
 /// The reason when every API endpoint of a family has been tried.
 pub(crate) const EXHAUSTED: &str = "every allowed endpoint is throttled or unavailable";
@@ -549,6 +566,11 @@ fn final_text(blocks: &[ContentBlock]) -> String {
 const SHELL_SCOPE: &str = "shell-worktree-scoped";
 
 /// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
+/// The key of a span marked read-only by its handoff: handoff ids repeat across missions (`ho_t_0003_red-team_r1`), so the mission is part of it.
+pub(crate) fn readonly_key(mission: &str, handoff_id: &str) -> String {
+    format!("{mission}/{handoff_id}")
+}
+
 pub(crate) fn builds(m: &AgentManifest) -> bool {
     m.execute.iter().any(|e| e == SHELL_SCOPE) && m.write.iter().any(|g| g.starts_with("@worktree/"))
 }
@@ -987,7 +1009,8 @@ impl Engine {
             let tier = handoff.routing_directive.model_tier.clone().unwrap_or_else(|| self.default_tier_of(&role, &manifest));
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id), output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
+            let seat_readonly = self.readonly_handoffs.lock().unwrap().contains(&readonly_key(&m.id, &handoff.handoff_id));
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -1021,6 +1044,10 @@ impl Engine {
                 sc.manifest.write = Vec::new();
                 sc.guard.write_globs = Vec::new();
                 sc.manifest.execute.retain(|e| e == "agent-dispatch" || e == "org-context");
+                // A read-only seat is marked by its handoff, not its task, so a span it dispatched would not inherit the mark.
+                if seat_readonly {
+                    sc.manifest.execute.retain(|e| e == "org-context");
+                }
             }
             // A bundle `distill` span is narrowed before anything is read or offered (`distill.rs`).
             if let Some(stage) = &handoff.distill {
@@ -1199,6 +1226,8 @@ impl Engine {
                 harness_tried = true;
                 sc.harness_tried.store(true, std::sync::atomic::Ordering::SeqCst);
                 let mut first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                // The other retries below never take a stall (no `result`, no answer), so this one is not a second retry of anything.
+                let stalled_first = matches!(&first, Err(f) if f.stalled.is_some());
                 // One more try of an `agy` seat that the CLI itself failed before it used a tool, in a fresh process, on the seat's remaining
                 // time (`specs/089` P4b). Never a timeout, a quota error, a guard failure or a second failure; the first run's usage is logged.
                 if let Err(f) = &first {
@@ -1211,6 +1240,31 @@ impl Engine {
                         if left >= crate::harness_run::RETRY_MIN_REMAINING {
                             m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64}))).await?;
                             first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                        }
+                    }
+                }
+                // A run that produced no event at all (no output, no tool, no token) is tried once more on any CLI, and after a second
+                // stall the pair cools down and the family's next harness endpoint takes the span (`specs/089` §17). Nothing was spent,
+                // so nothing is repeated; a run that produced anything is never taken here.
+                let mut hep = hep;
+                if stalled_first {
+                    let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
+                    if left.is_none_or(|l| l >= crate::harness_run::RETRY_MIN_REMAINING) {
+                        if let Err(f) = &first {
+                            m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "cause": "no_first_event", "endpoint": hep.id, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.map(|l| l.as_millis() as u64)}))).await?;
+                        }
+                        first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                        if let Err(f) = &first {
+                            if let Some(model) = f.stalled.clone() {
+                                let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
+                                let next = self.route_harness_after(&sc, &hep.id, &model);
+                                if let (Some(next), true) = (next, left.is_none_or(|l| l >= crate::harness_run::RETRY_MIN_REMAINING)) {
+                                    self.pool.record_stall(&hep.id, &model, STALL_COOLDOWN_SECS);
+                                    m.append(sc.ev("harness.fallback", json!({"from": hep.id, "to": next.id, "cause": "no_first_event", "attempt": 3, "cooldown_secs": STALL_COOLDOWN_SECS, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>()}))).await?;
+                                    first = self.run_harness(&mut sc, &ipr, &next).await?;
+                                    hep = next;
+                                }
+                            }
                         }
                     }
                 }
@@ -2018,6 +2072,20 @@ impl Engine {
             return None;
         }
         route.key().and_then(|k| cfg.endpoint(&k.endpoint_id)).filter(|e| e.path == delphi_adapter::config::AccessPath::Harness).cloned()
+    }
+
+    /// The harness endpoint this span would take if the pair `(endpoint_id, model_id)` were cooling down: the family's next endpoint in
+    /// `[access] order` after a stalled one (`specs/089` §17). `None` when the route would not change to another harness endpoint.
+    pub(crate) fn route_harness_after(&self, sc: &SpanCtx, endpoint_id: &str, model_id: &str) -> Option<Endpoint> {
+        let cfg = self.cfg.get();
+        let now = (self.clock_unix)();
+        let mut state: Vec<crate::pool::Entry> = self.pool.snapshot().into_iter().filter(|e| !(e.endpoint_id == endpoint_id && e.model_id == model_id)).collect();
+        state.push(crate::pool::Entry { endpoint_id: endpoint_id.into(), model_id: model_id.into(), state: crate::pool::State::CoolingDown, since: now, until: Some(now + STALL_COOLDOWN_SECS), reason: "no first event".into(), throttles: vec![], probe_interval_secs: 0, next_probe_at: None });
+        let route = resolve_route(&cfg, &state, now, &self.route_request(sc, false));
+        if route.needs_confirmation() {
+            return None;
+        }
+        route.key().and_then(|k| cfg.endpoint(&k.endpoint_id)).filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.id != endpoint_id).cloned()
     }
 
     /// Is there an API pair that can serve this span turn by turn right now?

@@ -1,5 +1,5 @@
 # Coverage of the GitHub `copilot` CLI, 1.0.105 (specs/051). Format and rules: crates/delphi-engine/src/coverage.rs.
-# Nothing is used yet: Copilot is not a Delphi harness until spec 051 S1 lands. `-C <dir>` has no long form, so it has no row: S1 passes it as the span's working directory.
+# Copilot is a Delphi harness (spec 051 S1, S2; spec 132): read-only seats use `--output-format json` with the rows marked `used`, and a Builder `--acp`. The rest wait for their slice. The snapshot is 1.0.105's; spec 132 C1 found 1.0.112 installed, and the refresh (`coverage::tests::refresh_snapshots`, which runs `--help`) is the operator's. `-C <dir>` has no long form, so it has no row: S1 passes it as the span's working directory.
 # kind | path | names | disposition | slice | reason
 
 # ── Flags that appear on several pages ──

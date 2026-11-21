@@ -8,21 +8,22 @@ use delphi_engine::workspace::WorkspacePaths;
 
 /// Compact pack sizes in bytes, measured when spec 106 P2 was built, after spec 109 Q6 added the `search_use` header line, and after G1's markers and names-only skill index (spec 106 §9). `None`: the role is not served to hosts.
 const MEASURED: &[(&str, Option<usize>)] = &[
-    ("orchestrator", Some(21035)),
-    ("architect", Some(17524)),
-    ("builder", Some(17562)),
-    ("scout", Some(18898)),
-    ("investigator", Some(19291)),
-    ("strategist", Some(20116)), // measured again for `specs/124` S3: it gained the source ladder
-    ("red-team", Some(19676)),
-    ("writer", Some(16744)),
+    // Every role measured again for `specs/134` (charter §1.3 and §1.4 grew; every compact pack carries the charter excerpt).
+    // The earlier sizes (spec 106 P2, spec 109 Q6, G1, and spec 124 S2/S3 for six roles) are in git history; spec 106 §9's table
+    // still shows the sizes before spec 124, and spec 134 amends no spec by text.
+    ("orchestrator", Some(23408)),
+    ("architect", Some(19559)),
+    ("builder", Some(19089)),
+    ("scout", Some(20945)),
+    ("investigator", Some(21253)),
+    ("strategist", Some(22100)),
+    ("red-team", Some(20751)),
+    ("writer", Some(18029)),
     ("messenger", None),
-    ("validator", Some(17923)),
-    // Measured again for `specs/124` S2: the three roles of `specs/067` gained the source ladder (about 2.4 KB each). Spec 106 §9's
-    // table still shows the sizes before it; spec 124 amends no spec by text.
-    ("administrator", Some(19680)),
-    ("assistant", Some(19304)),
-    ("advocate", Some(19763)),
+    ("validator", Some(19292)),
+    ("administrator", Some(20167)),
+    ("assistant", Some(20182)),
+    ("advocate", Some(20250)),
 ];
 
 #[test]

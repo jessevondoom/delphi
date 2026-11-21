@@ -30,7 +30,16 @@ pub enum Class {
     /// A step after a merge could not finish (a locked worktree, a branch another pull request is based on). Recorded when the
     /// cleanup after a merge returns a problem; it stays open, because only a person can settle it.
     Cleanup,
+    /// The head does not contain the base tip, so its checks ran against an older base (spec 094 §11.3.1). Someone must update
+    /// the branch (`delphi merge refresh <PR>`) and wait for CI on the new head.
+    Behind,
+    /// `merge refresh` could not update the branch mechanically (a conflict outside its closed list, a gate path, a compile
+    /// that failed, a widened diff or a rejected push, §11.3.2). Nothing was pushed; `merge fix` takes it to the builder.
+    RefreshRefused,
 }
+
+/// Every class, in one place (the slug round trip and `from_slug` read it).
+const ALL: [Class; 12] = [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup, Class::Behind, Class::RefreshRefused];
 
 impl Class {
     pub fn slug(self) -> &'static str {
@@ -45,20 +54,24 @@ impl Class {
             Class::Ledger => "ledger",
             Class::MergeFailed => "merge-failed",
             Class::Cleanup => "cleanup",
+            Class::Behind => "behind",
+            Class::RefreshRefused => "refresh-refused",
         }
     }
     pub fn from_slug(s: &str) -> Option<Class> {
-        [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup].into_iter().find(|c| c.slug() == s)
+        ALL.into_iter().find(|c| c.slug() == s)
     }
     /// Can a builder fix this by changing the branch? (Others are for a person: a missing `gh`, a damaged list.)
     pub fn builder_can_fix(self) -> bool {
-        matches!(self, Class::Conflict | Class::CiRed | Class::NoChecks | Class::Spec | Class::StaleRecord | Class::MergeFailed)
+        matches!(self, Class::Conflict | Class::CiRed | Class::NoChecks | Class::Spec | Class::StaleRecord | Class::MergeFailed | Class::Behind | Class::RefreshRefused)
     }
 }
 
 /// What a refusal reason is, if it is a problem. `None` means a state of the world to wait out or act on, not an error.
 pub fn classify_refusal(reason: &str) -> Option<Class> {
-    if reason.contains("conflicts with") {
+    if reason.contains(super::check::BEHIND_MARK) {
+        Some(Class::Behind)
+    } else if reason.contains("conflicts with") {
         Some(Class::Conflict)
     } else if reason.starts_with("checks failed") {
         Some(Class::CiRed)
@@ -234,6 +247,7 @@ mod tests {
             ("it is not queued (no `merge-queue` label)", None),
             ("checks are still running: test", None),
             ("GitHub has not finished working out whether it merges (`UNKNOWN`)", None),
+            (&super::super::check::behind_reason(7, 2, "main"), Some(Class::Behind)),
         ] {
             assert_eq!(classify_refusal(r), want, "{r}");
         }
@@ -241,10 +255,15 @@ mod tests {
 
     #[test]
     fn every_class_round_trips_through_its_slug() {
-        for c in [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup] {
+        for c in ALL {
             assert_eq!(Class::from_slug(c.slug()), Some(c));
         }
         assert_eq!(Class::from_slug("nonsense"), None);
+        let slugs: std::collections::BTreeSet<&str> = ALL.iter().map(|c| c.slug()).collect();
+        assert_eq!(slugs.len(), ALL.len(), "every slug is distinct");
+        assert_eq!(Class::from_slug("behind"), Some(Class::Behind));
+        assert!(Class::Behind.builder_can_fix(), "`merge fix` takes a behind entry (§11.3.5)");
+        assert!(Class::RefreshRefused.builder_can_fix() && Class::from_slug("refresh-refused") == Some(Class::RefreshRefused));
     }
 
     #[test]

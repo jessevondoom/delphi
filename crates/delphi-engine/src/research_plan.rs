@@ -40,25 +40,40 @@ pub struct PlannedQuery {
 }
 
 fn private_token(tok: &str) -> bool {
-    let t = tok.trim_matches(|c: char| matches!(c, '"' | '\'' | '(' | ')' | ',' | ';' | '[' | ']' | '<' | '>'));
-    // A full stop that ends a sentence is not part of a name: `part.` is the word `part`, not a single-label host. Without this
-    // the last word of every sentence was taken out of the query (`specs/124` S11). A dotted name keeps its dots and is still checked.
-    let t = t.trim_end_matches('.');
+    // Punctuation around a word is not part of a name: `part.`, `(jdoe@buildbox.)`, `build.internal!` and `buildbox:8080,` are the
+    // names inside them. A sentence-ending full stop used to hide the e-mail and host rules below (`specs/124` S11), and `!`, `:`, `?`
+    // after a name hid them before that; every rule below runs on the trimmed token and none of them needs a dot.
+    let t = tok
+        .trim_start_matches(['"', '\'', '(', '[', '<', '{', '`'])
+        .trim_end_matches(['"', '\'', ')', ']', '>', '}', '`', ',', ';', ':', '!', '?', '.']);
     if t.is_empty() {
         return false;
     }
     if t.starts_with('/') || t.starts_with("~/") || t.starts_with("./") || t.starts_with("../") || t.contains('\\') || t.get(1..3) == Some(":\\") {
         return true;
     }
-    if t.contains('@') && t.contains('.') {
+    let has_scheme = t.contains("://");
+    // An e-mail address or a user at a host: anything with a non-empty part on both sides of an `@` (`jdoe@buildbox`). A handle
+    // such as `@delphi` has nothing before it and is kept.
+    if !has_scheme && t.split_once('@').is_some_and(|(user, host)| !user.is_empty() && host.starts_with(|c: char| c.is_ascii_alphanumeric())) {
         return true;
     }
-    let has_scheme = t.contains("://");
     let host = t.split("://").last().unwrap_or(t).split(['/', '?', '#']).next().unwrap_or("");
     let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host);
-    let host = host.rsplit_once(':').filter(|(_, p)| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())).map(|(h, _)| h).unwrap_or(host);
-    // A single plain word is never a host; a dotted token, an address or anything with a scheme is checked.
-    (has_scheme || host.contains('.') || host.parse::<std::net::IpAddr>().is_ok()) && is_internal_host(host)
+    let (host, port) = match host.rsplit_once(':').filter(|(_, p)| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())) {
+        Some((h, p)) => (h, Some(p)),
+        None => (host, None),
+    };
+    // `buildbox:8080` is a host and a port: a name that starts with a letter, then a port of two to five digits. A time (`10:30`), a
+    // ratio (`3:2`), a verse (`3:16`) or `Python:3` is not.
+    let host_and_port = port.is_some_and(|p| (2..=5).contains(&p.len()) && p.parse::<u32>().is_ok_and(|n| n <= 65_535))
+        && host.starts_with(|c: char| c.is_ascii_alphabetic())
+        && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    // A single plain word is never a host; a dotted token, an address, a host with a port or anything with a scheme is checked.
+    (has_scheme || host_and_port || host.contains('.') || host.parse::<std::net::IpAddr>().is_ok()) && is_internal_host(host)
 }
 
 /// The question as a query: secrets, paths, internal hosts and addresses and e-mail addresses removed, whitespace folded,
@@ -341,6 +356,54 @@ mod tests {
             assert!(!q.contains(bad), "{bad} in {q:?}");
         }
         assert!(q.contains("rust borrow checker"), "{q:?}");
+    }
+
+    #[test]
+    fn user_at_host_host_and_port_and_localhost_are_private_whatever_punctuation_follows() {
+        // specs/066 §5-6, query privacy. Each of these was sent to the search provider: the first five since `specs/124` S11
+        // trimmed a sentence-ending full stop before the rules that needed a dot, the rest in mid-sentence before that.
+        for tok in [
+            "jdoe@buildbox.",
+            "admin@localhost.",
+            "(jdoe@buildbox.)",
+            "buildbox:8080.",
+            "localhost.",
+            "jdoe@buildbox",
+            "buildbox:8080",
+            "build.internal!",
+            "build.internal:",
+            "jdoe@buildbox?",
+            "admin@localhost",
+            "localhost",
+            "LOCALHOST,",
+            "localhost:3000",
+            "buildbox:8080,",
+            "build-01:22;",
+            "\"jdoe@buildbox\"",
+            "jdoe@corp.example.com.",
+            "build.internal.",
+            "build.internal?",
+            "10.1.2.3.",
+            "root@10.1.2.3.",
+            "http://buildbox.",
+            "~/secrets.",
+            "host.corp:8443.",
+        ] {
+            assert!(private_token(tok), "{tok} would be sent");
+        }
+        // Ordinary words stay in the query, with or without the punctuation that ends a sentence.
+        for tok in [
+            "part.", "part", "C++", "C++?", "GPT-4", "GPT-4.", "10:30", "10:30.", "3:2", "3:16", "Python:3", "ratio:", "e.g.", "U.S.",
+            "v1.2.", "node.js", "example.com", "example.com:443", "https://www.who.int/news.", "@delphi", "(see", "notes):", "why?", "wow!",
+            "fasting,",
+        ] {
+            assert!(!private_token(tok), "{tok} would be removed");
+        }
+        let r = Redactor::new();
+        assert_eq!(
+            clean_query("why can jdoe@buildbox not reach buildbox:8080 at 10:30 when localhost works on build.internal: with GPT-4 and C++?", &r).as_deref(),
+            Some("why can not reach at 10:30 when works on with GPT-4 and C++?")
+        );
     }
 
     #[test]

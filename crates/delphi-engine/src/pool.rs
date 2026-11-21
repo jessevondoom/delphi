@@ -253,6 +253,22 @@ impl Pool {
         })
     }
 
+    /// A harness pair produced no event at all twice in a row (`specs/089` §17): cooling down for `secs`, so the family's next endpoint
+    /// serves meanwhile. It is not a throttle: rule 3's count is left alone, and an exhausted pair stays exhausted.
+    pub fn record_stall(&self, endpoint_id: &str, model_id: &str, secs: i64) {
+        self.with(|m, now| {
+            let e = m.entry((endpoint_id.to_string(), model_id.to_string())).or_insert_with(|| Entry::fresh(endpoint_id, model_id, now));
+            if e.state == State::Exhausted {
+                return ((), false);
+            }
+            e.state = State::CoolingDown;
+            e.since = now;
+            e.until = Some(now + secs.max(1));
+            e.reason = "no first event, twice in a row".into();
+            ((), true)
+        })
+    }
+
     /// A call (or the classifier) says the quota is used up.
     pub fn record_exhausted(&self, endpoint_id: &str, model_id: &str, x: &Exhaustion) {
         delphi_core::elog::warn("provider", "quota_exhausted", &x.reason, serde_json::json!({"provider": endpoint_id, "model": model_id, "retry_after_s": x.reset_at}));
@@ -320,6 +336,19 @@ mod tests {
 
     fn quota(reset_at: Option<i64>) -> Exhaustion {
         Exhaustion { reason: "quota reached".into(), reset_at, raw: "Individual quota reached.".into() }
+    }
+
+    #[test]
+    fn a_stall_cools_a_pair_for_its_time_and_never_wakes_an_exhausted_one() {
+        let (p, now) = pool();
+        p.record_stall("agy-sub", "m", 300);
+        let e = p.entry("agy-sub", "m").unwrap();
+        assert_eq!((e.state, e.until, e.throttles.len()), (State::CoolingDown, Some(T0 + 300), 0));
+        advance(&now, 301);
+        assert_eq!(p.state("agy-sub", "m"), State::Available);
+        p.record_exhausted("x", "m", &quota(None));
+        p.record_stall("x", "m", 300);
+        assert_eq!(p.state("x", "m"), State::Exhausted);
     }
 
     #[test]

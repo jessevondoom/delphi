@@ -16,7 +16,8 @@
 //!   the limits on unproven connections (per peer and for the socket) is sent the challenge, and a refusal costs the caller, whose
 //!   answer waits longer with each failure ([`crate::app_refusals`]). A valid signature is answered at once, whatever others failed.
 //!   A session calls only the methods of the grants its key holds *now* ([`crate::app_keys::GRANTS`]), and ends the moment
-//!   its key is revoked.
+//!   its key is revoked; the requests the key started that have not ended are then cancelled ([`Extension::app_requests_cancel`],
+//!   `specs/129` §10.2).
 
 use crate::app_keys::{self, AppKey, CallRefused, KeyStore};
 use crate::app_refusals::{LogNow, PeerId, RefusalCost, RefusalLog};
@@ -45,7 +46,7 @@ pub const RELAY_METHODS: [&str; 5] = ["session.ping", "events.subscribe", "appro
 
 /// The only methods the host socket answers (besides the `hello` handshake): stage a lesson or a summary as untrusted
 /// content, and keep or read one handoff (`specs/062` §8). A host cannot start work, read events or approve anything.
-pub const HOST_METHODS: [&str; 32] = ["session.ping", "host.search_kb", "host.propose_note", "host.propose_kb_entry", "host.record_finding", "host.flag_wrong","host.request_test_authorization", "host.record_session_summary", "host.handoff_put", "host.handoff_get", "host.recall_sessions", "host.ingest_transcript", "host.request_help", "host.help_result", "host.request_council", "host.council_status", "host.council_result", "host.council_open", "host.council_frame", "host.council_brief", "host.council_submit", "host.council_choose", "host.request_research", "host.research_status", "host.research_result", "host.record_research", "host.research_feed", "host.cancel_job", "host.route_decided", "host.reads_seen", "host.ask_family", "host.ask_result"];
+pub const HOST_METHODS: [&str; 33] = ["session.ping", "host.search_kb", "host.propose_note", "host.propose_kb_entry", "host.record_finding", "host.flag_wrong","host.request_test_authorization", "host.record_session_summary", "host.handoff_put", "host.handoff_get", "host.recall_sessions", "host.ingest_transcript", "host.request_help", "host.help_result", "host.request_council", "host.council_status", "host.council_result", "host.council_open", "host.council_frame", "host.council_brief", "host.council_submit", "host.council_choose", "host.request_research", "host.research_status", "host.research_result", "host.record_research", "host.research_feed", "host.cancel_job", "host.route_decided", "host.reads_seen", "host.ask_family", "host.ask_result", "host.review"];
 
 /// The console methods that pair, list, revoke and grant the desktop app's keys (`specs/120` §2, §5, §13.1) and that list and approve
 /// a pending update (§13.2 item 5). All need the console scope; the ones that change what a key may do or approve something (all
@@ -254,6 +255,26 @@ pub trait Extension: Send + Sync {
         let _ = (method, params);
         Box::pin(async { None })
     }
+
+    /// The key `key` was revoked (`whole`), or lost its `request` grant: cancel every request it started that has not ended
+    /// (`specs/120` §2 item 8 as amended by `specs/129` §10.2). The server calls this after the record no longer holds the key or
+    /// the grant and its sessions are closed, so no new request of the key is admitted past the extension's own second look at the
+    /// record. The answer is `{"cancelled": [request ids], "left_running": [{"request", "method"}]}`; an extension that starts no
+    /// work for the app leaves this as it is.
+    fn app_requests_cancel(&self, key: &str, whole: bool) -> RpcFuture {
+        let _ = (key, whole);
+        Box::pin(async { None })
+    }
+}
+
+/// What [`Daemon::app_admin`] leaves for after the key lock is let go: an event to write, once the key's running requests are
+/// cancelled when `cancel` says so (`specs/129` §10.2).
+struct AdminAfter {
+    key: String,
+    /// `Some(whole)`: cancel the key's requests; `whole` when the key itself was revoked.
+    cancel: Option<bool>,
+    event: &'static str,
+    payload: Value,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1062,8 +1083,44 @@ impl Daemon {
         }
     }
 
-    /// The console's four methods for the app's keys ([`APP_ADMIN_METHODS`]).
-    fn app_admin(&self, req: &Request, scope: Scope, peer: &Peer) -> Response {
+    /// The console's methods for the app's keys ([`APP_ADMIN_METHODS`]), and, for a revoke or a `request` grant taken away, the
+    /// cancel of the key's running requests (`specs/129` §10.2): it comes after the record is written and the sessions are closed, so
+    /// a request the server had already handed over is caught by the extension's second look at the record or by this cancel.
+    async fn app_admin_then(&self, req: &Request, scope: Scope, peer: &Peer) -> Response {
+        let mut after = None;
+        let mut resp = self.app_admin(req, scope, peer, &mut after);
+        let Some(AdminAfter { key, cancel, event, mut payload }) = after else { return resp };
+        if let Some(whole) = cancel {
+            let ext = self.extension.lock().unwrap().clone();
+            let out = match ext {
+                Some(ext) => ext.app_requests_cancel(&key, whole).await,
+                None => None,
+            };
+            let out = match out {
+                Some(Ok(v)) => v,
+                Some(Err(e)) => {
+                    crate::elog::warn("daemon", "app_cancel_failed", "the revoked key's requests could not be cancelled", json!({"code": e.code}));
+                    json!({})
+                }
+                None => json!({}),
+            };
+            let ids = out["cancelled"].as_array().cloned().unwrap_or_default();
+            let cancelled = json!({"count": ids.len(), "ids": ids});
+            let left = out["left_running"].as_array().cloned().unwrap_or_default();
+            payload["requests_cancelled"] = cancelled.clone();
+            payload["left_running"] = json!(left);
+            if let Some(r) = resp.result.as_mut() {
+                r["requests_cancelled"] = cancelled;
+                r["left_running"] = json!(left);
+            }
+        }
+        self.audit(event, payload);
+        resp
+    }
+
+    /// The console's methods for the app's keys ([`APP_ADMIN_METHODS`]). An event of a revoke or a grant is left in `after`, for
+    /// [`Daemon::app_admin_then`] to write once the key lock is let go.
+    fn app_admin(&self, req: &Request, scope: Scope, peer: &Peer, after: &mut Option<AdminAfter>) -> Response {
         let id = req.id.clone();
         if scope != Scope::Console {
             return Response::err(id, code::FORBIDDEN, "this method requires the console scope");
@@ -1197,7 +1254,8 @@ impl Daemon {
                 }
                 let closed = Daemon::close_sessions(&st, name);
                 drop(st);
-                self.audit("app.revoked", json!({"name": name, "sessions_closed": closed}));
+                // The key's running requests are cancelled next, and the event written with what was cancelled (`specs/129` §10.2).
+                *after = Some(AdminAfter { key: name.to_string(), cancel: Some(true), event: "app.revoked", payload: json!({"name": name, "sessions_closed": closed}) });
                 Response::ok(id, json!({"revoked": name, "sessions_closed": closed}))
             }
             "app.grant" => {
@@ -1240,7 +1298,9 @@ impl Daemon {
                 drop(st);
                 let changed = held == remove || was_auto != now_auto;
                 if changed {
-                    self.audit("app.granted", json!({"name": name, "grant": grant, "removed": remove, "auto": now_auto, "sessions_closed": closed}));
+                    // Taking `request` away also cancels what the key asked for that has not ended (`specs/129` §10.2).
+                    let cancel = (remove && held && grant == "request").then_some(false);
+                    *after = Some(AdminAfter { key: name.to_string(), cancel, event: "app.granted", payload: json!({"name": name, "grant": grant, "removed": remove, "auto": now_auto, "sessions_closed": closed}) });
                 }
                 Response::ok(id, json!({"name": name, "grants": grants, "update_auto": now_auto, "changed": changed, "sessions_closed": closed}))
             }
@@ -1250,8 +1310,9 @@ impl Daemon {
 
     /// Hand one of the `request` grant's methods to the extension, **as a task of its own**. Revoking a key, or taking a grant
     /// from it, ends its session by dropping the session's future, a call in flight included (`specs/120` §2 item 8); a request
-    /// that had begun to start work must not be cut halfway through a write, so the work is not part of that future. A request
-    /// that was already being answered when its key was revoked runs to its own end and its answer is thrown away.
+    /// that had begun to start work must not be cut halfway through a write, so the work is not part of that future. The revoke
+    /// then asks the extension to cancel what the key started ([`Extension::app_requests_cancel`]); the extension stops each piece
+    /// of work at a step of its own, and the answer to the closed session is thrown away.
     async fn app_request(&self, req: Request, key: String) -> Response {
         let id = req.id.clone();
         let Some(ext) = self.extension.lock().unwrap().clone() else { return Response::err(id, code::METHOD_NOT_FOUND, "unknown method") };
@@ -1321,7 +1382,7 @@ impl Daemon {
         }
         // The app's keys are the server's own business, and the console's only: never offered to the engine.
         if APP_ADMIN_METHODS.contains(&req.method.as_str()) {
-            return self.app_admin(&req, scope, peer);
+            return self.app_admin_then(&req, scope, peer).await;
         }
         // The server's own methods first; everything else may belong to the engine.
         if matches!(req.method.as_str(), "session.ping" | "events.subscribe" | "daemon.shutdown") {

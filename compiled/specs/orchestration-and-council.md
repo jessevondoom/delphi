@@ -2,7 +2,7 @@
 
 # Orchestration and Council
 
-13 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group orchestration-and-council` lists this group.
 
 ## 003-collaboration-and-council
 
@@ -85,7 +85,7 @@ An operator who works in another tool has two ways to get a Council today, and n
 
 ## 089-panel-hardening-from-e2
 
-**089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart** · approved (per source at `8bc8c6683865`) · tier 0 · [source](../../specs/089-panel-hardening-from-e2.md)
+**089: Panel hardening from the E2 run: a server-side Round 2 shape check, honest question handling and confirmation, scorer and record fixes, agy seat reliability, and a matcher that can tell findings apart** · approved (per source at `70425409e39b`) · tier 0 · [source](../../specs/089-panel-hardening-from-e2.md)
 
 **source excerpt, untrusted** · `specs/089-panel-hardening-from-e2.md` line 26
 
@@ -121,7 +121,7 @@ Three jobs, in this order of risk:
 
 ## 128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes
 
-**128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes** · approved (per source at `286494536422`) · tier 0 · [source](../../specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md)
+**128: Round 2 without tools, one retry for an empty finish, and a checkout guard that knows Delphi's own writes** · approved (per source at `77c026d5eb28`) · tier 0 · [source](../../specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md)
 
 **source excerpt, untrusted** · `specs/128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md` line 25
 
@@ -137,4 +137,24 @@ A host Council kept losing the red-team's Round 2: the ruling said "Red-Team's R
 
 ```text
 Over three Councils (`t_0002`, `t_0003`, `t_0004`, 2026-11-19 and 2026-11-20) every seat on the Gemini family failed, and each Council still printed "two families met". This spec says how Delphi stops a Gemini-carried seat from being sent more than its carrier delivers, keeps the task readable when something is cut anyway, counts a family only when a seat was heard, and keeps a seat from acting on the project.
+```
+
+## 133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns
+
+**133: The spec-to-build handoff contract: criteria mapped to tests, a fuller skeleton, and spikes before unknowns** · approved (per source at `24300ab22131`) · tier 0 · [source](../../specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md)
+
+**source excerpt, untrusted** · `specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md` line 25
+
+```text
+An audit of the architect, the builder and the spec skills (host session, 2026-11-20, a Fable subagent reading main at 76da4a79, then a daemon Council `t_0001` with seats on two families) found that the specs Delphi writes are better than the contract that carries them into a build:
+```
+
+## 135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests
+
+**135: The forge, first cut: slice claims, a finisher, and a cross-family review that runs the tests** · approved (per source at `dc53858a5351`) · tier 0 · [source](../../specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md)
+
+**source excerpt, untrusted** · `specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md` line 24
+
+```text
+The idea discussed with the operator was a "forge": a host calls Delphi with an approved slice and gets a pull request back, built by seats of several model families. Read against what actually goes wrong, most of the value is not in many writers. It is in four recurring failures, three of which need no model at all:
 ```

@@ -88,31 +88,31 @@
     },
     {
       "level": 3,
-      "line": 127,
+      "line": 129,
       "number": "10.2",
       "title": "A disk image, as a fallback (slice C2)"
     },
     {
       "level": 3,
-      "line": 133,
+      "line": 135,
       "number": "10.3",
       "title": "A lasting opt-out (slice C1)"
     },
     {
       "level": 3,
-      "line": 137,
+      "line": 139,
       "number": "10.4",
       "title": "The doctor (slice C1)"
     },
     {
       "level": 3,
-      "line": 141,
+      "line": 143,
       "number": "10.5",
       "title": "Acceptance criteria"
     },
     {
       "level": 3,
-      "line": 150,
+      "line": 152,
       "number": "10.6",
       "title": "Slices"
     }
@@ -120,7 +120,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md",
-    "sha256": "7b08b2d27ba6af710a0171055e7fc2fe53a89ce2e030c7a3025bd138a58aa350"
+    "sha256": "adb03b5cfc8ee88a6d7af13a6a241ca070008503168ea6e81f47d3c697ffd5f6"
   },
   "source_status_at_hash": {
     "line": {
@@ -133,7 +133,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-16, in a host session. Asked \"what's the shortest path to distributing a compiled binary for mac and linux, just like we are for the TUI?\", shown a two-step plan (step 1: build and publish the app in the release; step 2: install and update it like the console) and its estimate in hours, the operator answered \"do step one and step two, but macos only and only on release\". The spec was written from those words; the operator was shown the plan and the estimate, not this text."
     },
-    "sha256": "7b08b2d27ba6af710a0171055e7fc2fe53a89ce2e030c7a3025bd138a58aa350",
+    "sha256": "adb03b5cfc8ee88a6d7af13a6a241ca070008503168ea6e81f47d3c697ffd5f6",
     "word": "approved"
   },
   "spec": {

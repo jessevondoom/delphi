@@ -219,8 +219,9 @@ pub enum Event {
     /// One assistant message's usage (the sum of these is the live meter).
     Usage(Tokens),
     /// The vendor's own meter for the span (Copilot: `totalPremiumRequests`, `totalNanoAiu`), the input of the seat ledger
-    /// (`specs/051` §8). Counts only, never a price.
-    Meter { premium_requests: u64, nano_aiu: u64 },
+    /// (`specs/051` §8). Counts only, never a price. Premium requests are fractional (0.33 for one call on a 0.33x model), so they
+    /// are carried exactly in thousandths (`specs/132` §6.4).
+    Meter { premium_milli: u64, nano_aiu: u64 },
     /// Share of the subscription's window used, 0 to 1.
     /// `status` is `allowed`, `allowed_warning` or `rejected` (empty when the CLI does not say); `resets_at` is Unix seconds or milliseconds, as the CLI sent it.
     RateLimit { utilization: f64, window: String, status: String, resets_at: Option<i64> },
@@ -798,6 +799,11 @@ const COPILOT_LOG_DIR: &str = ".copilot-logs";
 /// The read tools a span with `Tools::Standard` is offered. Writes and shell are denied by the CLI without an approver.
 const COPILOT_READ_TOOLS: [&str; 3] = ["view", "grep", "glob"];
 
+/// A premium-request count (a JSON number, whole or fractional) in thousandths, rounded; anything else is 0.
+fn premium_milli(v: &Value) -> u64 {
+    v.as_f64().filter(|f| f.is_finite() && *f > 0.0).map(|f| (f * 1000.0).round() as u64).unwrap_or(0)
+}
+
 /// `copilot --output-format json` output (`specs/051` §2.1, §6.4): one JSON object per line. It keeps the last non-empty
 /// assistant message (the answer), the model the stream reports, and the usage of the last `session.usage_checkpoint`, and
 /// ends the span at the `result` line.
@@ -855,7 +861,7 @@ impl CopilotParser {
                     let tools = d["promptCacheBreakState"].as_array().into_iter().flatten().flat_map(|s| s["models"].as_object().into_iter().flat_map(|ms| ms.values())).next().map(|mm| mm["tools"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default();
                     out.push(Event::Init { session_id: String::new(), tools, mcp_servers: None });
                 }
-                self.meter = Some((d["totalPremiumRequests"].as_u64().unwrap_or(0), d["totalNanoAiu"].as_u64().unwrap_or(0)));
+                self.meter = Some((premium_milli(&d["totalPremiumRequests"]), d["totalNanoAiu"].as_u64().unwrap_or(0)));
                 let t = &d["accountingSnapshot"]["tokenDetails"];
                 let n = |k: &str| t[k]["tokenCount"].as_u64().unwrap_or(0);
                 self.tokens = Tokens { input: n("input"), cache_read: n("cache_read"), cache_write: n("cache_write"), output: n("output") };
@@ -874,8 +880,22 @@ impl CopilotParser {
                 } else {
                     (self.last.clone(), false, "success")
                 };
-                if let Some((premium_requests, nano_aiu)) = self.meter.take() {
-                    out.push(Event::Meter { premium_requests, nano_aiu });
+                // The final `usage.premiumRequests` is the CLI's own total for the run: it is kept over the last checkpoint's, and a
+                // difference is noted in the error log (`specs/132` §6.4).
+                let last = m["usage"].get("premiumRequests").map(premium_milli);
+                let meter = match (self.meter.take(), last) {
+                    (Some((checkpoint, nano_aiu)), Some(fin)) => {
+                        if checkpoint != fin {
+                            delphi_core::elog::warn("harness", "copilot_premium_mismatch", "copilot's final premium-request count differs from its last checkpoint; the final one is kept", json!({"checkpoint_milli": checkpoint, "final_milli": fin}));
+                        }
+                        Some((fin, nano_aiu))
+                    }
+                    (Some(m), None) => Some(m),
+                    (None, Some(fin)) => Some((fin, 0)),
+                    (None, None) => None,
+                };
+                if let Some((premium_milli, nano_aiu)) = meter {
+                    out.push(Event::Meter { premium_milli, nano_aiu });
                 }
                 out.push(Event::Result { text, is_error, stop_reason: None, total_cost_usd: 0.0, usage: self.tokens, subtype: subtype.into(), structured: None });
             }
@@ -1116,6 +1136,8 @@ pub struct Session {
     /// The app-server transport's writer: replies and the handshake go through it (it owns the child's stdin).
     out: Option<mpsc::Sender<String>>,
     cli: Cli,
+    /// The process was killed because no event came within the wait given to [`Session::next`].
+    idle_killed: bool,
 }
 
 /// How much of a CLI's stderr the error log can ever see.
@@ -1226,7 +1248,7 @@ impl Session {
                         }
                     }
                 });
-                return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx), cli: l.cli });
+                return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx), cli: l.cli, idle_killed: false });
             }
             let mut parser = CodexAppServer::new(&format!("{}\n\n{}\n", l.system_prompt, l.user_prompt), &l.model, &l.cwd, l.opts.effort.clone());
             let (out_tx, mut out_rx) = mpsc::channel::<String>(16);
@@ -1264,7 +1286,7 @@ impl Session {
                     }
                 }
             });
-            return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx), cli: l.cli });
+            return Ok(Session { child, stdin: None, rx, pgid, exited: false, stderr_tail, stderr_task, out: Some(out_tx), cli: l.cli, idle_killed: false });
         }
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -1297,7 +1319,7 @@ impl Session {
         stdin.flush().await.map_err(|e| e.to_string())?;
         // `codex exec` and `copilot` read their prompt to the end of stdin, so the input closes with the one turn.
         let stdin = if matches!(cli, Cli::Codex | Cli::Copilot) { None } else { Some(stdin) };
-        Ok(Session { child, stdin, rx, pgid, exited: false, stderr_tail, stderr_task, out: None, cli: l.cli })
+        Ok(Session { child, stdin, rx, pgid, exited: false, stderr_tail, stderr_task, out: None, cli: l.cli, idle_killed: false })
     }
 
     /// The tail of the CLI's stderr (empty unless the error log was on when it started). Raw: the caller redacts it.
@@ -1307,6 +1329,11 @@ impl Session {
             let _ = tokio::time::timeout(Duration::from_millis(300), h).await;
         }
         self.stderr_tail.lock().map(|t| String::from_utf8_lossy(&t).into_owned()).unwrap_or_default()
+    }
+
+    /// Whether the process was killed because no event came within the wait given to [`Session::next`].
+    pub fn idle_killed(&self) -> bool {
+        self.idle_killed
     }
 
     /// The next event; after the process ends, one [`Event::Exit`] and then `None`.
@@ -1333,6 +1360,7 @@ impl Session {
             Err(_) => {
                 self.kill().await;
                 self.exited = true;
+                self.idle_killed = true;
                 Some(Event::Exit { code: None })
             }
         }
@@ -2043,7 +2071,7 @@ read never
         assert_eq!(ev[1], Event::ToolResult { id: "c1".into(), is_error: true });
         assert_eq!(ev[2], Event::Text("the answer".into()), "an empty tool-turn message is not text");
         assert!(matches!(&ev[3], Event::Init { tools, .. } if tools == &["view", "grep"]), "the seat record shows the tools really offered");
-        assert_eq!(ev[4], Event::Meter { premium_requests: 1, nano_aiu: 1000 }, "the vendor's own count of the span, for the seat ledger");
+        assert_eq!(ev[4], Event::Meter { premium_milli: 1000, nano_aiu: 1000 }, "the vendor's own count of the span, for the seat ledger");
         match &ev[5] {
             Event::Result { text, is_error: false, usage, subtype, .. } => {
                 assert_eq!((text.as_str(), subtype.as_str()), ("the answer", "success"));
@@ -2053,6 +2081,23 @@ read never
         }
         assert_eq!(ev.len(), 6);
         assert!(CopilotParser::new("m-1").line("not json").is_empty());
+    }
+
+    /// specs/132 O13, AC-4: a fractional premium-request count (0.33 for one call on a 0.33x model, seen in P0) is kept exactly, and
+    /// the final `usage.premiumRequests` wins over the last checkpoint's.
+    #[test]
+    fn fractional_premium_requests_are_kept_exactly_and_the_final_count_wins() {
+        let meter = |checkpoint: &str, fin: &str| -> Vec<Event> {
+            let mut p = CopilotParser::new("m-1");
+            let mut lines = copilot_run("m-1");
+            lines[7] = lines[7].replace("\"totalPremiumRequests\":1", &format!("\"totalPremiumRequests\":{checkpoint}"));
+            lines[8] = lines[8].replace("\"premiumRequests\":1", &format!("\"premiumRequests\":{fin}"));
+            lines.iter().flat_map(|l| p.line(l)).filter(|e| matches!(e, Event::Meter { .. })).collect()
+        };
+        assert_eq!(meter("0.33", "0.33"), vec![Event::Meter { premium_milli: 330, nano_aiu: 1000 }]);
+        assert_eq!(meter("0.33", "0.66"), vec![Event::Meter { premium_milli: 660, nano_aiu: 1000 }], "the final count is kept");
+        assert_eq!(meter("14", "14"), vec![Event::Meter { premium_milli: 14_000, nano_aiu: 1000 }]);
+        assert_eq!(premium_milli(&json!("x")), 0);
     }
 
     #[test]
