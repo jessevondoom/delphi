@@ -2,7 +2,7 @@
 
 # Knowledge and memory
 
-31 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group knowledge-and-memory` lists this group.
 
 ## 004-memory-and-coaching
 
