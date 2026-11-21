@@ -75,7 +75,8 @@ pub fn local_offset_secs(at: i64) -> i64 {
     if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
         return 0;
     }
-    i64::from(tm.tm_gmtoff)
+    // `c_long`, 64-bit on every platform Delphi ships for.
+    tm.tm_gmtoff
 }
 
 #[cfg(test)]
