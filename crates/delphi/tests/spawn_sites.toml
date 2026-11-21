@@ -84,6 +84,13 @@ file = "crates/delphi-engine/src/hooks.rs"
 count = 1
 class = "operator-config"
 
+# The account's Copilot model list (spec 132 C3): `copilot --acp` with fixed flags in a scratch directory and COPILOT_HOME,
+# `initialize` then `session/new`, and the process is stopped. No prompt is ever sent, so no model is asked anything.
+[[site]]
+file = "crates/delphi-engine/src/model_catalog.rs"
+count = 1
+class = "probe"
+
 [[site]]
 file = "crates/delphi-engine/src/probe.rs"
 count = 1

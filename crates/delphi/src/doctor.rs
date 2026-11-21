@@ -196,7 +196,10 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     // 10. Subscription harnesses (specs/009 §7B): installed and signed in, from the CLIs' own status commands.
     check_harnesses(Some(&ws.dir), &cfg, &run_cli, opts.require_providers, &mut r);
     let codex_meter = || delphi_engine::quota::read_codex("codex", std::time::Duration::from_secs(8));
-    check_seat_quota(&cfg, &run_cli, &codex_meter, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0), &mut r);
+    let now_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    check_seat_quota(&cfg, &run_cli, &codex_meter, now_unix, &mut r);
+    let copilot_catalog = || delphi_engine::model_catalog::read_live("copilot", std::time::Duration::from_secs(20));
+    check_copilot_catalog(Some(&ws.dir), &cfg, &run_cli, &copilot_catalog, now_unix, &mut r);
     check_coverage_drift(&cfg, &help_page, &mut r);
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
 
@@ -870,6 +873,53 @@ fn check_harnesses(ws: Option<&Path>, cfg_text: &str, run: &dyn Fn(&str, &[&str]
             },
             Some("gemini") => r.warn("10 harness", id.to_string(), "the Gemini CLI no longer supports personal Google sign-in (it points to Antigravity); use `harness = \"agy\"`"),
             other => r.warn("10 harness", id.to_string(), format!("the `{}` harness is not implemented yet", other.unwrap_or("?"))),
+        }
+    }
+}
+
+/// The account's Copilot catalog against every Copilot endpoint's `models` (`specs/132` §5.2, C3): one line per endpoint, each tier's
+/// model found or missing, with the vendor's multiplier and cost class shown for information only (the cost class never decides a tier,
+/// a class or a capability). The catalog is the cached one in `local/` when it was read on the installed CLI version within a day;
+/// otherwise `read` is asked once (`copilot --acp` `session/new`, no prompt sent) and its answer cached.
+fn check_copilot_catalog(ws: Option<&Path>, cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, read: &dyn Fn() -> Option<serde_json::Value>, now: i64, r: &mut Report) {
+    use delphi_engine::model_catalog as mc;
+    let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let Some(list) = v.get("endpoints").and_then(|e| e.as_array()) else { return };
+    let eps: Vec<&toml::Value> = list.iter().filter(|e| e.get("path").and_then(|p| p.as_str()) == Some("harness") && e.get("harness").and_then(|h| h.as_str()) == Some("copilot")).collect();
+    if eps.is_empty() {
+        return;
+    }
+    let version = run("copilot", &["--version"]).and_then(|(_, out)| out.lines().next().map(|l| l.trim().to_string())).filter(|l| !l.is_empty());
+    let catalog = match (ws, &version) {
+        (Some(ws), Some(ver)) => mc::refresh(&ws.join("local"), ver, now, read),
+        _ => None,
+    };
+    for e in eps {
+        let id = e.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+        let loc = format!("{id} models");
+        let Some(models) = e.get("models").and_then(|m| m.as_table()) else { continue };
+        let Some(cat) = &catalog else {
+            r.push(Level::Skipped, "10 harness", loc, "the account's Copilot catalog could not be read (CLI missing or signed out, or no answer in time), so this endpoint's models were not checked");
+            continue;
+        };
+        let (mut shown, mut missing) = (Vec::new(), Vec::new());
+        for (tier, model) in models {
+            let Some(model) = model.as_str() else { continue };
+            let c = mc::model_cost(Some(cat), model);
+            let cost = match (&c.multiplier, c.class) {
+                (Some(m), Some(class)) => format!(" {m} {class}"),
+                _ => String::new(),
+            };
+            shown.push(format!("{tier} `{model}`{cost}"));
+            if let Some(why) = mc::refusal(cat, id, tier, model) {
+                missing.push(why);
+            }
+        }
+        let head = format!("Copilot catalog ({}, {} models): {}. The cost class is the vendor's multiplier, shown for information only", cat.cli_version, cat.models.len(), shown.join(", "));
+        if missing.is_empty() {
+            r.push(Level::Ok, "10 harness", loc, format!("{head}; every model is in the catalog"));
+        } else {
+            r.warn("10 harness", loc, format!("{head}. {}", missing.join(" ")));
         }
     }
 }
@@ -2219,6 +2269,44 @@ mod tests {
         assert!(on[1].0 == Level::Ok && on[1].1.contains("business plan") && on[1].1.contains("10% of 100 credits used"), "{:?}", on);
         let silent = say(&cfg, &|_: &str, _: &[&str]| None, &|| None);
         assert!(silent[0].0 == Level::Skipped && silent[0].1.contains("unknown"), "{:?}", silent);
+    }
+
+    /// specs/132 AC-5: with a fake `session/new` answer the catalog is cached with its CLI version; a configured model missing from it
+    /// is a warning naming the unusable tier; the cost class is shown (14x is `premium`); a fresh cache is not read again.
+    #[test]
+    fn copilot_endpoints_are_checked_against_the_accounts_catalog() {
+        let ws = tempfile::tempdir().unwrap();
+        let cfg = "[[endpoints]]\nid=\"copilot-gemini\"\nfamily=\"gemini\"\npath=\"harness\"\nharness=\"copilot\"\ncredential=\"harness-login\"\nmodels = { fast = \"gemini-3.8-flash\", workhorse = \"gemini-3.8-flash\", frontier = \"gemini-4-argon\" }\n\
+                   [[endpoints]]\nid=\"copilot-claude\"\nfamily=\"claude\"\npath=\"harness\"\nharness=\"copilot\"\ncredential=\"harness-login\"\nmodels = { fast = \"claude-haiku-4.5\", workhorse = \"claude-sonnet-5.5\", frontier = \"claude-sonnet-5.5\" }\n";
+        let run = |p: &str, a: &[&str]| -> CliRun { (p == "copilot" && a == ["--version"]).then(|| (0, "GitHub Copilot CLI 1.0.112.\nRun 'copilot update'\n".into())) };
+        let answer = serde_json::json!({"result": {"models": {"availableModels": [
+            {"modelId": "auto"},
+            {"modelId": "claude-sonnet-5.5", "_meta": {"copilotUsage": "1x", "copilotEnablement": "enabled"}},
+            {"modelId": "claude-haiku-4.5", "_meta": {"copilotUsage": "0.33x", "copilotEnablement": "enabled"}},
+            {"modelId": "gemini-3.8-flash", "_meta": {"copilotUsage": "14x", "copilotEnablement": "enabled"}}
+        ]}}});
+        let reads = std::cell::Cell::new(0);
+        let read = || {
+            reads.set(reads.get() + 1);
+            Some(answer.clone())
+        };
+        let say = |r: &mut Report| check_copilot_catalog(Some(ws.path()), cfg, &run, &read, 1_793_000_000, r);
+        let mut r = Report::default();
+        say(&mut r);
+        let gem = r.findings.iter().find(|f| f.location == "copilot-gemini models").unwrap();
+        assert_eq!(gem.level, Level::Warn, "{:?}", r.findings);
+        assert!(gem.message.contains("workhorse `gemini-3.8-flash` 14x premium") && gem.message.contains("frontier model `gemini-4-argon` is not in this account's Copilot catalog") && gem.message.contains("frontier tier is unusable"), "{}", gem.message);
+        let cl = r.findings.iter().find(|f| f.location == "copilot-claude models").unwrap();
+        assert!(cl.level == Level::Ok && cl.message.contains("fast `claude-haiku-4.5` 0.33x low") && cl.message.contains("information only"), "{}", cl.message);
+        let cached = delphi_engine::model_catalog::load(&ws.path().join("local")).unwrap();
+        assert_eq!((cached.cli_version.as_str(), cached.models.len()), ("GitHub Copilot CLI 1.0.112.", 3));
+        let mut again = Report::default();
+        say(&mut again);
+        assert_eq!(reads.get(), 1, "a fresh cache for this CLI version is not read again");
+        // No catalog to judge by: the models are not checked, and nothing is called missing.
+        let mut none = Report::default();
+        check_copilot_catalog(Some(tempfile::tempdir().unwrap().path()), cfg, &run, &|| None, 1_793_000_000, &mut none);
+        assert!(none.findings.iter().all(|f| f.level == Level::Skipped && f.message.contains("not checked")), "{:?}", none.findings);
     }
 
     #[test]
