@@ -25,6 +25,8 @@ mod chat;
 mod console;
 mod decisions;
 mod docs_cmd;
+mod finisher;
+mod forge_cmd;
 mod doctor;
 mod escalation;
 // Moved to the engine so the daemon's `check` tool and the CLI share one implementation.
@@ -75,9 +77,11 @@ mod observer;
 mod ratify_console;
 mod relay;
 mod release;
+mod slice_claims;
 mod spec_compile;
 mod spec_views;
 mod specs_cmd;
+mod tracker;
 mod report;
 mod run;
 mod run_granted;
@@ -172,6 +176,7 @@ const CMDS: &[Cmd] = &[
     Cmd { group: "Inspect", name: "models", about: "the model pool: usable, out of quota, cooling down", synopsis: "  delphi models [--probe] [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "daemon", about: "the background process: status, stop, restart", synopsis: "  delphi daemon status|stop|restart [--workspace <name>] [--home <dir>]", detail: "" },
     Cmd { group: "Inspect", name: "lint", about: "check a repository's Delphi files", synopsis: "  delphi lint --repo <path>", detail: "" },
+    Cmd { group: "Work", name: "forge", about: "claim a spec slice before building it; finish it before its PR", synopsis: "  delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--repo <dir>] [--home <dir>]\n  delphi forge release <spec> <slice> [--by <holder>] [--repo <dir>] [--home <dir>]\n  delphi forge list [--all] [--json] [--repo <dir>] [--home <dir>]\n  delphi forge finish [--check] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]", detail: "Spec 135. claim records that a slice of an approved spec is being built, in <home>/forge/claims.json under a lock, so another session that claims it is refused and told who holds it (exit 1). A claim belongs to a holder (--by, by default the branch checked out at --repo) and lasts --ttl (default 8h); claiming again renews it, --take takes over a live claim of another holder (printed and recorded), and an expired claim is replaced. A draft spec is refused; the tracker is read for warnings only (a slice it does not list, a slice it says is merged). A claim binds only sessions that ask, on this machine and home; nothing refuses a pull request for a claimed slice. release removes your claim; list shows the live claims of this repository (--all: every repository and the expired ones). finish does the deterministic chores before a pull request, in-process: it regenerates docs/reference, the ecosystem files and the compiled specs (--check compares and exits 1 on drift), checks that the slice's tracker row no longer says not built (the slice comes from --spec/--slice or this branch's claim), prints the three gates (it runs none), and with --body prints a pull request body and renews the claim. No daemon and no process are started." },
     Cmd { group: "Inspect", name: "specs", about: "compile the specs into one JSON file each, and read them", synopsis: "  delphi specs compile [--check] [--repo <path>]\n  delphi specs show <spec> [--section <n>] [--json] [--for <label>]\n  delphi specs list [--group <g>] [--status <s>] [--json]\n  delphi specs report [--json]", detail: "show prints a compiled spec and refuses one whose source has changed since; --section prints that section of the source spec itself, with its hash; --for labels the read (a slice or a branch) for the counter. list shows every spec and whether its compiled file is current. report prints the read counter: reads made through these commands and the Delphi tools, never a host that opens the files directly. A lookup never creates the Delphi home; --home names it. compile: Reads specs/*.md and compiled/groups.toml and writes compiled/specs/data/<spec>.json, each a quotation of its source with a hash (spec 088), then an index and one page per group beside them, rendered from those files for people to review. It never edits a spec and never decides anything: the source spec stays the authority. --check compares instead of writing and fails when a file is stale, missing or has no source, or when a page differs from a fresh render of the JSON beside it. A failed compile writes nothing. Run it from the repository root or pass --repo." },
     Cmd { group: "Inspect", name: "check", about: "the deterministic checks behind the built-in skills", synopsis: "  delphi check <dag|handoff|provenance|rules|review-md|spec|brief|kb|tui|skill> <path> [--repo <path>]\n  delphi check fact <claim.json> [--home <dir>] [--offline]\n  delphi check record <mission-dir> --event <seq> [--hash <h>]", detail: "`record` verifies one event in a mission log: its hash chain against the daemon's stored head (no model,\nno network). An agent-authored event only warns \"an agent wrote this\". `fact` reads {claim, needed_for, kind,\nsnapshots: [ids]} and checks the claim against snapshots the daemon stored: origins, independence, classes.\nIt runs no model; the judge and the contradiction search are the daemon's. It looks a stored publisher\npage's DOI up at doi.org, as the daemon does; `--offline` skips that." },
     Cmd { group: "Maintain", name: "self-install", about: "put this program on your PATH, as install.sh does", synopsis: "  delphi self-install", detail: "Copies the running delphi to ~/.local/bin/delphi (or $DELPHI_INSTALL_DIR/delphi): written under a temporary name,\nmode 0755, then moved into place. It never writes over a symbolic link or over a file that is not a delphi\n(a regular program holding delphi's own text; the file is read, never run), and prints what it did. The desktop\napp carries a copy of delphi and shows this command, to be run from that copy, when no delphi is installed.\nNeeds no terminal. Refused inside an agent seat." },
@@ -333,6 +338,7 @@ fn main() {
         Some("__agy-hook") if ci == Some(0) => delphi_engine::bridge::run_agy_hook(),
         Some("lint") => cmd_lint(&args),
         Some("specs") => spec_compile::cli(&args),
+        Some("forge") => forge_cmd::cli(&args),
         Some("check") => cmd_check(&args),
         Some("setup") => cmd_setup(&args),
         Some("update") => cmd_update(&args),
@@ -457,7 +463,7 @@ fn log_exit(cmd: Option<&str>, args: &[String], code: i32) {
     let shape = format!("{} word(s) {}", words, flags.join(" "));
     let ctx = serde_json::json!({"command": name, "exit_code": code, "args_shape": shape});
     let msg = format!("delphi {} exited with code {}", name, code);
-    let finding = code == 1 && matches!(name, "doctor" | "lint" | "specs" | "check" | "status" | "train" | "bundle" | "update" | "learn" | "retro" | "decisions" | "xenia");
+    let finding = code == 1 && matches!(name, "doctor" | "lint" | "specs" | "forge" | "check" | "status" | "train" | "bundle" | "update" | "learn" | "retro" | "decisions" | "xenia");
     if code == 2 || finding {
         delphi_core::elog::warn("cli", "cli_exit", &msg, ctx);
     } else {
