@@ -7,6 +7,7 @@
 //! * [`budget`]: pre-dispatch reservations and the halt-on-ceiling rule (`specs/003` §3.2).
 
 pub mod app_keys;
+pub mod app_refusals;
 pub mod artifact;
 pub mod ascii_badge;
 pub mod budget;

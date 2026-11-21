@@ -271,7 +271,10 @@ pub(crate) fn render_event(timestamp: &str, kind: &str, p: &Value) -> String {
         "app.paired" => format!("paired with {}", list(&p["grants"])),
         "app.pair_requested" => format!("asked to pair (key {}, app {})", p["fingerprint"].as_str().unwrap_or("?"), p["app_version"].as_str().filter(|v| !v.is_empty()).unwrap_or("-")),
         "app.pair_approved" => format!("approved by code with {}", list(&p["grants"])),
-        "app.refused" => format!("refused: {}{}", p["reason"].as_str().unwrap_or("?"), if p["locked_out"] == true { " (the socket is closed to new connections for a minute)" } else { "" }),
+        // A window's count of the refusals past its first twenty (`specs/129` §10.1). `locked_out` is in records written before the
+        // lockout was replaced.
+        "app.refused" if p["reason"] == "aggregated" => format!("refused {} more time(s) in {} s, not written one by one", p["count"].as_u64().unwrap_or(0), p["window_secs"].as_u64().unwrap_or(60)),
+        "app.refused" => format!("refused: {}{}", p["reason"].as_str().unwrap_or("?"), if p["locked_out"] == true { " (the socket was closed to new connections for a minute)" } else { "" }),
         "app.revoked" => format!("revoked; {} session(s) closed", p["sessions_closed"].as_u64().unwrap_or(0)),
         "app.granted" => format!("{} {}{}", if p["removed"] == true { "lost" } else { "given" }, p["grant"].as_str().unwrap_or("?"), if p["auto"] == true { " (auto: its update requests skip the terminal approval)" } else { "" }),
         "app.updated" => format!("updated Delphi {} -> {}; restart the daemon when idle", p["from"].as_str().unwrap_or("?"), p["to"].as_str().unwrap_or("?")),
@@ -948,7 +951,9 @@ mod tests {
         assert_eq!(render_event("T", "app.pair_requested", &json!({"name": "app-0a1b2c", "fingerprint": "0123456789ab", "app_version": "0.1.0"})), "T  app-0a1b2c  asked to pair (key 0123456789ab, app 0.1.0)");
         assert_eq!(render_event("T", "app.pair_approved", &json!({"name": "app-0a1b2c", "grants": ["read"]})), "T  app-0a1b2c  approved by code with read");
         assert_eq!(render_event("2026-11-15T10:00:00.000Z", "app.paired", &json!({"name": "app-0a1b2c", "grants": ["read", "request"]})), "2026-11-15T10:00:00.000Z  app-0a1b2c  paired with read, request");
-        assert_eq!(render_event("T", "app.refused", &json!({"name": null, "reason": "bad_signature", "locked_out": true})), "T  -           refused: bad_signature (the socket is closed to new connections for a minute)");
+        assert_eq!(render_event("T", "app.refused", &json!({"name": null, "reason": "bad_signature"})), "T  -           refused: bad_signature");
+        assert_eq!(render_event("T", "app.refused", &json!({"name": null, "reason": "bad_signature", "locked_out": true})), "T  -           refused: bad_signature (the socket was closed to new connections for a minute)");
+        assert_eq!(render_event("T", "app.refused", &json!({"name": null, "reason": "aggregated", "count": 41, "window_secs": 60})), "T  -           refused 41 more time(s) in 60 s, not written one by one");
         assert_eq!(render_event("T", "app.revoked", &json!({"name": "app-0a1b2c", "sessions_closed": 2})), "T  app-0a1b2c  revoked; 2 session(s) closed");
         assert_eq!(render_event("T", "app.granted", &json!({"name": "app-0a1b2c", "grant": "request", "removed": true})), "T  app-0a1b2c  lost request");
         assert_eq!(render_event("T", "app.request", &json!({"name": "app-0a1b2c", "method": "app.page_rebuild", "ids": {"slug": "x"}})), "T  app-0a1b2c  asked app.page_rebuild {\"slug\":\"x\"}");

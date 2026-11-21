@@ -1,5 +1,6 @@
-//! The app socket (`specs/120` slice K1): pairing tickets, the signed handshake, refusals and the lockout, grants read per
-//! call, and revocation. AC-2 (the daemon's half), AC-3, AC-4, AC-6 (first half), AC-10.
+//! The app socket (`specs/120` slice K1): pairing tickets, the signed handshake, refusals and what they cost, grants read per
+//! call, and revocation. AC-2 (the daemon's half), AC-3, AC-4, AC-6 (first half), AC-10; and `specs/129` AC-8 (`specs/120` §3
+//! item 4 as amended by `specs/129` §10.1: no lockout, a flood of refusals does not keep a valid key out).
 
 use delphi_core::app_keys::{test_sign, KeyStore};
 use delphi_core::client::{Client, ClientError};
@@ -35,6 +36,9 @@ async fn start(policy: TtyPolicy, tweak: impl FnOnce(&mut DaemonConfig)) -> Fixt
     let mut cfg = DaemonConfig::new(dir.path().to_path_buf(), dir.path().to_path_buf());
     cfg.tty_policy = policy;
     cfg.auth_timeout = Duration::from_millis(500);
+    // Every test's refusals come from this one process: their waits are kept short unless a test is about the wait.
+    cfg.app_refusal_delay = Duration::from_millis(5);
+    cfg.app_refusal_delay_cap = Duration::from_millis(20);
     tweak(&mut cfg);
     let daemon = Daemon::new(cfg).unwrap();
     let audit = Arc::new(Mutex::new(Vec::new()));
@@ -280,8 +284,7 @@ fn run_child_without_tty(sock: &Path, token: &str) -> String {
 /// unknown name and a revoked key are each closed, and each leaves an `app.refused`. A token is no use on this socket.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_replay_another_key_or_a_revoked_key_is_closed_and_recorded() {
-    // The window is short so this test's refusals never add up to a lockout (that is the next test).
-    let f = start(TtyPolicy::Disabled, |c| c.app_refusal_window = Duration::from_millis(1)).await;
+    let f = start(TtyPolicy::Disabled, |_| {}).await;
     let name = f.pair(&A);
     let pause = || std::thread::sleep(Duration::from_millis(20));
 
@@ -335,7 +338,7 @@ async fn a_replay_another_key_or_a_revoked_key_is_closed_and_recorded() {
     let got: Vec<(String, Value)> = f.refusals().iter().map(|p| (p["reason"].as_str().unwrap().to_string(), p["name"].clone())).collect();
     let n = json!(name);
     assert_eq!(got, [("bad_signature".to_string(), n.clone()), ("bad_signature".into(), n.clone()), ("bad_signature".into(), n.clone()), ("bad_signature".into(), n.clone()), ("unknown_key".into(), json!("app-ffffff")), ("unknown_key".into(), Value::Null), ("unknown_key".into(), n)]);
-    assert!(f.refusals().iter().all(|p| p["locked_out"] == false));
+    assert!(f.refusals().iter().all(|p| p.get("locked_out").is_none()), "there is no lockout to report");
 
     // A token, of any scope, and a request for one: the connection is closed and nothing but the challenge was sent.
     for first in [json!({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {"protocol_version": 1, "token": f.daemon.console_token()}}), json!({"jsonrpc": "2.0", "id": 1, "method": "auth.issue", "params": {"scope": "console"}}), json!({"jsonrpc": "2.0", "id": 1, "method": "auth.issue", "params": {"scope": "app"}}), json!({"jsonrpc": "2.0", "id": 1, "method": "session.ping", "params": {}})] {
@@ -355,25 +358,242 @@ async fn a_replay_another_key_or_a_revoked_key_is_closed_and_recorded() {
     assert_eq!(f.refusals().len(), before);
 }
 
-/// §3 item 4: five refusals in a minute close the socket to new connections, a good key's included, for a minute.
+/// `specs/129` AC-8 (`specs/120` §3 item 4, amended): a flood of refused connections that all claim a valid key's name, from one process
+/// that opens many at once and from processes that each knock once (a rotating process id), does not keep that key out. Its
+/// signature is answered at once, every time, while the name's refusals wait. The flood is bounded so that it never holds the
+/// socket's last unproven place (the one process holds at most its own few; the others have ended), which makes this deterministic.
 #[tokio::test(flavor = "multi_thread")]
-async fn five_refusals_close_the_socket_to_new_connections_for_a_while() {
-    let f = start(TtyPolicy::Disabled, |c| c.app_lockout = Duration::from_millis(700)).await;
+async fn a_flood_of_refusals_under_a_keys_name_does_not_keep_the_key_out() {
+    let f = start(TtyPolicy::Disabled, |c| {
+        c.app_refusal_delay = Duration::from_secs(1);
+        c.app_refusal_delay_cap = Duration::from_secs(5);
+        c.auth_timeout = Duration::from_secs(5);
+    })
+    .await;
     let name = f.pair(&A);
     let mut open = f.session(&A, &name);
+
+    // One process floods from three connections at once and goes on until it is stopped.
+    let mut flooder = child(&f, "flood", &name).spawn().unwrap();
+    // Eight processes knock once each under the same name, four at a time, and go without waiting for their answers.
+    for _ in 0..2 {
+        let batch: Vec<std::process::Child> = (0..4).map(|_| child(&f, "fire", &name).spawn().unwrap()).collect();
+        for mut c in batch {
+            assert!(c.wait().unwrap().success());
+        }
+    }
+    let end = std::time::Instant::now() + Duration::from_secs(20);
+    while f.refusals().iter().filter(|p| p["name"] == json!(name)).count() < 9 {
+        assert!(std::time::Instant::now() < end, "the flood was refused: {:?}", f.refusals());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // The name now has a run of refusals against it, each waiting longer; the key's own signature does not wait.
     for i in 0..5 {
-        let mut k = f.knock().unwrap_or_else(|| panic!("knock {i} should still be answered"));
-        let r = k.hello(&B, &name);
+        let t = std::time::Instant::now();
+        let mut s = f.session(&A, &name);
+        assert_eq!(s.call("session.ping", json!({})).unwrap(), json!("pong"));
+        assert!(t.elapsed() < Duration::from_millis(900), "attempt {i}: the valid key waited {:?}, as long as a refusal would", t.elapsed());
+    }
+    let _ = flooder.kill();
+    let _ = flooder.wait();
+    assert_eq!(open.call("session.ping", json!({})).unwrap(), json!("pong"), "a session already open is untouched");
+    let refused = f.refusals();
+    assert!(refused.iter().all(|p| p["reason"] == "bad_signature" || p["reason"] == "aggregated"), "{refused:?}");
+    assert_eq!(f.keys().len(), 1);
+}
+
+/// `specs/129` §10.1: the cost is kept per claimed name, so a process id that rotates does not escape it. Three processes refused in
+/// turn under one name each wait longer for their answer; a fourth, under a name with no failures, does not wait.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_name_claimed_by_new_processes_keeps_its_cost_and_another_name_does_not_share_it() {
+    let f = start(TtyPolicy::Disabled, |c| {
+        c.app_refusal_delay = Duration::from_secs(1);
+        c.app_refusal_delay_cap = Duration::from_secs(5);
+        c.auth_timeout = Duration::from_secs(10);
+    })
+    .await;
+    let name = f.pair(&A);
+    let waited = |n: &str| -> Duration {
+        let out = child(&f, "hello-wait", n).output().unwrap();
+        let line = String::from_utf8_lossy(&out.stdout).lines().find_map(|l| l.find("FLOOD ANSWER ").map(|i| l[i..].to_string())).unwrap_or_else(|| panic!("no answer: {}", String::from_utf8_lossy(&out.stdout)));
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(parts[2], code::FORBIDDEN.to_string(), "{line}");
+        Duration::from_millis(parts[3].parse().unwrap())
+    };
+    let first = waited(&name);
+    let second = waited(&name);
+    let third = waited(&name);
+    assert!(second >= Duration::from_millis(950), "the name's second refusal waits: {second:?} (first {first:?})");
+    assert!(third >= Duration::from_millis(1950), "and its third twice as long: {third:?}");
+    let other = waited("app-0f0f0f");
+    assert!(other < Duration::from_millis(900), "another name, from another process, is not charged: {other:?}");
+}
+
+/// `specs/129` §10.1: one peer may hold only a few unproven connections, its connections that wait out a refusal included; another
+/// process is not held to that peer's count. Nothing about it is a refusal.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peer_holds_few_unproven_places_and_a_refusal_it_waits_out_is_one_of_them() {
+    let f = start(TtyPolicy::Disabled, |c| {
+        c.max_unauth_per_peer = 2;
+        c.app_refusal_delay = Duration::from_secs(2);
+        c.app_refusal_delay_cap = Duration::from_secs(2);
+        c.auth_timeout = Duration::from_secs(30);
+    })
+    .await;
+    let held: Vec<Knock> = (0..2).map(|_| f.knock().expect("within the peer's limit")).collect();
+    assert!(f.knock().is_none(), "a third from the same process is closed without a challenge");
+    let out = child(&f, "knock", "app-000000").output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("FLOOD CHALLENGE"), "another process still gets its challenge: {}", String::from_utf8_lossy(&out.stdout));
+    assert!(f.refusals().is_empty(), "a closed knock is not a refusal");
+    drop(held);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // A first refusal is answered at once. The second waits, and holds one of the peer's places while it does.
+    let mut k = f.knock().unwrap();
+    let r = k.hello(&B, "app-0a0a0a");
+    k.refused_and_closed(r);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut waiting = f.knock().unwrap();
+    let sent = std::time::Instant::now();
+    let pending = std::thread::spawn(move || {
+        let r = waiting.hello(&B, "app-0a0a0a");
+        (rpc_code(r), sent.elapsed())
+    });
+    let _one = f.knock().expect("the peer's second place");
+    assert!(f.knock().is_none(), "the refusal being waited out and the open knock fill the peer's two places");
+    let (answer, after) = pending.join().unwrap();
+    assert_eq!(answer, Some(code::FORBIDDEN));
+    assert!(after >= Duration::from_millis(1900), "the second refusal waited: {after:?}");
+}
+
+/// `specs/129` §10.1: the `app.refused` log writes the first twenty refusals in a window and then counts, and the count is written once
+/// when the window ends, with no further refusal needed to write it.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_refusal_log_writes_twenty_a_window_and_then_a_count() {
+    let f = start(TtyPolicy::Disabled, |c| {
+        c.app_refusal_window = Duration::from_secs(3);
+        c.app_refusal_delay = Duration::ZERO;
+        c.app_refusal_delay_cap = Duration::ZERO;
+    })
+    .await;
+    for _ in 0..25 {
+        let mut k = f.knock().unwrap();
+        let r = k.hello(&B, "app-0b0b0b");
         k.refused_and_closed(r);
     }
-    let locked: Vec<bool> = f.refusals().iter().map(|p| p["locked_out"].as_bool().unwrap()).collect();
-    assert_eq!(locked, [false, false, false, false, true]);
-    assert!(f.knock().is_none(), "no challenge while the socket is closed to new connections");
-    assert_eq!(f.refusals().len(), 5, "a knock on the closed socket is not recorded again");
-    // A session that was already open is untouched.
-    assert_eq!(open.call("session.ping", json!({})).unwrap(), json!("pong"));
-    tokio::time::sleep(Duration::from_millis(900)).await;
-    f.session(&A, &name).call("session.ping", json!({})).unwrap();
+    let written = f.refusals();
+    assert!(written.len() <= 21, "{written:?}");
+    assert_eq!(written.iter().filter(|p| p["reason"] == "unknown_key").count(), 20, "{written:?}");
+    let end = std::time::Instant::now() + Duration::from_secs(10);
+    let counted = loop {
+        if let Some(c) = f.refusals().iter().find(|p| p["reason"] == "aggregated").cloned() {
+            break c;
+        }
+        assert!(std::time::Instant::now() < end, "the count was never written: {:?}", f.refusals());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!((counted["count"].as_u64(), counted["name"].clone(), counted["window_secs"].as_u64()), (Some(5), Value::Null, Some(3)));
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    assert_eq!(f.refusals().iter().filter(|p| p["reason"] == "aggregated").count(), 1, "the count is written once");
+}
+
+/// `specs/129` work plan, S1's exit: a pairing that waits for its code is not penalised. It holds no place of its peer's, so the app
+/// may still connect while it waits; wrong codes typed at the terminal cost the app nothing; and the key, once approved, connects.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pairing_that_waits_for_its_code_is_not_penalised() {
+    let f = start(TtyPolicy::Disabled, |c| {
+        c.max_unauth_per_peer = 1;
+        c.app_refusal_delay = Duration::from_secs(2);
+        c.app_refusal_delay_cap = Duration::from_secs(2);
+        c.auth_timeout = Duration::from_secs(10);
+    })
+    .await;
+    let (mut k, shown, name) = request(&f, &A);
+    let other = f.knock().expect("the waiting request holds no place of its process's");
+    drop(other);
+    let mut con = f.console();
+    let wrong = if shown == "AAA-AAA" { "BBB-BBB" } else { "AAA-AAA" };
+    for _ in 0..2 {
+        assert_eq!(rpc_code(con.call("app.pair_approve", json!({"request_id": name, "code": wrong}))), Some(code::FORBIDDEN));
+    }
+    con.call("app.pair_approve", json!({"request_id": name, "code": shown})).unwrap();
+    assert_eq!(k.c.next_notification().unwrap()["params"]["outcome"], "approved");
+    let t = std::time::Instant::now();
+    k.hello(&A, &name).unwrap();
+    assert_eq!(k.c.call("session.ping", json!({})).unwrap(), json!("pong"));
+    assert!(t.elapsed() < Duration::from_millis(1500), "the approved key did not wait: {:?}", t.elapsed());
+    assert_eq!(f.refusals().iter().filter(|p| p["reason"] == "wrong_code").count(), 2);
+    // The wrong codes were not counted against the name or the process: a first refusal under the name is answered at once.
+    let mut bad = f.knock().unwrap();
+    let t = std::time::Instant::now();
+    let r = bad.hello(&B, &name);
+    assert!(t.elapsed() < Duration::from_millis(1500), "a first refusal after the wrong codes waited {:?}", t.elapsed());
+    bad.refused_and_closed(r);
+}
+
+/// The test binary itself, started as another process for the tests above, so the daemon sees other process ids. Its mode, the
+/// socket and the name it claims come in the environment; run as an ordinary test, it does nothing.
+#[test]
+fn flood_child() {
+    let (Ok(mode), Ok(sock), Ok(name)) = (std::env::var("DELPHI_FLOOD_CHILD"), std::env::var("DELPHI_FLOOD_SOCK"), std::env::var("DELPHI_FLOOD_NAME")) else { return };
+    let bad = |name: &str| json!({"jsonrpc": "2.0", "id": 1, "method": "app.hello", "params": {"name": name, "signature": "00".repeat(64), "protocol_version": 1}}).to_string();
+    match mode.as_str() {
+        "knock" => {
+            let mut c = Client::connect(Path::new(&sock)).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            println!("{}", if c.next_notification().is_ok() { "FLOOD CHALLENGE" } else { "FLOOD CLOSED" });
+        }
+        // Send a refused hello and go, without waiting for its answer.
+        "fire" => {
+            let mut s = UnixStream::connect(&sock).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut b = [0u8; 1];
+            if s.read(&mut b).unwrap_or(0) == 1 {
+                let _ = writeln!(s, "{}", bad(&name));
+            }
+        }
+        "hello-wait" => {
+            let mut c = Client::connect(Path::new(&sock)).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            c.next_notification().unwrap();
+            let t = std::time::Instant::now();
+            let r = c.call("app.hello", json!({"name": name, "signature": "00".repeat(64), "protocol_version": 1}));
+            println!("FLOOD ANSWER {} {}", rpc_code(r).unwrap_or(0), t.elapsed().as_millis());
+        }
+        // Three connections at once, each refused again and again, until this process is stopped, the daemon is gone or a minute
+        // has passed (so a test that failed leaves nothing running).
+        "flood" => {
+            let until = std::time::Instant::now() + Duration::from_secs(60);
+            let threads: Vec<_> = (0..3)
+                .map(|_| {
+                    let (sock, line) = (sock.clone(), bad(&name));
+                    std::thread::spawn(move || while std::time::Instant::now() < until {
+                        let Ok(mut s) = UnixStream::connect(&sock) else { return };
+                        let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+                        let mut b = [0u8; 1];
+                        if s.read(&mut b).unwrap_or(0) == 1 && writeln!(s, "{}", line).is_ok() {
+                            let mut rest = String::new();
+                            let _ = s.read_to_string(&mut rest);
+                        } else {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                    })
+                })
+                .collect();
+            for t in threads {
+                let _ = t.join();
+            }
+        }
+        other => panic!("unknown mode {other}"),
+    }
+}
+
+/// The test binary as a child in `mode` (see [`flood_child`]), knocking on `f`'s app socket under `name`.
+fn child(f: &Fixture, mode: &str, name: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    cmd.args(["--exact", "flood_child", "--nocapture", "--test-threads=1"]).env("DELPHI_FLOOD_CHILD", mode).env("DELPHI_FLOOD_SOCK", &f.app_sock).env("DELPHI_FLOOD_NAME", name).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+    cmd
 }
 
 /// AC-6, first half: a method under no grant is refused; a method under a grant the key lacks is refused; and the record is
@@ -792,7 +1012,7 @@ async fn only_a_few_connections_may_wait_unproven_on_the_app_socket() {
     .await;
     let held: Vec<Knock> = (0..3).map(|_| f.knock().expect("within the limit")).collect();
     assert!(f.knock().is_none(), "the fourth is closed without a challenge");
-    assert!(f.refusals().is_empty(), "and it is not a refusal that counts toward the lockout");
+    assert!(f.refusals().is_empty(), "and it is not a refusal");
     drop(held);
     let end = std::time::Instant::now() + Duration::from_secs(5);
     loop {

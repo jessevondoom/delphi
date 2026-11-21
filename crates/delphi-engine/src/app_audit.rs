@@ -56,7 +56,7 @@ mod tests {
         let f = setup(vec![], 5.0, |_| {});
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
-        svc.record_app("app.refused", json!({"reason": "bad_signature", "name": "app-0a1b2c", "locked_out": false})).await;
+        svc.record_app("app.refused", json!({"reason": "bad_signature", "name": "app-0a1b2c"})).await;
         svc.record_app("approval.resolved", json!({"approval_id": "ap_1", "resolution": "allow"})).await;
         // A request's record is the engine's own to write, for a request it counted: the server cannot report one.
         svc.record_app("app.request", json!({"name": "app-0a1b2c", "method": "app.page_rebuild", "ids": {"slug": "tides"}, "state": "done"})).await;
