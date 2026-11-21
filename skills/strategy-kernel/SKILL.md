@@ -42,7 +42,7 @@ A strategy says what is in the way, what approach is chosen, and what will be do
 - **Coherent actions:** steps that carry a policy out and do not work against each other.
 
 ## Layout
-`strategy_trace` reads exactly this. Ids are `D`, `P` and `A` with a number. A policy names the diagnosis claims it answers in parentheses; an action names the policies it carries out. A section heading is level 1 or 2 (level 3 under a heading outside the layout) and may carry a number or more words (`## 3. Actions and owners`). An item line starts with its id, after a list marker, a number or a task box if any: `D1: …`, `P1 (D1, D2): …`, `P1: (D1) …`, `A1 (P1, P2) - …`. A field goes on the item's line or on a line directly under it, indented or starting with the field; a blank line ends a list item. A line that starts with an id but cannot be read is reported (`TRACE-DOC-02`): keep an item's references on its own line.
+`strategy_trace` reads exactly this. Ids are `D`, `P` and `A` with a number. A policy names the diagnosis claims it answers in parentheses; an action names the policies it carries out. A section heading is level 1 or 2 (level 3 under a heading outside the layout) and may carry a number or more words (`## 3. Actions and owners`). An item line starts with its id, after a list marker, a number or a task box if any: `D1: …`, `P1 (D1, D2): …`, `P1: (D1) …`, `A1 (P1–P3) - …` (a range names every id in it). A field goes on the item's line or on a line directly under it, indented or starting with the field; a blank line ends a list item. A line that starts with an id but cannot be read is reported (`TRACE-DOC-02`): keep an item's references on its own line.
 
 ```markdown
 # Strategy: faster checkout

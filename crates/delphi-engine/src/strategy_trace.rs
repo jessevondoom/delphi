@@ -120,14 +120,26 @@ struct Item {
 
 const FIELDS: [&str; 4] = ["falsifier", "owner", "measure", "tripwire"];
 /// A field whose whole value is one of these says nothing, and counts as absent.
-const PLACEHOLDERS: [&str; 8] = ["tbd", "todo", "none", "n/a", "na", "?", "-", "unknown"];
+const PLACEHOLDERS: [&str; 3] = ["none", "na", "unknown"];
+/// A field whose value starts with one of these says nothing yet (`TBD later`, `—`), and counts as absent.
+const PENDING: [&str; 9] = ["tbd", "tbc", "todo", "n/a", "?", "-", "–", "—", "…"];
 
-/// `D1`, `p12`: one letter of `DPA` and digits, returned in upper case.
+/// Does a field's value (lower case, trimmed) say something?
+fn says_something(value: &str) -> bool {
+    let first = value.split_whitespace().next().unwrap_or("").trim_end_matches(['.', ',', ';', ':', '!']);
+    !(first.is_empty() || PLACEHOLDERS.contains(&value) || PENDING.contains(&first) || first.chars().all(|c| c == '?'))
+}
+
+/// `D1`, `p12`, `P01`: one letter of `DPA` and digits, returned in upper case without leading zeros (`P01` is `P1`).
 fn as_id(token: &str) -> Option<String> {
     let mut chars = token.chars();
     let first = chars.next()?.to_ascii_uppercase();
     let rest = chars.as_str();
-    (matches!(first, 'D' | 'P' | 'A') && !rest.is_empty() && rest.len() <= 6 && rest.bytes().all(|b| b.is_ascii_digit())).then(|| format!("{}{}", first, rest))
+    if !(matches!(first, 'D' | 'P' | 'A') && !rest.is_empty() && rest.len() <= 6 && rest.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    let digits = rest.trim_start_matches('0');
+    Some(format!("{}{}", first, if digits.is_empty() { "0" } else { digits }))
 }
 
 /// What follows a list marker (`- `, `* `, `+ `, `1. `, `1) `) and a task box (`[ ] `, `[x] `); `None` for a line that is not a
@@ -157,10 +169,28 @@ fn bare(line: &str) -> String {
     s
 }
 
-/// The ids named in an item's parentheses.
+/// The ids named in an item's parentheses. A range of one letter, `P1–P3` or `P1 - P3`, names every id in it (at most
+/// `MAX_RANGE`); a reversed or longer one names its two ends.
 fn refs_of(inner: &str) -> Vec<String> {
-    inner.split(|c: char| !c.is_ascii_alphanumeric()).filter_map(as_id).collect()
+    let dashed = inner.replace(['–', '—'], "-").replace(" -", "-").replace("- ", "-");
+    let mut out = Vec::new();
+    for token in dashed.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
+        let ends: Vec<String> = token.split('-').filter_map(as_id).collect();
+        if let [from, to] = ends.as_slice() {
+            if let (Ok(a), Ok(b)) = (from[1..].parse::<u32>(), to[1..].parse::<u32>()) {
+                if from[..1] == to[..1] && a < b && b - a < MAX_RANGE {
+                    out.extend((a..=b).map(|n| format!("{}{}", &from[..1], n)));
+                    continue;
+                }
+            }
+        }
+        out.extend(ends);
+    }
+    out
 }
+
+/// The most ids a range in an item's references may stand for.
+const MAX_RANGE: u32 = 20;
 
 /// An item's references and its text, as read from its line.
 type Read = (Vec<String>, String);
@@ -221,19 +251,49 @@ fn fields_in(text: &str) -> Vec<&'static str> {
     let mut found = Vec::new();
     for f in FIELDS {
         let key = format!("{}:", f);
-        let Some(at) = lower.find(&key) else { continue };
-        if at > 0 && lower.as_bytes()[at - 1].is_ascii_alphanumeric() {
-            continue;
-        }
+        // The first place the key stands as a word of its own: `unfalsifier:` is not the field.
+        let Some(at) = lower.match_indices(&key).map(|(at, _)| at).find(|at| *at == 0 || !lower.as_bytes()[at - 1].is_ascii_alphanumeric()) else { continue };
         let after = &lower[at + key.len()..];
         // The value ends where the next field on the same line begins (`owner: ops | measure: p99`).
         let end = FIELDS.iter().filter_map(|o| after.find(&format!("{}:", o))).min().unwrap_or(after.len());
         let value = after[..end].trim().trim_matches(|c: char| matches!(c, '|' | ';' | ',' | '.')).trim();
-        if !value.is_empty() && !PLACEHOLDERS.contains(&value) {
+        if says_something(value) {
             found.push(f);
         }
     }
     found
+}
+
+/// The code fence a line is in. A fence opens on a line that starts with three or more backticks or tildes (a backtick fence's
+/// info string has no backtick, so ```` ```toml``` is … ```` is inline code) and closes only on a line of the same mark, at least as
+/// long, and nothing else.
+#[derive(Default)]
+struct Fence(Option<(char, usize)>);
+
+impl Fence {
+    /// Is the line part of a fence: its opening, its inside or its closing?
+    fn skip(&mut self, line: &str) -> bool {
+        let t = line.trim();
+        let run = |c: char| t.chars().take_while(|x| *x == c).count();
+        match self.0 {
+            Some((c, n)) => {
+                if run(c) >= n && t.chars().all(|x| x == c) {
+                    self.0 = None;
+                }
+                true
+            }
+            None => {
+                for c in ['`', '~'] {
+                    let n = run(c);
+                    if n >= 3 && !(c == '`' && t[n..].contains('`')) {
+                        self.0 = Some((c, n));
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+    }
 }
 
 /// What a document holds: the items of each section in the order written, the sections it has, and the lines that start with an
@@ -263,17 +323,13 @@ fn parse(text: &str) -> Parsed {
     // The open section and the level of its heading.
     let mut section: Option<(Section, usize)> = None;
     let mut open: Option<Open> = None;
-    let mut fenced = false;
+    let mut fence = Fence::default();
     for line in text.lines() {
-        let t = line.trim_start();
-        if t.starts_with("```") || t.starts_with("~~~") {
-            fenced = !fenced;
+        if fence.skip(line) {
             open = None;
             continue;
         }
-        if fenced {
-            continue;
-        }
+        let t = line.trim_start();
         let indent = line.len() - t.len();
         let heading = t.starts_with('#');
         if heading {
@@ -390,22 +446,27 @@ pub fn trace(text: &str) -> (Vec<Finding>, Vec<String>) {
 
     let diagnoses = ids(Section::Diagnosis);
     let policies = ids(Section::Policies);
-    // A link holds only when it names an id the document defines; an unknown id is reported and does not count.
-    let mut links = |item: &Item, known: &BTreeSet<&str>, code: &'static str, none: &str| {
+    let kind = |id: &str| [(Section::Diagnosis, "a diagnosis"), (Section::Policies, "a policy"), (Section::Actions, "an action")].into_iter().find(|(s, _)| ids(*s).contains(id)).map(|(_, k)| k);
+    // A link holds only when it names an id of the right section; any other id is reported and does not count.
+    let mut links = |item: &Item, known: &BTreeSet<&str>, want: &str, code: &'static str, none: &str| {
         let unknown: Vec<&str> = item.refs.iter().map(|r| r.as_str()).filter(|r| !known.contains(r)).collect();
         for r in &unknown {
-            findings.push(Finding::new("TRACE-REF-01", &item.id, format!("names {}, which the document does not define", r)));
+            let message = match kind(r) {
+                Some(k) => format!("names {}, which is {}, not {}", r, k, want),
+                None => format!("names {}, which the document does not define", r),
+            };
+            findings.push(Finding::new("TRACE-REF-01", &item.id, message));
         }
         if unknown.len() == item.refs.len() {
             findings.push(Finding::new(code, &item.id, none.to_string()));
         }
     };
     for p in of(Section::Policies) {
-        links(p, &diagnoses, "TRACE-POL-01", "unfounded policy: it names no diagnosis claim it answers (write `P1 (D1): …`)");
+        links(p, &diagnoses, "a diagnosis", "TRACE-POL-01", "unfounded policy: it names no diagnosis claim it answers (write `P1 (D1): …`)");
     }
     let mut carried = BTreeSet::new();
     for a in of(Section::Actions) {
-        links(a, &policies, "TRACE-ACT-01", "orphan action: it names no guiding policy it carries out (write `A1 (P1): …`)");
+        links(a, &policies, "a policy", "TRACE-ACT-01", "orphan action: it names no guiding policy it carries out (write `A1 (P1): …`)");
         carried.extend(a.refs.iter().map(|r| r.as_str()));
         let missing: Vec<&str> = ["owner", "measure"].into_iter().filter(|f| !a.fields.contains(f)).collect();
         if !missing.is_empty() {
@@ -455,17 +516,13 @@ fn forecasts(text: &str) -> Vec<Finding> {
             }
         }
     };
-    let mut fenced = false;
+    let mut fence = Fence::default();
     for (n, line) in text.lines().enumerate() {
-        let t = line.trim_start();
-        if t.starts_with("```") || t.starts_with("~~~") {
-            fenced = !fenced;
+        if fence.skip(line) {
             close(&mut open);
             continue;
         }
-        if fenced {
-            continue;
-        }
+        let t = line.trim_start();
         let indent = line.len() - t.len();
         let b = bare(line).replace('`', "");
         if let Some(rest) = forecast_label(&b) {
@@ -519,7 +576,7 @@ impl Engine {
         let text = args["text"].as_str().filter(|t| !t.trim().is_empty());
         let mut events: Vec<EventEnvelope> = Vec::new();
         let (what, document, cut) = match (path, text) {
-            (Some(_), Some(_)) | (None, None) => return Ok(tool_result_error("strategy_trace needs a `path` or a `text`, not both")),
+            (Some(_), Some(_)) | (None, None) => return Ok(tool_result_error(args_error(path, text).unwrap_or_default())),
             (None, Some(t)) if t.len() > MAX_TEXT_BYTES => return Ok(tool_result_error(format!("`text` is over {} bytes; write the document to a file and pass its `path`", MAX_TEXT_BYTES))),
             (None, Some(t)) => ("the text".to_string(), unfence(t).to_string(), false),
             (Some(p), None) if p.len() > 1024 || p.contains("#L") => return Ok(tool_result_error("`path` is a file path, without a line range")),
@@ -555,6 +612,15 @@ impl Engine {
         events.push(sc.ev("strategy.trace", json!({"path": path, "cut": cut, "findings": findings.iter().map(|f| json!({"code": f.code, "level": f.level, "id": f.id})).collect::<Vec<_>>()})));
         sc.m.append_batch(events).await?;
         Ok(ToolResult::ok(out))
+    }
+}
+
+/// What is wrong with a call's arguments, if anything: it takes one of `path` and `text`.
+fn args_error(path: Option<&str>, text: Option<&str>) -> Option<&'static str> {
+    match (path, text) {
+        (None, None) => Some("strategy_trace needs a `path` or a `text`"),
+        (Some(_), Some(_)) => Some("strategy_trace takes a `path` or a `text`, not both"),
+        _ => None,
     }
 }
 
@@ -832,6 +898,80 @@ pub(crate) mod tests {
         ] {
             assert_eq!(forecasts(bad).len(), 1, "{}: {:?}", why, forecasts(bad));
         }
+    }
+
+    // V1-4: a key inside another word (`unfalsifier:`) does not hide the real field later on the line.
+    #[test]
+    fn every_place_a_field_key_appears_is_tried() {
+        let text = format!("## Diagnosis\n- D1: this is unfalsifier: claim. Falsifier: real one\n{}", P1);
+        assert!(codes(&text).is_empty(), "{:?}", codes(&text));
+    }
+
+    // V1-5: a fence closes only on its own mark; inline code with three backticks opens nothing.
+    #[test]
+    fn a_fence_closes_only_on_its_own_mark() {
+        let inline = format!("```toml``` is the format.\n{}", CLEAN);
+        assert!(codes(&inline).is_empty(), "{:?}", codes(&inline));
+        let mixed = format!("```\n~~~\n## Diagnosis\n- D9: an example\n```\n{}", CLEAN);
+        assert!(codes(&mixed).is_empty(), "{:?}", codes(&mixed));
+        let longer = format!("````\n```\n- Forecast: an example\n```\n````\n{}", CLEAN);
+        assert!(codes(&longer).is_empty(), "{:?}", codes(&longer));
+        assert_eq!(forecasts("```\n~~~\n- Forecast: in the example\n```\n"), []);
+    }
+
+    // V1-8: a reference of the wrong kind says so.
+    #[test]
+    fn a_reference_of_the_wrong_kind_says_what_it_names() {
+        let text = CLEAN.replace("- A1 (P1): Cache", "- A1 (D1): Cache");
+        let found = trace(&text).0;
+        assert_eq!(found[0].code, "TRACE-REF-01");
+        assert_eq!(found[0].message, "names D1, which is a diagnosis, not a policy");
+        let text = CLEAN.replace("- P1 (D1): Take", "- P1 (A1): Take");
+        assert_eq!(trace(&text).0[0].message, "names A1, which is an action, not a diagnosis");
+    }
+
+    // V1-9: a range of ids names every id in it.
+    #[test]
+    fn a_range_of_ids_names_every_id_in_it() {
+        let three = "## Diagnosis\n- D1: x Falsifier: q\n## Guiding policies\n- P1 (D1): p\n- P2 (D1): p\n- P3 (D1): p\n## Actions\n";
+        for range in ["P1–P3", "P1-P3", "P1 — P3", "P1 - P3"] {
+            let text = format!("{}- A1 ({}): a\n", three, range);
+            assert!(codes(&text).is_empty(), "{}: {:?}", range, codes(&text));
+        }
+        // a reversed or very long range, or one across letters, is not expanded
+        assert_eq!(refs_of("P3–P1"), ["P3", "P1"]);
+        assert_eq!(refs_of("P1–P99"), ["P1", "P99"]);
+        assert_eq!(refs_of("D1–P3"), ["D1", "P3"]);
+    }
+
+    // V1-12: the error for a call with neither argument says what is missing.
+    #[test]
+    fn the_argument_errors_say_what_is_wrong() {
+        assert_eq!(args_error(None, None), Some("strategy_trace needs a `path` or a `text`"));
+        assert_eq!(args_error(Some("a.md"), Some("x")), Some("strategy_trace takes a `path` or a `text`, not both"));
+        assert_eq!(args_error(Some("a.md"), None), None);
+        assert_eq!(args_error(None, Some("x")), None);
+    }
+
+    // V1-14: `P01` is `P1`.
+    #[test]
+    fn an_id_with_leading_zeros_is_the_same_id() {
+        let text = CLEAN.replace("- A1 (P1): Cache", "- A1 (P01): Cache").replace("- D1:", "- D01:");
+        assert!(codes(&text).is_empty(), "{:?}", codes(&text));
+        assert_eq!(as_id("p007").as_deref(), Some("P7"));
+        assert_eq!(as_id("A0").as_deref(), Some("A0"));
+    }
+
+    // V1-15: a dash or a placeholder that starts the value says nothing.
+    #[test]
+    fn a_dash_or_a_placeholder_first_word_is_no_falsifier() {
+        for empty in ["Falsifier: —", "Falsifier: –", "Falsifier: TBD later", "Falsifier: tbc.", "Falsifier: todo: ask ops", "Falsifier: ???"] {
+            let text = CLEAN.replace("Falsifier: an incident review names one owner.", empty);
+            assert_eq!(codes(&text), ["TRACE-DIA-01 D2"], "{}", empty);
+        }
+        // a value that only starts with a word that is a placeholder on its own still says something
+        let text = CLEAN.replace("Falsifier: an incident review names one owner.", "Falsifier: none of the vendors ships by Q3.");
+        assert!(codes(&text).is_empty(), "{:?}", codes(&text));
     }
 
     #[test]
