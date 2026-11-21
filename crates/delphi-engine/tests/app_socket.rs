@@ -671,14 +671,19 @@ async fn revoking_a_key_closes_its_open_sessions_at_once() {
     assert!(matches!(b1.call("session.ping", json!({})), Err(ClientError::Closed) | Err(ClientError::Io(_))));
 }
 
-/// An engine stand-in that records what the server hands it. A request takes a while, as a real one may.
+/// An engine stand-in that records what the server hands it. A research request runs until it is cancelled, as a queued run may.
 struct Recorder {
     /// `(key, method, params)` of each request the server handed over.
     asked: Arc<Mutex<Vec<(String, String, Value)>>>,
-    /// Requests that ran to their end.
+    /// Requests that ran to their end, and requests that a revoke cancelled.
     finished: Arc<std::sync::atomic::AtomicUsize>,
+    cancelled: Arc<std::sync::atomic::AtomicUsize>,
     /// Every method offered to the ordinary entry.
     called: Arc<Mutex<Vec<String>>>,
+    /// Each cancel the server asked for: (key, whether the key itself was revoked, whether the key's record still held `request`).
+    cancels: Arc<Mutex<Vec<(String, bool, bool)>>>,
+    stop: Arc<tokio::sync::Notify>,
+    keys: PathBuf,
 }
 
 impl delphi_core::server::Extension for Recorder {
@@ -689,25 +694,43 @@ impl delphi_core::server::Extension for Recorder {
 
     fn app_request(&self, key: &str, method: &str, params: Value) -> delphi_core::server::RpcFuture {
         self.asked.lock().unwrap().push((key.to_string(), method.to_string(), params));
-        let finished = self.finished.clone();
+        let (finished, cancelled, stop, long) = (self.finished.clone(), self.cancelled.clone(), self.stop.clone(), method == "app.research_ask");
         Box::pin(async move {
-            tokio::time::sleep(Duration::from_millis(400)).await;
+            if long {
+                stop.notified().await;
+                cancelled.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Some(Err(delphi_core::proto::RpcError { code: code::FORBIDDEN, message: "cancelled".into(), data: None }));
+            }
             finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Some(Ok(json!({"state": "running"})))
         })
+    }
+
+    fn app_requests_cancel(&self, key: &str, whole: bool) -> delphi_core::server::RpcFuture {
+        let on_record = KeyStore::at(&self.keys).load().unwrap().iter().any(|k| k.name == key && k.grants.iter().any(|g| g == "request"));
+        self.cancels.lock().unwrap().push((key.to_string(), whole, on_record));
+        let running = self.asked.lock().unwrap().iter().filter(|(_, m, _)| m == "app.research_ask").count() > self.cancelled.load(std::sync::atomic::Ordering::SeqCst);
+        if running {
+            self.stop.notify_one();
+        }
+        let ids: Vec<&str> = if running { vec!["aq-1-2"] } else { vec![] };
+        Box::pin(async move { Some(Ok(json!({"cancelled": ids, "left_running": []}))) })
     }
 }
 
 /// `specs/120` §4.2 at the socket (K4): the four request methods reach the engine only from an app session whose key holds
 /// `request` at that moment, with the key's own name (never a name the peer sent); from every other socket they do not
-/// exist. A request being answered when its key is revoked is not cut halfway: the session ends at once (AC-10) and the
-/// work runs to its own end.
+/// exist. AC-10 as amended by `specs/129` §10.2: a request being answered when its key is revoked is cancelled. The session
+/// ends at once; the server then asks the engine to cancel the key's requests, after the record no longer holds the key, and the
+/// revoke's answer and its `app.revoked` event count and name what was cancelled. Taking `request` away asks the same.
+/// (This test asserted the opposite before spec 129: that such a request "runs to its own end".)
 #[tokio::test(flavor = "multi_thread")]
-async fn a_request_reaches_the_engine_only_from_a_key_that_holds_the_grant_and_is_not_cut_by_a_revocation() {
+async fn a_request_reaches_the_engine_only_from_a_key_that_holds_the_grant_and_is_cancelled_by_a_revocation() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let f = start(TtyPolicy::Disabled, |_| {}).await;
-    let (asked, finished, called) = (Arc::new(Mutex::new(Vec::new())), Arc::new(AtomicUsize::new(0)), Arc::new(Mutex::new(Vec::new())));
-    f.daemon.set_extension(Arc::new(Recorder { asked: asked.clone(), finished: finished.clone(), called: called.clone() }));
+    let (asked, finished, cancelled, called, cancels) = (Arc::new(Mutex::new(Vec::new())), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
+    let rec = Recorder { asked: asked.clone(), finished: finished.clone(), cancelled: cancelled.clone(), called: called.clone(), cancels: cancels.clone(), stop: Arc::new(tokio::sync::Notify::new()), keys: f.dir.path().to_path_buf() };
+    f.daemon.set_extension(Arc::new(rec));
     let name = f.pair(&A);
     let mut s = f.session(&A, &name);
     // The key's name is the session's, whatever the parameters say.
@@ -726,8 +749,17 @@ async fn a_request_reaches_the_engine_only_from_a_key_that_holds_the_grant_and_i
     assert_eq!(asked.lock().unwrap().len(), 1);
     assert!(called.lock().unwrap().iter().all(|m| !m.starts_with("app.")), "the ordinary entry is never offered a request: {:?}", called.lock().unwrap());
 
-    // Without the grant: refused by the table, before the engine hears of it. Reading is not asking.
-    con.call("app.grant", json!({"name": name, "grant": "request", "remove": true})).unwrap();
+    // Without the grant: refused by the table, before the engine hears of it. Reading is not asking. Taking the grant away asked
+    // the engine to cancel the key's requests (none ran), after the record had lost it; the event says what was cancelled.
+    let lost = con.call("app.grant", json!({"name": name, "grant": "request", "remove": true})).unwrap();
+    assert_eq!((lost["requests_cancelled"].clone(), lost["left_running"].clone()), (json!({"count": 0, "ids": []}), json!([])));
+    assert_eq!(cancels.lock().unwrap().clone(), [(name.clone(), false, false)]);
+    let granted = f.audit.lock().unwrap().iter().rev().find(|(k, _)| k == "app.granted").unwrap().1.clone();
+    assert_eq!(granted["requests_cancelled"], json!({"count": 0, "ids": []}));
+    // Giving a grant, or taking one that is not `request`, cancels nothing.
+    con.call("app.grant", json!({"name": name, "grant": "update"})).unwrap();
+    con.call("app.grant", json!({"name": name, "grant": "update", "remove": true})).unwrap();
+    assert_eq!(cancels.lock().unwrap().len(), 1);
     let mut s = f.session(&A, &name);
     for m in delphi_core::app_keys::REQUEST_METHODS {
         match s.call(m, json!({"slug": "tides"})) {
@@ -738,7 +770,7 @@ async fn a_request_reaches_the_engine_only_from_a_key_that_holds_the_grant_and_i
     assert_eq!(s.call("session.ping", json!({})).unwrap(), json!("pong"), "it still reads");
     assert_eq!(asked.lock().unwrap().len(), 1);
 
-    // Given back, and revoked while a request is being answered: the session is closed at once, and the request ends on its own.
+    // Given back, and revoked while a request is being answered: the session is closed at once, and the request is cancelled.
     con.call("app.grant", json!({"name": name, "grant": "request"})).unwrap();
     let before = finished.load(Ordering::SeqCst);
     let in_flight = std::thread::spawn(move || s.call("app.research_ask", json!({"question": "why"})));
@@ -747,15 +779,20 @@ async fn a_request_reaches_the_engine_only_from_a_key_that_holds_the_grant_and_i
         assert!(std::time::Instant::now() < deadline, "the request never reached the engine");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert_eq!(con.call("app.revoke", json!({"name": name})).unwrap()["sessions_closed"], 1);
-    assert_eq!(finished.load(Ordering::SeqCst), before, "the request had not ended when its key was revoked");
+    let revoked = con.call("app.revoke", json!({"name": name})).unwrap();
+    assert_eq!(revoked["sessions_closed"], 1);
+    assert_eq!((revoked["requests_cancelled"].clone(), revoked["left_running"].clone()), (json!({"count": 1, "ids": ["aq-1-2"]}), json!([])));
+    assert_eq!(cancels.lock().unwrap().last().unwrap(), &(name.clone(), true, false), "the cancel comes after the record lost the key");
     let answer = tokio::task::spawn_blocking(move || in_flight.join().unwrap()).await.unwrap();
     assert!(matches!(answer, Err(ClientError::Closed) | Err(ClientError::Io(_))), "the revoked session gets no answer: {answer:?}");
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while finished.load(Ordering::SeqCst) == before {
-        assert!(std::time::Instant::now() < deadline, "a request cut by a revocation must still run to its end");
+    while cancelled.load(Ordering::SeqCst) == 0 {
+        assert!(std::time::Instant::now() < deadline, "the request was not cancelled");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    assert_eq!(finished.load(Ordering::SeqCst), before, "the cancelled request did not run to its end");
+    let event = f.audit.lock().unwrap().iter().find(|(k, _)| k == "app.revoked").unwrap().1.clone();
+    assert_eq!(event, json!({"name": name, "sessions_closed": 1, "requests_cancelled": {"count": 1, "ids": ["aq-1-2"]}, "left_running": []}));
     // And the revoked key asks for nothing more.
     assert!(f.knock().unwrap().hello(&A, &name).is_err());
     assert_eq!(asked.lock().unwrap().len(), 2);
