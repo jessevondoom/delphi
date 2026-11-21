@@ -511,6 +511,15 @@ impl Engine {
         self.agy_gate_record(endpoint_id, program).is_some_and(|r| r.builder_ready)
     }
 
+    /// The account's Copilot catalog (`specs/132` §5.2), only when the cached one in `local/` was read on the installed CLI version
+    /// within a day. A span reads the cache, never the catalog itself (`delphi doctor` reads and caches it); no cache, no judgment.
+    pub(crate) fn copilot_fresh_catalog(&self) -> Option<crate::model_catalog::Catalog> {
+        let cached = crate::model_catalog::load(&self.ws.dir.join("local"))?;
+        let version = crate::capabilities::cli_version_bounded(&self.settings.copilot_program, 5)?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        cached.usable_for(&version, now).then_some(cached)
+    }
+
     fn agy_gate_record(&self, endpoint_id: &str, program: &str) -> Option<crate::capabilities::GateRecord> {
         let path = self.settings.agy_gate_file.clone().or_else(|| self.inventory.gate_path())?;
         let rec = crate::capabilities::load_gates(&path).into_iter().find(|g| g.endpoint_id == endpoint_id)?;
@@ -596,6 +605,10 @@ impl Engine {
                 }
             }
             Cli::Copilot => {
+                // A model the account's fresh catalog lacks makes the tier unusable (`specs/132` §5.2): refused, never swapped.
+                if let Some(why) = self.copilot_fresh_catalog().and_then(|c| crate::model_catalog::refusal(&c, &ep.id, &sc.tier, &model)) {
+                    return Ok(Err(HarnessErr::retry(why)));
+                }
                 if builder {
                     let profile = self.cfg.get().harness.get("copilot").cloned().unwrap_or_default();
                     if !profile.bridge {
@@ -2155,6 +2168,33 @@ open(sys.argv[1], "w").write(json.dumps(out))
             }
             let r = &events_of(&f, "seat.receipt")[0].payload;
             assert_eq!(r["carrier"]["tools_offered"], json!([]), "{cli}: {r}");
+        }
+    }
+
+    /// specs/132 AC-5, §5.2: a tier whose model a fresh catalog (this CLI version, within a day) lacks is refused before the CLI starts,
+    /// naming the model; the same catalog listing it lets the seat run; a catalog read on another version judges nothing.
+    #[tokio::test]
+    async fn a_copilot_tier_whose_model_a_fresh_catalog_lacks_is_refused() {
+        use crate::model_catalog::{save, Catalog, CatalogModel};
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let listed = |ids: &[&str], ver: &str| Catalog { cli_version: ver.into(), read_unix: now, models: ids.iter().map(|id| CatalogModel { id: id.to_string(), multiplier: Some(1.0), price_category: "medium".into(), enabled: true }).collect() };
+        for (catalog, runs) in [(listed(&["gpt-6-luna"], "GitHub Copilot CLI 9.9.9."), false), (listed(&["m-1"], "GitHub Copilot CLI 9.9.9."), true), (listed(&["gpt-6-luna"], "GitHub Copilot CLI 9.9.8."), true)] {
+            let scripts = tempfile::tempdir().unwrap();
+            let prog = crate::harness::tests::fake_cli_versioned(scripts.path(), &fake_copilot_body(&scripts.path().join("dump"), "m-1"), "GitHub Copilot CLI 9.9.9.");
+            let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+            use_keyed_harness(&f, "copilot");
+            *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+            save(&f.engine.ws.dir.join("local"), &catalog).unwrap();
+            let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+            if runs {
+                assert_eq!(out.status, Status::Done, "{:?}: {}", catalog.models, out.text);
+            } else {
+                match &out.status {
+                    Status::Escalated(r) => assert!(r.contains("model `m-1` is not in this account's Copilot catalog") && r.contains("never swaps"), "{r}"),
+                    other => panic!("{other:?}"),
+                }
+                assert!(events_of(&f, "harness.started").is_empty());
+            }
         }
     }
 

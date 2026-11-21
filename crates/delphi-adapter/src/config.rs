@@ -292,6 +292,52 @@ impl Default for HarnessProfile {
     }
 }
 
+/// The shipped family table (`specs/091` SR-2), the one list of family names: a new family is a table entry, never a change to
+/// routing or to this check (`specs/056` §3.6, `specs/132` OD-5). A workspace's own `model-families.toml` is read by the engine.
+const SHIPPED_FAMILY_TABLE: &str = include_str!("../../delphi-engine/src/model_families.toml");
+
+fn family_rows() -> Vec<(String, String)> {
+    let Ok(v) = toml::from_str::<toml::Value>(SHIPPED_FAMILY_TABLE) else { return vec![] };
+    v.get("family").and_then(|f| f.as_array()).into_iter().flatten().filter_map(|r| Some((r.get("pattern")?.as_str()?.to_ascii_lowercase(), r.get("family")?.as_str()?.to_string()))).collect()
+}
+
+/// Every family name a config may use: those of the family table, then `local` (a local server, whose models no vendor table maps).
+pub fn known_families() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (_, f) in family_rows() {
+        if !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    out.push("local".into());
+    out
+}
+
+/// The family the shipped table gives a model id, first match wins; `*` matches any run of characters.
+pub fn family_of_model(model: &str) -> Option<String> {
+    let m = model.to_ascii_lowercase();
+    let glob = |p: &str| -> bool {
+        let parts: Vec<&str> = p.split('*').collect();
+        if parts.len() == 1 {
+            return p == m;
+        }
+        let (first, last) = (parts[0], parts[parts.len() - 1]);
+        if !m.starts_with(first) || !m.ends_with(last) || m.len() < first.len() + last.len() {
+            return false;
+        }
+        let mut at = first.len();
+        let end = m.len() - last.len();
+        parts[1..parts.len() - 1].iter().all(|mid| match m[at..end].find(mid) {
+            Some(i) => {
+                at += i + mid.len();
+                true
+            }
+            None => false,
+        })
+    };
+    family_rows().into_iter().find(|(p, _)| glob(p)).map(|(_, f)| f)
+}
+
 pub(crate) fn host_of(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
     let auth = rest.split(['/', '?', '#']).next()?;
@@ -316,7 +362,7 @@ pub struct Access {
     /// `[access]`: only the ratified copy counts. 0 (the default) is off.
     #[serde(default)]
     pub standing_foreign_tokens: u64,
-    /// Role → model family (`claude`, `gemini`, `openai` or `local`) for roles that should not use the default (`primary`).
+    /// Role → model family (any family the family table names, or `local`) for roles that should not use the default (`primary`).
     #[serde(default)]
     pub role_family: BTreeMap<String, String>,
     /// The family roles are served by unless `role_family` says otherwise (`specs/035` D-1). Unset: `claude` when an allowed
@@ -1577,6 +1623,15 @@ impl Config {
                     None => errs.push(format!("endpoint `{}`: gateway endpoints need a base_url", e.id)),
                 },
                 AccessPath::Harness => {
+                    // One login, several vendors (`specs/132` §5.1): a Copilot endpoint names only models of its own family, since
+                    // planning reads the endpoint's family. A model the table does not map is not judged here.
+                    if e.harness.as_deref() == Some("copilot") {
+                        for (tier, model) in &e.models {
+                            if let Some(f) = family_of_model(model).filter(|f| *f != e.family) {
+                                errs.push(format!("endpoint `{}`: its {} model `{}` is family `{}`, but the endpoint's family is `{}`; a Copilot endpoint names only models of its own family (declare one endpoint per family)", e.id, tier, model, f, e.family));
+                            }
+                        }
+                    }
                     if e.harness.as_deref().unwrap_or("").is_empty() {
                         errs.push(format!("endpoint `{}`: harness endpoints need `harness = \"claude\"|\"agy\"|\"codex\"|\"copilot\"` (`gemini` is accepted but the Gemini CLI no longer supports personal sign-in)", e.id));
                     }
@@ -1728,16 +1783,18 @@ impl Config {
                 }
             }
         }
+        let families = known_families();
+        let named = families.join("`, `");
         for (role, family) in &self.access.role_family {
-            if !matches!(family.as_str(), "claude" | "gemini" | "openai" | "local") {
-                errs.push(format!("[access] role_family.{} names unknown family `{}` (use `claude`, `gemini`, `openai` or `local`)", role, family));
+            if !families.contains(family) {
+                errs.push(format!("[access] role_family.{} names unknown family `{}` (use `{}`)", role, family, named));
             } else if !self.endpoints.iter().any(|e| &e.family == family && allowed.contains(&e.id)) {
                 errs.push(format!("[access] role_family.{} = `{}`, but no allowed endpoint serves that family", role, family));
             }
         }
         for (what, family) in self.access.primary.iter().map(|p| ("primary", p)).chain(self.access.failover.iter().map(|f| ("failover", f))) {
-            if !matches!(family.as_str(), "claude" | "gemini" | "openai" | "local") {
-                errs.push(format!("[access] {} names unknown family `{}` (use `claude`, `gemini`, `openai` or `local`)", what, family));
+            if !families.contains(family) {
+                errs.push(format!("[access] {} names unknown family `{}` (use `{}`)", what, family, named));
             } else if !self.endpoints.iter().any(|e| &e.family == family && allowed.contains(&e.id)) {
                 errs.push(format!("[access] {} = `{}`, but no allowed endpoint serves that family", what, family));
             }
@@ -2220,6 +2277,36 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         let bad = "[[endpoints]]\nid = \"h\"\nfamily = \"claude\"\npath = \"harness\"\ncredential = \"harness-login\"\n";
         let errs = Config::parse(&format!("{}\n{}", bad, SAMPLE)).unwrap_err().join("; ");
         assert!(errs.contains("harness endpoints need") && errs.contains("\"codex\"|\"copilot\""), "{}", errs);
+    }
+
+    /// specs/132 OD-5 and the Council's P1: family names come from the family table, so `kimi` and `mai` are accepted with no code
+    /// change, and an unknown name is still refused.
+    #[test]
+    fn family_names_come_from_the_family_table() {
+        let fams = known_families();
+        for f in ["claude", "gemini", "openai", "kimi", "mai", "local"] {
+            assert!(fams.iter().any(|x| x == f), "{f}: {fams:?}");
+        }
+        assert_eq!(family_of_model("kimi-k3").as_deref(), Some("kimi"));
+        assert_eq!(family_of_model("gpt-6.2-sol").as_deref(), Some("openai"));
+        assert_eq!(family_of_model("gemini-3.8-flash").as_deref(), Some("gemini"));
+        assert_eq!(family_of_model("qwen3:8b"), None);
+        let ep = "[[endpoints]]\nid = \"copilot-kimi\"\nfamily = \"kimi\"\npath = \"harness\"\nharness = \"copilot\"\ncredential = \"harness-login\"\nmodels = { fast = \"kimi-k3\", workhorse = \"kimi-k3\", frontier = \"kimi-k3\" }\n";
+        let ok = format!("{}\n{}", ep, SAMPLE).replace("allowed_endpoints = [\"corp-gateway\", \"bedrock-us\"]", "allowed_endpoints = [\"corp-gateway\", \"bedrock-us\", \"copilot-kimi\"]\nrole_family = { red-team = \"kimi\" }");
+        Config::parse(&ok).unwrap();
+        let bad = ok.replace("red-team = \"kimi\"", "red-team = \"moonshot\"");
+        let errs = Config::parse(&bad).unwrap_err().join("; ");
+        assert!(errs.contains("unknown family `moonshot`") && errs.contains("`kimi`"), "{errs}");
+    }
+
+    /// specs/132 AC-6: a Copilot endpoint with `family = "gemini"` and a `claude-*` model fails the config check, naming both.
+    #[test]
+    fn a_mixed_vendor_copilot_endpoint_is_refused() {
+        let ep = "[[endpoints]]\nid = \"copilot-gemini\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"copilot\"\ncredential = \"harness-login\"\nmodels = { fast = \"gemini-4-argon\", workhorse = \"gemini-4-argon\", frontier = \"claude-opus-5.5\" }\n";
+        let errs = Config::parse(&format!("{}\n{}", ep, SAMPLE)).unwrap_err().join("; ");
+        assert!(errs.contains("`claude-opus-5.5` is family `claude`, but the endpoint's family is `gemini`"), "{errs}");
+        // The same models on an agy endpoint are not judged by this rule (agy names its own models).
+        assert!(Config::parse(&format!("{}\n{}", ep.replace("copilot\"\ncredential", "agy\"\ncredential"), SAMPLE)).is_ok());
     }
 
     /// The operator's staged `agy-oss` endpoint (GPT-OSS through agy): an agy endpoint whose family is `openai` is accepted, and
