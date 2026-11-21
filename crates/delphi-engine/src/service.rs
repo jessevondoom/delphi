@@ -1631,8 +1631,8 @@ impl EngineService {
     }
 
     /// The seats of a `foreign_seats` request (`specs/086` §6.4): each `{role, family?, tools?}`, roles distinct, among the Panel's three.
-    /// `tools` is `none` (the default: no tools in any round) or `readonly` (what the role's manifest allows in Round 1, still none
-    /// once a seat reads a peer). A family it names must be configured and usable; none named takes the role's own, avoiding the host's.
+    /// `tools` is `none` (the default: no tools in any round) or `readonly` (the role's read tools in Round 1, narrowed as a
+    /// host-raised span is by `specs/062` §6.3: no write, command or connector; still none once a seat reads a peer). A family it names must be configured and usable; none named takes the role's own, avoiding the host's.
     /// Nothing is spent here.
     fn plan_foreign_seats(&self, v: &Value, host_family: Option<&str>) -> Result<Vec<crate::council_panel::ForeignSeat>, RpcError> {
         let bad = |m: String| err(code::INVALID_PARAMS, m);
