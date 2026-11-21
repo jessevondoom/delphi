@@ -2,7 +2,7 @@
 
 # Orchestration and Council
 
-15 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group orchestration-and-council` lists this group.
 
 ## 003-collaboration-and-council
 
