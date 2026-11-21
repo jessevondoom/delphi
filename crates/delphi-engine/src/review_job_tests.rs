@@ -64,7 +64,7 @@ type Log = Arc<Mutex<Vec<String>>>;
 fn runner(log: Log) -> impl Fn(Vec<String>, &'static str) -> std::future::Ready<CommandResult> {
     move |argv: Vec<String>, by: &'static str| {
         log.lock().unwrap().push(format!("{by}: {}", argv.join(" ")));
-        std::future::ready(CommandResult { tail: format!("OUTPUT-OF-{}", argv.join("-")), argv, exit: Some(0), elapsed_ms: 1, requested_by: by, refused: None, timed_out: false })
+        std::future::ready(CommandResult { tail: format!("OUTPUT-OF-{}", argv.join("-")), argv, exit: Some(0), elapsed_ms: 1, requested_by: by, refused: None, timed_out: false, started: true })
     }
 }
 
@@ -169,4 +169,51 @@ fn the_slice_row_is_found_by_spec_number_and_slice() {
     let t = "| Spec | Slice | Content | State |\n| 135 | F2 | the review | built |\n| 135 | F0 | claims | merged |\n";
     assert_eq!(slice_row(t, "135", "f2").as_deref(), Some("| 135 | F2 | the review | built |"));
     assert_eq!(slice_row(t, "135", "F9"), None);
+}
+
+/// A runner whose configured command cannot start (the macOS sandbox's `execvp` failure) or exits non-zero, by program name.
+fn failing_runner() -> impl Fn(Vec<String>, &'static str) -> std::future::Ready<CommandResult> {
+    move |argv: Vec<String>, by: &'static str| {
+        // The program is the first word, or the word after `env`.
+        let program = if argv[0].ends_with("/env") { argv[1].as_str() } else { argv[0].as_str() };
+        let (exit, out) = match program {
+            "cargo" => (Some(71), "sandbox-exec: execvp() of 'cargo' failed: No such file or directory".to_string()),
+            "missing" => (Some(127), "env: missing: No such file or directory".to_string()),
+            _ => (Some(101), "test result: FAILED. 1 failed".to_string()),
+        };
+        std::future::ready(CommandResult { started: !could_not_start(exit, &out), tail: out, argv, exit, elapsed_ms: 1, requested_by: by, refused: None, timed_out: false })
+    }
+}
+
+/// Spec 135 AC-12 (§14.1 item 1): a command that cannot start reports `tests_run: false`, `started: false` and the fix; one that exits
+/// non-zero reports `tests_run: true`.
+#[tokio::test]
+async fn ac12_a_command_that_cannot_start_is_not_a_test_run_and_the_note_says_how_to_fix_it() {
+    assert!(could_not_start(Some(71), "sandbox-exec: execvp() of 'cargo' failed: Operation not permitted"));
+    assert!(could_not_start(Some(126), "") && could_not_start(Some(127), ""));
+    assert!(could_not_start(Some(1), "bwrap: execvp cargo: No such file or directory"));
+    assert!(!could_not_start(Some(71), "a test that exits 71 on its own") && !could_not_start(Some(1), "FAILED") && !could_not_start(None, "execvp"));
+    let d = cap_diff(&diff_of(&[("a.rs", 1)]), 10_000);
+    let briefs: Log = Default::default();
+    let b2 = briefs.clone();
+    let seat = move |brief: String| {
+        b2.lock().unwrap().push(brief);
+        std::future::ready(Ok(r#"{"verdict": "unsure", "findings": []}"#.to_string()))
+    };
+    let out = review(&input(&d), &[argv(&["cargo", "test"]), argv(&["/usr/bin/env", "missing"])], true, seat, failing_runner()).await;
+    assert!(!out.tests_run, "nothing started: {:?}", out.commands);
+    assert!(out.commands.iter().all(|c| !c.started && c.to_json()["started"] == json!(false)), "{:?}", out.commands);
+    let note = out.tests_note.as_deref().unwrap();
+    assert!(note.contains("2 configured command(s) could not start") && note.contains("[exec] toolchain") && note.contains("[exec] env.PATH"), "{note}");
+    assert!(briefs.lock().unwrap()[0].contains("could not start this program"), "the seat is told it did not run");
+    // One that ran and failed is a test run: its exit is evidence.
+    let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "changes", "findings": []}"#.to_string()));
+    let out = review(&input(&d), &[argv(&["cargo", "test"]), argv(&["make", "test"])], true, seat, failing_runner()).await;
+    assert!(out.tests_run, "a non-zero exit is a run");
+    assert_eq!(out.commands.iter().map(|c| (c.started, c.exit)).collect::<Vec<_>>(), vec![(false, Some(71)), (true, Some(101))]);
+    assert!(out.tests_note.as_deref().is_some_and(|n| n.contains("1 configured command(s)")), "the one that did not start is still named");
+    // Nothing configured: no run, and the note says why.
+    let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "accept", "findings": []}"#.to_string()));
+    let out = review(&input(&d), &[], true, seat, failing_runner()).await;
+    assert!(!out.tests_run && out.tests_note.as_deref().is_some_and(|n| n.contains("no command is configured")));
 }

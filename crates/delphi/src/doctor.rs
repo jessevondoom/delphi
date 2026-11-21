@@ -219,6 +219,10 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         (None, "prefer") => r.warn("9 sandbox", "", "`[exec] sandbox = \"prefer\"` but no OS sandbox is available: commands run directly and ask for approval"),
         (None, _) => r.push(Level::Ok, "9 sandbox", "", "off (no OS sandbox is available either): commands ask for approval"),
     }
+    if delphi_sandbox::detect().is_some() {
+        let user_home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from).unwrap_or_default();
+        check_review_commands(&cfg, &user_home, &mut r);
+    }
     // 9b. The authorized-test sandbox (specs/092 S2b): optional. A canary battery under the profile an operator-authorized test would
     // use. Nothing calls it from a run yet; an absent or failing profile only means such a test would refuse to start, so it is
     // never a failure of the doctor.
@@ -363,6 +367,22 @@ fn check_removed_settings(cfg_text: &str, r: &mut Report) {
     for (table, key) in REMOVED_SETTINGS {
         if root.get(table).and_then(|t| t.get(key)).is_some() {
             r.warn("18 removed-settings", "config.toml", format!("[{table}] {key} was removed; the feature is always on; see specs/098 section 13.2"));
+        }
+    }
+}
+
+/// `specs/135` §14.2: each command a cross-family review runs (`[forge] review_commands`, or the `[exec]` test and check commands) must
+/// name a program the investigation sandbox can start: on `[exec] env.PATH` and inside a system or `[exec] toolchain` directory. A warning
+/// per command that would not; nothing when none is configured. Only the file system is read.
+fn check_review_commands(cfg_text: &str, user_home: &Path, r: &mut Report) {
+    let Ok(root) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let exec = delphi_engine::exec::ExecConfig::from_root(&root, user_home);
+    let configured = delphi_engine::boot::settings_from(&root).review_commands.unwrap_or_else(|| [exec.test_command.clone(), exec.check_command.clone()].into_iter().flatten().collect());
+    let path = exec.env.get("PATH").cloned().unwrap_or_else(|| "/usr/bin:/bin".into());
+    let roots: Vec<PathBuf> = delphi_sandbox::system_read_only().into_iter().chain(exec.toolchain.iter().cloned()).collect();
+    for argv in &configured {
+        if let Some(why) = delphi_engine::review_job::program_problem(argv, &path, &roots) {
+            r.warn("9c review-commands", "config.toml", format!("a review command will not start in the sandbox ({}): {why}. See `[exec] toolchain` and `[exec] env.PATH` (specs/135 section 14.2)", argv.join(" ")));
         }
     }
 }
@@ -1626,6 +1646,45 @@ mod tests {
         assert!(findings("[research]\nthin_below = 5\n").iter().any(|x| x.message.contains("fewer than 5 kept claims")));
         let f = findings("[search]\nproviders = [\"nonesuch\"]\n");
         assert_eq!((f[0].level, f[0].location.as_str()), (Level::Warn, "config.toml"), "{f:?}");
+    }
+
+    /// Spec 135 AC-16 (§14.2): a review command whose program is not on the sandbox PATH, or not in a system or toolchain directory, is
+    /// warned about; one that is found is not.
+    #[test]
+    fn doctor_warns_when_a_review_commands_program_is_not_on_the_sandbox_path() {
+        let t = tempfile::tempdir().unwrap();
+        let (tc, elsewhere) = (t.path().join("tc"), t.path().join("elsewhere"));
+        for d in [tc.join("bin"), elsewhere.clone()] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(tc.join("bin/mytool"), "").unwrap();
+        std::fs::write(elsewhere.join("stray"), "").unwrap();
+        let warned = |cfg: &str| {
+            let mut r = Report::default();
+            check_review_commands(cfg, t.path(), &mut r);
+            r.findings.into_iter().filter(|f| f.check == "9c review-commands").map(|f| (f.level, f.message)).collect::<Vec<_>>()
+        };
+        // The default PATH, with no toolchain: `mytool` is not found; `/bin/echo` is a system program.
+        let w = warned("[forge]\nreview_commands = [[\"mytool\", \"test\"], [\"/bin/echo\", \"x\"]]\n");
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0].0, Level::Warn);
+        assert!(w[0].1.contains("`mytool` is not on the sandbox's PATH") && w[0].1.contains("[exec] toolchain"), "{w:?}");
+        // On the PATH but not in a toolchain directory: still refused by the sandbox.
+        let on_path = "[exec]\nenv = { PATH = \"~/tc/bin:/usr/bin:/bin\" }\n[forge]\nreview_commands = [[\"mytool\"]]\n";
+        assert!(warned(on_path)[0].1.contains("not inside a system or `[exec] toolchain` directory"), "{:?}", warned(on_path));
+        // Configured as F4 should have been: no warning. `~` is the operator's home.
+        assert!(warned("[exec]\ntoolchain = [\"~/tc\"]\nenv = { PATH = \"~/tc/bin:/usr/bin:/bin\" }\n[forge]\nreview_commands = [[\"mytool\", \"test\"]]\n").is_empty());
+        // `/usr/bin/env` is looked through, with its assignments; a PATH it sets is the one searched.
+        assert!(warned("[forge]\nreview_commands = [[\"/usr/bin/env\", \"RUST_LOG=1\", \"mytool\"]]\n")[0].1.contains("`mytool`"));
+        let via_env = format!("[exec]\ntoolchain = [\"~/tc\"]\n[forge]\nreview_commands = [[\"/usr/bin/env\", \"PATH={}\", \"mytool\"]]\n", tc.join("bin").display());
+        assert!(warned(&via_env).is_empty(), "{:?}", warned(&via_env));
+        // An absolute path outside every executable directory, and one that does not exist.
+        let abs = format!("[forge]\nreview_commands = [[\"{}\"], [\"/nonexistent/x\"]]\n", elsewhere.join("stray").display());
+        let w = warned(&abs);
+        assert!(w.len() == 2 && w[0].1.contains("cannot execute it") && w[1].1.contains("does not exist"), "{w:?}");
+        // The `[exec]` gates stand in when `[forge]` names none; nothing configured, nothing said.
+        assert_eq!(warned("[exec]\ntest_command = [\"mytool\"]\n").len(), 1);
+        assert!(warned("").is_empty() && warned("[forge]\nreview_commands = []\n[exec]\ntest_command = [\"mytool\"]\n").is_empty());
     }
 
     // `specs/098` §13.2: one line per removed key an old config still carries, none for a clean config, and nothing else changes.

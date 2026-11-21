@@ -144,7 +144,9 @@
         "shell": { "type": "boolean", "description": "Offer the `shell` tool (specs/061). Default true." },
         "hard": { "type": "array", "items": { "type": "string" }, "description": "Shell lines that are always Hard: a Red card." },
         "test_command": { "type": "array", "items": { "type": "string" }, "description": "Merge gate 1." },
-        "check_command": { "type": "array", "items": { "type": "string" }, "description": "Merge gate 2." }
+        "check_command": { "type": "array", "items": { "type": "string" }, "description": "Merge gate 2." },
+        "toolchain": { "type": "array", "items": { "type": "string" }, "description": "Directories a sandboxed command may read and execute, read-only; ~ is the operator's home (specs/135 section 14.2)." },
+        "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "The environment of a sandboxed command; ~ is expanded in each PATH element. Default PATH /usr/bin:/bin:/usr/sbin:/sbin." }
       }
     },
     "update": { "type": "object", "properties": { "require_signed": { "type": "boolean" } } },
