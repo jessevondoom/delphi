@@ -28,7 +28,7 @@ fn world() -> World {
 fn with_ctx<R>(w: &World, term: &mut FakeTerminal, quote: Option<&str>, dry_run: bool, f: impl FnOnce(&mut Ctx) -> R) -> R {
     let ledger = Ledger::at(w.home.path());
     let errors = Errors::at(w.home.path());
-    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, errors: &errors, term, quote: quote.map(String::from), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string() };
+    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, errors: &errors, term, quote: quote.map(String::from), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string(), refresh: None };
     f(&mut ctx)
 }
 
@@ -575,7 +575,7 @@ fn a_behind_pull_request_can_still_be_queued_and_status_names_it_as_behind() {
     let msg = queue_one(&w.forge, 1).unwrap();
     assert!(msg.contains("queued") && msg.contains("4 commit(s) behind") && msg.contains("delphi merge refresh 1"), "{msg}");
     let lines = status_lines(&w.forge).unwrap();
-    assert!(lines[0].contains("not ready") && lines[0].contains("4 commit(s) behind `main`"), "{lines:?}");
+    assert!(lines[0].contains("will be refreshed at merge") && lines[0].contains("4 commit(s) behind `main`"), "{lines:?}");
     // Behind and red: queueing still refuses on the red check.
     w.forge.with_ready_pr(2, "h2", &["a.rs"]);
     w.forge.edit(2, |p| p.labels.clear());

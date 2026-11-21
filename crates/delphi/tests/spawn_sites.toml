@@ -161,6 +161,15 @@ file = "crates/delphi/src/connect_run.rs"
 count = 1
 class = "operator-cli"
 
+# `delphi forge finish --gates` (spec 135 section 14.4, F1b): the three gates of AGENTS.md, typed by the operator at a terminal (or by
+# their host): cargo test, a rerun of its failing tests by name, cargo clippy, and this program's own lint. Fixed argument lists built
+# in `finisher_gates::commands`; the only words not fixed are test names libtest printed and the checkout path. Not sandboxed: the
+# operator's own process, as when they run the gates by hand.
+[[site]]
+file = "crates/delphi/src/finisher_gates.rs"
+count = 1
+class = "operator-cli"
+
 [[site]]
 file = "crates/delphi/src/connect_files.rs"
 count = 1

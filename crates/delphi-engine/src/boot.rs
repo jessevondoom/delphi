@@ -103,6 +103,19 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         if let Some(n) = fg.get("review_diff_chars").and_then(|v| v.as_integer()).filter(|v| (1_000..=200_000).contains(v)) {
             s.review_diff_chars = n as usize;
         }
+        // §14.3 item 1: 0 turns the call sites and Round 0 off.
+        if let Some(n) = fg.get("review_context_chars").and_then(|v| v.as_integer()).filter(|v| (0..=100_000).contains(v)) {
+            s.review_context_chars = n as usize;
+        }
+        // §14.7 rule 1: `[forge.tools.<harness>] read`, a list of names; `forge_tools::read_list` keeps only the carrier's read tools,
+        // so a list can narrow or turn off (`[]`) a carrier's read tools, never widen them. A value of the wrong shape is ignored.
+        if let Some(t) = fg.get("tools").and_then(|v| v.as_table()) {
+            for (h, v) in t {
+                if let Some(list) = v.get("read").and_then(|r| r.as_array()).and_then(|a| a.iter().map(|x| x.as_str().map(String::from)).collect::<Option<Vec<_>>>()) {
+                    s.forge_tools.insert(h.clone(), list);
+                }
+            }
+        }
     }
     // Spec 104 §12 A4: `[access]` is one of the pinned blocks, so this is the ratified copy's value; a live edit does not count.
     if let Some(n) = root.get("access").and_then(|a| a.get("standing_foreign_tokens")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
@@ -582,6 +595,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         timers: Arc::new(timers),
         inventory: Arc::new(crate::inventory::Inventory::open(ws_dir.join("local/harness-tools.json"))),
         toolless: Default::default(),
+        forge_reads: Default::default(),
         operator_prompts: Default::default(),
         readonly_tasks: Default::default(),
         readonly_handoffs: Default::default(),
@@ -797,6 +811,8 @@ mod tests {
         let s = settings_from(&toml::from_str("[forge]\nreview_commands = [[\"cargo\", \"test\", \"--offline\"], [\"cargo\", \"clippy\"]]\nreview_diff_chars = 20000\n").unwrap());
         assert_eq!(s.review_commands, Some(vec![vec!["cargo".to_string(), "test".into(), "--offline".into()], vec!["cargo".to_string(), "clippy".into()]]));
         assert_eq!(s.review_diff_chars, 20_000);
+        assert_eq!((d.review_context_chars, settings_from(&toml::from_str("[forge]\nreview_context_chars = 0\n").unwrap()).review_context_chars), (12_000, 0));
+        assert_eq!(settings_from(&toml::from_str("[forge]\nreview_context_chars = 999999\n").unwrap()).review_context_chars, 12_000, "out of range keeps the default");
         assert_eq!(settings_from(&toml::from_str("[forge]\nreview_commands = []\n").unwrap()).review_commands, Some(vec![]), "an empty list runs nothing");
         for bad in ["review_commands = [[]]", "review_commands = [\"cargo test\"]", "review_commands = [[1]]", "review_diff_chars = 10", "review_diff_chars = 9000000"] {
             let s = settings_from(&toml::from_str(&format!("[forge]\n{bad}\n")).unwrap());
@@ -929,6 +945,33 @@ mod tests {
         assert_eq!(read(w.path(), "[seats]\nmax_foreign_seats = 2\n"), (false, 2), "nor does removing it");
         let none = tempfile::tempdir().unwrap();
         assert_eq!(read(none.path(), "[seats]\nspread = \"two\"\n"), (true, 1), "with nothing ratified a live \"two\" does not narrow a Council");
+    }
+
+    // specs/056 §10.5 test 3: a live edit of `[routing] max_cost_class` changes nothing until it is ratified; the rest of `[routing]`
+    // stays live, and a workspace that never ratified the key keeps the `standard` default whatever the live file says.
+    #[test]
+    fn max_cost_class_counts_only_from_the_ratified_copy() {
+        use delphi_adapter::config::CostClass;
+        let ratify = |dir: &Path, text: &str| {
+            let blocks = access_blocks(text);
+            fs::create_dir_all(dir.join("local/ratified")).unwrap();
+            let mut l = lock::LockFile::default();
+            l.files.insert(crate::ratify::CONFIG_KEY.into(), hash(blocks.as_bytes()));
+            lock::write(&dir.join("local/ratified.lock"), &l).unwrap();
+            fs::write(dir.join("local/ratified").join(crate::ratify::CONFIG_COPY), &blocks).unwrap();
+        };
+        let read = |dir: &Path, live: &str| {
+            let cfg = Config::parse(&effective_config(dir, live).unwrap().0).unwrap();
+            (cfg.routing.max_cost_class.of("architect"), cfg.routing.assignment)
+        };
+        let w = tempfile::tempdir().unwrap();
+        ratify(w.path(), "");
+        let live = "[routing]\nassignment = \"discovered\"\nmax_cost_class = \"premium\"\n";
+        assert_eq!(read(w.path(), live), (CostClass::Standard, delphi_adapter::config::Assignment::Discovered), "the live cap is a pending proposal; the live assignment counts");
+        ratify(w.path(), live);
+        assert_eq!(read(w.path(), live).0, CostClass::Premium, "after /ratify it counts");
+        assert_eq!(read(w.path(), "[routing]\nmax_cost_class = \"low\"\n").0, CostClass::Premium, "a later live edit, lowering or raising, waits for /ratify too");
+        assert_eq!(read(w.path(), "").0, CostClass::Premium, "and so does taking the key out");
     }
 
     fn pin_config(ws: &WorkspacePaths) {

@@ -90,6 +90,11 @@ max_parallel_agents = 4
 # a card only when no pool member meets a role's floor. `delphi capabilities --models` shows each model's class.
 # assignment = "static"
 # evidence_enough = 8                # measured results per (role, kind, model) after which a model is scored by them alone
+# Cost cap (specs/056 §10.5), under either assignment: the highest cost class that may serve a role, "low" (under 1x), "standard" (1x)
+# or "premium" (over 1x). Only Copilot labels a cost class; every other carrier counts as "standard". Absent, it is "standard": a model over
+# 1x serves only a role you raise. Ratified: an edit counts only after /ratify. A cap never serves a role below its floor or the tier asked
+# for; the task waits and says what to raise.
+# max_cost_class = "standard"        # or per role: { default = "standard", architect = "premium" }
 # Emergency stop-gap (specs/056 §3.5; off unless both are set). A local model (an endpoint with cost_model = "local") that, only when every
 # ratified seat is out of quota, reads and writes one hand-off record of the mission's state, marked unverified until a capable model re-checks it.
 # It never serves ordinary work, approves, ratifies or leaves the sandbox.
@@ -140,10 +145,21 @@ per_watch_max_wakes_per_day = 10
 # spread = "all"                     # ratified (like [access]): with three or more usable families every Council seat sits on its own family, and a Panel's foreign seats on distinct ones; "two" keeps two-family Councils (specs/132 section 5.4)
 
 # A cross-family review of a host's branch (`request_review`, specs/135 section 6). Delphi runs these commands in the OS sandbox,
-# with no network, in a copy of the branch; a seat of another family with no tools reviews the diff with their output.
+# with no network, in a copy of the branch; a seat of another family with no tools reviews the diff with their output. The program
+# must be on the sandbox's PATH and in a system or `[exec] toolchain` directory (see [exec] below). Read when the daemon starts.
 # [forge]
 # review_commands = [["cargo", "test", "--offline"]]   # unset (default): the [exec] test_command and check_command, when set; [] runs none
 # review_diff_chars = 40000          # the most diff the reviewer is shown (1000 to 200000); whole files past it are left out and named
+# review_context_chars = 12000       # call sites and what the reviewer asks to see in Round 0, found in the copy (0 to 100000; 0 turns both off)
+# The reviewer's own read tools on the copy (specs/135 section 14.7), per CLI. Unset: the defaults below. A list can only pick from the
+# CLI's read tools (anything else is dropped); [] turns them off. Each call is checked by Delphi's gate (on the list, every path inside the
+# copy) before it runs. A CLI version gets them once a background probe passed, or for 5 days after an update while the daemon probes it
+# when idle; a failed probe or a call that got past the gate drops that version to tool-less (`delphi doctor` says so). codex and copilot
+# get none for now.
+# [forge.tools.claude]
+# read = ["Read", "Grep", "Glob", "LS"]
+# [forge.tools.agy]
+# read = ["view_file", "read_file", "list_dir", "find_by_name", "grep_search"]
 
 # What the engine adds around a role's model calls (specs/045). Not an access table: it adds notes and one verification turn,
 # never a tool or a permission. Every key shown is the default.
@@ -172,6 +188,8 @@ sandbox = "off"
 # check_command = ["cargo", "clippy"] # merge gate 2
 # shell = true                       # offer the `shell` tool (a full shell line); false keeps only `run_command`
 # hard = ["git push*"]               # shell lines that are always Hard: a Red card, never auto-approved (specs/061)
+# toolchain = ["~/.cargo", "~/.rustup"]              # sandbox only: read-only and executable (a review's `cargo test` needs both)
+# env = { PATH = "~/.cargo/bin:/usr/bin:/bin" }      # the sandboxed command's environment; `delphi doctor` checks review commands against PATH
 
 # Releases (specs/036). Uncomment to make `delphi update` refuse any build that is not a signed release. This table is ratified:
 # adding the line takes effect at once, and taking it out takes effect when you ratify the removal. Development builds and source

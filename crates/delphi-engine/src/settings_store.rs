@@ -251,6 +251,17 @@ mod tests {
         assert!(SETTABLE.contains("pace"));
     }
 
+    // specs/056 §10.5 test 4: the cost cap is not a setting an agent can change. `change_setting` (the one tool that changes settings) refuses
+    // it under every name, so a seat can only edit config.toml, which is a pending proposal until the operator's /ratify (boot.rs test).
+    #[test]
+    fn the_cost_cap_is_refused_as_a_setting() {
+        for key in ["max_cost_class", "routing.max_cost_class", "max_cost_class.architect"] {
+            let e = parse(key, &json!("premium"), &enabled()).unwrap_err();
+            assert!(e.contains("cannot be changed this way"), "{key}: {e}");
+        }
+        assert!(!SETTABLE.contains("max_cost_class"));
+    }
+
     #[test]
     fn reduce_motion_is_a_setting_that_survives_a_restart() {
         for (word, on) in [("on", true), ("true", true), ("Yes", true), ("off", false), ("0", false)] {

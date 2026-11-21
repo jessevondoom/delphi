@@ -209,6 +209,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_families(&ws.dir, &delphi_core::bundles::today(), &mut r);
     // The standing consent for foreign seats (specs/104 §5 item 4): from the ratified copy, and what it used in the last 24 hours.
     check_standing_consent(&ws.dir, &mut r);
+    // Forge seats' read tools per carrier version (specs/135 section 14.7): probed, in grace, or bridge-only and why.
+    check_forge_tools(&ws.dir, now_unix, &mut r);
 
     // 9. Sandbox (D-24): optional. Reported, never a warning unless the config asks for it and it is missing.
     let wanted = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("exec").and_then(|e| e.get("sandbox")).and_then(|s| s.as_str().map(String::from))).unwrap_or_else(|| "off".into());
@@ -218,6 +220,10 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
         (None, "required") => r.fail("9 sandbox", "", "`[exec] sandbox = \"required\"` but no OS sandbox is available (sandbox-exec on macOS, bubblewrap on Linux): no command will run"),
         (None, "prefer") => r.warn("9 sandbox", "", "`[exec] sandbox = \"prefer\"` but no OS sandbox is available: commands run directly and ask for approval"),
         (None, _) => r.push(Level::Ok, "9 sandbox", "", "off (no OS sandbox is available either): commands ask for approval"),
+    }
+    if delphi_sandbox::detect().is_some() {
+        let user_home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from).unwrap_or_default();
+        check_review_commands(&cfg, &user_home, &mut r);
     }
     // 9b. The authorized-test sandbox (specs/092 S2b): optional. A canary battery under the profile an operator-authorized test would
     // use. Nothing calls it from a run yet; an absent or failing profile only means such a test would refuse to start, so it is
@@ -363,6 +369,22 @@ fn check_removed_settings(cfg_text: &str, r: &mut Report) {
     for (table, key) in REMOVED_SETTINGS {
         if root.get(table).and_then(|t| t.get(key)).is_some() {
             r.warn("18 removed-settings", "config.toml", format!("[{table}] {key} was removed; the feature is always on; see specs/098 section 13.2"));
+        }
+    }
+}
+
+/// `specs/135` §14.2: each command a cross-family review runs (`[forge] review_commands`, or the `[exec]` test and check commands) must
+/// name a program the investigation sandbox can start: on `[exec] env.PATH` and inside a system or `[exec] toolchain` directory. A warning
+/// per command that would not; nothing when none is configured. Only the file system is read.
+fn check_review_commands(cfg_text: &str, user_home: &Path, r: &mut Report) {
+    let Ok(root) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let exec = delphi_engine::exec::ExecConfig::from_root(&root, user_home);
+    let configured = delphi_engine::boot::settings_from(&root).review_commands.unwrap_or_else(|| [exec.test_command.clone(), exec.check_command.clone()].into_iter().flatten().collect());
+    let path = exec.env.get("PATH").cloned().unwrap_or_else(|| "/usr/bin:/bin".into());
+    let roots: Vec<PathBuf> = delphi_sandbox::system_read_only().into_iter().chain(exec.toolchain.iter().cloned()).collect();
+    for argv in &configured {
+        if let Some(why) = delphi_engine::review_job::program_problem(argv, &path, &roots) {
+            r.warn("9c review-commands", "config.toml", format!("a review command will not start in the sandbox ({}): {why}. See `[exec] toolchain` and `[exec] env.PATH` (specs/135 section 14.2)", argv.join(" ")));
         }
     }
 }
@@ -1000,6 +1022,30 @@ fn check_families(ws_dir: &Path, today: &str, r: &mut Report) {
     }
 }
 
+/// `specs/135` §14.7: one line per carrier version a forge seat has met (`local/forge-tools.json`): read tools (probed, or in the grace
+/// with the probe due), tool-less until probed, or bridge-only with the reason (a failed probe, the watchdog, a grace that ran out),
+/// with what the probes spent. Codex and Copilot are named once as bridge-only by design. Only the record is read.
+fn check_forge_tools(ws_dir: &Path, now: i64, r: &mut Report) {
+    use delphi_engine::forge_tools as ft;
+    const CHECK: &str = "11 forge tools";
+    let recs = ft::load(&ft::store_path(ws_dir));
+    if recs.is_empty() {
+        r.push(Level::Ok, CHECK, "", "no forge seat has met a CLI with read tools yet; a review seat stays tool-less until the background probe of its CLI version passes");
+    }
+    for (ok, line) in ft::doctor_lines(&recs, now) {
+        if ok {
+            r.push(Level::Ok, CHECK, "", line);
+        } else {
+            r.warn(CHECK, "local/forge-tools.json", line);
+        }
+    }
+    for h in ["codex", "copilot"] {
+        if let Some(why) = ft::carrier_problem(h) {
+            r.push(Level::Ok, CHECK, "", format!("{h}: bridge-only by design; {why}"));
+        }
+    }
+}
+
 /// `[access] standing_foreign_tokens` is read the way the daemon reads it: from the effective config, whose `[access]` is the ratified copy.
 fn check_standing_consent(ws_dir: &Path, r: &mut Report) {
     let live = std::fs::read_to_string(ws_dir.join("config.toml")).unwrap_or_default();
@@ -1030,6 +1076,8 @@ fn check_pool(ws: &Workspace, home: &Path, cfg_text: &str, r: &mut Report) {
     }
     // Spec 056 M6: the emergency stop-gap, one line either way; not being configured is a note, not a failure.
     r.push(if cfg.routing.emergency.is_some() { Level::Ok } else { Level::Skipped }, "11 model pool", "", delphi_engine::emergency::line(&cfg));
+    // Spec 056 §10.5: the cost cap, the models over it, and which ones count as `standard` for want of a label.
+    r.push(Level::Ok, "11 model pool", "cost cap", delphi_engine::route::cost_cap_line(&cfg));
     // Spec 056 M1: a model no class rule places is trialled on low-risk tasks only, until its results or the operator place it.
     match delphi_engine::models::ClassRules::load(&ws.dir) {
         Err(e) => r.warn("11 model pool", "model-classes.toml", e),
@@ -1626,6 +1674,69 @@ mod tests {
         assert!(findings("[research]\nthin_below = 5\n").iter().any(|x| x.message.contains("fewer than 5 kept claims")));
         let f = findings("[search]\nproviders = [\"nonesuch\"]\n");
         assert_eq!((f[0].level, f[0].location.as_str()), (Level::Warn, "config.toml"), "{f:?}");
+    }
+
+    /// Spec 135 §14.7 rule 3 (AC-18, the doctor's half): a version the probe or the watchdog dropped is a warning that says why; one in
+    /// its grace and one probed are plain lines; the probes' cost is shown; codex and copilot are bridge-only by design.
+    #[test]
+    fn doctor_says_which_cli_versions_are_bridge_only_for_forge_seats() {
+        use delphi_engine::forge_tools as ft;
+        let t = tempfile::tempdir().unwrap();
+        let store = ft::store_path(t.path());
+        ft::update(&store, |r| {
+            ft::observe(r, "agy", Some("agy 1"), 0);
+            ft::record_probe(r, "agy", "agy 1", &ft::ProbeOutcome::Pass { tokens: 7 }, 0);
+            ft::observe(r, "agy", Some("agy 2"), 100);
+            ft::observe(r, "claude", Some("2.1.1"), 100);
+            ft::drop_version(r, "claude", "2.1.1", "the seat's own tool `Read` ran although Delphi's gate never allowed it", 200);
+        })
+        .unwrap();
+        let mut r = Report::default();
+        check_forge_tools(t.path(), 300, &mut r);
+        let got: Vec<(Level, String)> = r.findings.into_iter().filter(|f| f.check == "11 forge tools").map(|f| (f.level, f.message)).collect();
+        assert!(got.iter().any(|(l, m)| *l == Level::Ok && m.contains("agy 1: read tools (probed") && m.contains("7 tokens")), "{got:?}");
+        assert!(got.iter().any(|(l, m)| *l == Level::Ok && m.contains("agy 2: read tools in the grace period")), "{got:?}");
+        assert!(got.iter().any(|(l, m)| *l == Level::Warn && m.contains("claude 2.1.1: BRIDGE-ONLY") && m.contains("watchdog")), "{got:?}");
+        assert!(got.iter().any(|(_, m)| m.starts_with("codex: bridge-only")) && got.iter().any(|(_, m)| m.starts_with("copilot: bridge-only")), "{got:?}");
+    }
+
+    /// Spec 135 AC-16 (§14.2): a review command whose program is not on the sandbox PATH, or not in a system or toolchain directory, is
+    /// warned about; one that is found is not.
+    #[test]
+    fn doctor_warns_when_a_review_commands_program_is_not_on_the_sandbox_path() {
+        let t = tempfile::tempdir().unwrap();
+        let (tc, elsewhere) = (t.path().join("tc"), t.path().join("elsewhere"));
+        for d in [tc.join("bin"), elsewhere.clone()] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(tc.join("bin/mytool"), "").unwrap();
+        std::fs::write(elsewhere.join("stray"), "").unwrap();
+        let warned = |cfg: &str| {
+            let mut r = Report::default();
+            check_review_commands(cfg, t.path(), &mut r);
+            r.findings.into_iter().filter(|f| f.check == "9c review-commands").map(|f| (f.level, f.message)).collect::<Vec<_>>()
+        };
+        // The default PATH, with no toolchain: `mytool` is not found; `/bin/echo` is a system program.
+        let w = warned("[forge]\nreview_commands = [[\"mytool\", \"test\"], [\"/bin/echo\", \"x\"]]\n");
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0].0, Level::Warn);
+        assert!(w[0].1.contains("`mytool` is not on the sandbox's PATH") && w[0].1.contains("[exec] toolchain"), "{w:?}");
+        // On the PATH but not in a toolchain directory: still refused by the sandbox.
+        let on_path = "[exec]\nenv = { PATH = \"~/tc/bin:/usr/bin:/bin\" }\n[forge]\nreview_commands = [[\"mytool\"]]\n";
+        assert!(warned(on_path)[0].1.contains("not inside a system or `[exec] toolchain` directory"), "{:?}", warned(on_path));
+        // Configured as F4 should have been: no warning. `~` is the operator's home.
+        assert!(warned("[exec]\ntoolchain = [\"~/tc\"]\nenv = { PATH = \"~/tc/bin:/usr/bin:/bin\" }\n[forge]\nreview_commands = [[\"mytool\", \"test\"]]\n").is_empty());
+        // `/usr/bin/env` is looked through, with its assignments; a PATH it sets is the one searched.
+        assert!(warned("[forge]\nreview_commands = [[\"/usr/bin/env\", \"RUST_LOG=1\", \"mytool\"]]\n")[0].1.contains("`mytool`"));
+        let via_env = format!("[exec]\ntoolchain = [\"~/tc\"]\n[forge]\nreview_commands = [[\"/usr/bin/env\", \"PATH={}\", \"mytool\"]]\n", tc.join("bin").display());
+        assert!(warned(&via_env).is_empty(), "{:?}", warned(&via_env));
+        // An absolute path outside every executable directory, and one that does not exist.
+        let abs = format!("[forge]\nreview_commands = [[\"{}\"], [\"/nonexistent/x\"]]\n", elsewhere.join("stray").display());
+        let w = warned(&abs);
+        assert!(w.len() == 2 && w[0].1.contains("cannot execute it") && w[1].1.contains("does not exist"), "{w:?}");
+        // The `[exec]` gates stand in when `[forge]` names none; nothing configured, nothing said.
+        assert_eq!(warned("[exec]\ntest_command = [\"mytool\"]\n").len(), 1);
+        assert!(warned("").is_empty() && warned("[forge]\nreview_commands = []\n[exec]\ntest_command = [\"mytool\"]\n").is_empty());
     }
 
     // `specs/098` §13.2: one line per removed key an old config still carries, none for a clean config, and nothing else changes.

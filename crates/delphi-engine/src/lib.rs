@@ -26,6 +26,7 @@ pub mod fact_ratify;
 pub mod fact_run;
 pub mod fact_audit;
 pub mod fact_background;
+pub mod forge_tools;
 pub mod fact_serve;
 pub mod page_run;
 pub mod fact_span;

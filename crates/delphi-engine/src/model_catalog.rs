@@ -42,6 +42,9 @@ pub struct SeedModel {
     /// The prompt size at which delivery of the last line was checked (0: not paid-tested).
     pub tail_tested_tokens: u64,
     pub json_in_text: String,
+    /// Where the carrier reported the prompt's tokens (`input`, `cache_write`, `both`); empty when the survey did not record it.
+    #[serde(default)]
+    pub token_accounting: String,
     #[serde(default)]
     pub note: String,
 }

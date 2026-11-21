@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import React from 'react';
-import { FILE, initElog, log, error, warn, debug, logCrash, readRecords, sanitize, settingsFor, stopElog, CONTEXT_KEYS } from '../src/elog.ts';
+import { FILE, delphiHome, initElog, log, error, warn, debug, logCrash, readRecords, sanitize, settingsFor, stopElog, CONTEXT_KEYS } from '../src/elog.ts';
 import { ErrorBoundary } from '../src/boundary.tsx';
 
 const SECRET = 'sk-ant-api03-GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG';
@@ -179,4 +179,31 @@ test('the TypeScript writer and the Rust reader agree on the format', () => {
   assert.match(r.os, /^(macos|linux)-(aarch64|x86_64)$/);
   assert.deepEqual(r.context, { mission: 'm1', exit_code: 2, duration_ms: 5 });
   stopElog();
+});
+
+test('an empty DELPHI_HOME counts as unset, as on the Rust side and in install.sh (specs/006 §2.2 item 3)', () => {
+  const saved = { HOME: process.env.HOME, DELPHI_HOME: process.env.DELPHI_HOME, cwd: process.cwd() };
+  const user = home(), cwd = home();
+  try {
+    process.env.HOME = user;
+    process.env.DELPHI_HOME = '';
+    process.chdir(cwd);
+    initElog({ version: 't', env: {} });
+    error('empty_home', 'x');
+    assert.ok(!existsSync(join(cwd, 'logs')), 'nothing is written relative to the working directory');
+    assert.ok(existsSync(join(user, '.delphi', 'logs', FILE)), 'the log is under ~/.delphi');
+    stopElog();
+    // An empty home handed in counts as none too; whitespace is still a value (install.sh's `:-` honours it).
+    initElog({ home: '', version: 't', env: {} });
+    error('empty_home', 'y');
+    assert.ok(!existsSync(join(cwd, 'logs')));
+    assert.equal(delphiHome({ DELPHI_HOME: '' }), join(user, '.delphi'));
+    assert.equal(delphiHome({}), join(user, '.delphi'));
+    assert.equal(delphiHome({ DELPHI_HOME: ' ' }), ' ');
+    assert.equal(delphiHome({ DELPHI_HOME: '/srv/d' }), '/srv/d');
+  } finally {
+    stopElog();
+    process.chdir(saved.cwd);
+    for (const k of ['HOME', 'DELPHI_HOME'] as const) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
 });

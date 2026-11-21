@@ -39,8 +39,9 @@ pub const ACCESS_KEYS: [&str; 12] = ["endpoints", "access", "auth", "harness", "
 
 /// Single keys of an otherwise live table that are trusted only from the ratified copy, like the blocks above. `[seats] spread` is
 /// here because it decides how many model families a Council seats (`specs/132` §5.4 item 2): a local edit, or an agent's, must not
-/// narrow a Council to two families. A config without the key hashes exactly as before.
-pub const PINNED_KEYS: [(&str, &str); 1] = [("seats", "spread")];
+/// narrow a Council to two families. `[routing] max_cost_class` is here because it decides whether a model over 1x may serve a role
+/// (`specs/056` §10.5): a local edit, or an agent's, must not lift or change it. A config without either key hashes exactly as before.
+pub const PINNED_KEYS: [(&str, &str); 2] = [("seats", "spread"), ("routing", "max_cost_class")];
 
 pub fn access_blocks(config: &str) -> String {
     let v: toml::Value = toml::from_str(config).unwrap_or(toml::Value::Table(Default::default()));
@@ -147,6 +148,11 @@ mod tests {
         let spread = access_blocks(&format!("{a}[seats]\nmax_foreign_seats = 2\nspread = \"two\"\n"));
         assert_ne!(access_blocks(a), spread);
         assert!(spread.contains("spread = \"two\"") && !spread.contains("max_foreign_seats"), "{spread}");
+        // specs/056 §10.5 test 5: `[routing] max_cost_class` is pinned, the rest of `[routing]` is not, and a lock made before it verifies unchanged.
+        assert_eq!(access_blocks(a), access_blocks(&format!("{a}[routing]\nassignment = \"discovered\"\n")), "[routing] assignment is a live setting");
+        let capped = access_blocks(&format!("{a}[routing]\nassignment = \"discovered\"\nmax_cost_class = \"premium\"\n"));
+        assert_ne!(access_blocks(a), capped);
+        assert!(capped.contains("max_cost_class = \"premium\"") && !capped.contains("assignment"), "{capped}");
     }
 
     #[test]

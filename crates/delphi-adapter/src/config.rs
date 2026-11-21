@@ -488,6 +488,72 @@ impl Assignment {
     }
 }
 
+/// A carrier's cost class (`specs/132` §5.2): `low` under 1x, `standard` at 1x, `premium` over 1x. Ordered, so a cap admits
+/// every class at or below it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CostClass {
+    Low,
+    #[default]
+    Standard,
+    Premium,
+}
+
+impl CostClass {
+    pub fn parse(s: &str) -> Option<CostClass> {
+        match s {
+            "low" => Some(CostClass::Low),
+            "standard" => Some(CostClass::Standard),
+            "premium" => Some(CostClass::Premium),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CostClass::Low => "low",
+            CostClass::Standard => "standard",
+            CostClass::Premium => "premium",
+        }
+    }
+}
+
+/// `[routing] max_cost_class` (`specs/056` §10.5): the highest cost class that may serve a role. Ratified (`lock::PINNED_KEYS`), so
+/// the daemon reads it only from the ratified copy. Absent, every role's cap is `standard` (OD-A1). A cap only removes candidates.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CostCap {
+    pub default: CostClass,
+    pub roles: BTreeMap<String, CostClass>,
+}
+
+/// The core roles a per-role `max_cost_class` may name; any other role takes the `default`.
+pub const COST_CAP_ROLES: &[&str] = &["orchestrator", "builder", "architect", "investigator", "scout", "strategist", "red-team", "writer", "messenger", "validator", "administrator", "assistant", "advocate"];
+
+impl CostCap {
+    pub fn of(&self, role: &str) -> CostClass {
+        self.roles.get(role).copied().unwrap_or(self.default)
+    }
+
+    /// `"standard"` for every role, or `{ default = "standard", architect = "premium" }`. Every error is a sentence.
+    pub fn parse(v: &toml::Value) -> Result<CostCap, String> {
+        const VALUES: &str = "\"low\", \"standard\" or \"premium\"";
+        let class = |what: &str, v: &toml::Value| v.as_str().and_then(CostClass::parse).ok_or_else(|| format!("[routing] max_cost_class{what} must be {VALUES}, not {v}"));
+        match v {
+            toml::Value::String(_) => Ok(CostCap { default: class("", v)?, roles: BTreeMap::new() }),
+            toml::Value::Table(t) => {
+                let default = t.get("default").ok_or("[routing] max_cost_class as a table needs a `default` for the roles it does not name")?;
+                let mut cap = CostCap { default: class(".default", default)?, roles: BTreeMap::new() };
+                for (role, x) in t.iter().filter(|(k, _)| *k != "default") {
+                    if !COST_CAP_ROLES.contains(&role.as_str()) {
+                        return Err(format!("[routing] max_cost_class names `{role}`, which is not a role (one of {})", COST_CAP_ROLES.join(", ")));
+                    }
+                    cap.roles.insert(role.clone(), class(&format!(".{role}"), x)?);
+                }
+                Ok(cap)
+            }
+            other => Err(format!("[routing] max_cost_class must be {VALUES}, or a table of them with a `default`, not {other}")),
+        }
+    }
+}
+
 /// How the orchestrator learns of bundle agents (`specs/041` §4, §5.7): `flat` is the one-line-per-agent list as before (the
 /// default, until the labeled set meets the recall bar); `auto` swaps in the domain index and `search_agent_registry` once
 /// there are more agents than the list holds.
@@ -583,11 +649,13 @@ pub struct Routing {
     /// `[routing] emergency_endpoint` and `emergency_model` (`specs/056` §3.5): a local model that only saves state when
     /// every ratified seat is out of quota. Both set, or neither (off). Never part of ordinary routing.
     pub emergency: Option<(String, String)>,
+    /// `[routing] max_cost_class` (`specs/056` §10.5), ratified; `standard` for every role when absent.
+    pub max_cost_class: CostCap,
 }
 
 impl Default for Routing {
     fn default() -> Routing {
-        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None }
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None, max_cost_class: CostCap::default() }
     }
 }
 
@@ -1518,6 +1586,12 @@ impl Config {
                     None => errs.push("[routing] assignment must be \"static\" or \"discovered\"".into()),
                 }
             }
+            if let Some(v) = r.get("max_cost_class") {
+                match CostCap::parse(v) {
+                    Ok(cap) => cfg.routing.max_cost_class = cap,
+                    Err(e) => errs.push(e),
+                }
+            }
             if let Some(a) = r.get("registry") {
                 match a.as_str().and_then(RegistryMode::parse) {
                     Some(v) => cfg.routing.registry = v,
@@ -2362,6 +2436,23 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         for bad in ["[routing]\nassignment = \"auto\"", "[routing]\nevidence_enough = 0", "[routing.reserve]\nvalidator = 1.5", "[routing.reserve]\nvalidator = 0.6\nbuilder = 0.6"] {
             assert!(with_routing(bad).is_err(), "{bad}");
         }
+    }
+
+    /// specs/056 §10.5 tests 5, 7 and 8 (the config half): absent is `standard`; one value or a table with a `default`; bad values fail
+    /// with a sentence.
+    #[test]
+    fn max_cost_class_is_standard_when_absent_per_role_with_a_default_and_checked() {
+        let cap = |extra: &str| with_routing(extra).map(|c| c.routing.max_cost_class);
+        let absent = cap("").unwrap();
+        assert_eq!((absent.of("architect"), absent.of("builder")), (CostClass::Standard, CostClass::Standard));
+        assert_eq!(cap("[routing]\nmax_cost_class = \"low\"").unwrap().of("architect"), CostClass::Low);
+        let per_role = cap("[routing]\nmax_cost_class = { default = \"standard\", architect = \"premium\" }").unwrap();
+        assert_eq!((per_role.of("architect"), per_role.of("builder"), per_role.of("some-one-off")), (CostClass::Premium, CostClass::Standard, CostClass::Standard));
+        for (bad, says) in [("\"cheap\"", "must be \"low\", \"standard\" or \"premium\""), ("3", "or a table of them"), ("{ architect = \"premium\" }", "needs a `default`"), ("{ default = \"low\", wizard = \"premium\" }", "`wizard`, which is not a role"), ("{ default = \"low\", architect = 2 }", "max_cost_class.architect must be")] {
+            let errs = cap(&format!("[routing]\nmax_cost_class = {bad}")).unwrap_err().join("; ");
+            assert!(errs.contains(says), "{bad}: {errs}");
+        }
+        assert!(CostClass::Low < CostClass::Standard && CostClass::Standard < CostClass::Premium);
     }
 
     #[test]
