@@ -536,6 +536,7 @@ Approved by the operator on 2026-11-01. Amends 062 for research egress; adds `re
 | S6 | `badge_style`, `delphi-attribution` skill, instructions, print-config | built (`[mcp] badge_style` plain/ansi/markdown, fail closed; the skill is served through the orchestrator; `get_agent` says who is acting and via which client; `search_kb` hints at `request_research`) |
 | S7 | generated docs and goldens | built (catalog regenerated for the new skill; the host guide lists the research tools and `badge_style`) |
 | S8 | security and red-team pass | built (§9 invariants proven by tests: hostile page, wildcard and disguised hosts, disabled switch for research, plus the earlier redaction, signature, queue, dedupe and status tests) |
+| fix 2026-11-20 | query privacy (§5): defect V2-1 | built (this PR): `user@host`, `host:port` and `localhost` are removed from a query whatever punctuation follows them (`.`, `!`, `:`, `?`, `,`, `)`); the 124 S11 full-stop trim had let `jdoe@buildbox.` and `buildbox:8080.` through, and the mid-sentence forms leaked before it. Times, ratios, `C++` and `GPT-4` stay |
 
 ## Agent episodic memory, trace distillation, and tool-conditioned retrieval (spec 065, approved 2026-11-01)
 
