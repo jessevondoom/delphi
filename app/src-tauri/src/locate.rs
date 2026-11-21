@@ -35,9 +35,15 @@ fn own_bundled() -> Option<PathBuf> {
     bundled_path(&std::env::current_exe().ok()?)
 }
 
-/// The places an install puts `delphi`, without the bundled copy.
+/// The places an install puts `delphi`, without the bundled copy: `DELPHI_EXE`, then `$DELPHI_INSTALL_DIR/delphi` (where
+/// `install.sh` and `delphi self-install` put it when that is set), then the standard places.
 pub fn installed_candidates(user_home: Option<&Path>) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = env_path("DELPHI_EXE").into_iter().collect();
+    installed_candidates_in(env_path("DELPHI_EXE"), env_path("DELPHI_INSTALL_DIR"), user_home)
+}
+
+/// [`installed_candidates`], with the two variables given.
+fn installed_candidates_in(exe: Option<PathBuf>, install_dir: Option<PathBuf>, user_home: Option<&Path>) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = exe.into_iter().chain(install_dir.map(|d| d.join("delphi"))).collect();
     if let Some(h) = user_home {
         v.push(h.join(".local/bin/delphi"));
     }
@@ -63,9 +69,15 @@ pub struct Program {
 }
 
 pub fn program_in(user_home: Option<&Path>, bundled: Option<PathBuf>) -> Program {
-    let installed = installed_candidates(user_home).iter().any(|p| p.is_file());
+    let installed = installed_candidates(user_home).iter().any(|p| runnable(p));
     let bundled = bundled.filter(|p| p.is_file()).and_then(|p| p.to_str().map(String::from));
     Program { installed, bundled }
+}
+
+/// A regular file with an execute bit: a `delphi` that is there but cannot run does not count as installed.
+fn runnable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 pub fn program() -> Program {
@@ -608,7 +620,21 @@ mod tests {
         assert_eq!(program_in(Some(t.path()), Some(bundled.clone())).bundled.as_deref(), bundled.to_str());
         std::fs::create_dir_all(t.path().join(".local/bin")).unwrap();
         std::fs::write(t.path().join(".local/bin/delphi"), b"x").unwrap();
+        // V3-6: a file that cannot run is not an installed program, so the self-install offer stays. (`runnable` is asked
+        // directly: this machine may have a delphi in Homebrew's or /usr/local's folder, which `program_in` also counts.)
+        assert!(!runnable(&t.path().join(".local/bin/delphi")));
+        std::fs::set_permissions(t.path().join(".local/bin/delphi"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        assert!(runnable(&t.path().join(".local/bin/delphi")));
+        assert!(!runnable(t.path()), "a folder is not a program");
         assert!(program_in(Some(t.path()), None).installed);
+    }
+
+    /// V3-5: a program installed into `DELPHI_INSTALL_DIR` is looked for, after `DELPHI_EXE` and before the standard places.
+    #[test]
+    fn the_install_dir_is_looked_in_after_delphi_exe() {
+        let v = installed_candidates_in(Some(PathBuf::from("/e/delphi")), Some(PathBuf::from("/opt/tools")), Some(Path::new("/h")));
+        assert_eq!(v[..3], [PathBuf::from("/e/delphi"), PathBuf::from("/opt/tools/delphi"), PathBuf::from("/h/.local/bin/delphi")]);
+        assert_eq!(installed_candidates_in(None, None, Some(Path::new("/h")))[0], PathBuf::from("/h/.local/bin/delphi"));
     }
 }
 
