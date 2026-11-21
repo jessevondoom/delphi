@@ -71,6 +71,15 @@ A run that keeps no claim says why. Its result carries `empty`: `reason` is one 
 
 The words are counted by code and are information only: none of them makes Delphi fetch, trust or permit anything.
 
+### Every endpoint is a harness
+
+Delphi's own research runner reads each page with a single model call for the scout, and a harness endpoint (`path = "harness"`: a command-line tool that runs a whole task) never serves a single call. When every endpoint is a harness, or none has quota left, no model can serve the scout and Delphi's runner keeps no claim. `request_research` now says so before anything is searched:
+
+- asked with `runner: "daemon"` from a tool that has a web search of its own (Claude Code), the run is given to that tool's search instead; the reply carries `runner_switched: {from: daemon, to: host, reason: no_model_seat}` and the usual `queries` and `host_note`;
+- otherwise the run is not refused, and the reply carries `scout: no_model_seat` with a note: read the sources the result lists with your own tools and hand them over with `record_research`.
+
+`delphi doctor` check 17 says when no configured endpoint can serve the scout. Adding an API endpoint (`path = "api"`) for the primary family's fast tier lets Delphi's runner read pages again.
+
 ## Research ran with no web search
 
 A research request is never refused for want of a source. `delphi init` writes `[search] providers = ["parallel"]`: Parallel's hosted engine, which needs no key or account, is rate limited, sees your queries, and does not publish how long it keeps them. `delphi research setup` at a terminal offers it first and Brave second; with a Brave key it writes `["parallel", "brave"]`, so a Parallel error or rate limit passes the query to Brave. It takes the key into your keychain, runs one test query and one test fetch, and shows the change for you to ratify. `[search]` names who receives your queries, so it takes effect only once ratified.
