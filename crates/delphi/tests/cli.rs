@@ -412,3 +412,40 @@ fn handling_status_and_reconcile_count_and_set_and_clear_are_the_operators() {
     }
     assert_eq!(std::fs::read_to_string(&records).unwrap(), after, "a refused set or clear changes nothing");
 }
+
+// specs/129 AC-2 and §9 item 1: `delphi teach` and `delphi learn unteach` with stdin that is not a terminal refuse and write nothing,
+// even when what stdin holds is `yes`; `delphi learn lessons` only reads.
+#[test]
+fn teach_and_unteach_refuse_stdin_that_is_not_a_terminal_and_write_nothing() {
+    use std::io::Write;
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().join("home");
+    let delphi = |args: &[&str]| {
+        let mut c = Command::new(DELPHI).args(args).arg("--home").arg(&home).env_remove("DELPHI_WORKSPACE").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).current_dir(t.path()).spawn().unwrap();
+        c.stdin.take().unwrap().write_all(b"yes\n").unwrap();
+        c.wait_with_output().unwrap()
+    };
+    let o = Command::new(DELPHI).args(["init", "--non-interactive", "--workspace", "w"]).arg("--home").arg(&home).env_remove("DELPHI_WORKSPACE").stdin(Stdio::null()).current_dir(t.path()).output().unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let ws = home.join("workspaces/w");
+    let files = ["local/memory/agents/builder/lessons.md", "local/ratified/memory/agents/builder/lessons.md", "local/ratified.lock"];
+    let before: Vec<Option<Vec<u8>>> = files.iter().map(|p| std::fs::read(ws.join(p)).ok()).collect();
+    // `--help` answers without touching the workspace.
+    let o = delphi(&["teach", "--help"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(text(&o.stdout).starts_with("usage:\n  delphi teach <role>"), "{}", text(&o.stdout));
+    let o = delphi(&["teach", "builder", "T: before a release D: regenerate the docs", "--goal", "the docs test fails", "--workspace", "w"]);
+    assert_eq!(o.status.code(), Some(1), "{}{}", text(&o.stdout), text(&o.stderr));
+    assert!(text(&o.stderr).contains("needs a terminal") && text(&o.stderr).contains("nothing was written"), "{}", text(&o.stderr));
+    // `delphi init` seeds the builder's lessons, so there is one to try to unteach.
+    let o = delphi(&["learn", "lessons", "builder", "--workspace", "w"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let listed = text(&o.stdout);
+    assert!(listed.starts_with("builder: ") && listed.contains("served: not counted yet"), "{listed}");
+    let id = listed.lines().nth(1).and_then(|l| l.split_whitespace().next()).unwrap().to_string();
+    let o = delphi(&["learn", "unteach", "builder", &id, "--workspace", "w"]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o.stderr));
+    assert!(text(&o.stderr).contains("needs a terminal"), "{}", text(&o.stderr));
+    assert_eq!(files.iter().map(|p| std::fs::read(ws.join(p)).ok()).collect::<Vec<_>>(), before, "nothing was written");
+    assert!(!ws.join("local/lessons-log").exists() && !home.join("operator/lessons-log").exists(), "not even the lessons log");
+}

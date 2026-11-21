@@ -715,8 +715,10 @@ impl Engine {
         // Delphi's tools for this role, offered over the bridge: to the Claude CLI as an MCP config, to the Antigravity CLI
         // as a plugin in the span's own `.agents/` with a hook that gates its other tools (`specs/020` §8). A Builder keeps
         // the Claude CLI's own file and shell tools (every request still answered here), so those Delphi tools are not duplicated.
-        // A Codex seat has no bridge yet (`specs/047` S2).
-        let mut bridge_defs: Vec<ToolDef> = if profile.bridge && cli != Cli::Codex { self.span_tool_defs(sc).await? } else { vec![] };
+        // A Codex seat has no bridge yet (`specs/047` S2), and no Copilot launch passes an MCP config yet (`specs/132` §6.2, C8):
+        // offering either one Delphi's tools would tell the model about tools it never receives (L0 honesty, `specs/132` AC-3).
+        let mcp_transport = !matches!(cli, Cli::Codex | Cli::Copilot);
+        let mut bridge_defs: Vec<ToolDef> = if profile.bridge && mcp_transport { self.span_tool_defs(sc).await? } else { vec![] };
         if builder {
             // An agy Builder keeps Delphi's `run_command`: its own shell cannot be approved when it runs headless.
             bridge_defs.retain(|d| !DUPLICATED_FOR_BUILDERS.contains(&d.name.as_str()) || (cli == Cli::Agy && (d.name == "run_command" || d.name == "shell")) || (granted && cli == Cli::Claude && d.name == "run_command"));
@@ -2088,6 +2090,38 @@ open(sys.argv[1], "w").write(json.dumps(out))
         assert!(!format!("{:?}", f.m.replay().unwrap()).contains("ghp-cp-1"), "the token never reaches the log");
     }
 
+    /// specs/132 §6.2, AC-3 (L0 honesty): a Copilot reader with the default `bridge = true` has no MCP transport, so it is offered
+    /// no Delphi tool: no bridge starts, the prompt names none, "Do not call tools" is the only tool sentence, and the receipt
+    /// lists nothing offered. Codex, which has no bridge either, is held to the same.
+    #[tokio::test]
+    async fn a_reader_seat_with_no_mcp_transport_is_offered_no_delphi_tool_and_told_so() {
+        for cli in ["copilot", "codex"] {
+            let scripts = tempfile::tempdir().unwrap();
+            let stdin = scripts.path().join("stdin");
+            let body = if cli == "copilot" {
+                fake_copilot_body(&scripts.path().join("dump"), "m-1").replace("cat > /dev/null", &format!("cat > {}", stdin.display()))
+            } else {
+                format!("cat > {}\necho '{{\"type\":\"thread.started\",\"thread_id\":\"t1\"}}'\necho '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"Plan: ship it.\"}}}}'\necho '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":4}}}}'", stdin.display())
+            };
+            let prog = fake_cli(scripts.path(), &body);
+            let f = setup_with_exec(vec![], 5.0, |s| if cli == "copilot" { s.copilot_program = prog.clone() } else { s.codex_program = prog.clone() }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+            use_keyed_harness(&f, cli);
+            assert!(f.engine.cfg.get().harness.get(cli).cloned().unwrap_or_default().bridge, "the default profile asks for the bridge");
+            *f.model.harness_key.lock().unwrap() = Some("k-1".into());
+            let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+            assert_eq!(out.status, Status::Done, "{cli}: {}", out.text);
+            let started = &events_of(&f, "harness.started")[0].payload;
+            assert_eq!(started["bridge"], json!([]), "{cli}: no bridge for a carrier with no MCP transport");
+            let prompt = fs::read_to_string(&stdin).unwrap();
+            assert!(!prompt.contains(crate::bridge::TOOL_PREFIX) && !prompt.contains("Delphi's own tools are available"), "{cli}: {prompt}");
+            if cli == "copilot" {
+                assert_eq!(prompt.matches("Do not call tools").count(), 1, "{prompt}");
+            }
+            let r = &events_of(&f, "seat.receipt")[0].payload;
+            assert_eq!(r["carrier"]["tools_offered"], json!([]), "{cli}: {r}");
+        }
+    }
+
     /// specs/051 §2.2 (as amended): a Council Round 2 node on a carrier with no structured-output flag is read from the line format.
     async fn copilot_round2(reply: &str) -> (crate::engine::TaskOutcome, String) {
         let scripts = tempfile::tempdir().unwrap();
@@ -2582,6 +2616,24 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert_eq!(r["carrier"]["native_tools"], 3, "the carrier's own count is kept apart");
         assert_eq!(r["tool_grant"]["bridge"], json!([]));
         assert!(crate::seat::receipt_toolless(r));
+    }
+
+    /// D7 (`specs/086` §6.4): a seat opened with `tools: "readonly"` runs read-only on a CLI too: the bridge serves no write tool and
+    /// the receipt says `readonly`.
+    #[tokio::test]
+    async fn a_readonly_agy_seat_bridges_no_write_tool_and_its_receipt_says_readonly() {
+        let scripts = tempfile::tempdir().unwrap();
+        let prog = fake_cli(scripts.path(), "echo '{\"event\":\"init\",\"init\":{\"model\":\"gemini-3.8-flash-low\",\"tools\":[]}}'\necho '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"ok\",\"usage\":{}}}'");
+        let f = retry_fx(prog, Duration::from_secs(600));
+        let s = seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
+        assert_eq!(r["tool_grant"]["readonly"], true, "{r}");
+        let bridge: Vec<&str> = r["tool_grant"]["bridge"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(bridge.contains(&"read_file"), "{bridge:?}");
+        for w in ["write_file", "write_archive", "write_html", "run_command", "shell"] {
+            assert!(!bridge.contains(&w), "`{w}` bridged to a readonly seat: {bridge:?}");
+        }
     }
 
     #[tokio::test]

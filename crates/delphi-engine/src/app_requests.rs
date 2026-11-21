@@ -19,12 +19,20 @@
 //! * **The record** (item 4): an `app.request` event for each request that was counted, with the key's name, the method,
 //!   the ids and the request's state, written again when the state changes. Typed text is never in it.
 //!
+//! * **Revoke** (`specs/120` §2 item 8 as amended by `specs/129` §10.2): revoking the key, or taking `request` from it, cancels
+//!   every request of the key that has not ended ([`EngineService::app_requests_cancel`]): a research run through the queue's own
+//!   cancel, a rebuild at its next check (before its writer's model call, or before the page is written; past that it runs to its
+//!   end and says so), a request still being admitted at its next step. Each cancelled request's `app.request` event says
+//!   `cancelled` with the reason `revoked`. A request admitted while the revoke runs is caught by a second look at the key's record
+//!   after admission.
+//!
 //! Only [`delphi_core::server::Extension::app_request`] reaches this, and the server calls that only for an app session
 //! whose key holds the grant at that moment. The server runs it as a task of its own, so a key revoked while a request is
-//! being answered does not cut the request halfway; and nothing here holds work inside the call: a research run is queued
-//! in the one queue, a rebuild is its own task.
+//! being answered does not cut the request halfway through a write; and nothing here holds work inside the call: a research
+//! run is queued in the one queue, a rebuild is its own task.
 
 use super::{err, EngineService};
+use crate::library::topics::{Cancel, Stopped};
 use delphi_core::event::EventEnvelope;
 use delphi_core::proto::code;
 use delphi_core::server::RpcOutcome;
@@ -61,13 +69,28 @@ pub enum Work {
     Rebuild(String),
 }
 
+/// A request that was admitted and has not ended: what it is, the work it started once it has started some, and what stops it.
+struct Running {
+    req: Req,
+    work: Option<Work>,
+    cancel: Arc<Cancel>,
+}
+
+/// Tests: where a request waits once, and the two signals (it got there; it may go on).
+#[cfg(test)]
+pub(crate) type Pause = (&'static str, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
+
 /// What each key asked in the last hour and what of it still runs. In memory: a daemon that restarts forgets the hour's
 /// count (the work it had started is gone with it).
 #[derive(Default)]
 pub struct Tally {
     asked: HashMap<String, VecDeque<i64>>,
-    running: HashMap<String, Vec<Work>>,
+    running: HashMap<String, Vec<Running>>,
     made: u64,
+    /// Tests: where a request waits, once, for the test to let it go on (`"admitted"`: counted and entered, before the second look at
+    /// the key's record; `"checked"`: after it, before any work starts).
+    #[cfg(test)]
+    pub(crate) pause: Option<Pause>,
 }
 
 impl Tally {
@@ -81,7 +104,7 @@ impl Tally {
             return Err(format!("refused: the limit is {} requests an hour for one key, and this key has made {} in the last hour", PER_HOUR, asked.len()));
         }
         let running = self.running.entry(key.to_string()).or_default();
-        running.retain(|w| going(w));
+        running.retain(|r| r.work.as_ref().is_none_or(going));
         if running.len() >= AT_ONCE {
             return Err(format!("refused: the limit is {} requests running at once for one key; wait for one to end", AT_ONCE));
         }
@@ -89,19 +112,47 @@ impl Tally {
         Ok(())
     }
 
-    fn begin(&mut self, key: &str, work: Work) {
-        self.running.entry(key.to_string()).or_default().push(work);
+    /// An admitted request is running from now until it ends: before it has started any work, too, so a revoke finds it.
+    fn enter(&mut self, req: &Req) -> Arc<Cancel> {
+        let cancel = Arc::new(Cancel::default());
+        self.running.entry(req.key.clone()).or_default().push(Running { req: req.clone(), work: None, cancel: cancel.clone() });
+        cancel
     }
 
-    fn end(&mut self, key: &str, work: &Work) {
+    /// The request started `work`. `false`, and nothing recorded, when it was cancelled first: the caller stops the work.
+    fn begin(&mut self, req: &Req, work: Work) -> bool {
+        match self.running.get_mut(&req.key).and_then(|rs| rs.iter_mut().find(|r| r.req.id == req.id)) {
+            Some(r) if !r.cancel.stopped() => {
+                r.work = Some(work);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The request ended.
+    fn end(&mut self, key: &str, request: &str) {
         if let Some(r) = self.running.get_mut(key) {
-            r.retain(|w| w != work);
+            r.retain(|r| r.req.id != request);
+        }
+    }
+
+    /// The request's answer is given: it ends now unless it left work running, which ends it when it ends.
+    fn settle(&mut self, key: &str, request: &str) {
+        if let Some(r) = self.running.get_mut(key) {
+            r.retain(|r| r.req.id != request || r.work.is_some());
         }
     }
 
     /// Is some key's request rebuilding this page now?
     fn rebuilding(&self, slug: &str) -> bool {
-        self.running.values().flatten().any(|w| matches!(w, Work::Rebuild(s) if s == slug))
+        self.running.values().flatten().any(|r| matches!(&r.work, Some(Work::Rebuild(s)) if s == slug))
+    }
+
+    /// Tests: the ids of the requests of `key` that have not ended.
+    #[cfg(test)]
+    pub(crate) fn unended(&self, key: &str) -> Vec<String> {
+        self.running.get(key).into_iter().flatten().map(|r| r.req.id.clone()).collect()
     }
 
     /// Tests: how many requests of `key` are counted in its hour.
@@ -157,18 +208,22 @@ fn why(message: &str) -> String {
 struct Slot {
     svc: Arc<EngineService>,
     key: String,
-    work: Work,
+    request: String,
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
         if let Ok(mut tally) = self.svc.app_asked.lock() {
-            tally.end(&self.key, &self.work);
+            tally.end(&self.key, &self.request);
         }
     }
 }
 
+/// What a request that was cancelled is told (its session has most likely been closed by the revoke already).
+pub const CANCELLED: &str = "cancelled: this key was revoked or no longer holds `request`";
+
 /// One request that was counted: who asked, what, and the ids it named.
+#[derive(Clone)]
 struct Req {
     id: String,
     key: String,
@@ -226,25 +281,44 @@ impl EngineService {
             }
         };
         let now = (self.engine.clock_unix)();
-        let req = {
+        let (req, cancel) = {
             let mut tally = self.app_asked.lock().unwrap();
             let going = |w: &Work| match w {
                 Work::Research(run) => self.research_jobs.status(run, crate::research_console::SESSION).is_some_and(|s| matches!(s["status"].as_str(), Some("queued" | "running"))),
                 Work::Rebuild(_) => true,
             };
             tally.admit(key, now, &going).map_err(|m| err(code::FORBIDDEN, m))?;
-            Req { id: tally.next_id(crate::host_rpc::now_ms()), key: key.to_string(), method: method.to_string(), ids }
+            let req = Req { id: tally.next_id(crate::host_rpc::now_ms()), key: key.to_string(), method: method.to_string(), ids };
+            // Entered before the key's record is read again: a revoke that runs from here on finds this request and stops it, and one
+            // that ran before has already taken the grant away, which the look below sees (`specs/129` §10.2).
+            let cancel = tally.enter(&req);
+            (req, cancel)
         };
-        // A request is the operator at work, as the same command at a terminal is.
-        self.last_operator.store(now, std::sync::atomic::Ordering::SeqCst);
-        let started = match method {
-            "app.research_continue" => self.app_continue(&req, &p).await,
-            "app.research_ask" => self.app_ask(&req, &p).await,
-            "app.page_rebuild" => self.app_rebuild(&req).await,
-            _ => self.app_dispute(&req, &p).await,
+        #[cfg(test)]
+        self.app_pause("admitted").await;
+        let started = match self.app_holds_request(key) {
+            Err(why) => Err(err(code::FORBIDDEN, why)),
+            Ok(()) => {
+                #[cfg(test)]
+                self.app_pause("checked").await;
+                // A request is the operator at work, as the same command at a terminal is.
+                self.last_operator.store(now, std::sync::atomic::Ordering::SeqCst);
+                match method {
+                    "app.research_continue" => self.app_continue(&req, &p, &cancel).await,
+                    "app.research_ask" => self.app_ask(&req, &p, &cancel).await,
+                    "app.page_rebuild" => self.app_rebuild(&req, &cancel).await,
+                    _ => self.app_dispute(&req, &p, &cancel).await,
+                }
+            }
         };
+        self.app_asked.lock().unwrap().settle(&req.key, &req.id);
         match started {
             Ok(v) => Ok(v),
+            // A revoke counted this request among those it cancelled: that is what its record says, whatever step it was at.
+            Err(_) if cancel.stopped() => {
+                self.app_event_revoked(&req, "cancelled").await;
+                Err(err(code::FORBIDDEN, CANCELLED))
+            }
             Err(e) => {
                 self.app_event(&req, "refused", Some(&e.message)).await;
                 Err(e)
@@ -252,14 +326,90 @@ impl EngineService {
         }
     }
 
+    /// The second look at the key (`specs/129` §10.2): does its record, read now, still hold `request`? The server looked before it
+    /// handed the request over; a revoke may have run since.
+    fn app_holds_request(&self, key: &str) -> Result<(), String> {
+        let keys = delphi_core::app_keys::KeyStore::at(&self.engine.ws.home).load().map_err(|_| "the key record cannot be read".to_string())?;
+        match keys.iter().find(|k| k.name == key) {
+            None => Err("this key is no longer paired".into()),
+            Some(k) if !k.grants.iter().any(|g| g == "request") => Err("this key no longer holds `request`".into()),
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// Tests: wait here, once, if a test asked a request to.
+    #[cfg(test)]
+    async fn app_pause(&self, at: &str) {
+        let hold = {
+            let mut tally = self.app_asked.lock().unwrap();
+            if tally.pause.as_ref().is_some_and(|(s, _, _)| *s == at) {
+                tally.pause.take()
+            } else {
+                None
+            }
+        };
+        if let Some((_, reached, go)) = hold {
+            reached.notify_one();
+            go.notified().await;
+        }
+    }
+
+    /// Cancel every request of `key` that has not ended (`specs/120` §2 item 8 as amended by `specs/129` §10.2): the server calls
+    /// this after it has taken the key, or its `request` grant, out of the record and closed its sessions. A research run is
+    /// cancelled through the queue; a rebuild stops at its next check; a request still being admitted stops at its next step. Each
+    /// writes its own `app.request` event, `cancelled` with the reason `revoked`, in order after its earlier states. Returns the ids
+    /// of the requests cancelled, and what was left running: a rebuild or a dispute past its last check, and (when the key itself was
+    /// revoked, `whole`) an update the key started, which is never stopped halfway (an install cut short can leave a broken program).
+    pub fn app_requests_cancel(&self, key: &str, whole: bool) -> Value {
+        let (mut cancelled, mut left) = (Vec::new(), Vec::new());
+        {
+            let tally = self.app_asked.lock().unwrap();
+            for r in tally.running.get(key).into_iter().flatten() {
+                match (&r.work, r.cancel.stop()) {
+                    (_, Stopped::Already) => {}
+                    (Some(Work::Research(run)), Stopped::Now) => {
+                        // A run that ended a moment ago is not cancelled; its watcher writes how it ended.
+                        if self.research_jobs.cancel(run, crate::research_console::SESSION) {
+                            cancelled.push(r.req.id.clone());
+                        }
+                    }
+                    (_, Stopped::Now) => cancelled.push(r.req.id.clone()),
+                    (_, Stopped::TooLate) => left.push(json!({"request": r.req.id, "method": r.req.method})),
+                }
+            }
+        }
+        if whole {
+            if let Some(request) = self.update_running_for(key) {
+                left.push(json!({"request": request, "method": delphi_core::app_keys::UPDATE_METHODS[0]}));
+            }
+        }
+        json!({"cancelled": cancelled, "left_running": left})
+    }
+
     /// Write the request's state as an `app.request` event of the default mission, where `delphi app log` and every attached
     /// client read it. The payload is the key's name, the method, the ids and the state: never what was typed.
     async fn app_event(&self, req: &Req, state: &str, because: Option<&str>) {
-        debug_assert!(STATES.contains(&state));
         let mut payload = json!({"name": req.key, "request": req.id, "method": req.method, "ids": req.ids, "state": state});
         if let Some(b) = because {
             payload["why"] = json!(why(b));
         }
+        self.app_event_write(payload).await;
+    }
+
+    /// A state a revoke caused: `cancelled` with the reason `revoked`; or the end of work the revoke came too late to stop, marked
+    /// `revoked: after_last_check`.
+    async fn app_event_revoked(&self, req: &Req, state: &str) {
+        let mut payload = json!({"name": req.key, "request": req.id, "method": req.method, "ids": req.ids, "state": state});
+        if state == "cancelled" {
+            payload["reason"] = json!("revoked");
+        } else {
+            payload["revoked"] = json!("after_last_check");
+        }
+        self.app_event_write(payload).await;
+    }
+
+    async fn app_event_write(&self, payload: Value) {
+        debug_assert!(payload["state"].as_str().is_some_and(|s| STATES.contains(&s)));
         if let Ok(m) = self.mission_at(None, None).await {
             let _ = m.append(EventEnvelope::new(&m.id, crate::app_audit::REQUEST_EVENT, payload)).await;
         }
@@ -267,7 +417,7 @@ impl EngineService {
 
     /// `app.research_continue`: `delphi research continue <topic> [--note …]`. A section is named in the run's note by its
     /// anchor, after the daemon has found a heading with that anchor on a page that follows the topic.
-    async fn app_continue(self: &Arc<Self>, req: &Req, p: &Asked<'_>) -> RpcOutcome {
+    async fn app_continue(self: &Arc<Self>, req: &Req, p: &Asked<'_>, cancel: &Arc<Cancel>) -> RpcOutcome {
         let id = req.ids["topic_id"].as_str().unwrap_or("").to_string();
         let mut note = p.get("note").map(str::trim).unwrap_or("").to_string();
         if let Some(anchor) = req.ids["section"].as_str() {
@@ -282,13 +432,16 @@ impl EngineService {
         if !note.is_empty() {
             params["note"] = json!(note);
         }
+        if cancel.stopped() {
+            return Err(err(code::FORBIDDEN, CANCELLED));
+        }
         let out = self.continue_as_operator(&params).await?;
-        self.app_research_started(req, out).await
+        self.app_research_started(req, out, cancel).await
     }
 
     /// `app.research_ask`: the console's `/research <question>`. A question that follows a topic is researched in that
     /// topic's project.
-    async fn app_ask(self: &Arc<Self>, req: &Req, p: &Asked<'_>) -> RpcOutcome {
+    async fn app_ask(self: &Arc<Self>, req: &Req, p: &Asked<'_>, cancel: &Arc<Cancel>) -> RpcOutcome {
         let question = p.get("question").map(str::trim).unwrap_or("").to_string();
         if question.is_empty() || question.chars().count() > QUESTION_MAX || question.chars().any(char::is_control) {
             return Err(err(code::INVALID_PARAMS, format!("`question` is one line of 1 to {} characters", QUESTION_MAX)));
@@ -306,22 +459,28 @@ impl EngineService {
                 found.ok_or_else(|| err(code::NOT_FOUND, "no research topic has the id `follows` names"))?
             }
         };
+        if cancel.stopped() {
+            return Err(err(code::FORBIDDEN, CANCELLED));
+        }
         let out = self.launch_research(question, project, None, None, false).await?;
-        self.app_research_started(req, out).await
+        self.app_research_started(req, out, cancel).await
     }
 
     /// A run was queued: record it, say so, and follow it to its end in a task of its own.
-    async fn app_research_started(self: &Arc<Self>, req: &Req, out: Value) -> RpcOutcome {
+    async fn app_research_started(self: &Arc<Self>, req: &Req, out: Value, cancel: &Arc<Cancel>) -> RpcOutcome {
         let run = out["research_id"].as_str().unwrap_or("").to_string();
         let state_of = |svc: &EngineService| svc.research_jobs.status(&run, crate::research_console::SESSION).and_then(|s| s["status"].as_str().map(String::from));
-        let work = Work::Research(run.clone());
-        self.app_asked.lock().unwrap().begin(&req.key, work.clone());
+        if !self.app_asked.lock().unwrap().begin(req, Work::Research(run.clone())) {
+            // Revoked while the run was being queued: it is cancelled before it is ever reported.
+            self.research_jobs.cancel(&run, crate::research_console::SESSION);
+            return Err(err(code::FORBIDDEN, CANCELLED));
+        }
         let first = match state_of(self).as_deref() {
             Some("running") => "running",
             _ => "queued",
         };
         self.app_event(req, first, None).await;
-        let (svc, req2, mut last) = (self.clone(), Req { id: req.id.clone(), key: req.key.clone(), method: req.method.clone(), ids: req.ids.clone() }, first.to_string());
+        let (svc, req2, mut last, cancel) = (self.clone(), req.clone(), first.to_string(), cancel.clone());
         let watched = run.clone();
         tokio::spawn(async move {
             loop {
@@ -336,11 +495,15 @@ impl EngineService {
                     _ => "done",
                 };
                 if state != last {
-                    svc.app_event(&req2, state, None).await;
+                    if state == "cancelled" && cancel.stopped() {
+                        svc.app_event_revoked(&req2, state).await;
+                    } else {
+                        svc.app_event(&req2, state, None).await;
+                    }
                     last = state.to_string();
                 }
                 if !matches!(state, "queued" | "running") {
-                    svc.app_asked.lock().unwrap().end(&req2.key, &work);
+                    svc.app_asked.lock().unwrap().end(&req2.key, &req2.id);
                     return;
                 }
             }
@@ -354,7 +517,7 @@ impl EngineService {
     }
 
     /// `app.page_rebuild`: `delphi pages rebuild <slug>`, answered at once; the rebuild is its own task and its end is an event.
-    async fn app_rebuild(self: &Arc<Self>, req: &Req) -> RpcOutcome {
+    async fn app_rebuild(self: &Arc<Self>, req: &Req, cancel: &Arc<Cancel>) -> RpcOutcome {
         let slug = req.ids["slug"].as_str().unwrap_or("").to_string();
         if !self.engine.cfg.get().library.pages.enabled {
             return Err(err(code::INVALID_PARAMS, "generated pages are off ([library.pages] enabled = false)"));
@@ -362,23 +525,27 @@ impl EngineService {
         if crate::library::Library::in_home(&self.engine.ws.home).topic_side(&slug).is_none() {
             return Err(err(code::NOT_FOUND, "no topic has that slug"));
         }
-        let work = Work::Rebuild(slug.clone());
         {
             let mut tally = self.app_asked.lock().unwrap();
             if tally.rebuilding(&slug) {
                 return Err(err(code::INVALID_PARAMS, "that page is already being rebuilt for the app"));
             }
-            tally.begin(&req.key, work.clone());
+            if !tally.begin(req, Work::Rebuild(slug.clone())) {
+                return Err(err(code::FORBIDDEN, CANCELLED));
+            }
         }
         self.app_event(req, "running", None).await;
-        let (svc, req2) = (self.clone(), Req { id: req.id.clone(), key: req.key.clone(), method: req.method.clone(), ids: req.ids.clone() });
+        let (svc, req2, cancel) = (self.clone(), req.clone(), cancel.clone());
         tokio::spawn(async move {
             // The slot is given back when this task ends, however it ends: a rebuild that panicked must not hold one of the
             // key's four for as long as the daemon runs.
-            let slot = Slot { svc: svc.clone(), key: req2.key.clone(), work };
-            let built = svc.engine.clone().topic_rebuild(&slug).await;
+            let slot = Slot { svc: svc.clone(), key: req2.key.clone(), request: req2.id.clone() };
+            // A revoke's flag is read at the rebuild's own checks, so the rebuild ends on its own and journals what it spent.
+            let built = svc.engine.clone().topic_rebuild_cancellable(&slug, Some(&cancel)).await;
             drop(slot);
             match built {
+                Err(_) if cancel.stopped() => svc.app_event_revoked(&req2, "cancelled").await,
+                Ok(_) if cancel.revoked_late() => svc.app_event_revoked(&req2, "done").await,
                 Ok(_) => svc.app_event(&req2, "done", None).await,
                 Err(e) => svc.app_event(&req2, "failed", Some(&e)).await,
             }
@@ -387,14 +554,22 @@ impl EngineService {
     }
 
     /// `app.page_dispute`: `delphi pages dispute <claim> --note …`. It is one write with nothing to wait for.
-    async fn app_dispute(self: &Arc<Self>, req: &Req, p: &Asked<'_>) -> RpcOutcome {
+    async fn app_dispute(self: &Arc<Self>, req: &Req, p: &Asked<'_>, cancel: &Arc<Cancel>) -> RpcOutcome {
         let lib = crate::library::Library::in_home(&self.engine.ws.home);
         let claim = req.ids["claim"].as_str().unwrap_or("");
         if lib.claim(claim).is_none() {
             return Err(err(code::NOT_FOUND, "no claim has that id"));
         }
+        // Its one check: a revoke from here on is too late to stop the write.
+        if !cancel.commit() {
+            return Err(err(code::FORBIDDEN, CANCELLED));
+        }
         lib.dispute_claim(claim, p.get("note").unwrap_or("")).map_err(|e| err(code::INVALID_PARAMS, e))?;
-        self.app_event(req, "done", None).await;
+        if cancel.revoked_late() {
+            self.app_event_revoked(req, "done").await;
+        } else {
+            self.app_event(req, "done", None).await;
+        }
         Ok(json!({"request": req.id, "state": "done", "claim": claim}))
     }
 }
@@ -419,21 +594,50 @@ mod tests {
         assert!(t.admit("app-00000a", 1_000 + 3_600, &none).is_err(), "and only one: a refused request is not counted, an admitted one is");
 
         let mut t = Tally::default();
+        let req = |n: usize| Req { id: format!("aq-{n}"), key: "app-00000a".into(), method: "app.page_rebuild".into(), ids: json!({}) };
         for i in 0..4 {
             t.admit("app-00000a", 10, &none).unwrap();
-            t.begin("app-00000a", Work::Rebuild(format!("p{i}")));
+            t.enter(&req(i));
+            assert!(t.begin(&req(i), Work::Rebuild(format!("p{i}"))));
         }
         let refused = t.admit("app-00000a", 11, &none).unwrap_err();
         assert!(refused.contains("4 requests running at once"), "{refused}");
         assert!(t.rebuilding("p2") && !t.rebuilding("p9"));
-        t.end("app-00000a", &Work::Rebuild("p2".into()));
+        t.end("app-00000a", "aq-2");
         assert_eq!(t.admit("app-00000a", 12, &none), Ok(()));
+        // A request being admitted counts before it has started anything; answered with nothing left running, it ends.
+        t.enter(&req(5));
+        assert!(t.admit("app-00000a", 12, &none).is_err());
+        t.settle("app-00000a", "aq-5");
+        assert_eq!(t.unended("app-00000a"), ["aq-0", "aq-1", "aq-3"]);
         // A run the queue says has ended no longer counts, whoever forgot to say so.
-        t.begin("app-00000a", Work::Research("r-1".into()));
+        t.enter(&req(6));
+        assert!(t.begin(&req(6), Work::Research("r-1".into())));
+        t.settle("app-00000a", "aq-6");
         assert!(t.admit("app-00000a", 13, &none).is_err());
         assert_eq!(t.admit("app-00000a", 13, &|w: &Work| !matches!(w, Work::Research(_))), Ok(()));
+        // A request a revoke stopped before it started its work does not start it.
+        t.enter(&req(7));
+        assert_eq!(t.running["app-00000a"].last().unwrap().cancel.stop(), Stopped::Now);
+        assert!(!t.begin(&req(7), Work::Rebuild("p7".into())) && !t.rebuilding("p7"));
         let (a, b) = (t.next_id(255), t.next_id(255));
         assert!(a.starts_with("aq-ff-") && a != b);
+    }
+
+    /// The flag a revoke sets and work reads (`specs/129` §10.2): stopped before the last check, it stops; after, the work goes on and
+    /// the revoke is noted. Whichever comes first wins, once.
+    #[test]
+    fn a_cancel_stops_work_before_its_last_check_and_only_notes_a_revoke_after_it() {
+        let c = Cancel::default();
+        assert!(!c.stopped() && !c.revoked_late());
+        assert_eq!(c.stop(), Stopped::Now);
+        assert!(c.stopped() && !c.commit(), "stopped work does not pass its last check");
+        assert_eq!(c.stop(), Stopped::Already);
+        let c = Cancel::default();
+        assert!(c.commit() && c.commit(), "the last check passes, and passes again");
+        assert_eq!(c.stop(), Stopped::TooLate);
+        assert!(!c.stopped() && c.revoked_late() && c.commit());
+        assert_eq!(c.stop(), Stopped::Already);
     }
 
     /// AC-7's first half: a parameter the table does not list refuses the call, as does anything that is not a string, and typed text

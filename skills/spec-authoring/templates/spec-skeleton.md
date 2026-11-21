@@ -4,6 +4,7 @@ title: "NNN: Short Name"
 author: architect
 timestamp: "2026-01-01T00:00:00Z"   # replace with the current UTC time
 status: draft
+reviewed_by: []   # placeholder (the lint does not require it): cite [council:<id>, panel:<id>] and commit each record under missions/*/councils/; check no committed record has the same id (specs/104 §13 G5, specs/133)
 source_type: internal_generated
 confidence: medium
 source_mission: mission-id
@@ -36,17 +37,40 @@ Chosen: A, B or C, and why the others lost. Flagged by the guard (a new layer of
 ## 2. Design
 Interfaces, data shapes, invariants and failure behaviour, at the level a Builder needs.
 
-## 3. Acceptance Criteria
+## 3. Authority
+Only when the spec touches authority, trust, a gate or a sandbox; otherwise delete this section. What the change may do, what it may never do, and the test that proves each limit.
+
+## 4. Slices
+S0 is the spec itself, or a spike with its kill criterion written here before it runs. About 300 changed lines a slice; say why when one is larger.
+
+| Slice | Criteria closed | Files | Lines (est.) | Depends on | Blocked by |
+| :-- | :-- | :-- | --: | :-- | :-- |
+| S0 | (the spec) | this file | (docs) | none | none |
+| S1 | AC-1, AC-2 | the files it changes | 100-200 | S0 | none, or OD-n |
+
+## 5. Acceptance Criteria
 1. **AC-1:** an observable, testable statement.
 2. **AC-2:** another one.
 
-## 4. Verification Plan
-How each criterion is proven: the tests, checks and manual steps, mapped to AC numbers.
+## 6. Verification Plan
+How each criterion is proven, by number: the test (named with `specs/NNN AC-n`), check or manual step.
 
-## 5. Open Questions
-Anything undecided, and who decides.
+| Criterion | How it is verified |
+| :-- | :-- |
+| AC-1 | the test or check |
+
+## 7. What Is Not Verified
+Each claim this spec makes that nobody has observed, and what would show it.
+
+## 8. Decisions for the Operator
+The architect proposes whether a decision is reversible; the operator decides. Only a decision marked reversible may take its recommendation by default. One that changes a criterion, an interface, a data shape or authority blocks the slices it names until answered.
+
+| OD | Question | Recommendation | Reversible? (operator decides) | Blocks |
+| :-- | :-- | :-- | :-- | :-- |
+| OD-1 | the question | the recommendation and its alternative | proposed: yes or no | none, or S-n |
 
 <!--
 Check with: delphi check spec <this file>
 An agent never sets `status: approved`; approval comes from the operator.
+A tiny change (about 100 lines or fewer, 3 criteria or fewer) may delete section 4, and section 8 only when no open item touches authority, an interface or something irreversible; say so in one line.
 -->
