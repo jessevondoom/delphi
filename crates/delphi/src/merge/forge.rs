@@ -78,6 +78,23 @@ pub trait Forge {
     fn open_bases(&self) -> Result<Vec<String>, ForgeError>;
     /// `(number, head branch)` of the most recently merged pull requests, at most `limit`.
     fn merged_branches(&self, limit: usize) -> Result<Vec<(u64, String)>, ForgeError>;
+    /// How many commits of the base branch's tip the head does not contain (the compare API's `behind_by`, spec 094 §11.3.1).
+    /// Not `mergeStateStatus`: GitHub reports `BEHIND` there only when branch protection requires an up-to-date branch. A
+    /// failed compare is an error, never a zero.
+    fn behind_by(&self, base_ref: &str, head_sha: &str) -> Result<u64, ForgeError>;
+}
+
+/// The compare API path for `base...head`. Both ends must be plain refs (`url_safe`); anything else is refused, not escaped.
+fn compare_path(base_ref: &str, head_sha: &str) -> Result<String, ForgeError> {
+    if !url_safe(base_ref) || !url_safe(head_sha) {
+        return Err(ForgeError::Failed { what: "compare the branch with its base".into(), detail: format!("`{base_ref}...{head_sha}` has characters that are not allowed in a ref here") });
+    }
+    Ok(format!("repos/{{owner}}/{{repo}}/compare/{base_ref}...{head_sha}"))
+}
+
+/// The `behind_by` number out of `gh api ... --jq .behind_by`. `null` or anything else is a parse error, never a zero.
+fn parse_behind(out: &str) -> Result<u64, ForgeError> {
+    out.trim().parse::<u64>().map_err(|_| ForgeError::Parse(format!("compare: `behind_by` is `{}`, not a count", out.trim())))
 }
 
 /// The `gh pr merge` arguments. Always `--merge` (a merge commit): a squash or a rebase would collapse or rewrite the pull
@@ -233,6 +250,11 @@ impl Forge for Gh {
         let v = self.json("list merged pull requests", &["pr", "list", "--state", "merged", "--limit", &lim, "--json", "number,headRefName"], &[])?;
         Ok(v.as_array().into_iter().flatten().filter_map(|p| Some((p["number"].as_u64()?, s(p, "headRefName")))).collect())
     }
+
+    fn behind_by(&self, base_ref: &str, head_sha: &str) -> Result<u64, ForgeError> {
+        let path = compare_path(base_ref, head_sha)?;
+        parse_behind(&self.run("compare the branch with its base", &["api", &path, "--jq", ".behind_by"], &[])?)
+    }
 }
 
 #[cfg(test)]
@@ -262,6 +284,18 @@ mod tests {
             assert!(!url_safe(bad), "{bad:?}");
         }
         assert!(!url_safe(&"a".repeat(301)));
+    }
+
+    #[test]
+    fn the_compare_is_read_as_a_count_and_anything_else_is_an_error_not_a_zero() {
+        assert_eq!(compare_path("main", "abc123").unwrap(), "repos/{owner}/{repo}/compare/main...abc123");
+        assert!(compare_path("main?x=1", "abc").is_err() && compare_path("main", "a b").is_err());
+        assert!(matches!(Gh.behind_by("ma in", "abc"), Err(ForgeError::Failed { .. })), "refused before running anything");
+        assert_eq!(parse_behind("3\n").unwrap(), 3);
+        assert_eq!(parse_behind("0").unwrap(), 0);
+        for bad in ["", "null", "-1", "two"] {
+            assert!(matches!(parse_behind(bad), Err(ForgeError::Parse(_))), "{bad:?}");
+        }
     }
 
     #[test]

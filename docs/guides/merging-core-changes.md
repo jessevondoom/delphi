@@ -9,6 +9,7 @@ How a pull request to Delphi's own repository goes from "ready" to "merged and c
 | S5 | the error log entries, `merge log`, `merge fix` |
 | S6 | `merge --auto` |
 | S7 (this page) | the agent rules, this guide, the vocabulary table |
+| S9 (§11) | freshness: a PR whose head is behind its base is refused, class `behind` |
 
 Delphi stays optional. The label, the PR comment and the merge commit are visible in plain GitHub, and a native merge always works.
 
@@ -24,6 +25,10 @@ delphi merge --all        merge every queued PR, oldest first
 ```
 
 The command derives the head commit, base commit, changed paths, the linked spec's blob hash, the checks and mergeability. It refuses unless the PR is queued, not a draft, mergeable, all checks pass and the spec is approved. CI, `delphi lint`, spec linkage and the `REVIEW.md` audit still run; an approval never replaces them.
+
+### Freshness (S9)
+
+CI tests a PR against the base as it was at the PR's last push, and nothing runs again when the base moves. Two spec PRs that each change the compiled index's count line from 136 to 137 merge with no conflict, and `main` then says 137 where there are 138 specs (this broke `main` on 2026-11-20). So the command also refuses a PR whose head does not contain the base tip: it asks GitHub's compare API how far the head is behind (`behind_by`, not `mergeStateStatus`, which says `BEHIND` only under strict branch protection). The refusal gives the count and says what to do: refresh the branch (`delphi merge refresh <PR>`) and wait for CI on the new head. A failed compare is a failure, never a pass. The rule applies to every PR, gate-changing ones included, and `--dry-run` and `merge status` show it. `merge queue` does not require freshness: the queue is advice, and it says when a PR it queues is behind. In a batch (`--all`, `--auto`), every PR after the first merge is behind, so it is refused until it is refreshed and green again; refreshing and waiting inside the batch is slice S11, not built yet.
 
 ## The approval record
 
