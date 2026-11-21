@@ -141,9 +141,9 @@ Over three Councils (`t_0002`, `t_0003`, `t_0004`, 2026-11-19 and 2026-11-20) ev
 
 ## 133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns
 
-**133: The spec-to-build handoff contract: criteria mapped to tests, a fuller skeleton, and spikes before unknowns** · approved (per source at `41b77b7efa80`) · tier 0 · [source](../../specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md)
+**133: The spec-to-build handoff contract: criteria mapped to tests, a fuller skeleton, and spikes before unknowns** · approved (per source at `6337f6a51e8a`) · tier 0 · [source](../../specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md)
 
-**source excerpt, untrusted** · `specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md` line 24
+**source excerpt, untrusted** · `specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md` line 25
 
 ```text
 An audit of the architect, the builder and the spec skills (host session, 2026-11-20, a Fable subagent reading main at 76da4a79, then a daemon Council `t_0001` with seats on two families) found that the specs Delphi writes are better than the contract that carries them into a build:

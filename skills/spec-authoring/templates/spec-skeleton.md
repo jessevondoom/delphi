@@ -4,7 +4,7 @@ title: "NNN: Short Name"
 author: architect
 timestamp: "2026-01-01T00:00:00Z"   # replace with the current UTC time
 status: draft
-reviewed_by: []   # the Councils or Panels that reviewed it: [council:<id>, panel:<id>]; commit each record under missions/*/councils/ (delphi lint resolves it; specs/104 §13 G5)
+reviewed_by: []   # placeholder (the lint does not require it): cite [council:<id>, panel:<id>] and commit each record under missions/*/councils/; check no committed record has the same id (specs/104 §13 G5, specs/133)
 source_type: internal_generated
 confidence: medium
 source_mission: mission-id
@@ -72,5 +72,5 @@ The architect proposes whether a decision is reversible; the operator decides. O
 <!--
 Check with: delphi check spec <this file>
 An agent never sets `status: approved`; approval comes from the operator.
-A tiny change (about 100 lines or fewer, 3 criteria or fewer) may delete sections 4 and 8 and say so in one line.
+A tiny change (about 100 lines or fewer, 3 criteria or fewer) may delete section 4, and section 8 only when no open item touches authority, an interface or something irreversible; say so in one line.
 -->

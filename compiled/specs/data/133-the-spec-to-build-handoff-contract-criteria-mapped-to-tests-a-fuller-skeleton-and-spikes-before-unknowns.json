@@ -4,117 +4,123 @@
   "outline": [
     {
       "level": 1,
-      "line": 16,
+      "line": 17,
       "number": null,
       "title": "Spec 133: The spec-to-build handoff contract"
     },
     {
       "level": 2,
-      "line": 22,
+      "line": 23,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 34,
+      "line": 35,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 41,
+      "line": 42,
       "number": "1.2",
       "title": "Simpler Alternative Considered"
     },
     {
       "level": 3,
-      "line": 46,
+      "line": 47,
       "number": "1.3",
       "title": "Options considered"
     },
     {
       "level": 2,
-      "line": 56,
+      "line": 57,
       "number": "2",
       "title": "Design"
     },
     {
       "level": 3,
-      "line": 58,
+      "line": 59,
       "number": "2.1",
       "title": "The build contract (`skills/spec-driven-build/SKILL.md`, `skills/git-pr-packaging/SKILL.md`)"
     },
     {
       "level": 4,
-      "line": 69,
+      "line": 70,
       "number": "2.1.1",
       "title": "The table and lists in the pull request"
     },
     {
       "level": 4,
-      "line": 78,
+      "line": 79,
       "number": "2.1.2",
       "title": "The tracker"
     },
     {
       "level": 3,
-      "line": 84,
+      "line": 85,
       "number": "2.2",
       "title": "The skeleton (`skills/spec-authoring/templates/spec-skeleton.md`)"
     },
     {
       "level": 3,
-      "line": 95,
+      "line": 96,
       "number": "2.3",
       "title": "Authoring rules (`skills/spec-authoring/SKILL.md`)"
     },
     {
       "level": 3,
-      "line": 106,
+      "line": 107,
       "number": "2.4",
       "title": "The deferred check (recommendation R4) and its trigger"
     },
     {
       "level": 2,
-      "line": 115,
+      "line": 116,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 119,
+      "line": 120,
       "number": "4",
       "title": "Slices (one pull request; same-spec slices, each its own commit, own trailer and own tracker row)"
     },
     {
       "level": 2,
-      "line": 129,
+      "line": 130,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 139,
+      "line": 140,
       "number": "6",
       "title": "Verification Plan"
     },
     {
       "level": 2,
-      "line": 149,
+      "line": 150,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 156,
+      "line": 157,
       "number": "8",
       "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 164,
+      "number": "9",
+      "title": "Review"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md",
-    "sha256": "41b77b7efa80e49e329f0473b4b4cdb41643a649b53096750b111ef268764937"
+    "sha256": "6337f6a51e8a7f58132fe25b634c338fd68fd77bdc376fe6336a26708c8f0bee"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +133,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, in a host session after the plan was shown: \"follow your plan and go. i'll approve specs from this plan and ratify and changes\". It takes effect when the pull request that carries it merges."
     },
-    "sha256": "41b77b7efa80e49e329f0473b4b4cdb41643a649b53096750b111ef268764937",
+    "sha256": "6337f6a51e8a7f58132fe25b634c338fd68fd77bdc376fe6336a26708c8f0bee",
     "word": "approved"
   },
   "spec": {
@@ -142,10 +148,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 1651,
-      "end_line": 24,
-      "line": 24,
-      "start": 1368
+      "end": 1899,
+      "end_line": 25,
+      "line": 25,
+      "start": 1616
     },
     "text": "An audit of the architect, the builder and the spec skills (host session, 2026-11-20, a Fable subagent reading main at 76da4a79, then a daemon Council `t_0001` with seats on two families) found that the specs Delphi writes are better than the contract that carries them into a build:"
   }

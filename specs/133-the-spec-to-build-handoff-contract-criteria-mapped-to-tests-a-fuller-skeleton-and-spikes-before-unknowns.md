@@ -5,6 +5,7 @@ author: architect
 timestamp: 2026-11-20T21:00:00Z
 status: approved   # by the operator, 2026-11-20, in a host session after the plan was shown: "follow your plan and go. i'll approve specs from this plan and ratify and changes". It takes effect when the pull request that carries it merges.
 approved_by: operator (2026-11-20)
+reviewed_by: [council:t_0001]   # the review of this text and spec 134's: daemon Council of session host-de42e7270bcb4edf, 2026-11-21, record committed under missions/2026-11-20-spec-build-audit/councils/; its named changes are applied (section 9)
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -97,20 +98,20 @@ The skeleton keeps every section `delphi check spec` looks for (Scope, Simpler A
 New steps and rules, in place of nothing (no existing step is weakened):
 
 1. **Size (guidance, not a rule).** A slice closes named criteria, is observable by a test, and is about 300 changed lines or fewer. A spec past about 8 slices, or one that needs a second amendment, is split into a new spec. Exceeding either is allowed when the spec says why.
-2. **Tiny change.** A spec for a change of about 100 lines or fewer with 3 criteria or fewer may leave out the Slices and Decisions tables; it says so in one line.
+2. **Tiny change.** A spec for a change of about 100 lines or fewer with 3 criteria or fewer may leave out the Slices table, and the Decisions table only when no open item touches authority, an interface or something irreversible; it says so in one line.
 3. **Unknowns first.** A premise nobody has observed gets slice S0: a spike, with a kill criterion written into the spec before the spike runs. No other slice starts until the spike's result is written into the spec.
 4. **Decisions.** The architect proposes whether a decision is reversible; the operator decides. Only a decision the operator marked reversible may take its recommendation by default, and the default is recorded in the tracker. A decision that changes an acceptance criterion, an interface, a data shape or authority blocks the slices it names until the operator answers.
-5. **Review before approval.** Ask for a Council or a witnessed Panel with Strategist and Red-Team seats, cite it in `reviewed_by` as `council:<id>` or `panel:<id>`, and commit its record under `missions/<mission>/councils/` with the spec so the lint can resolve it. A spec with an Authority section also gets `spec-premortem`. Never cite a review that did not happen.
+5. **Review before approval.** Ask for a Council or a witnessed Panel with Strategist and Red-Team seats, cite it in `reviewed_by` as `council:<id>` or `panel:<id>`, and commit its record under `missions/<mission>/councils/` with the spec so the lint can resolve it. Council ids restart in every session (`t_0001`), and the lint maps an id to one record: before citing, search `missions/*/councils/` for the same `council_id`; if one is there, the citation is ambiguous, so stop and ask instead of citing. A spec with an Authority section also gets `spec-premortem`. Never cite a review that did not happen.
 6. **Start from the skeleton** (unchanged: `status: draft`; an agent never marks a spec `approved`).
 
 ### 2.4 The deferred check (recommendation R4) and its trigger
 
-R4 is not dropped; it waits for evidence. **Trigger:** the first of (a) three specs numbered above 134 written from the new skeleton, or (b) 2026-12-18. At the trigger, whoever picks it up writes a tally into this spec's tracker row:
+R4 is not dropped; it waits for evidence. **Trigger:** the first of (a) three specs numbered above 134 written from the new skeleton, or (b) 2026-12-18. **Owner:** the operator's first session on or after the trigger; this spec's tracker row R4 carries the date, and the session that merges the third such spec says in its report that the trigger fired. At the trigger, the owner writes a tally into that row:
 
 - for each of those specs: which of the new sections it has (Slices with the criteria column, the Decisions table with reversibility, What is not verified, Authority where it applies, a Verification Plan that names every criterion), and whether `reviewed_by` names real reviews;
 - for each pull request that built one of their slices: whether it carries the table of 2.1.1, and whether its tests name criteria.
 
-The R4 spec then encodes only the checks that held in at least two of three specs. If two of three specs skipped a section, that is evidence that prose does not hold, and R4 proposes that check as a failure, not a warning.
+The R4 spec then decides each check from the tally: a section present in at least two of three specs becomes a check (a warning first); a section skipped in at least two of three is evidence that prose does not hold, so R4 proposes it as a failing check from the start, or proposes removing the section if the specs were better without it. R4 also takes the Council-id collision of section 7, item 3.
 
 ## 3. Authority
 
@@ -150,7 +151,7 @@ The pull request touches no `.github/`, charter or rubric path. Spec 134 edits s
 
 1. **That the text changes behaviour.** Gap 5 says skill prose is often skipped. The skeleton is the stronger lever, but whether architects fill the new sections, and builders the table, is what the tally of 2.4 measures. Nothing here measures it in advance.
 2. **The sizing numbers.** About 300 lines a slice and about 8 slices a spec are guesses from specs 110-132, not measured against outcomes. They are guidance for that reason.
-3. **That a cited Council id is unique.** The lint maps a `council_id` to one record; ids such as `t_0001` restart in every session, so two committed records with the same id would shadow each other. Not fixed here (a follow-up for the R4 spec).
+3. **That a cited Council id is unique.** The lint maps a `council_id` to one record; ids such as `t_0001` restart in every session, so two committed records with the same id would shadow each other. Until R4 fixes it in the lint, rule 5 of 2.3 makes an author check for a duplicate before citing.
 4. **The audit's counts** (criteria cited in tests, sections per spec) are regular-expression matches over specs 110-132 and `crates/`, not a manual read.
 
 ## 8. Decisions for the operator
@@ -159,3 +160,7 @@ The pull request touches no `.github/`, charter or rubric path. Spec 134 edits s
 | :-- | :-- | :-- | :-- | :-- |
 | OD-1 | Defer R4 until the trigger of 2.4 | yes (decided by the operator, 2026-11-20) | yes | none |
 | OD-2 | Fold `scope-creep-detection`'s rule into the build contract instead of authorizing the skill for the builder | yes; no manifest widens | yes | none |
+
+## 9. Review
+
+Daemon Council `t_0001` of session `host-de42e7270bcb4edf` (2026-11-21, seats on Claude and Gemini) reviewed this text and spec 134's. The architect and strategist seats recommended approval with named changes; the red-team seat's Round 1 said the same, and its Round 2 could not be read, so the ruling went to the operator. The changes it named for this spec are applied: the tiny-change exemption keeps the Decisions table when an item touches authority, an interface or something irreversible (2.3 rule 2); a duplicate Council id stops a citation (2.3 rule 5); the R4 trigger has an owner, a dated row and a rule without the contradiction it had (2.4). The design it rests on was ruled by an earlier Council of the same id in session `host-390eef8435513f56` (2026-11-20), whose record is not committed, so it is not cited.
