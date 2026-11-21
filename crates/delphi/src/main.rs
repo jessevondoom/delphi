@@ -583,7 +583,7 @@ fn cmd_update(args: &[String]) -> i32 {
     }
     let mut workspace_code = 0;
     let mut already_newest = false;
-    let code = selfupdate::run_with(args, &selfupdate::RealNet, &dest, &api, &mut |event| {
+    let code = selfupdate::run_with(args, &selfupdate::RealNet, &dest, &api, &home, &mut |event| {
         if event == selfupdate::Event::UpToDate {
             workspace_code = update::run(&home, only.as_deref(), has("--check"), has("--allow-downgrade"), false, has("--review"), has("--require-signed"));
             already_newest = true;
