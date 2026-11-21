@@ -71,6 +71,9 @@ pub struct RouteRequest {
     pub mutating_harnesses: Vec<String>,
     /// Context the request needs, in tokens; 0 when it does not matter.
     pub min_context_tokens: u64,
+    /// The seat must answer a schema in its text. Under `discovered` a pair needs a JSON-in-text record of every sample valid
+    /// (`specs/056` §10.2); `static` does not read it.
+    pub needs_json: bool,
     /// The role's target model (`[routing.targets]`).
     pub target: Option<String>,
     /// The caller can only drive one model turn at a time, so a harness (which runs a whole span) is not a candidate.

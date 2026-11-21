@@ -6,7 +6,7 @@
 //! is usable the task waits (or escalates when no pool member meets it at all). Every choice is among
 //! pool members the operator ratified; nothing here reaches outside that set.
 
-use crate::models::{Candidate, Class, ClassRules, Presence};
+use crate::models::{measured_ineligible, Candidate, Class, ClassRules, Measured, Presence};
 use crate::pool::Entry;
 use crate::route::{availability, ineligible, Avail, Blocked, Route, RouteRequest};
 use delphi_adapter::config::{Config, PoolKey};
@@ -36,6 +36,8 @@ pub struct Assign {
     pub plan_following: bool,
     /// Class of every ready pool member; a member absent here (or marked gone) is not selectable.
     pub classes: Vec<(String, String, Class)>,
+    /// The measured attributes of every ready pool member (`specs/056` §10.2); a member absent here has none.
+    pub measured: Vec<(String, String, Measured)>,
     pub gone: Vec<(String, String)>,
     pub evidence: Vec<Evidence>,
     /// Results after which a model is scored by evidence alone.
@@ -68,6 +70,7 @@ impl Assign {
             plan_making: policy.is_some_and(|p| p.plan_making),
             plan_following: policy.is_some_and(|p| p.plan_following),
             classes: candidates.iter().filter(|c| c.presence == Presence::Ready && c.class != Class::Emergency).map(|c| (c.endpoint_id.clone(), c.model_id.clone(), c.class)).collect(),
+            measured: candidates.iter().filter(|c| c.presence == Presence::Ready).map(|c| (c.endpoint_id.clone(), c.model_id.clone(), c.measured.clone())).collect(),
             gone: candidates.iter().filter(|c| c.presence == Presence::Gone).map(|c| (c.endpoint_id.clone(), c.model_id.clone())).collect(),
             evidence: vec![],
             enough,
@@ -81,6 +84,10 @@ impl Assign {
             return None;
         }
         self.classes.iter().find(|(e, m, _)| e == &k.endpoint_id && m == &k.model_id).map(|(_, _, c)| *c)
+    }
+
+    fn measured_of(&self, k: &PoolKey) -> Measured {
+        self.measured.iter().find(|(e, m, _)| e == &k.endpoint_id && m == &k.model_id).map(|(_, _, m)| m.clone()).unwrap_or_default()
     }
 
     fn evidence_of(&self, k: &PoolKey) -> Option<&Evidence> {
@@ -142,6 +149,10 @@ pub fn pick(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest, a: &Ass
     let mut rejected: Vec<(PoolKey, String)> = Vec::new();
     for (i, k) in cfg.pool_entries().into_iter().enumerate() {
         if let Some(why) = ineligible(cfg, &k, req) {
+            rejected.push((k, why));
+            continue;
+        }
+        if let Some(why) = measured_ineligible(&a.measured_of(&k), req.min_context_tokens, req.needs_json) {
             rejected.push((k, why));
             continue;
         }
@@ -388,6 +399,63 @@ assignment = "discovered"
         assert!(class_of("builder", -1).starts_with("m-small"), "nerfed to quick, which is its floor");
         assert!(class_of("builder", 2).starts_with("m-big"), "the pool has nothing above deep");
         assert!(class_of("validator", -2).starts_with("m-mid"), "a floor of steady holds");
+    }
+
+    /// Give one pool member a measured record.
+    fn with_measured(mut a: Assign, model: &str, m: Measured) -> Assign {
+        let k = a.classes.iter().find(|(_, id, _)| id == model).map(|(e, id, _)| (e.clone(), id.clone())).unwrap();
+        a.measured.retain(|(e, id, _)| !(e == &k.0 && id == &k.1));
+        a.measured.push((k.0, k.1, m));
+        a
+    }
+
+    /// `specs/056` §10.2 use 1: under `discovered` a prompt over the measured budget, or a schema answer without a valid JSON-in-text
+    /// record, rules the pair out for that dispatch and the next one serves.
+    #[test]
+    fn a_measured_budget_or_json_record_rules_a_pair_out_under_discovered() {
+        let c = cfg();
+        let small = Measured { prompt_budget_tokens: 50_000, json_in_text: "bare".into(), ..Default::default() };
+        let a = with_measured(assign_for(&c, "builder"), "m-mid-a", small);
+        let r = RouteRequest { min_context_tokens: 80_000, ..req("builder", a.clone()) };
+        assert_eq!(resolve(&c, &[], &r).key().unwrap().model_id, "m-mid-b", "the prompt does not fit m-mid-a's measured budget");
+        assert_eq!(resolve(&c, &[], &req("builder", a.clone())).key().unwrap().model_id, "m-mid-a", "no prompt size given: nothing is ruled out");
+        let nested = || Measured { json_in_text: "nested-string".into(), ..Default::default() };
+        let mut every = with_measured(a, "m-mid-b", nested());
+        for (e, m, _) in every.classes.clone().into_iter().filter(|(_, m, _)| m != "m-mid-b" && m != "m-mid-a") {
+            every.measured.retain(|(x, y, _)| !(x == &e && y == &m));
+            every.measured.push((e, m, Measured { json_in_text: "bare".into(), ..Default::default() }));
+        }
+        let pick = resolve(&c, &[], &RouteRequest { needs_json: true, ..req("builder", every) });
+        assert_ne!(pick.key().unwrap().model_id, "m-mid-b", "{pick:?}");
+        let only_nested = with_measured(assign_for(&c, "builder"), "m-mid-b", nested());
+        match resolve(&c, &[], &RouteRequest { needs_json: true, ..req("builder", only_nested) }) {
+            Route::NoModel { ineligible, .. } => assert!(ineligible.iter().any(|(k, why)| k.model_id == "m-mid-a" && why.contains("no record")) && ineligible.iter().any(|(_, why)| why.contains("nested-string")), "{ineligible:?}"),
+            other => panic!("an empty record is never a pass: {other:?}"),
+        }
+    }
+
+    /// M1a exit: `static` routes are byte-identical whatever the measured attributes say, over every role and tier.
+    #[test]
+    fn static_routes_are_unchanged_by_the_measured_attributes() {
+        let mut c = cfg();
+        c.routing.assignment = delphi_adapter::config::Assignment::Static;
+        let mut golden = Vec::new();
+        for role in ["architect", "builder", "validator", "scout"] {
+            for tier in ["fast", "workhorse", "frontier"] {
+                let mut a = assign_for(&c, role);
+                for (e, m, _) in a.classes.clone() {
+                    a.measured.push((e, m, Measured { prompt_budget_tokens: 1, json_in_text: "untested".into(), served_match: Some(false), ..Default::default() }));
+                }
+                let plain = RouteRequest { role: role.into(), tier: tier.into(), ..Default::default() };
+                let with = RouteRequest { assign: Some(a), min_context_tokens: 0, needs_json: true, ..plain.clone() };
+                let (x, y) = (resolve(&c, &[], &plain), resolve(&c, &[], &with));
+                assert_eq!(format!("{x:?}"), format!("{y:?}"), "{role} {tier}");
+                golden.push(format!("{role}/{tier}={}", x.key().unwrap().model_id));
+            }
+        }
+        assert_eq!(golden.iter().filter(|g| g.ends_with("=m-small-a")).count(), 4);
+        assert_eq!(golden.iter().filter(|g| g.ends_with("=m-mid-a")).count(), 4);
+        assert_eq!(golden.iter().filter(|g| g.ends_with("=m-big-a")).count(), 4);
     }
 
     fn resolve(c: &Config, st: &[Entry], r: &RouteRequest) -> Route {

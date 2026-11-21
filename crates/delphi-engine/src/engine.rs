@@ -2038,6 +2038,7 @@ impl Engine {
             mutating: sc.guard.zones.worktree.is_some() && builds(&sc.manifest),
             mutating_harnesses: self.mutating_harnesses(),
             min_context_tokens: 0,
+            needs_json: false,
             target: self.cfg.get().routing.targets.get(&sc.role).cloned(),
             turn_by_turn,
             assign: self.assign_for(sc),

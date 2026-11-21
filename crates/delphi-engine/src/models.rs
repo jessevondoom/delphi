@@ -83,14 +83,95 @@ pub struct Candidate {
     pub presence: Presence,
     #[serde(default)]
     pub class: Class,
-    /// Also far wider than its family's median context (`specs/056` §2.2).
+    /// Also far wider than its family's median prompt budget, with a retrieval record to show it (`specs/056` §10.2).
     #[serde(default)]
     pub wide: bool,
+    /// What was measured of this model on its carrier (`specs/056` §10.2). Empty when nothing was.
+    #[serde(default)]
+    pub measured: Measured,
+}
+
+/// The measured attributes of a candidate (`specs/056` §10.2, slice M1a). Each is read from a record, never estimated by a model,
+/// and an empty one is never read as a pass. None of them is a cost: the cost class stays a cost input only (§10.3).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Measured {
+    /// The largest prompt, in tokens, the carrier accepts for this model after reserving output; 0 when there is no record.
+    #[serde(default)]
+    pub prompt_budget_tokens: u64,
+    /// The JSON-in-text record: `bare` or `fenced` (every sample valid), `nested-string`, `untested`, or empty (no record).
+    #[serde(default)]
+    pub json_in_text: String,
+    /// The fraction of the prompt budget at which every planted string was recovered; `None` when there is no record.
+    #[serde(default)]
+    pub recall_fraction: Option<f64>,
+    /// `Some(false)`: the carrier reported serving another model than the one asked for.
+    #[serde(default)]
+    pub served_match: Option<bool>,
+    /// Where the carrier puts the prompt's tokens: `input`, `cache_write` or `both`; empty when there is no record.
+    #[serde(default)]
+    pub token_accounting: String,
+    /// When, on which carrier and version, and by what the record was taken.
+    #[serde(default)]
+    pub measured_on: String,
+    #[serde(default)]
+    pub carrier: String,
+    #[serde(default)]
+    pub carrier_version: String,
+    #[serde(default)]
+    pub command: String,
+}
+
+impl Measured {
+    /// Every sample of the structured-answer check came back valid.
+    pub fn json_valid(&self) -> bool {
+        matches!(self.json_in_text.as_str(), "bare" | "fenced")
+    }
+
+    /// The seed table's row for `model` on `carrier` (`specs/132` C3), or nothing.
+    pub fn from_seed(seed: &crate::model_catalog::Seed, carrier: &str, model: &str) -> Measured {
+        let Some(m) = seed.model(carrier, model) else { return Measured::default() };
+        let version = match carrier {
+            "copilot" => seed.copilot_cli.clone(),
+            "agy" => seed.agy_cli.clone(),
+            _ => String::new(),
+        };
+        Measured {
+            prompt_budget_tokens: m.prompt_budget_tokens,
+            json_in_text: m.json_in_text.clone(),
+            // Until the probe plants strings at several depths, recall is the tail delivered at the size tested (§10.2).
+            recall_fraction: (m.tail_tested_tokens > 0 && m.prompt_budget_tokens > 0).then(|| m.tail_tested_tokens as f64 / m.prompt_budget_tokens as f64),
+            served_match: None,
+            token_accounting: m.token_accounting.clone(),
+            measured_on: seed.measured.clone(),
+            carrier: carrier.into(),
+            carrier_version: version,
+            command: "seed table (specs/132 C3): the carrier's own over-budget refusal and one tail-delivery call".into(),
+        }
+    }
 }
 
 impl Candidate {
     pub fn is_ready(&self) -> bool {
         self.presence == Presence::Ready
+    }
+}
+
+/// The carrier whose records describe models on this endpoint: a harness endpoint's CLI, or a CLI list's own name.
+fn carrier_of(cfg: &Config, endpoint_id: &str) -> Option<String> {
+    if let Some(cli) = endpoint_id.strip_prefix("cli:") {
+        return Some(cli.to_string());
+    }
+    cfg.endpoint(endpoint_id).filter(|e| e.path == delphi_adapter::config::AccessPath::Harness).and_then(|e| e.harness.clone())
+}
+
+/// Put the measured attributes on every candidate from the shipped seed table (`specs/056` §10.2). A model with no row keeps them
+/// empty. A served-model match learned earlier is kept.
+pub fn measure(cfg: &Config, list: &mut [Candidate]) {
+    let seed = crate::model_catalog::Seed::shipped();
+    for c in list.iter_mut() {
+        let served = c.measured.served_match;
+        c.measured = carrier_of(cfg, &c.endpoint_id).map(|carrier| Measured::from_seed(&seed, &carrier, &c.model_id)).unwrap_or_default();
+        c.measured.served_match = served;
     }
 }
 
@@ -114,6 +195,7 @@ pub fn discover(cfg: &Config, snap: Option<&Snapshot>, now: i64) -> Vec<Candidat
             presence: Presence::Ready,
             class: Class::Unclassified,
             wide: false,
+            measured: Measured::default(),
         });
     }
     for c in snap.iter().flat_map(|s| s.clis.iter()).filter(|c| c.installed) {
@@ -135,15 +217,21 @@ pub fn discover(cfg: &Config, snap: Option<&Snapshot>, now: i64) -> Vec<Candidat
                 presence: Presence::Ready,
                 class: Class::Unclassified,
                 wide: false,
+                measured: Measured::default(),
             });
         }
     }
+    measure(cfg, &mut out);
     out
 }
 
 /// Fold a fresh discovery into the earlier inventory: seen ones are refreshed, ones not seen now become `gone`.
 pub fn merge(previous: Vec<Candidate>, seen: Vec<Candidate>) -> Vec<Candidate> {
     let mut out = seen;
+    // A served-model record comes from receipts, not from a source that lists models: keep it across a refresh.
+    for c in out.iter_mut().filter(|c| c.measured.served_match.is_none()) {
+        c.measured.served_match = previous.iter().find(|p| p.endpoint_id == c.endpoint_id && p.model_id == c.model_id).and_then(|p| p.measured.served_match);
+    }
     for p in previous {
         if !out.iter().any(|c| c.endpoint_id == p.endpoint_id && c.model_id == p.model_id) {
             out.push(Candidate { presence: Presence::Gone, ..p });
@@ -203,19 +291,23 @@ pub struct Rule {
     pub local: Option<bool>,
     pub tier: Option<String>,
     pub can_think: Option<bool>,
-    pub cost_class: Option<String>,
     pub min_context: Option<u64>,
 }
 
 impl Rule {
     fn holds(&self, c: &Candidate) -> bool {
-        self.local.is_none_or(|v| v == c.local)
-            && self.tier.as_deref().is_none_or(|t| t == c.tier)
-            && self.can_think.is_none_or(|v| v == c.can_think)
-            && self.cost_class.as_deref().is_none_or(|v| v == c.cost_class)
-            && self.min_context.is_none_or(|n| c.context_tokens >= n)
+        self.local.is_none_or(|v| v == c.local) && self.tier.as_deref().is_none_or(|t| t == c.tier) && self.can_think.is_none_or(|v| v == c.can_think) && self.min_context.is_none_or(|n| c.context_tokens >= n)
     }
 }
+
+/// A rule key that names a cost (`specs/056` §10.3): price never sets class, so such a rule is refused, not ignored.
+fn is_cost_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    ["cost", "price", "multiplier", "usd", "premium", "billing"].iter().any(|w| k.contains(w))
+}
+
+/// The retrieval record a model needs to be `wide`: every planted string found at this fraction of its budget or more (§10.2).
+pub const WIDE_RECALL_FRACTION: f64 = 0.8;
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 struct WideRule {
@@ -247,7 +339,14 @@ pub struct ClassRules {
 
 impl ClassRules {
     pub fn parse(text: &str) -> Result<ClassRules, String> {
-        let r: ClassRules = toml::from_str(text).map_err(|e| format!("class rules: {e}"))?;
+        let raw: toml::Value = toml::from_str(text).map_err(|e| format!("class rules: {e}"))?;
+        for rule in raw.get("rule").and_then(|r| r.as_array()).into_iter().flatten() {
+            let id = rule.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            if let Some(key) = rule.as_table().into_iter().flat_map(|t| t.keys()).find(|k| is_cost_key(k)) {
+                return Err(format!("class rules: rule `{id}` conditions on `{key}`, a cost; a price, multiplier or cost class never sets a class (specs/056 §10.3), it is a cost input to ranking only. Use measured or capability attributes (local, tier, can_think, min_context)"));
+            }
+        }
+        let r: ClassRules = raw.try_into().map_err(|e| format!("class rules: {e}"))?;
         for rule in &r.rules {
             match Class::parse(&rule.class) {
                 Some(Class::Unclassified | Class::Emergency) | None => return Err(format!("class rules: rule `{}` has class `{}`; use deep, steady, quick or local (the emergency model is set in config.toml, not by a rule)", rule.id, rule.class)),
@@ -283,24 +382,53 @@ impl ClassRules {
 }
 
 /// Set `class` and `wide` on every candidate. A model no rule places stays `unclassified`.
+///
+/// The quality classes (`deep`, `steady`, `quick`) come from the rules, which read the operator's tier as the prior; no measured
+/// attribute moves them, and no cost does (§10.2, §10.3). `wide` needs a measured prompt budget at least `[wide] min_context_ratio`
+/// times its family's median and a retrieval record at [`WIDE_RECALL_FRACTION`] or more. A carrier that reported serving another
+/// model makes the candidate's family `unknown` and its class `unclassified`.
 pub fn classify(rules: &ClassRules, list: &mut [Candidate]) {
+    for c in list.iter_mut().filter(|c| c.measured.served_match == Some(false)) {
+        c.family = crate::seat::UNKNOWN.into();
+    }
     let ratio = rules.wide.min_context_ratio.unwrap_or(0.0);
     let medians: Vec<(String, u64)> = {
-        let mut fams: Vec<String> = list.iter().filter(|c| !c.family.is_empty()).map(|c| c.family.clone()).collect();
+        let mut fams: Vec<String> = list.iter().filter(|c| !c.family.is_empty() && c.family != crate::seat::UNKNOWN).map(|c| c.family.clone()).collect();
         fams.sort();
         fams.dedup();
         fams.into_iter()
             .filter_map(|f| {
-                let mut v: Vec<u64> = list.iter().filter(|c| c.family == f && c.is_ready() && c.context_tokens > 0).map(|c| c.context_tokens).collect();
+                let mut v: Vec<u64> = list.iter().filter(|c| c.family == f && c.is_ready() && c.measured.prompt_budget_tokens > 0).map(|c| c.measured.prompt_budget_tokens).collect();
                 v.sort_unstable();
                 (v.len() >= 3).then(|| (f, v[v.len() / 2]))
             })
             .collect()
     };
     for c in list.iter_mut() {
+        if c.measured.served_match == Some(false) {
+            c.class = Class::Unclassified;
+            c.wide = false;
+            continue;
+        }
         c.class = rules.class_of(c);
-        c.wide = ratio > 0.0 && medians.iter().find(|(f, _)| *f == c.family).is_some_and(|(_, m)| c.context_tokens as f64 >= ratio * *m as f64);
+        let budget = c.measured.prompt_budget_tokens;
+        let recalled = c.measured.recall_fraction.is_some_and(|f| f >= WIDE_RECALL_FRACTION);
+        c.wide = ratio > 0.0 && recalled && budget > 0 && medians.iter().find(|(f, _)| *f == c.family).is_some_and(|(_, m)| budget as f64 >= ratio * *m as f64);
     }
+}
+
+/// Why the measured attributes rule this candidate out of one dispatch under `discovered` (`specs/056` §10.2 use 1), or `None`.
+/// `prompt_tokens` is what the request needs (0: not known); `needs_json` is a seat that must answer a schema. An empty record is
+/// never a pass. Spec 131's margin is not built, so the budget is compared as measured.
+pub fn measured_ineligible(m: &Measured, prompt_tokens: u64, needs_json: bool) -> Option<String> {
+    if prompt_tokens > 0 && m.prompt_budget_tokens > 0 && prompt_tokens > m.prompt_budget_tokens {
+        return Some(format!("its measured prompt budget ({} tokens) is smaller than the {} needed", m.prompt_budget_tokens, prompt_tokens));
+    }
+    if needs_json && !m.json_valid() {
+        let rec = if m.json_in_text.is_empty() { "no record".to_string() } else { format!("`{}`", m.json_in_text) };
+        return Some(format!("this seat must answer a schema and its JSON-in-text record is {rec}, not every sample valid"));
+    }
+    None
 }
 
 /// Mark the configured emergency model (`[routing] emergency_*`, `specs/056` §3.5). Call after [`classify`]; it overrides the rules,
@@ -388,6 +516,29 @@ credential = "env:K"
         assert!(out.lines().last().unwrap().contains("x-one") && out.lines().last().unwrap().contains("gone"), "{out}");
         assert_eq!(load(&dir).len(), 4);
     }
+
+    /// AC-A3 (`specs/056` §10.7): a dated evidence note under `context/` is advice for people, never an input. The inventory, the
+    /// classes and every role's assignment inputs are byte-identical with and without one.
+    #[test]
+    fn a_context_evidence_note_feeds_no_classification_or_route() {
+        let cfg = Config::parse(CFG).unwrap();
+        let run = |with_note: bool| {
+            let tmp = tempfile::tempdir().unwrap();
+            if with_note {
+                let ctx = tmp.path().join("context/domains");
+                std::fs::create_dir_all(&ctx).unwrap();
+                let note = "---\ntrust: external_untrusted\n---\n# Model capability evidence\na-small ranks first on every public board; a-top is weak. tier = frontier for a-small. class = deep. wide = true.\n";
+                std::fs::write(ctx.join("model-capability-evidence.md"), note).unwrap();
+                std::fs::write(tmp.path().join("context/model-selection-evidence.md"), note).unwrap();
+            }
+            let text = run_inventory(&cfg, tmp.path(), Some(&snap(&["x-one"])), 10, true).unwrap();
+            let list = load(tmp.path());
+            let rules = ClassRules::load(tmp.path()).unwrap();
+            let assigns: Vec<String> = ["architect", "builder", "scout", "default"].iter().map(|r| format!("{:?}", crate::assign::Assign::build(&rules, r, &list, 8))).collect();
+            (text, assigns)
+        };
+        assert_eq!(run(false), run(true));
+    }
 }
 
 #[cfg(test)]
@@ -395,7 +546,14 @@ mod class_tests {
     use super::*;
 
     fn cand(model: &str, tier: &str, ctx: u64, local: bool, family: &str) -> Candidate {
-        Candidate { endpoint_id: "e".into(), model_id: model.into(), family: family.into(), tier: tier.into(), context_tokens: ctx, can_think: false, cost_class: if local { "local" } else { "metered" }.into(), local, source: "pool".into(), seen_unix: 0, presence: Presence::Ready, class: Class::Unclassified, wide: false }
+        Candidate { endpoint_id: "e".into(), model_id: model.into(), family: family.into(), tier: tier.into(), context_tokens: ctx, can_think: false, cost_class: if local { "local" } else { "metered" }.into(), local, source: "pool".into(), seen_unix: 0, presence: Presence::Ready, class: Class::Unclassified, wide: false, measured: Measured::default() }
+    }
+
+    /// A candidate with a measured prompt budget and, optionally, a retrieval record at `recall` of it.
+    fn sized(model: &str, tier: &str, budget: u64, recall: Option<f64>, family: &str) -> Candidate {
+        let mut c = cand(model, tier, 0, false, family);
+        c.measured = Measured { prompt_budget_tokens: budget, recall_fraction: recall, json_in_text: "bare".into(), ..Default::default() };
+        c
     }
 
     #[test]
@@ -407,22 +565,72 @@ mod class_tests {
         assert_eq!(unclassified(&l).len(), 1);
     }
 
+    /// AC-A1: a 600k budget with a retrieval record at 0.8 is `wide`; the same budget with no record, or a declared window alone, is not.
     #[test]
-    fn a_window_several_times_its_familys_median_is_also_wide() {
-        let mut l = vec![cand("a", "fast", 200_000, false, "f"), cand("b", "workhorse", 200_000, false, "f"), cand("c", "frontier", 1_000_000, false, "f"), cand("d", "frontier", 1_000_000, false, "solo")];
+    fn wide_needs_a_measured_budget_and_a_retrieval_record_not_a_declared_window() {
+        let mut l: Vec<Candidate> = ["a", "b", "c", "i", "j"].iter().map(|m| sized(m, "workhorse", 200_000, Some(0.9), "f")).collect();
+        l.extend([sized("d", "frontier", 600_000, Some(0.8), "f"), sized("e", "frontier", 600_000, None, "f"), sized("g", "frontier", 600_000, Some(0.5), "f"), cand("h", "frontier", 5_000_000, false, "f"), sized("s", "frontier", 600_000, Some(1.0), "solo")]);
         classify(&ClassRules::shipped(), &mut l);
-        assert_eq!(l.iter().map(|c| c.wide).collect::<Vec<_>>(), [false, false, true, false], "a family of fewer than three has no median");
+        assert_eq!(l.iter().map(|c| c.wide).collect::<Vec<_>>(), [false, false, false, false, false, true, false, false, false, false], "a family of fewer than three has no median");
+        assert!(l.iter().all(|c| c.class == Class::Deep || c.tier != "frontier"), "wide is an extra mark; the class stays the tier prior");
     }
 
+    /// AC-A1: a carrier that served another model makes the family `unknown` and the model `unclassified`.
     #[test]
-    fn a_new_vendor_is_a_row_in_the_data_file_and_a_bad_class_is_refused() {
-        let rules = ClassRules::parse("[[rule]]\nid = \"big-sub\"\ncost_class = \"subscription\"\nmin_context = 500000\nclass = \"deep\"\n").unwrap();
-        let mut c = cand("zz", "", 600_000, false, "");
-        c.cost_class = "subscription".into();
-        assert_eq!(rules.class_of(&c), Class::Deep);
+    fn a_served_model_mismatch_makes_the_family_unknown_and_the_model_unclassified() {
+        let mut l = vec![sized("a", "frontier", 600_000, Some(1.0), "f"), sized("b", "frontier", 200_000, Some(1.0), "f")];
+        l[0].measured.served_match = Some(false);
+        l[1].measured.served_match = Some(true);
+        classify(&ClassRules::shipped(), &mut l);
+        assert_eq!((l[0].family.as_str(), l[0].class, l[0].wide), (crate::seat::UNKNOWN, Class::Unclassified, false));
+        assert_eq!((l[1].family.as_str(), l[1].class), ("f", Class::Deep));
+    }
+
+    /// AC-A2: a rule naming a cost fails to parse with a sentence, and no cost attribute moves a class.
+    #[test]
+    fn a_cost_condition_is_refused_and_no_cost_value_changes_a_class() {
+        for key in ["cost_class = \"subscription\"", "multiplier = 1.0", "price_category = \"low\"", "max_input_usd_per_mtok = 3.0", "premium = false"] {
+            let e = ClassRules::parse(&format!("[[rule]]\nid = \"cheap\"\n{key}\nclass = \"deep\"\n")).unwrap_err();
+            assert!(e.contains("rule `cheap`") && e.contains("never sets a class"), "{key}: {e}");
+        }
+        let rules = ClassRules::parse("[[rule]]\nid = \"big\"\nmin_context = 500000\nclass = \"deep\"\n").unwrap();
+        assert_eq!(rules.class_of(&cand("zz", "", 600_000, false, "")), Class::Deep, "a new vendor is a row of attributes");
+        let base = || vec![sized("p", "frontier", 600_000, Some(0.9), "f"), sized("q", "workhorse", 200_000, Some(0.9), "f"), sized("r", "fast", 100_000, None, "f"), cand("t", "", 0, false, "")];
+        let mut want = base();
+        classify(&ClassRules::shipped(), &mut want);
+        for cost in ["metered", "subscription", "local", "low", "standard", "premium", ""] {
+            let mut l = base();
+            l.iter_mut().for_each(|c| c.cost_class = cost.into());
+            classify(&ClassRules::shipped(), &mut l);
+            assert_eq!(l.iter().map(|c| (c.class, c.wide)).collect::<Vec<_>>(), want.iter().map(|c| (c.class, c.wide)).collect::<Vec<_>>(), "cost {cost}");
+        }
         assert!(ClassRules::parse("[[rule]]\nid = \"x\"\nclass = \"best\"\n").is_err());
         assert!(ClassRules::parse("[[rule]]\nid = \"x\"\nclass = \"unclassified\"\n").is_err());
         assert_eq!(ClassRules::shipped().version, 1);
+    }
+
+    #[test]
+    fn the_measured_attributes_rule_a_pair_out_only_with_a_record_and_an_empty_one_is_no_pass() {
+        let m = Measured { prompt_budget_tokens: 100_000, json_in_text: "bare".into(), ..Default::default() };
+        assert!(measured_ineligible(&m, 90_000, true).is_none());
+        assert!(measured_ineligible(&m, 120_000, false).unwrap().contains("measured prompt budget (100000 tokens)"));
+        assert!(measured_ineligible(&Measured::default(), 5_000_000, false).is_none(), "no budget record: the declared window decides, as before");
+        assert!(measured_ineligible(&Measured::default(), 0, true).unwrap().contains("no record"));
+        assert!(measured_ineligible(&Measured { json_in_text: "nested-string".into(), ..Default::default() }, 0, true).unwrap().contains("nested-string"));
+        assert!(measured_ineligible(&Measured { json_in_text: "untested".into(), ..Default::default() }, 0, false).is_none());
+    }
+
+    /// The seed table fills the attributes of a carrier's rows, with where they came from; another carrier's model gets none.
+    #[test]
+    fn the_seed_table_is_the_first_source_of_the_measured_attributes() {
+        let seed = crate::model_catalog::Seed::shipped();
+        let row = seed.models.iter().find(|m| m.carrier == "copilot" && m.tail_tested_tokens > 0).unwrap();
+        let m = Measured::from_seed(&seed, "copilot", &row.id);
+        assert_eq!((m.prompt_budget_tokens, m.carrier.as_str(), m.carrier_version.as_str(), m.measured_on.as_str()), (row.prompt_budget_tokens, "copilot", seed.copilot_cli.as_str(), seed.measured.as_str()));
+        assert!(m.recall_fraction.is_some_and(|f| f > 0.0 && f < WIDE_RECALL_FRACTION), "a tail at about 90k tokens is no record near the budget");
+        assert_eq!(Measured::from_seed(&seed, "api", &row.id), Measured::default());
+        let untested = seed.models.iter().find(|m| m.tail_tested_tokens == 0).unwrap();
+        assert_eq!(Measured::from_seed(&seed, &untested.carrier, &untested.id).recall_fraction, None);
     }
 
     #[test]
