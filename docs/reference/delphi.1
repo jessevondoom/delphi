@@ -673,12 +673,13 @@ page's DOI up at doi.org, as the daemon does; `\-\-offline` skips that.
 put this program on your PATH, as install.sh does.
 .PP
 .nf
-  delphi self\-install
+  delphi self\-install [\-\-allow\-downgrade]
 .fi
 .PP
 Copies the running delphi to ~/.local/bin/delphi (or $DELPHI_INSTALL_DIR/delphi): written under a temporary name,
 mode 0755, then moved into place. It never writes over a symbolic link or over a file that is not a delphi
-(a regular program holding delphi's own text; the file is read, never run), and prints what it did. The desktop
+(a regular program holding delphi's own text; the file is read, never run), and prints what it did. A delphi
+newer than this one (its version is read from its bytes) is kept unless \-\-allow\-downgrade is given. The desktop
 app carries a copy of delphi and shows this command, to be run from that copy, when no delphi is installed.
 Needs no terminal. Refused inside an agent seat.
 .SS delphi update

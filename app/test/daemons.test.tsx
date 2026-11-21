@@ -150,4 +150,8 @@ test('with no installed delphi and a bundled one, the empty state names its self
   // A path a shell would read inside double quotes is single-quoted; a relative one is not offered.
   assert.equal(selfInstallCommand({ installed: false, bundled: '/a b/$x/delphi' }), "'/a b/$x/delphi' self-install");
   assert.equal(selfInstallCommand({ installed: false, bundled: 'delphi' }), null);
+  // A control character, DEL or a line or paragraph separator in the path: no command is offered (V3-14).
+  for (const odd of ['\n', '\u007f', '\u2028', '\u2029']) {
+    assert.equal(selfInstallCommand({ installed: false, bundled: `/a${odd}b/delphi` }), null, JSON.stringify(odd));
+  }
 });

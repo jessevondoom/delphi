@@ -169,7 +169,7 @@ say "Installed $("$DIR/delphi" --version) to $DIR/delphi"
 # The desktop app (specs/122 section 3), on macOS only: from the same archive, so it passed the same checks. A release from
 # before it has none. It goes to ~/Applications, where `delphi app` and `delphi update` look; nothing here starts it.
 OPT_OUT="${DELPHI_HOME:-$HOME/.delphi}/app/opt-out"
-if [ "$os" = Darwin ] && [ "$APP" -eq 1 ] && [ -e "$OPT_OUT" ]; then
+if [ "$os" = Darwin ] && [ "$APP" -eq 1 ] && { [ -e "$OPT_OUT" ] || [ -L "$OPT_OUT" ]; }; then
   say "Leaving the desktop app alone: $OPT_OUT exists (\`delphi app opt-in\` removes it)."
   APP=0
 fi
