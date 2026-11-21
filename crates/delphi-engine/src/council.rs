@@ -1516,8 +1516,11 @@ impl Engine {
         if foreign.len() > 1 {
             started["foreign_seats"] = json!(foreign.iter().map(|(r, f)| json!({"role": r, "family": f})).collect::<Vec<_>>());
         }
-        // Spec 104 §12 A3, A8: how Round 1 arrived, and whether the Panel counts as an independent review.
+        // Spec 104 §12 A3, A8: how Round 1 arrived, and whether the Panel counts as an independent review (witnessed, and more than
+        // one family: A8 as amended 2026-11-21).
+        let relay = &crate::council_panel::judge_independence(relay, div.homogeneous());
         started["counts_as_independent_review"] = relay["counts_as_independent_review"].clone();
+        started["not_independent_because"] = relay["not_independent_because"].clone();
         if relay["relayed"] == true {
             started["relay"] = relay.clone();
         }
@@ -1567,11 +1570,16 @@ impl Engine {
             front.push_str(&format!("foreign_seats: {}\n", panel.foreign_seats().iter().map(|s| format!("{}={}", s.role, s.family)).collect::<Vec<_>>().join(", ")));
         }
         // Spec 104 §12 A3, A8: a Panel whose Round 1 arrived in a batch says so, with the moderator's witness (host-reported) or its lack.
-        let relay = panel.relay();
+        // A8 as amended 2026-11-21: a homogeneous Panel does not count either, and the record says why.
+        let relay = crate::council_panel::judge_independence(&panel.relay(), plan.homogeneous);
         if relay["relayed"] == true {
             front.push_str(&format!("isolation: host-reported, relayed\nblind_round_1: host-reported\nindependence: {}\n", crate::council_panel::one_line(relay["independence"].as_str().unwrap_or("not witnessed"))));
         }
         front.push_str(&format!("counts_as_independent_review: {}\n", relay["counts_as_independent_review"] == true));
+        let because: Vec<&str> = relay["not_independent_because"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        if !because.is_empty() {
+            front.push_str(&format!("not_independent_because: {}\n", because.join(", ")));
+        }
         front.push_str(&crate::council_earlier::front_line(&panel.earlier.iter().map(|e| e.path.clone()).collect::<Vec<_>>()));
         // The label travels with the verdict (`specs/086` §7): seats whose receipts show no tool that could read the repo.
         let unverified: Vec<String> = m.replay().map(|evs| crate::seat::seat_summaries(&evs, &task_id)).unwrap_or_default().into_iter().filter(|s| s.unverified_against_repo).map(|s| s.role).collect();

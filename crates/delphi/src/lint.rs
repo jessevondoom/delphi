@@ -253,7 +253,8 @@ fn check_done_when(tree: &Tree, r: &mut Report) {
 
 /// A spec may cite the review it rests on: `reviewed_by: [panel:<council id>, council:<council id>]`. Each id must resolve to a
 /// Council or Panel record under `missions/*/councils/` in this repo (the record's `council_id:` line), and a cited Panel whose record
-/// says `counts_as_independent_review: false` fails: the moderator did not witness that its seats ran apart. A spec with no
+/// says `counts_as_independent_review: false` fails, naming the record's reasons (`not_independent_because`: the moderator did not
+/// witness that its seats ran apart, or only one model family gave stances; specs/104 section 12 A8). A spec with no
 /// `reviewed_by` is not touched, and nothing here requires a review. Source repo only.
 fn check_reviewed_by(tree: &Tree, r: &mut Report) {
     if tree.mode != Mode::Repo {
@@ -271,14 +272,16 @@ fn check_reviewed_by(tree: &Tree, r: &mut Report) {
     if cited.is_empty() {
         return;
     }
-    // council id -> (venue, counts as an independent review), from the records under missions/.
+    // council id -> (venue, counts as an independent review, why not), from the records under missions/. A record written before
+    // `not_independent_because` was kept (specs/104 section 12 A8, amended 2026-11-21) did not count only for its witness.
     let record = Regex::new(r"^missions/[^/]+/councils/\d{3}-[^/]+\.md$").unwrap();
-    let mut records: BTreeMap<String, (String, bool)> = BTreeMap::new();
+    let mut records: BTreeMap<String, (String, bool, Vec<String>)> = BTreeMap::new();
     for path in tree.with_ext(&[".md"]).filter(|p| record.is_match(p)) {
         let Some(fm) = tree.read(path).as_deref().and_then(frontmatter_of) else { continue };
         let Some(id) = get_str(&fm, "council_id") else { continue };
         let counts = fm.get(Value::String("counts_as_independent_review".into())) != Some(&Value::Bool(false));
-        records.insert(id.to_string(), (get_str(&fm, "venue").unwrap_or("").to_string(), counts));
+        let because: Vec<String> = get_str(&fm, "not_independent_because").map(|b| b.split(',').map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect()).unwrap_or_default();
+        records.insert(id.to_string(), (get_str(&fm, "venue").unwrap_or("").to_string(), counts, because));
     }
     for (path, items) in cited {
         for item in items {
@@ -288,7 +291,11 @@ fn check_reviewed_by(tree: &Tree, r: &mut Report) {
             };
             match records.get(id) {
                 None => r.fail("reviewed-by", path.clone(), format!("`reviewed_by` cites `{kind}:{id}`, which resolves to no Council or Panel record under missions/")),
-                Some((venue, false)) if venue == "panel" => r.fail("reviewed-by", path.clone(), format!("`reviewed_by` cites `{kind}:{id}`, a Panel whose record says it does not count as an independent review (its seats' first answers were submitted together and the moderator did not witness that they ran apart)")),
+                Some((venue, false, because)) if venue == "panel" => {
+                    let why = if because.is_empty() { vec![delphi_engine::council_panel::NOT_WITNESSED.to_string()] } else { because.clone() };
+                    let why = why.iter().map(|b| delphi_engine::council_panel::not_independent_clause(b)).collect::<Vec<_>>().join("; and ");
+                    r.fail("reviewed-by", path.clone(), format!("`reviewed_by` cites `{kind}:{id}`, a Panel whose record says it does not count as an independent review ({why})"))
+                }
                 Some(_) => {}
             }
         }
@@ -1447,6 +1454,7 @@ mod tests {
             ("missions/m/councils/001-a.md", rec("t-yes", "panel", "counts_as_independent_review: true\n")),
             ("missions/m/councils/002-b.md", rec("t-no", "panel", "counts_as_independent_review: false\n")),
             ("missions/m/councils/003-c.md", rec("t-daemon", "daemon", "")),
+            ("missions/m/councils/004-d.md", rec("t-one", "panel", "counts_as_independent_review: false\nnot_independent_because: single family\n")),
         ];
         let with = |by: &str| {
             let s = spec(by);
@@ -1458,7 +1466,10 @@ mod tests {
         assert!(with("reviewed_by: [panel:t-yes, council:t-daemon]\n").is_empty());
         assert!(with("").is_empty(), "a spec that cites no review is not affected");
         let f = with("reviewed_by: [panel:t-no]\n");
-        assert!(f.len() == 1 && f[0].contains("does not count as an independent review"), "{f:?}");
+        assert!(f.len() == 1 && f[0].contains("does not count as an independent review") && f[0].contains("did not witness that they ran apart"), "a record without reasons is read as not witnessed: {f:?}");
+        // Spec 104 section 12 A8 (amended 2026-11-21): a witnessed Panel of one family does not count, and the lint says why.
+        let f = with("reviewed_by: [panel:t-one]\n");
+        assert!(f.len() == 1 && f[0].contains("does not count as an independent review") && f[0].contains("single family") && !f[0].contains("did not witness"), "{f:?}");
         let f = with("reviewed_by: [panel:t-nope]\n");
         assert!(f.len() == 1 && f[0].contains("resolves to no Council or Panel record"), "{f:?}");
         let f = with("reviewed_by: [panel:t-yes, \"t-yes\", 7]\n");
