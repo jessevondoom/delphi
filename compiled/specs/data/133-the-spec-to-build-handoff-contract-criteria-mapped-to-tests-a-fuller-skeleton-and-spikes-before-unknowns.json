@@ -120,7 +120,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md",
-    "sha256": "6337f6a51e8a7f58132fe25b634c338fd68fd77bdc376fe6336a26708c8f0bee"
+    "sha256": "24300ab2213145ec28dd22ca9c29a9f0396a3f35d97d032daf4074434863f791"
   },
   "source_status_at_hash": {
     "line": {
@@ -133,7 +133,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, in a host session after the plan was shown: \"follow your plan and go. i'll approve specs from this plan and ratify and changes\". It takes effect when the pull request that carries it merges."
     },
-    "sha256": "6337f6a51e8a7f58132fe25b634c338fd68fd77bdc376fe6336a26708c8f0bee",
+    "sha256": "24300ab2213145ec28dd22ca9c29a9f0396a3f35d97d032daf4074434863f791",
     "word": "approved"
   },
   "spec": {

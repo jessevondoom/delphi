@@ -28,7 +28,7 @@ An audit of the architect, the builder and the spec skills (host session, 2026-1
 2. **The skeleton lags practice.** `skills/spec-authoring/templates/spec-skeleton.md` has no slices table, no "What is not verified", no authority section and no decision table. Of the 22 specs numbered 110 and up, 22 have slices and 18 have open decisions, but only 6 have "What is not verified".
 3. **No sizing guidance.** The median recent spec is about 21 KB; spec 124 grew from 12 to 15 slices through two amendments.
 4. **Unknowns are built through.** Spec 126 was approved at `confidence: low` with "the first task of S1 is to check its premise". Specs 126 and 128 let every open decision take its recommendation unless the operator spoke, whether or not it was reversible.
-5. **A skill is not reliably loaded** (spec 124 §18.5: the architect wrote the three option kinds 0 of 3 times unless told to load the skill). The template is followed more reliably than skill prose, so this spec puts the structure in the template.
+5. **A skill is not reliably loaded** (spec 124 §17: the architect wrote the three option kinds 0 of 3 times unless told to load the skill). The template is followed more reliably than skill prose, so this spec puts the structure in the template.
 
 This spec changes four markdown files and one role file so that a slice has a written contract before code and a checkable record after it.
 

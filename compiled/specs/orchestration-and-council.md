@@ -141,7 +141,7 @@ Over three Councils (`t_0002`, `t_0003`, `t_0004`, 2026-11-19 and 2026-11-20) ev
 
 ## 133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns
 
-**133: The spec-to-build handoff contract: criteria mapped to tests, a fuller skeleton, and spikes before unknowns** · approved (per source at `6337f6a51e8a`) · tier 0 · [source](../../specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md)
+**133: The spec-to-build handoff contract: criteria mapped to tests, a fuller skeleton, and spikes before unknowns** · approved (per source at `24300ab22131`) · tier 0 · [source](../../specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md)
 
 **source excerpt, untrusted** · `specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md` line 25
 
