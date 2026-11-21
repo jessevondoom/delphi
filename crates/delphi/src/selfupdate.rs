@@ -278,6 +278,19 @@ fn opt_out_note() -> Option<String> {
     crate::app_cmd::opted_out(&crate::home::delphi_home(None)).then(|| format!("The desktop app was left alone: {} exists (`delphi app opt-in` removes it).", file.display()))
 }
 
+/// The app bundle `exe` sits in, when it is a program inside a `*.app/Contents/` folder (spec 122 §10.1 item 4): the copy of
+/// `delphi` the desktop app carries. `delphi update` refuses to rewrite it, since that would break the bundle's seal and could
+/// swap the bundle it runs from; the bundle is replaced as a whole, by an installed `delphi`.
+pub fn inside_app_bundle(exe: &Path) -> Option<PathBuf> {
+    let parts: Vec<_> = exe.components().collect();
+    parts.windows(2).position(|w| w[0].as_os_str().to_string_lossy().ends_with(".app") && w[1].as_os_str() == "Contents").map(|i| parts[..=i].iter().collect())
+}
+
+/// The refusal `delphi update` prints for a program inside the app's bundle.
+pub fn inside_app_refusal(exe: &Path, bundle: &Path) -> String {
+    format!("this delphi is inside the desktop app ({}), and updating it would break the app's seal; nothing was changed. Run `\"{}\" self-install`, then `delphi update`", bundle.display(), exe.display())
+}
+
 /// One entry of the bundle: its path inside `Delphi.app`, and for a file its bytes and whether it is executable.
 #[derive(Debug)]
 struct AppEntry {
@@ -1031,6 +1044,17 @@ mod tests {
 
     /// A temporary home: the program at `bin/delphi` reporting 0.1.0, and an empty `Applications` path (not made).
     /// Spec 122 §10.3 (AC-9): the opt-out file in the Delphi home is why `delphi update` leaves the app alone.
+    #[test]
+    fn a_program_inside_an_app_bundle_is_found_and_one_outside_is_not() {
+        assert_eq!(inside_app_bundle(Path::new("/Applications/Delphi.app/Contents/Resources/delphi")), Some(PathBuf::from("/Applications/Delphi.app")));
+        assert_eq!(inside_app_bundle(Path::new("/u/Applications/Other.app/Contents/MacOS/delphi")), Some(PathBuf::from("/u/Applications/Other.app")));
+        for outside in ["/u/.local/bin/delphi", "/opt/Delphi.app/delphi", "/opt/Delphi.application/Contents/delphi", "/opt/Contents/delphi"] {
+            assert_eq!(inside_app_bundle(Path::new(outside)), None, "{outside}");
+        }
+        let line = inside_app_refusal(Path::new("/A/Delphi.app/Contents/Resources/delphi"), Path::new("/A/Delphi.app"));
+        assert!(line.contains("\"/A/Delphi.app/Contents/Resources/delphi\" self-install") && line.contains("nothing was changed"), "{line}");
+    }
+
     #[test]
     fn the_opt_out_file_leaves_the_app_alone_until_opt_in() {
         let t = tempfile::tempdir().unwrap();

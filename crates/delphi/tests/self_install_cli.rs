@@ -91,3 +91,22 @@ fn opt_out_and_opt_in_need_no_terminal_and_an_agent_seat_cannot_use_them() {
     assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
     assert!(!file.exists());
 }
+
+/// Spec 122 §10.1 item 4: `delphi update` run from the copy inside the desktop app's bundle refuses before it reads a release,
+/// names `self-install`, and leaves the copy as it was; `--check` writes nothing and is let through.
+#[test]
+fn update_from_inside_the_app_bundle_is_refused_and_names_self_install() {
+    let t = tempfile::tempdir().unwrap();
+    let inner = t.path().join("Delphi.app/Contents/Resources/delphi");
+    std::fs::create_dir_all(inner.parent().unwrap()).unwrap();
+    std::fs::copy(DELPHI, &inner).unwrap();
+    let before = std::fs::read(&inner).unwrap();
+    let home = t.path().join("dh");
+    let o = Command::new(&inner).args(["update", "--home", home.to_str().unwrap()]).env("HOME", t.path()).env("DELPHI_RELEASES_URL", "http://127.0.0.1:9/releases").env("DELPHI_NO_APP", "1").stdin(Stdio::null()).output().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o.stderr).contains("inside the desktop app") && text(&o.stderr).contains("self-install"), "{}", text(&o.stderr));
+    assert!(!text(&o.stderr).contains("127.0.0.1"), "refused before any release is read: {}", text(&o.stderr));
+    assert_eq!(std::fs::read(&inner).unwrap(), before);
+    let o = Command::new(&inner).args(["update", "--check", "--home", home.to_str().unwrap()]).env("HOME", t.path()).env("DELPHI_RELEASES_URL", "http://127.0.0.1:9/releases").stdin(Stdio::null()).output().unwrap();
+    assert!(!text(&o.stderr).contains("inside the desktop app"), "{}", text(&o.stderr));
+}

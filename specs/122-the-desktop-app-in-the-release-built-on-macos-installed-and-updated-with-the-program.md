@@ -123,6 +123,7 @@ The operator's words, in a host session on 2026-11-19: "no developer ID for now 
 2. **C1 (program).** `delphi self-install` copies the running `delphi` to `~/.local/bin/delphi` (or `DELPHI_INSTALL_DIR`) as `install.sh` does: written under a temporary name, mode 0755, moved into place, never over a symbolic link or a file it did not write unless that file is an earlier `delphi` (it reads the file and takes it for one when it is machine code that holds a text every `delphi` carries; it does not run it), and it prints what it did. It needs no terminal, is refused inside an agent seat, and starts no process.
 3. **The app finds it.** `locate::candidates` gains `Contents/Resources/delphi` of the running bundle, last. The app never copies anything: when no installed `delphi` is found, the empty state says "Install the delphi command" and shows `"<path to the bundled delphi>" self-install` with a copy button, to be pasted in a terminal. The app writes nothing outside its own folder (spec 111).
 4. **Updates.** `delphi update` replaces the whole bundle (§4), so the bundled copy always matches the app.
+5. **Amendment (2026-11-20, from the Stage 0 review, V3-4).** `delphi update` run from a program inside a `*.app/Contents/` folder (the bundled copy) refuses before it reads a release, changes nothing, and names `"<that path>" self-install`, then `delphi update`: rewriting the copy in place would break the bundle's seal and could swap the bundle it runs from. `--check`, which writes nothing, still runs.
 
 ### 10.2 A disk image, as a fallback (slice C2)
 

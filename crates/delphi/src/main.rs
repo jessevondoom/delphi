@@ -572,6 +572,11 @@ fn cmd_update(args: &[String]) -> i32 {
         eprintln!("delphi update: cannot locate this executable");
         return 1;
     };
+    // Spec 122 §10.1 item 4: the copy inside the desktop app is never rewritten in place; only `--check`, which writes nothing, runs.
+    if let Some(bundle) = selfupdate::inside_app_bundle(&dest).filter(|_| !has("--check")) {
+        eprintln!("delphi update: {}", selfupdate::inside_app_refusal(&dest, &bundle));
+        return 1;
+    }
     let api = std::env::var("DELPHI_RELEASES_URL").unwrap_or_else(|_| selfupdate::DEFAULT_API.to_string());
     if api != selfupdate::DEFAULT_API {
         eprintln!("delphi update: reading releases from {api} (DELPHI_RELEASES_URL), not from the project's repository");
