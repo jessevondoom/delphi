@@ -1427,13 +1427,19 @@ impl Engine {
     /// caps `council_open` will apply. Reads configuration and the pool's state; starts nothing.
     pub fn panel_carrier_env(&self, require_families: Option<u32>) -> crate::carrier_plan::CarrierEnv {
         let cfg = self.cfg.get();
-        let options = cfg
-            .endpoints
-            .iter()
-            .filter(|e| cfg.is_allowed(&e.id) && self.endpoint_usable(&e.id))
-            .map(|e| crate::carrier_plan::CarrierOpt { endpoint: e.id.clone(), family: e.family.clone(), kind: crate::carrier_plan::kind_of(e.path == delphi_adapter::config::AccessPath::Harness, e.harness.as_deref()) })
+        let usable: Vec<_> = cfg.endpoints.iter().filter(|e| cfg.is_allowed(&e.id) && self.endpoint_usable(&e.id)).collect();
+        let is_copilot = |e: &delphi_adapter::config::Endpoint| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("copilot");
+        // Each Copilot model's multiplier and cost class (`specs/132` §5.3): shown in the plan, never a reason to choose.
+        let fresh = if usable.iter().any(|e| is_copilot(e)) { self.copilot_fresh_catalog() } else { None };
+        let options = usable
+            .into_iter()
+            .map(|e| {
+                let cost = if is_copilot(e) { ["fast", "workhorse", "frontier"].into_iter().filter_map(|t| cfg.resolve_model(e, t).map(|m| (t.to_string(), crate::model_catalog::model_cost(fresh.as_ref(), &m)))).collect() } else { Default::default() };
+                crate::carrier_plan::CarrierOpt { endpoint: e.id.clone(), family: e.family.clone(), kind: crate::carrier_plan::kind_of(e.path == delphi_adapter::config::AccessPath::Harness, e.harness.as_deref()), cost }
+            })
             .collect();
-        crate::carrier_plan::CarrierEnv { known: true, options, max_seats: self.settings.max_foreign_seats, max_tokens: self.settings.max_foreign_tokens, ceiling_per_seat: self.panel_foreign_ceiling_tokens(), require_families: require_families.or(self.settings.require_families) }
+        let seat_tiers = ["red-team", "strategist"].into_iter().map(|r| (r.to_string(), self.role_default_tier(r))).collect();
+        crate::carrier_plan::CarrierEnv { known: true, options, max_seats: self.settings.max_foreign_seats, max_tokens: self.settings.max_foreign_tokens, ceiling_per_seat: self.panel_foreign_ceiling_tokens(), require_families: require_families.or(self.settings.require_families), seat_tiers }
     }
 
     /// Whether `family` is configured and usable right now, for a foreign seat that names its family.

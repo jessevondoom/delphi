@@ -36,6 +36,7 @@ pub mod scope;
 pub mod shared_research;
 pub mod refusal;
 pub mod seat;
+pub mod model_catalog;
 pub mod promote;
 pub mod session;
 pub mod settings_run;

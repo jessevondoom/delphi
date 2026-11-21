@@ -12,10 +12,15 @@
 //! - a family other than the host's, and other than the other proposed seats', is preferred; when none is left, the plan says so
 //!   (the Panel runs labelled `homogeneous`, never refused for it unless `require_families` was asked);
 //! - never more seats than `[seats] max_foreign_seats`, never a ceiling above `max_foreign_tokens`: the plan refuses and names the cap;
-//! - only an endpoint that is configured, allowed and usable now is proposed; when availability could not be read, nothing is proposed.
+//! - only an endpoint that is configured, allowed and usable now is proposed; when availability could not be read, nothing is proposed;
+//! - a Copilot seat shows its model's multiplier and cost class (`specs/132` §5.3), and a `premium` one is said in the note before
+//!   anything runs. The cost class is a display and a cost input only: it never changes which carrier, family or tier is chosen. A
+//!   model a fresh catalog lacks makes that endpoint unusable for the seat, said in the note, never swapped.
 
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
+use crate::model_catalog::ModelCost;
 use crate::seat::{over_budget, Diversity, UNKNOWN, UNVERIFIED_AGAINST_REPO};
 
 /// Where the default estimates come from. Small samples: say so wherever they are shown.
@@ -28,6 +33,8 @@ pub struct CarrierOpt {
     pub family: String,
     /// `copilot-acp`, `claude-cli`, `agy`, `codex-cli` or `api`.
     pub kind: &'static str,
+    /// Tier to the model's cost, for a carrier that meters by model (Copilot); empty otherwise. Display and cost input only.
+    pub cost: BTreeMap<String, ModelCost>,
 }
 
 /// What `council_frame` knows about the machine. `known: false` means the daemon could not be asked.
@@ -40,6 +47,8 @@ pub struct CarrierEnv {
     /// The engine's per-seat ceiling (two calls at the configured output limit, plus input): the figure `council_open` checks.
     pub ceiling_per_seat: u64,
     pub require_families: Option<u32>,
+    /// The tier each proposed role runs on (its default tier); `workhorse` when a role is not listed.
+    pub seat_tiers: BTreeMap<String, String>,
 }
 
 /// The carrier kind of a harness endpoint (`None` harness defaults to `claude`, as the config does).
@@ -117,7 +126,14 @@ pub fn plan(question: &str, stakes: &str, pointers: &[String], host_family: Opti
             notes.push(format!("The {role} seat is not proposed: {why}"));
             break;
         }
-        let mut cands: Vec<&CarrierOpt> = env.options.iter().filter(|o| Some(o.family.as_str()) != host_family).collect();
+        let tier = env.seat_tiers.get(role).map(String::as_str).unwrap_or("workhorse");
+        let mut cands: Vec<&CarrierOpt> = Vec::new();
+        for o in env.options.iter().filter(|o| Some(o.family.as_str()) != host_family) {
+            match o.cost.get(tier) {
+                Some(c) if c.in_catalog == Some(false) => notes.push(format!("`{}` is not usable for the {role} seat: its {tier} model `{}` is missing from (or disabled in) the account's Copilot catalog.", o.endpoint, c.model)),
+                _ => cands.push(o),
+            }
+        }
         let fresh: Vec<&CarrierOpt> = cands.iter().copied().filter(|o| !used.contains(&o.family)).collect();
         if !fresh.is_empty() {
             cands = fresh;
@@ -133,6 +149,10 @@ pub fn plan(question: &str, stakes: &str, pointers: &[String], host_family: Opti
             });
             continue;
         };
+        let cost = c.cost.get(tier);
+        if let Some(ModelCost { model, multiplier: Some(m), class: Some("premium"), .. }) = cost {
+            notes.push(format!("The {role} seat would run `{model}` on `{}`, a premium model ({m} premium requests a call); change the endpoint's `models` if that is not wanted. Delphi never picks a cheaper model by itself.", c.endpoint));
+        }
         let (lo, hi) = estimate(c.kind);
         total_low += lo;
         total_high += hi;
@@ -147,6 +167,8 @@ pub fn plan(question: &str, stakes: &str, pointers: &[String], host_family: Opti
             "why": if tools { "its job is to verify a claim against the repo (the question or a pointer names repo files), so it gets read-only tools" } else { "a critique or second opinion that needs no repo reading, so it gets no tools; its verdict is labelled unverified-against-repo" },
             "estimate_tokens": {"low": lo, "high": hi, "source": ESTIMATE_SOURCE},
             "ceiling_tokens": env.ceiling_per_seat,
+            "model": cost.map(|c| json!(c.model)).unwrap_or(Value::Null),
+            "cost": cost.map(|c| json!({"multiplier": c.multiplier, "class": c.class, "use": "display and cost input only"})).unwrap_or(Value::Null),
             "council_open": {"role": role, "family": c.family, "tools": if tools { "readonly" } else { "none" }},
         }));
     }
@@ -193,10 +215,10 @@ mod tests {
     use super::*;
 
     fn opt(endpoint: &str, family: &str, kind: &'static str) -> CarrierOpt {
-        CarrierOpt { endpoint: endpoint.into(), family: family.into(), kind }
+        CarrierOpt { endpoint: endpoint.into(), family: family.into(), kind, cost: BTreeMap::new() }
     }
     fn env(options: Vec<CarrierOpt>) -> CarrierEnv {
-        CarrierEnv { known: true, options, max_seats: 2, max_tokens: 100_000, ceiling_per_seat: 40_000, require_families: None }
+        CarrierEnv { known: true, options, max_seats: 2, max_tokens: 100_000, ceiling_per_seat: 40_000, require_families: None, seat_tiers: BTreeMap::new() }
     }
     fn mixed() -> CarrierEnv {
         env(vec![opt("cop", "openai", "copilot-acp"), opt("cl", "claude", "claude-cli"), opt("ag", "gemini", "agy")])
@@ -282,6 +304,50 @@ mod tests {
         let p = plan("q?", "normal", &[], Some("claude"), &mixed(), Some(3));
         assert_eq!(p["plan_budget"]["require_families_met"], false, "{p}");
         assert!(p["plan_note"].as_str().unwrap().contains("require_families = 3 is not met"), "{p}");
+    }
+
+    fn costed(endpoint: &str, family: &str, model: &str, multiplier: &str, class: &'static str, in_catalog: Option<bool>) -> CarrierOpt {
+        let mut o = opt(endpoint, family, "copilot-acp");
+        o.cost.insert("workhorse".into(), ModelCost { model: model.into(), multiplier: Some(multiplier.into()), class: Some(class), in_catalog });
+        o
+    }
+
+    /// specs/132 AC-5: a 14x model shows cost class `premium` in the plan and the note says so before anything runs.
+    #[test]
+    fn a_premium_copilot_model_is_shown_and_said_in_the_plan() {
+        let p = plan("q?", "normal", &[], Some("claude"), &env(vec![costed("copilot-gemini", "gemini", "gemini-3.8-flash", "14x", "premium", Some(true))]), None);
+        let s = &p["proposed_seats"][0];
+        assert_eq!((s["model"].as_str(), s["cost"]["multiplier"].as_str(), s["cost"]["class"].as_str()), (Some("gemini-3.8-flash"), Some("14x"), Some("premium")), "{p}");
+        assert!(p["plan_note"].as_str().unwrap().contains("a premium model (14x premium requests a call)"), "{p}");
+        // Not premium: shown, not warned about. Not a Copilot endpoint: no cost at all.
+        let p = plan("q?", "normal", &[], Some("claude"), &env(vec![costed("copilot-openai", "openai", "gpt-6-luna", "0.33x", "low", Some(true))]), None);
+        assert_eq!(p["proposed_seats"][0]["cost"]["class"], "low");
+        assert!(!p["plan_note"].as_str().unwrap().contains("premium"), "{p}");
+        assert!(plan("q?", "normal", &[], Some("claude"), &mixed(), None)["proposed_seats"][0]["cost"].is_null());
+    }
+
+    /// The Council's rule: the cost class never feeds a choice. The same options with any costs give the same seats.
+    #[test]
+    fn the_cost_class_never_changes_which_seat_is_chosen() {
+        let seats = |a: &'static str, b: &'static str| {
+            let e = env(vec![costed("cop-a", "openai", "gpt-6-luna", "1x", a, Some(true)), costed("cop-b", "gemini", "gemini-4-argon", "1x", b, Some(true)), opt("cl", "claude", "claude-cli")]);
+            let p = plan("q?", "high", &[], Some("kimi"), &e, None);
+            p["proposed_seats"].as_array().unwrap().iter().map(|s| (s["endpoint"].as_str().unwrap().to_string(), s["family"].as_str().unwrap().to_string())).collect::<Vec<_>>()
+        };
+        let base = seats("standard", "standard");
+        assert_eq!(base.len(), 2);
+        for (a, b) in [("premium", "low"), ("low", "premium"), ("premium", "premium")] {
+            assert_eq!(seats(a, b), base, "{a} {b}");
+        }
+    }
+
+    /// specs/132 §5.2: a model a fresh catalog lacks makes that endpoint unusable for the seat, said in the note, never swapped.
+    #[test]
+    fn a_model_missing_from_the_catalog_is_not_proposed() {
+        let e = env(vec![costed("copilot-gemini", "gemini", "gemini-4-argon", "1x", "standard", Some(false)), opt("ag", "gemini", "agy")]);
+        let p = plan("q?", "normal", &[], Some("claude"), &e, None);
+        assert_eq!(p["proposed_seats"][0]["endpoint"], "ag", "{p}");
+        assert!(p["plan_note"].as_str().unwrap().contains("`copilot-gemini` is not usable for the red-team seat: its workhorse model `gemini-4-argon` is missing"), "{p}");
     }
 
     #[test]

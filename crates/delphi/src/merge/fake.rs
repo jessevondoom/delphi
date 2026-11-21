@@ -63,6 +63,7 @@ impl FakeForge {
                 body: String::new(),
                 commit_messages: vec![format!("Do the thing\n\nImplements-Spec: {SPEC_PATH}\n\nCo-Authored-By: x")],
                 created_at: format!("2026-11-07T10:{:02}:00Z", n % 60),
+                cross_repo: false,
             },
         );
         s.paths.insert(n, paths.iter().map(|p| p.to_string()).collect());

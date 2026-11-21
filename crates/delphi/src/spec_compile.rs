@@ -705,6 +705,35 @@ mod tests {
         assert!(!s["index.md"].contains("SYSTEM:"), "the index carries no excerpt at all");
     }
 
+    /// Spec 088 §13.7 test 22, the guard on the real corpus: the repository's committed JSON rendered whole, and once without each
+    /// spec. Every page of each smaller rendering is kept line for line in the full one, so no line of a committed view depends on
+    /// the whole set. A count, a total or a "last compiled" date brought back into the renderer fails here.
+    #[test]
+    fn the_repos_views_change_no_line_when_any_one_spec_is_removed() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let groups = parse_groups(&fs::read_to_string(root.join(GROUPS_FILE)).unwrap()).unwrap();
+        let mut data = BTreeMap::new();
+        for e in fs::read_dir(root.join(DATA_DIR)).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if let Some(stem) = name.strip_suffix(".json") {
+                data.insert(stem.to_string(), val(&fs::read_to_string(e.path()).unwrap()));
+            }
+        }
+        assert!(data.len() > 100, "only {} compiled specs found; the path is broken", data.len());
+        // Parsed once; `render_views` is `spec_views::render` after the parse.
+        let full = spec_views::render(&data, &groups).unwrap();
+        let mut failures = Vec::new();
+        for stem in data.keys() {
+            let mut fewer = data.clone();
+            fewer.remove(stem);
+            let smaller = spec_views::render(&fewer, &groups).unwrap();
+            for bad in spec_views::lines_not_kept(&smaller, &full) {
+                failures.push(format!("without {}: {}", stem, bad));
+            }
+        }
+        assert!(failures.is_empty(), "a committed view has a line that depends on the whole set (spec 088 §13.3):\n{}", failures.iter().take(10).cloned().collect::<Vec<_>>().join("\n"));
+    }
+
     #[test]
     fn missing_groups_and_unknown_commands_are_usage_errors() {
         let t = tempfile::tempdir().unwrap();

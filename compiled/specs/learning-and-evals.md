@@ -2,7 +2,7 @@
 
 # Learning and evals
 
-7 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group learning-and-evals` lists this group.
 
 ## 031-layered-learning-and-training-mode
 

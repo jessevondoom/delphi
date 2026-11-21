@@ -2,7 +2,7 @@
 
 # Sharing and bundles
 
-9 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group sharing-and-bundles` lists this group.
 
 ## 007-federated-mesh-and-sync
 

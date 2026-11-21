@@ -34,49 +34,49 @@
     },
     {
       "level": 2,
-      "line": 59,
+      "line": 61,
       "number": "3",
       "title": "Claims reach the library"
     },
     {
       "level": 2,
-      "line": 67,
+      "line": 69,
       "number": "4",
       "title": "One runner"
     },
     {
       "level": 2,
-      "line": 76,
+      "line": 78,
       "number": "5",
       "title": "Continue and refresh"
     },
     {
       "level": 2,
-      "line": 82,
+      "line": 84,
       "number": "6",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 93,
+      "line": 95,
       "number": "7",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 100,
+      "line": 102,
       "number": "8",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 115,
+      "line": 117,
       "number": "9",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 121,
+      "line": 123,
       "number": "10",
       "title": "Open questions (the operator decides)"
     }
@@ -84,7 +84,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md",
-    "sha256": "f4bf5b0c241b7ac9435da7e02ed2b7a3409dffc85794a81217cef4797305aa99"
+    "sha256": "8eb1fbed39d1bc49ffb23651f50a75d6277ca5772ada14dbb7912c75e708fba3"
   },
   "source_status_at_hash": {
     "line": {
@@ -97,7 +97,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-14, in a host session: \"all other specs are approved\", after the drafts and their slice tables were shown."
     },
-    "sha256": "f4bf5b0c241b7ac9435da7e02ed2b7a3409dffc85794a81217cef4797305aa99",
+    "sha256": "8eb1fbed39d1bc49ffb23651f50a75d6277ca5772ada14dbb7912c75e708fba3",
     "word": "approved"
   },
   "spec": {
