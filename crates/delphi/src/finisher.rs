@@ -1,6 +1,6 @@
 //! The finisher (spec 135 §5): the deterministic chores before a pull request, done in-process with the same functions the
 //! drift tests use. It regenerates the reference, the ecosystem files and the compiled specs, checks the slice's tracker row,
-//! prints the gates (it runs none: a new process start is a gate change, F1b) and can print a pull request body.
+//! prints the gates, or with `--gates` runs them (F1b, `finisher_gates.rs`), and can print a pull request body.
 
 use crate::slice_claims::{self, Out};
 use crate::tracker;
@@ -76,6 +76,8 @@ pub struct FinishReq<'a> {
     pub spec: Option<&'a str>,
     pub slice: Option<&'a str>,
     pub body: bool,
+    /// Run the three gates after regenerating (§14.4).
+    pub gates: bool,
     pub now: i64,
 }
 
@@ -99,6 +101,11 @@ fn spec_title(repo: &Path, stem: &str) -> String {
 }
 
 pub fn finish(r: &FinishReq) -> Out {
+    finish_with(r, &mut crate::finisher_gates::SystemRunner)
+}
+
+/// [`finish`] with the gates' process start given (a fake in the tests).
+pub fn finish_with(r: &FinishReq, runner: &mut dyn crate::finisher_gates::Runner) -> Out {
     let facts = match slice_claims::git_facts(r.repo) {
         Ok(f) => f,
         Err(e) => return Out { code: 2, out: String::new(), err: e },
@@ -107,6 +114,7 @@ pub fn finish(r: &FinishReq) -> Out {
     let (mut out, mut err) = (String::new(), String::new());
     let mut finding = false;
     let mut failed = false;
+    let mut gate_failed = false;
     let version = env!("CARGO_PKG_VERSION");
     if let Some(v) = checkout_version(repo).filter(|v| v != version) {
         err.push_str(&format!("warning: this delphi is {} and the checkout is {}: the reference is what THIS binary generates; run the finisher built from the branch (`cargo run -q -p delphi -- forge finish`)\n", version, v));
@@ -200,17 +208,28 @@ pub fn finish(r: &FinishReq) -> Out {
         },
     }
 
-    // 5. The gates: printed, not run.
-    out.push_str("gates (not run by the finisher; run them before you commit):\n");
-    for g in GATES {
-        out.push_str(&format!("  {}\n", g));
+    // 5. The gates: run with --gates (not after a generator failed), else printed.
+    let mut gates = None;
+    if r.gates && failed {
+        out.push_str("gates: not run (a generator failed)\n");
+    } else if r.gates {
+        let exe = std::env::current_exe().unwrap_or_else(|_| "delphi".into());
+        let results = crate::finisher_gates::run(repo, &exe, runner);
+        out.push_str(&crate::finisher_gates::report(&results));
+        gate_failed = results.iter().any(|g| !matches!(g.state, crate::finisher_gates::State::Passed));
+        gates = Some(results);
+    } else {
+        out.push_str("gates (not run by the finisher; run them before you commit, or pass --gates):\n");
+        for g in GATES {
+            out.push_str(&format!("  {}\n", g));
+        }
     }
 
     // 6. The body, and the claim renewed.
     if r.body {
         if let Some((stem, slice)) = &target {
             out.push('\n');
-            out.push_str(&body(repo, stem, slice, row.as_ref(), &s.changed));
+            out.push_str(&body(repo, stem, slice, row.as_ref(), &s.changed, gates.as_deref()));
         } else {
             err.push_str("--body needs a slice: pass --spec and --slice, or claim the slice on this branch\n");
             finding = true;
@@ -222,12 +241,13 @@ pub fn finish(r: &FinishReq) -> Out {
             }
         }
     }
-    let code = if failed { 4 } else if finding { 1 } else { 0 };
+    let code = if failed { 4 } else if finding || gate_failed { 1 } else { 0 };
     Out { code, out, err }
 }
 
 /// A pull request body skeleton (§5.4).
-pub fn body(repo: &Path, stem: &str, slice: &str, row: Option<&tracker::Row>, regenerated: &[String]) -> String {
+/// With `gates`, the Checked section holds their results (ticked when passed, flaky tests named); without, the gates unticked.
+pub fn body(repo: &Path, stem: &str, slice: &str, row: Option<&tracker::Row>, regenerated: &[String], gates: Option<&[crate::finisher_gates::GateResult]>) -> String {
     let mut b = format!("{} — slice {}\n\n", spec_title(repo, stem), slice);
     if let Some(r) = row {
         b.push_str(&format!("**Slice:** {}\n\n**Tracker:** {}\n\n", r.content, r.state));
@@ -241,8 +261,13 @@ pub fn body(repo: &Path, stem: &str, slice: &str, row: Option<&tracker::Row>, re
         b.push('\n');
     }
     b.push_str("## Checked\n\n");
-    for g in GATES {
-        b.push_str(&format!("- [ ] `{}`\n", g));
+    match gates {
+        Some(results) => b.push_str(&crate::finisher_gates::checked_lines(results)),
+        None => {
+            for g in GATES {
+                b.push_str(&format!("- [ ] `{}`\n", g));
+            }
+        }
     }
     b.push_str("\n## Not verified\n\n- \n");
     b
@@ -294,11 +319,22 @@ mod tests {
     fn the_body_names_the_trailer_the_row_and_the_gates() {
         let t = tracker_repo("built");
         let row = tracker_check(t.path(), "135-x", "F1").unwrap();
-        let b = body(t.path(), "135-x", "F1", Some(&row), &["docs/reference/cli.md".into()]);
+        let b = body(t.path(), "135-x", "F1", Some(&row), &["docs/reference/cli.md".into()], None);
         assert!(b.contains("Implements-Spec: specs/135-x.md"));
         assert!(b.contains("**Slice:** the finisher"));
         assert!(b.contains("- `docs/reference/cli.md`"));
         assert!(b.contains("cargo clippy"));
+    }
+
+    #[test]
+    fn ac15_the_body_holds_the_gate_results() {
+        use crate::finisher_gates::{GateResult, State};
+        let t = tracker_repo("built");
+        let g = |shown: &str, state: State, flaky: &[&str]| GateResult { shown: shown.into(), state, flaky: flaky.iter().map(|s| s.to_string()).collect() };
+        let results = [g("cargo test", State::Passed, &["a::b"]), g("cargo clippy", State::Failed { tail: "boom".into() }, &[]), g("delphi lint", State::NotRun, &[])];
+        let b = body(t.path(), "135-x", "F1b", None, &[], Some(&results));
+        assert!(b.contains("- [x] `cargo test` (flaky, passed on a rerun: `a::b`)\n- [ ] `cargo clippy` (FAILED)\n- [ ] `delphi lint` (not run: an earlier gate failed)\n"), "{}", b);
+        assert!(!b.contains("--locked -- -D warnings"), "the unrun list is not added: {}", b);
     }
 
     #[test]
