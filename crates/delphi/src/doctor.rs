@@ -271,10 +271,16 @@ fn has_quarantine(path: &Path) -> bool {
     }
 }
 
-/// The installed `delphi` the app looks for first: `DELPHI_EXE`, `~/.local/bin`, Homebrew's, `/usr/local/bin` (the order of `locate::candidates`).
+/// The installed `delphi` the app looks for first: `DELPHI_EXE`, `$DELPHI_INSTALL_DIR/delphi`, `~/.local/bin`, Homebrew's,
+/// `/usr/local/bin` (the order of `locate::candidates`).
 fn app_finds(user_home: Option<&Path>) -> Option<PathBuf> {
-    let env = std::env::var_os("DELPHI_EXE").map(PathBuf::from).filter(|p| p.is_absolute());
-    env.into_iter().chain(user_home.map(|h| h.join(".local/bin/delphi"))).chain(["/opt/homebrew/bin/delphi", "/usr/local/bin/delphi"].map(PathBuf::from)).find(|p| p.is_file())
+    let var = |n: &str| std::env::var_os(n).map(PathBuf::from).filter(|p| p.is_absolute());
+    app_finds_in(var("DELPHI_EXE"), var("DELPHI_INSTALL_DIR"), user_home)
+}
+
+/// [`app_finds`], with the two variables given.
+fn app_finds_in(exe: Option<PathBuf>, install_dir: Option<PathBuf>, user_home: Option<&Path>) -> Option<PathBuf> {
+    exe.into_iter().chain(install_dir.map(|d| d.join("delphi"))).chain(user_home.map(|h| h.join(".local/bin/delphi"))).chain(["/opt/homebrew/bin/delphi", "/usr/local/bin/delphi"].map(PathBuf::from)).find(|p| p.is_file())
 }
 
 /// `CFBundleShortVersionString` of a bundle's `Contents/Info.plist` (the XML form the app's build writes), or `None`.
@@ -2383,6 +2389,20 @@ mod tests {
 
     fn lines(r: &Report) -> String {
         r.findings.iter().map(|f| format!("{:?} {}", f.level, f.message)).collect::<Vec<_>>().join("\n")
+    }
+
+    /// V3-5: a program self-installed into `DELPHI_INSTALL_DIR` is the one the app finds, after `DELPHI_EXE`.
+    #[test]
+    fn the_program_the_app_finds_includes_the_install_dir() {
+        let t = tempfile::tempdir().unwrap();
+        let (dir, user) = (t.path().join("tools"), t.path().join("u"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(user.join(".local/bin")).unwrap();
+        std::fs::write(user.join(".local/bin/delphi"), b"x").unwrap();
+        assert_eq!(app_finds_in(None, Some(dir.clone()), Some(&user)), Some(user.join(".local/bin/delphi")));
+        std::fs::write(dir.join("delphi"), b"x").unwrap();
+        assert_eq!(app_finds_in(None, Some(dir.clone()), Some(&user)), Some(dir.join("delphi")));
+        assert_eq!(app_finds_in(Some(user.join(".local/bin/delphi")), Some(dir), Some(&user)), Some(user.join(".local/bin/delphi")), "DELPHI_EXE first");
     }
 
     #[test]

@@ -115,13 +115,15 @@ pub(crate) fn opt_out_path(delphi_home: &Path) -> PathBuf {
     delphi_home.join("app").join("opt-out")
 }
 
-/// Is the desktop app opted out of, for the Delphi home `delphi_home`?
+/// Is the desktop app opted out of, for the Delphi home `delphi_home`? Anything at the path counts, a link included (dangling
+/// or not): it is not followed, and `install.sh` tests the same (`-e` or `-L`).
 pub(crate) fn opted_out(delphi_home: &Path) -> bool {
-    opt_out_path(delphi_home).exists()
+    std::fs::symlink_metadata(opt_out_path(delphi_home)).is_ok()
 }
 
-/// `delphi app opt-out` and `opt-in`: write or remove the opt-out file, an empty file of mode 0600 in a folder of mode 0700.
-/// Nothing is started and no daemon is spoken to. A symbolic link at the path is never followed.
+/// `delphi app opt-out` and `opt-in`: write or remove the opt-out file, an empty file of mode 0600. Its folder is made with
+/// mode 0700 when it is new; an existing `<home>/app` keeps its own mode. Nothing is started and no daemon is spoken to. A
+/// symbolic link at the path is never followed.
 pub(crate) fn opt(action: &Action, delphi_home: &Path, out: &mut dyn std::io::Write) -> i32 {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     let file = opt_out_path(delphi_home);
@@ -598,6 +600,9 @@ mod tests {
         std::os::unix::fs::symlink(&target, opt_out_path(&home)).unwrap();
         assert_eq!(opt(&Action::OptOut, &home, &mut Vec::new()), 1);
         assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        // V3-7: a link counts as opted out even when it dangles, as `install.sh` reads it.
+        std::fs::remove_file(&target).unwrap();
+        assert!(opted_out(&home), "a dangling link at the path");
     }
 
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {

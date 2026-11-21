@@ -1046,8 +1046,7 @@ mod tests {
         ]
     }
 
-    /// A temporary home: the program at `bin/delphi` reporting 0.1.0, and an empty `Applications` path (not made).
-    /// Spec 122 §10.3 (AC-9): the opt-out file in the Delphi home is why `delphi update` leaves the app alone.
+    /// Spec 122 §10.1 item 5: the copy inside an app bundle is recognised, and the refusal names `self-install`.
     #[test]
     fn a_program_inside_an_app_bundle_is_found_and_one_outside_is_not() {
         assert_eq!(inside_app_bundle(Path::new("/Applications/Delphi.app/Contents/Resources/delphi")), Some(PathBuf::from("/Applications/Delphi.app")));
@@ -1059,6 +1058,7 @@ mod tests {
         assert!(line.contains("\"/A/Delphi.app/Contents/Resources/delphi\" self-install") && line.contains("nothing was changed"), "{line}");
     }
 
+    /// Spec 122 §10.3 (AC-9): the opt-out file in the Delphi home is why `delphi update` leaves the app alone.
     #[test]
     fn the_opt_out_file_leaves_the_app_alone_until_opt_in() {
         let t = tempfile::tempdir().unwrap();
@@ -1071,6 +1071,7 @@ mod tests {
         assert_eq!(app_dir_for(Some(&user), &dh), Some(user.join("Applications")));
     }
 
+    /// A temporary home: the program at `bin/delphi` reporting 0.1.0, and an empty `Applications` path (not made).
     fn home() -> (tempfile::TempDir, PathBuf, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();

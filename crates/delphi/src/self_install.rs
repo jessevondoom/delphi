@@ -3,7 +3,10 @@
 //! and shows this command for a person to paste into a terminal; the app copies nothing itself.
 //!
 //! * The copy is written under a temporary name in the destination folder, given mode 0755 and moved into place (a rename), so
-//!   a reader sees the old program or the new one and never half of one.
+//!   a reader sees the old program or the new one and never half of one. The folder is synced after the rename, so the new
+//!   name survives a crash.
+//! * The checks below and the rename are separate steps. A link put at the path in between is replaced by the rename, which
+//!   does not follow it, so the window can only replace a link, never write through one.
 //! * It is never written over a symbolic link, or over a file that is not a `delphi`. Starting the installed file to read its
 //!   `--version` would start a process, which this program lists in `tests/spawn_sites.toml` and this command does not add to;
 //!   so a file is taken for an earlier `delphi` when it is a regular file that is machine code (an ELF or Mach-O header) and
@@ -178,7 +181,8 @@ pub(crate) fn install(src: &Path, dir: &Path, current: &str, allow_downgrade: bo
         f.write_all(&bytes)?;
         f.sync_all()?;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
-        std::fs::rename(&tmp, &dest)
+        std::fs::rename(&tmp, &dest)?;
+        std::fs::File::open(dir)?.sync_all()
     })();
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
@@ -203,7 +207,10 @@ pub(crate) fn report(done: &Done, version: &str, dir: &Path, path_var: Option<&s
         Done::AlreadyThere { dest, made_executable: false } => format!("{} is this same program already; nothing was changed.\n", dest.display()),
         Done::AlreadyThere { dest, made_executable: true } => format!("{} is this same program already; it was not executable, so its mode was set to 0755.\n", dest.display()),
     };
-    if !path_var.is_some_and(|p| std::env::split_paths(p).any(|d| d == dir)) {
+    // The same folder by another spelling (a link, `..`) is on the PATH too.
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let here = canon(dir);
+    if !path_var.is_some_and(|p| std::env::split_paths(p).any(|d| d == dir || canon(&d) == here)) {
         out.push_str(&format!("{} is not on your PATH. Add this line to your shell profile (~/.zshrc or ~/.bashrc):\n  export PATH=\"{}:$PATH\"\n", dir.display(), dir.display()));
     }
     out
@@ -368,6 +375,21 @@ mod tests {
             std::fs::write(dir.join("delphi"), &there).unwrap();
             assert_eq!(install(&src, &dir, "1.0.0", false).unwrap(), Done::Installed { dest: dir.join("delphi"), was });
         }
+    }
+
+    /// V3-9: the folder named on the PATH through a link, or with a trailing slash, is the same folder.
+    #[test]
+    fn the_folder_on_the_path_by_another_spelling_counts() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(&dir, t.path().join("link")).unwrap();
+        let done = Done::Installed { dest: dir.join("delphi"), was: Was::Nothing };
+        for on in [t.path().join("link"), PathBuf::from(format!("{}/", dir.display()))] {
+            let line = report(&done, "1.0.0", &dir, Some(&format!("/usr/bin:{}", on.display())));
+            assert!(!line.contains("not on your PATH"), "{}: {line}", on.display());
+        }
+        assert!(report(&done, "1.0.0", &dir, Some("/usr/bin")).contains("not on your PATH"));
     }
 
     /// V3-3: the same program at a mode that cannot run is given 0755, and the report says so.
