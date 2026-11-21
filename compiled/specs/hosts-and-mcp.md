@@ -16,7 +16,7 @@ The operator asked that skill, agent and tool plugins be as widely compatible as
 
 ## 062-delphi-as-host-agent-mcp-server
 
-**062: Delphi for host agents: roles, project knowledge, help and Councils over MCP, and learning back** · approved (per source at `720589e9543e`) · tier 0 · [source](../../specs/062-delphi-as-host-agent-mcp-server.md)
+**062: Delphi for host agents: roles, project knowledge, help and Councils over MCP, and learning back** · approved (per source at `8b5e6a4aa3d5`) · tier 0 · [source](../../specs/062-delphi-as-host-agent-mcp-server.md)
 
 **source excerpt, untrusted** · `specs/062-delphi-as-host-agent-mcp-server.md` line 23
 
@@ -79,7 +79,7 @@ When an operator works in a host (Claude Code, Copilot CLI, Codex, `agy`) and ca
 
 ## 104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel
 
-**104: Responsive foreign seats: `ask_family` as a job, progress while a host waits, concurrent requests, an opt-in standing consent, and a Panel in four calls** · approved (per source at `565de5e365c6`) · tier 0 · [source](../../specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md)
+**104: Responsive foreign seats: `ask_family` as a job, progress while a host waits, concurrent requests, an opt-in standing consent, and a Panel in four calls** · approved (per source at `06a95e9ef83e`) · tier 0 · [source](../../specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md)
 
 **source excerpt, untrusted** · `specs/104-responsive-foreign-seats-jobs-progress-concurrency-standing-consent-and-a-four-call-panel.md` line 26
 

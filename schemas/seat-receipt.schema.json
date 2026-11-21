@@ -40,7 +40,8 @@
     "prompt_hash": { "type": "string", "pattern": "^blake3:[0-9a-f]{64}$" },
     "tokens_in": { "type": "integer", "minimum": 0 },
     "tokens_out": { "type": "integer", "minimum": 0 },
-    "outcome": { "enum": ["ok", "error", "model_mismatch"] }
+    "outcome": { "enum": ["ok", "error", "model_mismatch"] },
+    "failure": { "enum": ["no_first_event"], "description": "Present only on a failed run of a known kind: `no_first_event` is a CLI run that sent no event at all and was killed by the first-event clock (spec 089 §17)." }
   },
   "additionalProperties": false
 }

@@ -140,10 +140,51 @@ pub struct Panel {
     pub earlier: Vec<crate::council_earlier::Earlier>,
 }
 
-/// The ruling's note for a Panel whose Round 1 arrived in a batch (`specs/104` §12 A3).
-/// The one line a Panel that does not count as an independent review opens its ruling card and `council_result` with (`specs/104` §13 G5).
+/// The one line a Panel that does not count as an independent review opens its ruling card and `council_result` with (`specs/104` §13 G5),
+/// when the only reason is the missing witness. [`not_independent_line`] gives the line for any set of reasons.
 pub const NOT_INDEPENDENT_REVIEW: &str = "This Panel does not count as an independent review: its seats' first answers were submitted together and the moderator did not witness that they ran apart.";
 
+/// Why a Panel does not count as an independent review (`specs/104` §12 A8, amended 2026-11-21): the short forms the record and the
+/// result carry in `not_independent_because`.
+pub const NOT_WITNESSED: &str = "not witnessed";
+pub const SINGLE_FAMILY: &str = "single family";
+
+/// The clause the card and the lint say one reason with; an unknown reason is said as it is, on one line.
+pub fn not_independent_clause(reason: &str) -> String {
+    match reason {
+        NOT_WITNESSED => "its seats' first answers were submitted together and the moderator did not witness that they ran apart".to_string(),
+        SINGLE_FAMILY => "only one model family gave stances (single family), so its seats may share blind spots".to_string(),
+        other => one_line(other),
+    }
+}
+
+/// The fixed line a Panel that does not count opens its card with, naming every reason. With no reason given (a record written before
+/// the reasons were kept) it is the witness line.
+pub fn not_independent_line(reasons: &[String]) -> String {
+    if reasons.is_empty() {
+        return NOT_INDEPENDENT_REVIEW.to_string();
+    }
+    format!("This Panel does not count as an independent review: {}.", reasons.iter().map(|r| not_independent_clause(r)).collect::<Vec<_>>().join("; and "))
+}
+
+/// [`Panel::relay`] with the families taken into account (`specs/104` §12 A8, amended 2026-11-21): a Panel in which fewer than two
+/// model families gave stances (`homogeneous`, `[H-008]`) does not count as an independent review, witnessed or not. Sets
+/// `counts_as_independent_review` and `not_independent_because` (the reasons; empty when it counts).
+pub fn judge_independence(relay: &serde_json::Value, homogeneous: bool) -> serde_json::Value {
+    let mut v = relay.clone();
+    let mut because: Vec<&str> = Vec::new();
+    if relay["counts_as_independent_review"] == false {
+        because.push(NOT_WITNESSED);
+    }
+    if homogeneous {
+        because.push(SINGLE_FAMILY);
+    }
+    v["counts_as_independent_review"] = serde_json::json!(because.is_empty());
+    v["not_independent_because"] = serde_json::json!(because);
+    v
+}
+
+/// The ruling's note for a Panel whose Round 1 arrived in a batch (`specs/104` §12 A3).
 pub const RELAYED_NOTE: &str = "Round 1 arrived in a moderator's batch: Delphi held the release barrier, but could not see whether the host kept its seats apart before submitting";
 
 /// Text for one front-matter line: no line breaks, no control characters.
@@ -480,7 +521,8 @@ impl Panel {
     }
 
     /// What the record and the card say about how Round 1 arrived (`specs/104` §12 A3, A8): `relayed` when any Round 1 stance came in a
-    /// batch; the independence line; and whether the Panel counts as an independent review (no Round 1 batch, or every one witnessed).
+    /// batch; the independence line; and whether the witness allows the Panel to count as an independent review (no Round 1 batch, or
+    /// every one witnessed). The families are not known here: the daemon applies them with [`judge_independence`].
     pub fn relay(&self) -> serde_json::Value {
         let relayed = !self.round1_batches.is_empty();
         let witnessed = relayed && self.round1_batches.iter().all(Option::is_some);
@@ -650,6 +692,24 @@ mod tests {
         assert_eq!(p.submit("architect", 1, "A", None, Some("opus")).unwrap(), Step::Waiting(vec!["red-team".into(), "strategist".into()]));
         assert_eq!(p.submit("red-team", 1, "R", None, Some("sonnet")).unwrap(), Step::Waiting(vec!["strategist".into()]));
         assert!(matches!(p.submit("strategist", 1, "S", None, None).unwrap(), Step::Released(m) if m.len() == 3));
+    }
+
+    /// Spec 104 section 12 A8 (amended 2026-11-21): a witness is necessary, not enough; a single-family Panel does not count, and the
+    /// card line names each reason.
+    #[test]
+    fn a_witnessed_single_family_panel_is_not_an_independent_review_and_two_families_still_are() {
+        let witnessed = serde_json::json!({"relayed": true, "independence": "witnessed by the moderator (host-reported): x", "counts_as_independent_review": true});
+        let unwitnessed = serde_json::json!({"relayed": true, "independence": "not witnessed", "counts_as_independent_review": false});
+        let single = serde_json::json!({"relayed": false, "independence": null, "counts_as_independent_review": true});
+        let j = judge_independence(&witnessed, true);
+        assert_eq!((j["counts_as_independent_review"].clone(), j["not_independent_because"].clone()), (serde_json::json!(false), serde_json::json!(["single family"])));
+        let j = judge_independence(&witnessed, false);
+        assert_eq!((j["counts_as_independent_review"].clone(), j["not_independent_because"].clone()), (serde_json::json!(true), serde_json::json!([])));
+        assert_eq!(judge_independence(&single, false)["counts_as_independent_review"], true);
+        assert_eq!(judge_independence(&unwitnessed, true)["not_independent_because"], serde_json::json!(["not witnessed", "single family"]));
+        assert_eq!(not_independent_line(&[]), NOT_INDEPENDENT_REVIEW);
+        assert_eq!(not_independent_line(&[NOT_WITNESSED.to_string()]), NOT_INDEPENDENT_REVIEW, "the witness-only line is unchanged");
+        assert!(not_independent_line(&[SINGLE_FAMILY.to_string()]).contains("(single family)"));
     }
 
     #[test]

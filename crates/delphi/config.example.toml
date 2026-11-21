@@ -137,6 +137,7 @@ per_watch_max_wakes_per_day = 10
 # max_foreign_seats = 1              # per Council; 0 turns the foreign seat off
 # (`red_team_kind` was removed, specs/098 section 13.2: `council_open` always accepts `kind: red_team`.)
 # max_foreign_tokens = 100000        # per Council: the foreign seat's token ceiling must fit under this, and Round 2 is skipped once Round 1 used it
+# spread = "all"                     # ratified (like [access]): with three or more usable families every Council seat sits on its own family, and a Panel's foreign seats on distinct ones; "two" keeps two-family Councils (specs/132 section 5.4)
 
 # A cross-family review of a host's branch (`request_review`, specs/135 section 6). Delphi runs these commands in the OS sandbox,
 # with no network, in a copy of the branch; a seat of another family with no tools reviews the diff with their output.
@@ -541,6 +542,8 @@ default_peer_trust_ceiling = "federated_peer"
 # env_allow = []                       # extra environment variable NAMES passed to the CLI (for example "AWS_PROFILE"); never values
 # [harness]
 # connector_settle_secs = 10           # how long a span waits for the account's connectors to finish loading before its first turn
+# first_event_secs = 90                # a CLI run with no event at all by then is killed, tried once more, then moved to the family's next
+#                                      # endpoint in [access] order (specs/089 §17); 0: only the 300 s idle clock
 
 # ── Connectors (specs/010). [connectors.*] is ratified like [access]. Delphi ships no client IDs: create an OAuth
 # client in your own Google Cloud project, then `delphi auth login google`, `delphi connectors test drive`,

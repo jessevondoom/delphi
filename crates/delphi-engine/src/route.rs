@@ -497,6 +497,21 @@ order = { claude = ["direct", "bedrock"] }
         }
     }
 
+    // specs/132 §5.4 item 3, read for C4: between two endpoints of one family (an API and an agy endpoint here; `agy-sub` and
+    // `copilot-gemini` alike) the pool takes the one first in config order, and the other when the first is out. The budget-fit rule
+    // waits for spec 131 S2; until then config order is the rule, and this pins it.
+    #[test]
+    fn two_endpoints_of_one_family_are_taken_in_config_order() {
+        let gemini = |c: &Config, state: &[Entry]| picked(&resolve_route(c, state, NOW, &RouteRequest { prefer_family: Some("gemini".into()), ..req("red-team", "workhorse") }));
+        assert_eq!(gemini(&cfg(), &[]), "gem/gem-flash");
+        let agy = "[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { fast = \"gem-agy\", workhorse = \"gem-agy\", frontier = \"gem-agy\" }\n\n";
+        let swapped = CONFIG.replace(agy, "").replace("[[endpoints]]\nid = \"gem\"", &format!("{agy}[[endpoints]]\nid = \"gem\""));
+        assert_ne!(swapped, CONFIG);
+        let c = Config::parse(&swapped).unwrap();
+        assert_eq!(gemini(&c, &[]), "agy-sub/gem-agy", "the endpoint listed first serves");
+        assert_eq!(gemini(&c, &[entry("agy-sub", "gem-agy", State::Exhausted, Some(NOW + 3600))]), "gem/gem-flash", "and the other when it is out");
+    }
+
     #[test]
     fn an_exhausted_target_is_replaced_by_the_same_tier_on_another_endpoint_without_asking() {
         let c = cfg();

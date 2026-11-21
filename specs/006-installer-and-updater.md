@@ -4,7 +4,7 @@ title: "006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine"
 author: architect
 timestamp: 2026-10-23T07:54:00Z
 status: approved   # by the operator, 2026-10-23, after Council 002; amendments 004-A1, 006-A1..A6 approved by the operator 2026-10-23 to 2026-10-25 and folded in
-amendments: "2026-11-14, approved by the operator (spec 074 §10, 'do all 4. make any needed spec adjustments.'): ~/.local/bin/delphi is the path a host plugin launches (§2.2 item 4). 2026-11-04, approved by the operator (spec 074, 'approve 074'): the installed binary path is a stable contract (§2.2 item 4). 2026-11-02, approved by the operator ('work on a fix'): raise self-update safety limits for embedded model and seed vectors (MAX_ARCHIVE 512 MiB, MAX_BINARY 384 MiB; §4)"
+amendments: "2026-11-21, by the operator's instruction to fix the Stage 0 defects ('fix them all in the order you see fit'; V3-13), for review in its pull request: an empty DELPHI_HOME counts as unset, as in install.sh (§2.2 item 3). 2026-11-14, approved by the operator (spec 074 §10, 'do all 4. make any needed spec adjustments.'): ~/.local/bin/delphi is the path a host plugin launches (§2.2 item 4). 2026-11-04, approved by the operator (spec 074, 'approve 074'): the installed binary path is a stable contract (§2.2 item 4). 2026-11-02, approved by the operator ('work on a fix'): raise self-update safety limits for embedded model and seed vectors (MAX_ARCHIVE 512 MiB, MAX_BINARY 384 MiB; §4)"
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: user_ratified
@@ -58,6 +58,7 @@ The compiled `delphi` binary embeds the canonical read-only snapshot of all seed
 - **Platforms:** macOS and Linux only (`darwin`/`linux` × `arm64`/`x86_64`). Windows is unsupported, because Unix sockets, `flock`, and the sandbox are POSIX-specific (D-15, ratified 2026-10-23).
 3. **Onboarding (`delphi init [--non-interactive] [--workspace <name>] [--project <path>]`):**
    - Creates the workspace home (§3.1), seeds it from the binary, and registers one or more project repos by path. It writes **nothing** into any project repo, and needs **no network**.
+   - *Amendment, 2026-11-21 (defect V3-13):* the home is `--home`, else `DELPHI_HOME`, else `~/.delphi`. An empty `DELPHI_HOME` counts as unset, in every command and in the bootstrap script (`${DELPHI_HOME:-$HOME/.delphi}`), so the two never disagree on where the home is.
    - **Bootstraps ratification:** writes `base/` and `base/manifest.lock` from the release, and writes `local/ratified.lock` plus `local/ratified/` from the signed `core-manifest.json`. From then on, anything that diverges from those hashes needs operator ratification.
    - Offers the built-in theme packs (Greek by default) and records the choice in `config.toml` `[theme]`. Creating a new theme is post-v1 (`specs/001` §6.5).
    - Configures model access per [`specs/009`](009-model-access-and-auth.md): endpoints and credential sources (cloud platform credentials, gateway SSO, credential helpers, subscription CLIs, or API keys). Access can also be configured later (`delphi endpoints add`, `delphi auth login`). `--non-interactive` skips it, and `doctor` then reports `warn: no endpoints configured`.

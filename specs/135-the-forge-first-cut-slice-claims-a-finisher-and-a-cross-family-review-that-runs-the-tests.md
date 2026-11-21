@@ -287,3 +287,24 @@ After 14.1 to 14.4 are merged: the same three pull requests, the same four famil
 - **AC-14 (14.3):** with a scripted seat, Round 0's requested identifier and the diff's call sites reach Round 1's brief, within the cap; an item that is not a plain identifier or short string is refused; nothing outside the copy is read.
 - **AC-15 (14.4):** `finish --gates` with a fake runner: a test that fails then passes is `flaky` and the gate passes; one that fails twice fails the gate; the first failing gate stops the rest.
 - **AC-16 (14.2):** `delphi doctor` warns when a review command's program is not found on the configured sandbox `PATH`.
+
+### 14.7 Tool access for forge seats (operator, 2026-11-21)
+
+Approved by the operator in a host session, on the policy shown to them: "as long as the probe is automated and not more friction then your proposal is acceptable" (in answer to "should orchestrated builders in the forge get tool access? i feel like they should" and a softer rule than probe-before-use). Written afterwards by an architect agent; the operator has not read it line by line.
+
+Seats in the forge (F2 reviewers now, F3 writers later) may use their host CLI's own code tools under four rules.
+
+1. **An allowlist of read tools, per carrier.** Native search, view, symbol lookup, references and type information, confined to the seat's worktree or review copy. Each carrier's list is data (`[forge.tools.<harness>] read = [...]`, shipped defaults per CLI). A tool not on the list is refused at the gate, so a CLI update that adds or renames a tool cannot slip through: it is unknown, and unknown is refused.
+2. **Edit and run never get native freedom.** A native edit, patch, shell or test call goes only through the carrier's approval bridge to Delphi's gate (Copilot ACP, agy `PreToolUse` hook, Claude delegate), becomes a Delphi decision, and runs in the sandbox (`[exec] toolchain` and `env` as in 14.2). If the bridge does not answer, the call is refused. Codex stays read-only until a deny-capable gate exists (spec 132 §6.2). No grace period applies to this rule.
+3. **A CLI version change starts a grace period of 5 days, with an automatic re-probe.** The seat keeps its read tools during the grace. The daemon re-probes the new version by itself in the background at the next idle moment (one small call per carrier: one allowed read, one refused write; spec 132's conformance probe, C6 row). The operator is never asked to run or approve it, and nothing waits on it: it adds no step to a run. A pass ends the grace; a fail drops that CLI version to bridge-only at once, and `delphi doctor` and the console say so. The probe's cost is reported with the other seat costs.
+4. **A watchdog that is always on.** In every run the daemon reads the seat's event stream; a tool call that did not pass Delphi's gate stops the seat at the call (as `harness_run` stops non-Delphi tools today), drops that CLI version to bridge-only, and is logged as an error. This is what makes the grace period safe.
+
+**Where it applies:** the F4b rerun gains an arm where gemini and Copilot reviewers have the read allowlist, compared with F2d's toolless context round on the same pull requests. F3's spec takes this section as its tool policy.
+
+**Acceptance:**
+- **AC-17:** a tool not on a carrier's allowlist is refused at the gate (scripted seat).
+- **AC-18:** a changed CLI version keeps read tools, schedules one background probe, and a failed probe drops the version to bridge-only; the operator is not prompted (fake clock and fake carrier).
+- **AC-19:** a tool call in a seat's stream that never reached the gate stops the seat and drops the version (scripted stream).
+- **AC-20:** an edit or shell call with no bridge answer is refused.
+
+**Slice:** F2e (tool access and the watchdog), built after F2c/F2d; F4b waits for it.
