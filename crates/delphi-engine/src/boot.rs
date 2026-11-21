@@ -103,6 +103,10 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         if let Some(n) = fg.get("review_diff_chars").and_then(|v| v.as_integer()).filter(|v| (1_000..=200_000).contains(v)) {
             s.review_diff_chars = n as usize;
         }
+        // §14.3 item 1: 0 turns the call sites and Round 0 off.
+        if let Some(n) = fg.get("review_context_chars").and_then(|v| v.as_integer()).filter(|v| (0..=100_000).contains(v)) {
+            s.review_context_chars = n as usize;
+        }
     }
     // Spec 104 §12 A4: `[access]` is one of the pinned blocks, so this is the ratified copy's value; a live edit does not count.
     if let Some(n) = root.get("access").and_then(|a| a.get("standing_foreign_tokens")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
@@ -797,6 +801,8 @@ mod tests {
         let s = settings_from(&toml::from_str("[forge]\nreview_commands = [[\"cargo\", \"test\", \"--offline\"], [\"cargo\", \"clippy\"]]\nreview_diff_chars = 20000\n").unwrap());
         assert_eq!(s.review_commands, Some(vec![vec!["cargo".to_string(), "test".into(), "--offline".into()], vec!["cargo".to_string(), "clippy".into()]]));
         assert_eq!(s.review_diff_chars, 20_000);
+        assert_eq!((d.review_context_chars, settings_from(&toml::from_str("[forge]\nreview_context_chars = 0\n").unwrap()).review_context_chars), (12_000, 0));
+        assert_eq!(settings_from(&toml::from_str("[forge]\nreview_context_chars = 999999\n").unwrap()).review_context_chars, 12_000, "out of range keeps the default");
         assert_eq!(settings_from(&toml::from_str("[forge]\nreview_commands = []\n").unwrap()).review_commands, Some(vec![]), "an empty list runs nothing");
         for bad in ["review_commands = [[]]", "review_commands = [\"cargo test\"]", "review_commands = [[1]]", "review_diff_chars = 10", "review_diff_chars = 9000000"] {
             let s = settings_from(&toml::from_str(&format!("[forge]\n{bad}\n")).unwrap());
