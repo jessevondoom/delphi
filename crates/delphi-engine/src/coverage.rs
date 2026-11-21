@@ -441,6 +441,18 @@ Commands:
         assert!(dead.is_empty(), "manifest rows say `used` for flags harness.rs does not pass: {:?}", dead);
     }
 
+    /// specs/132 O16: a manifest's header names the version its snapshot was taken from, and says what is used.
+    #[test]
+    fn each_manifest_header_names_its_snapshots_version_and_no_stale_claim() {
+        for cli in ["codex", "copilot"] {
+            let header = manifest_text(cli).lines().next().unwrap_or("");
+            let snap = snapshot_text(cli).lines().next().unwrap_or("");
+            let version = snap.split_whitespace().find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit())).map(|w| w.trim_end_matches('.')).unwrap_or("");
+            assert!(!version.is_empty() && header.contains(version), "{cli}: header `{header}` vs snapshot `{snap}`");
+            assert!(!manifest_text(cli).contains("Nothing is used yet"), "{cli}: the header still says nothing is used");
+        }
+    }
+
     #[test]
     fn the_reference_lists_every_cli() {
         let md = markdown();

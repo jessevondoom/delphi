@@ -616,6 +616,9 @@ fn an_exchange_record_is_context_that_nothing_reads_as_a_criterion_and_that_reac
         "crates/delphi-engine/src/history_consent.rs",
         "crates/delphi/src/history_cmd.rs",
         "crates/delphi/src/doctor.rs",
+        // Spec 129 S3 (§9 item 10): a lesson's words and goal pass `history_redact::redact` before they are stored. It calls the masking
+        // function only; it reads no record and the redactor grants nothing.
+        "crates/delphi-engine/src/customize.rs",
     ];
     let mut stray = Vec::new();
     for f in &files {
