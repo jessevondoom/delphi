@@ -175,12 +175,54 @@
       "line": 238,
       "number": "13",
       "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 249,
+      "number": "14",
+      "title": "Amendment (operator, 2026-11-21): after F4"
+    },
+    {
+      "level": 3,
+      "line": 253,
+      "number": "14.1",
+      "title": "F2c: honest results (report item 2)"
+    },
+    {
+      "level": 3,
+      "line": 260,
+      "number": "14.2",
+      "title": "Toolchains in the investigation sandbox (report item 3)"
+    },
+    {
+      "level": 3,
+      "line": 264,
+      "number": "14.3",
+      "title": "F2d: context before judgement (report item 4)"
+    },
+    {
+      "level": 3,
+      "line": 273,
+      "number": "14.4",
+      "title": "F1b: the finisher runs the gates (report item 5)"
+    },
+    {
+      "level": 3,
+      "line": 279,
+      "number": "14.5",
+      "title": "F4b: the rerun (report item 6)"
+    },
+    {
+      "level": 3,
+      "line": 283,
+      "number": "14.6",
+      "title": "Acceptance"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md",
-    "sha256": "f2e2717e5c7dbd5649c318b99c3b051b3b336f586485077e9f5f31a4c934b3f7"
+    "sha256": "dc53858a5351fbf67a7b2008d50af5d178f58c348813862c23ae848ceb5507ea"
   },
   "source_status_at_hash": {
     "line": {
@@ -193,7 +235,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, IN ADVANCE, in a host session (\"build F0 to F2 then we can try F4?\"), said of a plan shown to them in that session (F0 slice claims, F1 a deterministic finisher, F2 a cross-family reviewer that can run the tests, F3 deferred, F4 a replay experiment). This text was written afterwards by an architect agent from that plan and the code; the operator has not read it line by line. No Council has read it. Open decisions (section 11) take their recommendations unless the operator says otherwise. F4 spends the operator's tokens and runs only on the operator's yes for it."
     },
-    "sha256": "f2e2717e5c7dbd5649c318b99c3b051b3b336f586485077e9f5f31a4c934b3f7",
+    "sha256": "dc53858a5351fbf67a7b2008d50af5d178f58c348813862c23ae848ceb5507ea",
     "word": "approved"
   },
   "spec": {
