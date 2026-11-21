@@ -70,7 +70,7 @@ A statement about what will be true at a later date is a **forecast**. Write it 
   Tripwire: p99 above 1.5 s at the 2027-02-15 review.
 ```
 
-`strategy_trace` reports a line labelled `Forecast` that has no date (`YYYY-MM-DD`) or no `Tripwire:` (`TRACE-FOR-01`). It cannot see a forecast that was not labelled.
+`strategy_trace` reports a line labelled `Forecast` that has no date (`YYYY-MM-DD`) or no `Tripwire:` (`TRACE-FOR-01`). It reads the label after a list marker or a number or as a heading with a date or a colon, the lines of its paragraph, lines indented under it and a `Tripwire:` line after a blank line; a heading, another list item or other text after a blank line ends the forecast. Any `YYYY-MM-DD` before the tripwire counts as its date, so put the forecast's own date in the parentheses. It cannot see a forecast that was not labelled.
 
 ## Steps
 1. Write the diagnosis first, from evidence you can point at. A claim about the outside carries its source, or is marked as an assumption.

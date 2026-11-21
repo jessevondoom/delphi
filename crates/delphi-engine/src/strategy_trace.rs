@@ -423,7 +423,7 @@ pub fn trace(text: &str) -> (Vec<Finding>, Vec<String>) {
 }
 
 /// What follows the label of a line labelled as a forecast: `Forecast: …`, `- **Forecast** (2027-03-31): …`, `` `forecast`: … ``.
-/// `Forecasts are hard` and a heading `## Forecast` are prose, not a label.
+/// `Forecasts are hard` and a heading `## Forecast` with nothing after it are prose, not a label.
 fn forecast_label(bare: &str) -> Option<&str> {
     let rest = bare.get(..8).filter(|l| l.eq_ignore_ascii_case("forecast")).map(|_| bare[8..].trim_start())?;
     (rest.starts_with(':') || rest.starts_with('(')).then_some(rest)
@@ -438,14 +438,17 @@ fn has_date(text: &str) -> bool {
 }
 
 /// `TRACE-FOR-01` (`specs/124` §5 item 1): every line labelled `Forecast`, in any section and outside a code fence, with the lines
-/// written under it (indented deeper, or a `Tripwire:` line), must carry a date and a tripwire that says something. Only a labelled
-/// line is seen: a forecast written as a plain sentence is not found.
+/// that belong to it, must carry a date and a tripwire that says something. The label may follow a list marker or a number or be a
+/// heading (`### Forecast (2027-03-31): …`). The forecast runs on through lines indented deeper, a `Tripwire:` line (also after a
+/// blank line), and the lines of its own paragraph; a heading, another list item or anything else after a blank line ends it.
+/// Only a labelled line is seen: a forecast written as a plain sentence is not found.
 fn forecasts(text: &str) -> Vec<Finding> {
     let mut out = Vec::new();
-    // The forecast being read: its line number, its indent, and whether a date and a tripwire were found so far.
-    let mut open: Option<(usize, usize, bool, bool)> = None;
-    let mut close = |open: &mut Option<(usize, usize, bool, bool)>| {
-        if let Some((line, _, dated, tripwire)) = open.take() {
+    // The forecast being read: its line number, its indent, whether a date and a tripwire were found so far, and whether a blank
+    // line has followed it.
+    let mut open: Option<(usize, usize, bool, bool, bool)> = None;
+    let mut close = |open: &mut Option<(usize, usize, bool, bool, bool)>| {
+        if let Some((line, _, dated, tripwire, _)) = open.take() {
             let missing: Vec<&str> = [(dated, "no date (write `Forecast (YYYY-MM-DD): …`)"), (tripwire, "no tripwire (write `Tripwire: …`, an observable that would show it wrong)")].into_iter().filter(|(has, _)| !has).map(|(_, what)| what).collect();
             if !missing.is_empty() {
                 out.push(Finding::new("TRACE-FOR-01", &format!("forecast, line {}", line), format!("a forecast with {}", missing.join(" and "))));
@@ -465,16 +468,22 @@ fn forecasts(text: &str) -> Vec<Finding> {
         }
         let indent = line.len() - t.len();
         let b = bare(line).replace('`', "");
-        if let Some(rest) = (!t.starts_with('#')).then(|| forecast_label(&b)).flatten() {
+        if let Some(rest) = forecast_label(&b) {
             close(&mut open);
-            open = Some((n + 1, indent, has_date(rest), fields_in(rest).contains(&"tripwire")));
-        } else if let Some((_, at, dated, tripwire)) = open.as_mut() {
+            open = Some((n + 1, indent, has_date(rest), fields_in(rest).contains(&"tripwire"), false));
+        } else if let Some((_, at, dated, tripwire, blank)) = open.as_mut() {
+            if t.is_empty() {
+                *blank = true;
+                continue;
+            }
             let is_tripwire = b.get(..9).is_some_and(|l| l.eq_ignore_ascii_case("tripwire:"));
-            if t.is_empty() || t.starts_with('#') || !(indent > *at || is_tripwire) {
-                close(&mut open);
-            } else {
+            let paragraph = !*blank && after_marker(t).is_none();
+            if !t.starts_with('#') && (indent > *at || is_tripwire || paragraph) {
+                *blank = false;
                 *dated |= has_date(&b);
                 *tripwire |= fields_in(&b).contains(&"tripwire");
+            } else {
+                close(&mut open);
             }
         }
     }
@@ -676,7 +685,7 @@ pub(crate) mod tests {
         assert!(codes(&format!("{}\n## Outlook\n{}", CLEAN, good)).is_empty());
         // in a traced section, between items, it is still read and takes nothing from the item above it
         assert!(codes(&CLEAN.replace("## Guiding policies\n", &format!("{}\n## Guiding policies\n", good))).is_empty());
-        let with = |forecast: &str| trace(&format!("{}\n## Outlook\nSome prose.\n{}\nMore prose with a date, 2027-01-01, and a Tripwire: that belongs to nothing.\n", CLEAN, forecast)).0;
+        let with = |forecast: &str| trace(&format!("{}\n## Outlook\nSome prose.\n{}\n\nMore prose with a date, 2027-01-01, and a Tripwire: that belongs to nothing.\n", CLEAN, forecast)).0;
         let line = CLEAN.lines().count() + 4;
         for (forecast, missing) in [
             ("- Forecast: the tax service stays the slowest call.\n  Tripwire: another call is slower in the weekly review.", "no date"),
@@ -795,6 +804,34 @@ pub(crate) mod tests {
     fn references_after_the_colon_are_read() {
         let text = "## Diagnosis\n- D1: x Falsifier: q\n## Guiding policies\n- P1: (D1) p\n## Actions\n- A1: (P1) a\n";
         assert!(codes(text).is_empty(), "{:?}", codes(text));
+    }
+
+    // V1-16, V1-18, V1-19: a tripwire after one blank line, a numbered or heading label, and a forecast wrapped onto the next line.
+    #[test]
+    fn a_forecast_keeps_its_tripwire_across_a_blank_line_wraps_and_may_be_numbered_or_a_heading() {
+        for ok in [
+            "Forecast (2027-03-31): x\n\nTripwire: y\n",
+            "- Forecast (2027-03-31): x\n\n  Tripwire: y\n",
+            "Forecast: checkout is fastest\nby 2027-03-31.\nTripwire: y\n",
+            "1. Forecast (2027-03-31): x\n   Tripwire: y\n",
+            "### Forecast (2027-03-31): x\nTripwire: y\n",
+            "  Forecast (2027-03-31): x\n\tTripwire: y\n",
+        ] {
+            assert!(forecasts(ok).is_empty(), "{:?} gave {:?}", ok, forecasts(ok));
+        }
+        for (bad, missing) in [("1. Forecast: x\n", "no date"), ("### Forecast (2027-03-31): x\n", "no tripwire"), ("2) Forecast (2027-03-31): x\n", "no tripwire")] {
+            let found = forecasts(bad);
+            assert_eq!(found.len(), 1, "{:?}: {:?}", bad, found);
+            assert!(found[0].message.contains(missing), "{:?}: {}", bad, found[0].message);
+        }
+        // what ends a forecast: prose after a blank line, another list item, a heading
+        for (bad, why) in [
+            ("Forecast (2027-03-31): x\n\nSome prose. Tripwire: not this one.\n", "prose after a blank line"),
+            ("Forecast (2027-03-31): x\n## Next\nTripwire: under another heading\n", "a heading"),
+            ("Forecast: x\n- an item dated 2027-03-31\n  Tripwire: y\n", "a list item after a paragraph"),
+        ] {
+            assert_eq!(forecasts(bad).len(), 1, "{}: {:?}", why, forecasts(bad));
+        }
     }
 
     #[test]
