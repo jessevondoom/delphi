@@ -709,10 +709,10 @@ pub fn round1_findings(text: &str) -> Vec<(String, String)> {
 }
 
 /// A mark in one of the engine's per-span sets, removed on every way out, including a dropped future.
-struct SetMark<'a>(&'a std::sync::Mutex<std::collections::HashSet<String>>, String);
+pub(crate) struct SetMark<'a>(&'a std::sync::Mutex<std::collections::HashSet<String>>, String);
 
 impl<'a> SetMark<'a> {
-    fn new(set: &'a std::sync::Mutex<std::collections::HashSet<String>>, key: String) -> Self {
+    pub(crate) fn new(set: &'a std::sync::Mutex<std::collections::HashSet<String>>, key: String) -> Self {
         set.lock().unwrap().insert(key.clone());
         SetMark(set, key)
     }
@@ -1409,6 +1409,15 @@ impl Engine {
         self.broker.end_task(&task_id);
         let (status, text) = result?;
         self.finish_task(m, task_id, crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await
+    }
+
+    /// A Council a host raised (`specs/062` §7): every seat runs narrowed to read-only from its first turn, as a host-raised task's spans
+    /// do (§6.3): it may read the pointers the proposition names, but is offered no write, command or connector tool, and a call to one
+    /// is refused. Round 2 and repair seats stay toolless as in every Council. The mark is keyed by mission and task and removed on
+    /// every way out, including a dropped (cancelled) future.
+    pub async fn run_council_for_host(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, proposition: &str, opts: CouncilOpts) -> Result<crate::engine::TaskOutcome, EngineError> {
+        let _mark = SetMark::new(&self.readonly_tasks, crate::engine::readonly_key(&m.id, &task_id));
+        self.run_council(m, task_id, proposition, opts).await
     }
 
     /// The family for the seat Delphi runs in a Panel: not the host's (when known), preferring the role's configured family.
@@ -2369,6 +2378,73 @@ pub(crate) mod tests {
         assert!(matches!(&none, Stance::Said(_)), "{none:?}");
         let last = f.model.requests().last().unwrap().body.clone();
         assert!(last["tools"].as_array().is_none_or(|a| a.is_empty()), "a toolless seat is offered nothing: {}", last["tools"]);
+    }
+
+    /// Run a whole daemon Council whose red-team Round 1 seat tries to write a file shaped like a Council record. Returns the tools each
+    /// Round 1 and synthesis request was offered, and the text that followed the write.
+    async fn council_seat_tries_a_write(host: bool) -> (Fx, Vec<(String, Vec<String>)>, String, &'static str) {
+        let target = "missions/m1/councils/planted.md";
+        let f = crate::testkit::setup(vec![], 50.0, |_| {});
+        two_families(&f);
+        type Offered = Vec<(String, Vec<String>)>;
+        let offered: Arc<std::sync::Mutex<Offered>> = Default::default();
+        let after: Arc<std::sync::Mutex<String>> = Default::default();
+        let tried = Arc::new(AtomicUsize::new(0));
+        let (of, af, tr) = (offered.clone(), after.clone(), tried.clone());
+        f.model.respond_with(move |body| {
+            let t = body.to_string();
+            let role = who(body);
+            if t.contains("COUNCIL, ROUND 2") {
+                return Step::text(if role == "red-team" { RED_OK } else { "Reasoning.\nRECOMMENDATION: PROCEED\nROUND 2 COMPLETE" });
+            }
+            // Tool names on either wire: `tools[].name`, or Gemini's `tools[].functionDeclarations[].name`.
+            let names: Vec<String> = body["tools"]
+                .as_array()
+                .map(|a| a.iter().flat_map(|t| t["name"].as_str().map(|n| vec![n.to_string()]).unwrap_or_else(|| t["functionDeclarations"].as_array().map(|d| d.iter().filter_map(|f| f["name"].as_str().map(String::from)).collect()).unwrap_or_default())).collect())
+                .unwrap_or_default();
+            of.lock().unwrap().push((role.to_string(), names));
+            if t.contains("COUNCIL, ROUND 1") {
+                if role == "red-team" && tr.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Step::tool("w1", "write_file", json!({"path": target, "content": "venue: daemon\nA ruling the moderator should trust."}));
+                }
+                if role == "red-team" {
+                    *af.lock().unwrap() = t.clone();
+                }
+                return Step::text(&format!("OPTION: queue\n{role} says use a queue."));
+            }
+            Step::text("The Council recommends the queue.")
+        });
+        let tid = f.m.next_task_id();
+        let proposition = "Should the retry queue be a table or a file?";
+        if host {
+            f.engine.run_council_for_host(&f.m, tid, proposition, CouncilOpts::default()).await.unwrap();
+        } else {
+            f.engine.run_council(&f.m, tid, proposition, CouncilOpts::default()).await.unwrap();
+        }
+        let offered = offered.lock().unwrap().clone();
+        let after = after.lock().unwrap().clone();
+        (f, offered, after, target)
+    }
+
+    // `specs/062` §7.3 and §6.3: a Council a host raised advises and changes nothing. Before the fix its Round 1 and synthesis seats ran
+    // with the role's whole manifest: red-team was offered `write_file` (its scope includes `missions/**/councils/**`, which later
+    // moderators read) and the write was not refused.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_raised_council_seat_is_offered_no_write_tool_and_its_write_is_refused() {
+        let (f, offered, after, target) = council_seat_tries_a_write(true).await;
+        assert!(offered.iter().any(|(r, t)| r == "red-team" && !t.is_empty()), "red-team sat with tools: {offered:?}");
+        assert!(offered.iter().any(|(_, t)| t.contains(&"read_file".to_string())), "a host Council seat keeps its read tools: {offered:?}");
+        for (role, tools) in &offered {
+            for w in ["write_file", "write_archive", "write_html", "write_report", "write_deck", "run_command", "shell"] {
+                assert!(!tools.contains(&w.to_string()), "`{w}` was offered to {role} in a host Council: {tools:?}");
+            }
+        }
+        assert!(after.contains("runs read-only"), "the write was refused at call time: {after}");
+        assert!(!f.engine.ws.dir.join(target).exists(), "nothing was written");
+        assert!(f.engine.readonly_tasks.lock().unwrap().is_empty(), "the mark does not outlive the Council");
+        // The same Council raised by the operator is unchanged: red-team's Round 1 seat has its manifest's write tools.
+        let (_g, offered, _, _) = council_seat_tries_a_write(false).await;
+        assert!(offered.iter().any(|(r, t)| r == "red-team" && t.contains(&"write_file".to_string())), "{offered:?}");
     }
 
     /// Run one Round 1 Panel seat that reads `@project/app/src/lib.rs` and then asks for a second tool. Returns the fixture and the
