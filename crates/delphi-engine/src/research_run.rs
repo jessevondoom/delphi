@@ -314,6 +314,8 @@ pub const HOST_LEADS: usize = 40;
 struct HostLeads {
     list: Vec<String>,
     marked: bool,
+    /// Every distinct address handed back and not fetched, past the list's cap too: what `leads_unread` counts.
+    all: BTreeSet<String>,
 }
 
 /// The host's turn of a run whose source is the host (`specs/119` §13.1).
@@ -1112,7 +1114,7 @@ async fn host_round(ctx: &JobCtx, deps: &Deps<'_>, turn: &HostTurn, question: &s
         for (i, row) in f.rows.iter().enumerate() {
             if f.leads_only || !deps.web.is_trusted(&row.url) {
                 st.log.dropped(li, "lead", 1);
-                if leads.len() < HOST_LEADS && !leads.contains(&row.url) {
+                if hl.all.insert(row.url.clone()) && leads.len() < HOST_LEADS {
                     leads.push(row.url.clone());
                 }
                 continue;
@@ -1342,7 +1344,7 @@ async fn write_the_answer(deps: &Deps<'_>, question: &str, subs: &[SubQuestion],
     let labelled = |label: String| if no_web { format!("{label}, {NO_WEB_LABEL}") } else { label };
     if given.is_empty() {
         // A run that kept no claim says why and what to do next (`specs/124` S11); the words are code's, from fixed lists.
-        let answer = empty.map(crate::research_empty::answer).unwrap_or_else(|| "No claim could be drawn from the sources read. (not validated)".to_string());
+        let answer = empty.map(crate::research_empty::answer).unwrap_or_else(|| "No claim could be drawn. (not validated)".to_string());
         return (answer, json!({"by": "none", "claims": 0, "attempts": 0}));
     }
     let (mut fix, mut attempts, mut rejected): (Option<String>, u64, Vec<String>) = (None, 0, Vec::new());
@@ -1680,15 +1682,16 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // from what the run did, in fixed words. It is information; nothing reads it to fetch, trust or permit anything. A run whose
     // claims the library kept no record of has nothing of its own to cite either, and says so (`specs/124` §19).
     let empty = (given.is_empty() || (claims.is_empty() && found_again.is_empty())).then(|| {
-        tally.budget = spent;
+        tally.budget = spent || check_spent;
         tally.not_stored = staged.iter().filter(|id| id.is_none()).count();
         let ended = crate::research_empty::Ended {
             local: deps.sources == Sources::Local,
             host_asked,
             host_fed,
-            host_leads: host_leads.list.len(),
+            host_leads: host_leads.all.len(),
             leads_marked: host_leads.marked,
             held: given.len(),
+            deep: depth == Depth::Deep,
             withheld: log.flow().withheld,
             answered: cov.answered,
             failure: cov.failure,
@@ -3880,7 +3883,7 @@ mod tests {
         // And it says why (`specs/124` S11): three pages were read and the scout drew nothing from them.
         assert_eq!(n["empty"]["reason"], "no_claims_on_pages", "{}", n["empty"]);
         assert_eq!(n["answer"].as_str().unwrap(), crate::research_empty::answer(&n["empty"]));
-        assert!(n["answer"].as_str().unwrap().starts_with("No claim could be drawn from the sources read: 3 page(s) were read") && n["answer"].as_str().unwrap().ends_with("(not validated)"), "{}", n["answer"]);
+        assert!(n["answer"].as_str().unwrap().starts_with("No claim could be drawn: 3 page(s) were read") && n["answer"].as_str().unwrap().ends_with("(not validated)"), "{}", n["answer"]);
     }
 
     /// `specs/124` S11, the host-fed runs of observation O-2: the host hands back addresses that are not on the trusted list and
@@ -3904,7 +3907,7 @@ mod tests {
         assert_eq!(e["causes"].as_array().unwrap().last().unwrap()["reason"], "plan_unusable", "{e}");
         assert_eq!(e["next"], "Read the addresses in host_leads with your own tool and hand over what you find with record_research.");
         let answer = v["answer"].as_str().unwrap();
-        assert!(answer.starts_with("No claim could be drawn from the sources read: 2 page(s) on the trusted list could not be fetched (http_404: 2); 2 address(es) the host handed back are not on the trusted list, so Delphi did not fetch them") && answer.ends_with("with record_research. (not validated)"), "{answer}");
+        assert!(answer.starts_with("No claim could be drawn: 2 page(s) on the trusted list could not be fetched (http_404: 2); 2 address(es) the host handed back are not on the trusted list, so Delphi did not fetch them") && answer.ends_with("with record_research. (not validated)"), "{answer}");
         assert!(!e.to_string().contains("example") && !e.to_string().contains("who.int"), "no address is in the field: {e}");
         assert_eq!(v["synthesis"]["by"], "none");
         assert_balanced(&v);
@@ -4233,6 +4236,36 @@ mod tests {
         // The lead is on the trusted list: the field names the mark, not the list (`specs/124` §19).
         let text = v["empty"]["text"].as_str().unwrap();
         assert!(text.contains("private-read mark") && !text.contains("not on the trusted list"), "{text}");
+    }
+
+    /// `specs/124` §19: `leads_unread` counts every address not fetched, not only the ones the capped `host_leads` list shows.
+    #[tokio::test]
+    async fn the_leads_count_is_not_capped_by_the_list() {
+        let mut f = host_fixture(false, 5_000);
+        // A plan of five sub-questions, two queries each, so the host is asked enough queries to hand back more than the list holds.
+        f.scout.1.plan = Some((1..=5).map(|n| sub(n, &format!("sub-question {n} on aspirin and fever?"), SubStatus::Open, &[format!("aspirin fever part {n}").as_str(), format!("aspirin fever angle {n}").as_str()])).collect());
+        let c = Arc::new(ctx(Depth::Deep));
+        // A host that hands back a full page of addresses off the trusted list for every query it is asked.
+        let fed = c.clone();
+        let host = tokio::spawn(async move {
+            let asked = loop {
+                if let Some((asked, _, _)) = fed.host_asked() {
+                    break asked;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            };
+            for (i, q) in asked.iter().enumerate() {
+                let rows: Vec<Row> = (0..crate::research_jobs::FEED_RESULTS).map(|j| row(&format!("https://blog.example/{i}-{j}"))).collect();
+                fed.feed(q, rows, false).unwrap();
+            }
+            asked.len() * crate::research_jobs::FEED_RESULTS
+        });
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever in adults and in children", Depth::Deep, &f.deps()).await.unwrap());
+        let total = host.await.unwrap();
+        assert!(total > HOST_LEADS, "the fixture must hand back more than the list holds: {total}");
+        assert_eq!(v["host_leads"].as_array().unwrap().len(), HOST_LEADS);
+        let leads = v["empty"]["causes"].as_array().unwrap().iter().find(|c| c["reason"] == "leads_unread").cloned();
+        assert_eq!(leads, Some(json!({"reason": "leads_unread", "n": total})), "{}", v["empty"]);
     }
 
     /// A host that hands nothing back does not stall the run or fail it. With no engine the run ends with what Delphi holds and

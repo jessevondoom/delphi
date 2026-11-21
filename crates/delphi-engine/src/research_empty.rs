@@ -83,7 +83,7 @@ impl Tally {
 }
 
 /// The fixed word for a fetcher's error: `http_<status>`, `not_text`, `too_large`, `network`, `redirect`, `address_refused`,
-/// `url_refused`, `cloaked`, `off_list`, `fetch_cap`, `refused` or `other`. The error's own text is never passed on.
+/// `url_refused`, `cloaked`, `off_list`, `fetch_cap`, `not_https`, `refused` or `other`. The error's own text is never passed on.
 pub fn fetch_word(error: &str) -> String {
     let e = error.trim();
     if let Some(code) = e.strip_prefix("http status ") {
@@ -91,7 +91,8 @@ pub fn fetch_word(error: &str) -> String {
             return format!("http_{code}");
         }
     }
-    let table: [(&str, &str); 12] = [
+    let table: [(&str, &str); 13] = [
+        ("not_https", "not_https"),
         ("content type is not text", "not_text"),
         ("body exceeds the size cap", "too_large"),
         ("network error or timeout", "network"),
@@ -124,6 +125,8 @@ pub struct Ended {
     pub leads_marked: bool,
     /// Claims held before the run that the answer is written from (none of the run's own).
     pub held: usize,
+    /// The run was at the deepest depth, so a deeper one is not a next step.
+    pub deep: bool,
     /// Queries the identifier guard withheld.
     pub withheld: usize,
     /// Searches that answered (an empty answer counts), the fixed word of the first that failed, and the results they returned.
@@ -160,7 +163,7 @@ fn says(c: &Value, t: &Tally, e: &Ended) -> String {
     let n = c["n"].as_u64().unwrap_or(0);
     match c["reason"].as_str().unwrap_or("") {
         "claims_not_stored" => format!("{n} claim(s) were drawn but the library kept no record of them, so none can be cited"),
-        "no_model_seat" => format!("{n} page(s) were fetched but no model could serve the scout to read them"),
+        "no_model_seat" => format!("{n} page(s) were at hand but no model could serve the scout to read them"),
         "scout_call_failed" => format!("the scout's call to read a page failed on {n} page(s)"),
         "no_claims_on_pages" => format!("{n} page(s) were read and the scout drew no claim with a quote found in the page"),
         "pages_refused" => format!("the library kept none of {n} page(s) fetched"),
@@ -179,8 +182,8 @@ fn says(c: &Value, t: &Tally, e: &Ended) -> String {
         "no_results" => "the searches returned no result".to_string(),
         "no_search_run" => "no search was run".to_string(),
         "no_local_sources" => "no query was sent and Delphi holds no source on the trusted list for the question".to_string(),
-        "plan_no_model_seat" => "no model could serve the scout to plan sub-questions, so the whole question was searched as one query".to_string(),
-        "plan_unusable" => "the scout's plan call gave no usable plan, so the whole question was searched as one query".to_string(),
+        "plan_no_model_seat" => "no model could serve the scout to plan sub-questions, so the run used the fixed plan (the question itself, not sub-questions)".to_string(),
+        "plan_unusable" => "the scout's plan call failed or gave no usable plan, so the run used the fixed plan (the question itself, not sub-questions)".to_string(),
         _ => String::new(),
     }
 }
@@ -277,6 +280,8 @@ pub fn empty(t: &Tally, e: &Ended) -> Value {
         next_for("leads_unread")
     } else if e.held > 0 {
         HELD_NEXT
+    } else if reason == "budget" && e.deep {
+        "Ask a narrower question: the run was already at the deepest depth."
     } else {
         next_for(&reason)
     };
@@ -285,7 +290,7 @@ pub fn empty(t: &Tally, e: &Ended) -> Value {
 
 /// The answer of a run that kept no claim, with its `empty` field in plain words. Its last words are still its label.
 pub fn answer(empty: &Value) -> String {
-    format!("No claim could be drawn from the sources read: {} {} (not validated)", empty["text"].as_str().unwrap_or(""), empty["next"].as_str().unwrap_or(""))
+    format!("No claim could be drawn: {} {} (not validated)", empty["text"].as_str().unwrap_or(""), empty["next"].as_str().unwrap_or(""))
 }
 
 #[cfg(test)]
@@ -327,7 +332,7 @@ mod tests {
         assert_eq!(v["causes"], json!([{"reason": "trusted_fetch_failed", "n": 2, "why": {"http_403": 1, "not_text": 1}}, {"reason": "leads_unread", "n": 18}]));
         assert_eq!(v["text"], "2 page(s) on the trusted list could not be fetched (http_403: 1, not_text: 1); 18 address(es) the host handed back are not on the trusted list, so Delphi did not fetch them.");
         assert_eq!(v["next"], "Read the addresses in host_leads with your own tool and hand over what you find with record_research.");
-        assert!(answer(&v).starts_with("No claim could be drawn from the sources read: 2 page(s)") && answer(&v).ends_with("with record_research. (not validated)"), "{}", answer(&v));
+        assert!(answer(&v).starts_with("No claim could be drawn: 2 page(s)") && answer(&v).ends_with("with record_research. (not validated)"), "{}", answer(&v));
     }
 
     #[test]
@@ -386,6 +391,35 @@ mod tests {
         // An answer written from claims held before the run: `next` does not tell the asker to ask again.
         let v = empty(&Tally { pages_no_claims: 1, ..Default::default() }, &Ended { answered: 1, rows: 3, held: 2, ..Default::default() });
         assert_eq!((v["reason"].as_str(), v["next"].as_str()), (Some("no_claims_on_pages"), Some(HELD_NEXT)), "{v}");
+    }
+
+    // `specs/124` §19: every error the fetch path returns has its own word (none falls to `other`); the table is tied to the
+    // fetcher's own Display and Debug text, so a changed phrase there fails here.
+    #[test]
+    fn every_error_the_fetch_path_returns_has_a_word_of_its_own() {
+        use crate::fact_fetch::Refusal;
+        use delphi_adapter::research::fetch::FetchError;
+        let refusals = [Refusal::BadUrl("scheme"), Refusal::Blocked("private"), Refusal::CrossOriginRedirect, Refusal::TooManyRedirects, Refusal::ContentType, Refusal::TooLarge, Refusal::Status(403), Refusal::Transport];
+        let mut errors: Vec<String> = refusals.iter().map(|r| r.to_string()).collect();
+        errors.extend([format!("{:?}", FetchError::OffList("x.example".into())), format!("{:?}", FetchError::TooManyRedirects)]);
+        // The wider fetch's own words: the observed-set test, the caps (`research_observed::Allowance::take`) and the cloaking check.
+        errors.extend(["not_observed", "not_https", "per_run_cap", "per_host_cap", "cloaked"].map(String::from));
+        for e in &errors {
+            assert_ne!(fetch_word(e), "other", "{e}");
+        }
+        assert_eq!(fetch_word("not_https"), "not_https");
+    }
+
+    #[test]
+    fn a_budget_at_the_deepest_depth_does_not_say_go_deeper() {
+        let t = Tally { budget: true, ..Default::default() };
+        let searched = Ended { answered: 1, rows: 2, ..Default::default() };
+        assert_eq!(empty(&t, &searched)["next"], "Rerun at a deeper depth.");
+        let v = empty(&t, &Ended { deep: true, ..searched });
+        assert!(v["next"].as_str().unwrap().starts_with("Ask a narrower question"), "{v}");
+        // The plan's words say what the fixed plan is, and the answer does not claim sources were read.
+        let v = empty(&Tally { plan: Some("plan_unusable"), ..Default::default() }, &Ended { answered: 1, ..Default::default() });
+        assert!(!v["text"].as_str().unwrap().contains("as one query") && !answer(&v).contains("sources read"), "{v}");
     }
 
     // A failed fetch's own text never reaches the field: only its fixed word does.

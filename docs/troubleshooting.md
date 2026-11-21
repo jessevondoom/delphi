@@ -65,7 +65,7 @@ A run that keeps no claim says why. Its result carries `empty`: `reason` is one 
 | :-- | :-- | :-- |
 | `leads_unread` | a connected tool's own search found pages that are not on your trusted list. Delphi never fetches those on a tool's word; they are listed in `host_leads`. When the session is under the private-read mark Delphi fetches none of them, trusted or not, and `text` says so | the tool reads them itself and hands over what it found with `record_research`; or add the sources worth trusting to your trusted list |
 | `trusted_fetch_failed` | pages on the trusted list could not be fetched; `why` counts each failure by a fixed word (`http_403`, `not_text` for a PDF or other non-text page, `network`, `too_large`, `redirect`) | read them with the tool's own reader and use `record_research`, or run again later |
-| `no_model_seat`, `plan_no_model_seat` | no model could serve the scout, so no page could be read, or the whole question was searched as one query | run again when a model is available (`delphi doctor`) |
+| `no_model_seat`, `plan_no_model_seat` | no model could serve the scout, so no page could be read, or the run used the fixed plan instead of sub-questions | run again when a model is available (`delphi doctor`) |
 | `no_claims_on_pages` | pages were read and nothing quotable on the question was found | ask a narrower question |
 | `no_results` | the searches ran and found nothing | ask a shorter, more specific question |
 | `search_failed` | every engine failed (down, over its limit, or an answer that is not results) | run again later; if it keeps failing, check the engines (next section) |

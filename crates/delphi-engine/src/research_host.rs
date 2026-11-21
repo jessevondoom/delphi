@@ -291,6 +291,16 @@ At most 6 claims. A claim whose quote is not in the page is thrown away.\n\nQUES
 }
 
 /// The claims of the scout's JSON reply whose quote is a run of at least three words that is in `page`.
+/// The page-reading call's reply as claims. A reply that is not a claim list at all (no JSON object with a `claims` array) is a
+/// failed call, not a page with no claim on it, so a run that ends empty counts it as `scout_call_failed` (`specs/124` §19).
+pub fn claims_from_reply(raw: &str, page: &str, url: &str) -> Result<Vec<Extracted>, String> {
+    let list = raw.find('{').zip(raw.rfind('}')).and_then(|(s, e)| serde_json::from_str::<Value>(&raw[s..=e.max(s)]).ok()).is_some_and(|v| v["claims"].is_array());
+    if !list {
+        return Err("the scout's reply was not a claim list".to_string());
+    }
+    Ok(parse_claims(raw, page, url))
+}
+
 pub fn parse_claims(raw: &str, page: &str, url: &str) -> Vec<Extracted> {
     let (Some(s), Some(e)) = (raw.find('{'), raw.rfind('}')) else { return vec![] };
     let Ok(v) = serde_json::from_str::<Value>(&raw[s..=e.max(s)]) else { return vec![] };
@@ -334,7 +344,7 @@ impl Scout for LiveScout {
             let key = e.scout_key().ok_or_else(|| crate::research_empty::NO_SCOUT_MODEL.to_string())?;
             let role = crate::role_call::load(e, crate::role_call::Step::JudgePage).await?;
             let raw = e.one_shot_raw(&key, &scout_ipr(&role, claim_contract(question, page, e.settings.research_limits.page_chars, subs)), CLAIM_OUTPUT).await.ok_or_else(|| "the scout's call failed".to_string())?;
-            Ok(parse_claims(&e.secrets.redact(&raw.text), &page.text, &page.url))
+            claims_from_reply(&e.secrets.redact(&raw.text), &page.text, &page.url)
         })
     }
 
@@ -925,6 +935,12 @@ mod tests {
         assert_eq!(c[0].subject, "aspirin");
         assert!(parse_claims("not json", page, "u").is_empty());
         assert_eq!(c[0].sub, 0, "no tag given, none kept");
+        // A reply that is not a claim list is a failed call; an empty list is a page with no claim (`specs/124` §19).
+        for bad in ["not json", "I could not read the page.", r#"{"answer": "aspirin lowers fever"}"#, "{ broken"] {
+            assert!(claims_from_reply(bad, page, "u").is_err(), "{bad}");
+        }
+        assert_eq!(claims_from_reply(r#"{"claims": []}"#, page, "u").map(|c| c.len()), Ok(0));
+        assert_eq!(claims_from_reply(raw, page, "https://who.int/a").map(|c| c.len()), Ok(1));
     }
 
     // specs/114 §4 item 3: with a plan, the page-reading call is handed the sub-questions and asked to tag each claim; the tag is

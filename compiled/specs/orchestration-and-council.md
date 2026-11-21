@@ -111,7 +111,7 @@ A daemon Council escalates when a seat's Round 2 cannot be read. For the red-tea
 
 ## 124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture
 
-**124: The fleet audit: honest manifests, strategist and architect skills, and a learning capture** · approved (per source at `9ef076b2ba55`) · tier 0 · [source](../../specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md)
+**124: The fleet audit: honest manifests, strategist and architect skills, and a learning capture** · approved (per source at `ae64b8021142`) · tier 0 · [source](../../specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md)
 
 **source excerpt, untrusted** · `specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md` line 25
 
