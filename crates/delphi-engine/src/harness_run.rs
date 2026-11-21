@@ -886,7 +886,7 @@ impl Engine {
         let native_for_note = if let Some(f) = &sc.forge { f.read.clone() } else if cli == Cli::Agy { if bridge_on { agy_native.clone() } else { vec![] } } else if tools == Tools::None { lp.native_tools.clone() } else { vec![] };
         let note = harness_note_for(builder, &bridge_defs, &native_for_note, cli == Cli::Agy, sc.toolless, sc.forge.as_ref());
         // The watchdog of a forge reader (§14.7 rule 4): always on while its read tools are given.
-        let mut watchdog = sc.forge.as_ref().map(|f| crate::forge_tools::Watchdog::new(f.read.clone(), cli == Cli::Claude));
+        let mut watchdog = sc.forge.as_ref().map(|f| crate::forge_tools::Watchdog::new(f.read.clone(), (cli == Cli::Claude).then(|| cwd.clone())));
         let launch = Launch { cli, program, model, system_prompt: format!("{}\n\n{}", harness_sections(ipr, &bridge_defs).join("\n\n"), note), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
         let ctl = Ctl { bridge_on, delegate, profile: &profile };
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));

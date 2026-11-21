@@ -25,6 +25,8 @@ use std::pin::Pin;
 pub const GRACE_SECS: i64 = 5 * 24 * 3600;
 /// A probe that could not decide (the CLI did not start, no answer, out of quota) is tried again after this long, not before.
 pub const RETRY_SECS: i64 = 3600;
+/// A version whose probe failed once is probed once more after this long; a second fail is final (as hardened after review).
+pub const FAIL_RETRY_SECS: i64 = 24 * 3600;
 /// The state file, under the workspace's `local/`.
 pub const STORE_FILE: &str = "forge-tools.json";
 
@@ -75,76 +77,135 @@ pub fn is_delphi_own(name: &str) -> bool {
     name.starts_with(crate::bridge::TOOL_PREFIX) || name.starts_with(crate::bridge::AGY_TOOL_PREFIX) || name == "StructuredOutput"
 }
 
-fn key_is_pathish(key: &str) -> bool {
-    let k = key.to_ascii_lowercase();
-    k.contains("path") || k.contains("file") || k.contains("dir") || k == "cwd"
+/// The argument keys a read tool may be called with, by kind. A key not listed for the tool refuses the call: what Delphi does not
+/// know how to judge is not let through (`specs/135` §14.7 rule 1, as hardened after review).
+struct Schema {
+    /// Each value a path the CLI opens: a string, absolute, inside the copy.
+    path: &'static [&'static str],
+    /// Each value a glob (a string or a list of strings): relative, no `..` anywhere, no `~`.
+    glob: &'static [&'static str],
+    /// Search text (a regex, a query): a string, never a path, even when it starts with `/`.
+    text: &'static [&'static str],
+    /// Numbers, booleans and short enum strings (an output mode, a file type).
+    other: &'static [&'static str],
 }
 
-fn is_glob_key(tool: &str, key: &str) -> bool {
-    let (t, k) = (tool.to_ascii_lowercase(), key.to_ascii_lowercase());
-    k == "glob" || k.starts_with("include") || (k == "pattern" && (t.contains("glob") || t == "find_by_name"))
+/// The keys of each carrier's read tools: the Claude CLI's published tool schemas, and for agy the names seen in its probes and tests
+/// (agy's own schemas are not in this repository; the list is kept minimal, and a key agy uses that is missing here only refuses the
+/// call, which the background probe then reports).
+fn schema(tool: &str) -> Option<Schema> {
+    Some(match tool {
+        "Read" => Schema { path: &["file_path"], glob: &[], text: &[], other: &["offset", "limit"] },
+        "Grep" => Schema { path: &["path"], glob: &["glob"], text: &["pattern"], other: &["type", "output_mode", "-i", "-n", "-A", "-B", "-C", "multiline", "head_limit"] },
+        "Glob" => Schema { path: &["path"], glob: &["pattern"], text: &[], other: &[] },
+        "LS" => Schema { path: &["path"], glob: &["ignore"], text: &[], other: &[] },
+        "NotebookRead" => Schema { path: &["notebook_path"], glob: &[], text: &[], other: &["cell_id"] },
+        "view_file" => Schema { path: &["AbsolutePath"], glob: &[], text: &[], other: &["StartLine", "EndLine"] },
+        "read_file" => Schema { path: &["Path"], glob: &[], text: &[], other: &[] },
+        "list_dir" => Schema { path: &["DirectoryPath"], glob: &[], text: &[], other: &[] },
+        "find_by_name" => Schema { path: &["SearchDirectory"], glob: &["Pattern"], text: &[], other: &[] },
+        "grep_search" => Schema { path: &["SearchPath"], glob: &["Includes"], text: &["Query"], other: &["IsRegex", "CaseInsensitive", "MatchPerLine"] },
+        _ => return None,
+    })
 }
 
-/// Every string in `v` with the key it sits under (an array item takes its array's key). Bounded in depth and count.
-fn strings<'a>(v: &'a Value, key: &str, depth: usize, out: &mut Vec<(String, &'a str)>) {
-    if depth > 4 || out.len() > 64 {
-        return;
+/// The most strings one glob key may hold.
+const MAX_GLOBS: usize = 16;
+
+fn is_file_uri(s: &str) -> bool {
+    s.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("file:"))
+}
+
+/// A glob that stays where it is searched from: not absolute, no `~`, no `..` anywhere (`{..,x}` too), no `file:`.
+fn glob_ok(s: &str) -> bool {
+    !s.starts_with('/') && !s.starts_with('~') && !s.contains("..") && !s.contains('\\') && !is_file_uri(s)
+}
+
+/// A call's arguments sorted by kind, or why they cannot be judged: not an object, a key the tool does not have, a value of the wrong
+/// shape, a list too long, a `file:` URI anywhere. Every value is looked at; nothing past a cap is skipped (it refuses instead).
+struct Args<'a> {
+    paths: Vec<&'a str>,
+    globs: Vec<&'a str>,
+}
+
+fn sort_args<'a>(tool: &str, input: &'a Value) -> Result<Args<'a>, String> {
+    let s = schema(tool).ok_or_else(|| format!("`{tool}` has no argument list Delphi can judge"))?;
+    let obj = input.as_object().ok_or_else(|| "the call's arguments are not an object".to_string())?;
+    let mut a = Args { paths: vec![], globs: vec![] };
+    for (k, v) in obj {
+        let k = k.as_str();
+        if s.path.contains(&k) {
+            match v {
+                Value::String(p) if is_file_uri(p) => return Err(format!("`{k}` is a file: URI; give a plain absolute path")),
+                Value::String(p) => a.paths.push(p),
+                Value::Null => {}
+                _ => return Err(format!("`{k}` must be a path")),
+            }
+        } else if s.glob.contains(&k) {
+            let items: Vec<&Value> = match v {
+                Value::Array(xs) if xs.len() <= MAX_GLOBS => xs.iter().collect(),
+                Value::Array(_) => return Err(format!("`{k}` holds more than {MAX_GLOBS} patterns")),
+                Value::Null => vec![],
+                x => vec![x],
+            };
+            for x in items {
+                match x.as_str() {
+                    Some(g) => a.globs.push(g),
+                    None => return Err(format!("`{k}` must hold patterns")),
+                }
+            }
+        } else if s.text.contains(&k) {
+            match v {
+                Value::String(t) if is_file_uri(t) => return Err(format!("`{k}` is a file: URI")),
+                Value::String(_) | Value::Null => {}
+                _ => return Err(format!("`{k}` must be text")),
+            }
+        } else if s.other.contains(&k) {
+            match v {
+                Value::Number(_) | Value::Bool(_) | Value::Null => {}
+                Value::String(t) if t.len() <= 40 && !is_file_uri(t) && !t.contains('/') && !t.contains("..") => {}
+                _ => return Err(format!("`{k}` has a value Delphi does not accept")),
+            }
+        } else {
+            return Err(format!("`{tool}` was called with `{}`, an argument Delphi does not know; it is refused", k.chars().take(40).collect::<String>()));
+        }
     }
-    match v {
-        Value::String(s) => out.push((key.to_string(), s.as_str())),
-        Value::Array(a) => a.iter().for_each(|x| strings(x, key, depth + 1, out)),
-        Value::Object(o) => o.iter().for_each(|(k, x)| strings(x, k, depth + 1, out)),
-        _ => {}
-    }
+    Ok(a)
 }
 
-/// A key whose value is search text (a regex, a query), never a path, even when it starts with `/`.
-fn is_text_key(key: &str) -> bool {
-    matches!(key.to_ascii_lowercase().as_str(), "pattern" | "query" | "regex" | "type" | "output_mode")
-}
-
-/// Does this value name a path the CLI would open (as opposed to a glob or search text)?
-fn names_path(tool: &str, key: &str, v: &str) -> bool {
-    !v.is_empty() && !is_glob_key(tool, key) && !is_text_key(key) && (key_is_pathish(key) || v.starts_with('/') || v.starts_with('~'))
-}
-
-fn dotdot(s: &str) -> bool {
-    s.split(['/', '\\']).any(|c| c == "..")
-}
-
-/// The gate for a forge reader's native call (§14.7 rule 1): the tool must be on `read`, and every path it names must be absolute and
-/// inside `root` (through symlinks, never under `.git`: `harness_run::inside`); a glob may not reach out. A call that names no path is
-/// refused too: a CLI would run it in its own working directory, which is not the copy. `Err` carries the reason the model is told.
+/// The gate for a forge reader's native call (§14.7 rule 1): the tool must be on `read`; every argument must be one Delphi knows for
+/// that tool; every path must be absolute and inside `root` (through symlinks, never under `.git`: `harness_run::inside`); every glob
+/// must stay where it is searched from. A call that names no path is refused too: a CLI would run it in its own working directory,
+/// which is not the copy. `Err` carries the reason the model is told.
 pub fn gate(read: &[String], root: &Path, tool: &str, input: &Value) -> Result<(), String> {
     if !read.iter().any(|r| r == tool) {
         return Err(format!("`{}` is not available to this seat: it may read the review copy with {} only, and a tool not on that list is refused", tool, read.join(", ")));
     }
-    let mut vals = Vec::new();
-    strings(input, "", 0, &mut vals);
-    let mut named = false;
-    for (key, v) in vals {
-        if is_glob_key(tool, &key) {
-            if v.starts_with('/') || v.starts_with('~') || dotdot(v) {
-                return Err(format!("a pattern may not reach out of the review copy (`{}`); search under a path inside {}", v.chars().take(80).collect::<String>(), root.display()));
-            }
-            continue;
-        }
-        if !names_path(tool, &key, v) {
-            continue;
-        }
-        if v.starts_with('~') || !v.starts_with('/') {
-            return Err(format!("give every path as an absolute path inside {} (got `{}`)", root.display(), v.chars().take(80).collect::<String>()));
-        }
-        if crate::harness_run::inside(root, v).is_none() {
-            return Err(format!("`{}` is outside the review copy (or under .git); this seat reads only inside {}", v.chars().take(120).collect::<String>(), root.display()));
-        }
-        named = true;
+    let a = sort_args(tool, input)?;
+    if let Some(g) = a.globs.iter().find(|g| !glob_ok(g)) {
+        return Err(format!("a pattern may not reach out of the review copy (`{}`); search under a path inside {}", g.chars().take(80).collect::<String>(), root.display()));
     }
-    if !named {
+    for p in &a.paths {
+        if p.starts_with('~') || !p.starts_with('/') {
+            return Err(format!("give every path as an absolute path inside {} (got `{}`)", root.display(), p.chars().take(80).collect::<String>()));
+        }
+        if crate::harness_run::inside(root, p).is_none() {
+            return Err(format!("`{}` is outside the review copy (or under .git); this seat reads only inside {}", p.chars().take(120).collect::<String>(), root.display()));
+        }
+    }
+    if a.paths.iter().all(|p| p.is_empty()) {
         return Err(format!("name an absolute path inside {}: a call with no path would run outside the review copy", root.display()));
     }
     Ok(())
 }
+
+/// Does a call of a read tool stay inside `cwd` (the seat's own empty working directory)? Its paths all resolve inside it (a path-less
+/// call runs there) and its globs stay where they are searched from. Anything that cannot be judged does not.
+fn stays_in(cwd: &Path, tool: &str, input: &Value) -> bool {
+    let Ok(a) = sort_args(tool, input) else { return false };
+    a.globs.iter().all(|g| glob_ok(g)) && a.paths.iter().all(|p| p.is_empty() || (!p.starts_with('~') && crate::harness_run::inside(cwd, p).is_some()))
+}
+
 
 /// A forge reader whose read tools were given: the copy it may read, its list, and the carrier version they were given on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,6 +257,13 @@ pub fn copy_is_closed(root: &Path) -> bool {
                 }
             } else if ft.is_dir() && e.file_name() != ".git" {
                 stack.push(p);
+            } else if ft.is_file() {
+                // A file with a second hard link may be the same bytes as a file outside the copy, and no path check can tell.
+                use std::os::unix::fs::MetadataExt;
+                match e.metadata() {
+                    Ok(m) if m.nlink() <= 1 => {}
+                    _ => return false,
+                }
             }
         }
     }
@@ -207,9 +275,10 @@ pub fn copy_is_closed(root: &Path) -> bool {
 #[derive(Debug, Default)]
 pub struct Watchdog {
     read: Vec<String>,
-    /// The CLI runs a call that names no path in its own (empty) working directory without asking (the Claude CLI): such a call is not
-    /// expected at the gate. `false` for a carrier whose gate sees every call (agy's hook).
-    cwd_free: bool,
+    /// The seat's own working directory, when its CLI reads there without asking (the Claude CLI): a read-list call that stays inside it
+    /// (no path, or only paths inside it, and no glob that reaches out) is not expected at the gate. The directory is empty, so nothing
+    /// leaks. `None` for a carrier whose gate sees every call (agy's hook).
+    cwd: Option<PathBuf>,
     /// Calls seen in the stream that need the gate: id to tool name.
     pending: HashMap<String, String>,
     allowed_ids: HashSet<String>,
@@ -217,8 +286,8 @@ pub struct Watchdog {
 }
 
 impl Watchdog {
-    pub fn new(read: Vec<String>, cwd_free: bool) -> Watchdog {
-        Watchdog { read, cwd_free, ..Default::default() }
+    pub fn new(read: Vec<String>, cwd: Option<PathBuf>) -> Watchdog {
+        Watchdog { read, cwd, ..Default::default() }
     }
 
     /// A tool call in the stream (before it runs).
@@ -226,11 +295,8 @@ impl Watchdog {
         if is_delphi_own(name) {
             return;
         }
-        if self.cwd_free && self.read.iter().any(|r| r == name) {
-            let mut vals = Vec::new();
-            strings(input, "", 0, &mut vals);
-            let reaches = vals.iter().any(|(k, v)| names_path(name, k, v) || (is_glob_key(name, k) && (v.starts_with('/') || v.starts_with('~') || dotdot(v))));
-            if !reaches {
+        if let Some(cwd) = &self.cwd {
+            if self.read.iter().any(|r| r == name) && stays_in(cwd, name, input) {
                 return;
             }
         }
@@ -314,6 +380,12 @@ pub struct VersionRecord {
     pub probe_tokens: u64,
     #[serde(default)]
     pub reason: Option<String>,
+    /// Probes that failed on this version. The first fail is tried once more after [`FAIL_RETRY_SECS`]; a second is final.
+    #[serde(default)]
+    pub fails: u32,
+    /// The watchdog dropped this version: final, whatever a later probe of it says.
+    #[serde(default)]
+    pub watchdog: bool,
 }
 
 pub fn store_path(ws_dir: &Path) -> PathBuf {
@@ -362,17 +434,19 @@ pub fn observe(recs: &mut Vec<VersionRecord>, harness: &str, version: Option<&st
     }
     let earlier_pass = recs.iter().any(|r| r.harness == harness && r.state == State::ProbedPass);
     let (state, grace_until) = if earlier_pass { (State::Grace, Some(now + GRACE_SECS)) } else { (State::Unprobed, None) };
-    recs.push(VersionRecord { harness: harness.into(), version: version.into(), state, first_seen: now, grace_until, probed_at: None, attempted_at: None, probe_tokens: 0, reason: None });
+    recs.push(VersionRecord { harness: harness.into(), version: version.into(), state, first_seen: now, grace_until, probed_at: None, attempted_at: None, probe_tokens: 0, reason: None, fails: 0, watchdog: false });
     observe(recs, harness, Some(version), now)
 }
 
-/// The next version that wants a probe (in grace, or never probed), unless one was attempted within [`RETRY_SECS`].
+/// The next version that wants a probe (in grace, never probed, or failed once by a probe a day ago or more), unless one was attempted
+/// within [`RETRY_SECS`]. A version the watchdog dropped, or that failed twice, is never probed again.
 pub fn probe_due(recs: &[VersionRecord], now: i64) -> Option<(String, String)> {
     recs.iter()
         .filter(|r| match r.state {
             State::Grace => r.grace_until.is_some_and(|g| now < g),
             State::Unprobed => true,
-            _ => false,
+            State::ProbedFail => !r.watchdog && r.fails == 1 && r.probed_at.is_some_and(|t| now - t >= FAIL_RETRY_SECS),
+            State::ProbedPass => false,
         })
         .find(|r| r.attempted_at.is_none_or(|a| now - a >= RETRY_SECS))
         .map(|r| (r.harness.clone(), r.version.clone()))
@@ -408,12 +482,17 @@ pub fn record_probe(recs: &mut [VersionRecord], harness: &str, version: &str, ou
     r.probe_tokens += outcome.tokens();
     match outcome {
         ProbeOutcome::Pass { .. } => {
-            // A watchdog drop is not undone by a later probe: what was seen in a real run outweighs a probe.
-            if r.state != State::ProbedFail {
+            // A watchdog drop is not undone by a later probe: what was seen in a real run outweighs a probe. A version whose first probe
+            // failed and whose retry passes is cleared.
+            if !r.watchdog {
                 (r.state, r.grace_until, r.probed_at, r.reason) = (State::ProbedPass, None, Some(now), None);
             }
         }
-        ProbeOutcome::Fail { reason, .. } => (r.state, r.grace_until, r.probed_at, r.reason) = (State::ProbedFail, None, Some(now), Some(format!("probe failed: {reason}"))),
+        ProbeOutcome::Fail { reason, .. } => {
+            r.fails += 1;
+            let when = if r.fails >= 2 || r.watchdog { "final" } else { "tried once more after a day" };
+            (r.state, r.grace_until, r.probed_at, r.reason) = (State::ProbedFail, None, Some(now), Some(format!("probe failed ({when}): {reason}")));
+        }
         ProbeOutcome::Undecided { reason, .. } => r.reason = Some(format!("last probe undecided: {reason}")),
     }
 }
@@ -422,8 +501,8 @@ pub fn record_probe(recs: &mut [VersionRecord], harness: &str, version: &str, ou
 pub fn drop_version(recs: &mut Vec<VersionRecord>, harness: &str, version: &str, reason: &str, now: i64) {
     let reason = format!("watchdog: {reason}");
     match recs.iter_mut().find(|r| r.harness == harness && r.version == version) {
-        Some(r) => (r.state, r.grace_until, r.reason) = (State::ProbedFail, None, Some(reason)),
-        None => recs.push(VersionRecord { harness: harness.into(), version: version.into(), state: State::ProbedFail, first_seen: now, grace_until: None, probed_at: None, attempted_at: None, probe_tokens: 0, reason: Some(reason) }),
+        Some(r) => (r.state, r.grace_until, r.reason, r.watchdog) = (State::ProbedFail, None, Some(reason), true),
+        None => recs.push(VersionRecord { harness: harness.into(), version: version.into(), state: State::ProbedFail, first_seen: now, grace_until: None, probed_at: None, attempted_at: None, probe_tokens: 0, reason: Some(reason), fails: 0, watchdog: true }),
     }
 }
 
@@ -550,7 +629,8 @@ impl LiveProbe {
         let mut _bridge = None;
         let mut notes = None;
         if cli == Cli::Claude {
-            lp.native_tools = read.clone();
+            // Its write tool too, in the probe only: the gate must be seen to refuse a write, and a CLI without one could not try.
+            lp.native_tools = read.iter().cloned().chain(["Write".to_string()]).collect();
         } else {
             let policy = crate::bridge::HookPolicy::new(vec![], vec![]).with_forge(root.clone(), read.clone());
             match std::env::current_exe() {
@@ -581,8 +661,8 @@ impl LiveProbe {
             r = root.display()
         );
         let l = Launch { cli, program, model, system_prompt: "This is a conformance probe. Follow the request exactly.".into(), user_prompt: prompt, cwd: cwd.clone(), tools: Tools::None, env: crate::harness::cli_env_with(&profile.env_allow), profile: lp, opts: Default::default() };
-        let mut wd = Watchdog::new(read.clone(), cli == Cli::Claude);
-        let (mut tokens, mut text, mut result_ok, mut reads_allowed, mut ungated) = (0u64, String::new(), false, 0u32, None::<String>);
+        let mut wd = Watchdog::new(read.clone(), (cli == Cli::Claude).then(|| cwd.clone()));
+        let (mut tokens, mut text, mut result_ok, mut reads_allowed, mut writes_refused, mut ungated) = (0u64, String::new(), false, 0u32, 0u32, None::<String>);
         match Session::start(&l).await {
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&dir);
@@ -596,6 +676,9 @@ impl LiveProbe {
                             wd.gate_decided(&n.tool, None, n.allowed);
                             if n.allowed && read.contains(&n.tool) {
                                 reads_allowed += 1;
+                            }
+                            if !n.allowed && is_write_kind(&n.tool) {
+                                writes_refused += 1;
                             }
                             continue;
                         }
@@ -611,6 +694,8 @@ impl LiveProbe {
                             wd.gate_decided(&p.tool_name, p.tool_use_id.as_deref(), ok);
                             if ok {
                                 reads_allowed += 1;
+                            } else if is_write_kind(&p.tool_name) {
+                                writes_refused += 1;
                             }
                             if s.decide(&p, &d).await.is_err() {
                                 break;
@@ -643,20 +728,53 @@ impl LiveProbe {
         }
         let wrote = root.join(PROBE_WRITE).exists() || cwd.join(PROBE_WRITE).exists();
         let _ = std::fs::remove_dir_all(&dir);
-        if let Some(why) = ungated {
-            return ProbeOutcome::Fail { reason: why, tokens };
-        }
-        if wrote {
-            return ProbeOutcome::Fail { reason: "the refused write happened".into(), tokens };
-        }
-        if !result_ok {
-            return undecided("the CLI gave no answer".into(), tokens);
-        }
-        if reads_allowed == 0 || !text.contains(&word) {
-            return ProbeOutcome::Fail { reason: format!("no read on the list ({}) was seen to pass the gate and return the file", read.join(", ")), tokens };
-        }
-        ProbeOutcome::Pass { tokens }
+        verdict(&ProbeEvidence { result_ok, ungated, wrote, reads_allowed, writes_refused, word_seen: text.contains(&word), tokens }, &read)
     }
+}
+
+/// A write, edit or shell tool, by either CLI's name: what the probe's refused-write step must be seen to try.
+fn is_write_kind(tool: &str) -> bool {
+    matches!(tool, "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "Bash") || matches!(crate::capabilities::tool_kind(tool), "write" | "edit" | "shell")
+}
+
+/// What one probe run showed.
+#[derive(Debug, Clone, Default)]
+pub struct ProbeEvidence {
+    /// The CLI finished with an answer.
+    pub result_ok: bool,
+    /// The watchdog saw a call run without the gate.
+    pub ungated: Option<String>,
+    /// The file the seat was told to write exists.
+    pub wrote: bool,
+    /// Reads on the list the gate allowed.
+    pub reads_allowed: u32,
+    /// Write, edit or shell calls the gate refused.
+    pub writes_refused: u32,
+    /// The word in the file came back in the answer.
+    pub word_seen: bool,
+    pub tokens: u64,
+}
+
+/// The probe's verdict. A pass needs both halves seen: an allowed read that returned the file AND a write the gate refused. A run in
+/// which the write was never tried proves nothing about the refusal, so it is undecided (tried again later), never a pass.
+pub fn verdict(e: &ProbeEvidence, read: &[String]) -> ProbeOutcome {
+    let tokens = e.tokens;
+    if let Some(why) = &e.ungated {
+        return ProbeOutcome::Fail { reason: why.clone(), tokens };
+    }
+    if e.wrote {
+        return ProbeOutcome::Fail { reason: "the refused write happened".into(), tokens };
+    }
+    if !e.result_ok {
+        return ProbeOutcome::Undecided { reason: "the CLI gave no answer".into(), tokens };
+    }
+    if e.reads_allowed == 0 || !e.word_seen {
+        return ProbeOutcome::Fail { reason: format!("no read on the list ({}) was seen to pass the gate and return the file", read.join(", ")), tokens };
+    }
+    if e.writes_refused == 0 {
+        return ProbeOutcome::Undecided { reason: "the write step was not tried, so the gate was not seen to refuse it".into(), tokens };
+    }
+    ProbeOutcome::Pass { tokens }
 }
 
 #[cfg(test)]
@@ -739,7 +857,8 @@ mod tests {
     /// Delphi's own and the Claude CLI's path-less search of its empty working directory do not fire it.
     #[test]
     fn the_watchdog_fires_only_on_a_native_call_that_ran_without_the_gate() {
-        let mut w = Watchdog::new(default_read("claude"), true);
+        let cwd = tempfile::tempdir().unwrap();
+        let mut w = Watchdog::new(default_read("claude"), Some(cwd.path().to_path_buf()));
         w.saw_use("t1", "Read", &json!({"file_path": "/copy/a"}));
         w.gate_decided("Read", Some("t1"), true);
         assert_eq!(w.ran("t1", false), None);
@@ -755,12 +874,127 @@ mod tests {
         w.saw_use("t6", "Bash", &json!({"command": "ls"}));
         assert!(w.ran("t6", false).is_some(), "an unlisted tool that ran");
         // agy: every call meets the hook, decisions come by name
-        let mut a = Watchdog::new(default_read("agy"), false);
+        let mut a = Watchdog::new(default_read("agy"), None);
         a.saw_use("1", "view_file", &json!({}));
         a.gate_decided("view_file", None, true);
         assert_eq!(a.ran("1", false), None);
         a.saw_use("2", "view_file", &json!({}));
         assert!(a.ran("2", false).is_some(), "one allowance covers one call");
+    }
+
+    /// Review item 2: the Claude CLI lists or searches its own empty working directory without asking; a call whose paths all lie there
+    /// is not a gate failure. A glob that climbs out of it (`{..,x}`), with or without a path, still is.
+    #[test]
+    fn a_read_of_the_seats_own_empty_working_directory_does_not_fire_the_watchdog() {
+        let cwd = tempfile::tempdir().unwrap();
+        let c = std::fs::canonicalize(cwd.path()).unwrap();
+        let mut w = Watchdog::new(default_read("claude"), Some(c.clone()));
+        for (i, (tool, input)) in [("LS", json!({"path": c.display().to_string()})), ("Grep", json!({"pattern": "x", "path": c.display().to_string()})), ("Glob", json!({"pattern": "**/*.rs", "path": c.join("sub").display().to_string()})), ("LS", json!({"path": "."}))].into_iter().enumerate() {
+            let id = format!("c{i}");
+            w.saw_use(&id, tool, &input);
+            assert_eq!(w.ran(&id, false), None, "{tool} {input}");
+        }
+        for (i, (tool, input)) in [("Glob", json!({"pattern": "{..,x}/**"})), ("Glob", json!({"pattern": "**", "path": "/"})), ("LS", json!({"path": "/Users"})), ("Read", json!({"file_path": "x", "extra": 1}))].into_iter().enumerate() {
+            let id = format!("o{i}");
+            w.saw_use(&id, tool, &input);
+            assert!(w.ran(&id, false).is_some(), "{tool} {input}");
+        }
+    }
+
+    /// Review item 1 (HIGH): nothing past a cap goes unchecked. 65 harmless values before a path outside the copy, an argument the tool
+    /// does not have, and a nested object are all refused.
+    #[test]
+    fn a_call_is_refused_when_any_argument_cannot_be_judged() {
+        let (_d, root) = copy();
+        let inside = root.join("src/lib.rs").display().to_string();
+        let agy = default_read("agy");
+        let many: Vec<String> = (0..65).map(|_| inside.clone()).collect();
+        assert!(gate(&agy, &root, "find_by_name", &json!({"Excludes": many, "Pattern": "*.pem", "SearchDirectory": "/Users"})).is_err());
+        assert!(gate(&agy, &root, "find_by_name", &json!({"Pattern": "*.pem", "SearchDirectory": "/Users"})).is_err());
+        let globs: Vec<&str> = (0..17).map(|_| "*.rs").collect();
+        assert!(gate(&agy, &root, "grep_search", &json!({"SearchPath": root.display().to_string(), "Query": "x", "Includes": globs})).unwrap_err().contains("more than"));
+        assert!(gate(&agy, &root, "view_file", &json!({"AbsolutePath": inside, "Unknown": "x"})).unwrap_err().contains("does not know"));
+        assert!(gate(&default_read("claude"), &root, "Read", &json!({"file_path": inside, "nested": {"path": "/etc/hosts"}})).is_err());
+        assert!(gate(&default_read("claude"), &root, "Read", &json!({"file_path": {"p": inside}})).is_err());
+        assert!(gate(&default_read("claude"), &root, "Read", &json!([inside])).is_err(), "not an object");
+        assert_eq!(gate(&default_read("claude"), &root, "Read", &json!({"file_path": inside, "offset": 1, "limit": 20})), Ok(()));
+    }
+
+    /// Review items 3 and 4: a glob with `..` anywhere (brace expansion too) and a `file:` URI in any argument are refused.
+    #[test]
+    fn brace_globs_that_climb_and_file_uris_are_refused() {
+        let (_d, root) = copy();
+        let r = root.display().to_string();
+        let claude = default_read("claude");
+        for (tool, input) in [
+            ("Glob", json!({"pattern": "{..,x}/**", "path": r})),
+            ("Glob", json!({"pattern": "a..b/*", "path": r})),
+            ("Grep", json!({"pattern": "x", "path": r, "glob": "{..,y}/*.rs"})),
+            ("Read", json!({"file_path": format!("file://{}/src/lib.rs", r)})),
+            ("Grep", json!({"pattern": "file:///etc/hosts", "path": r})),
+            ("Grep", json!({"pattern": "x", "path": r, "type": "file:///x"})),
+            ("LS", json!({"path": r, "ignore": ["../*"]})),
+        ] {
+            assert!(gate(&claude, &root, tool, &input).is_err(), "{tool} {input}");
+        }
+        assert!(gate(&default_read("agy"), &root, "grep_search", &json!({"SearchPath": r, "Query": "FILE:x"})).is_err());
+        assert_eq!(gate(&claude, &root, "Glob", &json!({"pattern": "src/**/*.rs", "path": r})), Ok(()));
+    }
+
+    /// Review item 5: a file with a second hard link keeps the seat tool-less (it may be a file outside the copy).
+    #[test]
+    fn a_hard_link_in_the_copy_keeps_the_seat_toolless() {
+        let (d, root) = copy();
+        assert!(copy_is_closed(&root));
+        std::fs::write(d.path().join("secret"), "s").unwrap();
+        std::fs::hard_link(d.path().join("secret"), root.join("innocent.txt")).unwrap();
+        assert!(!copy_is_closed(&root));
+    }
+
+    /// Review item 6: a probe passes only with both halves seen; a run in which the write was never tried is undecided.
+    #[test]
+    fn a_probe_passes_only_when_the_refused_write_was_seen() {
+        let read = default_read("claude");
+        let good = ProbeEvidence { result_ok: true, reads_allowed: 1, writes_refused: 1, word_seen: true, tokens: 9, ..Default::default() };
+        assert_eq!(verdict(&good, &read), ProbeOutcome::Pass { tokens: 9 });
+        assert!(matches!(verdict(&ProbeEvidence { writes_refused: 0, ..good.clone() }, &read), ProbeOutcome::Undecided { .. }));
+        assert!(matches!(verdict(&ProbeEvidence { wrote: true, ..good.clone() }, &read), ProbeOutcome::Fail { .. }));
+        assert!(matches!(verdict(&ProbeEvidence { word_seen: false, ..good.clone() }, &read), ProbeOutcome::Fail { .. }));
+        assert!(matches!(verdict(&ProbeEvidence { ungated: Some("x".into()), ..good.clone() }, &read), ProbeOutcome::Fail { .. }));
+        assert!(matches!(verdict(&ProbeEvidence { result_ok: false, ..good }, &read), ProbeOutcome::Undecided { .. }));
+        assert!(is_write_kind("Write") && is_write_kind("write_to_file") && is_write_kind("run_command") && !is_write_kind("view_file"));
+    }
+
+    /// Review item 7: a probe's first fail is tried once more a day later; a second fail is final. A watchdog drop is final for that
+    /// version, while a NEW version starts fresh and can pass.
+    #[test]
+    fn a_failed_probe_is_retried_once_after_a_day_and_a_watchdog_drop_stays_with_its_version() {
+        let t0 = 10_000_000;
+        let mut r: Vec<VersionRecord> = Vec::new();
+        observe(&mut r, "agy", Some("a1"), t0);
+        record_probe(&mut r, "agy", "a1", &ProbeOutcome::Fail { reason: "x".into(), tokens: 1 }, t0);
+        assert_eq!(probe_due(&r, t0 + D - 1), None);
+        assert_eq!(probe_due(&r, t0 + D), Some(("agy".into(), "a1".into())));
+        record_probe(&mut r, "agy", "a1", &ProbeOutcome::Fail { reason: "y".into(), tokens: 1 }, t0 + D);
+        assert_eq!(probe_due(&r, t0 + 10 * D), None, "a second fail is final");
+        // a first fail whose retry passes is cleared
+        observe(&mut r, "agy", Some("a2"), t0);
+        record_probe(&mut r, "agy", "a2", &ProbeOutcome::Fail { reason: "x".into(), tokens: 1 }, t0);
+        record_probe(&mut r, "agy", "a2", &ProbeOutcome::Pass { tokens: 1 }, t0 + D);
+        assert_eq!(observe(&mut r, "agy", Some("a2"), t0 + D), Access::Read);
+        // the watchdog: never retried, never lifted for its version
+        drop_version(&mut r, "agy", "a2", "ran ungated", t0 + D);
+        assert_eq!(probe_due(&r, t0 + 30 * D), None);
+        record_probe(&mut r, "agy", "a2", &ProbeOutcome::Pass { tokens: 1 }, t0 + 31 * D);
+        assert!(matches!(observe(&mut r, "agy", Some("a2"), t0 + 31 * D), Access::BridgeOnly(_)));
+        // ...but a new version of the CLI starts fresh: probed, it passes
+        let mut s: Vec<VersionRecord> = Vec::new();
+        drop_version(&mut s, "claude", "c1", "ran ungated", t0);
+        assert!(matches!(observe(&mut s, "claude", Some("c2"), t0), Access::BridgeOnly(_)), "no passed predecessor: probe first");
+        assert_eq!(probe_due(&s, t0), Some(("claude".into(), "c2".into())));
+        record_probe(&mut s, "claude", "c2", &ProbeOutcome::Pass { tokens: 1 }, t0);
+        assert_eq!(observe(&mut s, "claude", Some("c2"), t0), Access::Read);
+        assert!(matches!(observe(&mut s, "claude", Some("c1"), t0), Access::BridgeOnly(_)), "the dropped version stays dropped");
     }
 
     /// AC-18 in the store: a changed CLI version keeps the read tools for the grace and is due for a probe; a fail drops it at once; a
@@ -789,7 +1023,7 @@ mod tests {
         assert_eq!(probe_due(&r, t0 + 5 * H), Some(("agy".into(), "agy 3".into())));
         assert_eq!(observe(&mut r, "agy", Some("agy 3"), t0 + 4 * H + GRACE_SECS - 1), Access::Read);
         assert!(matches!(observe(&mut r, "agy", Some("agy 3"), t0 + 4 * H + GRACE_SECS + 1), Access::BridgeOnly(_)));
-        assert_eq!(probe_due(&r, t0 + 4 * H + GRACE_SECS + 1), None);
+        assert_eq!(probe_due(&r, t0 + 4 * H + GRACE_SECS + 1), Some(("agy".into(), "agy 2".into())), "agy 3's grace is over; only agy 2's one retry of its failed probe is left");
         assert!(matches!(observe(&mut r, "agy", None, t0), Access::BridgeOnly(_)), "an unreadable version has no record");
         // a pass on a grace version ends the grace
         assert_eq!(observe(&mut r, "agy", Some("agy 4"), t0 + 6 * D), Access::Read);
