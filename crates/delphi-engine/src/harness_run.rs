@@ -126,15 +126,18 @@ pub(crate) fn in_band_error(cli: Cli, text: &str) -> bool {
 }
 
 /// The kind of a CLI's final `result`. An error result whose subtype names structured output is a refusal (the answer was found
-/// and failed validation); a success with a schema asked for and no answer or words is "not found"; a success whose text is the
-/// CLI's own error line is in-band. Anything else is `Other`, so a miss behaves as before.
-fn classify_result(cli: Cli, wants_schema: bool, cli_error: bool, subtype: &str, text: &str, has_structured: bool, no_words: bool) -> FailKind {
+/// and failed validation); a success with no answer or words, when an answer was expected, is "not found"; a success whose text is
+/// the CLI's own error line is in-band. Anything else is `Other`, so a miss behaves as before.
+///
+/// `expects_answer` is true for a run that asked for a schema, and for any run that used no tool that acts (`specs/128` S2 item 4,
+/// 2026-11-21): a seat that only read and then said nothing produced nothing. A run without a schema that acted keeps its success.
+fn classify_result(cli: Cli, expects_answer: bool, cli_error: bool, subtype: &str, text: &str, has_structured: bool, no_words: bool) -> FailKind {
     if cli_error {
         return if subtype.contains("structured") { FailKind::AnswerRefused } else { FailKind::Other };
     }
     if !has_structured && in_band_error(cli, text) {
         FailKind::InBandError
-    } else if wants_schema && !has_structured && no_words {
+    } else if expects_answer && !has_structured && no_words {
         FailKind::AnswerNotFound
     } else {
         FailKind::Other
@@ -511,6 +514,15 @@ impl Engine {
         self.agy_gate_record(endpoint_id, program).is_some_and(|r| r.builder_ready)
     }
 
+    /// The account's Copilot catalog (`specs/132` §5.2), only when the cached one in `local/` was read on the installed CLI version
+    /// within a day. A span reads the cache, never the catalog itself (`delphi doctor` reads and caches it); no cache, no judgment.
+    pub(crate) fn copilot_fresh_catalog(&self) -> Option<crate::model_catalog::Catalog> {
+        let cached = crate::model_catalog::load(&self.ws.dir.join("local"))?;
+        let version = crate::capabilities::cli_version_bounded(&self.settings.copilot_program, 5)?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        cached.usable_for(&version, now).then_some(cached)
+    }
+
     fn agy_gate_record(&self, endpoint_id: &str, program: &str) -> Option<crate::capabilities::GateRecord> {
         let path = self.settings.agy_gate_file.clone().or_else(|| self.inventory.gate_path())?;
         let rec = crate::capabilities::load_gates(&path).into_iter().find(|g| g.endpoint_id == endpoint_id)?;
@@ -596,6 +608,10 @@ impl Engine {
                 }
             }
             Cli::Copilot => {
+                // A model the account's fresh catalog lacks makes the tier unusable (`specs/132` §5.2): refused, never swapped.
+                if let Some(why) = self.copilot_fresh_catalog().and_then(|c| crate::model_catalog::refusal(&c, &ep.id, &sc.tier, &model)) {
+                    return Ok(Err(HarnessErr::retry(why)));
+                }
                 if builder {
                     let profile = self.cfg.get().harness.get("copilot").cloned().unwrap_or_default();
                     if !profile.bridge {
@@ -1022,11 +1038,12 @@ impl Engine {
                         }, !used_tools));
                     }
                     let no_words = text.trim().is_empty() && text_parts.iter().all(|t| t.trim().is_empty());
-                    fail_kind = classify_result(cli, wants_schema, is_error && exhaustion.is_none(), subtype, text, structured.is_some(), no_words);
+                    fail_kind = classify_result(cli, wants_schema || !used_tools, is_error && exhaustion.is_none(), subtype, text, structured.is_some(), no_words);
                     if !is_error {
                         match fail_kind {
                             FailKind::InBandError => failure = Some((format!("the CLI reported success but its answer is an error: {}", text.trim().chars().take(100).collect::<String>()), !used_tools)),
-                            FailKind::AnswerNotFound => failure = Some(("the CLI finished without the schema-validated answer that was asked for".into(), !used_tools)),
+                            FailKind::AnswerNotFound if wants_schema => failure = Some(("the CLI finished without the schema-validated answer that was asked for".into(), !used_tools)),
+                            FailKind::AnswerNotFound => failure = Some(("the CLI finished with success and no words (an empty finish)".into(), !used_tools)),
                             _ => {}
                         }
                     }
@@ -1425,6 +1442,7 @@ echo "$a_{t}" >> answers.txt"#, t = tool, i = input);
         assert_eq!(k(true, true, "error_max_structured_output_retries", "", false, true), FailKind::AnswerRefused);
         assert_eq!(k(true, true, "error_max_turns", "", false, true), FailKind::Other);
         assert_eq!(k(true, false, "success", "", false, true), FailKind::AnswerNotFound);
+        // No answer expected: a run without a schema that used a tool that acts keeps its wordless success (spec 128 S2 item 4).
         assert_eq!(k(false, false, "success", "", false, true), FailKind::Other);
         assert_eq!(k(true, false, "success", "", true, true), FailKind::Other);
         assert_eq!(k(false, false, "success", "Error: cannot load model", false, false), FailKind::InBandError);
@@ -2158,6 +2176,33 @@ open(sys.argv[1], "w").write(json.dumps(out))
         }
     }
 
+    /// specs/132 AC-5, §5.2: a tier whose model a fresh catalog (this CLI version, within a day) lacks is refused before the CLI starts,
+    /// naming the model; the same catalog listing it lets the seat run; a catalog read on another version judges nothing.
+    #[tokio::test]
+    async fn a_copilot_tier_whose_model_a_fresh_catalog_lacks_is_refused() {
+        use crate::model_catalog::{save, Catalog, CatalogModel};
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let listed = |ids: &[&str], ver: &str| Catalog { cli_version: ver.into(), read_unix: now, models: ids.iter().map(|id| CatalogModel { id: id.to_string(), multiplier: Some(1.0), price_category: "medium".into(), enabled: true }).collect() };
+        for (catalog, runs) in [(listed(&["gpt-6-luna"], "GitHub Copilot CLI 9.9.9."), false), (listed(&["m-1"], "GitHub Copilot CLI 9.9.9."), true), (listed(&["gpt-6-luna"], "GitHub Copilot CLI 9.9.8."), true)] {
+            let scripts = tempfile::tempdir().unwrap();
+            let prog = crate::harness::tests::fake_cli_versioned(scripts.path(), &fake_copilot_body(&scripts.path().join("dump"), "m-1"), "GitHub Copilot CLI 9.9.9.");
+            let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+            use_keyed_harness(&f, "copilot");
+            *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+            save(&f.engine.ws.dir.join("local"), &catalog).unwrap();
+            let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+            if runs {
+                assert_eq!(out.status, Status::Done, "{:?}: {}", catalog.models, out.text);
+            } else {
+                match &out.status {
+                    Status::Escalated(r) => assert!(r.contains("model `m-1` is not in this account's Copilot catalog") && r.contains("never swaps"), "{r}"),
+                    other => panic!("{other:?}"),
+                }
+                assert!(events_of(&f, "harness.started").is_empty());
+            }
+        }
+    }
+
     /// specs/051 §2.2 (as amended): a Council Round 2 node on a carrier with no structured-output flag is read from the line format.
     async fn copilot_round2(reply: &str) -> (crate::engine::TaskOutcome, String) {
         let scripts = tempfile::tempdir().unwrap();
@@ -2550,6 +2595,23 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert!(g[0].payload["note"].as_str().unwrap().contains("2 paths Delphi wrote itself"));
     }
 
+    /// `specs/128` S3 (amended 2026-11-21): the research writer's temporary file (`.<name>.<pid>.<n>.tmp`), caught by the "after" snapshot
+    /// between its creation and its rename, is Delphi's own write too and does not discard the answer.
+    #[tokio::test]
+    async fn the_research_writers_temp_file_caught_mid_write_does_not_discard_the_answer() {
+        let (f, out, _) = run_with_concurrent_write(|dir| {
+            let d = dir.join("research/topics/t-4");
+            fs::create_dir_all(&d).unwrap();
+            let tmp = d.join(".record.json.4242.7.tmp");
+            crate::own_writes::note_temp(&tmp, b"{}");
+            fs::write(&tmp, "{}").unwrap();
+        })
+        .await;
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "a good answer"), "{}", out.text);
+        let g = events_of(&f, "harness.checkout_guard");
+        assert_eq!((g[0].payload["discarded"].clone(), g[0].payload["own_writes_count"].clone()), (json!(false), json!(1)), "{}", g[0].payload);
+    }
+
     /// The guard still fails closed: a file the ledger never saw, and a file Delphi wrote that was edited afterwards, are differences.
     #[tokio::test]
     async fn the_guard_still_discards_a_write_the_ledger_never_saw_or_one_edited_after_delphi_wrote_it() {
@@ -2748,6 +2810,34 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_EMPTY_FINISH), Duration::from_secs(600));
         let s = seat_r2(&f).await;
         assert!(matches!(&s, crate::council::Stance::Abstained(r) if r.contains("without the schema-validated answer")), "{s:?}");
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.no_answer").len()), (2, 1, 2));
+    }
+
+    /// `specs/128` S2 (amended 2026-11-21): a Round 1 seat asks no schema, and a wordless success there is an empty finish too: one
+    /// retry and `harness.no_answer` (the 58,693-token abstention of the Stage 0 run had neither).
+    #[tokio::test]
+    async fn an_empty_finish_of_a_seat_without_a_schema_is_tried_once_more_and_says_what_it_did() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 1, AGY_EMPTY_FINISH), Duration::from_secs(600));
+        let s = seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Said(t) if t == "a good answer"), "{s:?}");
+        assert_eq!(starts(&count), 2);
+        let r = events_of(&f, "harness.retry");
+        assert_eq!(r.len(), 1);
+        assert!(r[0].payload["reason"].as_str().unwrap().contains("no words"), "{}", r[0].payload);
+        let n = events_of(&f, "harness.no_answer");
+        assert_eq!(n.len(), 1, "only the first run ended with no answer");
+        assert_eq!((n[0].payload["status"].as_str(), n[0].payload["output_tokens"].as_u64()), (Some("success"), Some(1498)), "{}", n[0].payload);
+    }
+
+    #[tokio::test]
+    async fn two_empty_finishes_of_a_seat_without_a_schema_abstain_after_exactly_one_retry() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_EMPTY_FINISH), Duration::from_secs(600));
+        let s = seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Abstained(_)), "{s:?}");
         assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.no_answer").len()), (2, 1, 2));
     }
 
