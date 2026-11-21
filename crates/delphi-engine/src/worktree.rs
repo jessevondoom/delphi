@@ -91,6 +91,20 @@ fn valid_task_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// A branch name Delphi passes to git (`specs/135` §6.2): letters, digits and `._/-`, never starting with `-`, `/` or `.` (so it is never
+/// read as an option), no `..`, `//` or `/.`, not ending in `/`, `.` or `.lock`, at most 200 characters.
+pub fn valid_branch(b: &str) -> bool {
+    !b.is_empty()
+        && b.len() <= 200
+        && b.chars().all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c))
+        && !b.starts_with(['-', '/', '.'])
+        && !b.ends_with(['/', '.'])
+        && !b.ends_with(".lock")
+        && !b.contains("..")
+        && !b.contains("//")
+        && !b.contains("/.")
+}
+
 /// Config keys in a project's local config that would run programs on worktree content.
 fn unsafe_config(project: &Path, home: &Path) -> Result<Vec<String>, GitError> {
     let mut c = git_command(None, None, home);
@@ -569,8 +583,17 @@ impl Worktrees {
     /// Copy `project` at its `HEAD` into a new investigation named `key`. Every git call is the daemon's, hardened as for a task
     /// worktree, and all of them finish before any sandboxed command runs: the daemon never runs git here again.
     pub fn create_investigation(&self, project: &Path, key: &str) -> Result<Investigation, GitError> {
+        self.create_investigation_at(project, key, None)
+    }
+
+    /// As [`Worktrees::create_investigation`], checked out at the project's branch `branch` (`refs/heads/<branch>`) instead of its head
+    /// when one is named (`specs/135` §6.2 item 2: the review copy of a branch under review).
+    pub fn create_investigation_at(&self, project: &Path, key: &str, branch: Option<&str>) -> Result<Investigation, GitError> {
         if !valid_task_id(key) {
             return Err(GitError::BadTaskId(key.into()));
+        }
+        if let Some(b) = branch.filter(|b| !valid_branch(b)) {
+            return Err(GitError::Failed { args: "branch".into(), stderr: format!("`{}` is not a branch name Delphi accepts", b.chars().take(80).collect::<String>()) });
         }
         let home = self.home()?.to_path_buf();
         let project = std::fs::canonicalize(project).map_err(|e| GitError::Io(format!("{}: {}", project.display(), e)))?;
@@ -600,16 +623,52 @@ impl Worktrees {
             let mut c = git_command(Some(&git_dir), Some(&tree), &home);
             c.args(["-c", "protocol.file.allow=always", "fetch", "--quiet", "--no-recurse-submodules", "--no-write-fetch-head", "--update-head-ok"]).arg(&project).args(["+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*", "+HEAD:refs/delphi/base"]);
             run(c, "fetch")?;
+            let at = match branch {
+                None => base_sha.clone(),
+                Some(b) => {
+                    let mut c = git_command(Some(&git_dir), Some(&tree), &home);
+                    c.args(["rev-parse", "--verify", "--quiet"]).arg(format!("refs/heads/{}^{{commit}}", b));
+                    run(c, "rev-parse branch").map_err(|_| GitError::Failed { args: "branch".into(), stderr: format!("the project has no branch `{}`", b) })?.trim().to_string()
+                }
+            };
             let mut c = git_command(Some(&git_dir), Some(&tree), &home);
-            c.args(["checkout", "--quiet", "--force", "--detach", &base_sha]);
-            run(c, "checkout").map(|_| ())
+            c.args(["checkout", "--quiet", "--force", "--detach", &at]);
+            run(c, "checkout").map(|_| at)
         })();
+        let base_sha = match &made {
+            Ok(at) => at.clone(),
+            Err(_) => base_sha,
+        };
+        let made = made.map(|_| ());
         let inv = Investigation { key: key.into(), root, tree, git_dir, project, base_sha };
         if let Err(e) = made {
             inv.remove();
             return Err(e);
         }
         Ok(inv)
+    }
+
+    /// The stat and the diff of `branch` against `base` (`base...branch`, from their merge base) in an investigation copy, by the
+    /// daemon's git (`specs/135` §6.2 item 2). Called before any sandboxed command runs in the copy, so no command can change what
+    /// it reads. No external diff driver and no textconv run.
+    pub fn investigation_diff(&self, inv: &Investigation, base: &str, branch: &str) -> Result<(String, String), GitError> {
+        for b in [base, branch] {
+            if !valid_branch(b) {
+                return Err(GitError::Failed { args: "branch".into(), stderr: format!("`{}` is not a branch name Delphi accepts", b.chars().take(80).collect::<String>()) });
+            }
+        }
+        let home = self.home()?.to_path_buf();
+        let range = format!("refs/heads/{}...refs/heads/{}", base, branch);
+        let diff = |stat: bool| -> Result<String, GitError> {
+            let mut c = git_command(Some(&inv.git_dir), Some(&inv.tree), &home);
+            c.args(["diff", "--no-color", "--no-ext-diff", "--no-textconv"]);
+            if stat {
+                c.arg("--stat=200");
+            }
+            c.arg(&range).arg("--");
+            run(c, if stat { "diff --stat" } else { "diff" })
+        };
+        Ok((diff(true)?, diff(false)?))
     }
 
     /// Delete every investigation copy `live` does not name: what a daemon that died left behind.

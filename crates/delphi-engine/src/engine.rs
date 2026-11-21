@@ -120,6 +120,11 @@ pub struct Settings {
     /// `[access] standing_foreign_tokens` (`specs/104` §5, §12 A4): the operator's standing consent for read-only foreign seats, in tokens
     /// per 24 hours. Read from the ratified copy only (`[access]` is pinned); 0, the default, is off.
     pub standing_foreign_tokens: u64,
+    /// `[forge] review_commands` (`specs/135` §6.2 item 3): the commands a review runs in its sandboxed copy. `None`: the `[exec]`
+    /// test and check commands, when they are set.
+    pub review_commands: Option<Vec<Vec<String>>>,
+    /// `[forge] review_diff_chars` (`specs/135` §6.3): the most diff a review's seat is shown.
+    pub review_diff_chars: usize,
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
@@ -234,6 +239,8 @@ impl Default for Settings {
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
             standing_foreign_tokens: 0,
+            review_commands: None,
+            review_diff_chars: crate::review_job::DEFAULT_DIFF_CHARS,
             thin_below: 3,
             continue_bar: Default::default(),
             archive: Default::default(),
