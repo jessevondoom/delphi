@@ -133,6 +133,9 @@ pub struct Settings {
     pub review_diff_chars: usize,
     /// `[forge] review_context_chars` (`specs/135` §14.3 item 1): the most call sites and Round 0 excerpts a review's seat is shown.
     pub review_context_chars: usize,
+    /// `[forge.tools.<harness>] read` (`specs/135` §14.7 rule 1): a carrier's read list for forge seats, when configured; the shipped
+    /// default otherwise (`forge_tools::read_list`, which keeps only the carrier's known read tools).
+    pub forge_tools: BTreeMap<String, Vec<String>>,
     /// `[research] thin_below` (`specs/098` §7.5 item 4): fewer kept, cited claims than this from the knowledge base and the trusted
     /// sources together make a research answer `coverage: thin`. Default 3.
     pub thin_below: usize,
@@ -252,6 +255,7 @@ impl Default for Settings {
             review_commands: None,
             review_diff_chars: crate::review_job::DEFAULT_DIFF_CHARS,
             review_context_chars: crate::review_job::DEFAULT_CONTEXT_CHARS,
+            forge_tools: Default::default(),
             thin_below: 3,
             continue_bar: Default::default(),
             archive: Default::default(),
@@ -412,6 +416,8 @@ pub struct Engine {
     pub inventory: Arc<crate::inventory::Inventory>,
     /// Handoffs whose spans get no tools at all (an approver answers in text), by handoff id.
     pub(crate) toolless: Mutex<HashSet<String>>,
+    /// Tool-less handoffs that are forge readers (`specs/135` §14.7), by handoff id, with the review copy they may read.
+    pub(crate) forge_reads: Mutex<HashMap<String, PathBuf>>,
     /// The operator prompt behind each operator-rooted task, for the artifact prompt log (`specs/070` §3). Tasks a timer, a host or another agent started have none.
     pub(crate) operator_prompts: Mutex<HashMap<String, String>>,
     /// Tasks raised by a host agent (`specs/062` §6.3, §7), by `<mission id>/<task id>`: every span of one, dispatched or not, runs
@@ -519,6 +525,11 @@ pub(crate) struct SpanCtx {
     pub(crate) said_homogeneous: Mutex<bool>,
     /// This span is offered no tools, and refuses any it is not offered (`provisional_run.rs`).
     pub(crate) toolless: bool,
+    /// A forge reader's review copy (`specs/135` §14.7): the span is tool-less for Delphi's tools, and its CLI's own read tools may be
+    /// given for this directory when the carrier's version allows them (`run_harness`).
+    pub(crate) forge_read: Option<PathBuf>,
+    /// Set by `run_harness` when the read tools were given: what the gate and the watchdog hold the seat to.
+    pub(crate) forge: Option<crate::forge_tools::ForgeSeat>,
     /// This span belongs to a host-originated task: no writes, no commands, no timers, no settings, no connectors.
     pub(crate) readonly: bool,
     /// A harness was already tried for this span (and failed for a reason that is not a spent quota, so the pool does not know).
@@ -1038,7 +1049,7 @@ impl Engine {
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
             let seat_readonly = self.readonly_handoffs.lock().unwrap().contains(&readonly_key(&m.id, &handoff.handoff_id));
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), forge_read: self.forge_reads.lock().unwrap().get(&handoff.handoff_id).cloned(), forge: None, readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {

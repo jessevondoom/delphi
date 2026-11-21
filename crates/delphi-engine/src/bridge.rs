@@ -84,11 +84,33 @@ pub struct HookPolicy {
     /// A Builder's gate: the file and shell tools in [`AGY_BUILDER_TOOLS`] are asked of the span's loop, which applies the
     /// same rules as for a Claude Builder. Without it they are denied.
     pub ask: Option<mpsc::Sender<HookAsk>>,
+    /// A forge reader (`specs/135` §14.7): the CLI's own read tools on this list may run when every path they name is inside this
+    /// directory (`forge_tools::gate`). Anything else of the CLI's own stays denied.
+    pub forge: Option<(PathBuf, Vec<String>)>,
 }
 
 impl HookPolicy {
     pub fn new(allow_prefixes: Vec<String>, allow_names: Vec<String>) -> HookPolicy {
-        HookPolicy { allow_prefixes, allow_names, tainted: Arc::default(), ask: None }
+        HookPolicy { allow_prefixes, allow_names, tainted: Arc::default(), ask: None, forge: None }
+    }
+
+    /// This policy for a forge reader of `root` with the read tools `read`.
+    pub fn with_forge(mut self, root: PathBuf, read: Vec<String>) -> HookPolicy {
+        self.forge = Some((root, read));
+        self
+    }
+
+    /// [`Self::decide`], with the call's arguments: a forge reader's read tool is judged by its paths.
+    pub fn decide_call(&self, tool: &str, args: &Value) -> (bool, String) {
+        if let Some((root, read)) = &self.forge {
+            if !tool.is_empty() && !self.allow_prefixes.iter().any(|p| tool.starts_with(p)) && read.iter().any(|r| r == tool) {
+                return match crate::forge_tools::gate(read, root, tool, args) {
+                    Ok(()) => (true, String::new()),
+                    Err(why) => (false, format!("denied by Delphi: {}", why)),
+                };
+            }
+        }
+        self.decide(tool)
     }
 
     /// This policy for a Builder, with the channel its asks go to.
@@ -455,7 +477,7 @@ async fn handle(shared: &Shared, req: &Value) -> Option<Value> {
             Some(policy) => {
                 let call = &req["params"]["toolCall"];
                 let tool = call["name"].as_str().unwrap_or("");
-                let (mut allowed, mut reason) = policy.decide(tool);
+                let (mut allowed, mut reason) = policy.decide_call(tool, &call["args"]);
                 if let (false, Some(ask), true) = (allowed, &policy.ask, AGY_BUILDER_TOOLS.contains(&tool)) {
                     let (reply, answer) = oneshot::channel();
                     (allowed, reason) = if ask.send(HookAsk { tool: tool.to_string(), args: call["args"].clone(), reply }).await.is_err() {
@@ -925,6 +947,30 @@ mod tests {
         assert_eq!(seen[0], HookNote { tool: "mcp_delphi_delphi_timer".into(), allowed: true, summary: String::new() });
         assert_eq!((seen[1].tool.as_str(), seen[1].allowed, seen[1].summary.as_str()), ("run_command", false, "echo leaked > proof.txt"));
         assert_eq!(seen.len(), 3);
+    }
+
+    /// `specs/135` AC-20: an edit or shell call whose approval bridge does not answer (the span that would judge it is gone) is refused;
+    /// so is one whose bridge has no gate at all. No grace applies.
+    #[tokio::test]
+    async fn an_edit_or_shell_call_with_no_answer_from_the_bridge_is_refused() {
+        let (ask_tx, ask_rx) = mpsc::channel::<HookAsk>(1);
+        drop(ask_rx);
+        let policy = HookPolicy::new(vec![AGY_TOOL_PREFIX.into()], vec![]).for_builder(ask_tx);
+        let (b, _calls, _notes) = Bridge::start_gated(defs(), String::new(), Path::new("/x/delphi"), Some(policy)).await.unwrap();
+        let (mut r, mut w) = client(&b, b.token()).await;
+        for (tool, args) in [("write_file", json!({"Path": "/w/a.txt", "Content": "x"})), ("edit_file", json!({"Path": "/w/a.txt"})), ("run_command", json!({"CommandLine": "ls"}))] {
+            let resp = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 1, "method": "delphi/hook", "params": {"toolCall": {"name": tool, "args": args}}})).await;
+            assert_eq!(resp["result"]["decision"], "deny", "{tool}: {resp}");
+        }
+        // A forge reader's policy: the read list on the copy only; edits and the shell are not on it, whatever the bridge says.
+        let d = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(d.path()).unwrap();
+        std::fs::write(root.join("a.rs"), "x").unwrap();
+        let reader = HookPolicy::new(vec![], vec![]).with_forge(root.clone(), crate::forge_tools::default_read("agy"));
+        assert!(reader.decide_call("view_file", &json!({"AbsolutePath": root.join("a.rs").display().to_string()})).0);
+        for (tool, args) in [("write_to_file", json!({"TargetFile": root.join("a.rs").display().to_string()})), ("run_command", json!({"CommandLine": "ls"})), ("view_file", json!({"AbsolutePath": "/etc/hosts"}))] {
+            assert!(!reader.decide_call(tool, &args).0, "{tool}");
+        }
     }
 
     #[tokio::test]
