@@ -116,7 +116,8 @@
         "require_families": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Refuse a Panel that cannot show this many distinct known model families, before anything is spent. Unset (the default) never refuses; the result is labelled homogeneous." },
         "max_foreign_seats": { "type": "integer", "minimum": 0, "description": "Foreign seats one Council may run (default 1). 0 turns them off." },
         "red_team_kind": { "type": "boolean", "deprecated": true, "description": "Removed (specs/098 section 13.2): ignored. council_open always accepts kind: red_team. The key stays here so an old config still validates; delphi doctor names it." },
-        "max_foreign_tokens": { "type": "integer", "minimum": 0, "description": "Tokens the foreign seats of one Council may use (default 100000)." }
+        "max_foreign_tokens": { "type": "integer", "minimum": 0, "description": "Tokens the foreign seats of one Council may use (default 100000)." },
+        "spread": { "enum": ["all", "two"], "description": "With three or more usable families, every Council seat on its own family and a Panel's foreign seats on distinct families (all, the default), or two-family Councils (two). Read from the ratified copy only (specs/132 section 5.4)." }
       }
     },
     "loop": {
@@ -319,6 +320,7 @@
       "description": "`[harness.claude]`, `[harness.agy]`, `[harness.codex]` and `[harness.copilot]` narrow the subscription-CLI defaults; scalar keys on `[harness]` itself (for example connector_settle_secs, subscription_budget_tokens) apply to all.",
       "properties": {
         "connector_settle_secs": { "type": "integer", "minimum": 0 },
+        "first_event_secs": { "type": "integer", "minimum": 0, "description": "A CLI run with no event at all after this many seconds is killed, tried once more, then moved to the family's next endpoint (spec 089 §17). Default 90; 0 leaves only the idle clock." },
         "subscription_budget_tokens": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": { "$ref": "#/$defs/harnessProfile" }

@@ -6,7 +6,7 @@
 
 ## 006-installer-and-updater
 
-**006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine** · approved (per source at `8cb36ea98265`) · tier 0 · [source](../../specs/006-installer-and-updater.md)
+**006: Multi-Operator Distribution, Installer & Three-Zone Updater Engine** · approved (per source at `11715c533dbd`) · tier 0 · [source](../../specs/006-installer-and-updater.md)
 
 **source excerpt, untrusted** · `specs/006-installer-and-updater.md` lines 23-27
 
@@ -32,7 +32,7 @@ _No standard scope section; open the spec._
 
 ## 039-error-log
 
-**039: The central error log** · approved (per source at `6ceda78a3df1`) · tier 0 · [source](../../specs/039-error-log.md)
+**039: The central error log** · approved (per source at `9dbb823ba51d`) · tier 0 · [source](../../specs/039-error-log.md)
 
 _No standard scope section; open the spec._
 

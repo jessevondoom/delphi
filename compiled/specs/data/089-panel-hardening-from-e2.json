@@ -143,6 +143,12 @@
     {
       "level": 2,
       "line": 305,
+      "number": "17",
+      "title": "Amendment (2026-11-21): a first-event clock, one retry of a silent run, then the family's next endpoint"
+    },
+    {
+      "level": 2,
+      "line": 320,
       "number": "18",
       "title": "Amendment (2026-11-21): OD-4 decided; the checkout guard is narrowed by seat kind (P4b)"
     }
@@ -150,7 +156,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/089-panel-hardening-from-e2.md",
-    "sha256": "e737a74595e3308a9372d7358aa25c0a001bf258a763687d61eff49a5ba70c52"
+    "sha256": "e63a7d92a7ec31352b93f60062ebcb1075cd7d256fc840ac8e9a20ab19446109"
   },
   "source_status_at_hash": {
     "line": {
@@ -163,7 +169,7 @@
       },
       "text": "status: approved   # by the operator's instruction of 2026-11-06 (\"begin work on the remaining slices\"); OD-1, OD-2, OD-3 and OD-5 take the recommendations; P4b and the E3 run wait for the operator's explicit go (§10)"
     },
-    "sha256": "e737a74595e3308a9372d7358aa25c0a001bf258a763687d61eff49a5ba70c52",
+    "sha256": "e63a7d92a7ec31352b93f60062ebcb1075cd7d256fc840ac8e9a20ab19446109",
     "word": "approved"
   },
   "spec": {

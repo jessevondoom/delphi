@@ -88,6 +88,9 @@ pub struct Settings {
     pub harness_token_cap: u64,
     /// A harness that says nothing for this long is killed.
     pub harness_idle: Duration,
+    /// A harness run that has produced no event at all for this long is killed, tried once more and then moved to the family's next
+    /// endpoint (`specs/089` §17, `[harness] first_event_secs`); never longer than `harness_idle`. Zero leaves only the idle clock.
+    pub harness_first_event: Duration,
     /// CLI features from `[harness.claude]` and `[harness.agy]` (`specs/021`).
     pub harness_claude: crate::harness::Opts,
     pub harness_agy: crate::harness::Opts,
@@ -117,6 +120,9 @@ pub struct Settings {
     /// `[seats] max_foreign_seats` and `max_foreign_tokens` (SR-4): per Council.
     pub max_foreign_seats: u32,
     pub max_foreign_tokens: u64,
+    /// `[seats] spread` (`specs/132` §5.4): `"all"` (true, the default) seats every Council seat on its own family when three or more
+    /// are usable, and a Panel's foreign seats on distinct families; `"two"` (false) keeps two-family Councils. Ratified only.
+    pub spread_all: bool,
     /// `[access] standing_foreign_tokens` (`specs/104` §5, §12 A4): the operator's standing consent for read-only foreign seats, in tokens
     /// per 24 hours. Read from the ratified copy only (`[access]` is pinned); 0, the default, is off.
     pub standing_foreign_tokens: u64,
@@ -221,6 +227,7 @@ impl Default for Settings {
             agy_gate_file: None,
             harness_token_cap: 500_000,
             harness_idle: Duration::from_secs(300),
+            harness_first_event: Duration::from_secs(90),
             harness_claude: Default::default(),
             harness_agy: Default::default(),
             harness_codex: Default::default(),
@@ -238,6 +245,7 @@ impl Default for Settings {
             require_families: None,
             max_foreign_seats: 1,
             max_foreign_tokens: 100_000,
+            spread_all: true,
             standing_foreign_tokens: 0,
             review_commands: None,
             review_diff_chars: crate::review_job::DEFAULT_DIFF_CHARS,
@@ -403,7 +411,8 @@ pub struct Engine {
     pub(crate) toolless: Mutex<HashSet<String>>,
     /// The operator prompt behind each operator-rooted task, for the artifact prompt log (`specs/070` §3). Tasks a timer, a host or another agent started have none.
     pub(crate) operator_prompts: Mutex<HashMap<String, String>>,
-    /// Tasks raised by a host agent (`specs/062` §6.3): every span of one, dispatched or not, runs narrowed to read-only.
+    /// Tasks raised by a host agent (`specs/062` §6.3, §7), by `<mission id>/<task id>`: every span of one, dispatched or not, runs
+    /// narrowed to read-only. Task ids repeat across missions (`t_0003`), so a host task must not narrow another mission's task.
     pub(crate) readonly_tasks: Mutex<HashSet<String>>,
     /// Single spans narrowed to read-only, by `<mission id>/<handoff id>` (`specs/086` §6.4, `specs/062` §6): a host Panel's foreign
     /// seat opened with tools. Its task is the host's Panel, not a host-raised task, so `readonly_tasks` does not reach it.
@@ -462,6 +471,9 @@ pub(crate) struct Asker<'a> {
     pub span_id: &'a str,
     pub role: &'a str,
 }
+
+/// How long a harness pair that stalled twice in a row (no event at all) cools down while the family's next endpoint serves (`specs/089` §17).
+pub(crate) const STALL_COOLDOWN_SECS: i64 = 600;
 
 /// The reason when every API endpoint of a family has been tried.
 pub(crate) const EXHAUSTED: &str = "every allowed endpoint is throttled or unavailable";
@@ -558,12 +570,13 @@ fn final_text(blocks: &[ContentBlock]) -> String {
 /// The manifest scope that carries `run_command` and `shell`.
 const SHELL_SCOPE: &str = "shell-worktree-scoped";
 
-/// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
-/// The key of a span marked read-only by its handoff: handoff ids repeat across missions (`ho_t_0003_red-team_r1`), so the mission is part of it.
-pub(crate) fn readonly_key(mission: &str, handoff_id: &str) -> String {
-    format!("{mission}/{handoff_id}")
+/// The key of a task or span marked read-only (`readonly_tasks`, `readonly_handoffs`): task and handoff ids repeat across missions
+/// (`t_0003`, `ho_t_0003_red-team_r1`), so the mission is part of it.
+pub(crate) fn readonly_key(mission: &str, id: &str) -> String {
+    format!("{mission}/{id}")
 }
 
+/// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
 pub(crate) fn builds(m: &AgentManifest) -> bool {
     m.execute.iter().any(|e| e == SHELL_SCOPE) && m.write.iter().any(|g| g.starts_with("@worktree/"))
 }
@@ -817,10 +830,8 @@ impl Engine {
     /// A task a host agent asked for (`specs/062` §6): read-only throughout, and below full trust from its first turn, since
     /// the request is content from outside. The caller allocated `task_id` so it can say which task is answering.
     pub async fn run_task_for_host(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str) -> Result<TaskOutcome, EngineError> {
-        self.readonly_tasks.lock().unwrap().insert(task_id.clone());
-        let out = self.start_task(m, task_id.clone(), target, prompt, true, Some(Span::with_ceiling("host", delphi_core::provenance::Tier::L0))).await;
-        self.readonly_tasks.lock().unwrap().remove(&task_id);
-        out
+        let _mark = crate::council::SetMark::new(&self.readonly_tasks, readonly_key(&m.id, &task_id));
+        self.start_task(m, task_id, target, prompt, true, Some(Span::with_ceiling("host", delphi_core::provenance::Tier::L0))).await
     }
 
     async fn start_task(self: &Arc<Self>, m: &Arc<MissionState>, task_id: String, target: &str, prompt: &str, announce: bool, parent: Option<Span>) -> Result<TaskOutcome, EngineError> {
@@ -903,7 +914,7 @@ impl Engine {
             return Err(EngineError::Invalid(format!("`{}` is not an enabled or dispatchable role", target)));
         }
         if announce {
-            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "bundle_agent": bundle_agent, "source": if operator_task { "operator" } else if self.readonly_tasks.lock().unwrap().contains(&task_id) { "host" } else { "timer" }}));
+            let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": prompt, "target": target, "bundle_agent": bundle_agent, "source": if operator_task { "operator" } else if self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, &task_id)) { "host" } else { "timer" }}));
             created.task_id = Some(task_id.clone());
             m.append(created).await?;
         }
@@ -1003,7 +1014,7 @@ impl Engine {
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
             let seat_readonly = self.readonly_handoffs.lock().unwrap().contains(&readonly_key(&m.id, &handoff.handoff_id));
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(task_id) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, read_noted: false, investigate_in: None, investigation: None };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -1219,6 +1230,8 @@ impl Engine {
                 harness_tried = true;
                 sc.harness_tried.store(true, std::sync::atomic::Ordering::SeqCst);
                 let mut first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                // The other retries below never take a stall (no `result`, no answer), so this one is not a second retry of anything.
+                let stalled_first = matches!(&first, Err(f) if f.stalled.is_some());
                 // One more try of an `agy` seat that the CLI itself failed before it used a tool, in a fresh process, on the seat's remaining
                 // time (`specs/089` P4b). Never a timeout, a quota error, a guard failure or a second failure; the first run's usage is logged.
                 if let Err(f) = &first {
@@ -1231,6 +1244,31 @@ impl Engine {
                         if left >= crate::harness_run::RETRY_MIN_REMAINING {
                             m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64}))).await?;
                             first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                        }
+                    }
+                }
+                // A run that produced no event at all (no output, no tool, no token) is tried once more on any CLI, and after a second
+                // stall the pair cools down and the family's next harness endpoint takes the span (`specs/089` §17). Nothing was spent,
+                // so nothing is repeated; a run that produced anything is never taken here.
+                let mut hep = hep;
+                if stalled_first {
+                    let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
+                    if left.is_none_or(|l| l >= crate::harness_run::RETRY_MIN_REMAINING) {
+                        if let Err(f) = &first {
+                            m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "cause": "no_first_event", "endpoint": hep.id, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.map(|l| l.as_millis() as u64)}))).await?;
+                        }
+                        first = self.run_harness(&mut sc, &ipr, &hep).await?;
+                        if let Err(f) = &first {
+                            if let Some(model) = f.stalled.clone() {
+                                let left = self.seat_deadlines.lock().unwrap().get(&handoff.handoff_id).map(|d| d.saturating_duration_since(std::time::Instant::now()));
+                                let next = self.route_harness_after(&sc, &hep.id, &model);
+                                if let (Some(next), true) = (next, left.is_none_or(|l| l >= crate::harness_run::RETRY_MIN_REMAINING)) {
+                                    self.pool.record_stall(&hep.id, &model, STALL_COOLDOWN_SECS);
+                                    m.append(sc.ev("harness.fallback", json!({"from": hep.id, "to": next.id, "cause": "no_first_event", "attempt": 3, "cooldown_secs": STALL_COOLDOWN_SECS, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>()}))).await?;
+                                    first = self.run_harness(&mut sc, &ipr, &next).await?;
+                                    hep = next;
+                                }
+                            }
                         }
                     }
                 }
@@ -2038,6 +2076,20 @@ impl Engine {
             return None;
         }
         route.key().and_then(|k| cfg.endpoint(&k.endpoint_id)).filter(|e| e.path == delphi_adapter::config::AccessPath::Harness).cloned()
+    }
+
+    /// The harness endpoint this span would take if the pair `(endpoint_id, model_id)` were cooling down: the family's next endpoint in
+    /// `[access] order` after a stalled one (`specs/089` §17). `None` when the route would not change to another harness endpoint.
+    pub(crate) fn route_harness_after(&self, sc: &SpanCtx, endpoint_id: &str, model_id: &str) -> Option<Endpoint> {
+        let cfg = self.cfg.get();
+        let now = (self.clock_unix)();
+        let mut state: Vec<crate::pool::Entry> = self.pool.snapshot().into_iter().filter(|e| !(e.endpoint_id == endpoint_id && e.model_id == model_id)).collect();
+        state.push(crate::pool::Entry { endpoint_id: endpoint_id.into(), model_id: model_id.into(), state: crate::pool::State::CoolingDown, since: now, until: Some(now + STALL_COOLDOWN_SECS), reason: "no first event".into(), throttles: vec![], probe_interval_secs: 0, next_probe_at: None });
+        let route = resolve_route(&cfg, &state, now, &self.route_request(sc, false));
+        if route.needs_confirmation() {
+            return None;
+        }
+        route.key().and_then(|k| cfg.endpoint(&k.endpoint_id)).filter(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.id != endpoint_id).cloned()
     }
 
     /// Is there an API pair that can serve this span turn by turn right now?
@@ -3207,6 +3259,42 @@ mod tests {
         f.engine.run_task(&f.m, "orchestrator", "Again").await.unwrap();
         let tools2 = f.model.requests()[1].body["tools"].to_string();
         assert!(tools2.contains("write_file"));
+    }
+
+    // `specs/062` §6.3: the host mark is keyed by mission and task. Task ids repeat across missions (`t_0001`), so before the fix a
+    // host task in one mission narrowed an ordinary task with the same id in another (narrow only, never widen, but wrong).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_task_does_not_narrow_another_missions_task_with_the_same_id() {
+        let f = setup(vec![], 5.0, |_| {});
+        let host_m = later_mission(&f, "host-s1");
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+        let rx = std::sync::Mutex::new(rx);
+        let (tx2, rx2) = std::sync::mpsc::channel::<Vec<String>>();
+        f.model.respond_with(move |body| {
+            let names: Vec<String> = body["tools"].as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default();
+            if body.to_string().contains("HOST-QUESTION") {
+                // Hold the host task open until the ordinary task has been offered its tools.
+                let _ = tx2.send(names);
+                let _ = rx.lock().unwrap().recv_timeout(Duration::from_secs(30));
+                Step::text("host answer")
+            } else {
+                let _ = tx.send(names);
+                Step::text("ordinary answer")
+            }
+        });
+        let host_tid = host_m.next_task_id();
+        let (eng, hm, ht) = (f.engine.clone(), host_m.clone(), host_tid.clone());
+        let host = tokio::spawn(async move { eng.run_task_for_host(&hm, ht, "orchestrator", "HOST-QUESTION").await });
+        let host_tools = tokio::task::spawn_blocking(move || rx2.recv_timeout(Duration::from_secs(30)).unwrap()).await.unwrap();
+        assert!(!host_tools.contains(&"write_file".to_string()), "the host task is read-only: {host_tools:?}");
+        f.engine.run_task(&f.m, "orchestrator", "ORDINARY").await.unwrap();
+        let created = events_of(&f, "task.created");
+        assert_eq!(created.last().unwrap().task_id.as_deref(), Some(host_tid.as_str()), "the two tasks share an id");
+        assert_eq!(created.last().unwrap().payload["source"], "operator", "an ordinary task is not labelled a host task");
+        let ordinary = f.model.requests().iter().find(|r| r.body.to_string().contains("ORDINARY")).map(|r| r.body["tools"].to_string()).unwrap();
+        assert!(ordinary.contains("write_file"), "another mission's task with the same id keeps its tools: {ordinary}");
+        host.await.unwrap().unwrap();
+        assert!(f.engine.readonly_tasks.lock().unwrap().is_empty(), "the mark does not outlive the task");
     }
 
     #[tokio::test]

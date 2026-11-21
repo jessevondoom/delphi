@@ -40,7 +40,7 @@ and no lock is held to write. Rotation at `max_mb` (10) keeping `files` (3) file
 
 **Context.** Only these keys are kept, whatever the caller passes: `mission task span command args_shape exit_code harness provider
 status duration_ms tool method kind model role attempt stderr_tail error_type reason from to retry_after_s bytes count store phase
-view`. There is no key for a body, a prompt, a file's contents, an environment value or a key, so none can be logged by accident.
+view arg_keys` (`arg_keys` added 2026-11-21: the 2026-11-07 amendment below required it in `tool_failed`, but this list was not updated, so the logger dropped it; found by the spec 135 F4 cross-family review). There is no key for a body, a prompt, a file's contents, an environment value or a key, so none can be logged by accident.
 
 **Sanitizing, before anything is serialized.** Control, bidi, zero-width and line-separator characters are replaced (a newline
 becomes the two characters `\n`; one record is one line); the engine's secret redactor runs, including every credential the daemon

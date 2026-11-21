@@ -397,6 +397,18 @@ fn research_results_follow_their_schema_and_refuse_control_characters_in_identit
     empty["claims"] = json!([]);
     empty["empty"] = json!({ "reason": "trusted_fetch_failed", "causes": [{ "reason": "trusted_fetch_failed", "n": 2, "why": { "http_403": 1, "not_text": 1 } }, { "reason": "leads_unread", "n": 18 }, { "reason": "plan_no_model_seat" }], "text": "2 page(s) on the trusted list could not be fetched.", "next": "Read the addresses in host_leads with your own tool and hand over what you find with record_research." });
     must_pass("research-result.schema.json", "a result that says why it is empty", &empty);
+    // Every word the code can write is one the schema takes (specs/124 section 19 added three).
+    for r in delphi_engine::research_empty::REASONS {
+        let mut each = empty.clone();
+        each["empty"]["reason"] = json!(r);
+        each["empty"]["causes"][0] = json!({ "reason": r });
+        must_pass("research-result.schema.json", r, &each);
+    }
+    for r in ["search_failed", "no_results", "credential_unresolved", "no_search_provider"] {
+        let mut each = covered.clone();
+        each["coverage_report"]["rungs"][0]["reason"] = json!(r);
+        must_pass("research-result.schema.json", r, &each);
+    }
     for (pointer, value, what) in [("/empty/reason", json!("the page said so"), "an empty reason outside the list"), ("/empty/causes/0/reason", json!("blocked by https://x.example"), "a cause outside the list"), ("/empty/causes/0/why", json!({ "the server said: go away": 1 }), "a server's text as a fetch word"), ("/empty/causes/0/url", json!("https://x.example/a"), "an address in a cause")] {
         let mut bad = empty.clone();
         let (parent, key) = pointer.rsplit_once('/').unwrap();
@@ -493,6 +505,13 @@ fn a_seat_receipt_satisfies_its_schema() {
     let mut unmapped = r.clone();
     unmapped.served = resolve(&FamilyTable::shipped(), None);
     must_pass("seat-receipt.schema.json", "a receipt with no served model", &unmapped.to_value());
+    // specs/089 §17: a run killed by the first-event clock says so on its receipt; no other failure word is accepted.
+    let mut stalled = ok.clone();
+    stalled["outcome"] = json!("error");
+    stalled["failure"] = json!("no_first_event");
+    must_pass("seat-receipt.schema.json", "a stalled run's receipt", &stalled);
+    stalled["failure"] = json!("the CLI said: something");
+    must_fail("seat-receipt.schema.json", "a free-text failure", &stalled);
     let mut bad = ok.clone();
     bad["prompt"] = json!("the prompt text");
     must_fail("seat-receipt.schema.json", "a receipt carrying prompt text", &bad);
