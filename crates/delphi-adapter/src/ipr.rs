@@ -18,7 +18,7 @@ pub const STANDING_LIMITS: &str = "Delphi's standing limits (fixed text; no agen
 /// Every section tag Delphi itself emits. Interpolated text can never open or close one.
 pub const SECTION_TAGS: [&str; 13] = ["governance", "role", "skills", "persona", "guidance", "heuristics", "bundle_skills", "lessons", "context", "slice", "contract", "reminder", "prior_reasoning_note"];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContextSlice {
     pub label: String,
     /// Provenance tier, e.g. `L0`..`L5` (`specs/001` §5.1).

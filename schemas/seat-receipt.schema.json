@@ -39,6 +39,26 @@
     "tool_grant": { "type": "object", "description": "What Delphi granted, by name." },
     "prompt_hash": { "type": "string", "pattern": "^blake3:[0-9a-f]{64}$" },
     "prompt_bytes": { "type": "integer", "minimum": 0, "description": "The bytes of the prompt as handed to a CLI carrier (spec 131 S1); a count, never the text. Absent for an API seat." },
+    "context_cut": {
+      "type": "object",
+      "description": "What the carrier's byte budget cut from the prompt (spec 131 S2): counts and pointer labels, never contents. Absent when nothing was cut.",
+      "required": ["budget", "prompt_bytes_before", "prompt_bytes_after", "slices_cut"],
+      "properties": {
+        "budget": { "type": "integer", "minimum": 1 },
+        "prompt_bytes_before": { "type": "integer", "minimum": 0 },
+        "prompt_bytes_after": { "type": "integer", "minimum": 0 },
+        "slices_cut": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "kept_lines", "total_lines"],
+            "properties": { "label": { "type": "string" }, "kept_lines": { "type": "integer", "minimum": 0 }, "total_lines": { "type": "integer", "minimum": 0 } },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "tokens_in": { "type": "integer", "minimum": 0 },
     "tokens_out": { "type": "integer", "minimum": 0 },
     "outcome": { "enum": ["ok", "error", "model_mismatch"] }

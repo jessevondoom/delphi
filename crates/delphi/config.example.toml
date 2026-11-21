@@ -539,6 +539,7 @@ default_peer_trust_ceiling = "federated_peer"
 # claudeai_connectors = true           # false: only Delphi's bridge is loaded (the account's connectors and your own MCP servers stay out)
 # connector_reads = []                 # with approvals = "delphi": exact names like "mcp__claude_ai_Slack__slack_search" that only read; any other connector tool is a Red card
 # env_allow = []                       # extra environment variable NAMES passed to the CLI (for example "AWS_PROFILE"); never values
+# max_prompt_bytes = 150000            # (any [harness.*] block) the most bytes of prompt a seat is sent; over it, files given as pointers are shortened (specs/131)
 # [harness]
 # connector_settle_secs = 10           # how long a span waits for the account's connectors to finish loading before its first turn
 

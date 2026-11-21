@@ -203,6 +203,8 @@ pub struct Receipt {
     pub prompt_hash: String,
     /// The bytes of the prompt as handed to a CLI carrier (`specs/131` S1); `None` for an API seat, whose prompt is not counted here.
     pub prompt_bytes: Option<u64>,
+    /// What the carrier's byte budget cut from the prompt (`specs/131` S2): counts and pointer labels, never contents. `None`: nothing.
+    pub context_cut: Option<Value>,
     pub tokens_in: u64,
     pub tokens_out: u64,
     /// `ok`, `error`, or `model_mismatch`.
@@ -228,6 +230,9 @@ impl Receipt {
         });
         if let Some(n) = self.prompt_bytes {
             v["prompt_bytes"] = json!(n);
+        }
+        if let Some(c) = &self.context_cut {
+            v["context_cut"] = c.clone();
         }
         v
     }
@@ -287,6 +292,7 @@ impl SeatBook {
                 tool_grant: json!({"builtin": "none", "native": [], "bridge": s.tools, "provider": s.provider}),
                 prompt_hash: s.prompt_hash,
                 prompt_bytes: None,
+                context_cut: None,
                 tokens_in: s.tokens_in,
                 tokens_out: s.tokens_out,
                 outcome: outcome.into(),
@@ -413,11 +419,13 @@ pub struct SeatSummary {
     /// It sat, and none of its `ok` receipts shows a tool that could read the repo.
     pub unverified_against_repo: bool,
     pub tokens: u64,
+    /// The last `context_cut` its receipts carry (`specs/131` S2): the seat sat on less than it was given.
+    pub context_cut: Option<Value>,
 }
 
 impl SeatSummary {
     pub fn to_value(&self) -> Value {
-        json!({"seat": self.role, "served_model": self.served_model, "family": self.family, "carrier": self.carrier, "tools_offered": self.tools_offered, "native_tools": self.native_tools, "sat": self.sat, "unverified_against_repo": self.unverified_against_repo, "tokens": self.tokens})
+        json!({"seat": self.role, "served_model": self.served_model, "family": self.family, "carrier": self.carrier, "tools_offered": self.tools_offered, "native_tools": self.native_tools, "sat": self.sat, "unverified_against_repo": self.unverified_against_repo, "tokens": self.tokens, "context_cut": self.context_cut})
     }
 }
 
@@ -432,12 +440,15 @@ pub fn seat_summaries(events: &[delphi_core::event::EventEnvelope], task_id: &st
         let at = match out.iter().position(|s| s.role == role) {
             Some(i) => i,
             None => {
-                out.push(SeatSummary { role: role.clone(), served_model: None, family: UNKNOWN.into(), carrier: String::new(), tools_offered: Vec::new(), native_tools: None, sat: false, unverified_against_repo: false, tokens: 0 });
+                out.push(SeatSummary { role: role.clone(), served_model: None, family: UNKNOWN.into(), carrier: String::new(), tools_offered: Vec::new(), native_tools: None, sat: false, unverified_against_repo: false, tokens: 0, context_cut: None });
                 out.len() - 1
             }
         };
         let s = &mut out[at];
         s.tokens += tokens;
+        if e.payload.get("context_cut").is_some_and(|c| c.is_object()) {
+            s.context_cut = Some(e.payload["context_cut"].clone());
+        }
         // The seat is described by its first receipt that sat (the first at all while none has).
         if ok && !s.sat {
             s.sat = true;
@@ -584,6 +595,7 @@ mod tests {
             tool_grant: json!({"builtin": "none"}),
             prompt_hash: prompt_hash("sys", secret),
             prompt_bytes: Some(3 + secret.len() as u64),
+            context_cut: None,
             tokens_in: 10,
             tokens_out: 3,
             outcome: "model_mismatch".into(),

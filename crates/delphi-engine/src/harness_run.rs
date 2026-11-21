@@ -800,16 +800,36 @@ impl Engine {
         let bridge_on = bridge_rx.is_some() && !bridge_defs.is_empty();
         let native_for_note = if cli == Cli::Agy { if bridge_on { agy_native.clone() } else { vec![] } } else if tools == Tools::None { lp.native_tools.clone() } else { vec![] };
         let note = harness_note(builder, &bridge_defs, &native_for_note, cli == Cli::Agy, sc.toolless);
-        let launch = Launch { cli, program, model, system_prompt: format!("{}\n\n{}", harness_sections(ipr, &bridge_defs).join("\n\n"), note), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
+        let system_prompt = format!("{}\n\n{}", harness_sections(ipr, &bridge_defs).join("\n\n"), note);
+        // The carrier's byte budget (`specs/131` S2): counted on the whole prompt before the CLI starts. Over it, the slices that came from
+        // pointers are shortened (never the system text, the contract or a peer's text); if what may not be cut is alone over it, the seat
+        // does not start and nothing is spent.
+        let budget = crate::prompt_budget::budget(profile.max_prompt_bytes);
+        let fit = crate::prompt_budget::fit(ipr, system_prompt.len() as u64, budget);
+        let context_cut = fit.record(budget);
+        let sent: std::borrow::Cow<Ipr> = match fit {
+            crate::prompt_budget::Fit::Fits => std::borrow::Cow::Borrowed(ipr),
+            crate::prompt_budget::Fit::Cut { slices, .. } => std::borrow::Cow::Owned(Ipr { context_slices: slices, ..ipr.clone() }),
+            crate::prompt_budget::Fit::CannotFit { fixed } => {
+                let reason = crate::prompt_budget::cannot_fit(fixed, budget);
+                sc.m.append(sc.agent_ev("harness.prompt_refused", json!({"budget": budget, "fixed_bytes": fixed, "reason": reason}), ep, &model)).await?;
+                return Ok(Err(HarnessErr { reason, retryable: false, cli_error: false, kind: FailKind::Other }));
+            }
+        };
+        let launch = Launch { cli, program, model, system_prompt, user_prompt: sent.first_user_text(), cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
         let ctl = Ctl { bridge_on, delegate, profile: &profile };
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
         let builtin = if builder { "standard" } else if native_for_note.is_empty() { "none" } else { "native" };
         // What the prompt costs in bytes, counted where it is assembled (`specs/131` S1): counts only, never text.
-        let counts = prompt_counts(&launch.system_prompt, &launch.user_prompt, ipr);
+        let counts = prompt_counts(&launch.system_prompt, &launch.user_prompt, &sent);
         let mut started = json!({"endpoint_id": ep.id, "tools": builtin, "native_tools": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "approvals": if delegate { "delegate" } else { "delphi" }, "claudeai_connectors": launch.profile.claudeai_connectors, "cap_tokens": self.settings.harness_token_cap});
         if let (Some(o), Some(c)) = (started.as_object_mut(), counts.as_object()) {
             o.extend(c.clone());
+            o.insert("budget".into(), json!(budget));
+            if let Some(cut) = &context_cut {
+                o.insert("context_cut".into(), cut.clone());
+            }
         }
         sc.m.append(sc.agent_ev("harness.started", started, ep, &launch.model)).await?;
         // The flags a granted launch relies on (`--disable-slash-commands`, `--disallowedTools`, `--max-turns`) are the 2.1 line's: the CLI's
@@ -1134,6 +1154,7 @@ impl Engine {
                 tool_grant: json!({"builtin": builtin, "native": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "readonly": sc.readonly}),
                 prompt_hash: crate::seat::prompt_hash(&launch.system_prompt, &launch.user_prompt),
                 prompt_bytes: counts["prompt_bytes"].as_u64(),
+                context_cut: context_cut.clone(),
                 tokens_in: usage.input + usage.cache_read + usage.cache_write,
                 tokens_out: usage.output,
                 outcome: if mismatch { "model_mismatch" } else if failure.is_some() { "error" } else { "ok" }.into(),
@@ -2697,6 +2718,74 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert_eq!(c.engine.run_task(&c.m, "architect", "Plan the change").await.unwrap().status, Status::Done);
         let (cs, cr) = (&events_of(&c, "harness.started")[0].payload, &events_of(&c, crate::seat::RECEIPT_KIND)[0].payload);
         assert!(cs["prompt_bytes"].as_u64().is_some_and(|b| b > 0) && cr["prompt_bytes"] == cs["prompt_bytes"], "{cs} {cr}");
+    }
+
+    /// An agy seat whose stand-in keeps its first stdin line in `dump`, and the proposition naming ten 40 KB files of the project.
+    fn ten_big_pointers(dump: &std::path::Path, scripts: &std::path::Path) -> (Fx, String) {
+        let prog = fake_cli(scripts, &format!("printf '%s' \"$first\" > '{d}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"gemini-3.8-flash-low\",\"tools\":[]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"ok\",\"usage\":{{}}}}}}'", d = dump.display()));
+        let f = retry_fx(prog, Duration::from_secs(600));
+        let mut q = String::from("COUNCIL, ROUND 1 (blind). Proposition: review these");
+        for n in 0..10 {
+            let body: String = (1..=400).map(|l| format!("{l:05} {}\n", "y".repeat(94))).collect();
+            fs::write(f.root.join(format!("proj/big{n}.txt")), body).unwrap();
+            q.push_str(&format!(" @project/app/big{n}.txt"));
+        }
+        (f, q)
+    }
+
+    /// `specs/131` S2 (AC-2, AC-3): ten 40 KB pointers for an agy seat with no key set are cut to the default 150,000-byte budget, each at a
+    /// line with the fixed line, the contract still whole at the end; the start event and the receipt say what was cut, by label.
+    #[tokio::test]
+    async fn an_agy_seat_over_its_byte_budget_has_its_pointer_slices_cut_and_says_so() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!(started["budget"], 150_000, "{started}");
+        assert!(started["prompt_bytes"].as_u64().unwrap() <= 150_000, "{started}");
+        let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
+        let cut = &r["context_cut"];
+        assert_eq!(cut, &started["context_cut"]);
+        assert!(cut["prompt_bytes_before"].as_u64().unwrap() > 400_000 && cut["prompt_bytes_after"] == started["prompt_bytes"], "{cut}");
+        let labels: Vec<&str> = cut["slices_cut"].as_array().unwrap().iter().map(|c| c["label"].as_str().unwrap()).collect();
+        assert_eq!(labels.len(), 10, "{cut}");
+        assert!(labels.iter().all(|l| l.starts_with("@project/app/big")) && cut["slices_cut"].as_array().unwrap().iter().all(|c| c["kept_lines"].as_u64().unwrap() < 400 && c["total_lines"] == 400), "{cut}");
+        assert!(!cut.to_string().contains("yyyy"), "labels and counts, never contents");
+        let sent = fs::read_to_string(&dump).unwrap();
+        assert_eq!(sent.matches("[cut by Delphi: the carrier takes at most 150000 bytes of prompt; lines 1 to ").count(), 10);
+        assert!(sent.trim_end().trim_end_matches(['}', '"']).ends_with("</contract>"), "the contract is still the end of the prompt");
+    }
+
+    /// `specs/131` S2 (AC-4): when the text that may not be cut is alone over the budget, the CLI is never started and the seat abstains
+    /// with the stated reason; nothing is spent.
+    #[tokio::test]
+    async fn a_seat_whose_fixed_text_cannot_fit_its_budget_never_starts() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }\n[access]\nrole_family = { architect = \"gemini\" }")
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"agy-sub\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{text}\n[harness.agy]\nmax_prompt_bytes = 2000\n")).unwrap());
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        match &s {
+            crate::council::Stance::Abstained(why) => assert!(why.contains("the prompt cannot fit the carrier's budget (fixed text ") && why.contains("budget 2000)"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(events_of(&f, "harness.started").is_empty() && !dump.exists(), "the CLI was never started");
+        assert!(events_of(&f, "agent.usage").is_empty(), "no tokens recorded");
+        assert_eq!(events_of(&f, "harness.prompt_refused")[0].payload["budget"], 2000);
     }
 
     /// D7 (`specs/086` §6.4): a seat opened with `tools: "readonly"` runs read-only on a CLI too: the bridge serves no write tool and

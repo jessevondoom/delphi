@@ -1541,6 +1541,7 @@ impl EngineService {
                         "advice_only": true,
                         "answer": answer,
                         "unanswered": abstained,
+                        "context_cut": receipts.iter().find_map(|r| r["context_cut"].as_object().map(|c| Value::Object(c.clone()))),
                         "receipt": receipts,
                         "family_requested": family,
                         "family_served": served,
