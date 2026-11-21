@@ -2,7 +2,7 @@
 
 # Specs
 
-138 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
+139 specs in 9 groups. The files under `specs/` are the authority; this page is a view of their compiled form, for review. Each group has its own page.
 
 | Spec | Title | Status | Group | Supersedes / superseded by | Summary | Source |
 | :-- | :-- | :-- | :-- | :-- | :-- | :-- |
@@ -19,6 +19,7 @@
 | [093-authority-invariants-batch1](./governance-and-safety.md#093-authority-invariants-batch1) | 093: Authority invariants as tests: spawn-site ratchet, must-run gate, home isolation, dependency gate (batch 1), resume and usage honesty (batch 2) | approved (per source at `3ec8f144dfd0`) | [Governance and safety](./governance-and-safety.md) |  | yes | [source](../../specs/093-authority-invariants-batch1.md) |
 | [094-core-repo-merge-flow](./governance-and-safety.md#094-core-repo-merge-flow) | 094: The core-repo merge flow: a queue, `delphi merge`, a session-scoped `--auto`, cleanup after merge, a merge error log and a builder that can fix what fails | approved (per source at `73f179a3e942`) | [Governance and safety](./governance-and-safety.md) |  | none | [source](../../specs/094-core-repo-merge-flow.md) |
 | [103-the-private-read-mark-closing-the-four-unaudited-egress-channels](./governance-and-safety.md#103-the-private-read-mark-closing-the-four-unaudited-egress-channels) | 103: The private-read mark: closing the four unaudited egress channels | approved (per source at `d4582bb0f15b`) | [Governance and safety](./governance-and-safety.md) |  | none | [source](../../specs/103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md) |
+| [134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment](./governance-and-safety.md#134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment) | 134: Drift on a closed list and review on the record (a charter amendment) | approved (per source at `846e2933be66`) | [Governance and safety](./governance-and-safety.md) |  | yes | [source](../../specs/134-drift-on-a-closed-list-and-review-on-the-record-a-charter-amendment.md) |
 | [002-adapter-and-routing](./runtime-models-and-tools.md#002-adapter-and-routing) | 002: Adapter: Dialect Compiler, Multi-Provider Drivers & Dynamic Model Scaling | approved (per source at `7da34480fa15`) | [Runtime, models and tools](./runtime-models-and-tools.md) |  | yes | [source](../../specs/002-adapter-and-routing.md) |
 | [009-model-access-and-auth](./runtime-models-and-tools.md#009-model-access-and-auth) | 009: Model Access Paths, Endpoints & Authentication | approved (per source at `5e42174f6ff8`) | [Runtime, models and tools](./runtime-models-and-tools.md) |  | yes | [source](../../specs/009-model-access-and-auth.md) |
 | [010-connectors-and-tool-access](./runtime-models-and-tools.md#010-connectors-and-tool-access) | 010: Native Connectors (MCP) & the Tool Access Layer | approved (per source at `7464e4a37781`) | [Runtime, models and tools](./runtime-models-and-tools.md) |  | yes | [source](../../specs/010-connectors-and-tool-access.md) |
