@@ -574,6 +574,11 @@ impl ExecEnv {
     /// A new investigation copy of `project` named `key` (`specs/116` §8.1). Copies no running span owns are deleted first.
     /// Blocking: it runs the daemon's git.
     pub fn open_investigation(&self, key: &str, project: &Path) -> Result<InvestigationGuard, GitError> {
+        self.open_investigation_at(key, project, None)
+    }
+
+    /// As [`ExecEnv::open_investigation`], at the project's branch `branch` when one is named (`specs/135` §6.2: a review copy).
+    pub fn open_investigation_at(&self, key: &str, project: &Path, branch: Option<&str>) -> Result<InvestigationGuard, GitError> {
         // Named as live before it exists, so a sweep for another span cannot take a copy that is being made.
         let fresh = self.investigating.lock().unwrap().insert(key.to_string());
         if !fresh {
@@ -583,7 +588,7 @@ impl ExecEnv {
             let live = self.investigating.lock().unwrap().clone();
             self.worktrees.sweep_investigations(&|k| live.contains(k));
         }
-        match self.worktrees.create_investigation(project, key) {
+        match self.worktrees.create_investigation_at(project, key, branch) {
             Ok(inv) => Ok(InvestigationGuard { inv, scratch: self.scratch_for(key), live: self.investigating.clone() }),
             Err(e) => {
                 self.investigating.lock().unwrap().remove(key);

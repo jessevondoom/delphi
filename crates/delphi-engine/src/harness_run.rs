@@ -62,8 +62,9 @@ pub(crate) fn inside(root: &Path, p: &str) -> Option<PathBuf> {
 /// log is that seat's ledger (`specs/051` §8), and the vendor's server-side meter only reconciles it.
 fn cost_payload(cost: f64, metered: u64, vendor_meter: Option<(u64, u64)>) -> Value {
     let mut v = json!({"total_cost_usd_equivalent": cost, "metered_tokens": metered});
-    if let Some((premium_requests, nano_aiu)) = vendor_meter {
-        v["premium_requests"] = json!(premium_requests);
+    if let Some((premium_milli, nano_aiu)) = vendor_meter {
+        // Exact to the thousandth: a whole count stays an integer, a fraction (0.33) is written as one (`specs/132` §6.4).
+        v["premium_requests"] = if premium_milli % 1000 == 0 { json!(premium_milli / 1000) } else { json!(premium_milli as f64 / 1000.0) };
         v["nano_aiu"] = json!(nano_aiu);
     }
     v
@@ -91,6 +92,9 @@ pub(crate) struct HarnessErr {
     /// tool: the one failure a Council or Panel seat may try again (`specs/089` P4b).
     pub cli_error: bool,
     pub kind: FailKind,
+    /// The model the run was started on, when it produced no event at all (no output, no tool, no token) and the first-event clock
+    /// killed it: the one failure that is tried again on any CLI and then moved to the family's next endpoint (`specs/089` §17).
+    pub stalled: Option<String>,
 }
 
 /// What kind of failure a harness run was, beyond its reason text (`specs/093` section 5 E): an answer the CLI never produced
@@ -125,15 +129,18 @@ pub(crate) fn in_band_error(cli: Cli, text: &str) -> bool {
 }
 
 /// The kind of a CLI's final `result`. An error result whose subtype names structured output is a refusal (the answer was found
-/// and failed validation); a success with a schema asked for and no answer or words is "not found"; a success whose text is the
-/// CLI's own error line is in-band. Anything else is `Other`, so a miss behaves as before.
-fn classify_result(cli: Cli, wants_schema: bool, cli_error: bool, subtype: &str, text: &str, has_structured: bool, no_words: bool) -> FailKind {
+/// and failed validation); a success with no answer or words, when an answer was expected, is "not found"; a success whose text is
+/// the CLI's own error line is in-band. Anything else is `Other`, so a miss behaves as before.
+///
+/// `expects_answer` is true for a run that asked for a schema, and for any run that used no tool that acts (`specs/128` S2 item 4,
+/// 2026-11-21): a seat that only read and then said nothing produced nothing. A run without a schema that acted keeps its success.
+fn classify_result(cli: Cli, expects_answer: bool, cli_error: bool, subtype: &str, text: &str, has_structured: bool, no_words: bool) -> FailKind {
     if cli_error {
         return if subtype.contains("structured") { FailKind::AnswerRefused } else { FailKind::Other };
     }
     if !has_structured && in_band_error(cli, text) {
         FailKind::InBandError
-    } else if wants_schema && !has_structured && no_words {
+    } else if expects_answer && !has_structured && no_words {
         FailKind::AnswerNotFound
     } else {
         FailKind::Other
@@ -142,7 +149,7 @@ fn classify_result(cli: Cli, wants_schema: bool, cli_error: bool, subtype: &str,
 
 impl HarnessErr {
     fn retry(reason: impl Into<String>) -> HarnessErr {
-        HarnessErr { reason: reason.into(), retryable: true, cli_error: false, kind: FailKind::Other }
+        HarnessErr { reason: reason.into(), retryable: true, cli_error: false, kind: FailKind::Other, stalled: None }
     }
 }
 
@@ -510,6 +517,15 @@ impl Engine {
         self.agy_gate_record(endpoint_id, program).is_some_and(|r| r.builder_ready)
     }
 
+    /// The account's Copilot catalog (`specs/132` §5.2), only when the cached one in `local/` was read on the installed CLI version
+    /// within a day. A span reads the cache, never the catalog itself (`delphi doctor` reads and caches it); no cache, no judgment.
+    pub(crate) fn copilot_fresh_catalog(&self) -> Option<crate::model_catalog::Catalog> {
+        let cached = crate::model_catalog::load(&self.ws.dir.join("local"))?;
+        let version = crate::capabilities::cli_version_bounded(&self.settings.copilot_program, 5)?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        cached.usable_for(&version, now).then_some(cached)
+    }
+
     fn agy_gate_record(&self, endpoint_id: &str, program: &str) -> Option<crate::capabilities::GateRecord> {
         let path = self.settings.agy_gate_file.clone().or_else(|| self.inventory.gate_path())?;
         let rec = crate::capabilities::load_gates(&path).into_iter().find(|g| g.endpoint_id == endpoint_id)?;
@@ -595,6 +611,10 @@ impl Engine {
                 }
             }
             Cli::Copilot => {
+                // A model the account's fresh catalog lacks makes the tier unusable (`specs/132` §5.2): refused, never swapped.
+                if let Some(why) = self.copilot_fresh_catalog().and_then(|c| crate::model_catalog::refusal(&c, &ep.id, &sc.tier, &model)) {
+                    return Ok(Err(HarnessErr::retry(why)));
+                }
                 if builder {
                     let profile = self.cfg.get().harness.get("copilot").cloned().unwrap_or_default();
                     if !profile.bridge {
@@ -824,6 +844,9 @@ impl Engine {
         let (mut served_reported, mut tools_offered): (Option<String>, Vec<String>) = (None, Vec::new());
         // Any tool call at all (even a read-only one) and whether the failure is the CLI's own `result` error: the retry's conditions.
         let (mut any_tool, mut cli_error_seen) = (false, false);
+        // Whether the CLI has sent any event yet: until it has, the shorter first-event clock applies (`specs/089` §17).
+        let mut seen_event = false;
+        let first_event = Some(self.settings.harness_first_event).filter(|d| !d.is_zero()).map_or(self.settings.harness_idle, |d| d.min(self.settings.harness_idle));
         // The names of the tools the run called, for `harness.no_answer` (`specs/128` S2): names and counts only, never arguments or text.
         let mut tool_names: Vec<String> = Vec::new();
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
@@ -874,8 +897,11 @@ impl Engine {
                     }
                     continue;
                 }
-                ev = session.next(self.settings.harness_idle) => match ev {
-                    Some(ev) => ev,
+                ev = session.next(if seen_event || any_tool { self.settings.harness_idle } else { first_event }) => match ev {
+                    Some(ev) => {
+                        seen_event |= !matches!(ev, Event::Exit { .. });
+                        ev
+                    }
                     None => break,
                 },
             };
@@ -989,7 +1015,7 @@ impl Engine {
                         break;
                     }
                 }
-                Event::Meter { premium_requests, nano_aiu } => vendor_meter = Some((premium_requests, nano_aiu)),
+                Event::Meter { premium_milli, nano_aiu } => vendor_meter = Some((premium_milli, nano_aiu)),
                 Event::Usage(t) => {
                     metered += t.metered();
                     // The CLI's usage is logged once, when the span ends; the window's meter moves from this meanwhile.
@@ -1021,11 +1047,12 @@ impl Engine {
                         }, !used_tools));
                     }
                     let no_words = text.trim().is_empty() && text_parts.iter().all(|t| t.trim().is_empty());
-                    fail_kind = classify_result(cli, wants_schema, is_error && exhaustion.is_none(), subtype, text, structured.is_some(), no_words);
+                    fail_kind = classify_result(cli, wants_schema || !used_tools, is_error && exhaustion.is_none(), subtype, text, structured.is_some(), no_words);
                     if !is_error {
                         match fail_kind {
                             FailKind::InBandError => failure = Some((format!("the CLI reported success but its answer is an error: {}", text.trim().chars().take(100).collect::<String>()), !used_tools)),
-                            FailKind::AnswerNotFound => failure = Some(("the CLI finished without the schema-validated answer that was asked for".into(), !used_tools)),
+                            FailKind::AnswerNotFound if wants_schema => failure = Some(("the CLI finished without the schema-validated answer that was asked for".into(), !used_tools)),
+                            FailKind::AnswerNotFound => failure = Some(("the CLI finished with success and no words (an empty finish)".into(), !used_tools)),
                             _ => {}
                         }
                     }
@@ -1044,6 +1071,7 @@ impl Engine {
                         failure = Some((
                             match code {
                                 Some(c) => format!("the {} CLI exited ({}) without a result; is it signed in? Run it once to log in", launch.program, c),
+                                None if !seen_event && !any_tool && session.idle_killed() => format!("the {} CLI produced no output in {}s and was killed", launch.program, first_event.as_secs()),
                                 None => format!("the {} CLI stopped responding and was killed", launch.program),
                             },
                             !used_tools,
@@ -1057,6 +1085,8 @@ impl Engine {
             failure = Some((format!("the {} CLI stopped without a result", launch.program), !used_tools));
         }
         session.kill().await;
+        // No event, no tool, no token, and killed by the first-event clock: nothing was spent, so another try repeats nothing.
+        let stalled = !seen_event && !any_tool && metered == 0 && result.is_none() && session.idle_killed();
         // What the bridge turned away by itself (a tool the span was not offered, a connection without the token) is
         // otherwise invisible: the span's loop never saw it. Names and counts only, once.
         if let Some(refused) = _bridge.as_ref().map(|b| b.take_refusals()).filter(|r| !r.is_empty()) {
@@ -1121,7 +1151,11 @@ impl Engine {
                 tokens_out: usage.output,
                 outcome: if mismatch { "model_mismatch" } else if failure.is_some() { "error" } else { "ok" }.into(),
             };
-            batch.push(sc.agent_ev(crate::seat::RECEIPT_KIND, receipt.to_value(), ep, &launch.model));
+            let mut value = receipt.to_value();
+            if stalled {
+                value["failure"] = json!("no_first_event");
+            }
+            batch.push(sc.agent_ev(crate::seat::RECEIPT_KIND, value, ep, &launch.model));
         }
 
         // Only a run that failed counts: if the CLI printed a rejection but still finished, the pair served, and marking it
@@ -1207,7 +1241,7 @@ impl Engine {
                 }
             }
             sc.m.append_batch(batch).await?;
-            return Ok(Err(HarnessErr { reason, retryable, cli_error: cli == Cli::Agy && cli_error_seen && !any_tool && exhaustion.is_none(), kind: fail_kind }));
+            return Ok(Err(HarnessErr { reason, retryable, cli_error: cli == Cli::Agy && cli_error_seen && !any_tool && exhaustion.is_none(), kind: fail_kind, stalled: stalled.then(|| launch.model.clone()) }));
         }
         let text = final_text.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| text_parts.join("\n"));
         let block = delphi_adapter::blocks::ContentBlock::Text { text: text.clone() };
@@ -1424,6 +1458,7 @@ echo "$a_{t}" >> answers.txt"#, t = tool, i = input);
         assert_eq!(k(true, true, "error_max_structured_output_retries", "", false, true), FailKind::AnswerRefused);
         assert_eq!(k(true, true, "error_max_turns", "", false, true), FailKind::Other);
         assert_eq!(k(true, false, "success", "", false, true), FailKind::AnswerNotFound);
+        // No answer expected: a run without a schema that used a tool that acts keeps its wordless success (spec 128 S2 item 4).
         assert_eq!(k(false, false, "success", "", false, true), FailKind::Other);
         assert_eq!(k(true, false, "success", "", true, true), FailKind::Other);
         assert_eq!(k(false, false, "success", "Error: cannot load model", false, false), FailKind::InBandError);
@@ -2090,6 +2125,41 @@ open(sys.argv[1], "w").write(json.dumps(out))
         assert!(!format!("{:?}", f.m.replay().unwrap()).contains("ghp-cp-1"), "the token never reaches the log");
     }
 
+    /// specs/132 O12 (X1's classifier, built with C2): Codex's real out-of-quota stream marks the endpoint exhausted with its reset.
+    #[tokio::test]
+    async fn codex_out_of_its_plans_usage_limit_is_exhaustion_with_a_reset_time() {
+        let scripts = tempfile::tempdir().unwrap();
+        // A reset always ahead and within the 400 days believed: December 1st of next year.
+        let year = delphi_core::time::now_rfc3339()[..4].parse::<i32>().unwrap() + 1;
+        let text = format!("You\u{2019}ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), or try again at Dec 1st, {year} 2:49 AM.");
+        let body = format!("cat > /dev/null\necho '{{\"type\":\"thread.started\",\"thread_id\":\"t1\"}}'\necho '{{\"type\":\"turn.started\"}}'\necho '{{\"type\":\"error\",\"message\":\"{text}\"}}'\necho '{{\"type\":\"turn.failed\",\"error\":{{\"message\":\"{text}\"}}}}'\nexit 1");
+        let prog = fake_cli(scripts.path(), &body);
+        let f = setup_with_exec(vec![], 5.0, |s| s.codex_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "codex");
+        *f.model.harness_key.lock().unwrap() = Some("sk-cx-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert!(out.status != Status::Done, "{:?}", out.status);
+        let ex = events_of(&f, "model.exhausted");
+        assert!(!ex.is_empty(), "the endpoint is marked out of quota");
+        assert_eq!(ex[0].payload["reason"], delphi_adapter::exhaust::PLAN_LIMIT);
+        assert!(ex[0].payload["reset_at"].as_i64().is_some(), "{}", ex[0].payload);
+    }
+
+    /// specs/132 AC-4: a stream with `totalPremiumRequests: 0.33` yields 0.33 in `harness.cost`.
+    #[tokio::test]
+    async fn a_fractional_premium_request_count_reaches_the_cost_event_exactly() {
+        let scripts = tempfile::tempdir().unwrap();
+        let body = fake_copilot_body(&scripts.path().join("dump"), "m-1").replace("\"totalPremiumRequests\":2", "\"totalPremiumRequests\":0.33");
+        let prog = fake_cli(scripts.path(), &body);
+        let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        use_keyed_harness(&f, "copilot");
+        *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+        let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let c = &events_of(&f, "harness.cost")[0].payload;
+        assert_eq!(c["premium_requests"].as_f64(), Some(0.33), "{c}");
+    }
+
     /// specs/132 §6.2, AC-3 (L0 honesty): a Copilot reader with the default `bridge = true` has no MCP transport, so it is offered
     /// no Delphi tool: no bridge starts, the prompt names none, "Do not call tools" is the only tool sentence, and the receipt
     /// lists nothing offered. Codex, which has no bridge either, is held to the same.
@@ -2119,6 +2189,33 @@ open(sys.argv[1], "w").write(json.dumps(out))
             }
             let r = &events_of(&f, "seat.receipt")[0].payload;
             assert_eq!(r["carrier"]["tools_offered"], json!([]), "{cli}: {r}");
+        }
+    }
+
+    /// specs/132 AC-5, §5.2: a tier whose model a fresh catalog (this CLI version, within a day) lacks is refused before the CLI starts,
+    /// naming the model; the same catalog listing it lets the seat run; a catalog read on another version judges nothing.
+    #[tokio::test]
+    async fn a_copilot_tier_whose_model_a_fresh_catalog_lacks_is_refused() {
+        use crate::model_catalog::{save, Catalog, CatalogModel};
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let listed = |ids: &[&str], ver: &str| Catalog { cli_version: ver.into(), read_unix: now, models: ids.iter().map(|id| CatalogModel { id: id.to_string(), multiplier: Some(1.0), price_category: "medium".into(), enabled: true }).collect() };
+        for (catalog, runs) in [(listed(&["gpt-6-luna"], "GitHub Copilot CLI 9.9.9."), false), (listed(&["m-1"], "GitHub Copilot CLI 9.9.9."), true), (listed(&["gpt-6-luna"], "GitHub Copilot CLI 9.9.8."), true)] {
+            let scripts = tempfile::tempdir().unwrap();
+            let prog = crate::harness::tests::fake_cli_versioned(scripts.path(), &fake_copilot_body(&scripts.path().join("dump"), "m-1"), "GitHub Copilot CLI 9.9.9.");
+            let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+            use_keyed_harness(&f, "copilot");
+            *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+            save(&f.engine.ws.dir.join("local"), &catalog).unwrap();
+            let out = f.engine.run_task(&f.m, "architect", "Plan the change").await.unwrap();
+            if runs {
+                assert_eq!(out.status, Status::Done, "{:?}: {}", catalog.models, out.text);
+            } else {
+                match &out.status {
+                    Status::Escalated(r) => assert!(r.contains("model `m-1` is not in this account's Copilot catalog") && r.contains("never swaps"), "{r}"),
+                    other => panic!("{other:?}"),
+                }
+                assert!(events_of(&f, "harness.started").is_empty());
+            }
         }
     }
 
@@ -2175,7 +2272,10 @@ open(sys.argv[1], "w").write(json.dumps(out))
     #[test]
     fn only_a_seat_with_a_vendor_meter_adds_it_to_the_cost_event() {
         assert!(cost_payload(0.5, 10, None).get("nano_aiu").is_none());
-        assert_eq!(cost_payload(0.0, 10, Some((1, 7)))["nano_aiu"], 7);
+        assert_eq!(cost_payload(0.0, 10, Some((1000, 7)))["nano_aiu"], 7);
+        // specs/132 AC-4: 0.33 in, 0.33 out; a whole count stays a whole number.
+        assert_eq!(cost_payload(0.0, 10, Some((330, 7)))["premium_requests"].as_f64(), Some(0.33));
+        assert_eq!(cost_payload(0.0, 10, Some((2000, 7)))["premium_requests"].as_u64(), Some(2));
     }
 
     #[tokio::test]
@@ -2511,6 +2611,23 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert!(g[0].payload["note"].as_str().unwrap().contains("2 paths Delphi wrote itself"));
     }
 
+    /// `specs/128` S3 (amended 2026-11-21): the research writer's temporary file (`.<name>.<pid>.<n>.tmp`), caught by the "after" snapshot
+    /// between its creation and its rename, is Delphi's own write too and does not discard the answer.
+    #[tokio::test]
+    async fn the_research_writers_temp_file_caught_mid_write_does_not_discard_the_answer() {
+        let (f, out, _) = run_with_concurrent_write(|dir| {
+            let d = dir.join("research/topics/t-4");
+            fs::create_dir_all(&d).unwrap();
+            let tmp = d.join(".record.json.4242.7.tmp");
+            crate::own_writes::note_temp(&tmp, b"{}");
+            fs::write(&tmp, "{}").unwrap();
+        })
+        .await;
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "a good answer"), "{}", out.text);
+        let g = events_of(&f, "harness.checkout_guard");
+        assert_eq!((g[0].payload["discarded"].clone(), g[0].payload["own_writes_count"].clone()), (json!(false), json!(1)), "{}", g[0].payload);
+    }
+
     /// The guard still fails closed: a file the ledger never saw, and a file Delphi wrote that was edited afterwards, are differences.
     #[tokio::test]
     async fn the_guard_still_discards_a_write_the_ledger_never_saw_or_one_edited_after_delphi_wrote_it() {
@@ -2712,6 +2829,34 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.no_answer").len()), (2, 1, 2));
     }
 
+    /// `specs/128` S2 (amended 2026-11-21): a Round 1 seat asks no schema, and a wordless success there is an empty finish too: one
+    /// retry and `harness.no_answer` (the 58,693-token abstention of the Stage 0 run had neither).
+    #[tokio::test]
+    async fn an_empty_finish_of_a_seat_without_a_schema_is_tried_once_more_and_says_what_it_did() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 1, AGY_EMPTY_FINISH), Duration::from_secs(600));
+        let s = seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Said(t) if t == "a good answer"), "{s:?}");
+        assert_eq!(starts(&count), 2);
+        let r = events_of(&f, "harness.retry");
+        assert_eq!(r.len(), 1);
+        assert!(r[0].payload["reason"].as_str().unwrap().contains("no words"), "{}", r[0].payload);
+        let n = events_of(&f, "harness.no_answer");
+        assert_eq!(n.len(), 1, "only the first run ended with no answer");
+        assert_eq!((n[0].payload["status"].as_str(), n[0].payload["output_tokens"].as_u64()), (Some("success"), Some(1498)), "{}", n[0].payload);
+    }
+
+    #[tokio::test]
+    async fn two_empty_finishes_of_a_seat_without_a_schema_abstain_after_exactly_one_retry() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_EMPTY_FINISH), Duration::from_secs(600));
+        let s = seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Abstained(_)), "{s:?}");
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.no_answer").len()), (2, 1, 2));
+    }
+
     #[tokio::test]
     async fn an_empty_finish_is_not_retried_with_less_than_the_minimum_time_left() {
         let scripts = tempfile::tempdir().unwrap();
@@ -2775,6 +2920,91 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         let f = retry_fx(flaky_agy(scripts.path(), &count, 1, AGY_CLI_ERROR), Duration::from_secs(5));
         assert!(matches!(seat(&f).await, crate::council::Stance::Abstained(r) if r.contains("internal error")));
         assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0), "no time left");
+    }
+
+    // ---- a run with no first event: one more try, then the family's next endpoint (`specs/089` §17) ----
+
+    /// A stand-in `agy` that counts its starts and says nothing at all (it sleeps) while the count is at most `stalls`, then answers.
+    fn silent_agy(dir: &std::path::Path, count: &std::path::Path, stalls: u32) -> String {
+        fake_cli(
+            dir,
+            &format!(
+                "n=$(cat '{c}' 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > '{c}'\nif [ $n -le {stalls} ]; then\nsleep 30\nexit 0\nfi\necho '{{\"event\":\"init\",\"init\":{{}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"a good answer\",\"usage\":{{\"input_tokens\":20,\"output_tokens\":4}}}}}}'",
+                c = count.display(),
+                stalls = stalls
+            ),
+        )
+    }
+
+    /// A Gemini family of `agy` endpoints in `[access] order` (`second`: a second one after `agy-sub`), a four-second first-event clock (a fake CLI under a loaded machine can take over a second to start).
+    fn stall_fx(prog: String, second: bool, idle: Duration) -> Fx {
+        let f = setup_with_exec(vec![], 5.0, |s| { s.agy_program = prog; s.harness_first_event = Duration::from_secs(4); s.harness_idle = idle; }, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        let ep = |id: &str| format!("[[endpoints]]\nid = \"{id}\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = {{ frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }}\n");
+        let (eps, ids) = if second { (format!("{}{}", ep("agy-sub"), ep("agy-b")), "\"agy-sub\", \"agy-b\"") } else { (ep("agy-sub"), "\"agy-sub\"") };
+        let text = crate::testkit::CONFIG
+            .replace("[access]", &format!("{eps}[access]\nrole_family = {{ architect = \"gemini\" }}"))
+            .replace("order = { claude = [\"direct\", \"backup\"] }", &format!("order = {{ claude = [], gemini = [{ids}] }}"))
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", &format!("allowed_endpoints = [{ids}]"));
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&text).unwrap());
+        f
+    }
+
+    fn receipts(f: &Fx) -> Vec<(String, Option<String>)> {
+        events_of(f, crate::seat::RECEIPT_KIND).iter().map(|e| (e.payload["requested"]["endpoint"].as_str().unwrap_or("").to_string(), e.payload["failure"].as_str().map(String::from))).collect()
+    }
+
+    #[tokio::test]
+    async fn a_seat_with_no_first_event_is_tried_once_more_then_moves_to_the_familys_next_endpoint() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = stall_fx(silent_agy(scripts.path(), &count, 2), true, Duration::from_secs(300));
+        let s = seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Said(t) if t == "a good answer"), "{s:?}");
+        assert_eq!(starts(&count), 3, "the first run, one retry, then the next endpoint");
+        let r = events_of(&f, "harness.retry");
+        assert_eq!(r.len(), 1);
+        assert_eq!((r[0].payload["cause"].as_str(), r[0].payload["endpoint"].as_str(), r[0].payload["attempt"].as_i64()), (Some("no_first_event"), Some("agy-sub"), Some(2)));
+        assert!(r[0].payload["reason"].as_str().unwrap().contains("produced no output in 4s"), "{}", r[0].payload);
+        let fb = events_of(&f, "harness.fallback");
+        assert_eq!(fb.len(), 1);
+        assert_eq!((fb[0].payload["from"].as_str(), fb[0].payload["to"].as_str(), fb[0].payload["cause"].as_str()), (Some("agy-sub"), Some("agy-b"), Some("no_first_event")));
+        let no_event = Some("no_first_event".to_string());
+        assert_eq!(receipts(&f), vec![("agy-sub".into(), no_event.clone()), ("agy-sub".into(), no_event), ("agy-b".into(), None)]);
+        assert_eq!(f.engine.pool.state("agy-sub", "gemini-3.8-flash-low"), crate::pool::State::CoolingDown, "the stalled pair rests");
+        assert_eq!(f.engine.pool.state("agy-b", "gemini-3.8-flash-low"), crate::pool::State::Available);
+    }
+
+    #[tokio::test]
+    async fn one_stall_then_an_answer_keeps_the_endpoint_and_cools_nothing() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = stall_fx(silent_agy(scripts.path(), &count, 1), true, Duration::from_secs(300));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Said(t) if t == "a good answer"));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.fallback").len()), (2, 1, 0));
+        assert_eq!(f.engine.pool.state("agy-sub", "gemini-3.8-flash-low"), crate::pool::State::Available);
+    }
+
+    #[tokio::test]
+    async fn with_no_next_endpoint_two_stalls_abstain_and_the_pair_is_not_cooled() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = stall_fx(silent_agy(scripts.path(), &count, 5), false, Duration::from_secs(300));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Abstained(r) if r.contains("produced no output in 4s")));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.fallback").len()), (2, 1, 0));
+        assert_eq!(f.engine.pool.state("agy-sub", "gemini-3.8-flash-low"), crate::pool::State::Available, "the only endpoint is not taken away");
+    }
+
+    #[tokio::test]
+    async fn a_run_that_produced_an_event_and_then_went_quiet_is_not_retried() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        // It says something, then nothing: the idle clock (here four seconds) kills it, and it is no stall: no retry, no next endpoint.
+        let prog = fake_cli(scripts.path(), &format!("n=$(cat '{c}' 2>/dev/null || echo 0)\necho $((n+1)) > '{c}'\necho '{{\"event\":\"init\",\"init\":{{}}}}'\nsleep 30", c = count.display()));
+        let f = stall_fx(prog, true, Duration::from_secs(4));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Abstained(r) if r.contains("stopped responding")));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.fallback").len()), (1, 0, 0));
+        assert_eq!(receipts(&f), vec![("agy-sub".into(), None)]);
     }
 
     #[tokio::test]

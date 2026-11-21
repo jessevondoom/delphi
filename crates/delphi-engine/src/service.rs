@@ -235,8 +235,8 @@ fn spawn_foreign(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, id: 
         };
         // Round 2 is more spend: judge it by the receipts of Round 1, never by the request (`specs/091` SR-3, SR-4). A refusal here only narrows.
         let stop = if round > 1 {
-            let (host_family, required) = { panels.lock().unwrap().get(&key).map(|p| (p.host_family.clone(), p.require_families)).unwrap_or_default() };
-            let unmet = required.and_then(|n| engine.panel_diversity(&m, &id, host_family.as_deref()).unmet(n, "by the receipts of Round 1"));
+            let (host_family, required, round1, foreign) = { panels.lock().unwrap().get(&key).map(|p| (p.host_family.clone(), p.require_families, p.stances().cloned(), p.foreign_seats().iter().map(|s| s.role.clone()).collect::<Vec<_>>())).unwrap_or_default() };
+            let unmet = required.and_then(|n| engine.panel_diversity(&m, &id, host_family.as_deref(), round1.as_ref(), &foreign).unmet(n, "by the receipts of Round 1"));
             unmet.or_else(|| (engine.panel_foreign_tokens(&m, &id) >= engine.settings.max_foreign_tokens).then(|| format!("foreign-seat budget: Round 1 used {} tokens, the cap is [seats] max_foreign_tokens = {} per Council; Round 2 was not run", engine.panel_foreign_tokens(&m, &id), engine.settings.max_foreign_tokens)))
         } else {
             None
@@ -319,6 +319,12 @@ pub(crate) fn progress_line_of(v: &Value) -> String {
 
 /// What a foreign seat without the operator's yes is refused with (`specs/098` §6.2; `specs/104` §5 adds why the standing consent did not apply).
 const ASK_YES: &str = "a foreign seat spends the operator's Delphi tokens: ask the operator, and pass operator_confirmed: true only if they said yes";
+
+/// One review copy at a time (`specs/135` §6.2 item 2): a second review waits for the first to finish.
+fn review_slot() -> &'static tokio::sync::Semaphore {
+    static SLOT: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
 
 /// The answer of an `ask_family` job that is still running (`specs/104` §2 item 1).
 fn ask_working(id: &str) -> Value {
@@ -1556,6 +1562,183 @@ impl EngineService {
         Ok(self.signed_ask(v))
     }
 
+    /// `host.review` (`specs/135` §6, slice F2): a review of the branch checked out at the host's `cwd` by a seat of another family. Delphi
+    /// runs the review's commands in a sandboxed investigation copy of the branch and hands the seat, which has no tools, the diff and the
+    /// results; the seat may ask for up to three more commands, which code checks and runs. It answers at once with an `ask_id`; the
+    /// result is read with `host.ask_result` and the job stopped with `host.cancel_job`, as an `ask_family` job is. Advice only.
+    async fn host_review(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_rpc as h;
+        use crate::review_job as rj;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let mut c = h::Caller::parse(&p).map_err(host_err)?;
+        c.projects = self.engine.projects.clone();
+        let confirmed = p["operator_confirmed"].as_bool() == Some(true);
+        if !confirmed && self.engine.settings.standing_foreign_tokens == 0 {
+            return Err(err(code::INVALID_PARAMS, ASK_YES));
+        }
+        // §6.2 item 1: everything is checked before anything is spent.
+        let bad = |m: String| err(code::INVALID_PARAMS, format!("{m}. Nothing was spent"));
+        let base = p["base"].as_str().filter(|b| !b.is_empty()).unwrap_or("main").to_string();
+        if !crate::worktree::valid_branch(&base) {
+            return Err(bad(format!("`base` is not a branch name Delphi accepts: {}", base.chars().take(80).collect::<String>())));
+        }
+        let (project_name, project) = rj::project_of(&self.engine.projects, &c.cwd).ok_or_else(|| bad("your working directory is not inside a project registered with Delphi: a review copies a registered project's branch".into()))?;
+        let branch = rj::branch_of(&c.cwd).map_err(bad)?;
+        if branch == base {
+            return Err(bad(format!("the branch checked out is `{base}`, the base itself: check out the branch to review, or name another `base`")));
+        }
+        let spec = match p["spec"].as_str().filter(|s| !s.is_empty()) {
+            None => None,
+            Some(q) => {
+                let stems = crate::spec_lookup::spec_stems(&project).map_err(bad)?;
+                let stem = crate::spec_lookup::resolve(&stems, q).map_err(bad)?;
+                let text = std::fs::read_to_string(project.join("specs").join(format!("{stem}.md"))).map_err(|e| bad(format!("cannot read the spec: {e}")))?;
+                Some((stem, text))
+            }
+        };
+        let slice = match p["slice"].as_str().filter(|s| !s.is_empty()) {
+            None => None,
+            Some(sl) => {
+                let num = spec.as_ref().and_then(|(stem, _)| delphi_core::specdoc::spec_number(&format!("{stem}.md"))).ok_or_else(|| bad("`slice` needs `spec`".into()))?;
+                let tracker = std::fs::read_to_string(project.join(rj::TRACKER)).unwrap_or_default();
+                Some(rj::slice_row(&tracker, &num, sl).unwrap_or_else(|| format!("(the tracker has no row for {num} {})", sl.chars().take(16).collect::<String>())))
+            }
+        };
+        let host_family = crate::council_panel::host_family(p["model"].as_str(), &c.tool);
+        let role = "red-team";
+        let family = match p["family"].as_str().filter(|f| !f.is_empty()) {
+            Some(f) if Some(f) == host_family => return Err(err(code::INVALID_PARAMS, "a review exists to hear a family other than your own: name another, or leave `family` out")),
+            Some(f) if !self.engine.panel_family_usable(f) => return Err(err(code::INVALID_PARAMS, format!("`{f}` is not a configured, usable model family on this machine"))),
+            Some(f) => f.to_string(),
+            None => self.engine.panel_foreign_family(role, host_family).ok_or_else(|| err(code::INVALID_PARAMS, "no model family other than your host's is configured and usable: Delphi has no other family to review with. Nothing was spent"))?,
+        };
+        // One seat in two rounds: the ceiling of a Panel's foreign seat, which already covers both rounds.
+        if let Some(why) = crate::seat::over_budget(1, self.engine.panel_foreign_ceiling_tokens(), self.engine.settings.max_foreign_seats, self.engine.settings.max_foreign_tokens) {
+            return Err(err(code::INVALID_PARAMS, why));
+        }
+        let m = {
+            let _gate = self.host_gate.lock().await;
+            self.mission_at(Some(&c.mission()), c.cwd.to_str()).await?
+        };
+        let task_id = m.next_task_id();
+        let ceiling = self.engine.panel_foreign_ceiling_tokens();
+        let consent = self.standing_consent(confirmed, &c.mission(), &format!("{}/{}", m.id, task_id), ceiling)?;
+        let proposition = format!("Review of branch {branch} against {base} in project {project_name}");
+        let mut created = EventEnvelope::new(&m.id, "task.created", json!({"prompt": proposition, "target": "review", "flow": "council", "venue": "panel", "consent": consent, "branch": branch, "base": base}));
+        created.task_id = Some(task_id.clone());
+        m.append(created).await.map_err(engine_err)?;
+        let key = (c.session.clone(), task_id.clone());
+        {
+            let mut asks = self.asks.lock().unwrap();
+            asks.retain(|_, r| r.result.is_none() || r.at.elapsed() < Duration::from_secs(3600));
+            asks.insert(key.clone(), AskRun { result: None, at: Instant::now() });
+        }
+        let (engine, asks, tid, mm, k, host_family) = (self.engine.clone(), self.asks.clone(), task_id.clone(), m.clone(), key.clone(), host_family.map(String::from));
+        let standing_id = format!("{}/{}", m.id, task_id);
+        let job = tokio::spawn(async move {
+            // §6.2 item 2: one review copy at a time; a second request waits here.
+            let _slot = review_slot().acquire().await;
+            let copy_key = format!("rv{}", &blake3::hash(format!("{}/{}", mm.id, tid).as_bytes()).to_hex()[..24]);
+            let exec = engine.exec.clone();
+            let (b2, base2) = (branch.clone(), base.clone());
+            // The copy, the stat and the diff: the daemon's git, all of it before any sandboxed command.
+            let made = tokio::task::spawn_blocking(move || {
+                let guard = exec.open_investigation_at(&copy_key, &project, Some(&b2)).map_err(|e| e.to_string())?;
+                let (stat, diff) = exec.worktrees.investigation_diff(&guard.inv, &base2, &b2).map_err(|e| e.to_string())?;
+                Ok::<_, String>((guard, stat, diff))
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+            let result = match made {
+                Err(e) => {
+                    let why = engine.secrets.redact(&format!("could not make the review copy: {e}"));
+                    let _ = engine.finish_task(&mm, tid.clone(), crate::engine::SpanOutcome { status: crate::engine::Status::Escalated(why.clone()), text: String::new(), turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await;
+                    json!({"ask_id": tid, "status": "failed", "reason": why})
+                }
+                Ok((guard, stat, diff)) => {
+                    let capped = rj::cap_diff(&diff, engine.settings.review_diff_chars);
+                    let configured: Vec<Vec<String>> = engine.settings.review_commands.clone().unwrap_or_else(|| [engine.exec.cfg.test_command.clone(), engine.exec.cfg.check_command.clone()].into_iter().flatten().collect());
+                    let sandbox = engine.exec.sandbox.is_some();
+                    let input = rj::Input { branch: &branch, base: &base, spec: spec.as_ref().map(|(s, t)| (s.as_str(), t.as_str())), slice: slice.as_deref(), stat: &stat, diff: &capped, spec_chars: 20_000 };
+                    let seat = |brief: String| {
+                        let (engine, mm, tid, proposition, family) = (engine.clone(), mm.clone(), tid.clone(), proposition.clone(), family.clone());
+                        async move {
+                            match engine.panel_foreign_run_seat(&mm, &tid, brief, &proposition, role, &family, 1, None, true).await {
+                                crate::council::Stance::Said(t) => Ok(t),
+                                crate::council::Stance::Abstained(w) => Err(w),
+                            }
+                        }
+                    };
+                    let cmd = |argv: Vec<String>, by: &'static str| {
+                        let (exec, inv) = (engine.exec.clone(), guard.inv.clone());
+                        async move {
+                            let a2 = argv.clone();
+                            let ran = tokio::task::spawn_blocking(move || exec.run_investigation(&inv, &a2, None)).await;
+                            match ran {
+                                Ok(Ok(r)) => rj::CommandResult { argv, exit: r.outcome.status.and_then(|s| s.code()), elapsed_ms: r.elapsed.as_millis() as u64, requested_by: by, refused: None, timed_out: r.outcome.timed_out, tail: rj::tail(&format!("{}{}", r.outcome.stdout, r.outcome.stderr), rj::TAIL_CHARS) },
+                                Ok(Err(e)) => rj::CommandResult { argv, exit: None, elapsed_ms: 0, requested_by: by, refused: None, timed_out: false, tail: format!("could not run: {e}") },
+                                Err(e) => rj::CommandResult { argv, exit: None, elapsed_ms: 0, requested_by: by, refused: None, timed_out: false, tail: format!("could not run: {e}") },
+                            }
+                        }
+                    };
+                    let out = rj::review(&input, &configured, sandbox, seat, cmd).await;
+                    // §6.2 item 7: the copy is removed whatever happened.
+                    let _ = tokio::task::spawn_blocking(move || drop(guard)).await;
+                    let status = if out.answer.is_some() { crate::engine::Status::Done } else { crate::engine::Status::Escalated(out.unanswered.clone().unwrap_or_default()) };
+                    let text = out.answer.as_ref().map(|a| format!("verdict: {}; {} finding(s)", a.verdict, a.findings.len())).unwrap_or_default();
+                    let finished = engine.finish_task(&mm, tid.clone(), crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await;
+                    match (finished, mm.replay()) {
+                        (Ok(_), Ok(events)) => {
+                            let receipts: Vec<Value> = crate::seat::seat_summaries(&events, &tid).into_iter().map(|s| s.to_value()).collect();
+                            let served = receipts.first().and_then(|r| r["family"].as_str()).unwrap_or("unknown").to_string();
+                            let now = (engine.clock_unix)();
+                            crate::standing::settle(&engine.ws.dir, &standing_id, crate::seat::served_for_task(&events, &tid).1, now);
+                            let redact = |s: &str| engine.secrets.redact(s);
+                            let commands: Vec<Value> = out.commands.iter().map(|c| {
+                                let mut v = c.to_json();
+                                v["tail"] = json!(redact(&c.tail));
+                                v
+                            }).collect();
+                            json!({
+                                "consent": consent,
+                                "ask_id": tid,
+                                "id": tid,
+                                "status": if out.answer.is_some() { "answered" } else { "unanswered" },
+                                "answered_by": role,
+                                "advice_only": true,
+                                "verdict": out.answer.as_ref().map(|a| a.verdict.clone()),
+                                "findings": out.answer.as_ref().map(|a| a.findings.clone()).unwrap_or_default(),
+                                "unanswered": out.unanswered.as_deref().map(redact),
+                                "commands": commands,
+                                "tests_run": out.tests_run,
+                                "rounds": out.rounds,
+                                "branch": branch,
+                                "base": base,
+                                "diff": {"files": capped.files.len(), "shown": capped.files.len() - capped.dropped.len(), "truncated": capped.truncated(), "left_out": capped.dropped},
+                                "receipt": receipts,
+                                "family_requested": family,
+                                "family_served": served,
+                                "host_family": host_family.map(|f| json!({"family": f, "source": "host-declared"})),
+                                "note": "advice to you: it binds nothing and no gate reads it. The reviewer had no tools; every command was run by Delphi under the OS sandbox with no network, in a copy of the branch that is now deleted. The family shown is the served one from the receipt, not the one requested."
+                            })
+                        }
+                        (Err(e), _) => json!({"ask_id": tid, "status": "failed", "reason": engine.secrets.redact(&e.to_string())}),
+                        (_, Err(e)) => json!({"ask_id": tid, "status": "failed", "reason": engine.secrets.redact(&e.to_string())}),
+                    }
+                }
+            };
+            if let Some(r) = asks.lock().unwrap().get_mut(&k) {
+                r.result = Some(result);
+                r.at = Instant::now();
+            }
+        });
+        self.host_aborts.lock().unwrap().insert((m.id.clone(), task_id.clone()), job.abort_handle());
+        let v = self.wait_ask(&key, Duration::ZERO).await;
+        Ok(self.signed_ask(v))
+    }
+
     /// Spec 104 §5 (§12 A2, A4): the consent a foreign seat runs under. With the operator's yes for this call it is `operator` and the
     /// standing amount is not touched. Without it, the ratified `[access] standing_foreign_tokens` must be above 0, the session must not
     /// carry a live private-read mark (spec 103: no host text goes to another vendor without a yes then), and `ceiling` must fit in the
@@ -1917,7 +2100,7 @@ impl EngineService {
             let raised_council = events.iter().any(|e| e.kind == h::COUNCIL_EVENT && e.payload["task_id"] == id.as_str());
             let raised_help = self.helps.lock().unwrap().get(&id).is_some_and(|r| r.session == c.session) && events.iter().any(|e| e.kind == h::HELP_EVENT && e.payload["task_id"] == id.as_str());
             let ask_key = (c.session.clone(), id.clone());
-            let raised_ask = self.asks.lock().unwrap().get(&ask_key).is_some_and(|r| r.result.is_none()) && events.iter().any(|e| e.kind == "task.created" && e.task_id.as_deref() == Some(id.as_str()) && e.payload["target"] == "ask_family");
+            let raised_ask = self.asks.lock().unwrap().get(&ask_key).is_some_and(|r| r.result.is_none()) && events.iter().any(|e| e.kind == "task.created" && e.task_id.as_deref() == Some(id.as_str()) && matches!(e.payload["target"].as_str(), Some("ask_family" | "review")));
             let ended = events.iter().any(|e| e.task_id.as_deref() == Some(id.as_str()) && matches!(e.kind.as_str(), "task.completed" | "task.failed" | "task.cancelled"));
             if !(raised_council || raised_help || raised_ask) || ended {
                 return Err(refuse());
@@ -5072,6 +5255,7 @@ impl Extension for ServiceExt {
                 "host.council_open" => svc.host_council_open(params, ctx).await,
                 "host.ask_family" => svc.host_ask_family(params, ctx).await,
                 "host.ask_result" => svc.host_ask_result(params, ctx).await,
+                "host.review" => svc.host_review(params, ctx).await,
                 "host.council_frame" => svc.host_council_frame(params, ctx).await,
                 "host.council_brief" => svc.host_council_brief(params, ctx).await,
                 "host.council_submit" => svc.host_council_submit(params, ctx).await,
@@ -10603,6 +10787,44 @@ mod tests {
         assert!(got["display"].as_str().unwrap().contains("1 family: gemini (homogeneous)"), "{}", got["display"]);
     }
 
+    // specs/091 SR-3 (amended 2026-11-21): a seat counts toward families only if it gave a stance. Delphi's gemini seat runs (its
+    // receipt says `ok`, served gemini) but answers Round 1 with nothing, so it abstains: only the host's claude sat.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_foreign_seat_that_abstained_adds_no_family_and_the_panel_is_homogeneous() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text(R2_GOOD) } else { Step::text("") });
+        f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (_, got) = blocking(move || drive_panel(hsock, htok, cwd, json!({"question": "q?", "model": "claude-opus", "operator_confirmed": true, "foreign_seat": "red-team"}), &["architect", "strategist"]).unwrap()).await;
+        let events = replay_log(&delphi_core::sessions::dir(&f.engine.ws.dir, "host-abcdef0123456789"));
+        assert!(events.iter().any(|e| e.kind == crate::seat::RECEIPT_KIND && e.payload["outcome"] == "ok" && e.payload["served"]["family"] == "gemini"), "the seat ran and its receipt says ok");
+        assert!(events.iter().any(|e| e.kind == "council.stance" && e.payload["role"] == "red-team" && e.payload["status"] == "abstained"), "and it abstained");
+        let started = events.iter().find(|e| e.kind == "council.started").unwrap();
+        assert_eq!((started.payload["families"].clone(), started.payload["homogeneous"].clone()), (json!(["claude"]), json!(true)), "{}", started.payload);
+        assert_eq!((got["ruling"]["families"].clone(), got["ruling"]["homogeneous"].clone()), (json!(["claude"]), json!(true)), "{got}");
+        let verdict = events.iter().find(|e| e.kind == "council.verdict").unwrap();
+        assert_eq!(verdict.payload["homogeneous"], true, "the record is labelled homogeneous too: {}", verdict.payload);
+        assert!(got["display"].as_str().unwrap().contains("1 family: claude (homogeneous)"), "{}", got["display"]);
+    }
+
+    // The same rule for a required count: Round 1's only gemini seat abstained, so `require_families = 2` is not met.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_abstained_foreign_seat_does_not_meet_require_families() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        f.model.respond_with(|body| if body.to_string().contains("COUNCIL, ROUND 2") { Step::text(R2_GOOD) } else { Step::text("") });
+        f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let (_, got) = blocking(move || drive_panel(hsock, htok, cwd, json!({"question": "q?", "model": "claude-opus", "operator_confirmed": true, "require_families": 2, "foreign_seat": "red-team"}), &["architect", "strategist"]).unwrap()).await;
+        assert_eq!((got["ruling"]["families"].clone(), got["ruling"]["require_families_met"].clone()), (json!(["claude"]), json!(false)), "{got}");
+        assert!(!f.model.requests().iter().any(|q| q.body.to_string().contains("COUNCIL, ROUND 2")), "Round 2 of the foreign seat was not run: the requirement was judged unmet after Round 1");
+    }
+
     // ── specs/098 §6.2 (S6): a red-team review and `ask_family` ─────────────────────────────────────────────
 
     fn red_on(s: &mut crate::engine::Settings) {
@@ -10792,6 +11014,124 @@ mod tests {
         }
         let events = replay_log(&delphi_core::sessions::dir(&ws_dir, "host-abcdef0123456789"));
         assert_eq!(events.iter().filter(|e| e.kind == "task.completed").count(), 1, "the job finished its task once");
+    }
+
+    /// Spec 135 §6 (F2): make the testkit project a repository whose checked-out branch `feature` changes one file.
+    fn review_repo(f: &Fx) -> PathBuf {
+        let proj = std::fs::canonicalize(f.root.join("proj")).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git").arg("-C").arg(&proj).args(["-c", "user.name=t", "-c", "user.email=t@localhost.invalid", "-c", "commit.gpgSign=false"]).args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "--quiet", "-b", "main"]);
+        git(&["add", "--all"]);
+        git(&["commit", "--quiet", "-m", "init"]);
+        git(&["checkout", "--quiet", "-b", "feature"]);
+        std::fs::write(proj.join("src/lib.rs"), "pub fn needle() {}\npub fn REVIEWED_CHANGE() {}\n").unwrap();
+        git(&["commit", "--quiet", "-am", "the change"]);
+        proj
+    }
+
+    /// `request_review` as the MCP process drives it: the id at once, then `ask_result` until the review is in.
+    fn review(c: &mut Client, body: Value) -> Value {
+        let first = c.call("host.review", body.clone()).unwrap();
+        assert_eq!(first["status"], "working", "the daemon hands back the id at once: {first}");
+        let read = json!({"session": body["session"], "tool": body["tool"], "cwd": body["cwd"], "ask_id": first["ask_id"], "wait": true});
+        for _ in 0..20 {
+            let v = c.call("host.ask_result", read.clone()).unwrap();
+            if v["status"] != "working" {
+                return v;
+            }
+        }
+        panic!("the review never finished")
+    }
+
+    /// Spec 135 AC-8: Delphi runs the configured command in a copy of the branch, the seat's requested commands run (the denied one is
+    /// refused), Round 2 sees their output, the seat has no tools, and the copy is gone afterwards.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_review_runs_the_tests_in_a_copy_of_the_branch_and_a_seat_of_another_family_reviews_with_their_output() {
+        let f = setup(vec![], 50.0, |s| {
+            roomy(s);
+            s.review_commands = Some(vec![vec!["/bin/echo".into(), "TESTS-PASSED-MARKER".into()]]);
+        });
+        crate::council::tests::two_families(&f);
+        if f.engine.exec.sandbox.is_none() {
+            eprintln!("no OS sandbox on this machine: the AC-10 path is covered in review_job_tests");
+            return;
+        }
+        let briefs: Arc<std::sync::Mutex<Vec<(String, usize)>>> = Default::default();
+        let b2 = briefs.clone();
+        f.model.respond_with(move |body| {
+            let t = body.to_string();
+            b2.lock().unwrap().push((t.clone(), body["tools"].as_array().map_or(0, |a| a.len())));
+            if t.contains("FINAL answer") {
+                Step::text(r#"{"verdict": "changes", "findings": [{"severity": "medium", "file": "src/lib.rs", "line": 2, "claim": "a function name in capitals", "evidence": "REVIEWED_CHANGE"}]}"#)
+            } else {
+                Step::text(r#"{"verdict": "unsure", "findings": [], "run": [["/bin/cat", "src/lib.rs"], ["git", "push"]]}"#)
+            }
+        });
+        f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+        let proj = review_repo(&f);
+        let cwd = proj.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let got = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            review(&mut c, pbody(&cwd, json!({"model": "claude-opus", "operator_confirmed": true})))
+        })
+        .await;
+        assert_eq!((got["status"].as_str(), got["verdict"].as_str(), got["family_served"].as_str()), (Some("answered"), Some("changes"), Some("gemini")), "{got}");
+        assert_eq!((got["branch"].as_str(), got["base"].as_str(), got["tests_run"].as_bool(), got["rounds"].as_u64()), (Some("feature"), Some("main"), Some(true), Some(2)), "{got}");
+        assert_eq!(got["findings"][0]["claim"], "a function name in capitals", "{got}");
+        let cmds = got["commands"].as_array().unwrap();
+        let by: Vec<(&str, &str, bool)> = cmds.iter().map(|c| (c["argv"][0].as_str().unwrap(), c["requested_by"].as_str().unwrap(), c.get("refused").is_some())).collect();
+        assert_eq!(by, vec![("/bin/echo", "delphi", false), ("git", "seat", true), ("/bin/cat", "seat", false)], "{got}");
+        assert!(cmds[0]["tail"].as_str().unwrap().contains("TESTS-PASSED-MARKER") && cmds[2]["tail"].as_str().unwrap().contains("REVIEWED_CHANGE"), "the commands ran in the copy of the branch: {cmds:?}");
+        assert!(got["display"].as_str().is_some_and(|d| d.contains("(red-team, via delphi)")), "{got}");
+        assert_eq!(got["receipt"][0]["tools_offered"].as_array().map(Vec::len), Some(0), "no tools: {got}");
+        let briefs = briefs.lock().unwrap();
+        assert_eq!(briefs.len(), 2, "two rounds");
+        assert!(briefs.iter().all(|(_, tools)| *tools == 0), "the seat had no tools in either round");
+        assert!(briefs[0].0.contains("TESTS-PASSED-MARKER") && briefs[0].0.contains("REVIEWED_CHANGE"), "round 1 has the test output and the diff");
+        assert!(briefs[1].0.contains("refused, not run") && briefs[1].0.contains("FINAL answer"), "round 2 has the requested outputs");
+        let left = std::fs::read_dir(f.engine.exec.worktrees.investigations_root()).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(left, 0, "the review copy is removed");
+        // The project itself is untouched: still on its branch, nothing written.
+        assert_eq!(crate::review_job::branch_of(&proj).unwrap(), "feature");
+    }
+
+    /// Spec 135 AC-9: refused before anything is spent: no yes, the host's own family, a branch equal to the base, a directory outside a
+    /// registered project.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_review_is_refused_before_anything_is_spent() {
+        let f = setup(vec![], 50.0, roomy);
+        crate::council::tests::two_families(&f);
+        let proj = review_repo(&f);
+        let (cwd, outside) = (proj.to_string_lossy().to_string(), f.root.to_string_lossy().to_string());
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        let errs = blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.hello(&htok).unwrap();
+            let mut call = |cwd: &str, extra: Value| c.call("host.review", pbody(cwd, extra)).unwrap_err().to_string();
+            vec![
+                call(&cwd, json!({"model": "claude-opus"})),
+                call(&cwd, json!({"model": "claude-opus", "family": "claude", "operator_confirmed": true})),
+                call(&cwd, json!({"model": "claude-opus", "base": "feature", "operator_confirmed": true})),
+                call(&outside, json!({"model": "claude-opus", "operator_confirmed": true})),
+                call(&cwd, json!({"model": "claude-opus", "base": "-x", "operator_confirmed": true})),
+            ]
+        })
+        .await;
+        assert!(errs[0].contains("operator_confirmed"), "{}", errs[0]);
+        assert!(errs[1].contains("other than your own"), "{}", errs[1]);
+        assert!(errs[2].contains("the base itself") && errs[2].contains("Nothing was spent"), "{}", errs[2]);
+        assert!(errs[3].contains("not inside a project registered"), "{}", errs[3]);
+        assert!(errs[4].contains("not a branch name"), "{}", errs[4]);
+        assert!(f.model.requests().is_empty(), "nothing was spent");
+        assert!(!f.engine.exec.worktrees.investigations_root().exists() || std::fs::read_dir(f.engine.exec.worktrees.investigations_root()).unwrap().next().is_none(), "no copy was made");
     }
 
     /// Spec 104 §3 item 2: the progress line is built from status fields only: the phase, the workers, or the state word.

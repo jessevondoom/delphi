@@ -683,16 +683,18 @@ Merge this repository's queued pull requests, with a recorded approval.
   delphi merge status
   delphi merge log [--open] [--pr <n>] [--json] [--home <dir>]
   delphi merge fix <PR> [--done | --needs-human "<why>"] [--home <dir>]
+  delphi merge refresh <PR> [--home <dir>]
   delphi merge cleanup [<PR>...] [--merged] [--dry-run] [--yes]
 ```
 
 The core-repo merge flow (specs/094). Agents queue a ready pull request with the `merge-queue` label (`delphi merge queue <PR>`); a merge is started by the operator.
-For each pull request the command derives, from git and `gh`, the head commit, the changed paths and their hash, the base commit, the checks and the linked spec (the `Implements-Spec:` trailer); nothing is typed. It refuses unless the pull request is open, not a draft, queued, mergeable, every check passes and the spec is approved on the base branch (or the change is inside the bounded exemption of specs/003). A refusal lists every reason.
+For each pull request the command derives, from git and `gh`, the head commit, the changed paths and their hash, the base commit, the checks and the linked spec (the `Implements-Spec:` trailer); nothing is typed. It refuses unless the pull request is open, not a draft, queued, mergeable, every check passes, the spec is approved on the base branch (or the change is inside the bounded exemption of specs/003), and its head contains the tip of the base: CI tested the branch against the base as it was at the last push, so a head that is behind (the compare API's `behind_by` above 0) is refused, with the count, until it is refreshed and CI has run on the new head. The queue does not require that. A refusal lists every reason.
+`refresh <PR>` updates a pull request that is behind: in a temporary worktree under the Delphi home it merges the base into the pull request's head (a merge commit, never a rebase), settles only conflicts in the compiled spec views, the spec groups file and the spec tracker (the two hand-written files by keeping both sides' lines, the base's first; the views by taking the base's side), always reruns the spec compile and checks it, so every generated view is what the compile writes for the merged specs (even where the merge had no conflict), checks that what the pull request changes outside the generated files is exactly what it changed before, and pushes one commit with a plain push (never a force; a branch that moved meanwhile rejects it). Any other conflict, a gate path, more than 10 conflicted files, a failed compile, a widened change or a rejected push stops it with nothing pushed and an error entry of class `refresh-refused` for `merge fix`. It refuses a draft, a fork's pull request and a gate-changing one, never merges anything and needs no approval of its own. Run it in the repository.
 Approval is `tty` (you type the PR number; `all` for --all) or `chat-quote` (an agent passes your own words with --operator-said; the quote must name the pull request, or say all/every/each for --all). A chat quote is self-attested by the caller and is recorded as such. The merge is a merge commit, made only if the head is still the one derived, and the decision is appended to $DELPHI_HOME/merge/ledger.jsonl and posted on the pull request.
 A pull request that touches a path in merge-gates.toml (read from the BASE branch; the file is on its own list) changes a gate: it is never queued, never merged by --all, refuses a chat quote, and needs you at a terminal, shown the whole diff. --dry-run changes nothing.
 After a merge the command removes what belonged to the pull request and prints one line per step: the remote branch (kept if another open pull request is based on it, or its tip is not the merged commit), the worktrees that have the branch (kept, and reported, when locked, dirty, the main worktree, or the directory you are in; never --force), then the local branch with `git branch -d` only. The base, default, main and master branches and any pull request that is not MERGED are never touched. A cleanup failure is printed and never undoes a merge. `delphi merge cleanup <PR>...` does the same for merged pull requests; `--merged` sweeps the backlog of recent merged pull requests whose branch still exists, and only prints the plan until you add --yes.
 
-When a pull request cannot merge for a reason somebody must act on (a conflict, a red check, no checks, an unapproved spec, a head that moved, a `gh` failure), an entry is written to $DELPHI_HOME/merge/errors.jsonl and the central log (`delphi logs`); waiting (a draft, running checks) is not an error. The same problem on the same head is one more attempt, not a new entry, and a merge resolves the entries open for it. `log` shows them and the latest ledger rows. `fix <PR>` prepares a worktree on the pull request's branch (or points at the one where it is already checked out), writes a brief for the builder (the git-merge-and-conflict-resolution skill; never a rebase or force-push; stop on a gate file, more than 10 conflicting files or red tests) and moves the entry to `fixing`; the builder reports `--done` once it has pushed (the head must have moved; the earlier approval no longer applies) or `--needs-human` with the reason.
+When a pull request cannot merge for a reason somebody must act on (a conflict, a red check, no checks, an unapproved spec, a head behind the base, a head that moved, a `gh` failure), an entry is written to $DELPHI_HOME/merge/errors.jsonl and the central log (`delphi logs`); waiting (a draft, running checks) is not an error. The same problem on the same head is one more attempt, not a new entry, and a merge resolves the entries open for it. `log` shows them and the latest ledger rows. `fix <PR>` prepares a worktree on the pull request's branch (or points at the one where it is already checked out), writes a brief for the builder (the git-merge-and-conflict-resolution skill; never a rebase or force-push; stop on a gate file, more than 10 conflicting files or red tests) and moves the entry to `fixing`; the builder reports `--done` once it has pushed (the head must have moved; the earlier approval no longer applies) or `--needs-human` with the reason.
 Refused inside an agent seat. Needs the GitHub CLI (`gh`) signed in. Exit codes: 0 ok · 1 refused, declined or failed · 2 usage or refusal · 4 `gh` missing or unreachable.
 
 ## Inspect
@@ -742,6 +744,23 @@ Check a repository's Delphi files.
   delphi lint --repo <path>
 ```
 
+## Work
+
+### `delphi forge`
+
+Claim a spec slice before building it; finish it before its PR.
+
+```
+  delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--repo <dir>] [--home <dir>]
+  delphi forge release <spec> <slice> [--by <holder>] [--repo <dir>] [--home <dir>]
+  delphi forge list [--all] [--json] [--repo <dir>] [--home <dir>]
+  delphi forge finish [--check] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]
+```
+
+Spec 135. claim records that a slice of an approved spec is being built, in <home>/forge/claims.json under a lock, so another session that claims it is refused and told who holds it (exit 1). A claim belongs to a holder (--by, by default the branch checked out at --repo) and lasts --ttl (default 8h); claiming again renews it, --take takes over a live claim of another holder (printed and recorded), and an expired claim is replaced. A draft spec is refused; the tracker is read for warnings only (a slice it does not list, a slice it says is merged). A claim binds only sessions that ask, on this machine and home; nothing refuses a pull request for a claimed slice. release removes your claim; list shows the live claims of this repository (--all: every repository and the expired ones). finish does the deterministic chores before a pull request, in-process: it regenerates docs/reference, the ecosystem files and the compiled specs (--check compares and exits 1 on drift), checks that the slice's tracker row no longer says not built (the slice comes from --spec/--slice or this branch's claim), prints the three gates (it runs none), and with --body prints a pull request body and renews the claim. No daemon and no process are started.
+
+## Inspect
+
 ### `delphi specs`
 
 Compile the specs into one JSON file each, and read them.
@@ -778,12 +797,13 @@ page's DOI up at doi.org, as the daemon does; `--offline` skips that.
 Put this program on your PATH, as install.sh does.
 
 ```
-  delphi self-install
+  delphi self-install [--allow-downgrade]
 ```
 
 Copies the running delphi to ~/.local/bin/delphi (or $DELPHI_INSTALL_DIR/delphi): written under a temporary name,
 mode 0755, then moved into place. It never writes over a symbolic link or over a file that is not a delphi
-(a regular program holding delphi's own text; the file is read, never run), and prints what it did. The desktop
+(a regular program holding delphi's own text; the file is read, never run), and prints what it did. A delphi
+newer than this one (its version is read from its bytes) is kept unless --allow-downgrade is given. The desktop
 app carries a copy of delphi and shows this command, to be run from that copy, when no delphi is installed.
 Needs no terminal. Refused inside an agent seat.
 

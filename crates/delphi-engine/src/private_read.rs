@@ -140,7 +140,7 @@ const SEATS_CANNOT_READ: &str = "an answer written by seats that cannot read a n
 const MCP_OWN: &str = "runs in the MCP server's own process over files and the index; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`) and the index lists no private source";
 
 /// The methods of the host socket (`delphi_core::server::HOST_METHODS`).
-pub const HOST_SURFACE: [Surface; 32] = [
+pub const HOST_SURFACE: [Surface; 33] = [
     no_return("session.ping", "answers `pong`"),
     Surface { name: "host.search_kb", how: How::Marks },
     no_return("host.propose_note", WRITES),
@@ -173,10 +173,11 @@ pub const HOST_SURFACE: [Surface; 32] = [
     no_return("host.reads_seen", "a write to the daemon's in-memory tally of what a host session was shown (`specs/109` §13.1 item 3): ids and labels in, a count out, never an entry's text"),
     no_return("host.ask_family", "the answer of another model family to the host's own question; it is handed no entry by the daemon"),
     no_return("host.ask_result", "see `host.ask_family`; while it runs, fixed-form progress (role, state, counts) and no model text"),
+    no_return("host.review", "a review of the host's own branch by another model family (`specs/135` §6): the seat's findings and the output of commands run in a copy of that branch; it is handed no entry by the daemon"),
 ];
 
 /// The tools of the MCP server (`mcp_host::tools()`).
-pub const MCP_SURFACE: [Surface; 46] = [
+pub const MCP_SURFACE: [Surface; 47] = [
     Surface { name: "search_kb", how: How::Marks },
     no_return("list_roles", PROJECT_FILES),
     no_return("delphi_roster", PROJECT_FILES),
@@ -224,6 +225,7 @@ pub const MCP_SURFACE: [Surface; 46] = [
     no_return("cancel_job", WRITES),
     no_return("ask_family", "see `host.ask_family`"),
     no_return("ask_result", "see `host.ask_result`"),
+    no_return("request_review", "see `host.review`"),
 ];
 
 /// The relay stream's event kinds that carry no text an agent wrote, and why. The kinds that do are `AGENT_TEXT_KINDS` (masked above). A

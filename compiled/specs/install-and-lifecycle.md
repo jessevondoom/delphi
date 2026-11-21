@@ -2,7 +2,7 @@
 
 # Install and lifecycle
 
-10 specs. [All groups](./index.md).
+[All groups](./index.md). `delphi specs list --group install-and-lifecycle` lists this group.
 
 ## 006-installer-and-updater
 
@@ -32,7 +32,7 @@ _No standard scope section; open the spec._
 
 ## 039-error-log
 
-**039: The central error log** · approved (per source at `6ceda78a3df1`) · tier 0 · [source](../../specs/039-error-log.md)
+**039: The central error log** · approved (per source at `9dbb823ba51d`) · tier 0 · [source](../../specs/039-error-log.md)
 
 _No standard scope section; open the spec._
 
@@ -62,7 +62,7 @@ _No standard scope section; open the spec._
 
 ## 122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program
 
-**122: The desktop app in the release: built on macOS, installed and updated with the program** · approved (per source at `7b08b2d27ba6`) · tier 0 · [source](../../specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md)
+**122: The desktop app in the release: built on macOS, installed and updated with the program** · approved (per source at `adb03b5cfc8e`) · tier 0 · [source](../../specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md)
 
 **source excerpt, untrusted** · `specs/122-the-desktop-app-in-the-release-built-on-macos-installed-and-updated-with-the-program.md` line 23
 

@@ -5,6 +5,7 @@
 //! 2. The repository's own specs compile, and the committed files are exactly what a fresh compile writes.
 //! 3. Every committed file's quotations are the source cut at their recorded spans, and none carries an approval field.
 //! 4. The release seed ships only what it lists, and it does not list the compiled directory.
+//! 5. Two branches that each add a spec merge cleanly into a current tree (no whole-set line, spec 088 §13).
 //!
 //! The indexer and the project-files tool have their own tests beside their code (`kb.rs`, `mcp_project.rs`).
 
@@ -157,6 +158,75 @@ fn six_specs_share_a_number_no_longer_and_every_spec_has_its_own_file() {
     let dup: Vec<_> = numbers.iter().filter(|(_, v)| v.len() > 1).collect();
     assert!(dup.is_empty(), "two specs share a number: {:?}", dup);
     assert!(stems.len() > 100);
+}
+
+/// Runs git in `dir` with a fixed identity and no signing, and returns its output.
+fn git(dir: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git").arg("-C").arg(dir).args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"]).args(args).output().expect("run git")
+}
+
+fn git_ok(dir: &Path, args: &[&str]) -> String {
+    let out = git(dir, args);
+    assert!(out.status.success(), "git {:?} failed:\n{}{}", args, String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+/// A spec file the compile accepts.
+fn fixture_spec(stem: &str) -> String {
+    format!("---\nid: spec-{stem}\ntitle: \"Spec {stem}\"\nstatus: draft\n---\n\n# Spec {stem}\n\n## 1. Scope and objectives\n\nThe summary of {stem}.\n\n## 2. Next\n\ntext\n")
+}
+
+/// Adds a spec on the current branch: its file, its line in the groups file after the line `after`, a compile, a commit.
+fn add_spec_on_branch(dir: &Path, stem: &str, group: &str, after: &str) {
+    std::fs::write(dir.join(format!("specs/{}.md", stem)), fixture_spec(stem)).unwrap();
+    let groups = std::fs::read_to_string(dir.join("compiled/groups.toml")).unwrap();
+    let line = format!("\"{}\" = \"{}\"\n", stem, group);
+    let at = groups.find(after).expect("the anchor line") + after.len();
+    std::fs::write(dir.join("compiled/groups.toml"), format!("{}{}{}", &groups[..at], line, &groups[at..])).unwrap();
+    let c = Command::new(DELPHI).args(["specs", "compile", "--repo"]).arg(dir).output().unwrap();
+    assert!(c.status.success(), "{}", String::from_utf8_lossy(&c.stderr));
+    git_ok(dir, &["add", "-A"]);
+    git_ok(dir, &["commit", "-qm", &format!("add {}", stem)]);
+}
+
+/// Spec 088 §13.7 test 23, the 2026-11-20 incident as a fixture: two branches each add a spec to a different group, merge with
+/// no conflict, and the result is current without a recompile. Under the renderer before S3c the merge was just as clean, but the
+/// index said "5 specs in 2 groups" over six specs, and `--check` failed on main.
+#[test]
+fn two_specs_added_on_two_branches_merge_without_conflict_and_the_result_is_current() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    std::fs::create_dir_all(dir.join("specs")).unwrap();
+    std::fs::create_dir_all(dir.join("compiled")).unwrap();
+    for stem in ["001-a", "002-b", "003-c", "004-d"] {
+        std::fs::write(dir.join(format!("specs/{}.md", stem)), fixture_spec(stem)).unwrap();
+    }
+    let groups = "[[group]]\nid = \"one\"\ntitle = \"Group one\"\norder = 1\n\n[[group]]\nid = \"two\"\ntitle = \"Group two\"\norder = 2\n\n[specs]\n\"001-a\" = \"one\"\n\"002-b\" = \"one\"\n\"003-c\" = \"two\"\n\"004-d\" = \"two\"\n";
+    std::fs::write(dir.join("compiled/groups.toml"), groups).unwrap();
+    git_ok(dir, &["init", "-q"]);
+    git_ok(dir, &["checkout", "-q", "-b", "base"]);
+    let c = Command::new(DELPHI).args(["specs", "compile", "--repo"]).arg(dir).output().unwrap();
+    assert!(c.status.success(), "{}", String::from_utf8_lossy(&c.stderr));
+    git_ok(dir, &["add", "-A"]);
+    git_ok(dir, &["commit", "-qm", "base"]);
+    // Branch A adds a spec to the first group, its groups line near the top; branch B one to the second, its line at the end, so
+    // the two hunks of the groups file are separated by unchanged lines.
+    git_ok(dir, &["checkout", "-q", "-b", "a", "base"]);
+    add_spec_on_branch(dir, "005-e", "one", "\"001-a\" = \"one\"\n");
+    git_ok(dir, &["checkout", "-q", "-b", "b", "base"]);
+    add_spec_on_branch(dir, "006-f", "two", "\"004-d\" = \"two\"\n");
+    git_ok(dir, &["checkout", "-q", "a"]);
+    let merge = git(dir, &["merge", "--no-edit", "-q", "b"]);
+    assert!(merge.status.success(), "the merge of B into A is clean:\n{}{}", String::from_utf8_lossy(&merge.stdout), String::from_utf8_lossy(&merge.stderr));
+    assert_eq!(git_ok(dir, &["diff", "--name-only", "--diff-filter=U"]), "", "no conflicted file");
+    assert_eq!(git_ok(dir, &["status", "--porcelain"]), "", "the merge committed everything");
+    // The merged tree is current as it stands: no recompile.
+    let check = Command::new(DELPHI).args(["specs", "compile", "--check", "--repo"]).arg(dir).output().unwrap();
+    assert!(check.status.success(), "the merge result is current without a recompile:\n{}", String::from_utf8_lossy(&check.stderr));
+    let index = std::fs::read_to_string(dir.join("compiled/specs/index.md")).unwrap();
+    for stem in ["001-a", "002-b", "003-c", "004-d", "005-e", "006-f"] {
+        assert_eq!(index.matches(&format!("| [{}](./", stem)).count(), 1, "{} is in the merged index once", stem);
+    }
 }
 
 #[test]

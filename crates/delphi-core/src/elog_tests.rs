@@ -1,6 +1,20 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
+/// Spec 039 (`tool_failed`, amended 2026-11-07): the argument NAMES survive the context filter. They were dropped until
+/// 2026-11-21 because `arg_keys` was not in [`CONTEXT_KEYS`] (found by the spec 135 F4 cross-family review).
+#[test]
+fn a_failed_tool_calls_argument_names_reach_the_record() {
+    let d = tempfile::tempdir().unwrap();
+    let l = logger(d.path(), Level::Warn, DEFAULT_MAX_BYTES, 3);
+    let ctx = json!({"tool": "write_file", "kind": "denied", "arg_keys": ["content", "path"], "not_a_key": "dropped"});
+    let line = l.render(Level::Warn, "tool", "tool_failed", "a tool call returned an error", &ctx, &[], None);
+    let v: Value = serde_json::from_str(&line).unwrap();
+    let keys = v["context"]["arg_keys"].as_str().expect("arg_keys is kept");
+    assert!(keys.contains("content") && keys.contains("path"), "{line}");
+    assert!(v["context"].get("not_a_key").is_none(), "{line}");
+}
+
 fn logger(home: &Path, level: Level, max: u64, files: usize) -> Logger {
     let mut s = settings_with(home, None, None);
     s.level = level;
