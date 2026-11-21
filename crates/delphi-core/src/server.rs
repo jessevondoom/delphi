@@ -12,11 +12,14 @@
 //! * **the app socket issues no token** (`specs/120`). A connection there is sent a fresh nonce and must answer with a
 //!   signature by a key a terminal paired, over that nonce, this daemon's instance id, the protocol major and the socket's
 //!   path; nothing else opens a session. A pairing ticket is given only to a console client attached to a terminal, is good
-//!   once and for a minute. A refusal is recorded, and five in a minute close the socket to new connections for a minute.
+//!   once and for a minute. There is no lockout (`specs/120` §3 item 4, as amended by `specs/129` §10.1): every connection within
+//!   the limits on unproven connections (per peer and for the socket) is sent the challenge, and a refusal costs the caller, whose
+//!   answer waits longer with each failure ([`crate::app_refusals`]). A valid signature is answered at once, whatever others failed.
 //!   A session calls only the methods of the grants its key holds *now* ([`crate::app_keys::GRANTS`]), and ends the moment
 //!   its key is revoked.
 
 use crate::app_keys::{self, AppKey, CallRefused, KeyStore};
+use crate::app_refusals::{LogNow, PeerId, RefusalCost, RefusalLog};
 use crate::hub::{ClientQueue, Hub, DEFAULT_QUEUE_CAP};
 use crate::peer::controlling_tty;
 use crate::proto::{code, Notification, Request, Response, RpcError, Scope, PROTOCOL_MAJOR, RESTART_HINT};
@@ -52,8 +55,6 @@ pub const APP_ADMIN_METHODS: [&str; 8] = ["auth.pair_ticket", "app.keys", "app.r
 /// The two of [`APP_ADMIN_METHODS`] that belong to the extension, which holds the pending update (`Extension::app_update_admin`).
 pub const APP_UPDATE_ADMIN_METHODS: [&str; 2] = ["app.update_pending", "app.update_approve"];
 
-/// How many refusals on the app socket, within [`DaemonConfig::app_refusal_window`], close it to new connections.
-pub const APP_REFUSALS: usize = 5;
 /// Pairing tickets that may be outstanding at once.
 pub const MAX_TICKETS: usize = 4;
 /// Pairing requests by code that may be pending at once, how many may be made in an hour, and how many wrong codes cancel one
@@ -63,6 +64,12 @@ pub const MAX_PAIR_PER_HOUR: usize = 6;
 pub const MAX_WRONG_CODES: u8 = 3;
 /// Unauthenticated connections on the app socket at once (a local program that opens many holds one place each, and no more).
 pub const MAX_UNAUTH: usize = 8;
+/// Of those, how many one peer may hold, counting its connections that wait out a refusal (`specs/129` §10.1). A connection that waits
+/// for its pairing code holds no place here.
+pub const MAX_UNAUTH_PER_PEER: usize = 3;
+/// Connections waiting out a refusal at once, on the whole socket. One more is closed at once, with no answer. They hold no place
+/// among the unproven connections, so a flood of refusals cannot fill the places a valid key needs.
+pub const MAX_PENALISED: usize = 16;
 /// How long past its request's time an answered pairing request is kept for its app to collect.
 const ANSWERED_KEPT: Duration = Duration::from_secs(60);
 
@@ -80,13 +87,49 @@ fn pair_kept(p: &PairReq, now: Instant, ttl: Duration) -> bool {
     now.duration_since(p.issued) <= if matches!(p.outcome, PairOutcome::Pending) { ttl } else { ttl + ANSWERED_KEPT }
 }
 
-/// A place among the unauthenticated connections, given back when the connection's handshake ends.
-struct UnauthSlot<'a>(&'a Daemon);
+/// What a connection on the app socket holds before it proves a key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// A place among the unproven connections, the socket's and its peer's.
+    Unproven,
+    /// Waiting for its pairing code: the socket's place only, so the peer may still connect (`specs/129` §10.1).
+    Pairing,
+    /// Waiting out a refusal: a place among those, and its peer's.
+    Penalised,
+}
+
+/// The places a connection holds before it proves a key, given back when its handshake ends.
+struct UnauthSlot<'a> {
+    daemon: &'a Daemon,
+    peer: PeerId,
+    held: Held,
+}
+
+impl UnauthSlot<'_> {
+    /// Move to `to`, giving back what the old state held and taking what the new one needs. `false` (nothing changed) when the
+    /// places for those waiting out a refusal are all taken.
+    fn shift(&mut self, to: Held) -> bool {
+        let mut st = self.daemon.app.lock().unwrap();
+        if to == Held::Penalised && st.penalised >= MAX_PENALISED {
+            return false;
+        }
+        AppState::release(&mut st, self.peer, self.held);
+        match to {
+            Held::Unproven | Held::Pairing => st.unauth += 1,
+            Held::Penalised => st.penalised += 1,
+        }
+        if to != Held::Pairing {
+            *st.per_peer.entry(self.peer).or_insert(0) += 1;
+        }
+        self.held = to;
+        true
+    }
+}
 
 impl Drop for UnauthSlot<'_> {
     fn drop(&mut self) {
-        let mut st = self.0.app.lock().unwrap();
-        st.unauth = st.unauth.saturating_sub(1);
+        let mut st = self.daemon.app.lock().unwrap();
+        AppState::release(&mut st, self.peer, self.held);
     }
 }
 
@@ -138,14 +181,37 @@ struct AppState {
     pairs: Vec<PairReq>,
     /// When the requests of the last hour were made.
     pair_times: VecDeque<Instant>,
-    refusals: VecDeque<Instant>,
-    locked_until: Option<Instant>,
+    /// What refusals cost, per peer, per claimed name and for the socket; and the `app.refused` log's count.
+    cost: RefusalCost,
+    refusal_log: RefusalLog,
     /// Open sessions by client id: the key's name, and what ends the session at once.
     sessions: HashMap<u64, (String, Arc<Notify>)>,
     /// Connections on the app socket that have not proved a key.
     unauth: usize,
+    /// Of those (the ones waiting for a pairing code aside), and of those waiting out a refusal, how many each peer holds.
+    per_peer: HashMap<PeerId, usize>,
+    /// Connections waiting out a refusal.
+    penalised: usize,
     /// The last few tickets that were used, with what became of each: (ticket name, outcome, key name).
     spent: VecDeque<(String, String, String)>,
+}
+
+impl AppState {
+    /// Give back what a connection in state `held` held.
+    fn release(st: &mut AppState, peer: PeerId, held: Held) {
+        match held {
+            Held::Unproven | Held::Pairing => st.unauth = st.unauth.saturating_sub(1),
+            Held::Penalised => st.penalised = st.penalised.saturating_sub(1),
+        }
+        if held != Held::Pairing {
+            if let Some(n) = st.per_peer.get_mut(&peer) {
+                *n = n.saturating_sub(1);
+                if *n == 0 {
+                    st.per_peer.remove(&peer);
+                }
+            }
+        }
+    }
 }
 
 /// What `dispatch` knows about the connection besides its scope.
@@ -209,9 +275,12 @@ pub struct DaemonConfig {
     pub binary_version: String,
     /// How long a pairing ticket is good for (`specs/120` §2 item 2: 60 seconds).
     pub ticket_ttl: Duration,
-    /// The window in which [`APP_REFUSALS`] refusals close the app socket, and for how long (`specs/120` §3 item 4: a minute each).
+    /// How long a run of refusals is remembered after its last one, and the window of the `app.refused` log's aggregation
+    /// (`specs/129` §10.1: a minute).
     pub app_refusal_window: Duration,
-    pub app_lockout: Duration,
+    /// The wait before the answer to a peer's (or a name's) second refusal, doubling with each further one, and its cap (five seconds).
+    pub app_refusal_delay: Duration,
+    pub app_refusal_delay_cap: Duration,
     /// How long a pairing request by code is good for (`specs/120` §13.1 item 4: two minutes).
     pub pair_request_ttl: Duration,
     /// How often a connection that waits for its pairing request to be answered looks (`specs/120` §13.1).
@@ -219,6 +288,8 @@ pub struct DaemonConfig {
     /// Connections on the app socket that have not proved a key (waiting in the handshake, or holding a pairing request) that may be open
     /// at once; one more is closed without a word.
     pub max_unauth: usize,
+    /// Of those, how many one peer may hold, with its connections waiting out a refusal ([`MAX_UNAUTH_PER_PEER`]).
+    pub max_unauth_per_peer: usize,
 }
 
 impl DaemonConfig {
@@ -232,10 +303,12 @@ impl DaemonConfig {
             binary_version: env!("CARGO_PKG_VERSION").to_string(),
             ticket_ttl: Duration::from_secs(60),
             app_refusal_window: Duration::from_secs(60),
-            app_lockout: Duration::from_secs(60),
+            app_refusal_delay: crate::app_refusals::DELAY_BASE,
+            app_refusal_delay_cap: crate::app_refusals::DELAY_CAP,
             pair_request_ttl: Duration::from_secs(120),
             pair_poll: Duration::from_millis(150),
             max_unauth: MAX_UNAUTH,
+            max_unauth_per_peer: MAX_UNAUTH_PER_PEER,
         }
     }
 }
@@ -412,6 +485,23 @@ impl Daemon {
         if let Some(l) = app {
             let me = self.clone();
             tokio::spawn(async move { me.accept_loop(l, Scope::App).await });
+            // The `app.refused` count of a window that ended is written once, even when no refusal follows it.
+            // It holds the daemon weakly, and ends with it or with a shutdown.
+            let weak = Arc::downgrade(&self);
+            let window = self.cfg.app_refusal_window;
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(window.max(Duration::from_millis(50)));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    let Some(me) = weak.upgrade() else { return };
+                    if me.stopped.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let ended = me.app.lock().unwrap().refusal_log.flush(Instant::now(), window);
+                    me.refused_count(ended);
+                }
+            });
         }
         if let Some(l) = host {
             let me = self.clone();
@@ -479,7 +569,7 @@ impl Daemon {
         // ── The app socket: no token. A key proves itself, or the connection ends (`specs/120` §3).
         let mut app_key: Option<String> = None;
         if socket_scope == Scope::App {
-            match self.app_handshake(&mut rd, &mut wr, app_socket_names).await? {
+            match self.app_handshake(&mut rd, &mut wr, app_socket_names, PeerId::of(peer_pid, cred.uid())).await? {
                 Some(name) => app_key = Some(name),
                 None => return Ok(()),
             }
@@ -671,40 +761,63 @@ impl Daemon {
         Ok(keys)
     }
 
-    /// Record a refusal on the app socket (`specs/120` §3 item 4). `name` is written only when it has a key name's shape, so
-    /// nothing a peer made up reaches the log. The fifth refusal in the window closes the socket to new connections.
-    fn app_refused(&self, reason: &str, name: Option<&str>) {
-        let now = Instant::now();
-        let locked = {
-            let mut st = self.app.lock().unwrap();
-            st.refusals.push_back(now);
-            while st.refusals.front().is_some_and(|t| now.duration_since(*t) > self.cfg.app_refusal_window) {
-                st.refusals.pop_front();
+    /// Count a refusal on the app socket against `peer`, the name it claimed and the socket (`specs/129` §10.1), record it, and return
+    /// how long its answer waits. `name` is counted and written only when it has a key name's shape, so nothing a peer made up
+    /// reaches the log.
+    fn app_refused(&self, reason: &str, name: Option<&str>, peer: PeerId) -> Duration {
+        let name = name.filter(|n| app_keys::is_name(n));
+        let wait = self.app.lock().unwrap().cost.charge(peer, name, Instant::now(), self.cfg.app_refusal_window, self.cfg.app_refusal_delay, self.cfg.app_refusal_delay_cap);
+        self.refusal_record(reason, name);
+        wait
+    }
+
+    /// Write one `app.refused` record, through the log's aggregation: past the first [`crate::app_refusals::LOGGED_PER_WINDOW`] in
+    /// a window it adds to a count instead. Refusals that are no peer's doing (a wrong code typed at the terminal, a request that
+    /// ran out) come here directly and cost no one a wait.
+    fn refusal_record(&self, reason: &str, name: Option<&str>) {
+        let (now, ended) = self.app.lock().unwrap().refusal_log.note(Instant::now(), self.cfg.app_refusal_window);
+        self.refused_count(ended);
+        if now == LogNow::Write {
+            self.audit("app.refused", json!({"reason": reason, "name": name}));
+        }
+    }
+
+    /// The count of refusals a window did not write one by one.
+    fn refused_count(&self, ended: Option<u64>) {
+        if let Some(count) = ended {
+            self.audit("app.refused", json!({"reason": "aggregated", "name": null, "count": count, "window_secs": self.cfg.app_refusal_window.as_secs()}));
+        }
+    }
+
+    /// Send a refusal's answer after its wait, and end the handshake. The wait is spent among the connections waiting out a refusal,
+    /// not among the unproven ones; when those places are all taken the connection is closed at once with no answer.
+    async fn refuse<W: tokio::io::AsyncWrite + Unpin>(&self, wr: &mut W, slot: &mut UnauthSlot<'_>, wait: Duration, answer: &Response) -> io::Result<Option<String>> {
+        if !wait.is_zero() {
+            if !slot.shift(Held::Penalised) {
+                return Ok(None);
             }
-            let locked = st.refusals.len() >= APP_REFUSALS;
-            if locked {
-                st.locked_until = Some(now + self.cfg.app_lockout);
-                st.refusals.clear();
-            }
-            locked
-        };
-        self.audit("app.refused", json!({"reason": reason, "name": name.filter(|n| app_keys::is_name(n)), "locked_out": locked}));
+            tokio::time::sleep(wait).await;
+        }
+        write_line(wr, answer).await?;
+        Ok(None)
     }
 
     /// The whole of what an unproven connection on the app socket may do: `app.pair` once, with a ticket, and `app.hello` once,
     /// with a signature over the nonce it was just sent. `Some(name)` is a proven key; `None` means the connection is over.
-    async fn app_handshake<R: AsyncBufRead + Unpin, W: tokio::io::AsyncWrite + Unpin>(&self, rd: &mut R, wr: &mut W, socket_names: &[String]) -> io::Result<Option<String>> {
-        let _slot = {
+    async fn app_handshake<R: AsyncBufRead + Unpin, W: tokio::io::AsyncWrite + Unpin>(&self, rd: &mut R, wr: &mut W, socket_names: &[String], peer: PeerId) -> io::Result<Option<String>> {
+        let mut slot = {
             let mut st = self.app.lock().unwrap();
-            if st.locked_until.is_some_and(|t| Instant::now() < t) {
-                return Ok(None); // closed to new connections: not a word, and no new record for each knock
-            }
             if st.unauth >= self.cfg.max_unauth {
                 crate::elog::warn("daemon", "app_socket", "too many connections that have not proved a key; one was closed", json!({"limit": self.cfg.max_unauth, "view": "app"}));
                 return Ok(None);
             }
+            if st.per_peer.get(&peer).copied().unwrap_or(0) >= self.cfg.max_unauth_per_peer {
+                crate::elog::warn("daemon", "app_socket", "one process holds too many connections that have not proved a key; one was closed", json!({"limit": self.cfg.max_unauth_per_peer, "view": "app"}));
+                return Ok(None);
+            }
             st.unauth += 1;
-            UnauthSlot(self)
+            *st.per_peer.entry(peer).or_insert(0) += 1;
+            UnauthSlot { daemon: self, peer, held: Held::Unproven }
         };
         let nonce = random_token()?;
         write_line(wr, &Notification::new("app.challenge", json!({"nonce": nonce, "instance": self.instance, "protocol_version": PROTOCOL_MAJOR}))).await?;
@@ -722,9 +835,8 @@ impl Daemon {
                         write_line(wr, &Response::ok(req.id.clone(), v)).await?;
                     }
                     Err(reason) => {
-                        self.app_refused(reason, None);
-                        write_line(wr, &Response::err(req.id.clone(), code::FORBIDDEN, "pairing was refused")).await?;
-                        return Ok(None);
+                        let wait = self.app_refused(reason, None, peer);
+                        return self.refuse(wr, &mut slot, wait, &Response::err(req.id.clone(), code::FORBIDDEN, "pairing was refused")).await;
                     }
                 },
                 // A key that has none asks to be approved by a code its operator types at a terminal (`specs/120` §13.1). The
@@ -732,6 +844,8 @@ impl Daemon {
                 "app.pair_request" if !paired => match self.app_pair_request(&req.params) {
                     Ok((name, code)) => {
                         paired = true;
+                        // Waiting for the code is not a failure: it holds no place of its peer's, so the app may still connect.
+                        slot.shift(Held::Pairing);
                         let ttl = self.cfg.pair_request_ttl.as_secs();
                         write_line(wr, &Response::ok(req.id.clone(), json!({"code": code, "name": name, "expires_in": ttl}))).await?;
                         let result = loop {
@@ -749,9 +863,8 @@ impl Daemon {
                         }
                     }
                     Err(reason) => {
-                        self.app_refused(reason, None);
-                        write_line(wr, &Response::err(req.id.clone(), code::FORBIDDEN, pair_refusal_text(reason))).await?;
-                        return Ok(None);
+                        let wait = self.app_refused(reason, None, peer);
+                        return self.refuse(wr, &mut slot, wait, &Response::err(req.id.clone(), code::FORBIDDEN, pair_refusal_text(reason))).await;
                     }
                 },
                 "app.hello" => {
@@ -770,10 +883,9 @@ impl Daemon {
                             Ok(Some(key.name))
                         }
                         Err(reason) => {
-                            self.app_refused(reason, Some(name));
+                            let wait = self.app_refused(reason, Some(name), peer);
                             // One answer for every reason: which of them it was is in the operator's log, not on the wire.
-                            write_line(wr, &Response::err(req.id.clone(), code::FORBIDDEN, "the app key was refused")).await?;
-                            Ok(None)
+                            self.refuse(wr, &mut slot, wait, &Response::err(req.id.clone(), code::FORBIDDEN, "the app key was refused")).await
                         }
                     };
                 }
@@ -849,7 +961,7 @@ impl Daemon {
             }
             st.pairs.remove(i);
         }
-        self.audit("app.refused", json!({"reason": "expired_request", "name": name, "locked_out": false}));
+        self.refusal_record("expired_request", Some(name));
         Some(Err("expired"))
     }
 
@@ -1026,7 +1138,7 @@ impl Daemon {
                 if now.duration_since(st.pairs[i].issued) > self.cfg.pair_request_ttl {
                     st.pairs.remove(i);
                     drop(st);
-                    self.audit("app.refused", json!({"reason": "expired_request", "name": request_id, "locked_out": false}));
+                    self.refusal_record("expired_request", Some(request_id));
                     return Response::err(id, code::FORBIDDEN, "that request has expired; the app asks again");
                 }
                 let typed = app_keys::normalize_code(req.params["code"].as_str().unwrap_or(""));
@@ -1038,7 +1150,7 @@ impl Daemon {
                         st.pairs[i].outcome = PairOutcome::Cancelled;
                     }
                     drop(st);
-                    self.audit("app.refused", json!({"reason": if cancelled { "wrong_code_limit" } else { "wrong_code" }, "name": request_id, "locked_out": false}));
+                    self.refusal_record(if cancelled { "wrong_code_limit" } else { "wrong_code" }, Some(request_id));
                     let why = if cancelled { format!("that is not the code, {MAX_WRONG_CODES} times: the request is cancelled and the app asks again") } else { "that is not the code shown in the app's window".to_string() };
                     return Response::err(id, code::FORBIDDEN, &why);
                 }
