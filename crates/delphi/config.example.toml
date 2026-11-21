@@ -146,6 +146,15 @@ per_watch_max_wakes_per_day = 10
 # review_commands = [["cargo", "test", "--offline"]]   # unset (default): the [exec] test_command and check_command, when set; [] runs none
 # review_diff_chars = 40000          # the most diff the reviewer is shown (1000 to 200000); whole files past it are left out and named
 # review_context_chars = 12000       # call sites and what the reviewer asks to see in Round 0, found in the copy (0 to 100000; 0 turns both off)
+# The reviewer's own read tools on the copy (specs/135 section 14.7), per CLI. Unset: the defaults below. A list can only pick from the
+# CLI's read tools (anything else is dropped); [] turns them off. Each call is checked by Delphi's gate (on the list, every path inside the
+# copy) before it runs. A CLI version gets them once a background probe passed, or for 5 days after an update while the daemon probes it
+# when idle; a failed probe or a call that got past the gate drops that version to tool-less (`delphi doctor` says so). codex and copilot
+# get none for now.
+# [forge.tools.claude]
+# read = ["Read", "Grep", "Glob", "LS"]
+# [forge.tools.agy]
+# read = ["view_file", "read_file", "list_dir", "find_by_name", "grep_search"]
 
 # What the engine adds around a role's model calls (specs/045). Not an access table: it adds notes and one verification turn,
 # never a tool or a permission. Every key shown is the default.

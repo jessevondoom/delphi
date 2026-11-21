@@ -107,6 +107,15 @@ pub fn settings_from(root: &toml::Value) -> Settings {
         if let Some(n) = fg.get("review_context_chars").and_then(|v| v.as_integer()).filter(|v| (0..=100_000).contains(v)) {
             s.review_context_chars = n as usize;
         }
+        // §14.7 rule 1: `[forge.tools.<harness>] read`, a list of names; `forge_tools::read_list` keeps only the carrier's read tools,
+        // so a list can narrow or turn off (`[]`) a carrier's read tools, never widen them. A value of the wrong shape is ignored.
+        if let Some(t) = fg.get("tools").and_then(|v| v.as_table()) {
+            for (h, v) in t {
+                if let Some(list) = v.get("read").and_then(|r| r.as_array()).and_then(|a| a.iter().map(|x| x.as_str().map(String::from)).collect::<Option<Vec<_>>>()) {
+                    s.forge_tools.insert(h.clone(), list);
+                }
+            }
+        }
     }
     // Spec 104 §12 A4: `[access]` is one of the pinned blocks, so this is the ratified copy's value; a live edit does not count.
     if let Some(n) = root.get("access").and_then(|a| a.get("standing_foreign_tokens")).and_then(|v| v.as_integer()).filter(|v| *v >= 0) {
@@ -586,6 +595,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         timers: Arc::new(timers),
         inventory: Arc::new(crate::inventory::Inventory::open(ws_dir.join("local/harness-tools.json"))),
         toolless: Default::default(),
+        forge_reads: Default::default(),
         operator_prompts: Default::default(),
         readonly_tasks: Default::default(),
         readonly_handoffs: Default::default(),

@@ -1559,6 +1559,14 @@ impl Engine {
     /// on it (`specs/086` §4.3). The engine enforces this at the span (`toolless`), not the prompt.
     #[allow(clippy::too_many_arguments)]
     pub async fn panel_foreign_run_seat(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, panel_brief: String, proposition: &str, role: &str, family: &str, round: u8, stances: Option<&BTreeMap<String, Stance>>, tools_none: bool) -> Stance {
+        self.panel_foreign_run_seat_reading(m, task_id, panel_brief, proposition, role, family, round, stances, tools_none, None).await
+    }
+
+    /// [`Self::panel_foreign_run_seat`] for a forge reader (`specs/135` §14.7): a tool-less seat whose CLI may be given its own read
+    /// tools for `read_root` (a review copy), when the carrier's version allows them; `run_harness` decides and gates every call.
+    /// Nothing else changes: Delphi's own tools stay off, and on the API path the seat stays tool-less.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn panel_foreign_run_seat_reading(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, panel_brief: String, proposition: &str, role: &str, family: &str, round: u8, stances: Option<&BTreeMap<String, Stance>>, tools_none: bool, read_root: Option<&std::path::Path>) -> Stance {
         let plan = SeatPlan { role: role.to_string(), family: family.to_string(), avoid: vec![], tier: Some(self.role_default_tier(role)) };
         let pointers = pointers_from_prompt(proposition);
         let h = self.council_handoff(m, task_id, role, if round == 1 { "r1" } else { "r2" }, &plan, panel_brief, pointers);
@@ -1572,6 +1580,8 @@ impl Engine {
         } else {
             SetMark::new(&self.readonly_handoffs, crate::engine::readonly_key(&m.id, &h.handoff_id))
         };
+        // Only a seat that is tool-less for Delphi's tools and reads no peer text can be a forge reader.
+        let _reads = read_root.filter(|_| tools_none && stances.is_none()).map(|r| crate::forge_tools::ReadMark::new(&self.forge_reads, h.handoff_id.clone(), r.to_path_buf()));
         self.run_seat(m, task_id, h, slices, schema, self.settings.council_seat_timeout).await
     }
 

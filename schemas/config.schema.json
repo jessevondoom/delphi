@@ -107,7 +107,17 @@
       "properties": {
         "review_commands": { "type": "array", "maxItems": 8, "items": { "type": "array", "minItems": 1, "items": { "type": "string" } }, "description": "The commands a review runs, each an argv, in the OS sandbox with no network in a copy of the branch. Unset: the [exec] test_command and check_command, when set. An empty list runs none." },
         "review_diff_chars": { "type": "integer", "minimum": 1000, "maximum": 200000, "description": "The most diff the reviewer is shown (default 40000); whole files past it are left out and named." },
-        "review_context_chars": { "type": "integer", "minimum": 0, "maximum": 100000, "description": "The most characters of call sites and Round 0 excerpts, found in the copy, the reviewer is shown (default 12000; specs/135 section 14.3). 0 turns both off." }
+        "review_context_chars": { "type": "integer", "minimum": 0, "maximum": 100000, "description": "The most characters of call sites and Round 0 excerpts, found in the copy, the reviewer is shown (default 12000; specs/135 section 14.3). 0 turns both off." },
+        "tools": {
+          "type": "object",
+          "description": "The reviewer's own read tools on the review copy, per CLI (specs/135 section 14.7). Each call is checked by Delphi's gate before it runs; a CLI version gets them once a background probe passed, or for 5 days after an update. codex and copilot get none for now.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "read": { "type": "array", "items": { "type": "string" }, "description": "The read tools this CLI may use (claude default: Read, Grep, Glob, LS; agy default: view_file, read_file, list_dir, find_by_name, grep_search). A name that is not one of the CLI's read tools is dropped; [] turns them off." }
+            }
+          }
+        }
       }
     },
     "seats": {

@@ -209,6 +209,8 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_families(&ws.dir, &delphi_core::bundles::today(), &mut r);
     // The standing consent for foreign seats (specs/104 §5 item 4): from the ratified copy, and what it used in the last 24 hours.
     check_standing_consent(&ws.dir, &mut r);
+    // Forge seats' read tools per carrier version (specs/135 section 14.7): probed, in grace, or bridge-only and why.
+    check_forge_tools(&ws.dir, now_unix, &mut r);
 
     // 9. Sandbox (D-24): optional. Reported, never a warning unless the config asks for it and it is missing.
     let wanted = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("exec").and_then(|e| e.get("sandbox")).and_then(|s| s.as_str().map(String::from))).unwrap_or_else(|| "off".into());
@@ -1020,6 +1022,30 @@ fn check_families(ws_dir: &Path, today: &str, r: &mut Report) {
     }
 }
 
+/// `specs/135` §14.7: one line per carrier version a forge seat has met (`local/forge-tools.json`): read tools (probed, or in the grace
+/// with the probe due), tool-less until probed, or bridge-only with the reason (a failed probe, the watchdog, a grace that ran out),
+/// with what the probes spent. Codex and Copilot are named once as bridge-only by design. Only the record is read.
+fn check_forge_tools(ws_dir: &Path, now: i64, r: &mut Report) {
+    use delphi_engine::forge_tools as ft;
+    const CHECK: &str = "11 forge tools";
+    let recs = ft::load(&ft::store_path(ws_dir));
+    if recs.is_empty() {
+        r.push(Level::Ok, CHECK, "", "no forge seat has met a CLI with read tools yet; a review seat stays tool-less until the background probe of its CLI version passes");
+    }
+    for (ok, line) in ft::doctor_lines(&recs, now) {
+        if ok {
+            r.push(Level::Ok, CHECK, "", line);
+        } else {
+            r.warn(CHECK, "local/forge-tools.json", line);
+        }
+    }
+    for h in ["codex", "copilot"] {
+        if let Some(why) = ft::carrier_problem(h) {
+            r.push(Level::Ok, CHECK, "", format!("{h}: bridge-only by design; {why}"));
+        }
+    }
+}
+
 /// `[access] standing_foreign_tokens` is read the way the daemon reads it: from the effective config, whose `[access]` is the ratified copy.
 fn check_standing_consent(ws_dir: &Path, r: &mut Report) {
     let live = std::fs::read_to_string(ws_dir.join("config.toml")).unwrap_or_default();
@@ -1646,6 +1672,30 @@ mod tests {
         assert!(findings("[research]\nthin_below = 5\n").iter().any(|x| x.message.contains("fewer than 5 kept claims")));
         let f = findings("[search]\nproviders = [\"nonesuch\"]\n");
         assert_eq!((f[0].level, f[0].location.as_str()), (Level::Warn, "config.toml"), "{f:?}");
+    }
+
+    /// Spec 135 §14.7 rule 3 (AC-18, the doctor's half): a version the probe or the watchdog dropped is a warning that says why; one in
+    /// its grace and one probed are plain lines; the probes' cost is shown; codex and copilot are bridge-only by design.
+    #[test]
+    fn doctor_says_which_cli_versions_are_bridge_only_for_forge_seats() {
+        use delphi_engine::forge_tools as ft;
+        let t = tempfile::tempdir().unwrap();
+        let store = ft::store_path(t.path());
+        ft::update(&store, |r| {
+            ft::observe(r, "agy", Some("agy 1"), 0);
+            ft::record_probe(r, "agy", "agy 1", &ft::ProbeOutcome::Pass { tokens: 7 }, 0);
+            ft::observe(r, "agy", Some("agy 2"), 100);
+            ft::observe(r, "claude", Some("2.1.1"), 100);
+            ft::drop_version(r, "claude", "2.1.1", "the seat's own tool `Read` ran although Delphi's gate never allowed it", 200);
+        })
+        .unwrap();
+        let mut r = Report::default();
+        check_forge_tools(t.path(), 300, &mut r);
+        let got: Vec<(Level, String)> = r.findings.into_iter().filter(|f| f.check == "11 forge tools").map(|f| (f.level, f.message)).collect();
+        assert!(got.iter().any(|(l, m)| *l == Level::Ok && m.contains("agy 1: read tools (probed") && m.contains("7 tokens")), "{got:?}");
+        assert!(got.iter().any(|(l, m)| *l == Level::Ok && m.contains("agy 2: read tools in the grace period")), "{got:?}");
+        assert!(got.iter().any(|(l, m)| *l == Level::Warn && m.contains("claude 2.1.1: BRIDGE-ONLY") && m.contains("watchdog")), "{got:?}");
+        assert!(got.iter().any(|(_, m)| m.starts_with("codex: bridge-only")) && got.iter().any(|(_, m)| m.starts_with("copilot: bridge-only")), "{got:?}");
     }
 
     /// Spec 135 AC-16 (§14.2): a review command whose program is not on the sandbox PATH, or not in a system or toolchain directory, is
