@@ -19,7 +19,7 @@
 //! one, which the caller must put to the operator; otherwise nothing is usable.
 
 use crate::pool::{Entry, State};
-use delphi_adapter::config::{Config, PoolKey};
+use delphi_adapter::config::{Config, CostClass, PoolKey};
 
 /// How the operator has asked the team to be spread over the providers for now (`specs/035` D-21). It decides only which
 /// pair serves a request among those at the wanted tier; it never moves a request to a lower tier.
@@ -187,8 +187,80 @@ fn context_of(cfg: &Config, key: &PoolKey) -> u64 {
     cfg.catalog_entry(&key.model_id).map(|c| c.context_tokens).unwrap_or(0)
 }
 
+/// A pair's cost class and multiplier (`specs/056` §10.5): only a Copilot seat labels one, from the shipped seed table (`specs/132`
+/// §5.2); every other carrier, and a Copilot model the table does not list, counts as `standard` with no multiplier. A cost input
+/// only: it never sets a class or a tier.
+pub fn pair_cost(cfg: &Config, endpoint_id: &str, model_id: &str) -> (CostClass, Option<f64>) {
+    static SEED: std::sync::OnceLock<crate::model_catalog::Seed> = std::sync::OnceLock::new();
+    let copilot = cfg.endpoint(endpoint_id).is_some_and(|e| e.path == delphi_adapter::config::AccessPath::Harness && e.harness.as_deref() == Some("copilot"));
+    let multiplier = if copilot { SEED.get_or_init(crate::model_catalog::Seed::shipped).model("copilot", model_id).map(|m| m.multiplier).filter(|m| *m > 0.0) } else { None };
+    let class = multiplier.map(crate::model_catalog::cost_class).and_then(CostClass::parse).unwrap_or_default();
+    (class, multiplier)
+}
+
+/// Why `role` may not be served by this pair under `[routing] max_cost_class`, or `None` when it is within the cap.
+pub fn over_cap(cfg: &Config, endpoint_id: &str, model_id: &str, role: &str) -> Option<String> {
+    let cap = cfg.routing.max_cost_class.of(role);
+    let (class, multiplier) = pair_cost(cfg, endpoint_id, model_id);
+    (class > cap).then(|| format!("it costs {} ({}x), over the {role} role's cap of {} ([routing] max_cost_class; only the operator raises it, with /ratify)", class.as_str(), multiplier.unwrap_or(0.0), cap.as_str()))
+}
+
+/// Pool pairs the cost cap alone ruled out for this request (eligible in every other way): what `model.cost_capped` lists and the
+/// card names. Empty when the cap excluded nothing. A harness pair counts even for a turn-by-turn caller: the engine tries the
+/// harness first, so a capped one must not let the turn-by-turn fallback serve a lower tier in its place.
+pub fn capped(cfg: &Config, req: &RouteRequest) -> Vec<PoolKey> {
+    let any_caller = RouteRequest { turn_by_turn: false, ..req.clone() };
+    cfg.pool_entries().into_iter().filter(|k| ineligible_before_cap(cfg, k, &any_caller).is_none() && over_cap(cfg, &k.endpoint_id, &k.model_id, &req.role).is_some()).collect()
+}
+
+/// Under `static`, a capped pair that meets the tier asked for: then no lower tier may stand in for it (`specs/056` §10.5).
+pub fn capped_at_tier(cfg: &Config, req: &RouteRequest) -> Vec<PoolKey> {
+    let want = rank(&req.tier);
+    capped(cfg, req).into_iter().filter(|k| rank_at(cfg, k, want) >= want).collect()
+}
+
+/// For `model.cost_capped` and the card: the floor (the class floor under `discovered`, the tier asked for under `static`) and the
+/// capped pairs that meet it, cheapest first.
+pub fn passed_over(cfg: &Config, req: &RouteRequest) -> (String, Vec<PoolKey>) {
+    let (floor, mut keys) = match (&req.assign, cfg.routing.assignment) {
+        (Some(a), delphi_adapter::config::Assignment::Discovered) => (a.floor.as_str().to_string(), capped(cfg, req).into_iter().filter(|k| a.meets_floor(k)).collect()),
+        _ => (req.tier.clone(), capped_at_tier(cfg, req)),
+    };
+    keys.sort_by(|x, y| pair_cost(cfg, &x.endpoint_id, &x.model_id).1.unwrap_or(0.0).total_cmp(&pair_cost(cfg, &y.endpoint_id, &y.model_id).1.unwrap_or(0.0)));
+    (floor, keys)
+}
+
+/// `delphi doctor`'s line on the cost cap (`specs/056` §10.5): the cap, the models over it, and which models count as `standard`
+/// because their carrier labels no cost class.
+pub fn cost_cap_line(cfg: &Config) -> String {
+    let cap = &cfg.routing.max_cost_class;
+    let raised: Vec<String> = cap.roles.iter().map(|(r, c)| format!("{r} {}", c.as_str())).collect();
+    let mut over = Vec::new();
+    let mut unlabelled = Vec::new();
+    for k in cfg.pool_entries() {
+        match pair_cost(cfg, &k.endpoint_id, &k.model_id) {
+            (class, Some(m)) if class > cap.default => over.push(format!("{}/{} ({}x)", k.endpoint_id, k.model_id, m)),
+            (_, None) => unlabelled.push(format!("{}/{}", k.endpoint_id, k.model_id)),
+            _ => {}
+        }
+    }
+    let mut s = format!("cost cap ([routing] max_cost_class, counted only from the ratified copy): {}{}", cap.default.as_str(), if raised.is_empty() { String::new() } else { format!(", per role: {}", raised.join(", ")) });
+    if !over.is_empty() {
+        s.push_str(&format!("; over the cap, serving only a role raised for it: {}", over.join(", ")));
+    }
+    if !unlabelled.is_empty() {
+        s.push_str(&format!("; counted as standard because their carrier labels no cost class: {}", unlabelled.join(", ")));
+    }
+    s
+}
+
 /// Why a pair can never serve this request, or `None` if it is eligible.
 pub(crate) fn ineligible(cfg: &Config, key: &PoolKey, req: &RouteRequest) -> Option<String> {
+    // The cost cap goes last, so a pair it names was eligible in every other way (`capped`).
+    ineligible_before_cap(cfg, key, req).or_else(|| over_cap(cfg, &key.endpoint_id, &key.model_id, &req.role))
+}
+
+fn ineligible_before_cap(cfg: &Config, key: &PoolKey, req: &RouteRequest) -> Option<String> {
     let ep = cfg.endpoint(&key.endpoint_id)?;
     // The emergency model (`specs/056` §3.5) is never eligible, under either assignment, whatever the load.
     if crate::emergency::is_emergency(cfg, &key.endpoint_id, &key.model_id) {
@@ -266,6 +338,13 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
         let want = rank(&req.tier);
         by_preference.iter().map(|(_, k)| k).min_by_key(|k| ((rank_at(cfg, k, want) - want).abs(), (rank_at(cfg, k, want) < want) as i32)).cloned()
     });
+    // `specs/056` §10.5: a cap only removes candidates, never lowers a request. When it alone ruled out a pair at the tier asked for
+    // and no eligible pair at that tier remains, the nearest-tier fallback does not apply: the task waits, and the card says why.
+    let cap_holds = !capped_at_tier(cfg, req).is_empty();
+    let want = rank(&req.tier);
+    if cap_holds && from_target.is_none() && !eligible.iter().any(|(_, k)| rank_at(cfg, k, want) >= want) {
+        return Route::NoModel { target: None, blocked: vec![], ineligible: rejected, back_at: None };
+    }
     let Some(ideal) = ideal else {
         return Route::NoModel { target: None, blocked: vec![], ineligible: rejected, back_at: None };
     };
@@ -324,7 +403,8 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
     if let Some(key) = closest_similar() {
         return Route::Similar { homogeneous: homogeneous(&key), key, why: ideal_why, target: ideal };
     }
-    if let Some(key) = weakest_first(&|k: &PoolKey| same_lineage(k)).or_else(|| weakest_first(&|_: &PoolKey| true)) {
+    // Nor is a weaker pair offered in place of one the cap ruled out (§10.5 test 2): the task waits.
+    if let Some(key) = weakest_first(&|k: &PoolKey| same_lineage(k)).or_else(|| weakest_first(&|_: &PoolKey| true)).filter(|_| !cap_holds) {
         return weaker_route(key);
     }
     let back_at = blocked.iter().filter_map(|b| b.back_at).min();
@@ -831,6 +911,85 @@ order = { claude = ["direct", "bedrock"] }
         let c = Config::parse(&text).unwrap();
         assert_eq!(picked(&resolve_route(&c, &[], NOW, &req("builder", "workhorse"))), "bedrock/bedrock-sonnet-x");
         assert_eq!(picked(&resolve_route(&cfg(), &[], NOW, &req("builder", "workhorse"))), "direct/sonnet-x", "without a pool order, policy order decides");
+    }
+
+    /// Two Copilot seats (`specs/056` §10.5): the Claude one's frontier model is listed at 15x (premium), the rest at 1x; `routing` is
+    /// appended. Only Copilot labels a cost class, so the API endpoint of [`CONFIG`] counts as `standard`.
+    fn copilot(gemini: bool, routing: &str) -> Config {
+        let claude = "[[endpoints]]\nid = \"cp-claude\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"copilot\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { fast = \"claude-haiku-5.5\", workhorse = \"claude-sonnet-5.5\", frontier = \"claude-opus-5.5\" }\n";
+        let gem = "[[endpoints]]\nid = \"cp-gemini\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"copilot\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { fast = \"gemini-4-neon\", workhorse = \"gemini-4-neon\", frontier = \"gemini-4-argon\" }\n";
+        Config::parse(&format!("{claude}{}{routing}", if gemini { gem } else { "" })).unwrap()
+    }
+
+    fn discovered(c: &Config, role: &str, floor: Option<crate::models::Class>) -> crate::assign::Assign {
+        let rules = crate::models::ClassRules::shipped();
+        let mut list = crate::models::discover(c, None, NOW);
+        crate::models::classify(&rules, &mut list);
+        let mut a = crate::assign::Assign::build(&rules, role, &list, 8);
+        if let Some(f) = floor {
+            a.floor = f;
+        }
+        a
+    }
+
+    // specs/056 §10.5 test 1: two members meet the floor, one premium and one standard: the standard one serves under both assignments,
+    // and the premium one is what `model.cost_capped` lists as passed over.
+    #[test]
+    fn a_cost_cap_passes_over_a_premium_member_when_a_standard_one_meets_the_floor() {
+        for routing in ["", "[routing]\nmax_cost_class = \"standard\"\n"] {
+            let c = copilot(true, routing);
+            let r = RouteRequest { role: "architect".into(), tier: "frontier".into(), prefer_family: Some("claude".into()), ..Default::default() };
+            assert_eq!(picked(&resolve_route(&c, &[], NOW, &r)), "cp-gemini/gemini-4-argon", "static, cap {routing:?}");
+            let (floor, over) = passed_over(&c, &r);
+            assert_eq!((floor.as_str(), over.iter().map(|k| k.model_id.as_str()).collect::<Vec<_>>()), ("frontier", vec!["claude-opus-5.5"]));
+            let d = copilot(true, &format!("{routing}{}assignment = \"discovered\"\n", if routing.is_empty() { "[routing]\n" } else { "" }));
+            let dr = RouteRequest { assign: Some(discovered(&d, "architect", None)), ..r.clone() };
+            assert_eq!(picked(&resolve_route(&d, &[], NOW, &dr)), "cp-gemini/gemini-4-argon", "discovered");
+            assert!(passed_over(&d, &dr).1.iter().any(|k| k.model_id == "claude-opus-5.5"));
+        }
+        // Without the cap in the way (no Copilot premium member), nothing is passed over.
+        assert!(passed_over(&cfg(), &req("architect", "frontier")).1.is_empty());
+    }
+
+    // specs/056 §10.5 test 2: the only floor-meeting member is premium and a standard one sits a tier (or class) below: the route is
+    // `NoModel` under both assignments, never the lower member, and the reason names the cap.
+    #[test]
+    fn a_cost_cap_never_lets_a_lower_tier_or_class_stand_in() {
+        let c = copilot(false, "");
+        let r = RouteRequest { role: "architect".into(), tier: "frontier".into(), ..Default::default() };
+        for turn_by_turn in [false, true] {
+            match resolve_route(&c, &[], NOW, &RouteRequest { turn_by_turn, ..r.clone() }) {
+                Route::NoModel { ineligible, .. } => assert!(turn_by_turn || ineligible.iter().any(|(k, why)| k.model_id == "claude-opus-5.5" && why.contains("over the architect role's cap of standard")), "{ineligible:?}"),
+                other => panic!("the lower tier must not serve: {other:?}"),
+            }
+        }
+        // The same when the frontier model is merely out and the cap rules out nothing else: the usual card for a weaker model stays.
+        let blocked = [entry("cp-claude", "claude-opus-5.5", State::Exhausted, Some(NOW + 3600))];
+        let open = copilot(false, "[routing]\nmax_cost_class = \"premium\"\n");
+        assert!(resolve_route(&open, &blocked, NOW, &r).needs_confirmation());
+        let mut d = copilot(false, "[routing]\nassignment = \"discovered\"\n");
+        let dr = RouteRequest { assign: Some(discovered(&d, "architect", Some(crate::models::Class::Deep))), ..r.clone() };
+        assert!(matches!(resolve_route(&d, &[], NOW, &dr), Route::NoModel { .. }), "discovered waits too");
+        d.routing.max_cost_class.default = CostClass::Premium;
+        assert_eq!(picked(&resolve_route(&d, &[], NOW, &dr)), "cp-claude/claude-opus-5.5", "once the operator raises the cap");
+    }
+
+    // specs/056 §10.5 tests 5, 6 and 8: absent is `standard`; a carrier with no label counts as `standard`; a per-role cap admits a premium
+    // model for that role only.
+    #[test]
+    fn the_cap_is_standard_when_absent_unlabelled_carriers_are_standard_and_a_role_can_be_raised_alone() {
+        let c = cfg();
+        for k in c.pool_entries() {
+            assert_eq!(pair_cost(&c, &k.endpoint_id, &k.model_id), (CostClass::Standard, None), "{k:?}");
+        }
+        assert_eq!(pair_cost(&copilot(false, ""), "cp-claude", "claude-opus-5.5"), (CostClass::Premium, Some(15.0)));
+        // The doctor line says which models were counted as `standard` for want of a label, and which are over the cap.
+        let line = cost_cap_line(&c);
+        assert!(line.contains(": standard; counted as standard because their carrier labels no cost class: ") && line.contains("direct/haiku-x"), "{line}");
+        assert!(cost_cap_line(&copilot(false, "")).contains("over the cap, serving only a role raised for it: cp-claude/claude-opus-5.5 (15x)"));
+        let per_role = copilot(false, "[routing]\nmax_cost_class = { default = \"standard\", architect = \"premium\" }\n");
+        let at = |role: &str| picked(&resolve_route(&per_role, &[], NOW, &RouteRequest { role: role.into(), tier: "frontier".into(), ..Default::default() }));
+        assert_eq!((at("architect").as_str(), at("strategist").as_str()), ("cp-claude/claude-opus-5.5", "none"));
     }
 
     #[test]

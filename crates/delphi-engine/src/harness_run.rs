@@ -586,6 +586,10 @@ impl Engine {
             return Ok(Err(HarnessErr::retry(format!("the `{}` harness is not implemented (only `claude`, `agy`, `codex` and `copilot`)", ep.harness.as_deref().unwrap_or("?")))));
         };
         let Some(model) = self.cfg.get().resolve_model(ep, &sc.tier) else { return Ok(Err(HarnessErr::retry(format!("endpoint `{}` has no model for the `{}` tier", ep.id, sc.tier)))) };
+        // The seat launches the tier's model, which may not be the pair the router chose: the cost cap holds here too (`specs/056` §10.5).
+        if let Some(why) = crate::route::over_cap(&self.cfg.get(), &ep.id, &model, &sc.role) {
+            return Ok(Err(HarnessErr::retry(format!("launch refused: `{model}` on `{}`: {why}", ep.id))));
+        }
         let wt: Option<Worktree> = self.exec.known_worktree(&sc.task_id);
         // A Builder: the shell scope AND a write scope in the worktree. A role that holds the scope to investigate (`specs/116` §8.1)
         // is not one: it never gets the CLI's own tools in the task's worktree.
