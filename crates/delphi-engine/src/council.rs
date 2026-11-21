@@ -184,7 +184,18 @@ pub fn host_council_opts(p: &Value, configured: &[String], usable: usize, defaul
             _ => return Err("`require_families` is a whole number from 1 to 4 (leave it out to run labelled homogeneous when one family sits)".into()),
         },
     }
+    o.earlier_off = earlier_rulings_off(p)?;
     Ok(o)
+}
+
+/// A caller's `earlier_rulings` (`specs/123` §17 item 2) on `request_council` or `council_open`: `true` when it is `false`, refused when it
+/// is not a boolean.
+pub fn earlier_rulings_off(p: &Value) -> Result<bool, String> {
+    match p.get("earlier_rulings") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(b)) => Ok(!b),
+        Some(_) => Err("`earlier_rulings` is true or false (false keeps earlier Council records out of this Council)".into()),
+    }
 }
 
 /// The console's `--tier` sentences (`specs/003` §4.2), for a host's `tier` judged before anything is recorded (`specs/123` §6):
@@ -1255,6 +1266,8 @@ pub struct CouncilOpts {
     pub tier: Option<String>,
     /// A host's `require_families` (`specs/123` §6): the plan seats at least this many families or the Council is not convened.
     pub require_families: Option<u32>,
+    /// A caller's `earlier_rulings: false` (`specs/123` §17 item 2): show this Council no earlier rulings, whatever the workspace setting.
+    pub earlier_off: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1585,6 +1598,7 @@ impl Engine {
         }
         front.push_str(&format!("counts_as_independent_review: {}\n", relay["counts_as_independent_review"] == true));
         front.push_str(&crate::council_earlier::front_line(&panel.earlier.iter().map(|e| e.path.clone()).collect::<Vec<_>>()));
+        front.push_str(crate::council_earlier::front_off(panel.earlier_off));
         // The label travels with the verdict (`specs/086` §7): seats whose receipts show no tool that could read the repo.
         let unverified: Vec<String> = m.replay().map(|evs| crate::seat::seat_summaries(&evs, &task_id)).unwrap_or_default().into_iter().filter(|s| s.unverified_against_repo).map(|s| s.role).collect();
         if !unverified.is_empty() {
@@ -1667,9 +1681,11 @@ impl Engine {
             }
         }
         // `specs/123` §9: earlier rulings whose headline matches, for Round 2, the repair turn and the synthesis; never Round 1.
-        let earlier = if self.settings.council_earlier_rulings { crate::council_earlier::pick(&self.ws.dir, &m.dir, headline(proposition)) } else { Vec::new() };
+        // A caller's `earlier_rulings: false` (§17 item 2) turns them off for this Council only.
+        let earlier_off = opts.earlier_off;
+        let earlier = if self.settings.council_earlier_rulings && !earlier_off { crate::council_earlier::pick(&self.ws.dir, &m.dir, headline(proposition)) } else { Vec::new() };
         let earlier_paths: Vec<String> = earlier.iter().map(|e| e.path.clone()).collect();
-        m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling, "budget_tokens": budget_tokens, "require_families": opts.require_families, "earlier": earlier_paths}))).await?;
+        m.append(emit("council.started", json!({"proposition": proposition, "seats": plan.seats.iter().map(|s| json!({"role": s.role, "family": s.family, "tier": s.tier})).collect::<Vec<_>>(), "homogeneous": plan.homogeneous, "notes": plan.notes, "budget_usd": ceiling, "budget_tokens": budget_tokens, "require_families": opts.require_families, "earlier": earlier_paths, "earlier_off": earlier_off}))).await?;
 
         // Lenses are assigned once, before Round 1, and each seat is shown only its own (`specs/026` §4).
         let lens_plan = if opts.lenses {
@@ -1806,7 +1822,7 @@ impl Engine {
                 synthesis = t;
             }
         }
-        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), &format!("venue: daemon\ncouncil_id: {task_id}\n{}", crate::council_earlier::front_line(&earlier_paths)), synthesis).await
+        self.conclude(m, task_id, proposition, &plan, &stances, &round2, &round2_text, &decision, lens_plan.as_ref(), &format!("venue: daemon\ncouncil_id: {task_id}\n{}{}", crate::council_earlier::front_line(&earlier_paths), crate::council_earlier::front_off(earlier_off)), synthesis).await
     }
 
     /// From the deterministic decision to the record: the steps that follow, the Council record on disk, the `council.verdict` event
@@ -2759,6 +2775,24 @@ pub(crate) mod tests {
         assert!(f.model.requests().iter().all(|r| !r.body.to_string().contains("council/earlier/")));
     }
 
+    // specs/123 §17 item 2: a caller's `earlier_rulings: false` shows one Council nothing, and its record says the caller turned them off.
+    #[tokio::test]
+    async fn a_caller_can_turn_earlier_rulings_off_for_one_council() {
+        let (f, _, _) = fixture(RED_OK, None);
+        let prop = "Should the retry queue be a table or a file?";
+        f.engine.run_council(&f.m, f.m.next_task_id(), prop, CouncilOpts::default()).await.unwrap();
+        let before = f.model.requests().len();
+        f.engine.run_council(&f.m, f.m.next_task_id(), prop, CouncilOpts { earlier_off: true, ..Default::default() }).await.unwrap();
+        let started = events_of(&f, "council.started");
+        assert!(started[1].payload["earlier"].as_array().is_some_and(|a| a.is_empty()) && started[1].payload["earlier_off"] == true, "{}", started[1].payload);
+        assert!(f.model.requests()[before..].iter().all(|r| !r.body.to_string().contains("council/earlier/")), "no round sees an earlier ruling");
+        let mut files: Vec<String> = std::fs::read_dir(f.m.dir.join("councils")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        files.sort();
+        let doc = std::fs::read_to_string(f.m.dir.join("councils").join(&files[1])).unwrap();
+        assert!(doc.contains("earlier_rulings_off: by the caller") && !doc.contains("## Earlier rulings shown"), "{doc}");
+        assert!(lint_artifact(&doc).is_empty(), "{:?}", lint_artifact(&doc));
+    }
+
     // specs/003 §4.2: a verdict ends in a decision and the steps that follow, in the record, the event and what the operator reads.
     #[tokio::test]
     async fn a_verdict_ends_in_a_decision_and_next_steps_the_operator_can_start() {
@@ -3123,11 +3157,15 @@ pub(crate) mod tests {
         assert_eq!((o.tier.as_deref(), o.author_family.as_deref(), o.require_families), (Some("frontier"), Some("gemini"), Some(3)));
         assert!(o.seats.is_empty() && !o.lenses, "nothing else is opened to a host");
         let none = host_council_opts(&json!({"question": "q"}), &configured, 3, &workhorse).unwrap();
-        assert_eq!((none.tier, none.author_family, none.require_families), (None, None, None));
+        assert_eq!((none.tier, none.author_family, none.require_families, none.earlier_off), (None, None, None, false));
+        // specs/123 §17 item 2: `earlier_rulings: false` turns them off for this Council; true is the default; anything else is refused.
+        assert!(host_council_opts(&json!({"earlier_rulings": false}), &configured, 3, &workhorse).unwrap().earlier_off);
+        assert!(!host_council_opts(&json!({"earlier_rulings": true}), &configured, 3, &workhorse).unwrap().earlier_off);
         let refused = |p: Value, usable: usize| host_council_opts(&p, &configured, usable, &workhorse).unwrap_err();
         assert!(refused(json!({"tier": "fast"}), 3).starts_with("a Council is raised on demand, never lowered: `architect` starts on workhorse, so `tier` fast"));
         assert!(refused(json!({"tier": "huge"}), 3).contains("must be fast, workhorse or frontier"));
         assert!(refused(json!({"tier": 2}), 3).contains("`tier` is fast"));
+        assert!(refused(json!({"earlier_rulings": "no"}), 3).contains("`earlier_rulings` is true or false"));
         assert_eq!(refused(json!({"author_family": "mistral"}), 3), "`author_family` names a configured model family: claude, gemini, openai");
         assert_eq!(refused(json!({"require_families": 2}), 1), "seats_unavailable: only 1 model family usable now; require_families asked for 2");
         assert_eq!(refused(json!({"require_families": 3}), 2), "seats_unavailable: only 2 model families usable now; require_families asked for 3");
