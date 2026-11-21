@@ -17,6 +17,9 @@ delphi-bundle = { path = "../delphi-bundle" }
 base64 = "0.22"
 serde ={ version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# The JSON-in-text answer of a carrier with no schema flag is validated against the span's schema (`specs/132` §6.1, C5).
+# Already in the tree (the delphi crate's tests); no default features: no remote or file `$ref` is ever fetched.
+jsonschema = { version = "0.30", default-features = false }
 regex = "1.9"
 unicode-normalization = "0.1"
 tiny_http = "0.12"

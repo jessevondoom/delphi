@@ -926,6 +926,7 @@ dependencies = [
  "delphi-sandbox",
  "hmac",
  "image-webp",
+ "jsonschema",
  "libc",
  "regex",
  "resvg",
