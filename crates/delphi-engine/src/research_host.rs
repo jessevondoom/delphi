@@ -225,13 +225,14 @@ fn run_async<T: Send>(f: impl std::future::Future<Output = T> + Send) -> T {
 }
 
 /// The word the runner turns into a coverage `reason` (`specs/098` §7.5 item 3). No engine configured is `no_search_provider`; every
-/// engine passed over for its key (missing, or refused) is `credential_unresolved`; any other failure of every engine is `no_results`.
+/// engine passed over for its key (missing, or refused) is `credential_unresolved`; any other failure of every engine (an outage, a
+/// limit, an answer that is not results) is `search_failed` (`specs/124` §19). An empty answer is not a failure.
 /// No provider text, key or error detail leaves this function.
 pub fn search_failure_token(e: &SearchError) -> &'static str {
     match e {
         SearchError::NotConfigured => "no_search_provider",
         SearchError::AllFailed(why) if !why.is_empty() && why.iter().all(|(_, w)| w == "no key" || w == "the key was refused") => "credential_unresolved",
-        SearchError::AllFailed(_) => "no_results",
+        SearchError::AllFailed(_) => "search_failed",
     }
 }
 
@@ -886,8 +887,9 @@ mod tests {
         let key_missing = SearchError::AllFailed(vec![(Provider::Brave, "no key".into()), (Provider::Kagi, "the key was refused".into())]);
         assert_eq!(search_failure_token(&key_missing), "credential_unresolved");
         let mixed = SearchError::AllFailed(vec![(Provider::Brave, "no key".into()), (Provider::Mojeek, "the service is down".into())]);
-        assert_eq!(search_failure_token(&mixed), "no_results", "one engine that tried and failed is not a credential problem");
-        assert_eq!(search_failure_token(&SearchError::AllFailed(vec![])), "no_results");
+        assert_eq!(search_failure_token(&mixed), "search_failed", "one engine that tried and failed is not a credential problem, and an outage is not an empty answer");
+        assert_eq!(search_failure_token(&SearchError::AllFailed(vec![(Provider::Brave, "over its limit".into())])), "search_failed");
+        assert_eq!(search_failure_token(&SearchError::AllFailed(vec![])), "search_failed");
         for e in [&key_missing, &mixed] {
             assert!(!search_failure_token(e).contains("Brave") && !search_failure_token(e).contains("service"));
         }

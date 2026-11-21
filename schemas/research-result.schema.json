@@ -53,12 +53,12 @@
     "empty": {
       "type": "object",
       "required": ["reason", "causes", "text", "next"],
-      "description": "Present only when the run kept no claim and met none the library held (specs/124 section 14, S11): why, and what to do next. Counted by code from what the run did; every word is one of a fixed list and no address, page text, provider text or host's word is in it. It is information: nothing reads it as a reason to fetch, trust, promote or permit anything. When the run also had nothing to write an answer from, `answer` is `text` and `next` in one line.",
+      "description": "Present only when the run kept no claim and met none the library held, or kept claims the library recorded none of (specs/124 section 14, S11, and section 19): why, and what to do next. Counted by code from what the run did; every word is one of a fixed list and no address, page text, provider text or host's word is in it. It is information: nothing reads it as a reason to fetch, trust, promote or permit anything. When the run also had nothing to write an answer from, `answer` is `text` and `next` in one line; when the answer is written from claims held before the run, `next` says so.",
       "properties": {
         "reason": { "$ref": "#/$defs/empty_reason", "description": "The first of `causes`: the cause nearest a claim." },
         "causes": {
-          "type": "array", "minItems": 1, "maxItems": 18,
-          "description": "Every cause the run counted, from the step nearest a claim to the one furthest from it. `no_model_seat`: pages were fetched and no model could serve the scout to read them. `scout_call_failed`: the scout's page-reading call failed. `no_claims_on_pages`: pages were read and no claim with a quote found in the page was drawn. `pages_refused`: the library's keep step refused the pages. `trusted_fetch_failed`, `fetch_failed`: the daemon could not fetch pages on, or off, the trusted list (`why` counts the fixed word of each failure). `leads_unread`: addresses the host handed back that are not on the trusted list, which the daemon does not fetch (`host_leads`). `not_fetchable`: results outside what the fetcher reaches, kept as leads. `nothing_new`: results already read. `budget`: the step budget ran out. `host_fed_nothing`: the host handed back none of the queries it was asked. `queries_withheld`: queries the identifier guard withheld. `no_search_provider`, `credential_unresolved`, `no_results`: as in the coverage report. `no_local_sources`: a local run with no source on the trusted list for the question. `plan_no_model_seat`, `plan_unusable`: the scout's plan call gave no plan, so the whole question was searched as one query.",
+          "type": "array", "minItems": 1, "maxItems": 21,
+          "description": "Every cause the run counted, from the step nearest a claim to the one furthest from it. `claims_not_stored`: claims were drawn and the library kept no record of them, so none can be cited. `no_model_seat`: pages were fetched and no model could serve the scout to read them. `scout_call_failed`: the scout's page-reading call failed. `no_claims_on_pages`: pages were read and no claim with a quote found in the page was drawn. `pages_refused`: the library's keep step refused the pages. `trusted_fetch_failed`, `fetch_failed`: the daemon could not fetch pages on, or off, the trusted list (`why` counts the fixed word of each failure). `leads_unread`: addresses the host handed back that the daemon did not fetch (`host_leads`): those not on the trusted list, or, when the session is under the private-read mark, every one. `not_fetchable`: results outside what the fetcher reaches, kept as leads. `nothing_new`: results already read. `budget`: the step budget ran out. `host_fed_nothing`: the host handed back none of the queries it was asked. `queries_withheld`: queries the identifier guard withheld. `no_search_provider`, `credential_unresolved`, `search_failed` (every engine failed for a reason other than its key), `no_results` (the searches answered with nothing): as in the coverage report. `no_search_run`: no search was sent and none failed. `no_local_sources`: a local run with no source on the trusted list for the question. `plan_no_model_seat`, `plan_unusable`: the scout's plan call gave no plan, so the whole question was searched as one query.",
           "items": {
             "type": "object",
             "required": ["reason"],
@@ -144,7 +144,7 @@
   },
   "additionalProperties": false,
   "$defs": {
-    "empty_reason": { "enum": ["no_model_seat", "scout_call_failed", "no_claims_on_pages", "pages_refused", "trusted_fetch_failed", "fetch_failed", "leads_unread", "not_fetchable", "nothing_new", "budget", "host_fed_nothing", "queries_withheld", "no_search_provider", "credential_unresolved", "no_results", "no_local_sources", "plan_no_model_seat", "plan_unusable"] },
+    "empty_reason": { "enum": ["claims_not_stored", "no_model_seat", "scout_call_failed", "no_claims_on_pages", "pages_refused", "trusted_fetch_failed", "fetch_failed", "leads_unread", "not_fetchable", "nothing_new", "budget", "host_fed_nothing", "queries_withheld", "no_search_provider", "credential_unresolved", "search_failed", "no_results", "no_search_run", "no_local_sources", "plan_no_model_seat", "plan_unusable"] },
     "search_log": {
       "type": "object",
       "description": "What the run searched, of whom, when, and how much came back (specs/101 section 3). Written by the daemon: a host cannot add, edit or delete a line. It is private when any claim it served is, and a private log never leaves the install. It is information; nothing reads it as a reason to trust, promote or permit anything.",
@@ -173,7 +173,7 @@
         "duplicates": { "type": "integer", "minimum": 0 },
         "not_kept": { "type": "object", "propertyNames": { "enum": ["page_cap", "budget", "refused", "fetch_failed", "capture_failed", "lead_not_stored", "not_followed", "lead"] }, "additionalProperties": { "type": "integer", "minimum": 0 } },
         "via": { "type": "string", "description": "The provider that answered a trusted-list search." },
-        "failed": { "enum": ["no_search_provider", "credential_unresolved", "no_results"], "description": "The search itself failed, in one word of the fixed list." },
+        "failed": { "enum": ["no_search_provider", "credential_unresolved", "search_failed", "no_results"], "description": "The search itself failed, in one word of the fixed list." },
         "declared": { "const": true, "description": "Reported by the host, not made by the daemon. Its kept is 0 and it counts as nothing." },
         "run_by_host": { "const": true, "description": "Run by the host with its own search tool, for a query the run asked of it, and handed back with research_feed (specs/119 section 2.1 item 4). Its results on the trusted list were read by the daemon; the others are counted under not_kept as `lead` and were not fetched." },
         "local": { "const": true, "description": "Not a search: the addresses on the trusted list that a local run already knew for the question (specs/119 section 13.2). It has no query, and it is not counted in `searches`." }
@@ -200,7 +200,7 @@
         "searched": { "type": "boolean" },
         "entries_found": { "type": "integer", "minimum": 0 },
         "kept": { "type": "integer", "minimum": 0 },
-        "reason": { "enum": ["kb_empty", "no_search_provider", "credential_unresolved", "no_results", "not_connected", "not_approved"] }
+        "reason": { "enum": ["kb_empty", "no_search_provider", "credential_unresolved", "search_failed", "no_results", "not_connected", "not_approved"] }
       },
       "additionalProperties": false
     },

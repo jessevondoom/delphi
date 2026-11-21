@@ -145,12 +145,18 @@
       "line": 264,
       "number": "18",
       "title": "Corrections from the build (2026-11-18)"
+    },
+    {
+      "level": 2,
+      "line": 274,
+      "number": "19",
+      "title": "Amendment (2026-11-21, from the Stage 0 review of S11): the `empty` words tell the truth, and the two planner changes"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/124-the-fleet-audit-honest-manifests-strategist-and-architect-skills-and-a-learning-capture.md",
-    "sha256": "2a08da5077f6644fb1c365887692d60f8e71da09852f743b66f5032ae9fd874c"
+    "sha256": "2cdeab16b72823be141d353cdc0072b93b3e3ffc93b9e2c8a64c385dc06ad8fe"
   },
   "source_status_at_hash": {
     "line": {
@@ -163,7 +169,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-17, in a session, after seeing the build plan and this draft being written: \"i saw your drafting of the steps for 124 so i'll approve it when ready. if it's based on this conversation consider it approved and run hard at it\". Earlier the same day they answered the three questions: \"1. repo-wide. include the first set of recommendations too. 2. go with your pick. 3. no. now go\". The text was written from that conversation; the operator has not read it line by line. Open questions OD-1 to OD-4 of section 12 take their recommendations unless the operator says otherwise. It takes effect when the operator merges the pull request that carries it."
     },
-    "sha256": "2a08da5077f6644fb1c365887692d60f8e71da09852f743b66f5032ae9fd874c",
+    "sha256": "2cdeab16b72823be141d353cdc0072b93b3e3ffc93b9e2c8a64c385dc06ad8fe",
     "word": "approved"
   },
   "spec": {

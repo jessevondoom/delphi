@@ -13,7 +13,8 @@ use std::collections::BTreeMap;
 pub const NO_SCOUT_MODEL: &str = "no model is available for the scout right now";
 
 /// Every word `empty.reason` and `empty.causes[].reason` can be, from the step nearest a claim to the one furthest from it.
-pub const REASONS: [&str; 18] = [
+pub const REASONS: [&str; 21] = [
+    "claims_not_stored",
     "no_model_seat",
     "scout_call_failed",
     "no_claims_on_pages",
@@ -28,7 +29,9 @@ pub const REASONS: [&str; 18] = [
     "queries_withheld",
     "no_search_provider",
     "credential_unresolved",
+    "search_failed",
     "no_results",
+    "no_search_run",
     "no_local_sources",
     "plan_no_model_seat",
     "plan_unusable",
@@ -39,6 +42,8 @@ pub const REASONS: [&str; 18] = [
 pub struct Tally {
     /// Why the plan is the fixed one, when the scout's plan call was made and gave no plan: `plan_no_model_seat` or `plan_unusable`.
     pub plan: Option<&'static str>,
+    /// Claims the scout drew that the library kept no record of, so none has an id to cite.
+    pub not_stored: usize,
     /// Pages read whose page-reading call had no model to serve it, and those whose call failed otherwise.
     pub scout_no_model: usize,
     pub scout_failed: usize,
@@ -115,6 +120,10 @@ pub struct Ended {
     pub host_asked: usize,
     pub host_fed: usize,
     pub host_leads: usize,
+    /// The session is under the private-read mark: every address the host handed back was a lead, on the trusted list or not.
+    pub leads_marked: bool,
+    /// Claims held before the run that the answer is written from (none of the run's own).
+    pub held: usize,
     /// Queries the identifier guard withheld.
     pub withheld: usize,
     /// Searches that answered (an empty answer counts), the fixed word of the first that failed, and the results they returned.
@@ -147,15 +156,17 @@ fn why_words(why: &BTreeMap<String, usize>) -> String {
 }
 
 /// The plain words for one cause.
-fn says(c: &Value, t: &Tally) -> String {
+fn says(c: &Value, t: &Tally, e: &Ended) -> String {
     let n = c["n"].as_u64().unwrap_or(0);
     match c["reason"].as_str().unwrap_or("") {
+        "claims_not_stored" => format!("{n} claim(s) were drawn but the library kept no record of them, so none can be cited"),
         "no_model_seat" => format!("{n} page(s) were fetched but no model could serve the scout to read them"),
         "scout_call_failed" => format!("the scout's call to read a page failed on {n} page(s)"),
         "no_claims_on_pages" => format!("{n} page(s) were read and the scout drew no claim with a quote found in the page"),
         "pages_refused" => format!("the library kept none of {n} page(s) fetched"),
         "trusted_fetch_failed" => format!("{n} page(s) on the trusted list could not be fetched{}", why_words(&t.trusted_fetch_why)),
         "fetch_failed" => format!("{n} page(s) a search returned could not be fetched{}", why_words(&t.fetch_why)),
+        "leads_unread" if e.leads_marked => format!("the session is under the private-read mark, so Delphi fetched none of the {n} address(es) the host handed back"),
         "leads_unread" => format!("{n} address(es) the host handed back are not on the trusted list, so Delphi did not fetch them"),
         "not_fetchable" => format!("{n} result(s) are outside what the fetcher reaches and were kept as leads"),
         "nothing_new" => format!("{n} page(s) are unchanged since the topic last read them"),
@@ -164,7 +175,9 @@ fn says(c: &Value, t: &Tally) -> String {
         "queries_withheld" => format!("{n} query(ies) were withheld because the question names a private identifier"),
         "no_search_provider" => "no search provider is configured".to_string(),
         "credential_unresolved" => "no search provider's key could be used".to_string(),
+        "search_failed" => "the searches could not be run".to_string(),
         "no_results" => "the searches returned no result".to_string(),
+        "no_search_run" => "no search was run".to_string(),
         "no_local_sources" => "no query was sent and Delphi holds no source on the trusted list for the question".to_string(),
         "plan_no_model_seat" => "no model could serve the scout to plan sub-questions, so the whole question was searched as one query".to_string(),
         "plan_unusable" => "the scout's plan call gave no usable plan, so the whole question was searched as one query".to_string(),
@@ -175,6 +188,7 @@ fn says(c: &Value, t: &Tally) -> String {
 /// The one sentence on what to do next, for a reason. Each is something the asker or the operator does; none is done by Delphi.
 fn next_for(reason: &str) -> &'static str {
     match reason {
+        "claims_not_stored" => "Rerun the request; if the library again keeps no record of the claims, ask the operator to run delphi doctor.",
         "leads_unread" => "Read the addresses in host_leads with your own tool and hand over what you find with record_research.",
         "no_model_seat" | "plan_no_model_seat" => "Rerun when a model can serve the scout, or read the sources yourself and hand over what you find with record_research.",
         "scout_call_failed" | "plan_unusable" => "Rerun the request; if it fails again, read the sources yourself and hand over what you find with record_research.",
@@ -187,15 +201,21 @@ fn next_for(reason: &str) -> &'static str {
         "host_fed_nothing" => "Search the queries research_status lists with your own web search tool and hand each back with research_feed.",
         "queries_withheld" => "Ask the question without the workspace's private identifiers.",
         "no_search_provider" | "credential_unresolved" => "Ask the operator to set up a search provider, or ask from a tool that has a web search of its own.",
+        "search_failed" => "Rerun later; if every search fails again, ask the operator to check the search provider.",
+        "no_search_run" => "Ask the question in other words, without paths, hosts or credentials, so a query can be sent.",
         "no_local_sources" => "Ask the operator to set up a search provider, or ask from a tool that has a web search of its own.",
         _ => "Ask a shorter, more specific question.",
     }
 }
 
+/// `next` when the answer is written from claims held before the run: the answer stands, and this run added nothing to it.
+pub const HELD_NEXT: &str = "The answer above is written from claims Delphi held before this run; this run kept none of its own.";
+
 /// The `empty` field of a result whose run kept no claim: `reason` (the cause nearest a claim), `causes` (every cause counted, in
 /// that order, each with `n` when it is a count and `why` for a failed fetch), `text` (the causes in plain words) and `next`
 /// (one sentence on what to do). When the host handed back addresses that were not read, `next` is about those, whatever the
-/// first cause is: reading them is the one step that needs nothing changed.
+/// first cause is: reading them is the one step that needs nothing changed. Otherwise, when the answer is written from claims held
+/// before the run, `next` says so, so it never contradicts the answer beside it.
 pub fn empty(t: &Tally, e: &Ended) -> Value {
     let mut causes: Vec<Value> = Vec::new();
     let mut count = |reason: &str, n: usize| {
@@ -203,6 +223,7 @@ pub fn empty(t: &Tally, e: &Ended) -> Value {
             causes.push(cause(reason, n));
         }
     };
+    count("claims_not_stored", t.not_stored);
     count("no_model_seat", t.scout_no_model);
     count("scout_call_failed", t.scout_failed);
     count("no_claims_on_pages", t.pages_no_claims);
@@ -226,8 +247,11 @@ pub fn empty(t: &Tally, e: &Ended) -> Value {
         if e.local {
             causes.push(cause("no_local_sources", 0));
         } else if e.answered == 0 {
-            if let Some(w) = e.failure.filter(|w| REASONS.contains(w)) {
-                causes.push(cause(w, 0));
+            match e.failure.filter(|w| REASONS.contains(w)) {
+                Some(w) => causes.push(cause(w, 0)),
+                // No search was attempted (every query was cleaned away), and no other step says why nothing came back.
+                None if e.host_asked == 0 && e.withheld == 0 => causes.push(cause("no_search_run", 0)),
+                None => {}
             }
         } else {
             causes.push(cause("no_results", 0));
@@ -248,8 +272,14 @@ pub fn empty(t: &Tally, e: &Ended) -> Value {
         *c = with_why(c.take(), why);
     }
     let reason = causes[0]["reason"].as_str().unwrap_or("no_results").to_string();
-    let text = format!("{}.", causes.iter().map(|c| says(c, t)).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; "));
-    let next = next_for(if e.host_leads > 0 { "leads_unread" } else { &reason });
+    let text = format!("{}.", causes.iter().map(|c| says(c, t, e)).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; "));
+    let next = if e.host_leads > 0 {
+        next_for("leads_unread")
+    } else if e.held > 0 {
+        HELD_NEXT
+    } else {
+        next_for(&reason)
+    };
     json!({"reason": reason, "causes": causes, "text": text, "next": next})
 }
 
@@ -330,8 +360,32 @@ mod tests {
         assert!(v["next"].as_str().unwrap().contains("research_feed"), "{v}");
         // Every word is one of the list, and every one has plain words and a next step.
         for r in REASONS {
-            assert!(!says(&json!({"reason": r, "n": 1}), &Tally::default()).is_empty() && next_for(r).ends_with('.'), "{r}");
+            assert!(!says(&json!({"reason": r, "n": 1}), &Tally::default(), &Ended::default()).is_empty() && next_for(r).ends_with('.'), "{r}");
         }
+    }
+
+    // `specs/124` §19: the words tell the truth about the private-read mark, an outage, a run that sent nothing, claims the library
+    // did not record, and an answer written from claims held before the run.
+    #[test]
+    fn the_mark_an_outage_no_search_unstored_claims_and_a_held_answer_each_say_what_happened() {
+        // Under the mark the leads include trusted addresses: the text names the mark, not the trusted list.
+        let v = empty(&Tally::default(), &Ended { host_asked: 1, host_fed: 1, host_leads: 2, leads_marked: true, answered: 1, ..Default::default() });
+        assert_eq!(v["text"], "the session is under the private-read mark, so Delphi fetched none of the 2 address(es) the host handed back.", "{v}");
+        let v = empty(&Tally::default(), &Ended { host_asked: 1, host_fed: 1, host_leads: 2, answered: 1, ..Default::default() });
+        assert!(v["text"].as_str().unwrap().contains("not on the trusted list"), "{v}");
+        // Every engine failed for a reason other than its key: an outage, not an empty answer.
+        let v = empty(&Tally::default(), &Ended { failure: Some("search_failed"), ..Default::default() });
+        assert_eq!((v["reason"].as_str(), v["text"].as_str()), (Some("search_failed"), Some("the searches could not be run.")), "{v}");
+        assert!(v["next"].as_str().unwrap().starts_with("Rerun later"), "{v}");
+        // Nothing was sent and nothing failed: it does not say the searches returned nothing.
+        let v = empty(&Tally::default(), &Ended::default());
+        assert_eq!((v["reason"].as_str(), v["text"].as_str()), (Some("no_search_run"), Some("no search was run.")), "{v}");
+        // Claims drawn that the library kept no record of come first.
+        let v = empty(&Tally { not_stored: 2, pages_no_claims: 1, ..Default::default() }, &Ended { answered: 1, rows: 3, ..Default::default() });
+        assert_eq!(v["causes"][0], json!({"reason": "claims_not_stored", "n": 2}), "{v}");
+        // An answer written from claims held before the run: `next` does not tell the asker to ask again.
+        let v = empty(&Tally { pages_no_claims: 1, ..Default::default() }, &Ended { answered: 1, rows: 3, held: 2, ..Default::default() });
+        assert_eq!((v["reason"].as_str(), v["next"].as_str()), (Some("no_claims_on_pages"), Some(HELD_NEXT)), "{v}");
     }
 
     // A failed fetch's own text never reaches the field: only its fixed word does.
