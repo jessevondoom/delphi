@@ -190,4 +190,5 @@ order = 9
 "129-the-teaching-pipeline-lesson-cards-and-accept-at-a-terminal-or-in-the-app" = "learning-and-evals"
 "131-gemini-seats-a-bounded-prompt-the-task-at-both-ends-and-a-council-that-counts-who-was-heard" = "orchestration-and-council"
 "132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens" = "runtime-models-and-tools"
+"133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns" = "orchestration-and-council"
 "135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests" = "orchestration-and-council"

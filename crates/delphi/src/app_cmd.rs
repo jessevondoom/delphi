@@ -275,8 +275,8 @@ pub(crate) fn render_event(timestamp: &str, kind: &str, p: &Value) -> String {
         // lockout was replaced.
         "app.refused" if p["reason"] == "aggregated" => format!("refused {} more time(s) in {} s, not written one by one", p["count"].as_u64().unwrap_or(0), p["window_secs"].as_u64().unwrap_or(60)),
         "app.refused" => format!("refused: {}{}", p["reason"].as_str().unwrap_or("?"), if p["locked_out"] == true { " (the socket was closed to new connections for a minute)" } else { "" }),
-        "app.revoked" => format!("revoked; {} session(s) closed", p["sessions_closed"].as_u64().unwrap_or(0)),
-        "app.granted" => format!("{} {}{}", if p["removed"] == true { "lost" } else { "given" }, p["grant"].as_str().unwrap_or("?"), if p["auto"] == true { " (auto: its update requests skip the terminal approval)" } else { "" }),
+        "app.revoked" => format!("revoked; {} session(s) closed{}", p["sessions_closed"].as_u64().unwrap_or(0), cancelled_words(p)),
+        "app.granted" => format!("{} {}{}{}", if p["removed"] == true { "lost" } else { "given" }, p["grant"].as_str().unwrap_or("?"), if p["auto"] == true { " (auto: its update requests skip the terminal approval)" } else { "" }, cancelled_words(p)),
         "app.updated" => format!("updated Delphi {} -> {}; restart the daemon when idle", p["from"].as_str().unwrap_or("?"), p["to"].as_str().unwrap_or("?")),
         "app.update_refused" => format!("update refused: {}{}", p["reason"].as_str().unwrap_or("?"), p["why"].as_str().filter(|w| !w.is_empty()).map(|w| format!(" ({})", w.chars().filter(|c| !c.is_control()).take(200).collect::<String>())).unwrap_or_default()),
         "app.expired" => "removed: unused for 180 days".to_string(),
@@ -285,6 +285,9 @@ pub(crate) fn render_event(timestamp: &str, kind: &str, p: &Value) -> String {
         "app.request" => {
             let state = match (p["state"].as_str(), p["why"].as_str()) {
                 (Some(s), Some(why)) => format!(": {} ({})", s, why.chars().filter(|c| !c.is_control()).take(200).collect::<String>()),
+                // `specs/129` §10.2: a request a revoke cancelled, or one it came too late to stop.
+                (Some(s), None) if p["reason"] == "revoked" => format!(": {} (the key was revoked)", s),
+                (Some(s), None) if p["revoked"] == "after_last_check" => format!(": {} (the key was revoked after its last check; it ran to its end)", s),
                 (Some(s), None) => format!(": {}", s),
                 _ => String::new(),
             };
@@ -293,6 +296,22 @@ pub(crate) fn render_event(timestamp: &str, kind: &str, p: &Value) -> String {
         other => other.to_string(),
     };
     format!("{}  {:<12}{}", timestamp, name, what)
+}
+
+/// What a revoke, or a `request` grant taken away, cancelled and left running (`specs/129` §10.2): ids and method names only, and
+/// nothing when there was nothing.
+fn cancelled_words(p: &Value) -> String {
+    let mut out = String::new();
+    let n = p["requests_cancelled"]["count"].as_u64().unwrap_or(0);
+    if n > 0 {
+        let ids: Vec<&str> = p["requests_cancelled"]["ids"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        out.push_str(&format!("; {} running request(s) cancelled ({})", n, ids.join(", ")));
+    }
+    let left: Vec<String> = p["left_running"].as_array().into_iter().flatten().map(|l| format!("{} {}", l["method"].as_str().unwrap_or("?"), l["request"].as_str().unwrap_or("?"))).collect();
+    if !left.is_empty() {
+        out.push_str(&format!("; left running to its end: {}", left.join(", ")));
+    }
+    out.chars().filter(|c| !c.is_control()).collect()
 }
 
 /// `delphi app log`: the app socket's events, oldest first, read from the logs of the daemon's own day sessions (where it
@@ -459,7 +478,7 @@ pub(crate) fn act(client: &mut Client, action: &Action, out: &mut dyn std::io::W
         },
         Action::Revoke(name) => match client.call("app.revoke", json!({"name": name})) {
             Ok(v) => {
-                let _ = writeln!(out, "revoked {}; {} open session(s) closed", name, v["sessions_closed"].as_u64().unwrap_or(0));
+                let _ = writeln!(out, "revoked {}; {} open session(s) closed{}", name, v["sessions_closed"].as_u64().unwrap_or(0), cancelled_words(&v));
                 0
             }
             Err(e) => fail(&e),
@@ -470,7 +489,7 @@ pub(crate) fn act(client: &mut Client, action: &Action, out: &mut dyn std::io::W
                 let change = match (v["changed"] == true, *remove) {
                     (true, false) if *auto => format!("{} now holds {} with a standing authorization: its update requests skip the terminal approval until `--remove` or `revoke`", name, grant),
                     (true, false) => format!("{} now holds {}", name, grant),
-                    (true, true) => format!("{} no longer holds {}; {} open session(s) closed", name, grant, v["sessions_closed"].as_u64().unwrap_or(0)),
+                    (true, true) => format!("{} no longer holds {}; {} open session(s) closed{}", name, grant, v["sessions_closed"].as_u64().unwrap_or(0), cancelled_words(&v)),
                     (false, false) => format!("{} already holds {}", name, grant),
                     (false, true) => format!("{} did not hold {}", name, grant),
                 };
@@ -955,6 +974,13 @@ mod tests {
         assert_eq!(render_event("T", "app.refused", &json!({"name": null, "reason": "bad_signature", "locked_out": true})), "T  -           refused: bad_signature (the socket was closed to new connections for a minute)");
         assert_eq!(render_event("T", "app.refused", &json!({"name": null, "reason": "aggregated", "count": 41, "window_secs": 60})), "T  -           refused 41 more time(s) in 60 s, not written one by one");
         assert_eq!(render_event("T", "app.revoked", &json!({"name": "app-0a1b2c", "sessions_closed": 2})), "T  app-0a1b2c  revoked; 2 session(s) closed");
+        assert_eq!(render_event("T", "app.revoked", &json!({"name": "app-0a1b2c", "sessions_closed": 1, "requests_cancelled": {"count": 0, "ids": []}, "left_running": []})), "T  app-0a1b2c  revoked; 1 session(s) closed");
+        assert_eq!(
+            render_event("T", "app.revoked", &json!({"name": "app-0a1b2c", "sessions_closed": 1, "requests_cancelled": {"count": 2, "ids": ["aq-1-1", "aq-1-2"]}, "left_running": [{"request": "au-9", "method": "app.update_apply"}]})),
+            "T  app-0a1b2c  revoked; 1 session(s) closed; 2 running request(s) cancelled (aq-1-1, aq-1-2); left running to its end: app.update_apply au-9"
+        );
+        assert_eq!(render_event("T", "app.granted", &json!({"name": "app-0a1b2c", "grant": "request", "removed": true, "requests_cancelled": {"count": 1, "ids": ["aq-1-1"]}})), "T  app-0a1b2c  lost request; 1 running request(s) cancelled (aq-1-1)");
+        assert_eq!(render_event("T", "app.request", &json!({"name": "app-0a1b2c", "request": "aq-1-1", "method": "app.page_rebuild", "ids": {"slug": "x"}, "state": "cancelled", "reason": "revoked"})), "T  app-0a1b2c  asked app.page_rebuild {\"slug\":\"x\"}: cancelled (the key was revoked)");
         assert_eq!(render_event("T", "app.granted", &json!({"name": "app-0a1b2c", "grant": "request", "removed": true})), "T  app-0a1b2c  lost request");
         assert_eq!(render_event("T", "app.request", &json!({"name": "app-0a1b2c", "method": "app.page_rebuild", "ids": {"slug": "x"}})), "T  app-0a1b2c  asked app.page_rebuild {\"slug\":\"x\"}");
         assert_eq!(render_event("T", "app.request", &json!({"name": "app-0a1b2c", "request": "aq-1-1", "method": "app.research_continue", "ids": {"topic_id": "tides-0123abcd"}, "state": "queued"})), "T  app-0a1b2c  asked app.research_continue {\"topic_id\":\"tides-0123abcd\"}: queued");

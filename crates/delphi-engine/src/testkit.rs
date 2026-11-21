@@ -180,6 +180,7 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
         toolless: Default::default(),
         operator_prompts: Default::default(),
         readonly_tasks: Default::default(),
+        readonly_handoffs: Default::default(),
         approver_calls: Default::default(),
         pace: Default::default(),
         totp: Default::default(),

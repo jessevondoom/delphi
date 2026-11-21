@@ -10,217 +10,277 @@
     },
     {
       "level": 2,
-      "line": 25,
+      "line": 26,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 37,
+      "line": 38,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 47,
+      "line": 48,
       "number": "1.2",
       "title": "Simpler alternative considered"
     },
     {
       "level": 2,
-      "line": 53,
+      "line": 54,
       "number": "2",
       "title": "Invariants"
     },
     {
       "level": 2,
-      "line": 68,
+      "line": 69,
       "number": "3",
       "title": "Two tiers and two stages"
     },
     {
       "level": 2,
-      "line": 81,
+      "line": 82,
       "number": "4",
       "title": "The machine files"
     },
     {
       "level": 3,
-      "line": 83,
+      "line": 84,
       "number": "4.1",
       "title": "Layout"
     },
     {
       "level": 3,
-      "line": 102,
+      "line": 103,
       "number": "4.2",
       "title": "Contents of `data/<stem>.json`"
     },
     {
       "level": 3,
-      "line": 118,
+      "line": 119,
       "number": "4.3",
       "title": "What the compiler refuses"
     },
     {
       "level": 3,
-      "line": 122,
+      "line": 123,
       "number": "4.4",
       "title": "Identity: stems, and the three shared numbers"
     },
     {
       "level": 2,
-      "line": 130,
+      "line": 131,
       "number": "5",
       "title": "The human views"
     },
     {
       "level": 2,
-      "line": 143,
+      "line": 145,
       "number": "6",
       "title": "Requirement IDs (stage 2)"
     },
     {
       "level": 3,
-      "line": 147,
+      "line": 149,
       "number": "6.1",
       "title": "Form"
     },
     {
       "level": 3,
-      "line": 157,
+      "line": 159,
       "number": "6.2",
       "title": "Revisions"
     },
     {
       "level": 3,
-      "line": 161,
+      "line": 163,
       "number": "6.3",
       "title": "Registry and tombstones"
     },
     {
       "level": 3,
-      "line": 171,
+      "line": 173,
       "number": "6.4",
       "title": "Seeding"
     },
     {
       "level": 3,
-      "line": 175,
+      "line": 177,
       "number": "6.5",
       "title": "Parallel branches"
     },
     {
       "level": 2,
-      "line": 186,
+      "line": 188,
       "number": "7",
       "title": "Amendments and supersession (stage 2)"
     },
     {
       "level": 3,
-      "line": 188,
+      "line": 190,
       "number": "7.1",
       "title": "Amendment records"
     },
     {
       "level": 3,
-      "line": 198,
+      "line": 200,
       "number": "7.2",
       "title": "Supersession"
     },
     {
       "level": 2,
-      "line": 207,
+      "line": 209,
       "number": "8",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 240,
+      "line": 242,
       "number": "9",
       "title": "Prior art (surveyed 2026-11-06)"
     },
     {
       "level": 3,
-      "line": 262,
+      "line": 264,
       "number": "9.1",
       "title": "What the repository already has"
     },
     {
       "level": 2,
-      "line": 272,
+      "line": 274,
       "number": "10",
       "title": "Skills and surfaces"
     },
     {
       "level": 3,
-      "line": 274,
+      "line": 276,
       "number": "10.1",
       "title": "Authors (Architect), stage 2"
     },
     {
       "level": 3,
-      "line": 278,
+      "line": 280,
       "number": "10.2",
       "title": "Consumers (Builder, Validator, Red-Team), stage 1"
     },
     {
       "level": 3,
-      "line": 289,
+      "line": 291,
       "number": "10.3",
       "title": "Surfaces"
     },
     {
       "level": 3,
-      "line": 293,
+      "line": 295,
       "number": "10.4",
       "title": "Commit trailer"
     },
     {
       "level": 2,
-      "line": 299,
+      "line": 301,
       "number": "11",
       "title": "Slices (one pull request each) and decisions"
     },
     {
       "level": 3,
-      "line": 301,
+      "line": 303,
       "number": "11.1",
       "title": "Hours and review burden"
     },
     {
       "level": 3,
-      "line": 321,
+      "line": 323,
       "number": "11.2",
       "title": "Deferred decision: moving the sources and renumbering the shared numbers"
     },
     {
       "level": 3,
-      "line": 335,
+      "line": 337,
       "number": null,
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 349,
+      "line": 351,
       "number": "12",
       "title": "Reviews (2026-11-07)"
     },
     {
       "level": 3,
-      "line": 351,
+      "line": 353,
       "number": "12.1",
       "title": "Council (Delphi daemon)"
     },
     {
       "level": 3,
-      "line": 372,
+      "line": 374,
       "number": "12.2",
       "title": "Panel (host subagents)"
     },
     {
       "level": 2,
-      "line": 386,
+      "line": 388,
+      "number": "13",
+      "title": "Amendment (operator, 2026-11-21): no whole-set aggregate in a committed view"
+    },
+    {
+      "level": 3,
+      "line": 392,
+      "number": "13.1",
+      "title": "The problem, as found on 2026-11-20"
+    },
+    {
+      "level": 3,
+      "line": 402,
+      "number": "13.2",
+      "title": "Consumers of the count (searched, 2026-11-21)"
+    },
+    {
+      "level": 3,
+      "line": 412,
+      "number": "13.3",
+      "title": "The rule (a new invariant, extends §2)"
+    },
+    {
+      "level": 3,
+      "line": 421,
+      "number": "13.4",
+      "title": "The change (slice S3c)"
+    },
+    {
+      "level": 3,
+      "line": 431,
+      "number": "13.5",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 3,
+      "line": 436,
+      "number": "13.6",
+      "title": "Options considered"
+    },
+    {
+      "level": 3,
+      "line": 443,
+      "number": "13.7",
+      "title": "Acceptance criteria, tests and Verification Plan (extends §8)"
+    },
+    {
+      "level": 3,
+      "line": 468,
+      "number": "13.8",
+      "title": "Honest limits"
+    },
+    {
+      "level": 3,
+      "line": 476,
+      "number": "13.9",
+      "title": "Slice, hours and decisions"
+    },
+    {
+      "level": 2,
+      "line": 493,
       "number": null,
       "title": "Appendix A. Groups (approved by the operator, 2026-11-07, OD-4)"
     }
@@ -228,7 +288,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/088-spec-compile-and-current-set.md",
-    "sha256": "56c21e2f7919744223cfb754c2263abc1ddd6bcdf6428a78cfbbb9d23b204ce6"
+    "sha256": "c380dfe9cbc62308edc1651b3b2e9f4e44d81a1225ecfc51f1df6927d2617416"
   },
   "source_status_at_hash": {
     "line": {
@@ -241,7 +301,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"confirmed ... approved\"): S0 to S3 only; stage 2 (S4 to S6) is NOT approved and needs a fresh decision after the OD-5 measurement"
     },
-    "sha256": "56c21e2f7919744223cfb754c2263abc1ddd6bcdf6428a78cfbbb9d23b204ce6",
+    "sha256": "c380dfe9cbc62308edc1651b3b2e9f4e44d81a1225ecfc51f1df6927d2617416",
     "word": "approved"
   },
   "spec": {
@@ -256,10 +316,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 3385,
-      "end_line": 27,
-      "line": 27,
-      "start": 2700
+      "end": 3528,
+      "end_line": 28,
+      "line": 28,
+      "start": 2843
     },
     "text": "Development is fast and specs are corrected as it goes. An agent or a validator that asks \"what is currently required?\" has to read the specs themselves, and they do not fit in a context: on 2026-11-07 `specs/` held 99 markdown files (98 specs and the interface blueprints) and about 331,000 words, and 68 of them mention superseding or amending something. Today the current state is kept readable by **folding by hand**: when a spec's amendments are folded into its body, the removed text moves verbatim to `specs/history/` and every section number survives as a stub. That works, but it is manual, it rewrites approved files, it is done spec by spec, and nothing checks across specs."
   }

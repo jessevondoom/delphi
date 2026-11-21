@@ -22,7 +22,7 @@ Each `[[endpoints]]` entry in `config.toml` has a `path`:
 | `api` | the Anthropic or Gemini API directly | macOS Keychain or Linux Secret Service, an `*_env` variable, or a command |
 | `cloud` | AWS Bedrock or Google Vertex | `aws:<profile>`, `gcloud-adc` |
 | `gateway-native`, `gateway-compat` | a corporate gateway or any OpenAI-compatible endpoint | OAuth2 device code or PKCE, or none for a loopback address |
-| `harness` | your own `claude` (Claude Code) or `agy` (Antigravity) program, as a subscription seat | the program's own login; Delphi never reads it |
+| `harness` | your own `claude` (Claude Code), `agy` (Antigravity), `codex` (Codex CLI) or `copilot` (GitHub Copilot CLI) program, as a subscription seat | the program's own login; Delphi never reads it |
 
 API keys never go in `config.toml`. The `credential` field names where the key is kept.
 
@@ -50,7 +50,7 @@ delphi auth status
 delphi auth logout <name>
 ```
 
-Subscription seats (`claude`, `agy`) sign in through their own programs.
+Subscription seats (`claude`, `agy`, `codex`, `copilot`) sign in through their own programs.
 
 ## Subscription seats
 
@@ -61,6 +61,26 @@ delphi endpoints test --probe
 ```
 
 has watched its gate deny every kind of tool on the installed version. `delphi doctor` and the probe also tell you when your organization's MCP policy stops the bridge from loading.
+
+### Copilot and Codex: read-only seats on other families
+
+`copilot` and `codex` sit as **readers only** (reviewers, Council and Panel seats, `ask_family`), never as a Builder, and what they return starts untrusted (`specs/132`). Today both are tool-less seats (level L0): neither launch carries Delphi's tool bridge, so the prompt names no Delphi tool and the seat record lists none.
+
+- **Copilot** serves several vendors' models behind one GitHub login. The family of an answer is the model that answered, so declare **one endpoint per family**, each naming only that vendor's models; `delphi setup` offers exactly that (`copilot-claude`, `copilot-openai`, `copilot-gemini`). A Copilot seat whose stream reports a model other than the one asked for is refused. Its cost is counted in the vendor's own units: premium requests and nano-AIU, in each span's `harness.cost` event. `[harness.copilot] quota_source = "gh"` lets `delphi doctor` read the account's quota through your `gh` login (off by default).
+- **Codex** (`codex exec`) is an `openai` endpoint on your ChatGPT login. It reports no served model, so its seat's family is `unknown` and does not count toward family diversity yet.
+
+```toml
+[[endpoints]]
+id = "copilot-openai"
+family = "openai"
+path = "harness"
+harness = "copilot"
+credential = "harness-login"
+cost_model = "subscription"
+models = { fast = "gpt-6-luna", workhorse = "gpt-6.2-sol", frontier = "gpt-6.2-astra" }
+```
+
+`delphi capabilities` lists both programs with their versions; for Copilot it says whether a login config exists, without opening it.
 
 ## When a model runs out
 

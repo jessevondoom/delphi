@@ -162,6 +162,8 @@ pub struct State {
     available: Option<String>,
     pending: Option<Pending>,
     running: bool,
+    /// The key and the request of the apply that runs now: a revoke of that key names it as left running (`specs/129` §10.2).
+    running_for: Option<(String, String)>,
     /// When each key's last apply started ([`mono`]).
     last_apply: HashMap<String, i64>,
     /// When the last apply ended, and whether it installed: the next apply of any key waits [`AFTER_OK_SECS`] or [`AFTER_FAIL_SECS`].
@@ -240,6 +242,7 @@ impl Drop for RunGuard {
             let mut st = self.svc.update.lock().unwrap_or_else(|e| e.into_inner());
             let at = st.now();
             st.running = false;
+            st.running_for = None;
             st.epoch += 1;
             st.last_end = Some((at, false));
             st.child = None;
@@ -468,6 +471,13 @@ impl EngineService {
         self.update.lock().unwrap().limit = Some(limit);
     }
 
+    /// The request id of the apply `key` started, if it runs now. A revoke does not stop it: an install ended halfway can leave a
+    /// broken program, so it runs to its end and the revoke names it as left running (`specs/129` §10.2; work plan §6 question 3).
+    pub fn update_running_for(&self, key: &str) -> Option<String> {
+        let st = self.update.lock().unwrap_or_else(|e| e.into_inner());
+        st.running_for.as_ref().filter(|(k, _)| k == key).map(|(_, r)| r.clone())
+    }
+
     /// Tests: whether an apply is running now.
     pub fn update_running(&self) -> bool {
         self.update.lock().unwrap_or_else(|e| e.into_inner()).running
@@ -692,6 +702,7 @@ impl EngineService {
                 Some(("not_newer", "the release found is not newer than the one installed"))
             } else {
                 st.running = true;
+                st.running_for = Some((key.to_string(), request.to_string()));
                 st.epoch += 1;
                 st.last_apply.insert(key.to_string(), at);
                 None
@@ -739,6 +750,7 @@ impl EngineService {
             let mut st = self.update.lock().unwrap();
             let at = st.now();
             st.running = false;
+            st.running_for = None;
             st.epoch += 1;
             st.last_end = Some((at, matches!(end, End::Installed(_))));
             if installed {
@@ -1464,6 +1476,38 @@ mod tests {
         while unsafe { libc::kill(bg, 0) } == 0 {
             assert!(std::time::Instant::now() < end, "the process the child started survived the daemon's shutdown");
             tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// `specs/129` §10.2 and the work plan's question 3 (the recommendation, taken by default): revoking a key does not stop an update
+    /// it started, since an install ended halfway can leave a broken program. The apply runs on, and the revoke names it as left
+    /// running. Taking `request` away is not about updates and names nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_revoke_leaves_a_running_update_to_its_end_and_names_it() {
+        let r = rig(vec![key(KEY, &["read", "update"], true), key(OTHER, &["read", "update"], true)]);
+        r.svc.update_check_now().await;
+        std::fs::write(r.rec.join("hang"), "").unwrap();
+        let started = r.svc.app_update_apply(KEY, json!({})).await.unwrap();
+        let request = started["request"].as_str().unwrap().to_string();
+        assert_eq!((r.svc.update_running_for(KEY), r.svc.update_running_for(OTHER)), (Some(request.clone()), None));
+        // As the server does: the key leaves the record first, then its work is cancelled.
+        KeyStore::at(&r.f.engine.ws.home).save(&[key(OTHER, &["read", "update"], true)]).unwrap();
+        assert_eq!(r.svc.app_requests_cancel(KEY, false), json!({"cancelled": [], "left_running": []}));
+        assert_eq!(r.svc.app_requests_cancel(KEY, true), json!({"cancelled": [], "left_running": [{"request": request, "method": "app.update_apply"}]}));
+        assert!(r.svc.update_running(), "the apply goes on");
+        assert_eq!(r.svc.app_requests_cancel(OTHER, true)["left_running"], json!([]), "another key's revoke names no update it did not start");
+        // End it as a stopping daemon does. That ends the child the daemon recorded, so the child must have started: until it has,
+        // a shutdown has nothing to end and the stand-in would sleep on.
+        let end = std::time::Instant::now() + Duration::from_secs(30);
+        while r.svc.update.lock().unwrap().child.is_none() {
+            assert!(std::time::Instant::now() < end, "the child never started");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        r.svc.update_shutdown().await;
+        let end = std::time::Instant::now() + Duration::from_secs(30);
+        while r.svc.update_running_for(KEY).is_some() {
+            assert!(std::time::Instant::now() < end, "an apply that ended is still named as running");
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 
