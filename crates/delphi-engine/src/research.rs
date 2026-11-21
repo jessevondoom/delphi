@@ -217,12 +217,24 @@ impl crate::engine::Engine {
     /// raised for this, the job simply says so.
     pub(crate) fn scout_key(&self) -> Option<delphi_adapter::config::PoolKey> {
         let cfg = self.cfg.get();
-        let req = crate::route::RouteRequest { role: "scout".into(), tier: "fast".into(), prefer_family: Some(cfg.primary_family().to_string()), turn_by_turn: true, ..Default::default() };
-        match crate::route::resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &req) {
-            crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => Some(key),
-            _ => None,
-        }
+        scout_route(&cfg, &self.pool.snapshot(), (self.clock_unix)())
     }
+}
+
+/// The scout's model calls are single turns (`Engine::one_shot_raw`), so only an endpoint that serves one turn at a time can serve
+/// them: never a harness (`route.rs`: "a harness runs whole spans, not single turns").
+fn scout_route(cfg: &delphi_adapter::config::Config, state: &[crate::pool::Entry], now: i64) -> Option<delphi_adapter::config::PoolKey> {
+    let req = crate::route::RouteRequest { role: "scout".into(), tier: "fast".into(), prefer_family: Some(cfg.primary_family().to_string()), turn_by_turn: true, ..Default::default() };
+    match crate::route::resolve_route(cfg, state, now, &req) {
+        crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => Some(key),
+        _ => None,
+    }
+}
+
+/// Whether the configuration names any endpoint that could serve the scout, whatever its quota now (`specs/119` §17): false when
+/// every endpoint is a harness. Read from the configuration only, so `delphi doctor` can say it offline.
+pub fn scout_configured(cfg: &delphi_adapter::config::Config) -> bool {
+    scout_route(cfg, &[], 0).is_some()
 }
 
 /// The scout's judgement as one capped, tool-less model call per page (`Engine::one_shot_raw`).
