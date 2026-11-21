@@ -308,6 +308,16 @@ pub const HOST_WAIT: std::time::Duration = std::time::Duration::from_secs(240);
 /// The most addresses off the trusted list a result lists as leads for the host to read itself.
 pub const HOST_LEADS: usize = 40;
 
+/// The addresses a host handed back that the daemon did not fetch: the list (at most [`HOST_LEADS`]), and whether a feed was
+/// leads only because the session is under the private-read mark.
+#[derive(Default)]
+struct HostLeads {
+    list: Vec<String>,
+    marked: bool,
+    /// Every distinct address handed back and not fetched, past the list's cap too: what `leads_unread` counts.
+    all: BTreeSet<String>,
+}
+
 /// The host's turn of a run whose source is the host (`specs/119` §13.1).
 #[derive(Debug, Clone)]
 pub struct HostTurn {
@@ -544,12 +554,13 @@ struct Rungs {
 }
 
 /// The fixed reason a search failed. `Web::search` names a configuration problem by one of two words; any other failure of every
-/// engine counts as having found nothing.
+/// engine (an outage, a limit, an answer that is not results) is `search_failed`, never `no_results` (`specs/124` §19).
 pub fn failure_reason(e: &str) -> &'static str {
     match e {
         "no_search_provider" => "no_search_provider",
         "credential_unresolved" => "credential_unresolved",
-        _ => "no_results",
+        "no_results" => "no_results",
+        _ => "search_failed",
     }
 }
 
@@ -1082,14 +1093,17 @@ async fn local_round(ctx: &JobCtx, deps: &Deps<'_>, question: &str, depth: Depth
 /// read with its own tool. Nothing a host hands back enters the set of addresses a search of this run returned, so no feed widens
 /// what the daemon's fetcher reaches, and no title or snippet a host wrote is kept. Returns why sending must stop (a budget), the
 /// queries the host did not answer, and the leads.
-async fn host_round(ctx: &JobCtx, deps: &Deps<'_>, turn: &HostTurn, question: &str, depth: Depth, st: &mut State, round: &[Sending]) -> (Option<Stop>, Vec<Sending>, Vec<String>) {
+async fn host_round(ctx: &JobCtx, deps: &Deps<'_>, turn: &HostTurn, question: &str, depth: Depth, st: &mut State, round: &[Sending]) -> (Option<Stop>, Vec<Sending>, HostLeads) {
     ctx.ask_host(&round.iter().map(|q| q.text.clone()).collect::<Vec<_>>());
     let fed = ctx.fed(turn.wait).await;
     let unanswered: Vec<Sending> = round.iter().filter(|q| !fed.iter().any(|f| f.query == q.text)).cloned().collect();
-    let mut leads = Vec::<String>::new();
+    let mut hl = HostLeads::default();
+    let leads = &mut hl.list;
     for q in round {
         let Some(f) = fed.iter().find(|f| f.query == q.text) else { continue };
         st.cov.answered += 1;
+        // A feed from a session under the private-read mark is leads only; the run's `empty` field names the mark (`specs/124` §19).
+        hl.marked |= f.leads_only && !f.rows.is_empty();
         if q.kind != QueryKind::Trusted {
             st.cov.web_searched = true;
         }
@@ -1100,23 +1114,23 @@ async fn host_round(ctx: &JobCtx, deps: &Deps<'_>, turn: &HostTurn, question: &s
         for (i, row) in f.rows.iter().enumerate() {
             if f.leads_only || !deps.web.is_trusted(&row.url) {
                 st.log.dropped(li, "lead", 1);
-                if leads.len() < HOST_LEADS && !leads.contains(&row.url) {
+                if hl.all.insert(row.url.clone()) && leads.len() < HOST_LEADS {
                     leads.push(row.url.clone());
                 }
                 continue;
             }
             if st.pages_read >= deps.limits.pages_at(depth) {
                 st.log.dropped(li, "page_cap", total - i);
-                return (Some(Stop::PageBudget), unanswered, leads);
+                return (Some(Stop::PageBudget), unanswered, hl);
             }
             // The address alone goes on: a host's title and snippet are its own words and are not kept.
             let row = Row { title: String::new(), url: row.url.clone(), snippet: String::new() };
             if read_row(ctx, deps, question, st, li, &row, true, total - i, q.tag).await {
-                return (Some(Stop::StepBudget), unanswered, leads);
+                return (Some(Stop::StepBudget), unanswered, hl);
             }
         }
     }
-    (None, unanswered, leads)
+    (None, unanswered, hl)
 }
 
 /// Send one round's queries and read what they return. Within one search's results pages are read trusted and primary first, then
@@ -1330,7 +1344,7 @@ async fn write_the_answer(deps: &Deps<'_>, question: &str, subs: &[SubQuestion],
     let labelled = |label: String| if no_web { format!("{label}, {NO_WEB_LABEL}") } else { label };
     if given.is_empty() {
         // A run that kept no claim says why and what to do next (`specs/124` S11); the words are code's, from fixed lists.
-        let answer = empty.map(crate::research_empty::answer).unwrap_or_else(|| "No claim could be drawn from the sources read. (not validated)".to_string());
+        let answer = empty.map(crate::research_empty::answer).unwrap_or_else(|| "No claim could be drawn. (not validated)".to_string());
         return (answer, json!({"by": "none", "claims": 0, "attempts": 0}));
     }
     let (mut fix, mut attempts, mut rejected): (Option<String>, u64, Vec<String>) = (None, 0, Vec::new());
@@ -1467,7 +1481,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         Sources::Local => false,
         Sources::Host => host_turn.is_some_and(|t| t.engines),
     };
-    let (mut host_asked, mut host_fed, mut host_leads, mut host_stop, mut after_host) = (0usize, 0usize, Vec::<String>::new(), None::<Stop>, false);
+    let (mut host_asked, mut host_fed, mut host_leads, mut host_stop, mut after_host) = (0usize, 0usize, HostLeads::default(), None::<Stop>, false);
     if let Some(turn) = host_turn {
         rounds = 1;
         round.truncate(crate::research_jobs::FEED_QUERIES);
@@ -1665,10 +1679,24 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // The claims that disagree with each other, by the ids the answer cites them with.
     let groups: Vec<Vec<String>> = conflicts.iter().map(|g| g.iter().filter_map(|id| claims.iter().position(|c| c.id == *id).and_then(|i| staged[i].clone())).filter(|id| given.iter().any(|c| c.id == *id)).collect::<Vec<_>>()).filter(|g: &Vec<String>| g.len() > 1).collect();
     // A run that kept no claim, and met none the library held, says why and what to do next (`specs/124` S11): counted by code
-    // from what the run did, in fixed words. It is information; nothing reads it to fetch, trust or permit anything.
-    let empty = (claims.is_empty() && found_again.is_empty()).then(|| {
-        tally.budget = spent;
-        let ended = crate::research_empty::Ended { local: deps.sources == Sources::Local, host_asked, host_fed, host_leads: host_leads.len(), withheld: log.flow().withheld, answered: cov.answered, failure: cov.failure, rows: cov.trusted_rows + cov.web_rows };
+    // from what the run did, in fixed words. It is information; nothing reads it to fetch, trust or permit anything. A run whose
+    // claims the library kept no record of has nothing of its own to cite either, and says so (`specs/124` §19).
+    let empty = (given.is_empty() || (claims.is_empty() && found_again.is_empty())).then(|| {
+        tally.budget = spent || check_spent;
+        tally.not_stored = staged.iter().filter(|id| id.is_none()).count();
+        let ended = crate::research_empty::Ended {
+            local: deps.sources == Sources::Local,
+            host_asked,
+            host_fed,
+            host_leads: host_leads.all.len(),
+            leads_marked: host_leads.marked,
+            held: given.len(),
+            deep: depth == Depth::Deep,
+            withheld: log.flow().withheld,
+            answered: cov.answered,
+            failure: cov.failure,
+            rows: cov.trusted_rows + cov.web_rows,
+        };
         crate::research_empty::empty(&tally, &ended)
     });
     let (answer, synthesis) = write_the_answer(deps, question, &subs, &given, &groups, cov.answered == 0, empty.as_ref()).await;
@@ -1710,7 +1738,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // which the daemon did not fetch and the host may read with its own tool.
     if host_turn.is_some() {
         result["host_search"] = json!({"asked": host_asked, "fed": host_fed});
-        result["host_leads"] = json!(host_leads);
+        result["host_leads"] = json!(host_leads.list);
     }
     if let Some(e) = empty {
         result["empty"] = e;
@@ -1918,6 +1946,8 @@ mod tests {
         primary: BTreeSet<String>,
         /// The library's page check rejects an answer that holds this word, with this finding.
         rejects: Option<(&'static str, &'static str)>,
+        /// The library keeps no record of a staged claim (`stage_claim` returns no id).
+        no_record: bool,
     }
     impl Library for FakeLib {
         /// As the live library says when it says what it kept: a page kept whole under an open licence.
@@ -1983,7 +2013,7 @@ mod tests {
         fn stage_claim(&self, c: &ClaimRec) -> Result<Option<String>, String> {
             self.staged.lock().unwrap().push(c.id.clone());
             self.staged_quotes.lock().unwrap().push((c.id.clone(), c.source_ids.clone(), c.quotes.clone()));
-            Ok(Some(format!("c-{}", c.id)))
+            Ok((!self.no_record).then(|| format!("c-{}", c.id)))
         }
         /// As the live library does: a claim it holds gains an anchor; one it does not hold has nothing to add to.
         fn anchor_known(&self, fingerprint: &str, x: &Extracted, source_id: &str, _url: &str) -> Option<String> {
@@ -2415,7 +2445,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_search_that_cannot_run_says_why_in_the_words_of_the_fixed_list() {
-        for (token, want) in [("no_search_provider", "no_search_provider"), ("credential_unresolved", "credential_unresolved"), ("anything else", "no_results")] {
+        for (token, want) in [("no_search_provider", "no_search_provider"), ("credential_unresolved", "credential_unresolved"), ("search_failed", "search_failed"), ("anything else", "search_failed")] {
             let mut f = Fixture::new(Verdict::Inconclusive);
             f.web.fail = Some(token);
             let c = ctx(Depth::Quick);
@@ -2425,7 +2455,7 @@ mod tests {
             assert!(v["claims"].as_array().unwrap().is_empty() && v["status"].is_null(), "a failed search is still an answer with no claims, not an error: {v}");
         }
         assert_eq!(failure_reason("no_search_provider"), "no_search_provider");
-        assert_eq!(failure_reason("{\"raw\": \"AllFailed\"}"), "no_results", "no provider text becomes a reason");
+        assert_eq!(failure_reason("{\"raw\": \"AllFailed\"}"), "search_failed", "no provider text becomes a reason, and a failure is not an empty answer");
     }
 
     #[tokio::test]
@@ -3853,7 +3883,7 @@ mod tests {
         // And it says why (`specs/124` S11): three pages were read and the scout drew nothing from them.
         assert_eq!(n["empty"]["reason"], "no_claims_on_pages", "{}", n["empty"]);
         assert_eq!(n["answer"].as_str().unwrap(), crate::research_empty::answer(&n["empty"]));
-        assert!(n["answer"].as_str().unwrap().starts_with("No claim could be drawn from the sources read: 3 page(s) were read") && n["answer"].as_str().unwrap().ends_with("(not validated)"), "{}", n["answer"]);
+        assert!(n["answer"].as_str().unwrap().starts_with("No claim could be drawn: 3 page(s) were read") && n["answer"].as_str().unwrap().ends_with("(not validated)"), "{}", n["answer"]);
     }
 
     /// `specs/124` S11, the host-fed runs of observation O-2: the host hands back addresses that are not on the trusted list and
@@ -3877,7 +3907,7 @@ mod tests {
         assert_eq!(e["causes"].as_array().unwrap().last().unwrap()["reason"], "plan_unusable", "{e}");
         assert_eq!(e["next"], "Read the addresses in host_leads with your own tool and hand over what you find with record_research.");
         let answer = v["answer"].as_str().unwrap();
-        assert!(answer.starts_with("No claim could be drawn from the sources read: 2 page(s) on the trusted list could not be fetched (http_404: 2); 2 address(es) the host handed back are not on the trusted list, so Delphi did not fetch them") && answer.ends_with("with record_research. (not validated)"), "{answer}");
+        assert!(answer.starts_with("No claim could be drawn: 2 page(s) on the trusted list could not be fetched (http_404: 2); 2 address(es) the host handed back are not on the trusted list, so Delphi did not fetch them") && answer.ends_with("with record_research. (not validated)"), "{answer}");
         assert!(!e.to_string().contains("example") && !e.to_string().contains("who.int"), "no address is in the field: {e}");
         assert_eq!(v["synthesis"]["by"], "none");
         assert_balanced(&v);
@@ -3925,6 +3955,29 @@ mod tests {
         let ok = Fixture::new(Verdict::Inconclusive);
         let (_, y) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &ok.deps()).await.unwrap());
         assert!(!y["claims"].as_array().unwrap().is_empty() && y.get("empty").is_none(), "{y}");
+    }
+
+    /// `specs/124` §19: an outage is not an empty answer; an answer written from claims held before the run is not contradicted by
+    /// `next`; claims the library kept no record of are named; and leads under the private-read mark name the mark.
+    #[tokio::test]
+    async fn the_empty_field_tells_an_outage_a_held_answer_unstored_claims_and_the_mark_apart() {
+        // Every engine failed (the token `Web::search` gives an outage), and Delphi held a claim on the question before the run.
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.web.fail = Some("search_failed");
+        f.known = Some(FakeKnown { found: Known { claims: vec![crate::research_method::KnownClaim { id: "c-000000000001".into(), status: "noted".into(), text: "aspirin lowers fever".into() }], ..Default::default() }, asked: Default::default() });
+        let (_, v) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &f.deps()).await.unwrap());
+        assert_eq!(rung_of(&v, "trusted")["reason"], "search_failed", "{v}");
+        assert_eq!(v["empty"]["reason"], "search_failed", "{}", v["empty"]);
+        assert!(v["empty"]["text"].as_str().unwrap().starts_with("the searches could not be run;") && !v["empty"]["text"].to_string().contains("returned no result"), "{}", v["empty"]);
+        assert!(v["answer"].as_str().unwrap().contains("c-000000000001") || v["synthesis"]["claims"] == 1, "the answer is written from the held claim: {v}");
+        assert_eq!(v["empty"]["next"], crate::research_empty::HELD_NEXT, "next does not tell the asker to ask again beside an answer");
+        // Claims drawn that the library kept no record of: no answer can cite them, and the field says so first.
+        let mut g = Fixture::new(Verdict::Inconclusive);
+        g.lib.no_record = true;
+        let (_, w) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &g.deps()).await.unwrap());
+        assert!(!w["claims"].as_array().unwrap().is_empty(), "{w}");
+        assert_eq!(w["empty"]["reason"], "claims_not_stored", "{}", w["empty"]);
+        assert_eq!(w["answer"].as_str().unwrap(), crate::research_empty::answer(&w["empty"]));
     }
 
     /// `specs/114` §5 item 2: the library's page check runs on an answer that passed the runner's own: a finding there (a quoted
@@ -4180,6 +4233,39 @@ mod tests {
         assert_eq!(v["host_leads"], json!(["https://who.int/a"]));
         assert!(v["claims"].as_array().unwrap().is_empty());
         assert_balanced(&v);
+        // The lead is on the trusted list: the field names the mark, not the list (`specs/124` §19).
+        let text = v["empty"]["text"].as_str().unwrap();
+        assert!(text.contains("private-read mark") && !text.contains("not on the trusted list"), "{text}");
+    }
+
+    /// `specs/124` §19: `leads_unread` counts every address not fetched, not only the ones the capped `host_leads` list shows.
+    #[tokio::test]
+    async fn the_leads_count_is_not_capped_by_the_list() {
+        let mut f = host_fixture(false, 5_000);
+        // A plan of five sub-questions, two queries each, so the host is asked enough queries to hand back more than the list holds.
+        f.scout.1.plan = Some((1..=5).map(|n| sub(n, &format!("sub-question {n} on aspirin and fever?"), SubStatus::Open, &[format!("aspirin fever part {n}").as_str(), format!("aspirin fever angle {n}").as_str()])).collect());
+        let c = Arc::new(ctx(Depth::Deep));
+        // A host that hands back a full page of addresses off the trusted list for every query it is asked.
+        let fed = c.clone();
+        let host = tokio::spawn(async move {
+            let asked = loop {
+                if let Some((asked, _, _)) = fed.host_asked() {
+                    break asked;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            };
+            for (i, q) in asked.iter().enumerate() {
+                let rows: Vec<Row> = (0..crate::research_jobs::FEED_RESULTS).map(|j| row(&format!("https://blog.example/{i}-{j}"))).collect();
+                fed.feed(q, rows, false).unwrap();
+            }
+            asked.len() * crate::research_jobs::FEED_RESULTS
+        });
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever in adults and in children", Depth::Deep, &f.deps()).await.unwrap());
+        let total = host.await.unwrap();
+        assert!(total > HOST_LEADS, "the fixture must hand back more than the list holds: {total}");
+        assert_eq!(v["host_leads"].as_array().unwrap().len(), HOST_LEADS);
+        let leads = v["empty"]["causes"].as_array().unwrap().iter().find(|c| c["reason"] == "leads_unread").cloned();
+        assert_eq!(leads, Some(json!({"reason": "leads_unread", "n": total})), "{}", v["empty"]);
     }
 
     /// A host that hands nothing back does not stall the run or fail it. With no engine the run ends with what Delphi holds and
