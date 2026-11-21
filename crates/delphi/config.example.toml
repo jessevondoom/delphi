@@ -139,10 +139,12 @@ per_watch_max_wakes_per_day = 10
 # max_foreign_tokens = 100000        # per Council: the foreign seat's token ceiling must fit under this, and Round 2 is skipped once Round 1 used it
 
 # A cross-family review of a host's branch (`request_review`, specs/135 section 6). Delphi runs these commands in the OS sandbox,
-# with no network, in a copy of the branch; a seat of another family with no tools reviews the diff with their output.
+# with no network, in a copy of the branch; a seat of another family with no tools reviews the diff with their output. The program
+# must be on the sandbox's PATH and in a system or `[exec] toolchain` directory (see [exec] below). Read when the daemon starts.
 # [forge]
 # review_commands = [["cargo", "test", "--offline"]]   # unset (default): the [exec] test_command and check_command, when set; [] runs none
 # review_diff_chars = 40000          # the most diff the reviewer is shown (1000 to 200000); whole files past it are left out and named
+# review_context_chars = 12000       # call sites and what the reviewer asks to see in Round 0, found in the copy (0 to 100000; 0 turns both off)
 
 # What the engine adds around a role's model calls (specs/045). Not an access table: it adds notes and one verification turn,
 # never a tool or a permission. Every key shown is the default.
@@ -171,6 +173,8 @@ sandbox = "off"
 # check_command = ["cargo", "clippy"] # merge gate 2
 # shell = true                       # offer the `shell` tool (a full shell line); false keeps only `run_command`
 # hard = ["git push*"]               # shell lines that are always Hard: a Red card, never auto-approved (specs/061)
+# toolchain = ["~/.cargo", "~/.rustup"]              # sandbox only: read-only and executable (a review's `cargo test` needs both)
+# env = { PATH = "~/.cargo/bin:/usr/bin:/bin" }      # the sandboxed command's environment; `delphi doctor` checks review commands against PATH
 
 # Releases (specs/036). Uncomment to make `delphi update` refuse any build that is not a signed release. This table is ratified:
 # adding the line takes effect at once, and taking it out takes effect when you ratify the removal. Development builds and source
