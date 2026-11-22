@@ -47,7 +47,7 @@ Conflicts this repository has actually had. Resolve, then run the gates (below) 
 
 | Situation | Do | Never |
 | :-- | :-- | :-- |
-| Two branches both appended to the end of one file, e.g. `missions/2026-10-23-foundational-design/spec-tracker.md` | Keep both additions, in order. A table row stays directly under its own table, with no blank line or text between rows. | Keep one side; leave a row stranded below prose. |
+| Two branches both appended to the end of one file, e.g. `missions/2026-10-23-foundational-design/spec-tracker.md` (new slices use one file each under `tracker/<spec>/`, which do not collide) | Keep both additions, in order. A table row stays directly under its own table, with no blank line or text between rows. | Keep one side; leave a row stranded below prose. |
 | A module or import list, e.g. `crates/delphi-engine/src/lib.rs` | Keep both `mod` / `use` lines (sorted as the file sorts them), then build. | Keep one side, or leave markers in. |
 | A generated file: `docs/reference/*` and anything else AGENTS.md lists as generated | Take either side to clear the markers, then regenerate with the AGENTS.md commands (`docs cli`, `docs man`, `docs catalog`) and commit the regenerated output. | Hand-merge the text. |
 | `Cargo.lock` | Take the base's version (`git checkout --theirs Cargo.lock` during a merge of the base into your branch; `--theirs` is the side being merged in; tested on git 2.40.0: merging `main` into a feature branch, `--theirs` gave `main`'s content and `--ours` the feature's). If a manifest changed on your branch, let cargo re-resolve (`cargo metadata` or a build), then check the lock diff is only what you meant. Build with `--locked`. | Hand-edit the lock, or run `cargo update`. |
