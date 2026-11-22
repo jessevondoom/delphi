@@ -111,6 +111,20 @@ fn ac5_the_tracker_turns_into_warnings_never_refusals() {
     assert!(o.err.is_empty(), "{}", o.err);
 }
 
+/// AC-27 (spec 135 §14.10): the warning reads per-slice files too, and a file wins over the table's row.
+#[test]
+fn ac27_the_claim_warning_reads_slice_files() {
+    let f = fixture();
+    let dir = f.main.join(tracker::DIR).join("135");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("F0.md"), "---\nstate: merged\ndate: 2026-11-22\npr: 5\n---\n").unwrap();
+    fs::write(dir.join("E1.md"), "---\nstate: not-built\ndate: 2026-11-22\n---\n").unwrap();
+    let o = claim(&req(&f.main, &f.home, "F0", Some("A"), false, T0));
+    assert!(o.err.contains("already merged (missions/2026-10-23-foundational-design/tracker/135/F0.md)"), "{}", o.err);
+    let o = claim(&req(&f.main, &f.home, "E1", Some("A"), false, T0));
+    assert!(o.err.is_empty(), "{}", o.err);
+}
+
 #[test]
 fn ac3_concurrent_claims_have_exactly_one_winner() {
     let f = fixture();
