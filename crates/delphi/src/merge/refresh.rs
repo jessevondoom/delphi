@@ -195,7 +195,7 @@ impl Runner {
     pub fn new(repo: &Path) -> Runner {
         Runner { repo: repo.to_path_buf(), log: RefCell::new(Vec::new()) }
     }
-    fn git(&self, dir: &Path, args: &[&str]) -> Result<String, String> {
+    pub(super) fn git(&self, dir: &Path, args: &[&str]) -> Result<String, String> {
         self.log.borrow_mut().push(args.join(" "));
         Git { repo: dir.to_path_buf() }.run(args)
     }

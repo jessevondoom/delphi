@@ -84,6 +84,13 @@ pub trait Forge {
     /// Not `mergeStateStatus`: GitHub reports `BEHIND` there only when branch protection requires an up-to-date branch. A
     /// failed compare is an error, never a zero.
     fn behind_by(&self, base_ref: &str, head_sha: &str) -> Result<u64, ForgeError>;
+    /// Open a pull request from `head` (a branch already pushed) into `base`; its number. Only `repair-base` calls it (§11.3.4).
+    fn open_pr(&self, base: &str, head: &str, title: &str, body: &str) -> Result<u64, ForgeError>;
+}
+
+/// The pull request number at the end of the URL `gh pr create` prints.
+fn parse_created(out: &str) -> Result<u64, ForgeError> {
+    out.trim().rsplit('/').next().and_then(|n| n.parse::<u64>().ok()).filter(|n| *n > 0).ok_or_else(|| ForgeError::Parse(format!("pr create: `{}` does not end in a pull request number", out.trim())))
 }
 
 /// The compare API path for `base...head`. Both ends must be plain refs (`url_safe`); anything else is refused, not escaped.
@@ -259,6 +266,13 @@ impl Forge for Gh {
         let path = compare_path(base_ref, head_sha)?;
         parse_behind(&self.run("compare the branch with its base", &["api", &path, "--jq", ".behind_by"], &[])?)
     }
+
+    fn open_pr(&self, base: &str, head: &str, title: &str, body: &str) -> Result<u64, ForgeError> {
+        if !url_safe(base) || !url_safe(head) || base.starts_with('-') || head.starts_with('-') {
+            return Err(ForgeError::Failed { what: "open a pull request".into(), detail: format!("`{head}` into `{base}` has characters that are not allowed in a ref here") });
+        }
+        parse_created(&self.run("open a pull request", &["pr", "create", "--base", base, "--head", head, "--title", title, "--body", body], &[])?)
+    }
 }
 
 #[cfg(test)]
@@ -300,6 +314,13 @@ mod tests {
         for bad in ["", "null", "-1", "two"] {
             assert!(matches!(parse_behind(bad), Err(ForgeError::Parse(_))), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_created_pull_request_is_read_from_its_url_and_an_unsafe_branch_is_refused_first() {
+        assert_eq!(parse_created("https://github.com/o/r/pull/812\n").unwrap(), 812);
+        assert!(parse_created("").is_err() && parse_created("https://github.com/o/r/pull/x").is_err());
+        assert!(matches!(Gh.open_pr("main", "-x", "t", "b"), Err(ForgeError::Failed { .. })), "refused before running anything");
     }
 
     #[test]
