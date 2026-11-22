@@ -308,3 +308,11 @@ Seats in the forge (F2 reviewers now, F3 writers later) may use their host CLI's
 - **AC-20:** an edit or shell call with no bridge answer is refused.
 
 **Slice:** F2e (tool access and the watchdog), built after F2c/F2d; F4b waits for it.
+
+### 14.8 Correction to 14.2: ratify, and the macOS paths (operator, 2026-11-21)
+
+Approved by the operator in a host session ("1. ratify the macOS paths", on item 1 of the F4b report's follow-ups). Found by F4b (`missions/2026-11-20-forge/F4-REPORT.md`, "F4b").
+
+1. **`[exec]` is ratified, not merely configured.** It is one of the access blocks (`delphi_core::lock::ACCESS_KEYS`) the daemon takes only from the ratified copy (`boot::effective_config`). A live edit to `[exec] toolchain` or `env` has no effect until the operator ratifies it (`delphi setup` at a terminal, or `/ratify`) and the daemon restarts. Section 14.2's "the operator's yes is to configuring them" reads "to ratifying them".
+2. **On macOS a sandboxed `cargo test` needs three more read-only paths** besides `~/.cargo` and `~/.rustup`: `/private/etc/ssl` (cargo's TLS library reads its configuration at start), `/Applications/Xcode.app` (or the Command Line Tools directory: the linker, through `xcrun`), and `/Library/Preferences/com.apple.dt.Xcode.plist` (the licence check). With them, F4b's reviews built and ran the affected crate's tests from scratch with no network.
+3. `config.example.toml` shows the macOS line and says the table is ratified. Nothing is added to any operator's configuration by this text: each operator ratifies their own.
