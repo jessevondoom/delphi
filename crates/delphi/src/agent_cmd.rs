@@ -1,11 +1,12 @@
-//! `delphi agent promote|nerf|grades` (`specs/056` §4): move the class of model a role is assigned.
+//! `delphi agent promote|nerf|grades|clear` (`specs/056` §4, §3.2): move the class of model a role is assigned; show the ratchet and
+//! the suggestions; clear a class the ratchet stopped trying.
 //!
 //! A grade lives in the ratified `[grades]` table of `config.toml`. `promote` and `nerf` edit the live file, so the change is a
 //! pending Red-tier proposal that shows its diff and does nothing until the operator `/ratify`s it; the daemon reads `[grades]`
 //! only from the ratified copy. Delphi may suggest a grade; it never applies one. The commands are refused inside an agent seat.
 
 use delphi_adapter::config::{Config, GRADE_LIMIT};
-use delphi_engine::{grades, ratify};
+use delphi_engine::{grades, ratchet, ratify};
 use std::path::Path;
 use toml_edit::{value, DocumentMut, Item, Table};
 
@@ -120,10 +121,36 @@ pub fn cli(ws_dir: &Path, args: &[String], now: i64) -> i32 {
                 let kinds: String = a.kinds.iter().map(|(k, n)| format!(" {k}={n}")).collect();
                 println!("{r}: {}{kinds}{pending}  [{}]", a.role, grades::evidence_line(ws_dir, r).unwrap_or_else(|| "no measured results yet".into()));
             }
+            let rules = delphi_engine::models::ClassRules::load(ws_dir).unwrap_or_else(|_| delphi_engine::models::ClassRules::shipped());
+            let entries = ratchet::load(ws_dir);
+            for e in &entries {
+                let (b, _) = ratchet::bounds(&rules, &e.role);
+                let stopped: Vec<&str> = e.stopped.iter().map(|l| ratchet::name(*l)).collect();
+                println!("ratchet {} ({}): at {}{}", e.role, e.kind, ratchet::name(b.preferred + e.wanted(b)), if stopped.is_empty() { String::new() } else { format!(", not trying {} (`delphi agent clear {}`)", stopped.join(", "), e.role) });
+            }
+            for s in ratchet::suggestions(&entries, effective.routing.evidence_enough, |role| ratchet::bounds(&rules, role).0.floor) {
+                println!("suggestion: {s}. Delphi never applies one.");
+            }
+            0
+        }
+        (Some("clear"), [role]) => {
+            if crate::xenia_terminal::inside_an_agent_seat() {
+                eprintln!("delphi agent clear: refused; clearing the ratchet is the operator's and this process was started by an agent seat");
+                return 2;
+            }
+            let kind = flag("--kind").unwrap_or_else(|| ratchet::BUILD.into());
+            match ratchet::clear(ws_dir, role, &kind) {
+                Ok(c) if c.is_empty() => println!("{role} ({kind}): no class was stopped; nothing to clear"),
+                Ok(c) => println!("{role} ({kind}): {} may be tried again by the ratchet", c.iter().map(|l| ratchet::name(*l)).collect::<Vec<_>>().join(", ")),
+                Err(e) => {
+                    eprintln!("delphi agent clear: could not write {}: {e}", ratchet::FILE);
+                    return 4;
+                }
+            }
             0
         }
         _ => {
-            eprintln!("usage: delphi agent promote|nerf <role> [--kind <task kind>] [--reason <text>] | grades [--workspace <name>]");
+            eprintln!("usage: delphi agent promote|nerf <role> [--kind <task kind>] [--reason <text>] | grades | clear <role> [--kind <task kind>] [--workspace <name>]");
             2
         }
     }

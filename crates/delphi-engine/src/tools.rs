@@ -372,6 +372,10 @@ impl Registry {
     }
 }
 
+/// The only tools a Council or Panel seat is offered or may call (`specs/131` S5): reading, nothing that writes, records, asks for a
+/// card, queues research, dispatches or reaches a connector. It only narrows the offer; no tool is added by it.
+pub const SEAT_READING_TOOLS: [&str; 8] = ["read_file", "read_doc", "list_dir", "search", "kb_search", "recall_memory", "xenia_search", "check"];
+
 /// The built-in tool definitions (used by tests and callers with no registry of their own).
 pub fn tool_defs(can_write: bool) -> Vec<ToolDef> {
     Registry::builtin().defs(can_write)

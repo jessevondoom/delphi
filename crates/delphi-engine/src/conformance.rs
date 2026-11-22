@@ -5,8 +5,10 @@
 //! reply text. A record is evidence for the CLI version it names only: a newer CLI is "unprobed" (C9) until probed again.
 //!
 //! Built here: C2 (the bare call), C5 (the served model from the CLI's own events), C6 (the tool level: at L0 the tools the stream
-//! reported; for `agy` behind its gate, the gate record, folded in as this record's C6 row). Not built here, recorded as
-//! `unmeasured` with the reason: C3 (the input ladder is spec 131 S6) and C4 (one schema answer, not probed yet).
+//! reported; for `agy` behind its gate, the gate record, folded in as this record's C6 row), C9 (slice F1: the probed version
+//! against the version the CLI's coverage manifest is pinned to), and C3 when the operator runs the input ladder (`specs/131` S6,
+//! `--ladder`): the largest prompt answered, which can only LOWER a seat's byte budget ([`effective_budget`]).
+//! Not built here, recorded as `unmeasured`: C4 (one schema answer, not probed yet).
 //! Nothing reads this record to grant anything: `local/agy-gate.json` stays what a span reads for the agy gate.
 
 use crate::capabilities::{Capability, GateRecord};
@@ -59,6 +61,10 @@ pub struct Record {
     /// `L0` (no tools) or `L1` (read-only Delphi tools behind Delphi's gate), as declared by the profile.
     pub tool_level: String,
     pub rows: Vec<Row>,
+    /// When the C3 row was measured by the input ladder (`specs/131` S6), which can be earlier than `at`: a probe without the ladder
+    /// keeps the last ladder's row for the same version, and the row is trusted for [`TTL_SECS`] from the ladder, not from the probe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ladder_at: Option<i64>,
 }
 
 impl Record {
@@ -69,6 +75,93 @@ impl Record {
     pub fn row(&self, name: &str) -> Option<&Row> {
         self.rows.iter().find(|r| r.row == name)
     }
+
+    /// Put `row` in place of the row of the same name (or add it).
+    pub fn set_row(&mut self, row: Row) {
+        match self.rows.iter_mut().find(|r| r.row == row.row) {
+            Some(r) => *r = row,
+            None => self.rows.push(row),
+        }
+    }
+
+    /// The largest prompt the ladder saw answered, while the ladder's measurement is fresh: the input ceiling, at least.
+    pub fn measured_ceiling(&self, now: i64) -> Option<u64> {
+        let r = self.row("C3")?;
+        (r.status == Status::Met && now - self.ladder_at.unwrap_or(self.at) < TTL_SECS).then_some(r.count?)
+    }
+}
+
+/// The input ladder's steps, in bytes of Delphi's whole prompt (system and user text): `specs/131` §8 item 2(b).
+pub const LADDER_BYTES: [u64; 4] = [100_000, 150_000, 200_000, 250_000];
+/// The share of the largest size answered that a measured budget allows (`specs/131` §8 item 2(b)).
+pub const MEASURED_SHARE_PERCENT: u64 = 80;
+/// The system text of a ladder call.
+pub const LADDER_SYSTEM: &str = "This is an input-size probe. The user text is filler, and its very last line holds one code word. Reply with only that code word, nothing else. Do not call tools.";
+/// A reply longer than this is not an answer to "reply with only the code word", whatever it holds (a model that repeats the prompt
+/// back would hold the code word too).
+const LADDER_REPLY_MAX: usize = 200;
+
+/// The code word of one ladder step: unguessable from the filler, different at every step.
+pub fn ladder_code(nonce: u64, step: usize) -> String {
+    let mut x = nonce ^ (step as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    format!("ZQ{:010X}", (x ^ (x >> 31)) & 0xFF_FFFF_FFFF)
+}
+
+/// The user text of one ladder step: plain filler lines, then the code word on the last line, sized so that [`LADDER_SYSTEM`] and this
+/// text together are `total` bytes.
+pub fn ladder_prompt(total: u64, code: &str) -> String {
+    let last = format!("The code word is {code}.");
+    let want = (total as usize).saturating_sub(LADDER_SYSTEM.len() + last.len());
+    let mut text = String::with_capacity(want + last.len());
+    let mut n = 0u32;
+    while text.len() < want {
+        n += 1;
+        let line = format!("Filler line {n:06}: this line carries no instruction and nothing to remember; keep reading to the end.\n");
+        text.push_str(&line[..line.len().min(want - text.len())]);
+    }
+    text.push_str(&last);
+    text
+}
+
+/// Whether the assistant's reply (never the stream as a whole, `specs/132` §2) answered a ladder step: short, and holding the code.
+pub fn ladder_answered(reply: &str, code: &str) -> bool {
+    let r = reply.trim();
+    r.len() <= LADDER_REPLY_MAX && r.contains(code)
+}
+
+/// The C3 row from the ladder's steps in order (size, answered), which stop at the first step not answered. `count` is the largest size
+/// answered; the note names the smallest that was not. Sizes only: never the code word or the reply.
+pub fn ladder_row(steps: &[(u64, bool)]) -> Row {
+    let largest = steps.iter().filter(|s| s.1).map(|s| s.0).max();
+    let failed = steps.iter().find(|s| !s.1).map(|s| s.0);
+    match (largest, failed) {
+        (None, None) => row("C3", Status::Unmeasured, "the input ladder was not run; spec 131's default budget applies", None),
+        (None, Some(f)) => row("C3", Status::NotMet, format!("the input ladder's smallest step ({f} bytes) was not answered, so no ceiling is known; the budget is not lowered by this"), None),
+        (Some(l), None) => row("C3", Status::Met, format!("the input ladder answered every step up to {l} bytes (assistant reply only); the ceiling is at least that"), Some(l)),
+        (Some(l), Some(f)) => row("C3", Status::Met, format!("the input ladder answered {l} bytes and not {f} bytes (assistant reply only)"), Some(l)),
+    }
+}
+
+/// The budget a seat on `endpoint` gets, and where it came from: the operator's `[harness.<cli>] max_prompt_bytes` or the default, lowered
+/// to [`MEASURED_SHARE_PERCENT`] of the largest size the ladder saw answered on exactly the installed CLI version while that measurement is
+/// fresh. A measurement only ever lowers the budget, never raises it (`specs/131` §8 item 2(b)); a record of another version is ignored.
+pub fn effective_budget(configured: Option<u64>, all: &[Record], endpoint: &str, installed: Option<&str>, now: i64) -> (u64, String) {
+    let base = crate::prompt_budget::budget(configured);
+    let from = if configured.is_some_and(|n| n > 0) { "config" } else { "default" };
+    let measured = installed.and_then(|v| all.iter().filter(|r| r.endpoint_id == endpoint && !r.cli_version.is_empty() && r.cli_version == v).filter_map(|r| r.measured_ceiling(now)).min().map(|c| (c, v)));
+    match measured {
+        Some((ceiling, v)) if ceiling * MEASURED_SHARE_PERCENT / 100 < base => (ceiling * MEASURED_SHARE_PERCENT / 100, format!("measured on {v}: {MEASURED_SHARE_PERCENT}% of {ceiling} bytes answered, below the {from} {base}")),
+        Some((ceiling, _)) => (base, format!("{from}; the measured ceiling ({ceiling} bytes answered) does not lower it")),
+        None => (base, format!("{from}, unmeasured")),
+    }
+}
+
+/// The budget part of `delphi doctor`'s line.
+pub fn budget_text(configured: Option<u64>, all: &[Record], endpoint: &str, installed: Option<&str>, now: i64) -> String {
+    let (b, source) = effective_budget(configured, all, endpoint, installed, now);
+    format!("input budget {b} bytes ({source})")
 }
 
 fn row(name: &str, status: Status, note: impl Into<String>, count: Option<u64>) -> Row {
@@ -105,7 +198,7 @@ pub fn from_probe(cap: &Capability, seat: Option<&SeatRecord>, gate: Option<&Gat
             }
         }
     });
-    rows.push(row("C3", Status::Unmeasured, "the input ladder is spec 131 S6, not built; spec 131's default budget applies", None));
+    rows.push(ladder_row(&[]));
     rows.push(row("C4", Status::Unmeasured, "the schema answer is not probed yet", None));
     // C6: the tool level.
     rows.push(match (c2, level, harness, gate, seat) {
@@ -117,7 +210,56 @@ pub fn from_probe(cap: &Capability, seat: Option<&SeatRecord>, gate: Option<&Gat
         (true, _, _, _, Some(s)) if s.tools.is_empty() => row("C6", Status::Met, "L0: the stream reported no tools offered", Some(0)),
         (true, _, _, _, Some(s)) => row("C6", Status::NotMet, format!("L0: the stream reported tools offered ({})", s.tools.join(", ")), Some(s.tools.len() as u64)),
     });
-    Record { endpoint_id: cap.endpoint_id.clone(), harness: harness.into(), model: cap.model_id.clone(), cli_version: cli_version.unwrap_or("").into(), at: cap.probed_at, tool_level: level.into(), rows }
+    rows.push(pin_row(harness, cli_version));
+    Record { endpoint_id: cap.endpoint_id.clone(), harness: harness.into(), model: cap.model_id.clone(), cli_version: cli_version.unwrap_or("").into(), at: cap.probed_at, tool_level: level.into(), rows, ladder_at: None }
+}
+
+/// The C3 row of a probe, with its date: the ladder's when it ran (`steps`), else the last ladder's row kept from `previous` (the record
+/// for the same endpoint, model and version), else unmeasured. A probe without the ladder never drops a measurement it did not repeat.
+pub fn with_ladder(mut rec: Record, steps: Option<&[(u64, bool)]>, previous: Option<&Record>) -> Record {
+    match (steps, previous.and_then(|p| p.row("C3").filter(|r| r.status != Status::Unmeasured).map(|r| (r.clone(), p.ladder_at.unwrap_or(p.at))))) {
+        (Some(s), _) => {
+            rec.set_row(ladder_row(s));
+            rec.ladder_at = (!s.is_empty()).then_some(rec.at);
+        }
+        (None, Some((row, at))) => {
+            rec.set_row(row);
+            rec.ladder_at = Some(at);
+        }
+        (None, None) => {}
+    }
+    rec
+}
+
+/// The record already saved for this endpoint, model and CLI version.
+pub fn same<'a>(all: &'a [Record], rec: &Record) -> Option<&'a Record> {
+    all.iter().find(|r| r.endpoint_id == rec.endpoint_id && r.model == rec.model && r.cli_version == rec.cli_version && !r.cli_version.is_empty())
+}
+
+/// C9, the version pin (`specs/132` §4 row C9, F1): the record names the version it ran on (always), and the CLI's coverage manifest is
+/// pinned to that same version. A probed CLI newer than its manifest may offer surface Delphi has not classified, so the row is
+/// `not_met`. It raises and lowers nothing by itself: it is the drift, said where the record is read.
+fn pin_row(harness: &str, cli_version: Option<&str>) -> Row {
+    use crate::coverage::{version_drift, VersionDrift};
+    match version_drift(harness, cli_version.filter(|v| !v.is_empty())) {
+        VersionDrift::Pinned(v) => row("C9", Status::Met, format!("the coverage manifest is pinned to {v}, the version probed"), None),
+        VersionDrift::Newer { installed, pinned } => row("C9", Status::NotMet, format!("the CLI ({installed}) is newer than its coverage manifest ({pinned}): what it added is unclassified"), None),
+        VersionDrift::Older { installed, pinned } => row("C9", Status::NotMet, format!("the CLI ({installed}) is older than its coverage manifest ({pinned})"), None),
+        VersionDrift::Unknown => row("C9", Status::Unmeasured, "the CLI version or the manifest's pin could not be read as a version number", None),
+    }
+}
+
+/// How an installed version relates to the version of the last record, in words.
+fn relation(installed: &str, recorded: &str) -> &'static str {
+    use crate::coverage::{compare_versions, version_number};
+    match (version_number(installed), version_number(recorded)) {
+        (Some(a), Some(b)) => match compare_versions(&a, &b) {
+            Some(std::cmp::Ordering::Greater) => "newer than",
+            Some(std::cmp::Ordering::Less) => "older than",
+            _ => "other than",
+        },
+        _ => "other than",
+    }
 }
 
 pub fn load(path: &Path) -> Vec<Record> {
@@ -143,9 +285,10 @@ pub fn current<'a>(all: &'a [Record], endpoint: &str, cli_version: &str) -> Opti
 
 /// `delphi doctor`'s line for one harness endpoint (§4.1 step 5): version, rows met, the budget and its source, the tool level,
 /// and "unprobed version" when the CLI moved since the last record.
-pub fn doctor_line(all: &[Record], endpoint: &str, installed: Option<&str>, now: i64) -> String {
-    const BUDGET: &str = "input budget: none enforced yet (spec 131 S2 not built), ceiling unmeasured";
-    let Some(v) = installed else { return format!("conformance: the CLI version could not be read, so no record applies; L0, {BUDGET}") };
+/// `configured` is the operator's `[harness.<cli>] max_prompt_bytes`; the budget printed is the one a seat gets ([`effective_budget`]).
+pub fn doctor_line(all: &[Record], endpoint: &str, installed: Option<&str>, now: i64, configured: Option<u64>) -> String {
+    let budget = budget_text(configured, all, endpoint, installed, now);
+    let Some(v) = installed else { return format!("conformance: the CLI version could not be read, so no record applies; L0, {budget}") };
     match current(all, endpoint, v) {
         Some(r) => {
             let named = |s: Status| r.rows.iter().filter(|x| x.status == s).map(|x| x.row.as_str()).collect::<Vec<_>>().join(", ");
@@ -153,11 +296,13 @@ pub fn doctor_line(all: &[Record], endpoint: &str, installed: Option<&str>, now:
             let age = if r.is_fresh(now) { format!("{}d ago", (now - r.at).max(0) / 86400) } else { "STALE, probe again".into() };
             let met = if met.is_empty() { "none".to_string() } else { met };
             let failed = if failed.is_empty() { String::new() } else { format!(", NOT met {failed}") };
-            format!("conformance on {v} ({age}): met {met}{failed}; tool level {}; {BUDGET}", r.tool_level)
+            format!("conformance on {v} ({age}): met {met}{failed}; tool level {}; {budget}", r.tool_level)
         }
         None => match all.iter().filter(|r| r.endpoint_id == endpoint).max_by_key(|r| r.at) {
-            Some(old) => format!("conformance: unprobed version: {v} is installed, the last record is for {}; the seat stays at L0 with spec 131's default budget until `delphi endpoints test --probe` runs again", if old.cli_version.is_empty() { "an unknown version" } else { &old.cli_version }),
-            None => format!("conformance: not probed; run `delphi endpoints test --probe`. L0, {BUDGET}"),
+            Some(old) if old.cli_version.is_empty() => format!("conformance: unprobed version: {v} is installed, the last record is for an unknown version; the seat stays at L0 with {budget} until `delphi endpoints test --probe` runs again"),
+            // A Claude seat's tools come from its own allow-list, never from this record; every other carrier is L0 without one.
+            Some(old) => format!("conformance: unprobed version: {v} is installed, {} the last record's {}; {} until `delphi endpoints test --probe` runs again", relation(v, &old.cli_version), old.cli_version, if old.harness == "claude" { format!("no probe result applies to it; {budget}") } else { format!("the seat stays at L0 with {budget}") }),
+            None => format!("conformance: not probed; run `delphi endpoints test --probe`. L0, {budget}"),
         },
     }
 }
@@ -173,6 +318,18 @@ pub fn estimate_line(endpoint: &str, harness: &str, model: &str, prompt_bytes: u
         _ => String::new(),
     };
     format!("{endpoint:<16} {harness} `{model}`: 1 call, about {tokens} input tokens of Delphi's prompt plus the CLI's own{premium}")
+}
+
+/// What the input ladder will cost for one harness endpoint, at most: every step, if none stops it early.
+pub fn ladder_estimate_line(endpoint: &str, harness: &str, multiplier: Option<f64>) -> String {
+    let steps = LADDER_BYTES.iter().map(|b| (b / 1000).to_string()).collect::<Vec<_>>().join(", ");
+    let tokens = LADDER_BYTES.iter().sum::<u64>().div_ceil(4);
+    let premium = match (harness, multiplier) {
+        ("copilot", Some(m)) => format!(", up to {} premium request(s) ({}x a call)", m * LADDER_BYTES.len() as f64, m),
+        ("copilot", None) => ", premium requests unknown (no multiplier for this model)".into(),
+        _ => String::new(),
+    };
+    format!("{endpoint:<16} input ladder: up to {} calls of {steps} KB of filler, stopping at the first not answered; up to about {tokens} input tokens{premium}", LADDER_BYTES.len())
 }
 
 #[cfg(test)]
@@ -232,17 +389,18 @@ mod tests {
         let all = load(&p);
         assert_eq!(all.len(), 2, "one record per endpoint, model and version");
         assert_eq!(current(&all, "e", "1.0.112").unwrap().at, 300);
-        let line = doctor_line(&all, "e", Some("1.0.112"), 300);
-        assert!(line.contains("conformance on 1.0.112") && line.contains("met C2, C5, C6") && line.contains("tool level L0") && line.contains("spec 131 S2 not built"), "{line}");
+        let line = doctor_line(&all, "e", Some("1.0.112"), 300, None);
+        assert!(line.contains("conformance on 1.0.112") && line.contains("met C2, C5, C6") && line.contains("tool level L0") && line.contains("input budget 150000 bytes (default, unmeasured)"), "{line}");
         let mut failed = all.clone();
         failed[1].rows[1].status = Status::NotMet;
-        let line = doctor_line(&failed, "e", Some("1.0.112"), 300);
+        let line = doctor_line(&failed, "e", Some("1.0.112"), 300, None);
         assert!(line.contains("met C2, C6, NOT met C5"), "{line}");
-        let moved = doctor_line(&all, "e", Some("1.0.120"), 300);
-        assert!(moved.contains("unprobed version") && moved.contains("1.0.112") && moved.contains("L0"), "{moved}");
-        assert!(doctor_line(&all, "other", Some("1.0.112"), 300).contains("not probed"));
-        assert!(doctor_line(&all, "e", Some("1.0.112"), 300 + TTL_SECS).contains("STALE"));
-        assert!(doctor_line(&all, "e", None, 300).contains("could not be read"));
+        let moved = doctor_line(&all, "e", Some("1.0.120"), 300, None);
+        assert!(moved.contains("unprobed version") && moved.contains("newer than the last record's 1.0.112") && moved.contains("L0"), "{moved}");
+        assert!(doctor_line(&all, "e", Some("1.0.110"), 300, None).contains("older than the last record's 1.0.112"));
+        assert!(doctor_line(&all, "other", Some("1.0.112"), 300, None).contains("not probed"));
+        assert!(doctor_line(&all, "e", Some("1.0.112"), 300 + TTL_SECS, None).contains("STALE"));
+        assert!(doctor_line(&all, "e", None, 300, None).contains("could not be read"));
         // A record with no version never matches.
         save(&p, &mk("", 400)).unwrap();
         assert!(current(&load(&p), "e", "").is_none());
@@ -250,10 +408,91 @@ mod tests {
         assert!(load(&p).is_empty(), "a damaged file is no evidence");
     }
 
+    /// specs/132 F1, row C9: the record says whether the probed version is the one the coverage manifest is pinned to.
+    #[test]
+    fn the_c9_row_compares_the_probed_version_with_the_manifest_pin() {
+        let pin = crate::coverage::pinned_version("copilot").unwrap();
+        let rec = |v: Option<&str>| from_probe(&cap("ok", Some("claude-haiku-4.5")), Some(&seat(&[])), None, "copilot", false, "claude", v);
+        let at_pin = rec(Some(&format!("GitHub Copilot CLI {pin}.")));
+        assert_eq!(status(&at_pin, "C9"), Status::Met, "{:?}", at_pin.row("C9"));
+        let newer = rec(Some(&format!("GitHub Copilot CLI {pin}.7")));
+        assert!(status(&newer, "C9") == Status::NotMet && newer.row("C9").unwrap().note.contains("newer than its coverage manifest"), "{:?}", newer.row("C9"));
+        assert!(doctor_line(std::slice::from_ref(&newer),"e", Some(&newer.cli_version), newer.at, None).contains("NOT met C9"));
+        assert!(rec(Some("0.0.1")).row("C9").unwrap().note.contains("older"));
+        assert_eq!(status(&rec(None), "C9"), Status::Unmeasured, "an unread version is unmeasured, never met");
+        // C9 is judged even when the call failed: the version and the manifest need no answer from a model.
+        let failed = from_probe(&cap("failed", None), None, None, "copilot", false, "claude", Some(&pin));
+        assert_eq!(status(&failed, "C9"), Status::Met);
+    }
+
     #[test]
     fn the_estimate_counts_premium_requests_for_copilot_only() {
         assert!(estimate_line("cp", "copilot", "gemini-3.8-flash", 400, Some(14.0)).contains("about 100 input tokens") && estimate_line("cp", "copilot", "m", 4, Some(14.0)).contains("about 14 premium request(s)"));
         assert!(estimate_line("cp", "copilot", "m", 4, None).contains("premium requests unknown"));
         assert!(!estimate_line("ag", "agy", "m", 4, None).contains("premium"));
+        assert!(ladder_estimate_line("cp", "copilot", Some(14.0)).contains("up to 56 premium request(s)") && ladder_estimate_line("ag", "agy", None).contains("up to 4 calls of 100, 150, 200, 250 KB"));
+    }
+
+    #[test]
+    fn a_ladder_prompt_is_its_size_with_the_code_word_last_and_only_a_short_reply_holding_it_counts() {
+        let code = ladder_code(42, 2);
+        assert_ne!(code, ladder_code(42, 3));
+        assert_ne!(code, ladder_code(43, 2));
+        for size in LADDER_BYTES {
+            let p = ladder_prompt(size, &code);
+            assert_eq!((LADDER_SYSTEM.len() + p.len()) as u64, size);
+            assert!(p.ends_with(&format!("The code word is {code}.")) && p.matches(&code).count() == 1);
+        }
+        assert!(ladder_answered(&format!("  {code}\n"), &code));
+        assert!(!ladder_answered("I see only filler lines.", &code));
+        // A reply that repeats the prompt back holds the code word, and is not an answer (the echo lesson of specs/132 §2).
+        assert!(!ladder_answered(&ladder_prompt(10_000, &code), &code));
+    }
+
+    #[test]
+    fn the_ladder_row_keeps_the_largest_size_answered_and_names_the_smallest_that_was_not() {
+        let r = ladder_row(&[(100_000, true), (150_000, true), (200_000, false)]);
+        assert_eq!((r.status, r.count), (Status::Met, Some(150_000)));
+        assert!(r.note.contains("answered 150000 bytes and not 200000"), "{}", r.note);
+        assert_eq!(ladder_row(&[(100_000, true), (250_000, true)]).count, Some(250_000));
+        assert_eq!((ladder_row(&[(100_000, false)]).status, ladder_row(&[(100_000, false)]).count), (Status::NotMet, None));
+        assert_eq!(ladder_row(&[]).status, Status::Unmeasured);
+    }
+
+    // specs/131 AC-14: the measured budget is 80% of the largest size answered, on the installed version only, and only ever lowers.
+    #[test]
+    fn a_measured_ceiling_only_lowers_the_budget_and_counts_for_its_own_version_while_fresh() {
+        let mk = |v: &str, steps: &[(u64, bool)]| with_ladder(from_probe(&Capability { probed_at: 1_000, ..cap("ok", Some("gemini-3.8-flash")) }, None, None, "agy", true, "gemini", Some(v)), Some(steps), None);
+        let all = vec![mk("1.5.13", &[(100_000, true), (150_000, true), (200_000, false)])];
+        assert_eq!(effective_budget(None, &all, "e", Some("1.5.13"), 2_000), (120_000, "measured on 1.5.13: 80% of 150000 bytes answered, below the default 150000".into()));
+        // The operator's smaller value stays; a larger one is lowered to the measurement.
+        assert_eq!(effective_budget(Some(90_000), &all, "e", Some("1.5.13"), 2_000).0, 90_000);
+        assert_eq!(effective_budget(Some(500_000), &all, "e", Some("1.5.13"), 2_000).0, 120_000);
+        // Another version's record is ignored, and so is a stale one.
+        assert_eq!(effective_budget(None, &all, "e", Some("1.6.0"), 2_000), (150_000, "default, unmeasured".into()));
+        assert_eq!(effective_budget(None, &all, "e", Some("1.5.13"), 1_000 + TTL_SECS).0, 150_000);
+        assert_eq!(effective_budget(None, &all, "e", None, 2_000).0, 150_000);
+        // A ceiling above the budget never raises it; a ladder that answered nothing does not lower it.
+        let wide = vec![mk("1.5.13", &[(100_000, true), (150_000, true), (200_000, true), (250_000, true)])];
+        assert_eq!(effective_budget(None, &wide, "e", Some("1.5.13"), 2_000).0, 150_000);
+        assert_eq!(effective_budget(Some(100_000), &wide, "e", Some("1.5.13"), 2_000).0, 100_000);
+        assert_eq!(effective_budget(None, &[mk("1.5.13", &[(100_000, false)])], "e", Some("1.5.13"), 2_000).0, 150_000);
+        // doctor prints the budget and its source.
+        let line = doctor_line(&all, "e", Some("1.5.13"), 2_000, None);
+        assert!(line.contains("met C2, C5, C3") && line.contains("input budget 120000 bytes (measured on 1.5.13"), "{line}");
+        assert!(doctor_line(&all, "e", Some("1.6.0"), 2_000, Some(90_000)).contains("input budget 90000 bytes (config, unmeasured)"));
+    }
+
+    #[test]
+    fn a_probe_without_the_ladder_keeps_the_last_ladders_row_and_its_date() {
+        let base = |at: i64| from_probe(&Capability { probed_at: at, ..cap("ok", Some("m")) }, None, None, "agy", true, "gemini", Some("1.5.13"));
+        let laddered = with_ladder(base(1_000), Some(&[(100_000, true), (150_000, false)]), None);
+        assert_eq!(laddered.ladder_at, Some(1_000));
+        let again = with_ladder(base(5_000), None, Some(&laddered));
+        assert_eq!((again.row("C3").unwrap().count, again.ladder_at, again.at), (Some(100_000), Some(1_000), 5_000));
+        // The measurement ages from the ladder, not from the later probe.
+        assert_eq!(again.measured_ceiling(1_000 + TTL_SECS), None);
+        assert_eq!(with_ladder(base(5_000), None, None).row("C3").unwrap().status, Status::Unmeasured);
+        assert!(!serde_json::to_string(&laddered).unwrap().contains("ZQ"), "no code word in the record");
     }
 }

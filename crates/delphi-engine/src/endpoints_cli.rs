@@ -55,7 +55,7 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
 /// [`run`], with the operator's yes asked by `yes` (tests answer it without a terminal).
 fn run_with(ws_dir: &Path, args: &[String], yes: &dyn Fn() -> bool) -> i32 {
     if args.first().map(String::as_str) != Some("test") {
-        eprintln!("usage: delphi endpoints test [<endpoint id>] [--probe [--yes]]");
+        eprintln!("usage: delphi endpoints test [<endpoint id>] [--probe [--yes] [--ladder]]");
         return 2;
     }
     let live = match std::fs::read_to_string(ws_dir.join("config.toml")) {
@@ -95,6 +95,7 @@ fn run_with(ws_dir: &Path, args: &[String], yes: &dyn Fn() -> bool) -> i32 {
         return 0;
     }
 
+    let ladder = args.iter().any(|a| a == "--ladder");
     // Before anything runs: every harness CLI's version, and what the probe will cost (§4.1 steps 1 and 2).
     let mut versions: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
     println!("The probe will make these calls (outside any mission's ledger):");
@@ -107,11 +108,21 @@ fn run_with(ws_dir: &Path, args: &[String], yes: &dyn Fn() -> bool) -> i32 {
             let gate = cli == Some(crate::harness::Cli::Agy) && cfg.harness.get("agy").is_none_or(|p| p.bridge);
             let multiplier = if program == "copilot" { copilot_multiplier(ws_dir, version.as_deref(), &model) } else { None };
             println!("  {} [{}]", crate::conformance::estimate_line(&ep.id, program, &model, crate::capabilities::harness_probe_prompt_bytes(gate), multiplier), version.as_deref().unwrap_or("version unknown"));
+            if ladder {
+                println!("  {}", crate::conformance::ladder_estimate_line(&ep.id, program, multiplier));
+            }
         } else {
             println!("  {:<16} api: up to 3 calls per configured model, each capped at 64 to 512 output tokens plus the model's minimum thinking budget", ep.id);
         }
     }
-    if !args.iter().any(|a| a == "--yes") && !yes() {
+    // The input ladder spends far more than the rest (`specs/131` S6): it runs only on the operator's y at a terminal, never on `--yes`.
+    if ladder {
+        println!("The input ladder runs only on y at a terminal; `--yes` does not cover it.");
+        if !yes() {
+            println!("nothing was run.");
+            return 2;
+        }
+    } else if !args.iter().any(|a| a == "--yes") && !yes() {
         println!("nothing was run. Pass `--yes` to run these calls, or answer y at a terminal.");
         return 2;
     }
@@ -136,6 +147,9 @@ fn run_with(ws_dir: &Path, args: &[String], yes: &dyn Fn() -> bool) -> i32 {
                 let (cap, seat, gate) = crate::capabilities::probe_harness_full(&cfg, ep, program, now(), std::time::Duration::from_secs(10), agy_version).await;
                 let bridge = cfg.harness.get(program).is_none_or(|p| p.bridge);
                 let rec = crate::conformance::from_probe(&cap, seat.as_ref(), gate.as_ref(), program, bridge, &ep.family, version.as_deref());
+                // C3, the input ladder (`specs/131` S6), after the bare call answered; without it, the last ladder's row on this version stays.
+                let steps = if ladder && cap.auth == "ok" { crate::capabilities::probe_ladder(&cfg, ep, program, ladder_nonce(), std::time::Duration::from_secs(180)).await } else { vec![] };
+                let rec = crate::conformance::with_ladder(rec.clone(), (!steps.is_empty()).then_some(steps.as_slice()), crate::conformance::same(&crate::conformance::load(&ws_dir.join(crate::conformance::FILE)), &rec));
                 if let Err(e) = crate::conformance::save(&ws_dir.join(crate::conformance::FILE), &rec) {
                     eprintln!("delphi endpoints: could not save the conformance record: {}", e);
                 }
@@ -189,6 +203,11 @@ fn copilot_multiplier(ws_dir: &Path, version: Option<&str>, model: &str) -> Opti
     cat.as_ref().and_then(|c| c.model(model)).and_then(|m| m.multiplier).or_else(|| mc::Seed::shipped().model("copilot", model).map(|m| m.multiplier).filter(|m| *m > 0.0))
 }
 
+/// A fresh seed for the ladder's code words, so no two runs share one.
+fn ladder_nonce() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0) ^ ((std::process::id() as u64) << 32)
+}
+
 /// The operator's yes at a terminal. Anything else (a pipe, a script, an agent) is a no: the probe spends the operator's tokens.
 fn confirm() -> bool {
     use std::io::{BufRead, IsTerminal, Write};
@@ -229,5 +248,9 @@ mod tests {
         // Without --probe nothing is asked and nothing is spent.
         assert_eq!(run_with(w.path(), &["test".into()], &no), 0);
         assert_eq!(asked.get(), 1);
+        // specs/131 S6: the input ladder asks at the terminal even with --yes, and runs nothing on a no.
+        assert_eq!(run_with(w.path(), &["test".into(), "--probe".into(), "--yes".into(), "--ladder".into()], &no), 2);
+        assert_eq!(asked.get(), 2, "--yes does not cover the ladder");
+        assert!(!w.path().join("local/endpoint-capabilities.json").exists() && !w.path().join(crate::conformance::FILE).exists());
     }
 }

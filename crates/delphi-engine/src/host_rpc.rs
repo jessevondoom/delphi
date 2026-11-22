@@ -900,10 +900,16 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
         let receipts = crate::seat::seat_receipts(events, task_id, if panel { &[][..] } else { &planned[..] });
         // A seat counts only if it gave a stance (SR-3, amended 2026-11-21): a seat that abstained in Round 1 adds no family, whatever
         // its receipt's outcome; the host's family counts only if one of the host's own seats said something.
-        let (served, _) = crate::seat::sat_for_task(&receipts, task_id, &crate::seat::round1_abstained(events, task_id));
-        let host_roles: Vec<&str> = started.and_then(|e| e.payload["seats"].as_array()).into_iter().flatten().filter(|s| s["family"] == "host-reported").filter_map(|s| s["role"].as_str()).collect();
+        // `specs/131` S4 item 4: and only if it was heard in Round 1 AND Round 2 (a readable critique); a seat with no critique counts on
+        // Round 1 alone. A seat not heard still spent its tokens, and the spend still counts them.
+        let r2_unheard = crate::seat::round2_not_heard(events, task_id);
+        let mut unheard = crate::seat::round1_abstained(events, task_id);
+        unheard.extend(r2_unheard.iter().cloned());
+        let (served, _) = crate::seat::sat_for_task(&receipts, task_id, &unheard);
+        let all_host: Vec<&str> = started.and_then(|e| e.payload["seats"].as_array()).into_iter().flatten().filter(|s| s["family"] == "host-reported").filter_map(|s| s["role"].as_str()).collect();
+        let host_roles: Vec<&str> = all_host.iter().copied().filter(|r| !r2_unheard.iter().any(|u| u == r)).collect();
         let host_fam = started.and_then(|e| e.payload["host_family"].as_str());
-        let host_sat = host_fam.filter(|_| crate::seat::host_sat(events, task_id, &host_roles));
+        let host_sat = host_fam.filter(|_| (all_host.is_empty() || !host_roles.is_empty()) && crate::seat::host_sat(events, task_id, &host_roles));
         let div = crate::seat::Diversity::of(if panel { host_sat } else { None }, &served);
         let have = !served.is_empty() || (panel && host_fam.is_some());
         let homogeneous = if have && panel { json!(div.homogeneous()) } else if have { json!(ve.payload["homogeneous"].as_bool().unwrap_or(false) || div.homogeneous()) } else { ve.payload["homogeneous"].clone() };
@@ -930,6 +936,20 @@ pub fn council_view(events: &[delphi_core::event::EventEnvelope], mission_dir: &
                 d["round1_parsed"] = st.map(|e| e.payload["parsed"].clone()).unwrap_or(Value::Null);
                 d["round2_readable"] = cr.map(|e| e.payload["readable"].clone()).unwrap_or(Value::Null);
                 d["declined"] = json!(st.is_some_and(|e| e.payload["declined"] == true) || cr.is_some_and(|e| e.payload["declined"] == true));
+                // `specs/131` S4 item 4: heard in Round 1 and Round 2, or why not; a seat with no critique is heard in round 1 only.
+                // A log written before `heard` existed has no field and counts as heard.
+                let unheard = [st, cr].into_iter().flatten().find(|e| e.payload["heard"] == false).map(|e| e.payload["why"].clone());
+                let abstained = st.is_some_and(|e| e.payload["status"] == "abstained");
+                d["heard"] = json!(unheard.is_none() && !abstained);
+                d["why"] = match unheard {
+                    Some(w) => w,
+                    None if abstained => json!("abstained"),
+                    None => Value::Null,
+                };
+                if d["heard"] == true && cr.is_none() {
+                    d["heard_rounds"] = json!("round 1 only");
+                }
+                d["cut_suspected"] = json!([st, cr].into_iter().flatten().any(|e| e.payload["cut_suspected"] == true) || d["cut_suspected"] == true);
                 d
             })
             .collect();
@@ -1165,6 +1185,12 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
             // A seat whose context the carrier's budget cut sat on less than it was given (`specs/131` S2): not a failure, but said.
             if let Some(cut) = d["context_cut"].as_object() {
                 s.push_str(&context_cut_line(cut));
+            }
+            // `specs/131` S4: a seat started but not heard does not count toward the families, and the card says why.
+            if d["heard"] == false {
+                s.push_str(&format!("  - not heard ({}): it does not count toward the families{}\n", d["why"].as_str().unwrap_or("abstained").replace('_', " "), if d["cut_suspected"] == true { "; its prompt may have been cut in transit" } else { "" }));
+            } else if d["heard_rounds"] == "round 1 only" {
+                s.push_str("  - heard in round 1 only\n");
             }
         }
         s.push('\n');
