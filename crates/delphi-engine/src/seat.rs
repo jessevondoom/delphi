@@ -201,6 +201,10 @@ pub struct Receipt {
     /// What Delphi granted, by name: never arguments.
     pub tool_grant: Value,
     pub prompt_hash: String,
+    /// The bytes of the prompt as handed to a CLI carrier (`specs/131` S1); `None` for an API seat, whose prompt is not counted here.
+    pub prompt_bytes: Option<u64>,
+    /// What the carrier's byte budget cut from the prompt (`specs/131` S2): counts and pointer labels, never contents. `None`: nothing.
+    pub context_cut: Option<Value>,
     pub tokens_in: u64,
     pub tokens_out: u64,
     /// `ok`, `error`, or `model_mismatch`.
@@ -213,7 +217,7 @@ impl Receipt {
         if let Some(n) = self.carrier.native_tools {
             carrier["native_tools"] = json!(n);
         }
-        json!({
+        let mut v = json!({
             "seat_id": self.seat_id,
             "requested": {"endpoint": self.requested_endpoint, "model": self.requested_model},
             "served": {"model": self.served.model, "carrier_claimed": true, "family": self.served.family, "family_source": self.served.family_source},
@@ -223,7 +227,14 @@ impl Receipt {
             "tokens_in": self.tokens_in,
             "tokens_out": self.tokens_out,
             "outcome": self.outcome,
-        })
+        });
+        if let Some(n) = self.prompt_bytes {
+            v["prompt_bytes"] = json!(n);
+        }
+        if let Some(c) = &self.context_cut {
+            v["context_cut"] = c.clone();
+        }
+        v
     }
 }
 
@@ -280,6 +291,8 @@ impl SeatBook {
                 carrier: Carrier { kind: "api".into(), cli_version: None, tools_offered: s.tools.clone(), native_tools: None, dispatch_allowed: dispatch },
                 tool_grant: json!({"builtin": "none", "native": [], "bridge": s.tools, "provider": s.provider}),
                 prompt_hash: s.prompt_hash,
+                prompt_bytes: None,
+                context_cut: None,
                 tokens_in: s.tokens_in,
                 tokens_out: s.tokens_out,
                 outcome: outcome.into(),
@@ -436,11 +449,13 @@ pub struct SeatSummary {
     /// It sat, and none of its `ok` receipts shows a tool that could read the repo.
     pub unverified_against_repo: bool,
     pub tokens: u64,
+    /// The last `context_cut` its receipts carry (`specs/131` S2): the seat sat on less than it was given.
+    pub context_cut: Option<Value>,
 }
 
 impl SeatSummary {
     pub fn to_value(&self) -> Value {
-        json!({"seat": self.role, "served_model": self.served_model, "family": self.family, "carrier": self.carrier, "tools_offered": self.tools_offered, "native_tools": self.native_tools, "sat": self.sat, "unverified_against_repo": self.unverified_against_repo, "tokens": self.tokens})
+        json!({"seat": self.role, "served_model": self.served_model, "family": self.family, "carrier": self.carrier, "tools_offered": self.tools_offered, "native_tools": self.native_tools, "sat": self.sat, "unverified_against_repo": self.unverified_against_repo, "tokens": self.tokens, "context_cut": self.context_cut})
     }
 }
 
@@ -455,12 +470,15 @@ pub fn seat_summaries(events: &[delphi_core::event::EventEnvelope], task_id: &st
         let at = match out.iter().position(|s| s.role == role) {
             Some(i) => i,
             None => {
-                out.push(SeatSummary { role: role.clone(), served_model: None, family: UNKNOWN.into(), carrier: String::new(), tools_offered: Vec::new(), native_tools: None, sat: false, unverified_against_repo: false, tokens: 0 });
+                out.push(SeatSummary { role: role.clone(), served_model: None, family: UNKNOWN.into(), carrier: String::new(), tools_offered: Vec::new(), native_tools: None, sat: false, unverified_against_repo: false, tokens: 0, context_cut: None });
                 out.len() - 1
             }
         };
         let s = &mut out[at];
         s.tokens += tokens;
+        if e.payload.get("context_cut").is_some_and(|c| c.is_object()) {
+            s.context_cut = Some(e.payload["context_cut"].clone());
+        }
         // The seat is described by its first receipt that sat (the first at all while none has).
         if ok && !s.sat {
             s.sat = true;
@@ -606,6 +624,8 @@ mod tests {
             carrier: Carrier { kind: "copilot".into(), cli_version: None, tools_offered: vec!["view".into()], native_tools: None, dispatch_allowed: false },
             tool_grant: json!({"builtin": "none"}),
             prompt_hash: prompt_hash("sys", secret),
+            prompt_bytes: Some(3 + secret.len() as u64),
+            context_cut: None,
             tokens_in: 10,
             tokens_out: 3,
             outcome: "model_mismatch".into(),
@@ -614,6 +634,7 @@ mod tests {
         assert_eq!((v["requested"]["model"].as_str(), v["served"]["model"].as_str(), v["served"]["family"].as_str(), v["served"]["family_source"].as_str(), v["served"]["carrier_claimed"].as_bool()), (Some("claude-sonnet-5.5"), Some("gpt-6-luna"), Some("openai"), Some("table"), Some(true)));
         assert_eq!((v["tokens_in"].as_u64(), v["tokens_out"].as_u64(), v["carrier"]["dispatch_allowed"].as_bool()), (Some(10), Some(3), Some(false)));
         assert!(!v.to_string().contains(secret), "the hash stands for the text; the text is not there");
+        assert_eq!(v["prompt_bytes"].as_u64(), Some(26), "a count of the prompt, never the prompt");
     }
 
     // specs/091 §5: "no event of that kind comes from a host". The host-facing modules name no event of this kind, so a host's

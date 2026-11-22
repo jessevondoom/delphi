@@ -588,7 +588,8 @@
         "profile": { "type": "string" },
         "effort": {}, "json_schema": {}, "session": {}, "add_dirs": {}, "sandbox": {}, "print_timeout_secs": {},
         "max_turns": {}, "max_budget_usd": {}, "fallback_models": {}, "partial_messages": {}, "agents": {}, "settings": {}, "mode": {},
-        "quota_source": { "enum": ["gh", "off"] }
+        "quota_source": { "enum": ["gh", "off"] },
+        "max_prompt_bytes": { "type": "integer", "minimum": 1, "description": "The most bytes of prompt a seat on this CLI is sent (spec 131 S2); 150000 when unset. Over it, pointer slices are shortened." }
       },
       "additionalProperties": false
     }

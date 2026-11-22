@@ -25,13 +25,15 @@ ignore = [
     # the other TLS clients. The fix is a newer imap (or its TLS connector), which is a dependency decision for the operator.
     # A relay reply is still bound to a single-use code for its card from an allowlisted sender (GOVERNANCE 5.10), so a
     # man-in-the-middle can read or drop a reply, not forge one. Short fuse on purpose.
-    { id = "RUSTSEC-2026-0346", reason = "imap's rustls 0.22.4: Debug of client sessions could log TLS secrets; the relay does not log sessions. Needs an imap upgrade; revisit by 2026-11-21" },
-    { id = "RUSTSEC-2026-0349", reason = "imap's rustls 0.22.4: ServerHello can downgrade to classical key exchange; needs an imap upgrade; revisit by 2026-11-21" },
-    { id = "RUSTSEC-2026-0049", reason = "imap's rustls-webpki 0.102.8: CRL matching; the relay does not use CRLs; needs an imap upgrade; revisit by 2026-11-21" },
-    { id = "RUSTSEC-2026-0098", reason = "imap's rustls-webpki 0.102.8: URI name constraints; needs an imap upgrade; revisit by 2026-11-21" },
-    { id = "RUSTSEC-2026-0099", reason = "imap's rustls-webpki 0.102.8: wildcard name constraints; needs an imap upgrade; revisit by 2026-11-21" },
-    { id = "RUSTSEC-2026-0104", reason = "imap's rustls-webpki 0.102.8: reachable panic parsing a CRL; the relay does not use CRLs; needs an imap upgrade; revisit by 2026-11-21" },
-    { id = "RUSTSEC-2026-0382", reason = "imap's rustls-webpki 0.102.8: may accept distrusted intermediates; needs an imap upgrade; revisit by 2026-11-21" },
+    # Read again on 2026-11-22: the seven reasons below still hold (the relay does not log TLS sessions and does not use
+    # CRLs; each advisory still needs an imap upgrade). The operator extended the review date by six months, to 2027-05-22.
+    { id = "RUSTSEC-2026-0346", reason = "imap's rustls 0.22.4: Debug of client sessions could log TLS secrets; the relay does not log sessions. Needs an imap upgrade; revisit by 2027-05-22" },
+    { id = "RUSTSEC-2026-0349", reason = "imap's rustls 0.22.4: ServerHello can downgrade to classical key exchange; needs an imap upgrade; revisit by 2027-05-22" },
+    { id = "RUSTSEC-2026-0049", reason = "imap's rustls-webpki 0.102.8: CRL matching; the relay does not use CRLs; needs an imap upgrade; revisit by 2027-05-22" },
+    { id = "RUSTSEC-2026-0098", reason = "imap's rustls-webpki 0.102.8: URI name constraints; needs an imap upgrade; revisit by 2027-05-22" },
+    { id = "RUSTSEC-2026-0099", reason = "imap's rustls-webpki 0.102.8: wildcard name constraints; needs an imap upgrade; revisit by 2027-05-22" },
+    { id = "RUSTSEC-2026-0104", reason = "imap's rustls-webpki 0.102.8: reachable panic parsing a CRL; the relay does not use CRLs; needs an imap upgrade; revisit by 2027-05-22" },
+    { id = "RUSTSEC-2026-0382", reason = "imap's rustls-webpki 0.102.8: may accept distrusted intermediates; needs an imap upgrade; revisit by 2027-05-22" },
     # zip 8.6.0 comes only from candle-core, which reads .npz and pickle entries by name (candle-core npy.rs, pickle.rs) and
     # never calls ZipArchive::extract or ZipStreamReader::extract, the functions these four advisories are about. Delphi's own
     # code does not use zip at all.

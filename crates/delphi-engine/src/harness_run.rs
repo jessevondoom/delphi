@@ -95,6 +95,9 @@ pub(crate) struct HarnessErr {
     /// The model the run was started on, when it produced no event at all (no output, no tool, no token) and the first-event clock
     /// killed it: the one failure that is tried again on any CLI and then moved to the family's next endpoint (`specs/089` §17).
     pub stalled: Option<String>,
+    /// The fixed message the one retry carries when a JSON-in-text answer was not found or did not validate (`specs/132` §6.1
+    /// item 4): the reason only, never the reply's text.
+    pub retry_note: Option<String>,
 }
 
 /// What kind of failure a harness run was, beyond its reason text (`specs/093` section 5 E): an answer the CLI never produced
@@ -149,7 +152,7 @@ fn classify_result(cli: Cli, expects_answer: bool, cli_error: bool, subtype: &st
 
 impl HarnessErr {
     fn retry(reason: impl Into<String>) -> HarnessErr {
-        HarnessErr { reason: reason.into(), retryable: true, cli_error: false, kind: FailKind::Other, stalled: None }
+        HarnessErr { reason: reason.into(), retryable: true, cli_error: false, kind: FailKind::Other, stalled: None, retry_note: None }
     }
 }
 
@@ -223,6 +226,25 @@ const READ_ONLY_TOOLS: [&str; 4] = ["read_file", "list_dir", "search", "check"];
 /// The system sections a CLI seat is given: the prompt's own, with the skills index (`specs/124` §17) kept only when the seat
 /// holds Delphi's `read_file`, the one way it can open `skills/<name>/SKILL.md`. A seat with no bridge, and a Builder that
 /// keeps the CLI's own file tools in its worktree, cannot read a skill file, so it is not told to.
+/// The byte counts of a launch's prompt (`specs/131` S1), for `harness.started` and the seat receipt: `prompt_bytes` is the system and
+/// user text as handed to the carrier, `slice_bytes` the text of the context slices inside it, `slices` their number, and `fixed_bytes`
+/// everything else (governance, role, skills, lessons, the contract and the section tags). Diagnostic only: nothing is cut or refused here.
+pub(crate) fn prompt_counts(system: &str, user: &str, ipr: &Ipr) -> Value {
+    let prompt_bytes = system.len() + user.len();
+    let slice_bytes: usize = ipr.context_slices.iter().map(|s| s.text.len()).sum();
+    json!({"prompt_bytes": prompt_bytes, "fixed_bytes": prompt_bytes.saturating_sub(slice_bytes), "slice_bytes": slice_bytes, "slices": ipr.context_slices.len()})
+}
+
+/// The task at the top as well as the bottom (`specs/131` S3): a carrier that takes its whole prompt as one text (agy, codex, copilot) gets
+/// the `task` section first, so a tail its carrier cuts still leaves the task; the contract at the end is unchanged. A Claude seat's system
+/// text goes by flag and its prompt is left exactly as it was.
+pub(crate) fn with_task_head(cli: Cli, head: Option<&str>, system: String) -> String {
+    match head {
+        Some(h) if cli != Cli::Claude => format!("{h}\n\n{system}"),
+        _ => system,
+    }
+}
+
 fn harness_sections(ipr: &Ipr, delphi: &[ToolDef]) -> Vec<String> {
     if ipr.skills.is_none() || delphi.iter().any(|d| d.name == "read_file") {
         return ipr.system_sections();
@@ -745,10 +767,9 @@ impl Engine {
             // `critique_read` parses; anything unreadable stays unreadable (specs/051 §2.2). No flag is passed.
             opts.json_schema = None;
         }
-        if cli == Cli::Copilot && opts.json_schema.is_some() {
-            // No structured-output flag to validate the answer against: another seat takes a span that needs one.
-            return Ok(Err(HarnessErr::retry(format!("endpoint `{}`: the copilot harness has no structured-output flag (specs/051 §2.2)", ep.id))));
-        }
+        // No structured-output flag: the prompt asks for one JSON object and Delphi extracts and validates it from the reply
+        // (`specs/132` §6.1, C5). Delphi's own validation is the only judge; the flag is never passed.
+        let text_schema = if cli == Cli::Copilot { opts.json_schema.take() } else { None };
         if cli == Cli::Agy && builder {
             // The gate decides every file call; this keeps the CLI's own permission layer, which cannot ask anyone when it runs
             // headless, from refusing the edits the gate allowed. Its shell stays refused there, which is why a Builder's
@@ -891,12 +912,48 @@ impl Engine {
         let note = harness_note_for(builder, &bridge_defs, &native_for_note, cli == Cli::Agy, sc.toolless, sc.forge.as_ref());
         // The watchdog of a forge reader (§14.7 rule 4): always on while its read tools are given.
         let mut watchdog = sc.forge.as_ref().map(|f| crate::forge_tools::Watchdog::new(f.read.clone(), (cli == Cli::Claude).then(|| cwd.clone())));
-        let launch = Launch { cli, program, model, system_prompt: format!("{}\n\n{}", harness_sections(ipr, &bridge_defs).join("\n\n"), note), user_prompt: ipr.first_user_text(), cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
+        let head = (!sc.task.trim().is_empty()).then(|| ipr.task_section(&sc.task));
+        let mut system_prompt = format!("{}\n\n{}", harness_sections(ipr, &bridge_defs).join("\n\n"), note);
+        if let Some(schema) = &text_schema {
+            system_prompt.push_str(&format!("\n\n{}", crate::json_answer::contract(schema)));
+        }
+        // The task first for a one-text carrier (`specs/131` S3), ahead of everything else including the JSON answer contract.
+        let system_prompt = with_task_head(cli, head.as_deref(), system_prompt);
+        // The one retry of a JSON-in-text answer carries the fixed message, set by the engine for this run only. It is fixed text after
+        // the contract, so the budget below counts it as text that may not be cut.
+        let retry_note = sc.json_retry.take().map(|n| format!("\n\n{}", n)).unwrap_or_default();
+        // The carrier's byte budget (`specs/131` S2): counted on the whole prompt before the CLI starts. Over it, the slices that came from
+        // pointers are shortened (never the system text, the contract or a peer's text); if what may not be cut is alone over it, the seat
+        // does not start and nothing is spent.
+        let budget = crate::prompt_budget::budget(profile.max_prompt_bytes);
+        let fit = crate::prompt_budget::fit(ipr, (system_prompt.len() + retry_note.len()) as u64, budget);
+        let context_cut = fit.record(budget);
+        let sent: std::borrow::Cow<Ipr> = match fit {
+            crate::prompt_budget::Fit::Fits => std::borrow::Cow::Borrowed(ipr),
+            crate::prompt_budget::Fit::Cut { slices, .. } => std::borrow::Cow::Owned(Ipr { context_slices: slices, ..ipr.clone() }),
+            crate::prompt_budget::Fit::CannotFit { fixed } => {
+                let reason = crate::prompt_budget::cannot_fit(fixed, budget);
+                sc.m.append(sc.agent_ev("harness.prompt_refused", json!({"budget": budget, "fixed_bytes": fixed, "reason": reason}), ep, &model)).await?;
+                return Ok(Err(HarnessErr { reason, retryable: false, ..HarnessErr::retry("") }));
+            }
+        };
+        let user_prompt = format!("{}{}", sent.first_user_text(), retry_note);
+        let launch = Launch { cli, program, model, system_prompt, user_prompt, cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
         let ctl = Ctl { bridge_on, delegate, profile: &profile };
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
         let builtin = if builder { "standard" } else if native_for_note.is_empty() { "none" } else { "native" };
-        sc.m.append(sc.agent_ev("harness.started", json!({"endpoint_id": ep.id, "tools": builtin, "native_tools": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "approvals": if delegate { "delegate" } else { "delphi" }, "claudeai_connectors": launch.profile.claudeai_connectors, "cap_tokens": self.settings.harness_token_cap, "forge_read": sc.forge.as_ref().map(|f| f.read.clone())}), ep, &launch.model)).await?;
+        // What the prompt costs in bytes, counted where it is assembled (`specs/131` S1): counts only, never text.
+        let counts = prompt_counts(&launch.system_prompt, &launch.user_prompt, &sent);
+        let mut started = json!({"endpoint_id": ep.id, "tools": builtin, "native_tools": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "approvals": if delegate { "delegate" } else { "delphi" }, "claudeai_connectors": launch.profile.claudeai_connectors, "cap_tokens": self.settings.harness_token_cap, "forge_read": sc.forge.as_ref().map(|f| f.read.clone())});
+        if let (Some(o), Some(c)) = (started.as_object_mut(), counts.as_object()) {
+            o.extend(c.clone());
+            o.insert("budget".into(), json!(budget));
+            if let Some(cut) = &context_cut {
+                o.insert("context_cut".into(), cut.clone());
+            }
+        }
+        sc.m.append(sc.agent_ev("harness.started", started, ep, &launch.model)).await?;
         // The flags a granted launch relies on (`--disable-slash-commands`, `--disallowedTools`, `--max-turns`) are the 2.1 line's: the CLI's
         // version is read first, and a CLI that will not say or is older is not started (the other seat or the API serves the span).
         if granted && cli == Cli::Claude {
@@ -1187,6 +1244,25 @@ impl Engine {
         if result.is_none() && failure.is_none() {
             failure = Some((format!("the {} CLI stopped without a result", launch.program), !used_tools));
         }
+        // A JSON-in-text answer (`specs/132` §6.1): extracted deterministically and validated against the schema; valid, it is the
+        // structured answer as compact JSON, as a native one is. Not found or invalid is an answer not found, which takes the seat's
+        // one retry (shared with the empty finish, OD-3) with a fixed message naming the reason, never the reply.
+        let mut retry_note: Option<String> = None;
+        if let Some(schema) = &text_schema {
+            if failure.is_none() {
+                let reply = final_text.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| text_parts.join("\n"));
+                match crate::json_answer::answer(schema, &reply) {
+                    Ok(v) => final_text = Some(v.to_string()),
+                    Err(why) => {
+                        failure = Some((format!("the answer was not one JSON object matching the schema: {}", why), !used_tools));
+                        fail_kind = FailKind::AnswerNotFound;
+                        retry_note = Some(crate::json_answer::retry_message(&why));
+                    }
+                }
+            } else if fail_kind == FailKind::AnswerNotFound {
+                retry_note = Some(crate::json_answer::retry_message("no JSON object was found"));
+            }
+        }
         session.kill().await;
         // No event, no tool, no token, and killed by the first-event clock: nothing was spent, so another try repeats nothing.
         let stalled = !seen_event && !any_tool && metered == 0 && result.is_none() && session.idle_killed();
@@ -1250,6 +1326,8 @@ impl Engine {
                 carrier: crate::seat::Carrier { kind: cli.program().into(), cli_version: None, tools_offered: effective_tools, native_tools: Some(native_count), dispatch_allowed: bridge_defs.iter().any(|d| d.name == "dispatch_agent") },
                 tool_grant: json!({"builtin": builtin, "native": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "readonly": sc.readonly, "forge_read": sc.forge.as_ref().map(|f| json!({"tools": f.read, "harness": f.harness, "version": f.version}))}),
                 prompt_hash: crate::seat::prompt_hash(&launch.system_prompt, &launch.user_prompt),
+                prompt_bytes: counts["prompt_bytes"].as_u64(),
+                context_cut: context_cut.clone(),
                 tokens_in: usage.input + usage.cache_read + usage.cache_write,
                 tokens_out: usage.output,
                 outcome: if mismatch { "model_mismatch" } else if failure.is_some() { "error" } else { "ok" }.into(),
@@ -1338,7 +1416,7 @@ impl Engine {
                     Some(Event::Result { subtype, usage, .. }) => (subtype.clone(), usage.output),
                     _ => (String::new(), 0),
                 };
-                batch.push(sc.agent_ev("harness.no_answer", json!({"task_id": sc.task_id, "status": status, "tool_calls": tool_names.len(), "tools": tool_names, "text_events": text_parts.len(), "text_bytes": text_parts.iter().map(|t| t.len()).sum::<usize>(), "output_tokens": out_tokens, "structured_output": false, "exit_code": exit_code}), ep, &launch.model));
+                batch.push(sc.agent_ev("harness.no_answer", json!({"task_id": sc.task_id, "status": status, "tool_calls": tool_names.len(), "tools": tool_names, "text_events": text_parts.len(), "text_bytes": text_parts.iter().map(|t| t.len()).sum::<usize>(), "output_tokens": out_tokens, "structured_output": false, "json_in_text": text_schema.is_some(), "exit_code": exit_code}), ep, &launch.model));
             }
             // A failed harness run in the central error log (`specs/039`): the reason, the exit code and the redacted tail of stderr.
             // A spent quota is a decision (warn), anything else an error. The gate is the level of the record itself: at the default
@@ -1352,7 +1430,7 @@ impl Engine {
                 }
             }
             sc.m.append_batch(batch).await?;
-            return Ok(Err(HarnessErr { reason, retryable, cli_error: cli == Cli::Agy && cli_error_seen && !any_tool && exhaustion.is_none(), kind: fail_kind, stalled: stalled.then(|| launch.model.clone()) }));
+            return Ok(Err(HarnessErr { reason, retryable, cli_error: cli == Cli::Agy && cli_error_seen && !any_tool && exhaustion.is_none(), kind: fail_kind, stalled: stalled.then(|| launch.model.clone()), retry_note }));
         }
         let text = final_text.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| text_parts.join("\n"));
         let block = delphi_adapter::blocks::ContentBlock::Text { text: text.clone() };
@@ -2360,17 +2438,111 @@ open(sys.argv[1], "w").write(json.dumps(out))
         assert!(crate::council::critique_read(&out.text).critique.is_none(), "{:?} {}", out.status, out.text);
     }
 
-    #[tokio::test]
-    async fn a_copilot_span_with_another_schema_is_still_refused() {
-        let scripts = tempfile::tempdir().unwrap();
-        let prog = fake_cli(scripts.path(), &fake_copilot_body(&scripts.path().join("dump"), "m-1"));
+    // ---- a validated JSON-in-text answer with one shared retry (`specs/132` §6.1, C5) ----
+
+    const WORD_SCHEMA: &str = r#"{"type":"object","properties":{"word":{"type":"string","enum":["yes","no"]}},"required":["word"]}"#;
+
+    /// A stand-in `copilot` that counts its starts in `count`, saves each start's prompt as `prompt.<n>` and its arguments in `args`,
+    /// and answers with the n-th of `replies` (the last one after that).
+    fn flaky_copilot(dir: &std::path::Path, replies: &[&str]) -> String {
+        let mut body = format!("n=$(cat '{d}/count' 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > '{d}/count'\ncat > '{d}/prompt.'$n\necho \"$*\" >> '{d}/args'\n", d = dir.display());
+        // `if [ 1 = 0 ]` opens the chain so that every reply is an `elif` and the last an `else`.
+        body.push_str("if [ 1 = 0 ]; then\n:\n");
+        for (i, reply) in replies.iter().enumerate() {
+            let line = json!({"type": "assistant.message", "data": {"content": reply, "toolRequests": [], "model": "m-1"}}).to_string();
+            assert!(!line.contains('\''));
+            let test = if i + 1 == replies.len() { "else".to_string() } else { format!("elif [ $n -eq {} ]; then", i + 1) };
+            body.push_str(&format!("{test}\nprintf '%s\\n' '{line}'\n"));
+        }
+        body.push_str("fi\nprintf '%s\\n' '{\"type\":\"result\",\"sessionId\":\"s\",\"exitCode\":0}'");
+        fake_cli(dir, &body)
+    }
+
+    fn copilot_fx(prog: String) -> Fx {
         let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
         use_keyed_harness(&f, "copilot");
         *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+        f
+    }
+
+    /// A seat (it has a deadline, so it may be tried once more) asked for `WORD_SCHEMA`.
+    async fn copilot_schema_seat(f: &Fx) -> crate::council::Stance {
         let tid = f.m.next_task_id();
-        f.engine.schemas.lock().unwrap().insert(format!("ho_{}", tid), r#"{"type":"object"}"#.into());
-        let out = f.engine.run_task_with_id(&f.m, tid, "architect", "Make JSON").await.unwrap();
-        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("no structured-output flag")), "{:?}", out.status);
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let h = crate::handoff::HandoffEnvelope::root(&f.m.id, &tid, "architect", "Say yes or no as JSON", vec![]);
+        f.engine.run_seat(&f.m, &tid, h, vec![], Some(WORD_SCHEMA.into()), Duration::from_secs(600)).await
+    }
+
+    fn read(dir: &std::path::Path, name: &str) -> String {
+        fs::read_to_string(dir.join(name)).unwrap_or_default()
+    }
+
+    /// AC-9: one fenced object (the P0 reply) is the structured answer, as compact JSON; no schema flag is passed and the prompt
+    /// asks for one object matching the schema.
+    #[tokio::test]
+    async fn a_copilot_span_with_a_schema_answers_in_validated_json_text() {
+        let scripts = tempfile::tempdir().unwrap();
+        let f = copilot_fx(flaky_copilot(scripts.path(), &["Sure:\n```json\n{\"word\": \"yes\"}\n```"]));
+        let tid = f.m.next_task_id();
+        f.engine.schemas.lock().unwrap().insert(format!("ho_{}", tid), WORD_SCHEMA.into());
+        let out = f.engine.run_task_with_id(&f.m, tid, "architect", "Say yes or no as JSON").await.unwrap();
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, r#"{"word":"yes"}"#), "{}", out.text);
+        assert!(!read(scripts.path(), "args").contains("schema"), "{}", read(scripts.path(), "args"));
+        let prompt = read(scripts.path(), "prompt.1");
+        assert!(prompt.contains("<json_answer>Reply with one JSON object that matches this JSON Schema") && prompt.contains(WORD_SCHEMA), "{prompt}");
+    }
+
+    #[tokio::test]
+    async fn a_copilot_span_whose_reply_holds_no_valid_object_is_not_accepted() {
+        let scripts = tempfile::tempdir().unwrap();
+        let f = copilot_fx(flaky_copilot(scripts.path(), &["{\"word\":\"yes\"} or perhaps {\"word\":\"no\"}"]));
+        let tid = f.m.next_task_id();
+        f.engine.schemas.lock().unwrap().insert(format!("ho_{}", tid), WORD_SCHEMA.into());
+        let out = f.engine.run_task_with_id(&f.m, tid, "architect", "Say yes or no as JSON").await.unwrap();
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("not one JSON object matching the schema: more than one candidate")), "{:?}", out.status);
+    }
+
+    /// AC-10: an invalid first reply gets one retry with the fixed message and none of the reply's text; the second answer is kept.
+    #[tokio::test]
+    async fn an_invalid_json_answer_is_tried_once_more_with_the_fixed_message_and_no_reply_text() {
+        let scripts = tempfile::tempdir().unwrap();
+        let f = copilot_fx(flaky_copilot(scripts.path(), &["{\"word\":\"SECRET-maybe\"}", "{\"word\":\"no\"}"]));
+        let s = copilot_schema_seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Said(t) if t == r#"{"word":"no"}"#), "{s:?}");
+        assert_eq!(read(scripts.path(), "count").trim(), "2");
+        let r = events_of(&f, "harness.retry");
+        assert_eq!((r.len(), r[0].payload["json_retry"].as_bool()), (1, Some(true)), "{r:?}");
+        let second = read(scripts.path(), "prompt.2");
+        assert!(second.contains("Your answer was not one JSON object matching the schema: at /word (enum). Reply with only that object."), "{second}");
+        assert!(!second.contains("SECRET-maybe"), "{second}");
+        assert!(!read(scripts.path(), "prompt.1").contains("Your answer was not"));
+        let n = events_of(&f, "harness.no_answer");
+        assert_eq!((n.len(), n[0].payload["json_in_text"].as_bool()), (1, Some(true)));
+    }
+
+    #[tokio::test]
+    async fn a_second_invalid_json_answer_abstains_with_no_third_try() {
+        let scripts = tempfile::tempdir().unwrap();
+        let f = copilot_fx(flaky_copilot(scripts.path(), &["no JSON here", "{\"word\":\"maybe\"}", "{\"word\":\"no\"}"]));
+        let s = copilot_schema_seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Abstained(r) if r.contains("at /word (enum)")), "{s:?}");
+        assert_eq!(read(scripts.path(), "count").trim(), "2");
+        assert_eq!((events_of(&f, "harness.retry").len(), events_of(&f, "harness.no_answer").len()), (1, 2));
+    }
+
+    /// OD-3: one retry in total. A seat whose first run was an empty finish (spec 128's retry) gets no second retry for invalid JSON;
+    /// its one retry carried the fixed message.
+    #[tokio::test]
+    async fn a_seat_that_used_its_retry_on_an_empty_finish_gets_none_for_invalid_json() {
+        let scripts = tempfile::tempdir().unwrap();
+        let f = copilot_fx(flaky_copilot(scripts.path(), &["", "{\"word\":\"maybe\"}", "{\"word\":\"no\"}"]));
+        let s = copilot_schema_seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Abstained(_)), "{s:?}");
+        assert_eq!(read(scripts.path(), "count").trim(), "2");
+        assert_eq!(events_of(&f, "harness.retry").len(), 1);
+        assert!(read(scripts.path(), "prompt.2").contains("matching the schema: no JSON object was found."), "{}", read(scripts.path(), "prompt.2"));
     }
 
     #[test]
@@ -2892,6 +3064,131 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert_eq!(r["carrier"]["native_tools"], 3, "the carrier's own count is kept apart");
         assert_eq!(r["tool_grant"]["bridge"], json!([]));
         assert!(crate::seat::receipt_toolless(r));
+    }
+
+    /// `specs/131` S1 (AC-1): the prompt is counted where it is assembled, on `harness.started` and on the receipt, for an agy seat and a
+    /// Claude seat alike; the count is the system and user text the carrier was handed (the stand-in sees them in its stdin).
+    #[tokio::test]
+    async fn the_prompt_is_counted_in_bytes_on_the_start_event_and_the_receipt() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let prog = fake_cli(scripts.path(), &format!("printf '%s' \"$first\" > '{d}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"gemini-3.8-flash-low\",\"tools\":[]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"ok\",\"usage\":{{}}}}}}'", d = dump.display()));
+        let f = retry_fx(prog, Duration::from_secs(600));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Said(_)));
+        let started = &events_of(&f, "harness.started")[0].payload;
+        let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
+        let n = started["prompt_bytes"].as_u64().unwrap();
+        assert_eq!(r["prompt_bytes"].as_u64(), Some(n), "{r}");
+        assert_eq!(started["fixed_bytes"].as_u64().unwrap() + started["slice_bytes"].as_u64().unwrap(), n, "{started}");
+        assert!(started["slices"].is_u64());
+        // The stand-in's first stdin line is the one JSON user event: the counted text in its JSON wrapping (which `read` unescapes
+        // in part), so the two agree to within a few percent.
+        let sent = fs::read(&dump).unwrap().len() as u64;
+        assert!(n > 1000 && sent.abs_diff(n) < n / 10 + 200, "counted {n}, sent {sent}");
+        // A Claude seat carries the same counts.
+        let (c, _s) = fixture(&format!("{}\n{}", INIT, FINISH), |_| {});
+        assert_eq!(c.engine.run_task(&c.m, "architect", "Plan the change").await.unwrap().status, Status::Done);
+        let (cs, cr) = (&events_of(&c, "harness.started")[0].payload, &events_of(&c, crate::seat::RECEIPT_KIND)[0].payload);
+        assert!(cs["prompt_bytes"].as_u64().is_some_and(|b| b > 0) && cr["prompt_bytes"] == cs["prompt_bytes"], "{cs} {cr}");
+    }
+
+    /// An agy seat whose stand-in keeps its first stdin line in `dump`, and the proposition naming ten 40 KB files of the project.
+    fn ten_big_pointers(dump: &std::path::Path, scripts: &std::path::Path) -> (Fx, String) {
+        let prog = fake_cli(scripts, &format!("printf '%s' \"$first\" > '{d}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"gemini-3.8-flash-low\",\"tools\":[]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"ok\",\"usage\":{{}}}}}}'", d = dump.display()));
+        let f = retry_fx(prog, Duration::from_secs(600));
+        let mut q = String::from("COUNCIL, ROUND 1 (blind). Proposition: review these");
+        for n in 0..10 {
+            let body: String = (1..=400).map(|l| format!("{l:05} {}\n", "y".repeat(94))).collect();
+            fs::write(f.root.join(format!("proj/big{n}.txt")), body).unwrap();
+            q.push_str(&format!(" @project/app/big{n}.txt"));
+        }
+        (f, q)
+    }
+
+    /// `specs/131` S2 (AC-2, AC-3): ten 40 KB pointers for an agy seat with no key set are cut to the default 150,000-byte budget, each at a
+    /// line with the fixed line, the contract still whole at the end; the start event and the receipt say what was cut, by label.
+    #[tokio::test]
+    async fn an_agy_seat_over_its_byte_budget_has_its_pointer_slices_cut_and_says_so() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!(started["budget"], 150_000, "{started}");
+        assert!(started["prompt_bytes"].as_u64().unwrap() <= 150_000, "{started}");
+        let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
+        let cut = &r["context_cut"];
+        assert_eq!(cut, &started["context_cut"]);
+        assert!(cut["prompt_bytes_before"].as_u64().unwrap() > 400_000 && cut["prompt_bytes_after"] == started["prompt_bytes"], "{cut}");
+        let labels: Vec<&str> = cut["slices_cut"].as_array().unwrap().iter().map(|c| c["label"].as_str().unwrap()).collect();
+        assert_eq!(labels.len(), 10, "{cut}");
+        assert!(labels.iter().all(|l| l.starts_with("@project/app/big")) && cut["slices_cut"].as_array().unwrap().iter().all(|c| c["kept_lines"].as_u64().unwrap() < 400 && c["total_lines"] == 400), "{cut}");
+        assert!(!cut.to_string().contains("yyyy"), "labels and counts, never contents");
+        let sent = fs::read_to_string(&dump).unwrap();
+        assert_eq!(sent.matches("[cut by Delphi: the carrier takes at most 150000 bytes of prompt; lines 1 to ").count(), 10);
+        assert!(sent.trim_end().trim_end_matches(['}', '"']).ends_with("</contract>"), "the contract is still the end of the prompt");
+    }
+
+    /// `specs/131` S3 (AC-5): an agy seat's one user event starts with the task and ends with the contract, and with the last 70 KB gone
+    /// the objective and the task note are still there.
+    #[tokio::test]
+    async fn an_agy_seat_has_the_task_at_both_ends_and_a_cut_tail_still_leaves_it() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        let sent = fs::read_to_string(&dump).unwrap();
+        let content = sent.split_once("\"content\":\"").map(|(_, c)| c).unwrap_or("");
+        assert!(content.starts_with("<task nonce="), "{}", content.chars().take(200).collect::<String>());
+        assert!(sent.trim_end().trim_end_matches(['}', '"']).ends_with("</contract>"));
+        let kept = &sent[..sent.len() - 70_000];
+        assert!(kept.contains(delphi_adapter::ipr::TASK_HEAD_NOTE) && kept.contains("Proposition: review these"), "the task survives a cut tail");
+        assert!(!kept.contains("</contract>"), "the contract itself was in the part that was cut");
+    }
+
+    #[test]
+    fn only_a_carrier_that_takes_one_text_gets_the_task_head() {
+        for cli in [Cli::Agy, Cli::Codex, Cli::Copilot] {
+            assert_eq!(with_task_head(cli, Some("<task>T</task>"), "SYS".into()), "<task>T</task>\n\nSYS");
+        }
+        assert_eq!(with_task_head(Cli::Claude, Some("<task>T</task>"), "SYS".into()), "SYS", "a Claude seat's prompt is unchanged");
+        assert_eq!(with_task_head(Cli::Agy, None, "SYS".into()), "SYS");
+    }
+
+    /// `specs/131` S2 (AC-4): when the text that may not be cut is alone over the budget, the CLI is never started and the seat abstains
+    /// with the stated reason; nothing is spent.
+    #[tokio::test]
+    async fn a_seat_whose_fixed_text_cannot_fit_its_budget_never_starts() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }\n[access]\nrole_family = { architect = \"gemini\" }")
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"agy-sub\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{text}\n[harness.agy]\nmax_prompt_bytes = 2000\n")).unwrap());
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        match &s {
+            crate::council::Stance::Abstained(why) => assert!(why.contains("the prompt cannot fit the carrier's budget (fixed text ") && why.contains("budget 2000)"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(events_of(&f, "harness.started").is_empty() && !dump.exists(), "the CLI was never started");
+        assert!(events_of(&f, "agent.usage").is_empty(), "no tokens recorded");
+        assert_eq!(events_of(&f, "harness.prompt_refused")[0].payload["budget"], 2000);
     }
 
     /// D7 (`specs/086` §6.4): a seat opened with `tools: "readonly"` runs read-only on a CLI too: the bridge serves no write tool and

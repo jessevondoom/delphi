@@ -45,6 +45,9 @@ pub struct Capability {
     pub tokens_used: u64,
     pub cost_usd: Option<f64>,
     pub notes: Vec<String>,
+    /// The model a harness CLI reported serving in its own events (`specs/132` C5); `None` when it reported none or was not asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub served_model: Option<String>,
 }
 
 impl Capability {
@@ -216,6 +219,7 @@ pub async fn probe(model: &dyn ModelClient, cfg: &Config, ep: &Endpoint, model_i
         tokens_used: 0,
         cost_usd: None,
         notes: Vec::new(),
+        served_model: None,
     };
     let target = Target { provider: delphi_adapter::provider_for(ep).into(), endpoint_id: ep.id.clone(), model_id: model_id.to_string() };
     let price = cfg.catalog_entry(model_id).filter(|e| e.has_prices()).map(|e| e.price());
@@ -325,6 +329,14 @@ pub async fn probe_harness_seat(cfg: &Config, ep: &Endpoint, program: &str, now:
 /// What the conformance probe asks an `agy` model to attempt: one tool call each, so the gate is seen to meet every kind.
 const GATE_PROBE_PROMPT: &str = "This is a test of a tool gate; refusals are expected and fine. Do each of the following with one tool call each, in this order. If a call is refused, say so and go straight on to the next one; never retry a refused call. (1) Use the MCP tool named probe from the delphi server. (2) Run the shell command: echo x > conf-shell.txt . (3) Create a file named conf-write.txt containing hi. (4) Change the text 'original' to 'changed' in the file conf-edit.txt. (5) View the file /etc/hosts. (6) List the files in the current directory. (7) Search the web for 'rust language'. (8) Read the page at https://example.com . (9) Open https://example.com in the browser. (10) Start a subagent that says hello. (11) Schedule a reminder for tomorrow. Then reply with exactly the word OK.";
 
+const PLAIN_PROBE_PROMPT: &str = "Reply with exactly the word OK.";
+const PROBE_SYSTEM_PROMPT: &str = "This is a connectivity probe. Follow the request exactly.";
+
+/// The bytes of Delphi's own prompt in one harness probe call (system text and user text), for the cost line printed before it runs.
+pub fn harness_probe_prompt_bytes(gate: bool) -> usize {
+    PROBE_SYSTEM_PROMPT.len() + if gate { GATE_PROBE_PROMPT.len() } else { PLAIN_PROBE_PROMPT.len() }
+}
+
 /// [`probe_harness_seat`], and for an `agy` seat the conformance record (`agy_version` is what `agy --version` said, `None` in tests).
 pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now: i64, settle: Duration, agy_version: Option<String>) -> (Capability, Option<crate::inventory::SeatRecord>, Option<GateRecord>) {
     let mut gate_record: Option<GateRecord> = None;
@@ -344,6 +356,7 @@ pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now:
         tokens_used: 0,
         cost_usd: None,
         notes: Vec::new(),
+        served_model: None,
     };
     let Some(cli) = ep.harness.as_deref().and_then(Cli::from_harness) else {
         cap.auth = format!("failed: the `{}` harness is not implemented", ep.harness.as_deref().unwrap_or("?"));
@@ -409,8 +422,8 @@ pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now:
         }
     }
     let gate_probe = agy_calls.is_some();
-    let user_prompt = if gate_probe { GATE_PROBE_PROMPT } else { "Reply with exactly the word OK." };
-    let l = Launch { cli, program: program.into(), model: model.clone(), system_prompt: "This is a connectivity probe. Follow the request exactly.".into(), user_prompt: user_prompt.into(), cwd: dir.clone(), tools: Tools::None, env: crate::harness::cli_env_with(&profile.env_allow), profile: lp, opts: Default::default() };
+    let user_prompt = if gate_probe { GATE_PROBE_PROMPT } else { PLAIN_PROBE_PROMPT };
+    let l = Launch { cli, program: program.into(), model: model.clone(), system_prompt: PROBE_SYSTEM_PROMPT.into(), user_prompt: user_prompt.into(), cwd: dir.clone(), tools: Tools::None, env: crate::harness::cli_env_with(&profile.env_allow), profile: lp, opts: Default::default() };
     let mut served = false;
     match Session::start(&l).await {
         Err(e) => cap.auth = format!("failed: {}", e),
@@ -445,6 +458,7 @@ pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now:
                         seat = Some(crate::inventory::SeatRecord { endpoint_id: ep.id.clone(), harness: cli.program().into(), model: model.clone(), tools, mcp_servers: mcp_servers.unwrap_or_default(), bridge: _bridge.is_some(), seen_unix: now });
                     }
                     Event::Usage(t) => cap.tokens_used += t.metered(),
+                    Event::Served(m) => cap.served_model = Some(m),
                     Event::RateLimit { utilization, window, .. } => cap.notes.push(format!("{} window {:.0}% used", window.replace('_', "-"), utilization * 100.0)),
                     Event::Result { is_error, text, usage, .. } => {
                         got_result = true;
@@ -644,11 +658,12 @@ cost_model = "subscription"
         let cfg = Config::parse(HARNESS_CFG).unwrap();
         let ep = cfg.endpoint("sub").unwrap().clone();
         let d = tempfile::tempdir().unwrap();
-        let good = crate::harness::tests::fake_cli(d.path(), r#"echo '{"type":"system","subtype":"init","session_id":"s"}'
+        let good = crate::harness::tests::fake_cli(d.path(), r#"echo '{"type":"system","subtype":"init","session_id":"s","model":"claude-haiku-4.5"}'
 echo '{"type":"rate_limit_event","rate_limit_info":{"utilization":0.32,"rateLimitType":"seven_day"}}'
 echo '{"type":"result","subtype":"success","result":"OK","usage":{"input_tokens":5,"output_tokens":3}}'"#);
         let cap = probe_harness(&cfg, &ep, &good, 7).await;
         assert_eq!((cap.auth.as_str(), cap.usage_reported, cap.model_id.as_str()), ("ok", Some(true), "haiku-x"));
+        assert_eq!(cap.served_model.as_deref(), Some("claude-haiku-4.5"), "the served model is taken from the CLI's own events (specs/132 C5 row)");
         assert!(cap.notes.iter().any(|n| n.contains("seven-day window 32% used")), "{:?}", cap.notes);
         let d2 = tempfile::tempdir().unwrap();
         let bad = crate::harness::tests::fake_cli(d2.path(), "exit 1");
@@ -827,7 +842,7 @@ if {call_tool}:
         let t = tempfile::tempdir().unwrap();
         let p = t.path().join("local/endpoint-capabilities.json");
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        let mk = |ep: &str, model: &str, at: i64| Capability { endpoint_id: ep.into(), model_id: model.into(), path: "api".into(), degraded: false, probed_at: at, auth: "ok".into(), usage_reported: Some(true), tool_calling: Some(true), reasoning: None, signature_round_trip: None, cache: "not probed".into(), tokens_used: 1, cost_usd: None, notes: vec![] };
+        let mk = |ep: &str, model: &str, at: i64| Capability { endpoint_id: ep.into(), model_id: model.into(), path: "api".into(), degraded: false, probed_at: at, auth: "ok".into(), usage_reported: Some(true), tool_calling: Some(true), reasoning: None, signature_round_trip: None, cache: "not probed".into(), tokens_used: 1, cost_usd: None, notes: vec![], served_model: None };
         save(&p, &[mk("a", "m1", 0), mk("b", "m1", 0)]).unwrap();
         save(&p, &[mk("a", "m1", 500)]).unwrap();
         let all = load(&p);

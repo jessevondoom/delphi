@@ -1162,6 +1162,10 @@ pub fn ruling_card(v: &Value, tokens: u64) -> String {
                 d["tokens"].as_u64().unwrap_or(0),
                 if unverified.contains(&d["seat"].as_str().unwrap_or("")) { format!(" · **{}**", crate::seat::UNVERIFIED_AGAINST_REPO) } else { String::new() }
             ));
+            // A seat whose context the carrier's budget cut sat on less than it was given (`specs/131` S2): not a failure, but said.
+            if let Some(cut) = d["context_cut"].as_object() {
+                s.push_str(&context_cut_line(cut));
+            }
         }
         s.push('\n');
     }
@@ -1320,9 +1324,23 @@ pub fn read_handoff(ws_dir: &Path, project: Option<&str>, session: Option<&str>)
     load(&dir).map(|e| (name, e))
 }
 
+/// The ruling card's line for a seat whose context was cut (`specs/131` S2): counts only.
+pub(crate) fn context_cut_line(cut: &serde_json::Map<String, Value>) -> String {
+    let n = |k: &str| cut.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let files = cut.get("slices_cut").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0);
+    format!("  - its context was cut to fit the carrier's budget of {} bytes: {files} file(s) shortened, prompt {} bytes down to {}\n", n("budget"), n("prompt_bytes_before"), n("prompt_bytes_after"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // specs/131 S2: the ruling card names a seat whose context was cut, in counts.
+    #[test]
+    fn the_ruling_card_says_when_a_seats_context_was_cut() {
+        let cut = json!({"budget": 150000, "prompt_bytes_before": 260000, "prompt_bytes_after": 149500, "slices_cut": [{"label": "a", "kept_lines": 3, "total_lines": 9}, {"label": "b", "kept_lines": 1, "total_lines": 9}]});
+        assert_eq!(context_cut_line(cut.as_object().unwrap()), "  - its context was cut to fit the carrier's budget of 150000 bytes: 2 file(s) shortened, prompt 260000 bytes down to 149500\n");
+    }
 
     #[test]
     fn the_route_facts_are_checked_and_anything_else_a_caller_sends_is_dropped() {

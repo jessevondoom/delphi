@@ -284,11 +284,15 @@ pub struct HarnessProfile {
     /// login (a credential Delphi does not otherwise hold, on an undocumented endpoint). Off when absent or `"off"`.
     #[serde(default)]
     pub quota_source: Option<String>,
+    /// The most bytes of prompt a seat on this CLI is sent (`specs/131` S2). Unset: 150,000, the default for a carrier whose input
+    /// ceiling has not been measured. Over it, the context slices from pointers are shortened (never the system text or the contract).
+    #[serde(default)]
+    pub max_prompt_bytes: Option<u64>,
 }
 
 impl Default for HarnessProfile {
     fn default() -> Self {
-        HarnessProfile { bridge: true, approvals: ApprovalSource::Delegate, native_tools: default_native_tools(), claudeai_connectors: true, connector_reads: vec![], env_allow: vec![], profile: None, effort: None, json_schema: None, session: None, add_dirs: None, sandbox: None, print_timeout_secs: None, max_turns: None, max_budget_usd: None, fallback_models: None, partial_messages: None, agents: None, settings: None, mode: None, quota_source: None }
+        HarnessProfile { bridge: true, approvals: ApprovalSource::Delegate, native_tools: default_native_tools(), claudeai_connectors: true, connector_reads: vec![], env_allow: vec![], profile: None, effort: None, json_schema: None, session: None, add_dirs: None, sandbox: None, print_timeout_secs: None, max_turns: None, max_budget_usd: None, fallback_models: None, partial_messages: None, agents: None, settings: None, mode: None, quota_source: None, max_prompt_bytes: None }
     }
 }
 
@@ -2330,6 +2334,9 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         assert_eq!((h.connector_reads.len(), h.env_allow.len()), (1, 2));
         assert_eq!(c.harness["agy"], HarnessProfile { env_allow: vec!["HTTPS_PROXY".into()], ..Default::default() });
         assert_eq!(Config::parse(&format!("{}\n[harness.copilot]\nquota_source = \"gh\"\n", SAMPLE)).unwrap().harness["copilot"].quota_source.as_deref(), Some("gh"));
+        // specs/131 S2: a per-carrier prompt budget; one carrier's key leaves the others on the default.
+        let b = Config::parse(&format!("{}\n[harness.codex]\nmax_prompt_bytes = 90000\n", SAMPLE)).unwrap();
+        assert_eq!((b.harness["codex"].max_prompt_bytes, b.harness.get("agy").and_then(|h| h.max_prompt_bytes)), (Some(90_000), None));
         for (bad, needle) in [
             ("[harness.claude]\nenv_allow = [\"aws_profile\"]\n", "environment variable name"),
             ("[harness.claude]\nenv_allow = [\"TOKEN=abc\"]\n", "give names, never values"),
