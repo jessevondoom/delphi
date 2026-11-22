@@ -44,6 +44,7 @@ A reviewer should be able to understand the change from the commits and the desc
    - `Follow-ups:` ideas outside this slice.
 6. Report failures plainly. Do not describe a check as passing unless you ran it and read the output.
 7. Update the spec tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) by finding the spec's rows with a search and changing or appending only those lines. The file is over 1,200 lines: never read it whole.
+8. After every push, confirm that checks exist on the new head and that `mergeStateStatus` is not `DIRTY` (`gh pr view <PR> --json statusCheckRollup,mergeStateStatus`). An empty check list means untested, not green: a pull request that conflicts with its base runs no CI at all, and the `conflict` label marks it (`specs/094` §12.2.2). Merge the base in, then check again.
 
 ## Done when
 The diff contains only intended changes, each commit stands alone, and the description's verification claims are all true.
