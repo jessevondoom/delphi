@@ -202,6 +202,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_copilot_catalog(Some(&ws.dir), &cfg, &run_cli, &copilot_catalog, now_unix, &mut r);
     check_conformance(&ws.dir, &cfg, &run_cli, now_unix, &mut r);
     check_coverage_drift(&cfg, &help_page, &mut r);
+    check_version_drift(&cfg, &run_cli, &mut r);
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
 
     // 11. Model pool (specs/002 §4.1): which models are out of quota right now, from the daemon's saved state.
@@ -1025,6 +1026,34 @@ fn check_coverage_drift(cfg_text: &str, help: &dyn Fn(&str, &[&str]) -> Option<S
             let shown: Vec<String> = items.iter().take(6).map(|i| i.describe()).collect();
             let more = if items.len() > 6 { format!(" and {} more", items.len() - 6) } else { String::new() };
             r.warn("10 harness", format!("{} surface", cli), format!("the installed {} shows {}{} with no disposition in crates/delphi-engine/coverage/{}.cov: it is newer than this Delphi knows. Nothing breaks (Delphi passes only the flags it uses); a Delphi update classifies it", cli, shown.join(", "), more, cli));
+        }
+    }
+}
+
+/// For every CLI a `path = "harness"` endpoint uses: its installed `--version` against the version its coverage manifest is pinned to
+/// (`specs/132` row C9, F1, AC-18). A newer CLI is the drift line and the "unprobed version" line together: surface it added is not
+/// classified, and no probe record of the pinned version speaks for it. Read-only: `--version` only. Information, never a gate.
+fn check_version_drift(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, r: &mut Report) {
+    use delphi_engine::coverage::{version_drift, VersionDrift};
+    let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let Some(list) = v.get("endpoints").and_then(|e| e.as_array()) else { return };
+    let mut seen = std::collections::BTreeSet::new();
+    for e in list.iter().filter(|e| e.get("path").and_then(|p| p.as_str()) == Some("harness")) {
+        let Some(cli) = e.get("harness").and_then(|h| h.as_str()).filter(|c| delphi_engine::coverage::CLIS.contains(c)) else { continue };
+        if !seen.insert(cli.to_string()) {
+            continue;
+        }
+        let Some(installed) = run(cli, &["--version"]).filter(|(code, _)| *code == 0).map(|(_, out)| out) else { continue }; // not installed: check 10 says so
+        let at = format!("{cli} version");
+        match version_drift(cli, Some(&installed)) {
+            VersionDrift::Pinned(p) => r.push(Level::Ok, "10 harness", at, format!("{cli} {p} is the version its coverage manifest is pinned to")),
+            VersionDrift::Newer { installed, pinned } => {
+                // A Claude seat's tools come from its own allow-list, never from the probe record; every other carrier is L0 without one.
+                let seats = if cli == "claude" { "no probe record speaks for it" } else { "its seats stay at L0 with spec 131's default budget" };
+                r.warn("10 harness", at, format!("drift: the installed {cli} {installed} is newer than its coverage manifest ({pinned}); unprobed version: {seats} until `delphi endpoints test --probe` records {installed}, and a Delphi update classifies what it added"))
+            }
+            VersionDrift::Older { installed, pinned } => r.push(Level::Ok, "10 harness", at, format!("the installed {cli} {installed} is older than its coverage manifest ({pinned}); flags the manifest lists may be missing from it")),
+            VersionDrift::Unknown => r.push(Level::Skipped, "10 harness", at, format!("{cli}'s version could not be read as a number, so it is not compared with its coverage manifest")),
         }
     }
 }
@@ -2425,6 +2454,43 @@ mod tests {
         assert!(r.findings.iter().find(|f| f.location == "ag conformance").unwrap().message.contains("not probed"));
         let moved = say("GitHub Copilot CLI 1.0.120.\n");
         assert!(moved.findings.iter().find(|f| f.location == "cp conformance").unwrap().message.contains("unprobed version"), "{:?}", moved.findings);
+    }
+
+    /// specs/132 AC-18 (F1): a CLI newer than its manifest, with a fake newer `--help` and `--version`, prints the drift line and the
+    /// "unprobed version" line for that carrier; the pinned version is quiet; every carrier is judged the same way.
+    #[test]
+    fn a_cli_newer_than_its_manifest_prints_the_drift_and_unprobed_version_lines() {
+        use delphi_engine::coverage::{pinned_version, snapshot_text};
+        let ep = |id: &str, h: &str| format!("[[endpoints]]\nid=\"{id}\"\nfamily=\"x\"\npath=\"harness\"\nharness=\"{h}\"\ncredential=\"harness-login\"\n");
+        for cli in delphi_engine::coverage::CLIS {
+            let cfg = format!("{}{}", ep("one", cli), ep("two", cli));
+            let pin = pinned_version(cli).unwrap();
+            let newer = format!("{pin}.3");
+            let say = |version: String| {
+                let run = move |p: &str, a: &[&str]| -> CliRun { (p == *cli && a == ["--version"]).then(|| (0, format!("{cli} {version}\n"))) };
+                let mut r = Report::default();
+                check_version_drift(&cfg, &run, &mut r);
+                r
+            };
+            let r = say(newer.clone());
+            let lines: Vec<_> = r.findings.iter().filter(|f| f.location == format!("{cli} version")).collect();
+            assert_eq!(lines.len(), 1, "one line per CLI, not per endpoint: {:?}", r.findings);
+            assert!(lines[0].level == Level::Warn && lines[0].message.contains("drift") && lines[0].message.contains("unprobed version") && lines[0].message.contains(&newer) && lines[0].message.contains(&pin), "{}", lines[0].message);
+            let quiet = say(pin.clone());
+            assert!(quiet.findings.iter().all(|f| f.level == Level::Ok && !f.message.contains("unprobed")), "{:?}", quiet.findings);
+            // The newer `--help` shows a flag no manifest row covers: the surface drift line, from the same fake release.
+            let help = move |p: &str, words: &[&str]| -> Option<String> {
+                let page = snapshot_text(p).split("##### ").find(|s| s.lines().next().map(|h| h.split_whitespace().skip(1).collect::<Vec<_>>()) == Some(words.to_vec()))?;
+                let body: String = page.lines().skip(1).collect::<Vec<_>>().join("\n");
+                Some(if words.is_empty() { format!("{body}\nOptions:\n  --f1-brand-new-flag   added in {newer}\n") } else { body })
+            };
+            let mut s = Report::default();
+            check_coverage_drift(&cfg, &help, &mut s);
+            assert!(s.findings.iter().any(|f| f.level == Level::Warn && f.message.contains("--f1-brand-new-flag")), "{cli}: {:?}", s.findings);
+        }
+        let mut none = Report::default();
+        check_version_drift(&ep("one", "copilot"), &|_: &str, _: &[&str]| None, &mut none);
+        assert!(none.findings.is_empty(), "a CLI that is not installed is check 10's to report");
     }
 
     /// specs/132 AC-5: with a fake `session/new` answer the catalog is cached with its CLI version; a configured model missing from it
