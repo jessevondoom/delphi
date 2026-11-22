@@ -370,3 +370,32 @@ Chosen: A with D. Flagged by the guard: none.
 ## 16. Council record
 
 No Council has read this text. It was written by an architect agent from the operator-approved plan, the P0 results and the code at `main` `56fe81ac`, without calling any model. The approval is the operator's advance approval of the plan plus the instruction to put Copilot first. Slices C7, C9, A1, X2, X4, X5 and X6 are live runs that need the operator's yes; none of them is a Council of this text. A Council on this spec, if the operator wants one, should keep its context under spec 131's interim limit (about 150 KB) while a Gemini seat sits through agy.
+
+## 17. Amendment (operator, 2026-11-21): Copilot ACP seats are confined (slice C9)
+
+Approved by the operator in a host session ("6. make the copilot fixes"), on a recommendation drawn from a live probe of Copilot's ACP permissions on 2026-11-21 (about 2.6 premium requests; the evidence is summarised in `missions/2026-11-20-forge/F4-REPORT.md`'s follow-ups and below). Written afterwards by an architect agent; the operator has not read it line by line.
+
+### 17.1 What the probe found
+
+Copilot CLI (`--version` 1.0.114; ACP `initialize` reported 1.0.107; the installed link pointed at 1.0.105) in `--acp` mode:
+
+1. **Delphi's ACP launch passes no `--available-tools`** (`harness.rs`, the `--acp` argv). Print-mode readers already pass `--available-tools delphi-no-tools` and get no tools; an ACP seat (a Copilot Builder) is offered every native tool, including `bash`, `sql`, `web_fetch` and the agent tools.
+2. **The operator's user-level MCP configuration loads into the seat** even with `--disable-builtin-mcps`: the operator's `delphi-*` tools were offered.
+3. **`bash` runs commands it classes as read-only without asking** (for example `cat` inside its working directory).
+4. **A `view` of a file in the system temporary directory, outside the working directory, ran without a `session/request_permission`**, even with `--available-tools view grep glob --disallow-temp-dir`. Reads under `$HOME` outside the working directory did ask first, as did writes.
+5. A rejected permission request ends the agent's turn.
+
+### 17.2 The change
+
+1. **An explicit tool list on every ACP launch.** `--available-tools` names exactly the tools the seat's role is meant to have: Delphi's bridge tools (by their Copilot names, `<server>-<tool>`) and, for a Builder, the native edit and create tools that reach Delphi's gate as permission requests. `bash` is never offered (a Builder runs commands through Delphi's own `run_command`, sandboxed), nor `sql`, `web_fetch` or the agent and workflow tools.
+2. **No unasked reads outside the seat's places.** Each ACP launch passes `--deny-tool` rules for reads of the system temporary directories (`$TMPDIR`, `/tmp`, `/private/var/folders`, `/private/tmp`) except the seat's own scratch, and Delphi's ACP gate refuses every `kind:"read"` permission request whose path is outside the seat's worktree. Whether the deny rules close the unasked temp-directory read is checked live (17.3); if they do not, the seat's working directory and scratch are moved outside the system temporary directory and the remaining exposure is stated in `delphi doctor`.
+3. **The operator's own Copilot configuration stays out.** The seat runs with a Copilot configuration home inside its scratch (the CLI's config-directory setting or environment variable, whichever the installed version honours), so user-level MCP servers, custom instructions and trusted folders do not load. Delphi's bridge is passed explicitly (`--additional-mcp-config`) where the role needs it.
+4. **The watchdog sees reads.** For a Copilot seat, every `tool_call` of `kind:"read"` is checked against the seat's places (as spec 135 §14.7 rule 4 does for other carriers); a read outside them that no permission request preceded stops the seat and is logged.
+5. **The version Delphi records is the one the ACP server reports** (`agentInfo.version`), not `--version` alone; a mismatch is shown in `delphi doctor`.
+
+### 17.3 Verification
+
+- Unit tests: the ACP argv carries `--available-tools` with no `bash` and the deny rules; the config home is the seat's scratch; the read watchdog stops a seat on an unasked out-of-place read (scripted stream).
+- **A live re-probe, at most 3 premium requests**, run by the builder on the operator's standing approval for this slice: a `view` of a file in the system temporary directory and one under `$HOME`, both outside the working directory, `bash` not offered, no `delphi-*` user tools offered. The result is recorded in the tracker row. If the temporary-directory read still happens unasked, 17.2 item 2's fallback applies and the row says so.
+
+Copilot review seats stay tool-less (spec 135 §14.7); this amendment does not give them read tools.
