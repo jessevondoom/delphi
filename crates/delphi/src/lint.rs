@@ -108,7 +108,37 @@ pub fn run(tree: &Tree) -> Report {
     check_options_considered(tree, &mut r);
     check_skill_roles(tree, &mut r);
     check_done_when(tree, &mut r);
+    check_changelog_fragments(tree, &mut r);
     r
+}
+
+// ── release-note fragments (specs/036 section 9) ─────────────────────────────
+
+/// Every file under `changelog.d/` but its README is a well-formed fragment: a lowercase slug, a frontmatter block with one
+/// `section:` line naming one of the five sections, a Markdown list item, no heading and no relative link. A malformed fragment
+/// would stop the release pull request's `delphi release changelog --write`, so it fails here, in the pull request that adds it.
+/// Source repo only.
+fn check_changelog_fragments(tree: &Tree, r: &mut Report) {
+    if tree.mode != Mode::Repo {
+        return;
+    }
+    let prefix = format!("{}/", crate::release_notes::DIR);
+    let mut files: Vec<(String, Option<String>)> = Vec::new();
+    for path in tree.files.keys().filter(|p| p.starts_with(&prefix)) {
+        let rest = &path[prefix.len()..];
+        match rest.split_once('/') {
+            // A file in a subdirectory: the directory is reported once, as the command reports it.
+            Some((dir, _)) => {
+                if !files.iter().any(|(n, _)| n == dir) {
+                    files.push((dir.to_string(), None));
+                }
+            }
+            None => files.push((rest.to_string(), tree.read(path))),
+        }
+    }
+    for (name, why) in crate::release_notes::problems(&files) {
+        r.fail("changelog-fragment", format!("{prefix}{name}"), format!("{why} (specs/036 section 9; see changelog.d/README.md)"));
+    }
 }
 
 // ── "Options considered" in a new spec (specs/124 section 7) ───────────────────
@@ -1154,6 +1184,24 @@ mod tests {
 
     fn fails(tree: &Tree, check: &str) -> Vec<String> {
         run(tree).findings.into_iter().filter(|f| f.level == Level::Fail && f.check == check).map(|f| format!("{} {}", f.location, f.message)).collect()
+    }
+
+    // specs/036 section 9: a malformed release-note fragment fails the lint; the README and files elsewhere are not fragments.
+    #[test]
+    fn a_malformed_changelog_fragment_fails_and_the_readme_does_not() {
+        let good = "---\nsection: Fixed\n---\n- **A fix.** What it changes.\n";
+        let (_t, tree) = tree_of(&[
+            ("changelog.d/README.md", "# How to write a fragment\n"),
+            ("changelog.d/good.md", good),
+            ("changelog.d/no-section.md", "---\n---\n- a\n"),
+            ("changelog.d/Bad Name.md", good),
+            ("changelog.d/nested/x.md", good),
+            ("changelog.d/nested/y.md", good),
+            ("docs/changelog.d/elsewhere.md", "not a fragment"),
+        ]);
+        let mut f: Vec<String> = fails(&tree, "changelog-fragment").into_iter().map(|m| m.split_whitespace().next().unwrap_or("").to_string()).collect();
+        f.sort();
+        assert_eq!(f, vec!["changelog.d/Bad", "changelog.d/nested", "changelog.d/no-section.md"]);
     }
 
     // specs/090: a number names one spec. Letters make distinct numbers (005a, 005b), and files below `specs/` do not count.
