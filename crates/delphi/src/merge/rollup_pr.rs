@@ -6,7 +6,8 @@
 //! cross-spec bundle as before. The body is trusted for nothing: every fact in it is derived again.
 //!
 //! `merge` (S20) is the only path here to `Forge::merge`: inside an invocation the operator started and approved, on a green rollup
-//! whose constituents are all still at their approved heads. This module is on the gate list.
+//! whose constituents are all still at their approved heads. A red rollup is never merged: `bisect` (S21) closes it and splits it.
+//! This module is on the gate list.
 
 use super::check::{evaluate, Verdict, BEHIND_MARK};
 use super::errors::{Class, Errors};
@@ -22,6 +23,8 @@ use std::path::Path;
 /// Every refusal of a rollup starts with one of these (`errors::classify_refusal` reads them, §13.8).
 pub const REFUSED: &str = "rollup refused: ";
 pub const STALE: &str = "rollup stale: ";
+/// An entry for a constituent bisection found red on its own, or red together and green apart (§13.5, S21).
+pub const RED: &str = "rollup red: ";
 
 /// Where a rollup is built and rebuilt: the repository the command runs in and the Delphi home (for the temporary worktree).
 #[derive(Clone, Copy)]
@@ -220,18 +223,40 @@ fn merge(ctx: &mut Ctx, env: Env, v: Verdict, approval: Option<&Approval>) -> Ou
             }
         }
     };
-    if let Some((k, h, _)) = r.manifest.prs.iter().find(|(k, h, _)| !approval.covers(*k, h)) {
-        return refuse(vec![format!("{STALE}#{k} at `{}` is not a head the operator approved in this run", short(h))]);
+    match judge(ctx, &r, n, &head, &approval) {
+        Judged::Green if ctx.dry_run => Outcome::DryRun { pr: n, head: head.clone(), gate_changing: false },
+        Judged::Green => record_and_merge(ctx, env, &r, n, &head, &approval),
+        // A red rollup is bisected (§13.5, S21), never merged; a dry run only says so.
+        Judged::Red(_) if !ctx.dry_run => super::bisect::bisect(ctx, env, &r, n, &approval),
+        Judged::Red(reasons) | Judged::Refused(reasons) => refuse(reasons),
     }
-    let v = match wait_green(ctx, n, &head) {
+}
+
+/// What the rollup's checks and constituents say, once its checks finished (or the wait ran out).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Judged {
+    Green,
+    /// Its checks finished and `ci-gate` failed; nothing else refuses it. Bisected (S21).
+    Red(Vec<String>),
+    /// Anything else: still running, no `ci-gate`, a constituent that moved or closed, an approval that does not cover it.
+    Refused(Vec<String>),
+}
+
+/// Judge the recognised rollup `n` at `head` under `approval`: wait for its checks, then require a passing `ci-gate` and every
+/// constituent still open at the head the manifest names (invariant 2, at the last moment).
+pub(super) fn judge(ctx: &Ctx, r: &Recognised, n: u64, head: &str, approval: &Approval) -> Judged {
+    if let Some((k, h, _)) = r.manifest.prs.iter().find(|(k, h, _)| !approval.covers(*k, h)) {
+        return Judged::Refused(vec![format!("{STALE}#{k} at `{}` is not a head the operator approved in this run", short(h))]);
+    }
+    let v = match wait_green(ctx, n, head) {
         Ok(v) => lifted(&v),
-        Err(why) => return refuse(why),
+        Err(why) => return Judged::Refused(why),
     };
     let mut reasons = v.refusals.clone();
-    if !v.checks.iter().any(|c| c.name == REQUIRED_CHECK && c.bucket == "pass") {
+    let gate = v.checks.iter().find(|c| c.name == REQUIRED_CHECK).map(|c| c.bucket.clone());
+    if gate.as_deref() != Some("pass") {
         reasons.push(format!("checks failed: `{REQUIRED_CHECK}` has not passed on the rollup"));
     }
-    // Invariant 2 at the last moment: every constituent is still at the head the manifest names.
     for p in &r.parts {
         match ctx.forge.pr(p.pr.number) {
             Ok(now) if now.head_sha == p.pr.head_sha && now.state == "OPEN" => {}
@@ -239,14 +264,13 @@ fn merge(ctx: &mut Ctx, env: Env, v: Verdict, approval: Option<&Approval>) -> Ou
             Err(e) => reasons.push(e.to_string()),
         }
     }
-    if !reasons.is_empty() {
-        reasons.push("a red rollup is not bisected in this build (spec 094 §13.5, S21): merge its pull requests one by one".into());
-        return refuse(reasons);
+    if reasons.is_empty() {
+        Judged::Green
+    } else if gate.as_deref() == Some("fail") && reasons.iter().all(|r| r.starts_with("checks failed")) {
+        Judged::Red(reasons)
+    } else {
+        Judged::Refused(reasons)
     }
-    if ctx.dry_run {
-        return Outcome::DryRun { pr: n, head, gate_changing: false };
-    }
-    record_and_merge(ctx, env, &r, n, &head, &approval)
 }
 
 /// The check every rollup must have passed (§12.2.1: the one the ruleset requires).
@@ -272,7 +296,7 @@ fn wait_green(ctx: &Ctx, n: u64, head: &str) -> Result<Verdict, Vec<String>> {
 
 /// One `approved` row per constituent (its own approval, spec and head, `carried_into` the rollup), the merge of exactly the rollup
 /// head, the `merged` rows, the check of each constituent's state (OD-17) and cleanup.
-fn record_and_merge(ctx: &mut Ctx, env: Env, r: &Recognised, n: u64, head: &str, approval: &Approval) -> Outcome {
+pub(super) fn record_and_merge(ctx: &mut Ctx, env: Env, r: &Recognised, n: u64, head: &str, approval: &Approval) -> Outcome {
     let now = (ctx.now)();
     let row = |p: &Verdict, kind: &str| {
         let mut row = p.record(approval.att.clone(), ctx.session.clone(), now.clone()).to_json(kind);

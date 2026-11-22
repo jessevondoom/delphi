@@ -42,6 +42,9 @@ pub struct State {
     pub land_on_merge: bool,
     /// Pull requests closed: `(number, comment)`.
     pub closed: Vec<(u64, String)>,
+    /// CI as a function of a rollup's constituents (spec 094 §13.5): when set, an opened rollup's `ci-gate` fails if its manifest
+    /// holds every pull request of any one of these sets, and passes otherwise.
+    pub red_when: Vec<Vec<u64>>,
 }
 
 #[derive(Default)]
@@ -192,7 +195,13 @@ impl Forge for FakeForge {
         let head_sha = s.origin.as_ref().map(|o| super::refresh_tests::git(o, &["rev-parse", &format!("refs/heads/{head}")])).unwrap_or_default();
         let info = PrInfo { number: n, title: title.into(), state: "OPEN".into(), mergeable: "MERGEABLE".into(), head_sha, head_ref: head.into(), base_ref: base.into(), body: body.into(), ..PrInfo::default() };
         s.prs.insert(n, info);
-        let checks = s.checks_on_open.clone();
+        let checks = match super::rollup::parse_manifest(body) {
+            Ok(m) if !s.red_when.is_empty() => {
+                let red = s.red_when.iter().any(|set| set.iter().all(|k| m.prs.iter().any(|p| p.0 == *k)));
+                vec![Check { name: "test".into(), bucket: "pass".into() }, Check { name: "ci-gate".into(), bucket: if red { "fail" } else { "pass" }.into() }]
+            }
+            _ => s.checks_on_open.clone(),
+        };
         s.checks.insert(n, checks);
         Ok(n)
     }
