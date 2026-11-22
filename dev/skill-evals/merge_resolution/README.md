@@ -3,9 +3,12 @@
 Behavior evals for the builder's `git-merge-and-conflict-resolution` skill (spec 094, AC-7b). They test whether a
 resolution is right, not whether the skill is found (that is AC-7a, `dev/skill-evals/`).
 
-Six seeded cases, each a fresh temp git repo (branch `feature` diverged from `main`, no remote): `tracker`
+Seven seeded cases, each a fresh temp git repo (branch `feature` diverged from `main`, no remote): `tracker`
 (double append to a markdown file), `modlist` (two `mod` lines), `generated` (`out.md` made by `./gen.sh`), `lockfile`
-(the right answer is main's), `behind` (no conflict), `semantic` (merges cleanly, the gate `check.sh` then fails).
+(the right answer is main's), `behind` (no conflict), `semantic` (merges cleanly, the gate `check.sh` then fails), and
+`stalecount` (spec 094 §11.3.6, the identical-line case of 2026-11-20: both branches add a spec and regenerate
+`index.md`, both change its count line from 6 to 7, git merges with no conflict, and the result says 7 where 8 specs
+exist; the right answer is to rerun `./gen.sh` after the clean merge).
 
 - `cases.py` builds the repos with plain git and a fixed identity.
 - `checks.py` has one pure `check(repo) -> (ok, reason)` per case, run after the resolution is committed. All cases

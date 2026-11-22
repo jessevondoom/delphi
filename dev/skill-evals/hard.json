@@ -46,5 +46,6 @@
 ["builder", "The merge conflicts in docs/reference/cli.md after main changed a command.", "git-merge-and-conflict-resolution"],
 ["builder", "Cargo.lock has conflict markers after I pulled the base branch in.", "git-merge-and-conflict-resolution"],
 ["builder", "My PR says it is behind main and its checks never ran. Bring it up to date without rewriting history.", "git-merge-and-conflict-resolution"],
-["builder", "The merge was clean but the build is red afterwards, and the other branch changed what the same function means.", "git-merge-and-conflict-resolution"]
+["builder", "The merge was clean but the build is red afterwards, and the other branch changed what the same function means.", "git-merge-and-conflict-resolution"],
+["builder", "Main and my spec PR both added a spec; merging main in was clean, but the generated index now counts one spec too few.", "git-merge-and-conflict-resolution"]
 ]

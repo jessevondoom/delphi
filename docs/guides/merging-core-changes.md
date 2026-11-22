@@ -1,6 +1,6 @@
 # Merging core changes
 
-How a pull request to Delphi's own repository goes from "ready" to "merged and cleaned up". The design is [specs/094](../../specs/094-core-repo-merge-flow.md). Each part below says which slice built it. Slices S2 to S7 are merged; only the hardening of S8 (see "Deliberately deferred") is not built. You need a `delphi` built from `main` after those merges (release 0.5.6 predates them), the GitHub CLI (`gh`) signed in, and to run the commands inside the repository. If Delphi is unavailable, use the native route at the end.
+How a pull request to Delphi's own repository goes from "ready" to "merged and cleaned up". The design is [specs/094](../../specs/094-core-repo-merge-flow.md), with its §11 amendment of 2026-11-20 (merge only what CI has tested against the tip it lands on). Each part below says which slice built it. Slices S2 to S7 and S9 to S11b are merged; the hardening of S8 (see "Deliberately deferred") is not built, and the repository setting of S12 is yours to switch on (see "The repository setting"). You need a `delphi` built from `main` after those merges (release 0.5.6 predates S3 to S7; S9 to S11b merged on 2026-11-20 to 2026-11-22 and are in no release before then), the GitHub CLI (`gh`) signed in, and to run the commands inside the repository. If Delphi is unavailable, use the native route at the end.
 
 | Slice | Built |
 | :-- | :-- |
@@ -8,9 +8,14 @@ How a pull request to Delphi's own repository goes from "ready" to "merged and c
 | S4 | cleanup after merge, `merge cleanup` |
 | S5 | the error log entries, `merge log`, `merge fix` |
 | S6 | `merge --auto` |
-| S7 (this page) | the agent rules, this guide, the vocabulary table |
-| S9 (§11) | freshness: a PR whose head is behind its base is refused, class `behind` |
-| S10 (§11) | `merge refresh <PR>`: a mechanical update of a behind PR, class `refresh-refused` |
+| S7 | the agent rules, this guide, the vocabulary table |
+| S9 (§11, #821) | freshness: a PR whose head is behind its base is refused, class `behind` |
+| S10 (§11, #836) | `merge refresh <PR>`: a mechanical update of a behind PR, class `refresh-refused` |
+| S11 (§11, #853) | `<PR>`, `--all` and `--auto` refresh a behind PR themselves and wait for CI (`--wait`, `--no-wait`); the approval carried over (`carried_from`) |
+| S11b (§11, #874) | the check of the base after each merge, class `base-drift`, `merge repair-base` |
+| S12 (§11, this page) | this guide's §11 parts, the builder skill's row and eval fixture, the repository setting as your step |
+
+**Never run against real GitHub.** Everything from S9 on is proven by tests with a fake forge and by fixture repositories with a local bare remote, and by nothing else. The compare call (`behind_by`), a real refresh push, a real wait on real checks, the base check against the real `main`, and the `gh pr create` of `repair-base` have not run against GitHub. The live rehearsal of spec 094 §11.10 V5 (two scratch spec PRs through `delphi merge --all`, with you present) and the V3 replay of 2026-11-20 have not been done. Treat the first real runs as that rehearsal: watch them, and fall back to the native route if one misbehaves.
 
 Delphi stays optional. The label, the PR comment and the merge commit are visible in plain GitHub, and a native merge always works.
 
@@ -25,11 +30,11 @@ delphi merge <PR>...      merge these queued PRs, in order
 delphi merge --all        merge every queued PR, oldest first
 ```
 
-The command derives the head commit, base commit, changed paths, the linked spec's blob hash, the checks and mergeability. It refuses unless the PR is queued, not a draft, mergeable, all checks pass and the spec is approved. CI, `delphi lint`, spec linkage and the `REVIEW.md` audit still run; an approval never replaces them.
+The command derives the head commit, base commit, changed paths, the linked spec's blob hash, the checks and mergeability. It refuses unless the PR is queued, not a draft, mergeable, all checks pass, the spec is approved and the head contains the base tip (freshness, below; a behind PR that is otherwise ready is refreshed rather than refused, S11). CI, `delphi lint`, spec linkage and the `REVIEW.md` audit still run; an approval never replaces them.
 
 ### Freshness (S9)
 
-CI tests a PR against the base as it was at the PR's last push, and nothing runs again when the base moves. Two spec PRs that each change the compiled index's count line from 136 to 137 merge with no conflict, and `main` then says 137 where there are 138 specs (this broke `main` on 2026-11-20). So the command also refuses a PR whose head does not contain the base tip: it asks GitHub's compare API how far the head is behind (`behind_by`, not `mergeStateStatus`, which says `BEHIND` only under strict branch protection). The refusal gives the count and says what to do: refresh the branch (`delphi merge refresh <PR>`) and wait for CI on the new head. A failed compare is a failure, never a pass. The rule applies to every PR, gate-changing ones included, and `--dry-run` and `merge status` show it. `merge queue` does not require freshness: the queue is advice, and it says when a PR it queues is behind. In a batch (`--all`, `--auto`), every PR after the first merge is behind, so it is refused until it is refreshed and green again; refreshing and waiting inside the batch is slice S11, not built yet.
+CI tests a PR against the base as it was at the PR's last push, and nothing runs again when the base moves. Two spec PRs that each change the compiled index's count line from 136 to 137 merge with no conflict, and `main` then says 137 where there are 138 specs (this broke `main` on 2026-11-20). So the command also refuses a PR whose head does not contain the base tip: it asks GitHub's compare API how far the head is behind (`behind_by`, not `mergeStateStatus`, which says `BEHIND` only under strict branch protection). The refusal gives the count and says what to do: refresh the branch (`delphi merge refresh <PR>`) and wait for CI on the new head. A failed compare is a failure, never a pass. The rule applies to every PR, gate-changing ones included, and `--dry-run` and `merge status` show it. `merge queue` does not require freshness: the queue is advice, and it says when a PR it queues is behind. In a batch (`--all`, `--auto`), every PR after the first merge is behind; the merge command refreshes it and waits (below, S11).
 
 ### `delphi merge refresh <PR>` (S10)
 
@@ -46,6 +51,36 @@ Run it in the repository on a PR that is behind. It does what an author did by h
 Any other conflicted file, a gate path, more than 10 conflicted files, a failed compile, a widened change or a rejected push stops it with nothing pushed and an entry of class `refresh-refused`. Run `delphi merge fix <PR>` to hand that to the builder.
 
 **It needs no approval of its own.** It never merges a PR and has no path to one. It pushes one ordinary commit that changes nothing the PR did not already change, apart from generated files and the two append-only files. Anyone who may push to the branch may run it, an agent included, as with `merge fix`. CI then runs on the new head, and the PR merges only through `delphi merge` on your word. Cargo.lock and `docs/reference/` conflicts need a build of the merged code, so they go to `merge fix`.
+
+### Refresh and wait inside `delphi merge` (S11)
+
+```
+delphi merge <PR>... [--wait 40m | --no-wait]
+delphi merge --all   [--wait 40m | --no-wait]
+```
+
+You no longer have to run `refresh` yourself before a merge. When `<PR>` or `--all` meets a PR that is behind and otherwise ready (green, queued, not gate-changing), it first takes your approval as usual, then refreshes the PR as above, waits for CI on the new head, and merges the new head only when every check passed on it and it is still current.
+
+- **The wait.** `--wait <duration>` bounds it per PR: default 40 minutes, at most 4 hours. `--no-wait` refreshes and stops; run the merge again once CI is green.
+- **Two rounds at most.** If the base moves again during the wait, the command refreshes once more. After two refreshes of one PR in one run it stops and says the base kept moving; run it again when the base is quieter.
+- **What it does not refresh.** A PR that is behind and red, or behind with checks still running, is refused as before (a refresh would waste a CI run on a head about to be replaced). A gate-changing PR is never refreshed by the tool. A `--dry-run` never refreshes; `merge status` says which PRs "will be refreshed at merge".
+- **`--all` costs about one CI run per PR.** After the first merge every later PR is behind, so each is refreshed and waited for in turn: N PRs take about N CI runs end to end (10 to 25 minutes each on 2026-11-20). That is the price of testing each merge against the tip it lands on. A PR whose refresh is refused is skipped with its reason, and the batch goes on.
+- **`--auto`** refreshes a behind PR and moves on; the PR merges at a later poll once its checks are green. A refresh that fails counts toward the two-errors pause; one that succeeds does not. `--auto` takes no `--wait`: its polls are the wait.
+- **Your approval across a refresh.** A refresh makes a new head, and a new head needs a new record. The record is derived again; your attestation carries over to it only when the same run (or the same `--auto` session) made the refresh, and the ledger row says `carried_from: <old head>`. A head that moved any other way (someone else's refresh, a `merge fix`, a hand commit) needs you again.
+
+### The base check and `delphi merge repair-base` (S11b)
+
+A merge can be clean and still leave `main` wrong: on 2026-11-20 two spec PRs each changed a count line from 136 to 137, git merged the identical change once, and `main` said 137 with 138 specs. (Spec 088 has since removed the counts from the compiled views, so that exact line cannot recur, but any generated line both sides change the same way can.) So after each merge, at each `merge status` and at each `--auto` poll, the command fetches the base and runs the spec compile check (`delphi specs compile --check`, in process, no build) on its tip, in a temporary worktree under `$DELPHI_HOME/merge/` that it removes afterwards.
+
+- A drift writes an error entry of class `base-drift` (PR 0, the base commit). `--all` checks before it starts and after each merge and stops; `--auto` checks at each poll and after each merge and ends the session; `<PR>` records it, says so and goes on. A later check that finds the base current resolves the entry.
+- A check that could not run (no repository, a failed fetch) is said and never taken for drift or for current; it does not stop a run.
+- The check catches drift that entered by any route, your own native merge included, but only when somebody runs the flow. The CI run on `main` stays the first signal.
+
+```
+delphi merge repair-base [--base main] [--dry-run] [--operator-said "<words>"]
+```
+
+`repair-base` makes the repair that #806 made by hand. From the base tip, in a temporary worktree, it runs the spec compile and stages only `compiled/specs/`; if the compile changed anything else, it refuses and commits nothing. It shows you the files and asks first: type `repair` at a terminal, or an agent passes your own words asking for a repair with `--operator-said`. It then commits, pushes a new branch `repair-base-<base>-<short sha>` with a plain push (a branch that exists already rejects it), and opens the PR "Recompile compiled/specs on main". **It merges nothing**: the `base-drift` entry moves to `fixed-pending-ci` and the ledger gets a `repair_base` row; you merge the repair once CI is green, as any other PR. `--dry-run` only lists the files. If the base is already current it says so and resolves the entry. A spec that fails to compile on the base is not something a recompile can repair; it says so and you hand it to a builder.
 
 ## The approval record
 
@@ -75,6 +110,22 @@ It also releases the slice claims held by the merged branch in this repository (
 ## Errors and `merge fix` (S5)
 
 A PR that cannot merge (conflict, red check, behind the base, stale record, auth or network failure, locked worktree, refused match-head) gets an entry in `$DELPHI_HOME/merge/errors.jsonl` and a line in the central error log (component `merge`; see [Debugging](debugging.md)). `delphi merge log [--open] [--pr N]` reads it. `delphi merge fix <PR>` hands an open entry to the builder on the PR's branch. The builder pushes ordinary commits, never a force-push, and stops for a human when a gate path conflicts, more than 10 files conflict, or tests fail after its resolution. A new head commit voids the record, so you ask again.
+
+The §11 amendment added three classes: `behind` (S9, a refusal: the head does not contain the base tip), `refresh-refused` (S10, a conflict outside the mechanical list, a gate path, a failed compile, a widened change or a rejected push) and `base-drift` (S11b, the compiled views on the base are not what the compile writes). `merge fix` takes `behind` and `refresh-refused` entries as it takes a conflict; a `base-drift` entry is closed by `repair-base` and a current base. The builder's skill (`git-merge-and-conflict-resolution`) has a row for each: run `delphi merge refresh <PR>` first and resolve by hand only what it refused, and after any merge of the base, clean or not, rerun the generator.
+
+## The repository setting (S12, yours)
+
+The flow cannot stop a merge that does not go through it: the GitHub button, or `gh pr merge` at your own terminal. GitHub can. Spec 094 OD-10 recommends that you add a **required status checks** rule with the **strict** policy ("Require branches to be up to date before merging") to the existing ruleset. GitHub then refuses any merge, native ones included, of a head that does not contain the tip of `main`, and closes the seconds-long window between the flow's freshness check and its `gh pr merge`. No code changes, and Delphi stays optional: the check is GitHub's own.
+
+As read on 2026-11-22, the repository has one ruleset, "main branch protection" (active, on the default branch, no bypass actors), with two rules: `deletion` and `non_fast_forward`. No status check is required. Nothing in this slice changes it. To switch it on:
+
+1. Settings, Rules, Rulesets, "main branch protection", then add the rule "Require status checks to pass", and tick "Require branches to be up to date before merging".
+2. Add the checks by the names CI reports. At least `test linux (integration, bins, doc)` (it runs `compiled_specs`, the test the 2026-11-20 drift broke) and `lint (ubuntu-latest)`. If you accept the longer wait, add every job: `test linux (unit)`, `macos (test + clippy)`, `dependency policy (cargo deny)`, `ui (node)`, `linux sandbox (bubblewrap)`.
+3. Save, then check it once: on a PR one commit behind `main`, `gh pr view <PR> --json mergeStateStatus` should read `BEHIND`, and `gh pr merge` should be refused with GitHub's message.
+
+What it costs: a required check's name becomes a gate, so renaming or removing a CI job (a `.github/` change, gate-changing already) blocks every merge until the rule is edited to match. A PR can merge only after CI has run on a head that contains the current tip, which is what `delphi merge` already demands. `--all` and `--auto` behave the same with or without it (spec 094 OD-7). GitHub's Merge Queue is not recommended now: it needs a `merge_group` trigger in `ci.yml` and is likely unavailable on a repository owned by a user account. Outside the flow, update a behind PR with `gh pr update-branch <PR>` (or the button); GitHub's update merges the base in but does not recompile, so if the PR touches specs, run `delphi specs compile` on the updated branch and push what it writes.
+
+As of this page the setting is not switched on.
 
 ## Vocabulary
 
@@ -119,6 +170,8 @@ If Delphi is unavailable, nothing is lost:
 
 ```sh
 gh pr view <PR> --json isDraft,mergeable,statusCheckRollup
+gh api repos/{owner}/{repo}/compare/main...<head-sha> --jq .behind_by   # must be 0; otherwise:
+gh pr update-branch <PR>                                                # then wait for CI on the new head
 gh pr merge <PR> --merge --match-head-commit <head-sha>
 git push origin --delete <branch>
 git branch -d <branch>
