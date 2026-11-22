@@ -5,7 +5,8 @@
 //! reply text. A record is evidence for the CLI version it names only: a newer CLI is "unprobed" (C9) until probed again.
 //!
 //! Built here: C2 (the bare call), C5 (the served model from the CLI's own events), C6 (the tool level: at L0 the tools the stream
-//! reported; for `agy` behind its gate, the gate record, folded in as this record's C6 row). Not built here, recorded as
+//! reported; for `agy` behind its gate, the gate record, folded in as this record's C6 row), and C9 (slice F1: the probed version
+//! against the version the CLI's coverage manifest is pinned to). Not built here, recorded as
 //! `unmeasured` with the reason: C3 (the input ladder is spec 131 S6) and C4 (one schema answer, not probed yet).
 //! Nothing reads this record to grant anything: `local/agy-gate.json` stays what a span reads for the agy gate.
 
@@ -117,7 +118,34 @@ pub fn from_probe(cap: &Capability, seat: Option<&SeatRecord>, gate: Option<&Gat
         (true, _, _, _, Some(s)) if s.tools.is_empty() => row("C6", Status::Met, "L0: the stream reported no tools offered", Some(0)),
         (true, _, _, _, Some(s)) => row("C6", Status::NotMet, format!("L0: the stream reported tools offered ({})", s.tools.join(", ")), Some(s.tools.len() as u64)),
     });
+    rows.push(pin_row(harness, cli_version));
     Record { endpoint_id: cap.endpoint_id.clone(), harness: harness.into(), model: cap.model_id.clone(), cli_version: cli_version.unwrap_or("").into(), at: cap.probed_at, tool_level: level.into(), rows }
+}
+
+/// C9, the version pin (`specs/132` §4 row C9, F1): the record names the version it ran on (always), and the CLI's coverage manifest is
+/// pinned to that same version. A probed CLI newer than its manifest may offer surface Delphi has not classified, so the row is
+/// `not_met`. It raises and lowers nothing by itself: it is the drift, said where the record is read.
+fn pin_row(harness: &str, cli_version: Option<&str>) -> Row {
+    use crate::coverage::{version_drift, VersionDrift};
+    match version_drift(harness, cli_version.filter(|v| !v.is_empty())) {
+        VersionDrift::Pinned(v) => row("C9", Status::Met, format!("the coverage manifest is pinned to {v}, the version probed"), None),
+        VersionDrift::Newer { installed, pinned } => row("C9", Status::NotMet, format!("the CLI ({installed}) is newer than its coverage manifest ({pinned}): what it added is unclassified"), None),
+        VersionDrift::Older { installed, pinned } => row("C9", Status::NotMet, format!("the CLI ({installed}) is older than its coverage manifest ({pinned})"), None),
+        VersionDrift::Unknown => row("C9", Status::Unmeasured, "the CLI version or the manifest's pin could not be read as a version number", None),
+    }
+}
+
+/// How an installed version relates to the version of the last record, in words.
+fn relation(installed: &str, recorded: &str) -> &'static str {
+    use crate::coverage::{compare_versions, version_number};
+    match (version_number(installed), version_number(recorded)) {
+        (Some(a), Some(b)) => match compare_versions(&a, &b) {
+            Some(std::cmp::Ordering::Greater) => "newer than",
+            Some(std::cmp::Ordering::Less) => "older than",
+            _ => "other than",
+        },
+        _ => "other than",
+    }
 }
 
 pub fn load(path: &Path) -> Vec<Record> {
@@ -156,7 +184,9 @@ pub fn doctor_line(all: &[Record], endpoint: &str, installed: Option<&str>, now:
             format!("conformance on {v} ({age}): met {met}{failed}; tool level {}; {BUDGET}", r.tool_level)
         }
         None => match all.iter().filter(|r| r.endpoint_id == endpoint).max_by_key(|r| r.at) {
-            Some(old) => format!("conformance: unprobed version: {v} is installed, the last record is for {}; the seat stays at L0 with spec 131's default budget until `delphi endpoints test --probe` runs again", if old.cli_version.is_empty() { "an unknown version" } else { &old.cli_version }),
+            Some(old) if old.cli_version.is_empty() => format!("conformance: unprobed version: {v} is installed, the last record is for an unknown version; the seat stays at L0 with spec 131's default budget until `delphi endpoints test --probe` runs again"),
+            // A Claude seat's tools come from its own allow-list, never from this record; every other carrier is L0 without one.
+            Some(old) => format!("conformance: unprobed version: {v} is installed, {} the last record's {}; {} until `delphi endpoints test --probe` runs again", relation(v, &old.cli_version), old.cli_version, if old.harness == "claude" { "no probe result applies to it" } else { "the seat stays at L0 with spec 131's default budget" }),
             None => format!("conformance: not probed; run `delphi endpoints test --probe`. L0, {BUDGET}"),
         },
     }
@@ -239,7 +269,8 @@ mod tests {
         let line = doctor_line(&failed, "e", Some("1.0.112"), 300);
         assert!(line.contains("met C2, C6, NOT met C5"), "{line}");
         let moved = doctor_line(&all, "e", Some("1.0.120"), 300);
-        assert!(moved.contains("unprobed version") && moved.contains("1.0.112") && moved.contains("L0"), "{moved}");
+        assert!(moved.contains("unprobed version") && moved.contains("newer than the last record's 1.0.112") && moved.contains("L0"), "{moved}");
+        assert!(doctor_line(&all, "e", Some("1.0.110"), 300).contains("older than the last record's 1.0.112"));
         assert!(doctor_line(&all, "other", Some("1.0.112"), 300).contains("not probed"));
         assert!(doctor_line(&all, "e", Some("1.0.112"), 300 + TTL_SECS).contains("STALE"));
         assert!(doctor_line(&all, "e", None, 300).contains("could not be read"));
@@ -248,6 +279,23 @@ mod tests {
         assert!(current(&load(&p), "e", "").is_none());
         std::fs::write(&p, "not json").unwrap();
         assert!(load(&p).is_empty(), "a damaged file is no evidence");
+    }
+
+    /// specs/132 F1, row C9: the record says whether the probed version is the one the coverage manifest is pinned to.
+    #[test]
+    fn the_c9_row_compares_the_probed_version_with_the_manifest_pin() {
+        let pin = crate::coverage::pinned_version("copilot").unwrap();
+        let rec = |v: Option<&str>| from_probe(&cap("ok", Some("claude-haiku-4.5")), Some(&seat(&[])), None, "copilot", false, "claude", v);
+        let at_pin = rec(Some(&format!("GitHub Copilot CLI {pin}.")));
+        assert_eq!(status(&at_pin, "C9"), Status::Met, "{:?}", at_pin.row("C9"));
+        let newer = rec(Some(&format!("GitHub Copilot CLI {pin}.7")));
+        assert!(status(&newer, "C9") == Status::NotMet && newer.row("C9").unwrap().note.contains("newer than its coverage manifest"), "{:?}", newer.row("C9"));
+        assert!(doctor_line(std::slice::from_ref(&newer),"e", Some(&newer.cli_version), newer.at).contains("NOT met C9"));
+        assert!(rec(Some("0.0.1")).row("C9").unwrap().note.contains("older"));
+        assert_eq!(status(&rec(None), "C9"), Status::Unmeasured, "an unread version is unmeasured, never met");
+        // C9 is judged even when the call failed: the version and the manifest need no answer from a model.
+        let failed = from_probe(&cap("failed", None), None, None, "copilot", false, "claude", Some(&pin));
+        assert_eq!(status(&failed, "C9"), Status::Met);
     }
 
     #[test]

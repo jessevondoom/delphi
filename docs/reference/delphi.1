@@ -568,6 +568,8 @@ listed is kept as gone.
 Asks each CLI's own list commands and reads the skill directories; saves <home>/capabilities.json.
 Setup and update refresh it in the background. \-\-ask also asks the claude and agy models what they can
 use; that answer is shown apart and is not verified. Calls no model otherwise.
+A refresh reads Codex's rate\-limit meter and, when the workspace sets [harness.copilot]
+quota_source = "gh", Copilot's pool; neither calls a model, and nothing decides on them.
 .SS delphi logs
 the error log: what went wrong, with context.
 .PP

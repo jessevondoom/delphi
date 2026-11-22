@@ -320,6 +320,46 @@ pub fn collect(r: &dyn Runner, user_home: &Path, now: i64, with_ask: bool) -> Sn
     Snapshot { schema: 1, taken_unix: now, delphi_version: env!("CARGO_PKG_VERSION").into(), clis, projects: vec![] }
 }
 
+/// The account meters `capabilities` reads (`specs/132` F1), each without a model call: Codex's rate-limit window through
+/// `codex app-server --stdio` (`account/rateLimits/read`, the reader `delphi doctor` uses), and Copilot's pool through `gh` only when
+/// the operator turned it on (`[harness.copilot] quota_source = "gh"`, `specs/051` §6). What a meter says is shown; nothing decides on it.
+pub struct Meters<'a> {
+    pub codex: &'a dyn Fn() -> Option<serde_json::Value>,
+    pub copilot_gh: bool,
+}
+
+/// Whether a workspace config opts in to reading Copilot's pool through `gh`.
+pub fn copilot_gh_opt_in(cfg_text: &str) -> bool {
+    toml::from_str::<toml::Value>(cfg_text).ok().and_then(|v| v.get("harness")?.get("copilot")?.get("quota_source")?.as_str().map(|s| s == "gh")).unwrap_or(false)
+}
+
+/// Fill each installed carrier's `meter` line.
+pub fn read_meters(r: &dyn Runner, s: &mut Snapshot, m: &Meters, now: i64) {
+    use delphi_engine::quota;
+    for c in s.clis.iter_mut().filter(|c| c.installed) {
+        match c.cli.as_str() {
+            "codex" => {
+                c.meter = match (m.codex)().and_then(|v| quota::codex_reading(&v)) {
+                    Some(q) => quota::describe(&q, now),
+                    None => "no rate-limit answer (signed out, or none in time): unknown".into(),
+                }
+            }
+            "copilot" if !m.copilot_gh => c.meter = "not read: `[harness.copilot] quota_source = \"gh\"` turns on the account's pool read; Delphi counts its own spans (`harness.cost`) either way".into(),
+            "copilot" => {
+                let run = |p: &str, a: &[&str]| match r.run(p, a, PROBE_LIMIT) {
+                    Ran::Done { code, out, .. } => Some((code, out)),
+                    _ => None,
+                };
+                c.meter = match quota::read_copilot_via_gh(&run).and_then(|v| quota::copilot_reading(&v)) {
+                    Some(q) => format!("{}; the server's count lags", quota::describe(&q, now)),
+                    None => "`gh api /copilot_internal/user` gave no usable answer: unknown".into(),
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// What one project directory adds. Files only; nothing is run in it.
 pub fn scan_project(dir: &Path) -> ProjectEntry {
     let mut p = ProjectEntry { path: dir.display().to_string(), ..Default::default() };
@@ -358,6 +398,9 @@ pub fn render(s: &Snapshot, now: i64) -> String {
             continue;
         }
         o.push_str(&format!("\n{} {}{}\n", c.cli, c.version, if c.auth.is_empty() { String::new() } else { format!("  ({})", c.auth) }));
+        if !c.meter.is_empty() {
+            o.push_str(&format!("  meter: {}\n", c.meter));
+        }
         let groups: [(&str, &Vec<Item>); 6] = [("connectors", &c.mcp), ("plugins", &c.plugins), ("extensions", &c.extensions), ("skills", &c.skills), ("agents", &c.agents), ("models", &c.models)];
         for (label, items) in groups {
             if items.is_empty() {
@@ -419,8 +462,8 @@ pub fn refresh_in_background(exe: &Path, home: &Path) -> bool {
     background_command(exe, home).spawn().is_ok()
 }
 
-/// `delphi capabilities [--refresh] [--ask] [--json] [--quiet]`.
-pub fn cli(args: &[String], home: &Path) -> i32 {
+/// `delphi capabilities [--refresh] [--ask] [--json] [--quiet]`. `copilot_gh`: the workspace's config opts in to the Copilot pool read.
+pub fn cli(args: &[String], home: &Path, copilot_gh: bool) -> i32 {
     let has = |n: &str| args.iter().any(|a| a == n);
     let user = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
     let existing = load(home);
@@ -428,6 +471,8 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
         Some(s) if !has("--refresh") && !has("--ask") => s.clone(),
         _ => {
             let mut s = collect(&RealRunner, &user, now_unix(), has("--ask"));
+            let codex = || delphi_engine::quota::read_codex("codex", Duration::from_secs(8));
+            read_meters(&RealRunner, &mut s, &Meters { codex: &codex, copilot_gh }, now_unix());
             let scanned = project_dirs(args, home).iter().map(|d| scan_project(d)).collect();
             s.projects = merge_projects(scanned, existing.as_ref());
             if let Err(e) = save(home, &s) {
@@ -486,6 +531,31 @@ mod tests {
         assert_eq!(c.models.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["gpt-a", "gpt-b"], "hidden models are left out, best-ranked first");
         assert!(!format!("{:?}", s).contains("SECRET"));
         assert!(parse_codex_mcp("[]").is_empty() && parse_codex_mcp("No MCP servers configured yet.").is_empty());
+    }
+
+    /// specs/132 F1: `capabilities` shows Codex's rate-limit window and, only when opted in, Copilot's pool through `gh`; a missing
+    /// answer is unknown, a carrier not installed is not asked, and the meter survives the snapshot's round trip.
+    #[test]
+    fn meters_are_read_for_codex_and_for_copilot_only_when_opted_in() {
+        let mut f = Fake { on_path: vec!["codex", "copilot"], ..Default::default() };
+        f.answers.insert("codex --version".into(), done("codex-cli 0.166.0\n"));
+        f.answers.insert("copilot --version".into(), done("GitHub Copilot CLI 1.0.112.\n"));
+        f.answers.insert("gh api /copilot_internal/user".into(), done(r#"{"copilot_plan":"business","quota_snapshots":{"premium_interactions":{"entitlement":300,"remaining":270,"percent_remaining":90.0,"unlimited":false,"overage_permitted":false}}}"#));
+        let home = tempfile::tempdir().unwrap();
+        let codex_answer = || serde_json::from_str(r#"{"rateLimits":{"primary":{"usedPercent":25,"windowDurationMins":10080,"resetsAt":5000},"planType":"plus"}}"#).ok();
+        let meter = |s: &Snapshot, cli: &str| s.clis.iter().find(|c| c.cli == cli).unwrap().meter.clone();
+        let mut s = collect(&f, home.path(), 1, false);
+        read_meters(&f, &mut s, &Meters { codex: &codex_answer, copilot_gh: false }, 1000);
+        assert!(meter(&s, "codex").contains("25%") && meter(&s, "codex").contains("plus plan"), "{}", meter(&s, "codex"));
+        assert!(meter(&s, "copilot").starts_with("not read") && meter(&s, "copilot").contains("quota_source"), "{}", meter(&s, "copilot"));
+        read_meters(&f, &mut s, &Meters { codex: &|| None, copilot_gh: true }, 1000);
+        assert!(meter(&s, "codex").contains("unknown"));
+        assert!(meter(&s, "copilot").contains("business plan") && meter(&s, "copilot").contains("lags"), "{}", meter(&s, "copilot"));
+        assert!(meter(&s, "claude").is_empty(), "a carrier that is not installed is not asked");
+        assert!(render(&s, 1000).contains("  meter: "));
+        let back: Snapshot = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(meter(&back, "codex"), meter(&s, "codex"));
+        assert!(copilot_gh_opt_in("[harness.copilot]\nquota_source = \"gh\"\n") && !copilot_gh_opt_in("[harness.copilot]\n") && !copilot_gh_opt_in("not toml ["));
     }
 
     /// specs/132 O14, AC-2: `delphi capabilities` lists Copilot with its version and whether a login config exists, never a token.
