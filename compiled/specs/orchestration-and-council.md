@@ -151,7 +151,7 @@ An audit of the architect, the builder and the spec skills (host session, 2026-1
 
 ## 135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests
 
-**135: The forge, first cut: slice claims, a finisher, and a cross-family review that runs the tests** · approved (per source at `ac37dd36dc1f`) · tier 0 · [source](../../specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md)
+**135: The forge, first cut: slice claims, a finisher, and a cross-family review that runs the tests** · approved (per source at `db711cb6be4d`) · tier 0 · [source](../../specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md)
 
 **source excerpt, untrusted** · `specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md` line 24
 
