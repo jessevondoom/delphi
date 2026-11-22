@@ -73,6 +73,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2 # the base is the test merge commit's first parent (the review-date skip below)
       - name: Rust toolchain
         run: rustup show active-toolchain && rustc --version
       - name: Cache the Cargo registry
@@ -98,8 +100,22 @@ jobs:
       # before the long tests finish. They run again in the full step below; that costs nothing.
       - name: Static checks (spec references, compiled specs)
         run: cargo test --locked -p delphi --test spec_refs --test compiled_specs
+      # Spec 093-A1: the deny.toml review-date test depends on today's date, so a pull request that does not change
+      # deny.toml skips it (push runs and advisories.yml keep it); the name must match exactly one test.
       - name: Test (binaries and integration tests)
-        run: cargo test --workspace --locked --bins --test '*'
+        env:
+          EVENT: ${{ github.event_name }}
+          DATE_TEST: every_advisory_exception_review_date_has_not_passed
+        run: |
+          skip=()
+          # No pipe into `grep -q` (an early exit can fail the pipe under pipefail); no list of files means no skip.
+          if [ "$EVENT" = "pull_request" ] && changed=$(git diff --name-only HEAD^1 HEAD) && ! grep -qx deny.toml <<<"$changed"; then
+            n=$(cargo test --locked -p delphi --test deny_policy -- --list --exact "$DATE_TEST" | grep -c ': test$' || true)
+            [ "$n" = 1 ] || { echo "the review-date test $DATE_TEST matches $n tests, not 1"; exit 1; }
+            skip=(--exact --skip "$DATE_TEST")
+            echo "deny.toml unchanged: skipping $DATE_TEST (checked on push to main and daily)"
+          fi
+          cargo test --workspace --locked --bins --test '*' -- "${skip[@]}"
       - name: Test (doc tests)
         run: cargo test --workspace --locked --doc
       - name: Save the build directory
@@ -125,6 +141,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2 # the base is the test merge commit's first parent (the review-date skip below)
       - name: Rust toolchain
         run: rustup show active-toolchain && rustc --version
       - name: Cache the Cargo registry
@@ -145,8 +163,18 @@ jobs:
           key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: |
             cargo-target-${{ runner.os }}-test-
+      # Spec 093-A1: as in the Linux integration job (which also checks that the name matches exactly one test).
       - name: Test
-        run: cargo test --workspace --locked
+        env:
+          EVENT: ${{ github.event_name }}
+          DATE_TEST: every_advisory_exception_review_date_has_not_passed
+        run: |
+          skip=()
+          if [ "$EVENT" = "pull_request" ] && changed=$(git diff --name-only HEAD^1 HEAD) && ! grep -qx deny.toml <<<"$changed"; then
+            skip=(--exact --skip "$DATE_TEST")
+            echo "deny.toml unchanged: skipping $DATE_TEST (checked on push to main and daily)"
+          fi
+          cargo test --workspace --locked -- "${skip[@]}"
       - name: Clippy
         if: success() || failure()
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
