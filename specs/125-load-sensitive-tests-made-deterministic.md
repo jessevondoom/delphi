@@ -16,6 +16,7 @@ tags: [spec, tests, ci, flaky, sandbox, harness, doctor, signals]
 # Spec 125: Load-sensitive tests made deterministic
 
 > **Status: approved by the operator, 2026-11-18** (see the frontmatter).
+> **Amendment 125-A1 (section 10), approved by the operator 2026-11-22:** CI retries a failing test once and records it as flaky; a second failure fails the run.
 > **Amends, from its approval:** nothing by text. No product behavior changes. The tests keep what they protect in [`specs/092`](092-operator-authorized-tests.md) (the granted seat and the authorized profile) and [`specs/083`](083-learning-signals-and-host-diagnostics.md) (the host chain in `delphi doctor`).
 
 ---
@@ -25,7 +26,7 @@ tags: [spec, tests, ci, flaky, sandbox, harness, doctor, signals]
 Tests that fail on a pull request they have nothing to do with, and pass on a rerun, cost a macOS job each time and teach people to rerun instead of read. Over 2026-11-16 to 2026-11-18 tests of this kind reddened pull requests or `main` again and again. This spec fixes the four whose cause is shown (T1 to T4), and lists the rest (L1 to L3).
 
 1. **Fix the cause.** Each test in section 3 depends on something it does not control: how soon a thread is scheduled, how many processes the user owns, when a descriptor closes, or what another test did to the process's signals. The fix removes that dependence.
-2. **Keep what each test protects.** No assertion is loosened, no test is ignored, and no test is retried.
+2. **Keep what each test protects.** No assertion is loosened, no test is ignored, and no test is retried by these fixes. (Amendment 125-A1, section 10, adds one retry in CI for every test, as a separate measure; it does not replace a fix.)
 3. **Say what cannot be made deterministic.** Section 5 names one remainder and the smallest honest handling of it.
 
 Acceptance: section 9.
@@ -81,7 +82,7 @@ The case seen in practice on a developer's machine is a copy of these same tests
 
 - **L3.** The file lock of T2 could be taken by the two engine sweep tests as well, and would end the overlap with each other and with the sandbox crate. It would not end the rise from the other engine tests, which no turn can cover. It is left until a failure is caught with its output, so that the fix is aimed at what happened.
 - **L1 and L2.** No cause is shown. The first step is a test-only change that prints why the version was not read (deadline, start failure, exit status or empty output), which needs a failure to be caught first. Raising the 5 seconds or retrying the version call would be a guess, and the 5 seconds are product behavior of spec 092.
-- **A general retry in CI.** `CONTRIBUTING.md` says there is none, and this spec keeps that.
+- **A general retry in CI.** `CONTRIBUTING.md` said there is none, and this spec kept that until amendment 125-A1 (section 10, operator, 2026-11-22), which adds exactly one retry per failing test.
 - **The console pty tests.** They were stabilized in #154 and #631 and none failed in this window.
 - **A change to `PROC_HEADROOM`, to the sweep or to the probe.** They belong to spec 092.
 - **Any file under `.github/` or in the merge-gate list.** None is touched; if a fix turns out to need one, the slice stops and reports.
@@ -122,3 +123,59 @@ One pull request for S0; one for S1 to S4 under the same-spec trial (one commit 
 - **AC-3** No test in the three crates is ignored, removed or retried by these slices, and the count of tests does not fall.
 - **AC-4** All gates pass for every slice: `cargo test --workspace --locked`, clippy with `-D warnings`, and `delphi lint --repo .`.
 - **AC-5** The tracker says, for each test, what was reproduced, what was not, and what remains load-sensitive (section 5, L1 to L3).
+
+## 10. Amendment 125-A1: a failing test is retried once in CI, and a flaky pass is recorded (operator, 2026-11-22)
+
+**Approved by the operator, 2026-11-22**, in a session, in two answers: "retrying flaky tests is fine and a second failing test should continue to fail the run", and, as the go to build it, "can we start on C and D then the new slice you mentioned above while we wait on 881?" (C is this amendment). The text below was written after those answers; the operator has not read it. It takes effect when the operator merges the pull request that carries it.
+
+This amendment reverses one rule of this spec and of `CONTRIBUTING.md`: there was no automatic retry of tests (section 1 item 2, section 6, section 7 option A). Everything else in sections 1 to 9 stands: a flaky test still gets its cause fixed when the cause can be shown, by the principles of section 4.
+
+### 10.1 Why
+
+Measured on 2026-11-22: `main` was red on 20.7% of its CI runs over the ten days before, and about 25 of the 37 failures that could be classified were tests that passed on a rerun of the same commit. The most frequent were the granted Claude seat tests whose stand-in CLI's `--version` probe ran out of time on a loaded macOS runner (L1, L2 of section 3, still without a shown cause), `service::tests::cancelling_a_task_waiting_on_an_approval_…` (an event read before it was written), `run_granted::tests::the_prompt_leaves_an_ignored_signal_ignored_…` (T4, before S4), `doctor::…::the_real_probe_connects_and_closes_without_sending_a_byte` (T3, before S3), `investigation_tests::…` and `kb::tests::episodes_are_indexed_under_zone_episodes_…`. Each red run cost a rerun of the failed jobs, a macOS job each time, and taught the habit section 1 warns about: rerun instead of read. The fixes of section 4 work one test at a time and need a failure caught with its output; the failures arrive faster than that.
+
+### 10.2 The rule
+
+1. **Every failing test is run once more, alone, in a fresh process.** If it passes, the test counts as passed and the run goes on; the test is recorded as **flaky**. If it fails again, it has failed and the run fails, as before. There is no second retry.
+2. **A flaky pass is visible, never silent.** The job's summary page lists every flaky test by name; the JUnit report (kept as an artifact of the run) records the first failure with its output (`<flakyFailure>`); the test log marks it `FLAKY`.
+3. **A test flaky twice gets an owner.** A test recorded flaky in two runs (on `main` or on any pull request) gets an issue naming the runs, and someone who owns it: a fix by section 4, or a written finding why no fix is possible. The retry never closes such an issue.
+4. **Doc tests are not retried.** The runner that retries (below) does not run doc tests; they stay on `cargo test --doc`, as before. None of them has been seen to fail by load.
+5. **Locally** the same rule holds where the same runner is installed: `delphi forge finish --gates` already reruns a failing test once by name and reports it flaky (spec 135, F1b); with the runner it uses the same profile (slice R4).
+
+### 10.3 Why this does not hide bugs
+
+- A test that fails twice in a row still fails the run. A real regression fails every time and is stopped as before.
+- A regression that fails only some of the time (a new race) is the case a retry can let through: one that fails a third of the time passes a run with one retry eight times in nine. It is not hidden: each of its failures is recorded flaky with its output, and by rule 3 its second record makes an issue with an owner. Without the retry the same regression was rerun by hand until green, and nothing was recorded at all; the record is the improvement.
+- Spec 092's guarded tests (the granted seat, the authorized profile, the sweep) assert what never happens. A retry cannot turn a "never" into a pass: a run where the forbidden effect happened fails, and it fails again on the retry unless the effect is itself a race, which is then recorded.
+
+### 10.4 Options considered
+
+| | Option | How it would be tested |
+| :-- | :-- | :-- |
+| A, status quo | No retries: a red test turns the run red; people rerun failed jobs by hand. | Already measured: 20.7% of `main` runs red, about two in three of them flakes. Rejected: it costs a macOS job and a person's attention each time, and records nothing about which test failed. |
+| B, conventional | Retry once but report a flaky pass as a failure (`flaky-result = "fail"` in nextest). | It would give the record of rule 2 and keep every flaky run red. Rejected: the run is as red as today, so it saves nothing, and the operator chose that a pass on the retry passes. |
+| C, removes a constraint | Quarantine: move known-flaky tests to a separate job that may fail, or mark them ignored. | Count how many quarantined tests are ever fixed. Rejected: a quarantined test protects nothing while it waits, section 4 forbids `#[ignore]`, and the list grows quietly; the tests named in 10.1 guard spec 092's sandbox and seat. |
+| D, chosen | Retry once, pass on the retry, record the flaky pass where people look (rule 2), and give a repeat offender an owner (rule 3). | The pull request that builds it shows, in its own CI runs: the same test count as before, the summary page, the date-test skip of spec 093-A1 still working; afterwards, the share of red `main` runs and the flaky list per run. |
+
+### 10.5 How it is built
+
+The retry is cargo-nextest's (`retries = 1` in a `ci` profile in `.config/nextest.toml`), which runs each test in its own process and retries only the failed test. nextest's own default already treats a pass on the retry as a pass and marks it flaky. Running each test in its own process also ends, by itself, the class of failure of T4 (process-wide signal state shared by tests of one binary) and the descriptor copies of T3. The test selection does not change: the Linux unit job runs the library tests, the Linux integration job the binaries' tests and the integration tests (with spec 093-A1's skip of the review-date test, written as a nextest filter, still checked to name exactly one test), and the macOS job all three; doc tests stay on `cargo test --doc`. nextest is installed at a pinned version from its release archive, checked against a SHA-256 written in the workflow. `[test-groups]` run a few named families one at a time among themselves where they share a scarce thing (R2); a group never replaces the retry or a fix.
+
+### 10.6 Slices
+
+| Slice | Content |
+| :-- | :-- |
+| A1 | this amendment and its tracker entry |
+| R1 | `.config/nextest.toml` with a `ci` profile (`retries = 1`, `fail-fast = false`, a `slow-timeout`, a JUnit file); nextest pinned and checksum-verified in CI; `test-linux-lib` and `test-linux-integration` on `cargo nextest run --profile ci` with the same selection; doc tests on `cargo test --doc`; the JUnit file uploaded as an artifact (always) and a job summary naming every flaky test; `CONTRIBUTING.md` says so |
+| R2 | `[test-groups]` with `max-threads = 1` for the load-sensitive families named in 10.1, each justified in the file |
+| R3 | the macOS job on the same profile and summary; Clippy unchanged |
+| R4 | local parity: `delphi forge finish --gates` uses nextest with the `ci` profile when it is installed (doc tests then by `cargo test --doc`), and its own rerun otherwise. Rust code, so a separate pull request (no `.github/` path beside code) |
+
+R1 to R3 change `.github/` and are gate-changing: the operator merges them at a terminal.
+
+### 10.7 Verification plan
+
+- Before and after: the number of tests each job runs, from `--list` (`cargo test … -- --list` before, `cargo nextest list` after); the union must be the same.
+- The pull request's own CI: the jobs pass on nextest; the summary page renders (with "no flaky tests" or a list); the JUnit artifact is there; the integration job's log shows the review-date test filtered out and the once-only check passing.
+- `actionlint` on the workflow before the push.
+- After merge: the flaky list of each `main` run, and the share of red `main` runs over the next ten days against the 20.7% above.
