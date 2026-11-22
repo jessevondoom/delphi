@@ -31,25 +31,46 @@ fn today() -> i64 {
     (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() / 86_400) as i64
 }
 
-#[test]
-fn every_advisory_exception_has_a_reason_and_an_unexpired_review_date() {
+/// Each exception's `id` and `reason`, empty when missing.
+fn exceptions() -> Vec<(String, String)> {
     let p = policy();
     let ignores = p["advisories"]["ignore"].as_array().expect("[advisories] ignore is a list");
+    ignores
+        .iter()
+        .map(|i| {
+            let field = |k: &str| i.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            (field("id"), field("reason"))
+        })
+        .collect()
+}
+
+/// Depends only on the repository, so it runs on every pull request.
+#[test]
+fn every_advisory_exception_has_a_reason_and_a_review_date() {
     let mut problems = vec![];
-    for i in ignores {
-        let (id, reason) = (i.get("id").and_then(|v| v.as_str()).unwrap_or(""), i.get("reason").and_then(|v| v.as_str()).unwrap_or(""));
+    for (id, reason) in exceptions() {
         if !id.starts_with("RUSTSEC-") {
             problems.push(format!("an exception needs an `id` that is a RUSTSEC id (got `{id}`)"));
         }
-        match revisit_day(reason) {
-            None => problems.push(format!("{id}: the reason must end with `revisit by YYYY-MM-DD`")),
-            Some(day) if day < today() => problems.push(format!("{id}: its review date has passed; fix the dependency or decide again and set a new date")),
-            Some(_) => {}
+        if revisit_day(&reason).is_none() {
+            problems.push(format!("{id}: the reason must end with `revisit by YYYY-MM-DD`"));
         }
         if reason.trim().len() < 40 {
             problems.push(format!("{id}: the reason is too short to say why the advisory does not apply"));
         }
     }
+    assert!(problems.is_empty(), "deny.toml exceptions:\n  {}", problems.join("\n  "));
+}
+
+/// Depends on today's date, an outside event: CI skips it on a pull request that does not change deny.toml and runs it on
+/// every push to main and daily in `advisories.yml` (spec 093-A1). ci.yml names this test exactly: rename both together.
+#[test]
+fn every_advisory_exception_review_date_has_not_passed() {
+    let problems: Vec<String> = exceptions()
+        .into_iter()
+        .filter(|(_, reason)| revisit_day(reason).is_some_and(|day| day < today()))
+        .map(|(id, _)| format!("{id}: its review date has passed; fix the dependency or decide again and set a new date"))
+        .collect();
     assert!(problems.is_empty(), "deny.toml exceptions:\n  {}", problems.join("\n  "));
 }
 
