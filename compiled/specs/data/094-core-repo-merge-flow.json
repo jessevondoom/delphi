@@ -324,7 +324,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/094-core-repo-merge-flow.md",
-    "sha256": "05d7b45ce84599f147bc179b98db14eeec04d7e356edbe5aab3b664aad0f9646"
+    "sha256": "ba6c1e65415426e6763cb285d0786634252685016d9fc7d33eb6897f9359326a"
   },
   "source_status_at_hash": {
     "line": {
@@ -337,7 +337,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"approve the outstanding draft specs in this workstream\"); OD-1 to OD-5 take the recommendations, as when the operator approved the plan"
     },
-    "sha256": "05d7b45ce84599f147bc179b98db14eeec04d7e356edbe5aab3b664aad0f9646",
+    "sha256": "ba6c1e65415426e6763cb285d0786634252685016d9fc7d33eb6897f9359326a",
     "word": "approved"
   },
   "spec": {

@@ -5,7 +5,8 @@
 //! byte for byte. Only then is the cross-spec content accepted; anything else is an ordinary pull request again, refused as a
 //! cross-spec bundle as before. The body is trusted for nothing: every fact in it is derived again.
 //!
-//! Nothing here merges. This module is on the gate list.
+//! `merge` (S20) is the only path here to `Forge::merge`: inside an invocation the operator started and approved, on a green rollup
+//! whose constituents are all still at their approved heads. This module is on the gate list.
 
 use super::check::{evaluate, Verdict, BEHIND_MARK};
 use super::errors::{Class, Errors};
@@ -147,15 +148,20 @@ pub fn recognise(forge: &dyn Forge, env: Env, v: &Verdict) -> Result<Recognised,
     }
     // Recognised: the cross-spec refusal (and any other spec refusal of the whole) is lifted; each constituent's own spec was
     // judged above. Invariant 3 held twice: the rollup's own paths against the base's list, and the rebuild's.
-    let mut verdict = v.clone();
-    let spec_whys: Vec<&String> = v.specs.iter().filter_map(|s| if let SpecState::Missing(why) = s { Some(why) } else { None }).collect();
-    verdict.refusals.retain(|r| !spec_whys.contains(&r));
-    Ok(Recognised { verdict, manifest: m, parts })
+    Ok(Recognised { verdict: lifted(v), manifest: m, parts })
 }
 
-/// `delphi merge --batch` without `--dry-run`: choose, show the batch, take the operator's approval of it, build, open. Returns the
-/// rollup's number and the approval (bound to the heads shown).
-pub fn batch(ctx: &mut Ctx, numbers: &[u64], max: usize, from_all: bool, id: &str) -> Result<(u64, Approval), String> {
+/// A recognised rollup's own verdict, its spec refusals lifted.
+fn lifted(v: &Verdict) -> Verdict {
+    let mut out = v.clone();
+    let whys: Vec<&String> = v.specs.iter().filter_map(|s| if let SpecState::Missing(why) = s { Some(why) } else { None }).collect();
+    out.refusals.retain(|r| !whys.contains(&r));
+    out
+}
+
+/// `delphi merge --batch` without `--dry-run`: choose, show the batch, take the operator's approval of it, build, open, then wait
+/// for the rollup's checks and merge it (§13.2). The approval is bound to the heads shown.
+pub fn batch(ctx: &mut Ctx, numbers: &[u64], max: usize, from_all: bool, id: &str) -> Result<Outcome, String> {
     let env = ctx.rollup.ok_or("a rollup is built only in a repository")?;
     let choice = super::rollup::choose(ctx.forge, numbers, max);
     for (n, why) in &choice.skipped {
@@ -172,7 +178,10 @@ pub fn batch(ctx: &mut Ctx, numbers: &[u64], max: usize, from_all: bool, id: &st
     c.lines().iter().for_each(|l| ctx.term.show(l));
     let pr = open(ctx.forge, env, ctx.ledger, ctx.errors, &c, &approval, &(ctx.now)())?;
     ctx.term.show(&format!("opened rollup #{pr} from `{}`", c.branch));
-    Ok((pr, approval))
+    let v = evaluate(ctx.forge, pr).map_err(|e| format!("rollup #{pr} was opened, but it cannot be read ({e}); run `delphi merge {pr}` later"))?;
+    let out = merge(ctx, env, v, Some(&approval));
+    super::note(ctx, &out);
+    Ok(out)
 }
 
 /// `delphi merge <PR>` on a pull request whose branch is a rollup's: recognised, or refused with the reasons of an ordinary one.
@@ -185,13 +194,132 @@ pub(super) fn decide(ctx: &mut Ctx, v: Verdict, queued: bool) -> Outcome {
     let Some(env) = ctx.rollup else {
         return refuse(format!("{REFUSED}a rollup is recognised only by a rebuild in the repository"), &v);
     };
-    match recognise(ctx.forge, env, &v) {
-        Err(why) => refuse(why, &v),
-        Ok(r) => {
-            let list: Vec<String> = r.parts.iter().map(|p| format!("#{}", p.pr.number)).collect();
-            let mut reasons = vec![format!("recognised as a rollup of {} (manifest base {}); merging a rollup is slice S20 of spec 094 §13, not in this build", list.join(", "), short(&r.manifest.base_sha))];
-            reasons.extend(r.verdict.refusals);
-            Outcome::Refused { pr: n, reasons, head }
+    merge(ctx, env, v, None)
+}
+
+/// Recognise the rollup `v`, take the approval of its constituents (this invocation's, or the operator's now), wait for its checks,
+/// and merge it only when every check passed (`ci-gate` among them) and every constituent is still at its approved head (§13.2
+/// steps 6 and 7). Never merges a red or pending rollup.
+fn merge(ctx: &mut Ctx, env: Env, v: Verdict, approval: Option<&Approval>) -> Outcome {
+    let (n, head) = (v.pr.number, v.pr.head_sha.clone());
+    let refuse = |reasons: Vec<String>| Outcome::Refused { pr: n, reasons, head: head.clone() };
+    let r = match recognise(ctx.forge, env, &v) {
+        Ok(r) => r,
+        Err(why) => return refuse(std::iter::once(why).chain(v.refusals.iter().cloned()).collect()),
+    };
+    let approval = match approval {
+        Some(a) => a.clone(),
+        None if ctx.dry_run => Approval { att: Attestation::Tty, pairs: r.manifest.prs.iter().map(|p| (p.0, p.1.clone())).collect() },
+        None => {
+            ctx.term.show(&format!("rollup #{n} carries, each at its approved head:"));
+            r.parts.iter().for_each(|p| ctx.term.show(&format!("  #{} {} (head {}, spec {})", p.pr.number, p.pr.title, short(&p.pr.head_sha), spec_of(p).unwrap_or("none".into()))));
+            let prs: Vec<u64> = r.parts.iter().map(|p| p.pr.number).collect();
+            match attest_rollup(ctx.term, ctx.quote.as_deref(), &prs, false) {
+                Ok(att) => Approval { att, pairs: r.parts.iter().map(|p| (p.pr.number, p.pr.head_sha.clone())).collect() },
+                Err(why) => return Outcome::Declined { pr: n, why },
+            }
+        }
+    };
+    if let Some((k, h, _)) = r.manifest.prs.iter().find(|(k, h, _)| !approval.covers(*k, h)) {
+        return refuse(vec![format!("{STALE}#{k} at `{}` is not a head the operator approved in this run", short(h))]);
+    }
+    let v = match wait_green(ctx, n, &head) {
+        Ok(v) => lifted(&v),
+        Err(why) => return refuse(why),
+    };
+    let mut reasons = v.refusals.clone();
+    if !v.checks.iter().any(|c| c.name == REQUIRED_CHECK && c.bucket == "pass") {
+        reasons.push(format!("checks failed: `{REQUIRED_CHECK}` has not passed on the rollup"));
+    }
+    // Invariant 2 at the last moment: every constituent is still at the head the manifest names.
+    for p in &r.parts {
+        match ctx.forge.pr(p.pr.number) {
+            Ok(now) if now.head_sha == p.pr.head_sha && now.state == "OPEN" => {}
+            Ok(now) => reasons.push(format!("{STALE}#{} is {} at `{}` now, not open at the approved head", p.pr.number, now.state.to_lowercase(), short(&now.head_sha))),
+            Err(e) => reasons.push(e.to_string()),
         }
     }
+    if !reasons.is_empty() {
+        reasons.push("a red rollup is not bisected in this build (spec 094 §13.5, S21): merge its pull requests one by one".into());
+        return refuse(reasons);
+    }
+    if ctx.dry_run {
+        return Outcome::DryRun { pr: n, head, gate_changing: false };
+    }
+    record_and_merge(ctx, env, &r, n, &head, &approval)
+}
+
+/// The check every rollup must have passed (§12.2.1: the one the ruleset requires).
+pub const REQUIRED_CHECK: &str = "ci-gate";
+
+/// Wait for the rollup's checks within the invocation's wait; its head must not move meanwhile.
+fn wait_green(ctx: &Ctx, n: u64, head: &str) -> Result<Verdict, Vec<String>> {
+    let start = ctx.refresh.map(|r| r.clock.now_secs()).unwrap_or(0);
+    loop {
+        let v = evaluate(ctx.forge, n).map_err(|e| vec![e.to_string()])?;
+        if v.pr.head_sha != head {
+            return Err(vec![format!("{REFUSED}the rollup's head moved to `{}`, a commit this run did not make; do not push to a rollup", short(&v.pr.head_sha))]);
+        }
+        if !v.refusals.iter().any(|r| wait::not_yet(r)) {
+            return Ok(v);
+        }
+        match ctx.refresh {
+            Some(r) if r.wait.is_some_and(|w| r.clock.now_secs().saturating_sub(start) < w.as_secs()) => r.clock.sleep(r.poll),
+            _ => return Err(vec![format!("the rollup's checks have not finished; run `delphi merge {n}` once they are green (nothing was merged)")]),
+        }
+    }
+}
+
+/// One `approved` row per constituent (its own approval, spec and head, `carried_into` the rollup), the merge of exactly the rollup
+/// head, the `merged` rows, the check of each constituent's state (OD-17) and cleanup.
+fn record_and_merge(ctx: &mut Ctx, env: Env, r: &Recognised, n: u64, head: &str, approval: &Approval) -> Outcome {
+    let now = (ctx.now)();
+    let row = |p: &Verdict, kind: &str| {
+        let mut row = p.record(approval.att.clone(), ctx.session.clone(), now.clone()).to_json(kind);
+        row["rollup"] = json!(n);
+        row["carried_into"] = json!(n);
+        row
+    };
+    for p in &r.parts {
+        if let Err(e) = ctx.ledger.append(&row(p, "approved")) {
+            return Outcome::Failed { pr: n, detail: format!("cannot write the ledger ({e}); not merging without a record"), head: head.to_string() };
+        }
+    }
+    if let Err(e) = ctx.forge.merge(n, head) {
+        for p in &r.parts {
+            let _ = ctx.ledger.append(&row(p, "failed"));
+        }
+        return Outcome::Failed { pr: n, detail: e.to_string(), head: head.to_string() };
+    }
+    for p in &r.parts {
+        let _ = ctx.ledger.append(&row(p, "merged"));
+    }
+    let list: Vec<String> = r.parts.iter().map(|p| format!("#{}", p.pr.number)).collect();
+    let _ = ctx.ledger.append(&json!({"kind": "rollup_merged", "pr": n, "head_sha": head, "constituents": list, "time": now}));
+    let comment = format!("Merged by `delphi merge` (spec 094 §13) at head `{head}`: a rollup of {}, each approved on its own head ({}). Each is its own merge commit inside it.", list.join(", "), approval.att.label());
+    let _ = ctx.forge.comment(n, &comment);
+    ctx.errors.resolve_pr(n, &now);
+    let g = env.git;
+    let _ = g.git(&g.repo, &["fetch", "-q", "origin", &r.manifest.base_ref]);
+    for p in &r.parts {
+        let k = p.pr.number;
+        ctx.errors.resolve_pr(k, &now);
+        let state = ctx.forge.pr(k).map(|x| x.state).unwrap_or_default();
+        let landed = g.git(&g.repo, &["merge-base", "--is-ancestor", &p.pr.head_sha, &format!("refs/remotes/origin/{}", r.manifest.base_ref)]).is_ok();
+        let line = match state.as_str() {
+            "MERGED" => format!("#{k}: marked merged through rollup #{n}"),
+            "OPEN" if landed => match ctx.forge.close(k, &format!("Merged through rollup #{n} (head `{head}`): this pull request's approved head `{}` is in `{}`, but GitHub did not mark it merged, so `delphi merge` closed it (spec 094 §13.2 step 7).", p.pr.head_sha, r.manifest.base_ref)) {
+                Ok(()) => format!("#{k}: GitHub did not mark it merged; its head is in `{}`, so it was closed with a comment linking #{n}", r.manifest.base_ref),
+                Err(e) => format!("#{k}: GitHub did not mark it merged, and closing it failed: {e}"),
+            },
+            other => format!("#{k}: left as it is ({}): GitHub did not mark it merged and its head is not in `{}`; look at it", other.to_lowercase(), r.manifest.base_ref),
+        };
+        ctx.term.show(&line);
+    }
+    for p in r.parts.iter().chain(std::iter::once(&r.verdict)) {
+        for problem in super::after_merge(ctx, p) {
+            super::put_error(ctx.errors, &now, p.pr.number, &p.pr.head_sha, Class::Cleanup, &problem);
+        }
+    }
+    Outcome::Merged { pr: n, head: head.to_string() }
 }

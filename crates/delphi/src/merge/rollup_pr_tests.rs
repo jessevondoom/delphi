@@ -28,28 +28,31 @@ pub(super) fn world() -> (Fixture, FakeForge, String, String) {
     {
         let mut s = forge.st.borrow_mut();
         s.origin = Some(f.origin.clone());
-        s.checks_on_open = vec![Check { name: "test".into(), bucket: "pass".into() }, Check { name: "ci-gate".into(), bucket: "pass".into() }];
+        // CI has not finished on a rollup just opened; a test makes it green or red.
+        s.checks_on_open = vec![Check { name: "test".into(), bucket: "pass".into() }, Check { name: "ci-gate".into(), bucket: "pending".into() }];
     }
     (f, forge, h1, h2)
 }
 
 /// Run `body` with a context over `f` and `forge`, the operator's words `quote`, and a rollup environment.
 pub(super) fn with_ctx<R>(f: &Fixture, forge: &FakeForge, quote: Option<&str>, body: impl FnOnce(&mut Ctx) -> R) -> R {
-    let (ledger, errors, runner) = (Ledger::at(f.home.path()), Errors::at(f.home.path()), Runner::new(&f.work));
+    let (ledger, errors, runner, tidy) = (Ledger::at(f.home.path()), Errors::at(f.home.path()), Runner::new(&f.work), super::cleanup::Git::at(&f.work, f.home.path()));
     let mut term = FakeTerminal::new(false, &[]);
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: quote.map(String::from), dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-22T00:00:00Z".to_string(), refresh: None, claims: None, rollup: Some(Env { git: &runner, home: f.home.path() }) };
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: quote.map(String::from), dry_run: false, git: Some(&tidy), session: None, settle: Duration::ZERO, now: || "2026-11-22T00:00:00Z".to_string(), refresh: None, claims: None, rollup: Some(Env { git: &runner, home: f.home.path() }) };
     body(&mut ctx)
 }
 
 /// Open the rollup of #1 and #2 on the operator's words, and give it the commits GitHub would list (two specs: cross-spec).
 pub(super) fn opened(f: &Fixture, forge: &FakeForge) {
-    let (pr, approval) = with_ctx(f, forge, Some("batch #1 and #2"), |ctx| batch(ctx, &[1, 2], 4, false, ID)).unwrap();
-    assert_eq!((pr, approval.pairs.len()), (ROLLUP, 2));
+    let out = with_ctx(f, forge, Some("batch #1 and #2"), |ctx| batch(ctx, &[1, 2], 4, false, ID)).unwrap();
+    // No wait in a test: CI has not finished, so it is opened and not merged.
+    assert!(matches!(&out, Outcome::Refused { pr: ROLLUP, reasons, .. } if reasons[0].contains("have not finished")), "{out:?}");
+    assert!(forge.st.borrow().merged.is_empty());
     forge.edit(ROLLUP, |p| p.commit_messages = vec![format!("one\n\nImplements-Spec: {SPEC_PATH}\n"), format!("two\n\nImplements-Spec: {OTHER_SPEC}\n")]);
 }
 
 fn refusal(f: &Fixture, forge: &FakeForge) -> Vec<String> {
-    match with_ctx(f, forge, None, |ctx| merge_one(ctx, ROLLUP, None)) {
+    match with_ctx(f, forge, Some("merge #1 and #2"), |ctx| merge_one(ctx, ROLLUP, None)) {
         Outcome::Refused { reasons, .. } => reasons,
         other => panic!("{other:?}"),
     }
@@ -107,7 +110,8 @@ fn a_rollup_is_recognised_by_its_rebuild_and_its_cross_spec_content_accepted() {
     let r = with_ctx(&f, &forge, None, |ctx| super::rollup_pr::recognise(ctx.forge, ctx.rollup.unwrap(), &super::check::evaluate(ctx.forge, ROLLUP).unwrap()));
     let r = r.unwrap();
     assert_eq!(r.parts.len(), 2);
-    assert!(r.verdict.refusals.is_empty(), "the cross-spec refusal is lifted: {:?}", r.verdict.refusals);
+    // The cross-spec refusal is lifted; its own checks (still running here) are judged as for any pull request.
+    assert_eq!(r.verdict.refusals, vec!["checks are still running: ci-gate".to_string()]);
 }
 
 #[test]
@@ -149,4 +153,90 @@ fn a_constituent_whose_head_moved_since_the_approval_makes_the_rollup_stale() {
     let why = refusal(&f, &forge);
     assert!(why[0].starts_with(STALE) && why[0].contains("#2"), "{why:?}");
     assert!(Errors::at(f.home.path()).entries().iter().any(|e| e.class == "rollup-stale"));
+}
+
+// ---- S20: merging (AC-20) ----
+
+fn checks(forge: &FakeForge, gate: &str) {
+    let c = vec![Check { name: "test".into(), bucket: "pass".into() }, Check { name: "ci-gate".into(), bucket: gate.into() }];
+    let mut s = forge.st.borrow_mut();
+    s.checks.insert(ROLLUP, c.clone());
+    s.checks_on_open = c;
+}
+
+fn rows(f: &Fixture, pr: u64) -> Vec<serde_json::Value> {
+    Ledger::at(f.home.path()).read().into_iter().filter(|r| r["pr"] == pr && r["rollup"] == ROLLUP).collect()
+}
+
+#[test]
+fn a_green_rollup_merges_once_writes_rows_per_constituent_closes_one_left_open_and_cleans_up() {
+    let (f, forge, h1, h2) = world();
+    checks(&forge, "pass");
+    {
+        let mut s = forge.st.borrow_mut();
+        s.indirect.insert(ROLLUP, vec![1]);
+        s.land_on_merge = true;
+    }
+    let head = with_ctx(&f, &forge, Some("batch #1 and #2"), |ctx| batch(ctx, &[1, 2], 4, false, ID)).map(|o| match o {
+        Outcome::Merged { pr: ROLLUP, head } => head,
+        other => panic!("{other:?}"),
+    });
+    let head = head.unwrap();
+    let s = forge.st.borrow();
+    assert_eq!(s.merged, vec![(ROLLUP, head.clone())], "one merge, of the rollup, at its head");
+    for (k, h, spec) in [(1, &h1, SPEC_PATH), (2, &h2, OTHER_SPEC)] {
+        let r = rows(&f, k);
+        assert_eq!(r.iter().map(|r| r["kind"].as_str().unwrap()).collect::<Vec<_>>(), vec!["approved", "merged"], "#{k}");
+        assert!(r.iter().all(|r| r["head_sha"] == h.as_str() && r["spec"]["path"] == spec && r["carried_into"] == ROLLUP && r["attestation"] == "chat-quote"), "{r:?}");
+    }
+    // #1 was marked merged by GitHub; #2 was not, and its head is in main, so it was closed with a comment naming the rollup.
+    assert_eq!(s.prs[&1].state, "MERGED");
+    assert_eq!(s.closed.len(), 1);
+    assert!(s.closed[0].0 == 2 && s.closed[0].1.contains(&format!("#{ROLLUP}")), "{:?}", s.closed);
+    // Cleanup: the rollup's branch and #1's are gone from the origin; #2 was closed, not merged, so its branch stays.
+    let left = git(&f.origin, &["branch", "--list"]);
+    assert!(!left.contains("delphi-rollup/") && !left.contains("b1") && left.contains("b2"), "{left}");
+}
+
+#[test]
+fn a_constituent_left_open_whose_head_is_not_in_the_base_is_not_closed() {
+    let (f, forge, _, _) = world();
+    checks(&forge, "pass");
+    let out = with_ctx(&f, &forge, Some("batch #1 and #2"), |ctx| batch(ctx, &[1, 2], 4, false, ID)).unwrap();
+    assert!(matches!(out, Outcome::Merged { .. }), "{out:?}");
+    let s = forge.st.borrow();
+    assert!(s.closed.is_empty() && s.prs[&1].state == "OPEN" && s.prs[&2].state == "OPEN");
+}
+
+#[test]
+fn a_red_or_pending_rollup_or_one_without_ci_gate_is_never_merged() {
+    let (f, forge, _, _) = world();
+    opened(&f, &forge);
+    for (gate, want) in [("fail", "checks failed: ci-gate"), ("pending", "have not finished")] {
+        checks(&forge, gate);
+        let why = refusal(&f, &forge);
+        assert!(why.iter().any(|r| r.contains(want)), "{gate}: {why:?}");
+    }
+    forge.st.borrow_mut().checks.insert(ROLLUP, vec![Check { name: "test".into(), bucket: "pass".into() }]);
+    assert!(refusal(&f, &forge).iter().any(|r| r.contains("`ci-gate` has not passed")));
+    assert!(forge.st.borrow().merged.is_empty());
+    assert!(Ledger::at(f.home.path()).read().iter().all(|r| r["kind"] != "approved"), "no record without a merge");
+}
+
+#[test]
+fn a_rollup_merged_in_a_later_run_needs_the_operator_to_name_every_pull_request_in_it() {
+    let (f, forge, _, _) = world();
+    opened(&f, &forge);
+    checks(&forge, "pass");
+    let out = with_ctx(&f, &forge, Some(&format!("merge {ROLLUP}")), |ctx| merge_one(ctx, ROLLUP, None));
+    assert!(matches!(&out, Outcome::Declined { why, .. } if why.contains("#1")), "{out:?}");
+    let out = with_ctx(&f, &forge, Some("merge #1 and #2 together"), |ctx| merge_one(ctx, ROLLUP, None));
+    assert!(matches!(out, Outcome::Merged { pr: ROLLUP, .. }), "{out:?}");
+    // From the queue (`--all`'s approval), never.
+    let (f, forge, _, _) = world();
+    opened(&f, &forge);
+    checks(&forge, "pass");
+    let all = super::record::Attestation::ChatQuote("merge all".into());
+    let out = with_ctx(&f, &forge, None, |ctx| merge_one(ctx, ROLLUP, Some(&all)));
+    assert!(matches!(&out, Outcome::Refused { reasons, .. } if reasons[0].contains("never merged from the queue")), "{out:?}");
 }

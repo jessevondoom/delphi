@@ -728,7 +728,7 @@ fn refresh_cmd(p: &Parsed, forge: &Gh, n: u64) -> i32 {
 }
 
 /// `--batch` (spec 094 §13): with `--dry-run` (S18), choose, build the candidate in a temporary worktree, check its invariants and
-/// print it, writing nothing; without, the operator approves the batch and the rollup is opened (S19).
+/// print it, writing nothing; without, the operator approves the batch, the rollup is opened (S19) and merged once green (S20).
 fn batch_cmd(p: &Parsed, forge: &Gh, numbers: &[u64], from_all: bool) -> i32 {
     if crate::xenia_terminal::inside_an_agent_seat() && !p.dry_run {
         eprintln!("delphi merge: refused; merging is the operator's, and this process was started by an agent seat");
@@ -746,12 +746,18 @@ fn batch_cmd(p: &Parsed, forge: &Gh, numbers: &[u64], from_all: bool) -> i32 {
     let max = p.batch.unwrap_or(rollup::DEFAULT_BATCH);
     let runner = refresh::Runner::new(&repo);
     if !p.dry_run {
-        let (ledger, errors, mut term) = (Ledger::at(&home), Errors::at(&home), StdTerminal);
-        let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: p.quote.clone(), dry_run: false, git: None, session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: None, claims: None, rollup: Some(rollup_pr::Env { git: &runner, home: &home }) };
+        let (ledger, errors, mut term, git) = (Ledger::at(&home), Errors::at(&home), StdTerminal, cleanup::Git::here());
+        let made = std::cell::RefCell::new(std::collections::HashMap::new());
+        let refresher = wait::InRepo { forge, errors: &errors, ledger: &ledger, home: &home, git: refresh::Runner::new(&repo) };
+        // A rollup is never refreshed; `Refreshing` here only carries the wait for its checks (§13.2 step 6).
+        let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: p.wait, poll: Duration::from_secs(30), made: &made };
+        let here = claims_here(&home);
+        let claims = here.as_ref().map(|(h, r)| Claims { home: h, repo: r, now: unix_now });
+        let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: p.quote.clone(), dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh), claims, rollup: Some(rollup_pr::Env { git: &runner, home: &home }) };
         return match rollup_pr::batch(&mut ctx, numbers, max, from_all, &id) {
-            Ok((pr, _)) => {
-                println!("rollup #{pr} opened; merging a rollup is slice S20 of spec 094 §13, not in this build");
-                0
+            Ok(out) => {
+                println!("{}", out.line());
+                i32::from(!out.ok())
             }
             Err(e) => {
                 eprintln!("delphi merge --batch: no rollup: {e}");

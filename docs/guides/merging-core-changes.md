@@ -47,6 +47,17 @@ Any other conflicted file, a gate path, more than 10 conflicted files, a failed 
 
 **It needs no approval of its own.** It never merges a PR and has no path to one. It pushes one ordinary commit that changes nothing the PR did not already change, apart from generated files and the two append-only files. Anyone who may push to the branch may run it, an agent included, as with `merge fix`. CI then runs on the new head, and the PR merges only through `delphi merge` on your word. Cargo.lock and `docs/reference/` conflicts need a build of the merged code, so they go to `merge fix`.
 
+### Batches: `--batch` (spec 094 §13, S18-S20)
+
+```
+delphi merge --all --batch[=N] [--operator-said "<words>"] [--wait 40m] [--dry-run]
+delphi merge <PR>... --batch[=N] [--operator-said "<words>"] [--wait 40m] [--dry-run]
+```
+
+The serial path costs one CI run per PR. `--batch` lands up to N (default 4, at most 8) in one: it chooses, in order, PRs that are ready except perhaps for being behind and change no gate (gate-changing PRs are never batched), shows each with its head and spec, and asks you to approve the batch (type `all`; an agent's quote must name every number, or say all/every/each for `--all`). It builds a candidate from the base tip with one merge commit per PR, pushes it plainly to a new `delphi-rollup/<id>` branch and opens a rollup PR whose body carries a manifest (the base commit, each PR's head and spec). CI runs on it as on any PR. Once its checks are green, `ci-gate` included, and every PR in it is still at its approved head, the command merges the rollup with a merge commit at the head it opened and writes `approved` and `merged` ledger rows for each PR in it (`carried_into` the rollup). GitHub marks each PR merged; one it does not mark whose head is in the base is closed with a comment linking the rollup. `--dry-run` only prints the candidate.
+
+A rollup is recognised only by its branch prefix, exactly one manifest, and a rebuild from that manifest on the current base tip whose tree equals the rollup's. A PR that fails any of these is refused as a cross-spec bundle (`rollup-refused`); a PR in it whose head moved, or a base that moved, makes it `rollup-stale`: build the batch again. A red rollup is left open and not merged; bisecting it is S21, not built yet, so merge its PRs one by one. A rollup opened in an earlier run merges with `delphi merge <rollup>` once you approve its PRs again; `--all` never merges one. Do not push to a `delphi-rollup/*` branch. Without Delphi, read the manifest, check it by hand, and merge the rollup natively with a merge commit (never a squash), or close it.
+
 ## The approval record
 
 You approve a merge in one of two ways, and the record says which.
