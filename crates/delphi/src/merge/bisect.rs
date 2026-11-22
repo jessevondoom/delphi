@@ -30,6 +30,8 @@ pub struct Tally {
     pub serial: Vec<u64>,
     /// Halves left open because their checks did not finish (or something else stopped them) within the wait.
     pub open: Vec<u64>,
+    /// Red together and green apart: a `rollup-red` entry each (they are in `serial` too).
+    pub red_apart: Vec<u64>,
 }
 
 /// Bisect the red rollup `n` (recognised as `r`, approved as `approval`). The outcome stays a refusal of `n`: it was not merged.
@@ -82,10 +84,18 @@ pub(super) fn split(ctx: &mut Ctx, env: Env, r: &Recognised, n: u64, approval: &
     let halves: Vec<Option<u64>> = [(&parts[..mid], "a"), (&parts[mid..], "b")].into_iter().map(|(half, s)| open_half(ctx, env, approval, n, round + 1, &format!("{id}-{s}"), half, t)).collect();
     let opened: Vec<u64> = halves.iter().flatten().copied().collect();
     let _ = ctx.ledger.append(&json!({"kind": "rollup_bisected", "pr": n, "head_sha": head, "round": round + 1, "halves": opened, "time": (ctx.now)()}));
-    let list: Vec<String> = opened.iter().map(|h| format!("#{h}")).collect();
-    supersede(ctx, n, &format!("its checks failed (`ci-gate`), so its pull requests were split into {}", if list.is_empty() { "no new rollup".to_string() } else { list.join(" and ") }));
+    let halves: Vec<String> = opened.iter().map(|h| format!("#{h}")).collect();
+    supersede(ctx, n, &format!("its checks failed (`ci-gate`), so its pull requests were split into {}", if halves.is_empty() { "no new rollup".to_string() } else { halves.join(" and ") }));
     // Wait for both halves before deciding anything: both green means red together, green apart.
     let judged: Vec<(u64, Recognised, Judged)> = opened.iter().filter_map(|h| judge_half(ctx, env, *h, approval, t)).collect();
+    settle(ctx, env, n, &parts, judged, approval, t);
+}
+
+/// Decide on the judged halves of the red rollup `n`, which carried `parts`: one not yet decided leaves both open; both green is
+/// red together, green apart; otherwise a green half merges and a red one is split again. `--auto --batch` calls it too, at the
+/// poll where both halves' checks have finished (S22).
+pub(super) fn settle(ctx: &mut Ctx, env: Env, n: u64, parts: &[(u64, String)], judged: Vec<(u64, Recognised, Judged)>, approval: &Approval, t: &mut Tally) {
+    let list: Vec<String> = judged.iter().map(|(h, _, _)| format!("#{h}")).collect();
     if judged.iter().any(|(_, _, j)| matches!(j, Judged::Refused(_))) {
         for (h, _, j) in &judged {
             let why = if let Judged::Refused(why) = j { why.join("; ") } else { "its sibling has not been judged".into() };
@@ -100,10 +110,11 @@ pub(super) fn split(ctx: &mut Ctx, env: Env, r: &Recognised, n: u64, approval: &
             supersede(ctx, *h, &format!("it is green, and so is its sibling, while rollup #{n} of both was red: red together, green apart; its pull requests go back to the serial path"));
         }
         let now = (ctx.now)();
-        for (k, h) in &parts {
+        for (k, h) in parts {
             put_error(ctx.errors, &now, *k, h, Class::RollupRed, &format!("{RED}red together, green apart: rollup #{n} was red, its halves {} were green", list.join(" and ")));
+            t.red_apart.push(*k);
         }
-        serial(ctx, n, &parts, &format!("red together, green apart (rollup #{n})"), t);
+        serial(ctx, n, parts,&format!("red together, green apart (rollup #{n})"), t);
         return;
     }
     // A green half merges first (nothing has landed since both were built on the same tip); a red one is split on the new tip.
@@ -125,7 +136,7 @@ pub(super) fn split(ctx: &mut Ctx, env: Env, r: &Recognised, n: u64, approval: &
 /// Build and open one half from the current base tip; its constituents must still be at their approved heads and still batchable.
 /// What cannot go into the half goes back to the serial path. Returns the half's number.
 #[allow(clippy::too_many_arguments)]
-fn open_half(ctx: &mut Ctx, env: Env, approval: &Approval, parent: u64, round: u64, id: &str, half: &[(u64, String)], t: &mut Tally) -> Option<u64> {
+pub(super) fn open_half(ctx: &mut Ctx, env: Env, approval: &Approval, parent: u64, round: u64, id: &str, half: &[(u64, String)], t: &mut Tally) -> Option<u64> {
     let numbers: Vec<u64> = half.iter().map(|p| p.0).collect();
     let mut choice = rollup::choose(ctx.forge, &numbers, rollup::MAX_BATCH);
     let (keep, moved): (Vec<_>, Vec<_>) = choice.chosen.into_iter().partition(|c| approval.covers(c.pr, &c.head_sha));
@@ -182,7 +193,7 @@ fn judge_half(ctx: &mut Ctx, env: Env, h: u64, approval: &Approval, t: &mut Tall
 }
 
 /// Close a rollup that will not merge, with a comment saying why, and remove its `delphi-rollup/*` branch (§13.5).
-fn supersede(ctx: &mut Ctx, n: u64, why: &str) {
+pub(super) fn supersede(ctx: &mut Ctx, n: u64, why: &str) {
     let now = (ctx.now)();
     let comment = format!("Closed by `delphi merge` (spec 094 §13.5): {why}. A red rollup is never merged; each pull request in it keeps its own approval and is not changed.");
     if let Err(e) = ctx.forge.close(n, &comment) {
@@ -222,6 +233,10 @@ pub fn status_lines(forge: &dyn Forge, ledger: &Ledger) -> Vec<String> {
         let what = match half {
             Some(x) => format!("bisecting: round {} of {MAX_ROUNDS}, a half of #{}", x["round"], x["parent"]),
             None => "open".into(),
+        };
+        let what = match rows.iter().find(|x| x["kind"] == "rollup_session" && x["pr"] == n).and_then(|x| x["session"].as_str()) {
+            Some(s) => format!("{what}, opened by `--auto` session {s}"),
+            None => what,
         };
         out.push(format!("rollup #{n} of {}: {what}; `delphi merge {n}` merges it once green, on the operator's approval of its pull requests", prs.join(", ")));
     }

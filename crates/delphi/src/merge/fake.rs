@@ -45,6 +45,9 @@ pub struct State {
     /// CI as a function of a rollup's constituents (spec 094 §13.5): when set, an opened rollup's `ci-gate` fails if its manifest
     /// holds every pull request of any one of these sets, and passes otherwise.
     pub red_when: Vec<Vec<u64>>,
+    /// With `red_when`: an opened rollup's `ci-gate` stays pending until `finish_ci` (CI that takes a poll; spec 094 S22).
+    pub ci_later: bool,
+    pub ci_running: BTreeMap<u64, Vec<Check>>,
 }
 
 #[derive(Default)]
@@ -89,6 +92,13 @@ impl FakeForge {
 
     pub fn edit(&self, n: u64, f: impl FnOnce(&mut PrInfo)) {
         f(self.st.borrow_mut().prs.get_mut(&n).expect("pr"));
+    }
+
+    /// Every rollup CI is running on finishes, green or red by `red_when`.
+    pub fn finish_ci(&self) {
+        let mut s = self.st.borrow_mut();
+        let done = std::mem::take(&mut s.ci_running);
+        s.checks.extend(done);
     }
 }
 
@@ -201,6 +211,12 @@ impl Forge for FakeForge {
                 vec![Check { name: "test".into(), bucket: "pass".into() }, Check { name: "ci-gate".into(), bucket: if red { "fail" } else { "pass" }.into() }]
             }
             _ => s.checks_on_open.clone(),
+        };
+        let checks = if s.ci_later {
+            s.ci_running.insert(n, checks);
+            vec![Check { name: "ci-gate".into(), bucket: "pending".into() }]
+        } else {
+            checks
         };
         s.checks.insert(n, checks);
         Ok(n)

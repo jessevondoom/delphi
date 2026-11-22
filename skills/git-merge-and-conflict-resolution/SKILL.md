@@ -55,6 +55,7 @@ Conflicts this repository has actually had. Resolve, then run the gates (below) 
 | A semantic conflict: both sides changed meaning (same function, same rule, same name, different intent) | Stop. Read both intents (`git log --merge`, the specs). Write the combined behaviour by hand, with a test. If the intents cannot both hold, mark needs-human. | Pick a side by file (`-X ours`, `-X theirs`, `checkout --ours` on code). |
 | Branch is only behind, no conflict | `git merge origin/<base>`, run the gates, push. | Rebase. |
 | A file deleted on one side and edited on the other, or a rename | Decide with the owning commit's message in hand; if unsure, needs-human. | Re-add the file to make the conflict go away. |
+| Your pull request was in a rollup (`delphi merge --batch` or `--auto --batch`) and has a `rollup-red` or `rollup-refused` entry | `delphi merge fix <PR>` hands it to you: reproduce on your own branch with the current base merged in (for "red together, green apart", also with the other pull requests the entry names), fix it there with ordinary commits, run the gates, push, then `delphi merge fix <PR> --done`. The next batch takes it again. | Push to a `delphi-rollup/*` branch, edit or reopen a rollup, or queue one. |
 
 ## Hard stops: mark needs-human and do not push
 - The conflict touches a governed or gate file: `GOVERNANCE.md`, `REVIEW.md`, `AGENTS.md`, `context/heuristics.md`, `.github/**`, `deny.toml`, or an approved spec under `specs/`.

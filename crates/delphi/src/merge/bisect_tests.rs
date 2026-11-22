@@ -14,7 +14,7 @@ use super::rollup_tests::{branch, ready};
 use super::{merge_one, Outcome};
 
 /// `n` ready pull requests, #k adding `Fk.md`; CI is red on any rollup that holds every pull request of one of `red_when`.
-fn world(n: u64, red_when: Vec<Vec<u64>>) -> (Fixture, FakeForge, Vec<String>) {
+pub(super) fn world(n: u64, red_when: Vec<Vec<u64>>) -> (Fixture, FakeForge, Vec<String>) {
     let f = fixture();
     let forge = FakeForge::default();
     let mut heads = Vec::new();
@@ -46,12 +46,12 @@ fn run(f: &Fixture, forge: &FakeForge, n: u64) -> String {
 }
 
 /// Constituents with a `merged` ledger row, and those with a `rollup-red` entry.
-fn merged(f: &Fixture) -> Vec<u64> {
+pub(super) fn merged(f: &Fixture) -> Vec<u64> {
     let mut v: Vec<u64> = Ledger::at(f.home.path()).read().iter().filter(|r| r["kind"] == "merged" && r["carried_into"].is_u64()).filter_map(|r| r["pr"].as_u64()).collect();
     v.sort();
     v
 }
-fn red(f: &Fixture) -> Vec<u64> {
+pub(super) fn red(f: &Fixture) -> Vec<u64> {
     let mut v: Vec<u64> = Errors::at(f.home.path()).entries().iter().filter(|e| e.class == "rollup-red").map(|e| e.pr).collect();
     v.sort();
     v
@@ -61,7 +61,7 @@ fn red(f: &Fixture) -> Vec<u64> {
 fn merged_rollups(forge: &FakeForge) -> Vec<u64> {
     forge.st.borrow().merged.iter().map(|m| m.0).collect()
 }
-fn opened(forge: &FakeForge) -> Vec<Vec<u64>> {
+pub(super) fn opened(forge: &FakeForge) -> Vec<Vec<u64>> {
     forge.st.borrow().opened.iter().map(|o| parse_manifest(&o.3).unwrap().prs.iter().map(|p| p.0).collect()).collect()
 }
 
