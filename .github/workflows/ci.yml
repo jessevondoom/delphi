@@ -31,6 +31,11 @@ jobs:
   # then `--doc`. `--tests` is not used because it would run the library tests a second time. The union was compared with
   # `cargo test --workspace -- --list` when this was written (same test count); if a new kind of target is ever added
   # (an example with `test = true`, a bench), add it to one of the two.
+  #
+  # Spec 125-A1: the tests run under cargo-nextest's `ci` profile (.config/nextest.toml): each test in its own process, a
+  # failing test retried once, a pass on the retry recorded as FLAKY (job summary, a warning, the JUnit artifact), a second
+  # failure fails the job. nextest does not run doc tests, so they stay on `cargo test --doc`. The selection is unchanged:
+  # counted with `cargo test ... -- --list` before and `cargo nextest list` after (spec 125 tracker, slice R1).
   test-linux-lib:
     name: test linux (unit)
     runs-on: ubuntu-latest
@@ -58,8 +63,25 @@ jobs:
           restore-keys: |
             cargo-target-${{ runner.os }}-unit-
             cargo-target-${{ runner.os }}-test-
+      - name: Install cargo-nextest (pinned, checksum checked)
+        env:
+          NEXTEST_VERSION: "0.9.150"
+          NEXTEST_TARGET: x86_64-unknown-linux-gnu
+          NEXTEST_SHA256: b0959bc64232974224cf9fb22c915845398c0e8668fa7831eb5b43fb1eef781f
+        run: .github/scripts/install-nextest.sh
       - name: Test (library unit tests)
-        run: cargo test --workspace --locked --lib
+        run: cargo nextest run --workspace --locked --profile ci --lib
+      - name: Flaky tests (job summary)
+        if: always()
+        run: python3 -I .github/scripts/nextest_summary.py target/nextest/ci/junit.xml "Linux, library unit tests"
+      - name: Keep the JUnit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junit-linux-unit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 30
       - name: Save the build directory
         if: github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -96,6 +118,12 @@ jobs:
           restore-keys: |
             cargo-target-${{ runner.os }}-integ-
             cargo-target-${{ runner.os }}-test-
+      - name: Install cargo-nextest (pinned, checksum checked)
+        env:
+          NEXTEST_VERSION: "0.9.150"
+          NEXTEST_TARGET: x86_64-unknown-linux-gnu
+          NEXTEST_SHA256: b0959bc64232974224cf9fb22c915845398c0e8668fa7831eb5b43fb1eef781f
+        run: .github/scripts/install-nextest.sh
       # Cheap static checks first (milliseconds each once built), so a broken spec reference is reported minutes
       # before the long tests finish. They run again in the full step below; that costs nothing.
       - name: Static checks (spec references, compiled specs)
@@ -110,12 +138,26 @@ jobs:
           skip=()
           # No pipe into `grep -q` (an early exit can fail the pipe under pipefail); no list of files means no skip.
           if [ "$EVENT" = "pull_request" ] && changed=$(git diff --name-only HEAD^1 HEAD) && ! grep -qx deny.toml <<<"$changed"; then
-            n=$(cargo test --locked -p delphi --test deny_policy -- --list --exact "$DATE_TEST" | grep -c ': test$' || true)
+            # Counted over this step's whole selection, not one file: the filter below is matched in every test binary.
+            listed=$(cargo nextest list --workspace --locked --bins --test '*' -E "test(=$DATE_TEST)" -T oneline)
+            n=$(grep -cE " ${DATE_TEST}\$" <<<"$listed" || true)
             [ "$n" = 1 ] || { echo "the review-date test $DATE_TEST matches $n tests, not 1"; exit 1; }
-            skip=(--exact --skip "$DATE_TEST")
+            skip=(-E "not test(=$DATE_TEST)")
             echo "deny.toml unchanged: skipping $DATE_TEST (checked on push to main and daily)"
           fi
-          cargo test --workspace --locked --bins --test '*' -- "${skip[@]}"
+          cargo nextest run --workspace --locked --profile ci --bins --test '*' "${skip[@]}"
+      - name: Flaky tests (job summary)
+        if: always()
+        run: python3 -I .github/scripts/nextest_summary.py target/nextest/ci/junit.xml "Linux, binaries and integration tests"
+      - name: Keep the JUnit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junit-linux-integration
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 30
+      # Not retried: nextest does not run doc tests (spec 125-A1 rule 4).
       - name: Test (doc tests)
         run: cargo test --workspace --locked --doc
       - name: Save the build directory

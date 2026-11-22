@@ -1,0 +1,30 @@
+# cargo-nextest configuration (spec 125 amendment 125-A1, section 10).
+#
+# CI runs the Rust tests with `cargo nextest run --profile ci`: each test in its own process, and a failing test run once
+# more. A pass on the retry passes and is recorded as FLAKY (in the log, in the job summary and as <flakyFailure> in the
+# JUnit file); a second failure fails the run. There is no second retry. Doc tests are not run by nextest; they stay on
+# `cargo test --doc`.
+#
+# The default profile (a plain `cargo nextest run` on a developer machine) has no retries, so a local run shows every
+# failure. `delphi forge finish --gates` uses the `ci` profile when nextest is installed.
+
+[profile.default]
+# The same as CI apart from the retry: a run reports every failing test, not only the first.
+fail-fast = false
+
+[profile.ci]
+# One retry, never more (125-A1 rule 1). A pass on the retry counts as a pass (nextest's default `flaky-result`), written
+# here so that a change of that default cannot turn the rule around unnoticed.
+retries = 1
+flaky-result = "pass"
+fail-fast = false
+# Print a failing test's output as it fails and again at the end of the run, where the job log is read first.
+failure-output = "immediate-final"
+success-output = "never"
+# A test is reported slow after 60 s and stopped after 5 minutes (5 periods). The slowest tests of the suite take well
+# under that on a GitHub runner; a test that hangs is then a failure (and its one retry) instead of a job timeout.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci.junit]
+# Written to target/nextest/ci/junit.xml; the CI jobs upload it and list its flaky tests in the job summary.
+path = "junit.xml"
