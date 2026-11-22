@@ -181,12 +181,36 @@
       "line": 370,
       "number": "16",
       "title": "Council record"
+    },
+    {
+      "level": 2,
+      "line": 374,
+      "number": "17",
+      "title": "Amendment (operator, 2026-11-21): Copilot ACP seats are confined (slice C10)"
+    },
+    {
+      "level": 3,
+      "line": 378,
+      "number": "17.1",
+      "title": "What the probe found"
+    },
+    {
+      "level": 3,
+      "line": 388,
+      "number": "17.2",
+      "title": "The change"
+    },
+    {
+      "level": 3,
+      "line": 396,
+      "number": "17.3",
+      "title": "Verification"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens.md",
-    "sha256": "9cf9dc149c9713e995a2a3ffe55c7e02d50b05e320edd15fe70bad8a3b4b58a5"
+    "sha256": "1a1b46f5dda213204251550d44a34d780a0db82ce2da564b44c47272807ea382"
   },
   "source_status_at_hash": {
     "line": {
@@ -199,7 +223,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, IN ADVANCE, on the plan this spec carries out (\"i approve this plan in full\", given to the carrier-parity plan before this text existed), and the operator's later instruction the same day (\"prioritize copilot even if we have to wait on codex for the account license to open up. copilot is extremely useful thanks to its variety of models\"). This text was written afterwards by an architect agent from the plan, the P0 probe results and the code; the operator has not read it line by line. No Council has read it. Open decisions (section 14) take their recommendations unless the operator says otherwise. Slices that need a live run or a Council say so, and each live run spends the operator's tokens only on the operator's yes for it."
     },
-    "sha256": "9cf9dc149c9713e995a2a3ffe55c7e02d50b05e320edd15fe70bad8a3b4b58a5",
+    "sha256": "1a1b46f5dda213204251550d44a34d780a0db82ce2da564b44c47272807ea382",
     "word": "approved"
   },
   "spec": {

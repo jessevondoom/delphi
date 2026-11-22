@@ -144,7 +144,7 @@ Tests that fail on a pull request they have nothing to do with, and pass on a re
 
 ## 132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens
 
-**132: Carriers as seats: one contract, one probe, Copilot first, and Codex when its account opens** · approved (per source at `9cf9dc149c97`) · tier 0 · [source](../../specs/132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens.md)
+**132: Carriers as seats: one contract, one probe, Copilot first, and Codex when its account opens** · approved (per source at `1a1b46f5dda2`) · tier 0 · [source](../../specs/132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens.md)
 
 **source excerpt, untrusted** · `specs/132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens.md` line 27
 
