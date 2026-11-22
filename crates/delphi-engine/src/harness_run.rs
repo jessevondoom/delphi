@@ -941,7 +941,19 @@ impl Engine {
         // pointers are shortened (never the system text, the contract or a peer's text); if what may not be cut is alone over it, the seat
         // does not start and nothing is spent.
         // The one retry after a cut complaint runs with half the carrier's budget (`specs/131` S4 item 7, OD-7).
-        let budget = crate::prompt_budget::budget(profile.max_prompt_bytes) / if sc.half_budget { 2 } else { 1 };
+        // A ceiling the operator measured with the input ladder (`specs/131` S6) lowers it, on the installed CLI version only; the CLI's
+        // version is asked only when a measurement for this endpoint exists.
+        let (full_budget, budget_source) = {
+            let records: Vec<crate::conformance::Record> = crate::conformance::load(&self.ws.dir.join(crate::conformance::FILE)).into_iter().filter(|r| r.endpoint_id == ep.id && r.ladder_at.is_some()).collect();
+            let version = if records.is_empty() {
+                None
+            } else {
+                let p = program.clone();
+                tokio::task::spawn_blocking(move || crate::forge_tools::installed_cli_version(&p)).await.ok().flatten()
+            };
+            crate::conformance::effective_budget(profile.max_prompt_bytes, &records, &ep.id, version.as_deref(), (self.clock_unix)())
+        };
+        let budget = full_budget / if sc.half_budget { 2 } else { 1 };
         let fit = crate::prompt_budget::fit(ipr, (system_prompt.len() + retry_note.len()) as u64, budget);
         let context_cut = fit.record(budget);
         let sent: std::borrow::Cow<Ipr> = match fit {
@@ -965,6 +977,7 @@ impl Engine {
         if let (Some(o), Some(c)) = (started.as_object_mut(), counts.as_object()) {
             o.extend(c.clone());
             o.insert("budget".into(), json!(budget));
+            o.insert("budget_source".into(), json!(budget_source));
             if let Some(cut) = &context_cut {
                 o.insert("context_cut".into(), cut.clone());
             }
@@ -3216,7 +3229,7 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
         assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
         let started = &events_of(&f, "harness.started")[0].payload;
-        assert_eq!(started["budget"], 150_000, "{started}");
+        assert_eq!((started["budget"].as_u64(), started["budget_source"].as_str()), (Some(150_000), Some("default, unmeasured")), "{started}");
         assert!(started["prompt_bytes"].as_u64().unwrap() <= 150_000, "{started}");
         let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
         let cut = &r["context_cut"];
@@ -3229,6 +3242,32 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         let sent = fs::read_to_string(&dump).unwrap();
         assert_eq!(sent.matches("[cut by Delphi: the carrier takes at most 150000 bytes of prompt; lines 1 to ").count(), 10);
         assert!(sent.trim_end().trim_end_matches(['}', '"']).ends_with("</contract>"), "the contract is still the end of the prompt");
+    }
+
+    /// `specs/131` S6 (AC-14): a ceiling the input ladder measured on the installed CLI version lowers the seat's budget to 80% of it; a
+    /// record for another version is ignored.
+    #[tokio::test]
+    async fn a_measured_ceiling_on_the_installed_version_lowers_an_agy_seats_budget() {
+        use crate::conformance as cf;
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let now = (f.engine.clock_unix)();
+        let rec = |v: &str, ceiling: u64| cf::Record { endpoint_id: "agy-sub".into(), harness: "agy".into(), model: "gemini-3.8-flash-low".into(), cli_version: v.into(), at: now, tool_level: "L1".into(), rows: vec![cf::ladder_row(&[(ceiling, true), (ceiling + 50_000, false)])], ladder_at: Some(now) };
+        let file = f.engine.ws.dir.join(cf::FILE);
+        cf::save(&file, &rec("2.1.319 (Claude Code)", 100_000)).unwrap();
+        cf::save(&file, &rec("0.9.0", 20_000)).unwrap();
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!(started["budget"], 80_000, "{started}");
+        assert!(started["budget_source"].as_str().unwrap().starts_with("measured on 2.1.319 (Claude Code): 80% of 100000 bytes"), "{started}");
+        assert!(started["prompt_bytes"].as_u64().unwrap() <= 80_000, "{started}");
+        assert!(fs::read_to_string(&dump).unwrap().contains("[cut by Delphi: the carrier takes at most 80000 bytes of prompt"));
     }
 
     /// `specs/131` S3 (AC-5): an agy seat's one user event starts with the task and ends with the contract, and with the last 70 KB gone
