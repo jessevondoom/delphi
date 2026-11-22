@@ -223,12 +223,18 @@
       "line": 291,
       "number": "14.7",
       "title": "Tool access for forge seats (operator, 2026-11-21)"
+    },
+    {
+      "level": 3,
+      "line": 312,
+      "number": "14.8",
+      "title": "Correction to 14.2: ratify, and the macOS paths (operator, 2026-11-21)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md",
-    "sha256": "ac37dd36dc1f4050c42eeea06faf31b22ba236120f1691777bfccffb643a77be"
+    "sha256": "db711cb6be4d5b0d303a2d10ccae36c825d31f06163316973e64c7170f1227f7"
   },
   "source_status_at_hash": {
     "line": {
@@ -241,7 +247,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, IN ADVANCE, in a host session (\"build F0 to F2 then we can try F4?\"), said of a plan shown to them in that session (F0 slice claims, F1 a deterministic finisher, F2 a cross-family reviewer that can run the tests, F3 deferred, F4 a replay experiment). This text was written afterwards by an architect agent from that plan and the code; the operator has not read it line by line. No Council has read it. Open decisions (section 11) take their recommendations unless the operator says otherwise. F4 spends the operator's tokens and runs only on the operator's yes for it."
     },
-    "sha256": "ac37dd36dc1f4050c42eeea06faf31b22ba236120f1691777bfccffb643a77be",
+    "sha256": "db711cb6be4d5b0d303a2d10ccae36c825d31f06163316973e64c7170f1227f7",
     "word": "approved"
   },
   "spec": {
