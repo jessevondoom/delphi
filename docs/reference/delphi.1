@@ -72,13 +72,16 @@ sign in to, or out of, a model endpoint.
 check that each model endpoint answers.
 .PP
 .nf
-  delphi endpoints test [<endpoint id>] [\-\-probe [\-\-yes]] [\-\-workspace <name>] [\-\-home <dir>]
+  delphi endpoints test [<endpoint id>] [\-\-probe [\-\-yes] [\-\-ladder]] [\-\-workspace <name>] [\-\-home <dir>]
 .fi
 .PP
 Without `\-\-probe` it prints the cached results and spends nothing.
 `\-\-probe` reads each harness CLI's version, prints the calls and their estimated cost,
 and runs only on your yes (`y` at a terminal, or `\-\-yes`). It writes a conformance record
 per endpoint, model and CLI version to `local/carrier\-conformance.json` for `delphi doctor`.
+`\-\-ladder` adds the input ladder (100 to 250 KB of filler, stopping at the first size not
+answered); it runs only on `y` at a terminal, never on `\-\-yes`. A seat's byte budget is then
+the smaller of its `max_prompt_bytes` and 80% of the largest size answered on that CLI version.
 .SS delphi connectors
 the connectors that are configured, logged in and pinned.
 .PP
