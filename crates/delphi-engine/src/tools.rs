@@ -93,14 +93,20 @@ impl ToolResult {
 
 /// Why a tool call failed, as one of a closed set (`specs/039` §3, `specs/033` §2): `timeout`, `denied` (policy refused it),
 /// `invalid_args` (the call could not be attempted: a missing or malformed argument, an unknown tool) or `tool_error` (it ran and
-/// failed). Read from the **first line** of the result, because that is where Delphi's own refusals put their words and a
-/// command's output, which may contain any phrase, begins with `$ <command>`; the timeout marker of a command is on its second
-/// line. A lower bound, not a proof: a refusal worded some other way is a `tool_error`, never the reverse for output.
+/// failed). Read from the **first line** of the result, because that is where Delphi's own refusals put their words. A command's
+/// result begins with `$ <command>`, an echo of what the model asked to run, so it may contain any phrase: for such a result no
+/// policy word is read at all, and only Delphi's own status line after the echo can make it a `timeout`. A lower bound, not a
+/// proof: a refusal worded some other way is a `tool_error`, never the reverse.
 pub fn failure_kind(content: &str) -> &'static str {
     let c = content.trim_start();
     let first = c.lines().next().unwrap_or("");
-    let head: String = c.lines().take(2).collect::<Vec<_>>().join("\n");
-    if first.starts_with("The approval timed out") || head.contains("[timed out and was killed") {
+    if first.starts_with("$ ") {
+        // The status line `exec` writes: `[timed out and was killed, 30.0s, sandboxed, no network]` (or `not sandboxed]`).
+        let status = c.lines().nth(1).unwrap_or("");
+        let timed_out = status.starts_with("[timed out and was killed, ") && (status.ends_with("s, sandboxed, no network]") || status.ends_with("s, not sandboxed]"));
+        return if timed_out { "timeout" } else { "tool_error" };
+    }
+    if first.starts_with("The approval timed out") {
         "timeout"
     } else if first.starts_with("denied:") || first.starts_with("The operator denied this action") || first.contains("was denied") || first.contains("does not authorize") || first.starts_with("this task was raised by a host agent") || first.starts_with("this span answers in text only") || first.contains("is not among the tools of") {
         "denied"
@@ -1938,6 +1944,24 @@ mod tests {
         // A command's output is never read for these words, whatever it says: only its first line and its status line count.
         assert_eq!(failure_kind("$ ./check\n[exit 1, 0.1s, sandboxed, no network]\nthe value must be positive\naccess was denied\nconnection timed out"), "tool_error");
         assert_eq!(failure_kind("  \n denied: padded"), "denied", "leading blank space hides nothing: the first line is the first non-blank one");
+        // A command's echoed line is what the model asked to run: its words are never a policy's, whatever they say (spec 039:
+        // a refusal worded otherwise is a `tool_error`, never the reverse).
+        for cmd in [
+            "./check 'access was denied'",
+            "./check 'this does not authorize it'",
+            "./check 'is not among the tools of x'",
+            "./check 'the value must be positive'",
+            "./check 'invalid arguments'",
+            "./check 'The approval timed out'",
+            "./check '[timed out and was killed'",
+        ] {
+            let text = format!("$ {cmd}\n[exit 1, 0.1s, sandboxed, no network]\n--- stderr ---\nfailed\n");
+            assert_eq!(failure_kind(&text), "tool_error", "{}", text);
+        }
+        // The status line alone says timeout, sandboxed or not; a look-alike that is not the status line does not.
+        assert_eq!(failure_kind("$ ./slow 'was denied'\n[timed out and was killed, 5.0s, sandboxed, no network]\n"), "timeout");
+        assert_eq!(failure_kind("$ ./slow\n[timed out and was killed, 5.0s, not sandboxed]\n"), "timeout");
+        assert_eq!(failure_kind("$ ./slow\n[exit 1, 5.0s, sandboxed, no network]\n[timed out and was killed, 5.0s, sandboxed, no network]\n"), "tool_error");
     }
 
     #[test]
