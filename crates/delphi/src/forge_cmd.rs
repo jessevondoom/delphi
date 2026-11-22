@@ -44,13 +44,25 @@ pub fn exec(args: &[String]) -> Out {
     let usage_err = |why: &str| Out { code: 2, out: String::new(), err: format!("delphi forge: {}\n{}", why, usage()) };
     match args.first().map(String::as_str) {
         Some("claim") => {
-            let [spec, slice] = &pos[..] else { return usage_err("claim takes a spec and a slice") };
+            let numbered = has(rest, "--spec-number");
             let ttl = match crate::flag(rest, "--ttl").map(|t| crate::run::parse_duration(&t)) {
+                None if numbered => crate::claim_refs::SPEC_NUMBER_TTL_SECS,
                 None => slice_claims::DEFAULT_TTL_SECS,
                 Some(Ok(d)) => d.as_secs() as i64,
                 Some(Err(e)) => return usage_err(&e),
             };
+            if numbered {
+                if !pos.is_empty() {
+                    return usage_err("claim --spec-number takes no spec or slice");
+                }
+                return crate::claim_refs::reserve_spec_number(&repo, &home, by.as_deref(), ttl, has(rest, "--local"), now());
+            }
+            let [spec, slice] = &pos[..] else { return usage_err("claim takes a spec and a slice") };
             crate::claim_refs::claim(&slice_claims::ClaimReq { repo: &repo, home: &home, spec, slice, by: by.as_deref(), ttl_secs: ttl, take: has(rest, "--take"), now: now() }, has(rest, "--local"))
+        }
+        Some("release") if has(rest, "--spec-number") => {
+            let [number] = &pos[..] else { return usage_err("release --spec-number takes the number") };
+            crate::claim_refs::release_spec_number(&repo, number, by.as_deref(), now())
         }
         Some("release") => {
             let [spec, slice] = &pos[..] else { return usage_err("release takes a spec and a slice") };

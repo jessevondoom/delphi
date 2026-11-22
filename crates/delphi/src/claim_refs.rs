@@ -16,6 +16,7 @@ pub const NS: &str = "refs/delphi/claims";
 const SEEN: &str = "refs/delphi/seen-claims";
 /// The first path part of a spec-number reservation (§14.11 item 8).
 pub const SPEC_NUMBER: &str = "spec-number";
+pub const SPEC_NUMBER_TTL_SECS: i64 = 7 * 24 * 3600;
 const TIMEOUT: Duration = Duration::from_secs(20);
 const MAIN: &str = "refs/remotes/origin/main";
 
@@ -440,6 +441,58 @@ pub fn list(repo: &Path, home: &Path, all: bool, json: bool, sweep_first: bool, 
         });
     }
     Out { code: 0, out, err: format!("{}{}", local.err, notes) }
+}
+
+/// `forge claim --spec-number` (§14.11 item 8): reserve the lowest spec number above every number on `origin/main`, in this
+/// checkout and in a live reservation. Offline it prints the checkout's next number, reserving nothing.
+pub fn reserve_spec_number(repo: &Path, home: &Path, by: Option<&str>, ttl_secs: i64, local_only: bool, now: i64) -> Out {
+    let facts = match slice_claims::git_facts(repo) {
+        Ok(f) => f,
+        Err(e) => return Out { code: 2, out: String::new(), err: e },
+    };
+    let Some(by) = by.map(str::to_string).or_else(|| facts.branch.clone()) else {
+        return Out { code: 2, out: String::new(), err: "no branch is checked out here: name the holder with --by".into() };
+    };
+    let names = std::fs::read_dir(facts.top.join("specs")).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>()).unwrap_or_default();
+    let mut highest = spec_numbers(names.into_iter()).into_iter().max().unwrap_or(0);
+    let unreserved = |n: u32, why: &str| Out { code: 0, out: format!("{:03}\n", n), err: format!("warning: {}; {:03} is the next number in this checkout and is NOT reserved: check open pull requests before you use it\n", why, n) };
+    let remote = if local_only { None } else { Remote::of(repo) };
+    let Some(remote) = remote else { return unreserved(highest + 1, "no remote is used") };
+    let seen = match remote.fetch(true).and_then(|s| main_facts(&remote).map(|f| (s, f))) {
+        Ok((s, (_, on_main))) => {
+            highest = highest.max(on_main.into_iter().max().unwrap_or(0));
+            s
+        }
+        Err(e) => return unreserved(highest + 1, &format!("the remote could not be reached ({})", e)),
+    };
+    let prefix = format!("{}/", SPEC_NUMBER);
+    highest = highest.max(seen.iter().filter(|s| s.live(now)).filter_map(|s| s.path.strip_prefix(&prefix)?.parse().ok()).max().unwrap_or(0));
+    let machine = machine_id(home);
+    for n in highest + 1..highest + 6 {
+        let c = RefClaim { version: 1, spec: SPEC_NUMBER.into(), slice: format!("{:03}", n), by: by.clone(), machine: machine.clone(), branch: facts.branch.clone(), at: fmt_time(now), expires: fmt_time(now + ttl_secs), took_from: None };
+        match remote.write(&format!("{}{:03}", prefix, n), None, &c) {
+            Push::Done => return Out { code: 0, out: format!("{:03}\n", n), err: format!("reserved spec number {:03} for {} on {} until {}: name the file specs/{:03}-<slug>.md\n", n, by, machine, c.expires, n) },
+            Push::Lost => continue,
+            Push::Failed(e) => return unreserved(n, &format!("the remote could not be reached ({})", e)),
+        }
+    }
+    Out { code: 1, out: String::new(), err: "five spec numbers in a row were reserved meanwhile; run it again".into() }
+}
+
+/// `forge release --spec-number <NNN>`.
+pub fn release_spec_number(repo: &Path, number: &str, by: Option<&str>, now: i64) -> Out {
+    let Ok(n) = number.parse::<u32>() else { return Out { code: 2, out: String::new(), err: format!("`{}` is not a spec number", number) } };
+    let facts = slice_claims::git_facts(repo).ok();
+    let by = by.map(str::to_string).or_else(|| facts.and_then(|f| f.branch)).unwrap_or_default();
+    let Some(remote) = Remote::of(repo) else { return Out { code: 0, out: String::new(), err: "no origin remote: nothing is reserved\n".into() } };
+    let line = release_remote(&remote, &format!("{}/{:03}", SPEC_NUMBER, n), &by, now);
+    if line.starts_with("released") {
+        Out { code: 0, out: line, err: String::new() }
+    } else if line.is_empty() {
+        Out { code: 0, out: format!("no reservation of spec number {:03}; nothing to release\n", n), err: String::new() }
+    } else {
+        Out { code: 0, out: String::new(), err: line }
+    }
 }
 
 #[cfg(test)]
