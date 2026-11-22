@@ -152,6 +152,7 @@ pub mod verify_source;
 pub mod mission;
 pub mod grades;
 pub mod models;
+pub mod calibration;
 pub mod models_cli;
 pub mod model;
 pub mod observe;

@@ -18,6 +18,11 @@
 //! measurement may not score seat accuracy as a ranking or routing input; Goodhart: a number that picks seats trains seats to
 //! the number). The `review_findings` check's pass bit is a threshold on one synthetic case in one experiment, nothing more.
 //!
+//! One use is different, and `specs/056` §10.4 approves it: `delphi models calibrate` (slice M5, `models_calibrate.rs`) sends ten
+//! medium cases with its own fixed seeds to a model as bare carrier calls, with no Delphi role, and keeps the counts as **routing
+//! evidence** for task kind `review` and as class proposals the operator ratifies. That measures a model on fixed offline cases,
+//! not a seat; no model sees a result and nothing reaches a prompt.
+//!
 //! Nothing here calls a model.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -629,7 +634,7 @@ fn prompt(d: Difficulty) -> String {
 }
 
 /// What an inline case asks: the module is in the prompt, with line numbers, so a seat with no tools can take it.
-fn inline_prompt(source: &str, d: Difficulty) -> String {
+pub(crate) fn inline_prompt(source: &str, d: Difficulty) -> String {
     let numbered = numbered(source);
     format!("Below is a small Python module with line numbers. Each function has a docstring stating what it should do. Review it. {}\n\n---\n{}---", format_rules(d), numbered)
 }
