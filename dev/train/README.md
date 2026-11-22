@@ -163,11 +163,14 @@ and 2). A new seed is a new case, so a fresh seed is a holdout.
 
 `delphi train report` adds a **SEEDED-DEFECT REVIEW** section: by arm, recall, false positives, unmatched, and **unique
 catches** (planted defects caught by only one arm, over cases two or more arms ran). **These are diagnostics, not a seat score.**
-They are never an input to routing, ranking, staffing or any Council decision (`specs/078`), and the pass bit is a threshold on
-one synthetic case. One case is a few defects: read the table as a size of the gap to look into, not a verdict on a seat.
+In a training report they are never an input to routing, ranking, staffing or any Council decision (`specs/078`), and the pass
+bit is a threshold on one synthetic case. One case is a few defects: read the table as a size of the gap to look into, not a
+verdict on a seat. One use differs, approved by `specs/056` §10.4: the pass bits of the four holdout review cases of the M7
+routing benchmark (below) are one third of the gate on which `[routing] assignment` may become `discovered`. That compares two
+routing settings on fresh pre-registered seeds; no seat is scored, no model sees it, and nothing reaches a prompt.
 
-One use differs, approved by `specs/056` §10.4 (slice M5): `delphi models calibrate` sends ten medium inline cases, with seeds
-56051 to 56060 fixed in `crates/delphi/src/models_calibrate.rs` (disjoint from the M7 benchmark's), to one model at a time as
+A second use, approved by the same section (slice M5): `delphi models calibrate` sends ten medium inline cases, with seeds
+56051 to 56060 fixed in `crates/delphi/src/models_calibrate.rs` (disjoint from the M7 benchmark's 56071 to 56074), to one model at a time as
 bare carrier calls with no Delphi role text. The counts (caught of planted, false positives) stay in the workspace's `local/`
 and are **routing evidence** for task kind `review`, plus class proposals the operator ratifies; they measure a model on fixed
 offline cases, not a seat, and they never reach a prompt.
@@ -216,7 +219,25 @@ delphi train defects gen --seed 7 --difficulty hard --inline --out dev/train/sui
 The report adds **recall by defect kind** (caught/planted per arm, lowest recall first) under the arm table, so the kinds
 that separate seats, or that none finds, show. Rows written before this existed print no such table. The case's seed fixes
 everything: the prompt never holds the key, and the same seed and level give the same bytes. Same rule as above: diagnostics
-for a report, never a seat score or a routing input (`specs/078`).
+for a report, never a seat score or a routing input (`specs/078`; the routing gate below is the one exception, `specs/056` §10.4).
+
+## The routing gate (`specs/056` §10.6, M7)
+
+Is `[routing] assignment = "discovered"` no worse than `"static"`? `dev/train/m7/PREREG.md` registers the benchmark (12 cases,
+3 runs per arm, token caps, the five-part pass criterion) and `dev/train/m7/benchmark.toml` is its machine-readable form. The two
+arms (`dev/train/m7/arms.example.toml`) set `[arm.routing] assignment` and share one template home, the same `expect_models`
+(every pool model) and no overlay; `train run` refuses a pair that differs in anything else.
+
+```sh
+delphi train run --bench dev/train/m7/benchmark.toml --arms-file arms.toml --no-session-cap --work-dir /tmp/m7 --dry-run   # prints the ceiling
+delphi train run --bench dev/train/m7/benchmark.toml --arms-file arms.toml --no-session-cap --work-dir /tmp/m7             # asks yes at a terminal
+delphi train gate --bench dev/train/m7/benchmark.toml --work-dir /tmp/m7                                                   # the verdict again
+```
+
+`--bench` runs exactly the registered cases, 3 runs each, stops a run at its suite's token cap (graded, not passed), prints the
+token ceiling and the premium-request multipliers first, and runs only on a `yes` typed at a terminal (not from an agent seat).
+The gate prints the five criteria, PASS / FAIL / INCOMPLETE and the contrast; exit 0 only on PASS. A pass is necessary, not
+sufficient: the operator decides OD-5.
 
 ## Context retention (`specs/048` BM-7)
 

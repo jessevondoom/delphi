@@ -360,6 +360,10 @@ pub struct Row {
     pub seats: Vec<SeatNote>,
     /// For a seeded-defect review case: the run's recall, false positives and unmatched findings (`train_defects`). A diagnostic.
     pub review: Option<crate::train_defects::Score>,
+    /// The arm's `[arm.routing] assignment`, so the gate can tell S from D in `rows.jsonl`.
+    pub routing: Option<String>,
+    /// What the routing gate reads from the run (`specs/056` §10.6): tokens, premium requests, dispatches, floor and cap breaches.
+    pub gate: crate::train_gate::Facts,
 }
 
 /// The effort a run took, read from its mission log: counts only, no text (`specs/048` BM-2).
@@ -533,7 +537,8 @@ impl Row {
                "seats": self.seats.iter().map(SeatNote::to_json).collect::<Vec<_>>(), "review": self.review.as_ref().map(crate::train_defects::Score::note), "gates": self.eff.gates, "escalations": self.eff.escalations, "cache_read_tokens": self.eff.cache_read, "cache_input_tokens": self.eff.cache_input,
                "by_tool": self.eff.tool_calls.iter().map(|(t, (c, e))| (t.clone(), json!({"calls": c, "errors": e}))).collect::<serde_json::Map<String, Value>>(),
                "tokens_in": self.usage.values().map(ModelUse::tokens_in).sum::<u64>(), "tokens_out": self.usage.values().map(ModelUse::tokens_out).sum::<u64>(),
-               "models": self.usage.iter().map(|(m, u)| (m.clone(), json!({"calls": u.calls, "tokens_in": u.tokens_in(), "tokens_out": u.tokens_out(), "cost_usd": (u.cost_usd * 10000.0).round() / 10000.0}))).collect::<serde_json::Map<String, Value>>()})
+               "models": self.usage.iter().map(|(m, u)| (m.clone(), json!({"calls": u.calls, "tokens_in": u.tokens_in(), "tokens_out": u.tokens_out(), "cost_usd": (u.cost_usd * 10000.0).round() / 10000.0}))).collect::<serde_json::Map<String, Value>>(),
+               "routing": self.routing, "gate": self.gate.to_json()})
     }
 }
 
@@ -559,6 +564,8 @@ impl Row {
             eff: Efficiency::default(),
             seats: v["seats"].as_array().map(|a| a.iter().filter_map(SeatNote::from_json).collect()).unwrap_or_default(),
             review: crate::train_defects::Score::from_note(&v["review"]),
+            routing: v["routing"].as_str().map(String::from),
+            gate: crate::train_gate::Facts::from_json(&v["gate"]),
         })
     }
 }
@@ -710,11 +717,14 @@ pub struct Arm {
     pub base: Option<String>,
     /// `[loop]` keys this arm sets in its copy of the home's `config.toml` (checked against what the loop reads).
     pub loop_switches: BTreeMap<String, toml::Value>,
+    /// `[arm.routing] assignment` (`specs/056` §10.6): `static` or `discovered`, set in this arm's copy of the home's `config.toml`.
+    /// Arms that set it come as one pair that differs in nothing else (`train_gate::routing_pair`).
+    pub routing: Option<String>,
 }
 
 impl Arm {
     pub fn new(name: &str, overlay: Option<PathBuf>) -> Arm {
-        Arm { name: name.into(), overlay, template_home: None, expect_models: Vec::new(), base: None, loop_switches: BTreeMap::new() }
+        Arm { name: name.into(), overlay, template_home: None, expect_models: Vec::new(), base: None, loop_switches: BTreeMap::new(), routing: None }
     }
 }
 
@@ -759,6 +769,22 @@ pub fn parse_arms(file: &Path) -> Result<Vec<Arm>, String> {
                 loop_switches.insert(k.clone(), v.clone());
             }
         }
+        let routing = match a.get("routing") {
+            None => None,
+            Some(r) => {
+                let r = r.as_table().ok_or(format!("{}: `routing` must be a table", at))?;
+                if let Some(k) = r.keys().find(|k| *k != "assignment") {
+                    return Err(format!("{}: `{}`: [arm.routing] sets only `assignment`, not `{}`", at, name, k));
+                }
+                match r.get("assignment").and_then(|v| v.as_str()) {
+                    Some(v @ ("static" | "discovered")) => Some(v.to_string()),
+                    _ => return Err(format!("{}: `{}`: [arm.routing] assignment must be \"static\" or \"discovered\"", at, name)),
+                }
+            }
+        };
+        if routing.is_some() && base.is_some() {
+            return Err(format!("{}: `{}` sets [arm.routing] and a `base`; a routing arm is a plain arm", at, name));
+        }
         if base.is_none() && !loop_switches.is_empty() {
             return Err(format!("{}: `{}` sets [loop] switches but names no `base`; only a harness arm (`base = \"<arm>\"`) may, so staffing arms stay comparable", at, name));
         }
@@ -774,7 +800,7 @@ pub fn parse_arms(file: &Path) -> Result<Vec<Arm>, String> {
             }
             (Some(home), a.get("expect_models").and_then(|v| v.as_array()).map(|v| v.iter().filter_map(|m| m.as_str().map(String::from)).collect()).unwrap_or_default())
         };
-        arms.push(Arm { name: name.into(), overlay: a.get("overlay").and_then(|v| v.as_str()).map(resolve), template_home: home, expect_models, base, loop_switches });
+        arms.push(Arm { name: name.into(), overlay: a.get("overlay").and_then(|v| v.as_str()).map(resolve), template_home: home, expect_models, base, loop_switches, routing });
     }
     if arms.is_empty() {
         return Err(format!("{}: no [[arm]] tables", file.display()));
@@ -792,6 +818,10 @@ pub fn parse_arms(file: &Path) -> Result<Vec<Arm>, String> {
         if arms[i].overlay.is_none() {
             arms[i].overlay = overlay;
         }
+    }
+    // A routing arm compares only with its twin: two arms that differ in anything but `assignment` are refused (AC-A6).
+    if arms.iter().any(|a| a.routing.is_some()) {
+        crate::train_gate::routing_pair(&arms).map_err(|e| format!("{}: {}", file.display(), e))?;
     }
     Ok(arms)
 }
@@ -827,6 +857,10 @@ pub struct Config {
     pub resume: bool,
     /// Pace Claude runs by the subscription's utilization windows.
     pub pace: Option<Pace>,
+    /// Tokens one run of a case may spend, by suite (`specs/056` §10.6); a run is stopped there and counts as not passed.
+    pub token_caps: BTreeMap<String, u64>,
+    /// How often a capped run's tokens are read while it runs.
+    pub cap_poll: Duration,
 }
 
 /// Seconds of real time a run may exceed its monotonic time by before it counts as slept through.
@@ -874,18 +908,27 @@ pub(crate) fn keep_awake(args: &[String]) {
 
 /// Run `child` to completion or kill it at `deadline`; output goes to files so a full pipe never blocks it.
 pub(crate) fn run_process(cmd: &mut Command, out: &Path, err: &Path, limit: Duration) -> Result<(Option<i32>, bool), String> {
+    run_watched(cmd, out, err, limit, Duration::MAX, &mut || false).map(|(code, timed_out, _)| (code, timed_out))
+}
+
+/// [`run_process`] that also asks `stop` every `every` and kills the child when it says so: `(exit code, timed out, stopped)`.
+pub(crate) fn run_watched(cmd: &mut Command, out: &Path, err: &Path, limit: Duration, every: Duration, stop: &mut dyn FnMut() -> bool) -> Result<(Option<i32>, bool, bool), String> {
     let stdout = fs::File::create(out).map_err(|e| e.to_string())?;
     let stderr = fs::File::create(err).map_err(|e| e.to_string())?;
     let mut child = cmd.stdin(Stdio::null()).stdout(stdout).stderr(stderr).spawn().map_err(|e| format!("could not start {:?}: {}", cmd.get_program(), e))?;
-    let start = Instant::now();
+    let (start, mut looked) = (Instant::now(), Instant::now());
     loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            return Ok((status.code(), false));
+            return Ok((status.code(), false, false));
         }
-        if start.elapsed() >= limit {
+        let (timed_out, stopped) = (start.elapsed() >= limit, looked.elapsed() >= every && stop());
+        if looked.elapsed() >= every {
+            looked = Instant::now();
+        }
+        if timed_out || stopped {
             let _ = child.kill();
             let _ = child.wait();
-            return Ok((None, true));
+            return Ok((None, timed_out, stopped && !timed_out));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -907,7 +950,7 @@ pub(crate) const INLINE_PROMPT_MAX_BYTES: usize = 6000;
 /// One case, one seed, one arm, in its own directory under the working directory.
 pub fn run_one(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize) -> Row {
     let label = format!("{}/{}", case.suite, case.id);
-    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: arm.base.clone(), eff: Efficiency::default(), seats: Vec::new(), review: None };
+    let mut row = Row { case: label.clone(), arm: arm.name.clone(), seed, exit_code: None, wall_secs: 0.0, cost_usd: 0.0, passed: None, failed_checks: Vec::new(), notes: Vec::new(), usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: arm.base.clone(), eff: Efficiency::default(), seats: Vec::new(), review: None, routing: arm.routing.clone(), gate: Default::default() };
     if let Err(e) = run_inner(cfg, case, arm, seed, index, &mut row) {
         row.error = Some(e);
         row.passed = None;
@@ -941,6 +984,9 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
         text = set_loop_switches(&text, &arm.loop_switches)?;
         row.notes.push(format!("harness arm over {}: [loop] {}", arm.base.as_deref().unwrap_or("?"), arm.loop_switches.iter().map(|(k, v)| format!("{} = {}", k, v)).collect::<Vec<_>>().join(", ")));
     }
+    if let Some(a) = &arm.routing {
+        text = crate::train_gate::set_routing(&text, a)?;
+    }
     fs::write(&cfg_path, text).map_err(|e| e.to_string())?;
     if let Some(o) = &arm.overlay {
         apply_overlay(&ws_dir, o)?;
@@ -968,7 +1014,12 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     }
     let (stdout_path, stderr_path) = (dir.join("stdout.txt"), dir.join("stderr.txt"));
     let started = Stopwatch::start();
-    let (code, timed_out) = run_process(&mut cmd, &stdout_path, &stderr_path, Duration::from_secs(case.timeout_secs) + cfg.kill_grace)?;
+    // A token cap (`specs/056` §10.6) is read from the run's own logs while it runs; the run is stopped once it is passed.
+    let cap = cfg.token_caps.get(&case.suite).copied();
+    let watch_dir = ws_dir.clone();
+    let mut over = || cap.is_some_and(|c| crate::train_gate::tokens_of(&crate::train_gate::home_events(&watch_dir)) > c);
+    let every = if cap.is_some() { cfg.cap_poll } else { Duration::MAX };
+    let (code, timed_out, capped) = run_watched(&mut cmd, &stdout_path, &stderr_path, Duration::from_secs(case.timeout_secs) + cfg.kill_grace, every, &mut over)?;
     row.wall_secs = started.elapsed().as_secs_f64();
     row.exit_code = code;
     if let Some(s) = started.slept() {
@@ -976,6 +1027,24 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     }
     if timed_out {
         return Err(format!("killed after {}s", case.timeout_secs + cfg.kill_grace.as_secs()));
+    }
+    // The routing gate checks served models against the run's own cap, so it reads the configuration the daemon used.
+    let run_config = arm.routing.as_ref().and_then(|_| crate::train_gate::effective(&ws_dir));
+    if capped {
+        // Stopped at the cap: graded, not passed, in either arm alike. It printed no summary, so every mission of the home is read.
+        let events = crate::train_gate::home_events(&ws_dir);
+        row.usage = usage_by_model(&events);
+        row.seats = seats_of(&events);
+        row.cost_usd = row.usage.values().map(|u| u.cost_usd).sum();
+        row.gate = crate::train_gate::facts_of(&events, run_config.as_ref());
+        (row.gate.token_cap, row.gate.capped) = (cap, true);
+        let strangers: Vec<&String> = row.usage.keys().filter(|m| !arm.expect_models.is_empty() && !arm.expect_models.iter().any(|x| m.starts_with(x.as_str()))).collect();
+        if !strangers.is_empty() {
+            return Err(format!("arm staffing violated: used {} but `{}` expects {}", strangers.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "), arm.name, arm.expect_models.join(", ")));
+        }
+        row.failed_checks = vec![format!("stopped at its token cap: {} tokens, over the cap of {}", row.gate.cost_tokens, cap.unwrap_or(0))];
+        row.passed = Some(false);
+        return Ok(());
     }
     let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
     let summary = summary_of(&stdout).ok_or_else(|| format!("no run summary (exit {:?}); see {}", code, stderr_path.display()))?;
@@ -1001,6 +1070,8 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
     row.promotions = events.iter().filter(|e| e.kind == "model.promoted").count() as u32;
     row.eff = efficiency_of(&events);
     row.seats = seats_of(&events);
+    row.gate = crate::train_gate::facts_of(&events, run_config.as_ref());
+    row.gate.token_cap = cap;
     // An arm is a staffing decision. If any other model did the work, the run says nothing about the arm.
     let strangers: Vec<&String> = row.usage.keys().filter(|m| !arm.expect_models.is_empty() && !arm.expect_models.iter().any(|x| m.starts_with(x.as_str()))).collect();
     if !strangers.is_empty() {
@@ -1028,6 +1099,11 @@ fn run_inner(cfg: &Config, case: &Case, arm: &Arm, seed: u32, index: usize, row:
         }
     }
     row.failed_checks = case.checks.iter().filter_map(|c| eval_check(c, &ctx).err()).collect();
+    // A run that ended between two looks but over its cap is over it all the same.
+    if let Some(c) = cap.filter(|c| row.gate.cost_tokens > *c) {
+        row.gate.capped = true;
+        row.failed_checks.push(format!("went over its token cap: {} tokens, cap {}", row.gate.cost_tokens, c));
+    }
     row.passed = Some(row.failed_checks.is_empty());
     row.review = case.checks.iter().find_map(|c| match c {
         Check::ReviewFindings { file, .. } => crate::train_defects::grade(&case.dir, file, &ctx.deliverable).ok(),
@@ -1152,7 +1228,7 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 }
 
 /// `delphi train run ...`; `cases` are already loaded and validated by the caller.
-pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
+pub fn cli(args: &[String], cases: &[&Case], bench: Option<&crate::train_gate::Bench>) -> i32 {
     let Some(budget) = crate::train::session_budget(args) else {
         eprintln!("delphi train run: --budget-usd <dollars> is required; or --no-session-cap to drop the session total on purpose (each case's own cap still applies)");
         return 2;
@@ -1193,15 +1269,51 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         eprintln!("delphi train run: {}", e);
         return 2;
     }
-    let seeds: u32 = flag(args, "--seeds").and_then(|s| s.parse().ok()).filter(|s| (1..=20).contains(s)).unwrap_or(1);
+    let mut seeds: u32 = flag(args, "--seeds").and_then(|s| s.parse().ok()).filter(|s| (1..=20).contains(s)).unwrap_or(1);
     if let (None, Some(o)) = (&arms_file, flag(args, "--overlay")) {
         arms.push(Arm::new("candidate", Some(PathBuf::from(o))));
     }
+    // The routing benchmark (`specs/056` §10.6): its own cases, runs and caps, two routing arms, and the operator's yes at the ceiling.
+    let mut ceiling = None;
+    if let Some(b) = bench {
+        if let Err(e) = crate::train_gate::routing_pair(&arms) {
+            eprintln!("delphi train run --bench: {}", e);
+            return 2;
+        }
+        if flag(args, "--seeds").is_some_and(|s| s != b.runs.to_string()) {
+            eprintln!("delphi train run --bench: the benchmark registers {} runs per case; leave --seeds out", b.runs);
+            return 2;
+        }
+        seeds = b.runs;
+        let ws = flag(args, "--workspace").unwrap_or_else(|| "train".into());
+        let pool = arms[0].template_home.as_ref().and_then(|h| crate::train_gate::effective(&h.join("workspaces").join(&ws)));
+        let Some(pool) = pool else {
+            eprintln!("delphi train run --bench: the template home has no readable workspace `{}`", ws);
+            return 2;
+        };
+        let missing = crate::train_gate::unexpected_pool_models(&pool, &arms[0].expect_models);
+        if !missing.is_empty() {
+            eprintln!("delphi train run --bench: discovered may choose any pool model, so list each in both arms' expect_models; missing: {}", missing.join(", "));
+            return 2;
+        }
+        ceiling = Some(crate::train_gate::ceiling_text(b, arms.len(), Some(&pool)));
+    }
     let worst = train::worst_case_usd(cases, seeds) * arms.len() as f64;
     println!("{} case(s) x {} seed(s) x {} arm(s): at most ${:.2} against {}", cases.len(), seeds, arms.len(), worst, crate::train::show_budget(budget));
+    if let Some(c) = &ceiling {
+        print!("{}", c);
+    }
     if args.iter().any(|a| a == "--dry-run") {
         println!("(dry run: nothing was started; `delphi train plan` lists the cases)");
         return 0;
+    }
+    if ceiling.is_some() {
+        use std::io::IsTerminal;
+        let at_terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal() && !crate::xenia_terminal::inside_an_agent_seat();
+        if !crate::train_gate::confirm(at_terminal, &mut std::io::stdin().lock(), &mut std::io::stdout()) {
+            eprintln!("delphi train run --bench: not run");
+            return 2;
+        }
     }
     if cases.is_empty() {
         eprintln!("delphi train run: no cases chosen");
@@ -1226,7 +1338,7 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
         eprintln!("delphi train run: {}", e);
         return 2;
     }
-    let cfg = Config { template_home: template, work_dir: work.clone(), workspace: flag(args, "--workspace").unwrap_or_else(|| "train".into()), budget_usd: budget, seeds, arms: arms.clone(), delphi_bin, env: Vec::new(), kill_grace: Duration::from_secs(60), allow_unverified: args.iter().any(|a| a == "--allow-unverified"), allow_unvalidated: args.iter().any(|a| a == "--allow-unvalidated"), source_repo: PathBuf::from(flag(args, "--repo").unwrap_or_else(|| ".".into())), policy: flag(args, "--policy").map(PathBuf::from), permissions: flag(args, "--permissions").unwrap_or_else(|| "accept-edits".into()), rows_path: None, resume: false, pace: None };
+    let cfg = Config { template_home: template, work_dir: work.clone(), workspace: flag(args, "--workspace").unwrap_or_else(|| "train".into()), budget_usd: budget, seeds, arms: arms.clone(), delphi_bin, env: Vec::new(), kill_grace: Duration::from_secs(60), allow_unverified: args.iter().any(|a| a == "--allow-unverified"), allow_unvalidated: args.iter().any(|a| a == "--allow-unvalidated"), source_repo: PathBuf::from(flag(args, "--repo").unwrap_or_else(|| ".".into())), policy: flag(args, "--policy").map(PathBuf::from), permissions: flag(args, "--permissions").unwrap_or_else(|| "accept-edits".into()), rows_path: None, resume: false, pace: None, token_caps: bench.map(|b| b.token_cap.clone()).unwrap_or_default(), cap_poll: Duration::from_secs(5) };
     let mut cfg = cfg;
     let resume = args.iter().any(|a| a == "--resume");
     let out_path = flag(args, "--out").map(PathBuf::from).unwrap_or_else(|| work.join("rows.jsonl"));
@@ -1256,6 +1368,12 @@ pub fn cli(args: &[String], cases: &[&Case]) -> i32 {
     let mut rows = if resume { read_rows(&out_path).into_iter().filter(|r| !new_rows.iter().any(|n| n.dir == r.dir && !n.dir.is_empty())).collect() } else { Vec::new() };
     rows.extend(new_rows);
     print!("{}", report(&rows, &arms.iter().map(|a| a.name.clone()).collect::<Vec<_>>(), &skipped));
+    if let Some(b) = bench {
+        match crate::train_gate::evaluate(&rows, b) {
+            Ok(g) => print!("\n{}", crate::train_gate::render(&g, &rows, b)),
+            Err(e) => eprintln!("delphi train run --bench: {}", e),
+        }
+    }
     println!("rows: {}", out_path.display());
     i32::from(rows.iter().any(|r| r.passed.is_none()) || !skipped.is_empty())
 }
@@ -1309,7 +1427,7 @@ mod tests {
     fn fake_bin(root: &Path) -> PathBuf {
         let p = root.join("fake-delphi.sh");
         fs::write(&p, "#!/bin/sh\nwhile [ $# -gt 0 ]; do case \"$1\" in --home) H=\"$2\";; --workspace) W=\"$2\";; esac; shift; done\n\
-                       mkdir -p \"$H/workspaces/$W/local/missions\"\ncp -R \"$FAKE_MISSION\" \"$H/workspaces/$W/local/missions/m_fake\"\n\
+                       mkdir -p \"$H/workspaces/$W/local/missions\"\ncp -R \"$FAKE_MISSION\" \"$H/workspaces/$W/local/missions/m_fake\"\nsleep ${FAKE_SLEEP:-0}\n\
                        echo '{\"type\":\"run.summary\",\"outcome\":\"escalated\",\"exit_code\":0,\"mission_id\":\"m_fake\",\"task_id\":\"t_0001\"}'\nexit ${FAKE_EXIT:-0}\n").unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
         p
@@ -1324,7 +1442,7 @@ mod tests {
     }
 
     fn cfg(root: &Path, canned: &Path, arms: Vec<Arm>, budget: f64) -> Config {
-        Config { template_home: template(root), work_dir: root.join("work"), workspace: "train".into(), budget_usd: budget, seeds: 1, arms, delphi_bin: fake_bin(root), env: vec![("FAKE_MISSION".into(), canned.display().to_string())], kill_grace: Duration::from_secs(5), allow_unverified: false, allow_unvalidated: false, source_repo: PathBuf::from("."), policy: None, permissions: "accept-edits".into(), rows_path: None, resume: false, pace: None }
+        Config { template_home: template(root), work_dir: root.join("work"), workspace: "train".into(), budget_usd: budget, seeds: 1, arms, delphi_bin: fake_bin(root), env: vec![("FAKE_MISSION".into(), canned.display().to_string())], kill_grace: Duration::from_secs(5), allow_unverified: false, allow_unvalidated: false, source_repo: PathBuf::from("."), policy: None, permissions: "accept-edits".into(), rows_path: None, resume: false, pace: None, token_caps: BTreeMap::new(), cap_poll: Duration::from_millis(50) }
     }
 
     fn baseline() -> Arm {
@@ -1602,7 +1720,7 @@ mod tests {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let (tpl, work) = (template(t.path()), t.path().join("fresh"));
         let base = ["run", "--budget-usd", "9", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap()];
-        assert_eq!(cli(&a(&base), &[&c]), 2);
+        assert_eq!(cli(&a(&base), &[&c], None), 2);
         assert!(!work.exists());
     }
 
@@ -1636,7 +1754,7 @@ mod tests {
         assert!(!seats[0].mismatch() && !seats[1].mismatch(), "a dated suffix is not a mismatch, and nothing reported is not one");
         assert!(seats_of(&[receipt("m1", Some("other-model"), "unknown", "claude", 1)])[0].mismatch());
         // The row writes them and reads them back.
-        let mut row = Row { case: "s/c".into(), arm: "a".into(), seed: 1, exit_code: Some(0), wall_secs: 0.0, cost_usd: 0.0, passed: Some(true), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new(), review: None };
+        let mut row = Row { case: "s/c".into(), arm: "a".into(), seed: 1, exit_code: Some(0), wall_secs: 0.0, cost_usd: 0.0, passed: Some(true), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new(), review: None, routing: None, gate: Default::default() };
         row.seats = seats.clone();
         assert_eq!(Row::from_json(&row.to_json()).unwrap().seats, seats);
         // The key names are a contract for scripts that read rows.jsonl: `family` is the SERVED family, there is no `served_family`.
@@ -1742,8 +1860,8 @@ mod tests {
         let work = t.path().join("fresh");
         let base = ["run", "--budget-usd", "9", "--work-dir", work.to_str().unwrap(), "--arms-file", f.to_str().unwrap(), "--dry-run"];
         let c = case(t.path(), CHECKS);
-        assert_eq!(cli(&a(&base), &[&c]), 0, "no --template-home is needed when every arm has its own");
-        assert_eq!(cli(&a(&["run", "--budget-usd", "9", "--work-dir", work.to_str().unwrap(), "--dry-run"]), &[&c]), 2, "neither a template nor an arms file");
+        assert_eq!(cli(&a(&base), &[&c], None), 0, "no --template-home is needed when every arm has its own");
+        assert_eq!(cli(&a(&["run", "--budget-usd", "9", "--work-dir", work.to_str().unwrap(), "--dry-run"]), &[&c], None), 2, "neither a template nor an arms file");
         assert!(!work.exists());
     }
 
@@ -1863,7 +1981,7 @@ mod tests {
         assert!(rows[0].error.as_deref().unwrap_or("").contains("never validated"), "{:?}", rows[0].error);
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let (tpl, work) = (template(t.path()), t.path().join("fresh"));
-        assert_eq!(cli(&a(&["run", "--budget-usd", "9", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap()]), &[&c]), 2);
+        assert_eq!(cli(&a(&["run", "--budget-usd", "9", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap()]), &[&c], None), 2);
         assert!(!work.exists());
     }
 
@@ -1965,7 +2083,7 @@ mod tests {
 
     #[test]
     fn the_report_labels_deltas_as_no_evidence_unless_the_arms_separate() {
-        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new(), review: None };
+        let row = |arm: &str, seed: u32, pass: bool| Row { case: "s/c1".into(), arm: arm.into(), seed, exit_code: Some(0), wall_secs: 1.0, cost_usd: 0.25, passed: Some(pass), failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: String::new(), error: None, base: None, eff: Efficiency::default(), seats: Vec::new(), review: None, routing: None, gate: Default::default() };
         let arms = vec!["baseline".to_string(), "candidate".to_string()];
         let two: Vec<Row> = vec![row("baseline", 1, false), row("baseline", 2, false), row("candidate", 1, true), row("candidate", 2, true)];
         let r = report(&two, &arms, &[]);
@@ -2048,6 +2166,64 @@ mod tests {
         assert!(!uses_claude(&gem) && uses_claude(&baseline_with("claude-haiku")) && uses_claude(&baseline_with("sonnet")));
     }
 
+    /// `specs/056` §10.6 (AC-A6): routing arms set only `assignment` in the run's copy, and a run over its token cap is not passed,
+    /// whether it is stopped while running or ends between two looks.
+    #[test]
+    fn routing_arms_set_the_assignment_and_a_run_over_its_token_cap_counts_as_not_passed() {
+        let t = tempfile::tempdir().unwrap();
+        let usage = ("agent.usage", json!({"provider": "p", "input_tokens": 900, "cache_read_tokens": 50, "cache_write_tokens": 25, "output_tokens": 25, "cost_usd": 0.0, "reserved_usd": 0.0, "usage_source": "reported", "cost_model": "metered", "outcome": "ok"}));
+        let canned = mission(t.path(), &[usage, ("task.completed", json!({"status": "done"}))]);
+        let c = case(t.path(), "[[check]]\nkind = \"file_unchanged\"\npath = \"keep.txt\"\n");
+        let tpl = template(t.path());
+        let routed = |name: &str, a: &str| Arm { routing: Some(a.into()), template_home: Some(tpl.clone()), expect_models: vec!["m".into()], ..Arm::new(name, None) };
+        let mut config = cfg(t.path(), &canned, vec![routed("s", "static"), routed("d", "discovered")], 10.0);
+        train::prepare_work_home(&config.work_dir).unwrap();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert_eq!(rows.iter().map(|r| (r.passed, r.routing.clone().unwrap(), r.gate.cost_tokens)).collect::<Vec<_>>(), vec![(Some(true), "static".into(), 1000), (Some(true), "discovered".into(), 1000)]);
+        for r in &rows {
+            let run_cfg: toml::Value = toml::from_str(&fs::read_to_string(config.work_dir.join(&r.dir).join("home/workspaces/train/config.toml")).unwrap()).unwrap();
+            assert_eq!(run_cfg["routing"]["assignment"].as_str(), r.routing.as_deref(), "each arm's copy names its own assignment");
+        }
+        assert!(!fs::read_to_string(tpl.join("workspaces/train/config.toml")).unwrap().contains("routing"), "the template is untouched");
+        assert_eq!(Row::from_json(&rows[1].to_json()).unwrap().routing.as_deref(), Some("discovered"), "rows.jsonl keeps the arm's routing");
+        // A cap below the run's 1,000 tokens: the run ends before a look, and is failed for going over.
+        config.token_caps = BTreeMap::from([("s".to_string(), 999)]);
+        let (rows, _) = run_all(&config, &[&c]);
+        assert!(rows.iter().all(|r| r.passed == Some(false) && r.gate.capped && r.failed_checks.iter().any(|f| f.contains("went over its token cap: 1000 tokens, cap 999"))), "{:?}", rows);
+        // A run still going when a look finds it over its cap is stopped there: graded, not passed.
+        config.env.push(("FAKE_SLEEP".into(), "20".into()));
+        let started = Instant::now();
+        let (rows, _) = run_all(&config, &[&c]);
+        assert!(started.elapsed() < Duration::from_secs(15), "stopped, not waited out");
+        assert!(rows.iter().all(|r| r.passed == Some(false) && r.gate.capped && r.failed_checks[0].contains("stopped at its token cap")), "{:?}", rows);
+        // At the cap exactly is within it.
+        config.env.pop();
+        config.token_caps = BTreeMap::from([("s".to_string(), 1000)]);
+        assert!(run_all(&config, &[&c]).0.iter().all(|r| r.passed == Some(true) && !r.gate.capped));
+    }
+
+    #[test]
+    fn a_routing_arm_is_read_from_the_arms_file_and_a_pair_that_differs_otherwise_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let (h1, h2) = (t.path().join("h1"), t.path().join("h2"));
+        fs::create_dir_all(h1.join("workspaces")).unwrap();
+        fs::create_dir_all(h2.join("workspaces")).unwrap();
+        let f = t.path().join("arms.toml");
+        let pair = |h_d: &Path, extra: &str| format!("[[arm]]\nname = \"s\"\ntemplate_home = \"{}\"\nexpect_models = [\"m\"]\n[arm.routing]\nassignment = \"static\"\n\n[[arm]]\nname = \"d\"\ntemplate_home = \"{}\"\nexpect_models = [\"m\"]\n{}[arm.routing]\nassignment = \"discovered\"\n", h1.display(), h_d.display(), extra);
+        fs::write(&f, pair(&h1, "")).unwrap();
+        assert_eq!(parse_arms(&f).unwrap().iter().map(|a| a.routing.clone().unwrap()).collect::<Vec<_>>(), vec!["static", "discovered"]);
+        for (bad, want) in [
+            (pair(&h2, ""), "different template homes"),
+            (pair(&h1, "overlay = \"o\"\n"), "different overlays"),
+            (pair(&h1, "").replace("\"discovered\"", "\"fast\""), "must be \"static\" or \"discovered\""),
+            (pair(&h1, "").replace("assignment = \"discovered\"", "assignment = \"discovered\"\nmax_cost_class = \"premium\""), "sets only `assignment`"),
+            (format!("{}\n[[arm]]\nname = \"x\"\ntemplate_home = \"{}\"\n", pair(&h1, ""), h1.display()), "exactly two arms"),
+        ] {
+            fs::write(&f, bad).unwrap();
+            assert!(parse_arms(&f).unwrap_err().contains(want), "{}", want);
+        }
+    }
+
     fn baseline_with(model: &str) -> Arm {
         let mut a = baseline();
         a.expect_models = vec![model.into()];
@@ -2080,7 +2256,7 @@ mod tests {
         again.work_dir = t.path().join("w3");
         again.rows_path = Some(again.work_dir.join("rows.jsonl"));
         train::prepare_work_home(&again.work_dir).unwrap();
-        append_row(again.rows_path.as_ref().unwrap(), &Row { case: "s/c1".into(), arm: "baseline".into(), seed: 1, exit_code: Some(4), wall_secs: 0.1, cost_usd: 0.0, passed: None, failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: "r001".into(), error: Some("infrastructure".into()), base: None, eff: Efficiency::default(), seats: Vec::new(), review: None });
+        append_row(again.rows_path.as_ref().unwrap(), &Row { case: "s/c1".into(), arm: "baseline".into(), seed: 1, exit_code: Some(4), wall_secs: 0.1, cost_usd: 0.0, passed: None, failed_checks: vec![], notes: vec![], usage: BTreeMap::new(), attempts: 0, promotions: 0, dir: "r001".into(), error: Some("infrastructure".into()), base: None, eff: Efficiency::default(), seats: Vec::new(), review: None, routing: None, gate: Default::default() });
         again.resume = true;
         let (rerun, _) = run_all(&again, &[&c]);
         assert_eq!((rerun.len(), rerun[0].dir.as_str()), (1, "r002"), "the ungraded run was tried again");
@@ -2130,10 +2306,10 @@ mod tests {
         fs::write(work.join("rows.jsonl"), "{}\n").unwrap();
         let tpl = template(t.path());
         let base = ["run", "--no-session-cap", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap()];
-        assert_eq!(cli(&a(&base), &[&c]), 2);
+        assert_eq!(cli(&a(&base), &[&c], None), 2);
         let mut bad = a(&base);
         bad.extend(["--resume".into(), "--pace-window".into(), "2".into()]);
-        assert_eq!(cli(&bad, &[&c]), 2, "a fraction above 1 is refused");
+        assert_eq!(cli(&bad, &[&c], None), 2, "a fraction above 1 is refused");
     }
 
     #[test]
@@ -2148,7 +2324,7 @@ mod tests {
         let c = case(t.path(), CHECKS);
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let (tpl, work) = (template(t.path()), t.path().join("w".repeat(60)));
-        assert_eq!(cli(&a(&["run", "--no-session-cap", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap()]), &[&c]), 2);
+        assert_eq!(cli(&a(&["run", "--no-session-cap", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap()]), &[&c], None), 2);
         assert!(!work.exists());
     }
 
@@ -2174,22 +2350,22 @@ mod tests {
         // The command accepts the flag in place of a budget.
         let (tpl, work) = (template(t.path()), t.path().join("fresh"));
         let base = ["run", "--no-session-cap", "--template-home", tpl.to_str().unwrap(), "--work-dir", work.to_str().unwrap(), "--dry-run"];
-        assert_eq!(cli(&a(&base), &[&c]), 0);
+        assert_eq!(cli(&a(&base), &[&c], None), 0);
     }
 
     #[test]
     fn the_command_refuses_without_a_budget_a_template_or_a_fresh_work_dir() {
         let t = tempfile::tempdir().unwrap();
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(cli(&a(&["run"]), &[]), 2);
-        assert_eq!(cli(&a(&["run", "--budget-usd", "5"]), &[]), 2);
+        assert_eq!(cli(&a(&["run"]), &[], None), 2);
+        assert_eq!(cli(&a(&["run", "--budget-usd", "5"]), &[], None), 2);
         let tpl = template(t.path());
         let busy = t.path().join("busy");
         fs::create_dir_all(&busy).unwrap();
         fs::write(busy.join("precious"), "x").unwrap();
-        assert_eq!(cli(&a(&["run", "--budget-usd", "5", "--template-home", tpl.to_str().unwrap(), "--work-dir", busy.to_str().unwrap()]), &[]), 2);
+        assert_eq!(cli(&a(&["run", "--budget-usd", "5", "--template-home", tpl.to_str().unwrap(), "--work-dir", busy.to_str().unwrap()]), &[], None), 2);
         let fresh = t.path().join("fresh");
-        assert_eq!(cli(&a(&["run", "--budget-usd", "5", "--template-home", tpl.to_str().unwrap(), "--work-dir", fresh.to_str().unwrap(), "--dry-run"]), &[]), 0);
+        assert_eq!(cli(&a(&["run", "--budget-usd", "5", "--template-home", tpl.to_str().unwrap(), "--work-dir", fresh.to_str().unwrap(), "--dry-run"]), &[], None), 0);
         assert!(!fresh.exists(), "a dry run creates nothing");
     }
 }

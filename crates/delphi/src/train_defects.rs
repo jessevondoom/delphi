@@ -14,11 +14,16 @@
 //! # What this is not
 //!
 //! These figures (recall, false positives, unmatched, unique catches) are **diagnostics in a training report**. They are not a
-//! seat score. They are never an input to routing, ranking, staffing, a Council decision or any default (`specs/078`: Council
-//! measurement may not score seat accuracy as a ranking or routing input; Goodhart: a number that picks seats trains seats to
-//! the number). The `review_findings` check's pass bit is a threshold on one synthetic case in one experiment, nothing more.
+//! seat score. In `delphi train report` they are never an input to routing, ranking, staffing, a Council decision or any default
+//! (`specs/078`: Council measurement may not score seat accuracy as a ranking or routing input; Goodhart: a number that picks
+//! seats trains seats to the number). The `review_findings` check's pass bit is a threshold on one synthetic case.
 //!
-//! One use is different, and `specs/056` §10.4 approves it: `delphi models calibrate` (slice M5, `models_calibrate.rs`) sends ten
+//! One use is different, and `specs/056` §10.4 approves it: in the M7 routing benchmark (`train_gate`, `dev/train/m7/`), the pass
+//! bits of four holdout review cases are one third of the gate on which a default (`[routing] assignment`) may change. That
+//! compares two routing settings on fresh, pre-registered seeds; it measures no seat, no model sees it and it never reaches a
+//! prompt.
+//!
+//! A second use, approved by the same section: `delphi models calibrate` (slice M5, `models_calibrate.rs`) sends ten
 //! medium cases with its own fixed seeds to a model as bare carrier calls, with no Delphi role, and keeps the counts as **routing
 //! evidence** for task kind `review` and as class proposals the operator ratifies. That measures a model on fixed offline cases,
 //! not a seat; no model sees a result and nothing reaches a prompt.

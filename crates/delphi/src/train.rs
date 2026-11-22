@@ -537,6 +537,9 @@ pub fn run(args: &[String]) -> i32 {
     if sub == Some("retention") {
         return crate::train_retention::cli(args);
     }
+    if sub == Some("gate") {
+        return crate::train_gate::cli(args);
+    }
     let Some(root) = suites_dir(&repo) else {
         eprintln!("delphi train: {} has no dev/train/suites; training mode is for a source checkout (pass --repo <path>)", repo.display());
         return 2;
@@ -676,6 +679,23 @@ pub fn run(args: &[String]) -> i32 {
                 eprintln!("delphi train: fix the cases first (`delphi train validate`)");
                 return 1;
             }
+            // The routing benchmark names its own cases, whatever their split (`specs/056` §10.6).
+            if let Some(f) = flag(args, "--bench") {
+                let bench = match crate::train_gate::parse_bench(Path::new(&f)) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("delphi train run: {}", e);
+                        return 2;
+                    }
+                };
+                let chosen: Vec<&Case> = all.iter().filter(|c| bench.cases.contains(&format!("{}/{}", c.suite, c.id))).collect();
+                let missing: Vec<&String> = bench.cases.iter().filter(|b| !chosen.iter().any(|c| &format!("{}/{}", c.suite, c.id) == *b)).collect();
+                if !missing.is_empty() || flag(args, "--case").is_some() || flag(args, "--split").is_some() {
+                    eprintln!("delphi train run --bench: the benchmark runs exactly its registered cases (no --case or --split); missing: {} (generate the review cases with the commands in the pre-registration)", missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+                    return 2;
+                }
+                return crate::train_run::cli(args, &chosen, Some(&bench));
+            }
             let split = flag(args, "--split").unwrap_or_else(|| "dev".into());
             let one = flag(args, "--case");
             let chosen: Vec<&Case> = all
@@ -687,10 +707,10 @@ pub fn run(args: &[String]) -> i32 {
                 })
                 .filter(|c| one.as_ref().is_none_or(|id| &c.id == id))
                 .collect();
-            crate::train_run::cli(args, &chosen)
+            crate::train_run::cli(args, &chosen, None)
         }
         _ => {
-            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train harvest --case <suite>/<id> --base <sha> --reference <sha> --test-file <path>... --cmd <cmd>\n       delphi train check-hidden --case <suite>/<id>\n       delphi train judge --work-dir <dir of a run> --judges-file <judges.toml> --budget-usd <n> [--call-cap-usd <n>]\n       delphi train truth-sheet --case <suite>/<id> | --all   (a sheet to check a truth pack)\n       delphi train truth-check --case <suite>/<id> --text-file <answer>\n       delphi train verify --case <suite>/<id> --by <name>\n       delphi train arms init --source-home <home> --workspace <name> --defs <arms-defs.toml> --out <new dir> [--avail avail.json]\n       delphi train report --work-dir <dir of a run> [--judges-file <judges.toml>]\n       delphi train review|disputes|resolve --work-dir <dir of a run> [...]\n       delphi train run --budget-usd <n> --work-dir <new dir> (--template-home <dir> [--overlay <dir>] | --arms-file <arms.toml>) [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]");
+            eprintln!("usage: delphi train validate [--suite <name>] [--repo <path>]\n       delphi train plan --budget-usd <n> [--suite <name>] [--split dev|holdout|all] [--seeds <n>] [--home <new dir>] [--repo <path>]\n       delphi train harvest --case <suite>/<id> --base <sha> --reference <sha> --test-file <path>... --cmd <cmd>\n       delphi train check-hidden --case <suite>/<id>\n       delphi train judge --work-dir <dir of a run> --judges-file <judges.toml> --budget-usd <n> [--call-cap-usd <n>]\n       delphi train truth-sheet --case <suite>/<id> | --all   (a sheet to check a truth pack)\n       delphi train truth-check --case <suite>/<id> --text-file <answer>\n       delphi train verify --case <suite>/<id> --by <name>\n       delphi train arms init --source-home <home> --workspace <name> --defs <arms-defs.toml> --out <new dir> [--avail avail.json]\n       delphi train report --work-dir <dir of a run> [--judges-file <judges.toml>]\n       delphi train review|disputes|resolve --work-dir <dir of a run> [...]\n       delphi train run --budget-usd <n> --work-dir <new dir> (--template-home <dir> [--overlay <dir>] | --arms-file <arms.toml>) [--suite <name>] [--case <id>] [--split dev|holdout|all] [--seeds <n>] [--workspace <name>] [--delphi-bin <path>] [--out <file>] [--dry-run]\n       delphi train run --bench <benchmark.toml> --arms-file <routing arms> --budget-usd <n> --work-dir <new dir> [--resume] [--dry-run]   (asks yes at a terminal)\n       delphi train gate --work-dir <dir of a run> --bench <benchmark.toml>");
             2
         }
     }
