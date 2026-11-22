@@ -189,7 +189,10 @@ sandbox = "off"
 # shell = true                       # offer the `shell` tool (a full shell line); false keeps only `run_command`
 # hard = ["git push*"]               # shell lines that are always Hard: a Red card, never auto-approved (specs/061)
 # toolchain = ["~/.cargo", "~/.rustup"]              # sandbox only: read-only and executable (a review's `cargo test` needs both)
+# On macOS a sandboxed `cargo test` also needs the linker and the system TLS configuration (spec 135 §14.8):
+# toolchain = ["~/.cargo", "~/.rustup", "/Applications/Xcode.app", "/private/etc/ssl", "/Library/Preferences/com.apple.dt.Xcode.plist"]
 # env = { PATH = "~/.cargo/bin:/usr/bin:/bin" }      # the sandboxed command's environment; `delphi doctor` checks review commands against PATH
+# [exec] is a ratified table: an edit takes effect only after you ratify it (`delphi setup` at a terminal, or /ratify), then a daemon restart.
 
 # Releases (specs/036). Uncomment to make `delphi update` refuse any build that is not a signed release. This table is ratified:
 # adding the line takes effect at once, and taking it out takes effect when you ratify the removal. Development builds and source
