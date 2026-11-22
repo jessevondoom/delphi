@@ -12,7 +12,7 @@
 
 use delphi_sandbox::{plain_command, Limits};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -160,6 +160,10 @@ pub struct Opts {
     /// [`Event::Permission`] (`specs/047` S2b). Read-only thread; no Builder uses it until the file-change and writable-root
     /// probes are done.
     pub app_server: bool,
+    /// The seat's own scratch directory, outside its working directory (a Builder's working directory is the task worktree). A Copilot
+    /// seat keeps its configuration home and logs there (`specs/132` §17.2 item 3), and it is one of the places a Copilot ACP seat may
+    /// read. `None`: the working directory serves as the scratch (a reader's working directory is already scratch).
+    pub scratch: Option<PathBuf>,
 }
 
 /// A tool call the CLI wants to make.
@@ -232,6 +236,9 @@ pub enum Event {
     Result { text: String, is_error: bool, stop_reason: Option<String>, total_cost_usd: f64, usage: Tokens, subtype: String, structured: Option<Value> },
     /// The process ended; no more events follow.
     Exit { code: Option<i32> },
+    /// The version the carrier's own protocol server reported (Copilot ACP `initialize`: `agentInfo.version`), which can differ from
+    /// `--version` (`specs/132` §17.2 item 5). Recorded for the seat; never a reason to grant anything.
+    AgentVersion(String),
 }
 
 /// Turn one line of CLI output into events. Unknown or malformed lines yield nothing.
@@ -566,6 +573,10 @@ pub fn codex_approval_reply(p: &Permission, d: &Decision) -> String {
 /// It drives the handshake (`initialize`, `session/new`, `session/prompt`), turns notifications into events,
 /// turns `session/request_permission` into [`Event::Permission`], and answers `allow_once` or `reject`
 /// (never `allow_always`).
+///
+/// It is also the seat's read watchdog (`specs/132` §17.2 item 4): a `tool_call` of `kind: "read"` whose path is outside the seat's
+/// places (its working directory and scratch) and that finishes without a `session/request_permission` having been sent for it ran
+/// unasked, so the seat is stopped: the parser ends the span with a `read_watchdog` result.
 #[derive(Debug)]
 pub struct CopilotAcp {
     prompt: String,
@@ -573,6 +584,52 @@ pub struct CopilotAcp {
     last: String,
     tokens: Tokens,
     failure: Option<String>,
+    /// Where the seat may read without asking: its working directory and its scratch.
+    places: Vec<PathBuf>,
+    /// Out-of-place reads seen in the stream: call id to path.
+    outside_reads: HashMap<String, String>,
+    /// Call ids a permission request was sent for.
+    asked: std::collections::HashSet<String>,
+}
+
+/// The `subtype` of the result that ends a Copilot ACP seat its read watchdog stopped.
+pub const ACP_READ_WATCHDOG: &str = "read_watchdog";
+
+/// The path a Copilot ACP tool call names: its first location, else the raw input's path.
+fn acp_path(tc: &Value) -> Option<&str> {
+    let raw = &tc["rawInput"];
+    tc["locations"].as_array().and_then(|a| a.first()).and_then(|l| l["path"].as_str()).or_else(|| raw["path"].as_str()).or_else(|| raw["fileName"].as_str()).or_else(|| raw["file_path"].as_str())
+}
+
+/// A path with `.` and `..` taken out by text alone (nothing is read).
+fn lexical(p: &std::path::Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Whether `path` (relative ones against `cwd`) lies inside one of `places`, by its text and, where both exist, by their real paths
+/// (so `/var` and `/private/var` on macOS, or a symbolic link that leads out, are judged by where they lead).
+pub fn acp_path_inside(places: &[PathBuf], cwd: &std::path::Path, path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    let abs = lexical(&if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) });
+    let real = abs.canonicalize().ok();
+    places.iter().any(|place| {
+        let place_real = place.canonicalize().ok();
+        match (&real, &place_real) {
+            (Some(r), Some(pr)) => r.starts_with(pr),
+            // A path that does not exist (yet): its text must be inside the place's text or real path.
+            _ => abs.starts_with(lexical(place)) || place_real.as_ref().is_some_and(|pr| abs.starts_with(pr)),
+        }
+    })
 }
 
 const COPILOT_ACP_INIT: i64 = 1;
@@ -587,7 +644,35 @@ impl CopilotAcp {
             last: String::new(),
             tokens: Tokens::default(),
             failure: None,
+            places: vec![cwd.to_path_buf()],
+            outside_reads: HashMap::new(),
+            asked: Default::default(),
         }
+    }
+
+    /// Add a place the seat may read in (its scratch, when that is not its working directory).
+    pub fn with_place(mut self, place: &std::path::Path) -> CopilotAcp {
+        self.places.push(place.to_path_buf());
+        self
+    }
+
+    /// A read outside the seat's places that finished with no permission request sent for it: the CLI's own path check let it
+    /// through unasked. The seat stops here, before the model can use what it read: the result that ends the span.
+    fn unasked_read(&mut self, id: &str, status: &Value) -> Option<Event> {
+        if *status != "completed" || self.asked.contains(id) {
+            return None;
+        }
+        let path = self.outside_reads.remove(id)?;
+        let shown: String = path.chars().take(200).collect();
+        Some(Event::Result {
+            text: format!("stopped by Delphi's watchdog: the seat read `{}`, outside its working directory and scratch, without asking", shown),
+            is_error: true,
+            stop_reason: None,
+            total_cost_usd: 0.0,
+            usage: self.tokens,
+            subtype: ACP_READ_WATCHDOG.into(),
+            structured: None,
+        })
     }
 
     /// The first line to send (`initialize`).
@@ -624,6 +709,9 @@ impl CopilotAcp {
                 });
             }
             (Some(COPILOT_ACP_INIT), None) => {
+                if let Some(v) = m["result"]["agentInfo"]["version"].as_str().filter(|v| !v.trim().is_empty()) {
+                    ev.push(Event::AgentVersion(v.chars().take(40).collect()));
+                }
                 send.push(json!({
                     "jsonrpc": "2.0",
                     "id": COPILOT_ACP_NEW,
@@ -651,6 +739,9 @@ impl CopilotAcp {
                 let kind = tc["kind"].as_str().unwrap_or("");
                 let raw = &tc["rawInput"];
                 let tool_use_id = tc["toolCallId"].as_str().map(String::from);
+                if let Some(id) = &tool_use_id {
+                    self.asked.insert(id.clone());
+                }
                 let description = tc["title"].as_str().map(String::from);
                 match kind {
                     "edit" | "write" => {
@@ -727,6 +818,17 @@ impl CopilotAcp {
                         }
                     }
                     Some("tool_call") => {
+                        let id = u["toolCallId"].as_str().unwrap_or("");
+                        if u["kind"] == "read" && !id.is_empty() {
+                            if let Some(path) = acp_path(u).filter(|p| !acp_path_inside(&self.places, std::path::Path::new(&self.cwd), p)) {
+                                self.outside_reads.insert(id.to_string(), path.to_string());
+                            }
+                        }
+                        // A call reported already finished in its first notification is judged at once.
+                        if let Some(stop) = self.unasked_read(id, &u["status"]) {
+                            ev.push(stop);
+                            return (ev, send);
+                        }
                         ev.push(Event::ToolUse {
                             id: u["toolCallId"].as_str().unwrap_or("").into(),
                             name: u["kind"].as_str().unwrap_or("tool").into(),
@@ -734,8 +836,13 @@ impl CopilotAcp {
                         });
                     }
                     Some("tool_call_update") => {
+                        let id = u["toolCallId"].as_str().unwrap_or("");
+                        if let Some(stop) = self.unasked_read(id, &u["status"]) {
+                            ev.push(stop);
+                            return (ev, send);
+                        }
                         ev.push(Event::ToolResult {
-                            id: u["toolCallId"].as_str().unwrap_or("").into(),
+                            id: id.into(),
                             is_error: u["status"] == "failed",
                         });
                     }
@@ -798,6 +905,50 @@ pub const COPILOT_HOME_DIR: &str = ".copilot-home";
 const COPILOT_LOG_DIR: &str = ".copilot-logs";
 /// The read tools a span with `Tools::Standard` is offered. Writes and shell are denied by the CLI without an approver.
 const COPILOT_READ_TOOLS: [&str; 3] = ["view", "grep", "glob"];
+
+/// The tools a Copilot ACP Builder is offered (`specs/132` §17.2 item 1): the reads (inside its worktree they run without asking; outside
+/// they come to Delphi's gate as permission requests, which refuses them) and the native edit tools, whose every call is a permission
+/// request Delphi's gate judges. Which edit tool a model gets differs by family (`apply_patch` for some), so all three are named; a name a
+/// model lacks offers nothing. Never `bash` (a Builder's commands are Delphi's), `sql`, `web_fetch`, `str_replace_editor` (it also reads),
+/// or the agent, task and workflow tools.
+pub const COPILOT_ACP_BUILDER_TOOLS: [&str; 6] = ["view", "grep", "glob", "edit", "create", "apply_patch"];
+
+/// The system's temporary roots, which a Copilot seat may otherwise read without asking (`specs/132` §17.1 finding 4).
+const TEMP_ROOTS: [&str; 4] = ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders"];
+
+/// The seat's scratch: its own directory when the launch names one, else its working directory.
+pub fn copilot_scratch(l: &Launch) -> PathBuf {
+    l.opts.scratch.clone().unwrap_or_else(|| l.cwd.clone())
+}
+
+/// Whether `inner` lies inside `outer`, by text or by real path.
+fn within(outer: &std::path::Path, inner: &std::path::Path) -> bool {
+    let real = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| lexical(p));
+    lexical(inner).starts_with(lexical(outer)) || real(inner).starts_with(real(outer))
+}
+
+/// `--deny-tool` rules for reads of each temporary root (`$TMPDIR`, `/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders`),
+/// except a root that holds the seat's working directory or scratch: a Copilot rule cannot carve out an exception (`copilot help
+/// permissions`: "a pattern cannot exclude paths") and deny beats every allow, so such a root is left to Delphi's gate and watchdog.
+pub fn copilot_acp_deny_rules(cwd: &std::path::Path, scratch: &std::path::Path, tmpdir: &std::path::Path) -> Vec<String> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let tmp = lexical(tmpdir);
+    if tmp.is_absolute() && tmp.components().count() > 1 {
+        roots.push(tmp);
+    }
+    roots.extend(TEMP_ROOTS.iter().map(PathBuf::from));
+    let mut rules: Vec<String> = Vec::new();
+    for r in roots {
+        if within(&r, cwd) || within(&r, scratch) {
+            continue;
+        }
+        let rule = format!("read({}/**)", r.display().to_string().trim_end_matches('/'));
+        if !rules.contains(&rule) {
+            rules.push(rule);
+        }
+    }
+    rules
+}
 
 /// A premium-request count (a JSON number, whole or fractional) in thousandths, rounded; anything else is 0.
 fn premium_milli(v: &Value) -> u64 {
@@ -1027,7 +1178,20 @@ fn args(l: &Launch) -> Vec<String> {
         return a;
     }
     if l.cli == Cli::Copilot && o.app_server {
-        let mut a = strings(&["--acp", "--model", l.model.as_str(), "--disable-builtin-mcps", "--no-custom-instructions", "--no-auto-update", "--disable-client-telemetry", "--no-ask-user", "--no-experimental", "--no-bash-env"]);
+        // Confined (`specs/132` §17.2): an explicit tool list (never the shell, `sql`, `web_fetch` or the agent tools), no automatic
+        // access to the system temporary directory, a deny rule on reads of every temporary root the seat does not live in, and logs in
+        // the seat's scratch. The configuration home is the scratch's too (`COPILOT_HOME`, set in `Session::start`).
+        let mut a = strings(&["--acp", "--model", l.model.as_str(), "--disable-builtin-mcps", "--no-custom-instructions", "--no-auto-update", "--disable-client-telemetry", "--no-ask-user", "--no-experimental", "--no-bash-env", "--disallow-temp-dir", "--log-dir"]);
+        a.push(copilot_scratch(l).join(COPILOT_LOG_DIR).display().to_string());
+        a.push("--available-tools".into());
+        match l.tools {
+            Tools::None => a.push(COPILOT_NO_TOOLS.into()),
+            Tools::Standard => a.extend(COPILOT_ACP_BUILDER_TOOLS.iter().map(|t| t.to_string())),
+        }
+        let tmpdir = l.env.get("TMPDIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        for rule in copilot_acp_deny_rules(&l.cwd, &copilot_scratch(l), &tmpdir) {
+            push_flag(&mut a, "--deny-tool", Some(rule));
+        }
         push_flag(&mut a, "--reasoning-effort", o.effort.clone());
         return a;
     }
@@ -1036,7 +1200,7 @@ fn args(l: &Launch) -> Vec<String> {
         // directory and denies everything else. The allowlist is never empty. Nothing of the checkout's own instructions, the
         // built-in GitHub MCP server, telemetry, updates, shell startup files or history sync is let in. The prompt is on stdin.
         let mut a = strings(&["--output-format", "json", "--model", l.model.as_str(), "--no-custom-instructions", "--disable-builtin-mcps", "--no-auto-update", "--disable-client-telemetry", "--no-ask-user", "--no-experimental", "--no-bash-env", "--sync-session=off", "--log-dir"]);
-        a.push(l.cwd.join(COPILOT_LOG_DIR).display().to_string());
+        a.push(copilot_scratch(l).join(COPILOT_LOG_DIR).display().to_string());
         a.push("--available-tools".into());
         match l.tools {
             Tools::None => a.push(COPILOT_NO_TOOLS.into()),
@@ -1165,9 +1329,13 @@ impl Session {
             if l.model.trim().is_empty() || l.model == "auto" {
                 return Err("a copilot seat needs an explicit model id, not `auto` (specs/051 §1.1)".into());
             }
-            let home = l.cwd.join(COPILOT_HOME_DIR);
-            std::fs::create_dir_all(&home).and_then(|_| std::fs::create_dir_all(l.cwd.join(COPILOT_LOG_DIR))).map_err(|e| format!("cannot make the copilot home: {}", e))?;
+            // The seat's own configuration home, in its scratch (`specs/132` §17.2 item 3): the operator's user-level MCP servers, custom
+            // instructions, trusted folders and plugins stay out (the login is in the OS keychain). Plugin discovery is switched off too.
+            let scratch = copilot_scratch(l);
+            let home = scratch.join(COPILOT_HOME_DIR);
+            std::fs::create_dir_all(&home).and_then(|_| std::fs::create_dir_all(scratch.join(COPILOT_LOG_DIR))).map_err(|e| format!("cannot make the copilot home: {}", e))?;
             env.insert("COPILOT_HOME".into(), home.display().to_string());
+            env.insert("COPILOT_PLUGIN_DIR_ONLY".into(), "true".into());
         }
         let app_server = (l.cli == Cli::Codex || l.cli == Cli::Copilot) && l.opts.app_server;
         if app_server && l.opts.json_schema.is_some() {
@@ -1213,7 +1381,7 @@ impl Session {
         let (tx, mut rx) = mpsc::channel(256);
         if app_server {
             if l.cli == Cli::Copilot {
-                let mut parser = CopilotAcp::new(&format!("{}\n\n{}\n", l.system_prompt, l.user_prompt), &l.cwd);
+                let mut parser = CopilotAcp::new(&format!("{}\n\n{}\n", l.system_prompt, l.user_prompt), &l.cwd).with_place(&copilot_scratch(l));
                 let (out_tx, mut out_rx) = mpsc::channel::<String>(16);
                 out_tx.send(parser.first_line()).await.map_err(|e| e.to_string())?;
                 tokio::spawn(async move {
@@ -2363,13 +2531,89 @@ read never
         assert!(init && metered > 0 && text.to_lowercase().contains("pong"), "text={:?} metered={}", text, metered);
     }
 
+    /// specs/132 §17.2 items 1 and 2: every ACP launch names its tools (never the shell or the other wide tools), keeps the system
+    /// temporary directory out, and denies reads of every temporary root the seat does not live in; its logs go to its scratch.
     #[test]
-    fn copilot_acp_is_launched_with_acp_flag_and_model() {
-        let a = args(&copilot_launch(Tools::Standard, Opts { app_server: true, effort: Some("medium".into()), ..Default::default() }, "copilot", std::path::Path::new("/scratch")));
+    fn copilot_acp_is_launched_confined_with_an_explicit_tool_list_and_temp_read_denials() {
+        let wt = std::path::Path::new("/work/wt");
+        let opts = || Opts { app_server: true, effort: Some("medium".into()), scratch: Some("/work/scratch".into()), ..Default::default() };
+        let mut l = copilot_launch(Tools::Standard, opts(), "copilot", wt);
+        l.env.insert("TMPDIR".into(), "/var/folders/ab/xyz/T/".into());
+        let a = args(&l);
         let s = a.join(" ");
         assert!(s.starts_with("--acp --model m-1 --disable-builtin-mcps"), "{}", s);
-        assert!(s.contains("--reasoning-effort medium"), "{}", s);
-        assert!(!s.contains("--available-tools"), "{}", s);
+        assert!(s.contains("--reasoning-effort medium") && s.contains("--disallow-temp-dir") && s.contains("--log-dir /work/scratch/.copilot-logs"), "{}", s);
+        let i = a.iter().position(|x| x == "--available-tools").expect("a tool list");
+        let offered: Vec<&str> = a[i + 1..].iter().take_while(|x| !x.starts_with("--")).map(|x| x.as_str()).collect();
+        assert_eq!(offered, COPILOT_ACP_BUILDER_TOOLS.to_vec());
+        for wide in ["bash", "shell", "sql", "web_fetch", "task", "str_replace_editor", "powershell"] {
+            assert!(!a.iter().any(|x| x == wide), "{wide} is never offered: {s}");
+        }
+        let denies: Vec<&str> = a.windows(2).filter(|w| w[0] == "--deny-tool").map(|w| w[1].as_str()).collect();
+        assert_eq!(denies, vec!["read(/var/folders/ab/xyz/T/**)", "read(/tmp/**)", "read(/private/tmp/**)", "read(/var/folders/**)", "read(/private/var/folders/**)"], "{s}");
+        for banned in ["--allow-all", "--yolo", "--allow-tool", "--allow-all-tools", "--allow-all-paths", "--autopilot"] {
+            assert!(!a.iter().any(|x| x == banned), "{banned}: {s}");
+        }
+        // A reader on ACP: nothing at all.
+        let r = args(&copilot_launch(Tools::None, opts(), "copilot", wt));
+        let at = r.iter().position(|x| x == "--available-tools").unwrap();
+        assert_eq!(r[at + 1], COPILOT_NO_TOOLS);
+    }
+
+    /// A Copilot rule cannot carve out an exception, so a temporary root that holds the seat's working directory or scratch gets no rule
+    /// (Delphi's gate and watchdog cover it); the others still do.
+    #[test]
+    fn a_temp_root_the_seat_lives_in_gets_no_deny_rule() {
+        let rules = copilot_acp_deny_rules(std::path::Path::new("/tmp/delphi/wt"), std::path::Path::new("/srv/u/.delphi/scratch"), std::path::Path::new("/var/folders/ab/T"));
+        assert!(!rules.iter().any(|r| r == "read(/tmp/**)"), "{rules:?}");
+        assert!(rules.iter().any(|r| r == "read(/var/folders/ab/T/**)") && rules.iter().any(|r| r == "read(/private/var/folders/**)"), "{rules:?}");
+        let rules = copilot_acp_deny_rules(std::path::Path::new("/srv/u/wt"), std::path::Path::new("/var/folders/ab/T/s"), std::path::Path::new("/var/folders/ab/T/"));
+        assert!(!rules.iter().any(|r| r.starts_with("read(/var/folders")), "the scratch's root is left to the gate: {rules:?}");
+        assert!(rules.iter().any(|r| r == "read(/tmp/**)"), "{rules:?}");
+    }
+
+    /// specs/132 §17.2 item 4: a read outside the seat's places that finishes with no permission request stops the seat; a read inside
+    /// them, or one that asked first, does not.
+    #[test]
+    fn the_acp_read_watchdog_stops_a_seat_on_an_unasked_read_outside_its_places() {
+        let line = |id: &str, kind: &str, path: &str| format!(r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"tool_call","toolCallId":"{id}","kind":"{kind}","rawInput":{{"path":"{path}"}}}}}}}}"#);
+        let done = |id: &str| format!(r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"tool_call_update","toolCallId":"{id}","status":"completed"}}}}}}"#);
+        let mut p = CopilotAcp::new("hi", std::path::Path::new("/work/wt")).with_place(std::path::Path::new("/work/scratch"));
+        // Inside its worktree and its scratch, and a relative path: no stop.
+        for (id, path) in [("a", "/work/wt/src/lib.rs"), ("b", "/work/scratch/x"), ("c", "src/lib.rs")] {
+            p.line(&line(id, "read", path));
+            assert_eq!(p.line(&done(id)).0, vec![Event::ToolResult { id: id.into(), is_error: false }]);
+        }
+        // Outside, but it asked first (Delphi's gate refused or allowed it): no stop.
+        p.line(&line("d", "read", "/srv/u/secret"));
+        p.line(r#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"d","kind":"read","rawInput":{"path":"/srv/u/secret"}}}}"#);
+        assert!(matches!(p.line(&done("d")).0[0], Event::ToolResult { .. }));
+        // An edit outside is not a read: the gate judges it as a permission request.
+        p.line(&line("e", "edit", "/elsewhere/x"));
+        assert!(matches!(p.line(&done("e")).0[0], Event::ToolResult { .. }));
+        // A `..` that climbs out is outside.
+        p.line(&line("f", "read", "/work/wt/../../etc/passwd"));
+        let (ev, _) = p.line(&done("f"));
+        assert!(matches!(&ev[0], Event::Result { is_error: true, subtype, text, .. } if subtype == ACP_READ_WATCHDOG && text.contains("/etc/passwd")), "{ev:?}");
+        // Unasked, outside, in the temporary directory: stopped.
+        let mut q = CopilotAcp::new("hi", std::path::Path::new("/work/wt"));
+        q.line(&line("t", "read", "/tmp/other-session/notes.txt"));
+        let (ev, _) = q.line(&done("t"));
+        assert!(matches!(&ev[0], Event::Result { subtype, .. } if subtype == ACP_READ_WATCHDOG), "{ev:?}");
+        // A failed read read nothing.
+        let mut r = CopilotAcp::new("hi", std::path::Path::new("/work/wt"));
+        r.line(&line("x", "read", "/etc/hosts"));
+        let (ev, _) = r.line(r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"x","status":"failed"}}}"#);
+        assert_eq!(ev, vec![Event::ToolResult { id: "x".into(), is_error: true }]);
+    }
+
+    /// specs/132 §17.2 item 5: the ACP server's own version is passed on.
+    #[test]
+    fn the_acp_servers_version_is_reported() {
+        let mut p = CopilotAcp::new("hi", std::path::Path::new("/scratch"));
+        let (ev, send) = p.line(r#"{"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"name":"Copilot","version":"1.0.107"}}}"#);
+        assert_eq!(ev, vec![Event::AgentVersion("1.0.107".into())]);
+        assert!(send[0].contains("session/new"));
     }
 
     #[test]
@@ -2423,6 +2667,7 @@ read never
         let prog = d.path().join("fake-copilot-acp");
         let script = r#"#!/bin/sh
 printf '%s\n' "$@" > args.txt
+printf '%s|%s' "$COPILOT_HOME" "$COPILOT_PLUGIN_DIR_ONLY" > home.txt
 read init
 echo '{"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"name":"Copilot"}}}'
 read new_session
@@ -2437,7 +2682,8 @@ read never
 "#;
         std::fs::write(&prog, script).unwrap();
         std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let opts = Opts { app_server: true, ..Default::default() };
+        let scratch = tempfile::tempdir().unwrap();
+        let opts = Opts { app_server: true, scratch: Some(scratch.path().to_path_buf()), ..Default::default() };
         let l = Launch { cli: Cli::Copilot, program: prog.display().to_string(), model: "m".into(), system_prompt: "SYS".into(), user_prompt: "question".into(), cwd: d.path().to_path_buf(), tools: Tools::Standard, env: BTreeMap::new(), profile: Default::default(), opts };
         let mut s = Session::start(&l).await.unwrap();
         let mut seen = Vec::new();
@@ -2459,6 +2705,10 @@ read never
         let args = std::fs::read_to_string(d.path().join("args.txt")).unwrap();
         assert!(args.contains("--acp") && args.contains("--model\nm"));
         assert!(seen.iter().any(|e| matches!(e, Event::Result { text, .. } if text == "ok")));
+        // specs/132 §17.2 item 3: the configuration home is in the seat's scratch, not its working directory, and plugins are not discovered.
+        let home = std::fs::read_to_string(d.path().join("home.txt")).unwrap();
+        assert_eq!(home, format!("{}|true", scratch.path().join(COPILOT_HOME_DIR).display()));
+        assert!(!d.path().join(COPILOT_HOME_DIR).exists(), "nothing of the CLI's lands in the working directory");
     }
 
     #[tokio::test]

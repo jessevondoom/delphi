@@ -111,6 +111,10 @@ pub struct Catalog {
     pub cli_version: String,
     pub read_unix: i64,
     pub models: Vec<CatalogModel>,
+    /// The version the ACP server itself reported (`initialize` → `agentInfo.version`), which can differ from `--version`
+    /// (`specs/132` §17.1, §17.2 item 5). `None` when it gave none, or for a cache written before C9.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp_version: Option<String>,
 }
 
 impl Catalog {
@@ -180,13 +184,31 @@ pub fn refresh(local_dir: &Path, cli_version: &str, now: i64, read: &dyn Fn() ->
     if let Some(c) = fresh(local_dir, cli_version, now) {
         return Some(c);
     }
-    let models = parse_session_new(&read()?);
+    let answer = read()?;
+    let models = parse_session_new(&answer);
     if models.is_empty() {
         return None;
     }
-    let c = Catalog { cli_version: cli_version.into(), read_unix: now, models };
+    let c = Catalog { cli_version: cli_version.into(), read_unix: now, models, acp_version: acp_version(&answer) };
     let _ = save(local_dir, &c);
     Some(c)
+}
+
+/// The ACP server's own version from a live read (the `agentInfo` [`read_live`] carries over from `initialize`).
+pub fn acp_version(answer: &Value) -> Option<String> {
+    answer["agentInfo"]["version"].as_str().or_else(|| answer["result"]["agentInfo"]["version"].as_str()).map(|v| v.trim().chars().take(40).collect::<String>()).filter(|v| !v.is_empty())
+}
+
+/// The bare version number in a `--version` line (`GitHub Copilot CLI 1.0.114.` gives `1.0.114`).
+pub fn version_number(line: &str) -> Option<String> {
+    line.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_ascii_digit())).find(|w| w.contains('.') && w.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))).map(String::from)
+}
+
+/// `delphi doctor`'s line when the ACP server reported another version than `--version` (`specs/132` §17.2 item 5): the seat runs the
+/// ACP one, and that is the version Delphi records. `None` when they agree or either is unknown.
+pub fn version_mismatch(cli_version_line: &str, acp: Option<&str>) -> Option<String> {
+    let (cli, acp) = (version_number(cli_version_line)?, version_number(acp?)?);
+    (cli != acp).then(|| format!("`copilot --version` says {cli} but its ACP server reports {acp}: a seat runs {acp}, and that is the version Delphi records for it. Probe results for {cli} do not describe the seat"))
 }
 
 pub fn cache_path(local_dir: &Path) -> PathBuf {
@@ -236,7 +258,8 @@ fn read_in(program: &str, scratch: &Path, timeout: Duration) -> Option<Value> {
         }
     });
     let send = |stdin: &mut std::process::ChildStdin, v: Value| writeln!(stdin, "{}", v).and_then(|_| stdin.flush());
-    let mut out = None;
+    let mut out: Option<Value> = None;
+    let mut agent_info = Value::Null;
     let cwd = scratch.display().to_string();
     if send(&mut stdin, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1, "clientCapabilities": {}}})).is_ok() {
         let deadline = std::time::Instant::now() + timeout;
@@ -246,12 +269,17 @@ fn read_in(program: &str, scratch: &Path, timeout: Duration) -> Option<Value> {
             match m["id"].as_i64() {
                 Some(1) if !asked => {
                     asked = true;
+                    agent_info = m["result"]["agentInfo"].clone();
                     if send(&mut stdin, json!({"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": cwd, "mcpServers": []}})).is_err() {
                         break;
                     }
                 }
                 Some(2) => {
                     out = m.get("result").cloned();
+                    // The ACP server's own version travels with the answer (`specs/132` §17.2 item 5).
+                    if let (Some(o), false) = (out.as_mut().and_then(|v| v.as_object_mut()), agent_info.is_null()) {
+                        o.insert("agentInfo".into(), agent_info.clone());
+                    }
                     break;
                 }
                 _ => {}
@@ -271,6 +299,25 @@ mod tests {
     /// The latest generation per model line (operator, 2026-11-20). An older generation of a listed line must not be added.
     const SUPPORTED: [&str; 17] = ["claude-sonnet-5.5", "claude-haiku-5.5", "claude-fable-5.1", "claude-opus-5.5", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.3-codex", "gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon", "gemini-3.8-flash", "kimi-k3", "mai-code-2", "mai-code-2-flash"];
     const OLDER: [&str; 10] = ["claude-sonnet-5", "claude-haiku-4.5", "claude-fable-5", "claude-opus-4.8-fast", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-6-astra", "mai-code-1.1-flash"];
+
+    #[test]
+    fn the_acp_version_is_kept_and_a_mismatch_with_the_cli_version_is_said() {
+        let mut answer = session_new();
+        answer["agentInfo"] = json!({"name": "Copilot", "version": "1.0.107"});
+        assert_eq!(acp_version(&answer).as_deref(), Some("1.0.107"));
+        let d = tempfile::tempdir().unwrap();
+        let c = refresh(d.path(), "GitHub Copilot CLI 1.0.114.", 1000, &|| Some(answer.clone())).unwrap();
+        assert_eq!(c.acp_version.as_deref(), Some("1.0.107"));
+        assert_eq!(load(d.path()).unwrap().acp_version.as_deref(), Some("1.0.107"), "the cache keeps it");
+        assert_eq!(version_number("GitHub Copilot CLI 1.0.114."), Some("1.0.114".into()));
+        let line = version_mismatch("GitHub Copilot CLI 1.0.114.", Some("1.0.107")).unwrap();
+        assert!(line.contains("1.0.114") && line.contains("1.0.107"), "{line}");
+        assert_eq!(version_mismatch("GitHub Copilot CLI 1.0.114.", Some("1.0.114")), None);
+        assert_eq!(version_mismatch("GitHub Copilot CLI 1.0.114.", None), None);
+        // A cache written before C9 has no field and still loads.
+        let old: Catalog = serde_json::from_str(r#"{"cli_version":"v","read_unix":0,"models":[]}"#).unwrap();
+        assert_eq!(old.acp_version, None);
+    }
 
     #[test]
     fn the_seed_table_holds_the_seventeen_copilot_models_and_no_older_generation() {
@@ -325,7 +372,7 @@ mod tests {
     #[test]
     fn the_cache_keeps_its_cli_version_and_age() {
         let d = tempfile::tempdir().unwrap();
-        let c = Catalog { cli_version: "1.0.112".into(), read_unix: 1000, models: parse_session_new(&session_new()) };
+        let c = Catalog { cli_version: "1.0.112".into(), read_unix: 1000, models: parse_session_new(&session_new()), acp_version: None };
         save(d.path(), &c).unwrap();
         let back = load(d.path()).unwrap();
         assert_eq!(back, c);
@@ -337,7 +384,7 @@ mod tests {
     /// The cost comes from the fresh catalog, else the seed table; only a fresh catalog can call a model missing.
     #[test]
     fn a_models_cost_and_presence_come_from_the_fresh_catalog_then_the_seed() {
-        let c = Catalog { cli_version: "v".into(), read_unix: 0, models: parse_session_new(&session_new()) };
+        let c = Catalog { cli_version: "v".into(), read_unix: 0, models: parse_session_new(&session_new()), acp_version: None };
         let g = model_cost(Some(&c), "gemini-3.8-flash");
         assert_eq!((g.multiplier.as_deref(), g.class, g.in_catalog), (Some("14x"), Some("premium"), Some(true)));
         assert_eq!(model_cost(Some(&c), "kimi-k3").in_catalog, Some(false), "listed but disabled");
