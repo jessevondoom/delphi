@@ -496,6 +496,8 @@ fn a_seat_receipt_satisfies_its_schema() {
         carrier: Carrier { kind: "copilot".into(), cli_version: None, tools_offered: vec!["view".into()], native_tools: None, dispatch_allowed: false },
         tool_grant: json!({ "builtin": "none" }),
         prompt_hash: prompt_hash("system", "user"),
+        prompt_bytes: Some(10),
+        context_cut: Some(json!({"budget": 150000, "prompt_bytes_before": 200000, "prompt_bytes_after": 149000, "slices_cut": [{"label": "@project/app/a.md", "kept_lines": 10, "total_lines": 400}]})),
         tokens_in: 10,
         tokens_out: 4,
         outcome: "model_mismatch".into(),
@@ -505,6 +507,8 @@ fn a_seat_receipt_satisfies_its_schema() {
     let mut unmapped = r.clone();
     unmapped.served = resolve(&FamilyTable::shipped(), None);
     must_pass("seat-receipt.schema.json", "a receipt with no served model", &unmapped.to_value());
+    unmapped.prompt_bytes = None;
+    must_pass("seat-receipt.schema.json", "an API seat's receipt, which counts no prompt bytes", &unmapped.to_value());
     // specs/089 §17: a run killed by the first-event clock says so on its receipt; no other failure word is accepted.
     let mut stalled = ok.clone();
     stalled["outcome"] = json!("error");

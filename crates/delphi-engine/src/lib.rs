@@ -157,6 +157,7 @@ pub mod observe;
 pub mod policy;
 pub mod pool;
 pub mod progress;
+pub mod prompt_budget;
 pub mod quota;
 pub mod probe;
 pub mod provisional;

@@ -226,6 +226,25 @@ const READ_ONLY_TOOLS: [&str; 4] = ["read_file", "list_dir", "search", "check"];
 /// The system sections a CLI seat is given: the prompt's own, with the skills index (`specs/124` §17) kept only when the seat
 /// holds Delphi's `read_file`, the one way it can open `skills/<name>/SKILL.md`. A seat with no bridge, and a Builder that
 /// keeps the CLI's own file tools in its worktree, cannot read a skill file, so it is not told to.
+/// The byte counts of a launch's prompt (`specs/131` S1), for `harness.started` and the seat receipt: `prompt_bytes` is the system and
+/// user text as handed to the carrier, `slice_bytes` the text of the context slices inside it, `slices` their number, and `fixed_bytes`
+/// everything else (governance, role, skills, lessons, the contract and the section tags). Diagnostic only: nothing is cut or refused here.
+pub(crate) fn prompt_counts(system: &str, user: &str, ipr: &Ipr) -> Value {
+    let prompt_bytes = system.len() + user.len();
+    let slice_bytes: usize = ipr.context_slices.iter().map(|s| s.text.len()).sum();
+    json!({"prompt_bytes": prompt_bytes, "fixed_bytes": prompt_bytes.saturating_sub(slice_bytes), "slice_bytes": slice_bytes, "slices": ipr.context_slices.len()})
+}
+
+/// The task at the top as well as the bottom (`specs/131` S3): a carrier that takes its whole prompt as one text (agy, codex, copilot) gets
+/// the `task` section first, so a tail its carrier cuts still leaves the task; the contract at the end is unchanged. A Claude seat's system
+/// text goes by flag and its prompt is left exactly as it was.
+pub(crate) fn with_task_head(cli: Cli, head: Option<&str>, system: String) -> String {
+    match head {
+        Some(h) if cli != Cli::Claude => format!("{h}\n\n{system}"),
+        _ => system,
+    }
+}
+
 fn harness_sections(ipr: &Ipr, delphi: &[ToolDef]) -> Vec<String> {
     if ipr.skills.is_none() || delphi.iter().any(|d| d.name == "read_file") {
         return ipr.system_sections();
@@ -893,21 +912,48 @@ impl Engine {
         let note = harness_note_for(builder, &bridge_defs, &native_for_note, cli == Cli::Agy, sc.toolless, sc.forge.as_ref());
         // The watchdog of a forge reader (§14.7 rule 4): always on while its read tools are given.
         let mut watchdog = sc.forge.as_ref().map(|f| crate::forge_tools::Watchdog::new(f.read.clone(), (cli == Cli::Claude).then(|| cwd.clone())));
+        let head = (!sc.task.trim().is_empty()).then(|| ipr.task_section(&sc.task));
         let mut system_prompt = format!("{}\n\n{}", harness_sections(ipr, &bridge_defs).join("\n\n"), note);
         if let Some(schema) = &text_schema {
             system_prompt.push_str(&format!("\n\n{}", crate::json_answer::contract(schema)));
         }
-        // The one retry of a JSON-in-text answer carries the fixed message, set by the engine for this run only.
-        let mut user_prompt = ipr.first_user_text();
-        if let Some(note) = sc.json_retry.take() {
-            user_prompt.push_str(&format!("\n\n{}", note));
-        }
+        // The task first for a one-text carrier (`specs/131` S3), ahead of everything else including the JSON answer contract.
+        let system_prompt = with_task_head(cli, head.as_deref(), system_prompt);
+        // The one retry of a JSON-in-text answer carries the fixed message, set by the engine for this run only. It is fixed text after
+        // the contract, so the budget below counts it as text that may not be cut.
+        let retry_note = sc.json_retry.take().map(|n| format!("\n\n{}", n)).unwrap_or_default();
+        // The carrier's byte budget (`specs/131` S2): counted on the whole prompt before the CLI starts. Over it, the slices that came from
+        // pointers are shortened (never the system text, the contract or a peer's text); if what may not be cut is alone over it, the seat
+        // does not start and nothing is spent.
+        let budget = crate::prompt_budget::budget(profile.max_prompt_bytes);
+        let fit = crate::prompt_budget::fit(ipr, (system_prompt.len() + retry_note.len()) as u64, budget);
+        let context_cut = fit.record(budget);
+        let sent: std::borrow::Cow<Ipr> = match fit {
+            crate::prompt_budget::Fit::Fits => std::borrow::Cow::Borrowed(ipr),
+            crate::prompt_budget::Fit::Cut { slices, .. } => std::borrow::Cow::Owned(Ipr { context_slices: slices, ..ipr.clone() }),
+            crate::prompt_budget::Fit::CannotFit { fixed } => {
+                let reason = crate::prompt_budget::cannot_fit(fixed, budget);
+                sc.m.append(sc.agent_ev("harness.prompt_refused", json!({"budget": budget, "fixed_bytes": fixed, "reason": reason}), ep, &model)).await?;
+                return Ok(Err(HarnessErr { reason, retryable: false, ..HarnessErr::retry("") }));
+            }
+        };
+        let user_prompt = format!("{}{}", sent.first_user_text(), retry_note);
         let launch = Launch { cli, program, model, system_prompt, user_prompt, cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
         let ctl = Ctl { bridge_on, delegate, profile: &profile };
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
         let builtin = if builder { "standard" } else if native_for_note.is_empty() { "none" } else { "native" };
-        sc.m.append(sc.agent_ev("harness.started", json!({"endpoint_id": ep.id, "tools": builtin, "native_tools": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "approvals": if delegate { "delegate" } else { "delphi" }, "claudeai_connectors": launch.profile.claudeai_connectors, "cap_tokens": self.settings.harness_token_cap, "forge_read": sc.forge.as_ref().map(|f| f.read.clone())}), ep, &launch.model)).await?;
+        // What the prompt costs in bytes, counted where it is assembled (`specs/131` S1): counts only, never text.
+        let counts = prompt_counts(&launch.system_prompt, &launch.user_prompt, &sent);
+        let mut started = json!({"endpoint_id": ep.id, "tools": builtin, "native_tools": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "approvals": if delegate { "delegate" } else { "delphi" }, "claudeai_connectors": launch.profile.claudeai_connectors, "cap_tokens": self.settings.harness_token_cap, "forge_read": sc.forge.as_ref().map(|f| f.read.clone())});
+        if let (Some(o), Some(c)) = (started.as_object_mut(), counts.as_object()) {
+            o.extend(c.clone());
+            o.insert("budget".into(), json!(budget));
+            if let Some(cut) = &context_cut {
+                o.insert("context_cut".into(), cut.clone());
+            }
+        }
+        sc.m.append(sc.agent_ev("harness.started", started, ep, &launch.model)).await?;
         // The flags a granted launch relies on (`--disable-slash-commands`, `--disallowedTools`, `--max-turns`) are the 2.1 line's: the CLI's
         // version is read first, and a CLI that will not say or is older is not started (the other seat or the API serves the span).
         if granted && cli == Cli::Claude {
@@ -1280,6 +1326,8 @@ impl Engine {
                 carrier: crate::seat::Carrier { kind: cli.program().into(), cli_version: None, tools_offered: effective_tools, native_tools: Some(native_count), dispatch_allowed: bridge_defs.iter().any(|d| d.name == "dispatch_agent") },
                 tool_grant: json!({"builtin": builtin, "native": native_for_note, "bridge": bridge_defs.iter().map(|d| d.name.clone()).collect::<Vec<_>>(), "gated": gate_rx.is_some(), "readonly": sc.readonly, "forge_read": sc.forge.as_ref().map(|f| json!({"tools": f.read, "harness": f.harness, "version": f.version}))}),
                 prompt_hash: crate::seat::prompt_hash(&launch.system_prompt, &launch.user_prompt),
+                prompt_bytes: counts["prompt_bytes"].as_u64(),
+                context_cut: context_cut.clone(),
                 tokens_in: usage.input + usage.cache_read + usage.cache_write,
                 tokens_out: usage.output,
                 outcome: if mismatch { "model_mismatch" } else if failure.is_some() { "error" } else { "ok" }.into(),
@@ -3016,6 +3064,131 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert_eq!(r["carrier"]["native_tools"], 3, "the carrier's own count is kept apart");
         assert_eq!(r["tool_grant"]["bridge"], json!([]));
         assert!(crate::seat::receipt_toolless(r));
+    }
+
+    /// `specs/131` S1 (AC-1): the prompt is counted where it is assembled, on `harness.started` and on the receipt, for an agy seat and a
+    /// Claude seat alike; the count is the system and user text the carrier was handed (the stand-in sees them in its stdin).
+    #[tokio::test]
+    async fn the_prompt_is_counted_in_bytes_on_the_start_event_and_the_receipt() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let prog = fake_cli(scripts.path(), &format!("printf '%s' \"$first\" > '{d}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"gemini-3.8-flash-low\",\"tools\":[]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"ok\",\"usage\":{{}}}}}}'", d = dump.display()));
+        let f = retry_fx(prog, Duration::from_secs(600));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Said(_)));
+        let started = &events_of(&f, "harness.started")[0].payload;
+        let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
+        let n = started["prompt_bytes"].as_u64().unwrap();
+        assert_eq!(r["prompt_bytes"].as_u64(), Some(n), "{r}");
+        assert_eq!(started["fixed_bytes"].as_u64().unwrap() + started["slice_bytes"].as_u64().unwrap(), n, "{started}");
+        assert!(started["slices"].is_u64());
+        // The stand-in's first stdin line is the one JSON user event: the counted text in its JSON wrapping (which `read` unescapes
+        // in part), so the two agree to within a few percent.
+        let sent = fs::read(&dump).unwrap().len() as u64;
+        assert!(n > 1000 && sent.abs_diff(n) < n / 10 + 200, "counted {n}, sent {sent}");
+        // A Claude seat carries the same counts.
+        let (c, _s) = fixture(&format!("{}\n{}", INIT, FINISH), |_| {});
+        assert_eq!(c.engine.run_task(&c.m, "architect", "Plan the change").await.unwrap().status, Status::Done);
+        let (cs, cr) = (&events_of(&c, "harness.started")[0].payload, &events_of(&c, crate::seat::RECEIPT_KIND)[0].payload);
+        assert!(cs["prompt_bytes"].as_u64().is_some_and(|b| b > 0) && cr["prompt_bytes"] == cs["prompt_bytes"], "{cs} {cr}");
+    }
+
+    /// An agy seat whose stand-in keeps its first stdin line in `dump`, and the proposition naming ten 40 KB files of the project.
+    fn ten_big_pointers(dump: &std::path::Path, scripts: &std::path::Path) -> (Fx, String) {
+        let prog = fake_cli(scripts, &format!("printf '%s' \"$first\" > '{d}'\necho '{{\"event\":\"init\",\"init\":{{\"model\":\"gemini-3.8-flash-low\",\"tools\":[]}}}}'\necho '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"ok\",\"usage\":{{}}}}}}'", d = dump.display()));
+        let f = retry_fx(prog, Duration::from_secs(600));
+        let mut q = String::from("COUNCIL, ROUND 1 (blind). Proposition: review these");
+        for n in 0..10 {
+            let body: String = (1..=400).map(|l| format!("{l:05} {}\n", "y".repeat(94))).collect();
+            fs::write(f.root.join(format!("proj/big{n}.txt")), body).unwrap();
+            q.push_str(&format!(" @project/app/big{n}.txt"));
+        }
+        (f, q)
+    }
+
+    /// `specs/131` S2 (AC-2, AC-3): ten 40 KB pointers for an agy seat with no key set are cut to the default 150,000-byte budget, each at a
+    /// line with the fixed line, the contract still whole at the end; the start event and the receipt say what was cut, by label.
+    #[tokio::test]
+    async fn an_agy_seat_over_its_byte_budget_has_its_pointer_slices_cut_and_says_so() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!(started["budget"], 150_000, "{started}");
+        assert!(started["prompt_bytes"].as_u64().unwrap() <= 150_000, "{started}");
+        let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
+        let cut = &r["context_cut"];
+        assert_eq!(cut, &started["context_cut"]);
+        assert!(cut["prompt_bytes_before"].as_u64().unwrap() > 400_000 && cut["prompt_bytes_after"] == started["prompt_bytes"], "{cut}");
+        let labels: Vec<&str> = cut["slices_cut"].as_array().unwrap().iter().map(|c| c["label"].as_str().unwrap()).collect();
+        assert_eq!(labels.len(), 10, "{cut}");
+        assert!(labels.iter().all(|l| l.starts_with("@project/app/big")) && cut["slices_cut"].as_array().unwrap().iter().all(|c| c["kept_lines"].as_u64().unwrap() < 400 && c["total_lines"] == 400), "{cut}");
+        assert!(!cut.to_string().contains("yyyy"), "labels and counts, never contents");
+        let sent = fs::read_to_string(&dump).unwrap();
+        assert_eq!(sent.matches("[cut by Delphi: the carrier takes at most 150000 bytes of prompt; lines 1 to ").count(), 10);
+        assert!(sent.trim_end().trim_end_matches(['}', '"']).ends_with("</contract>"), "the contract is still the end of the prompt");
+    }
+
+    /// `specs/131` S3 (AC-5): an agy seat's one user event starts with the task and ends with the contract, and with the last 70 KB gone
+    /// the objective and the task note are still there.
+    #[tokio::test]
+    async fn an_agy_seat_has_the_task_at_both_ends_and_a_cut_tail_still_leaves_it() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        let sent = fs::read_to_string(&dump).unwrap();
+        let content = sent.split_once("\"content\":\"").map(|(_, c)| c).unwrap_or("");
+        assert!(content.starts_with("<task nonce="), "{}", content.chars().take(200).collect::<String>());
+        assert!(sent.trim_end().trim_end_matches(['}', '"']).ends_with("</contract>"));
+        let kept = &sent[..sent.len() - 70_000];
+        assert!(kept.contains(delphi_adapter::ipr::TASK_HEAD_NOTE) && kept.contains("Proposition: review these"), "the task survives a cut tail");
+        assert!(!kept.contains("</contract>"), "the contract itself was in the part that was cut");
+    }
+
+    #[test]
+    fn only_a_carrier_that_takes_one_text_gets_the_task_head() {
+        for cli in [Cli::Agy, Cli::Codex, Cli::Copilot] {
+            assert_eq!(with_task_head(cli, Some("<task>T</task>"), "SYS".into()), "<task>T</task>\n\nSYS");
+        }
+        assert_eq!(with_task_head(Cli::Claude, Some("<task>T</task>"), "SYS".into()), "SYS", "a Claude seat's prompt is unchanged");
+        assert_eq!(with_task_head(Cli::Agy, None, "SYS".into()), "SYS");
+    }
+
+    /// `specs/131` S2 (AC-4): when the text that may not be cut is alone over the budget, the CLI is never started and the seat abstains
+    /// with the stated reason; nothing is spent.
+    #[tokio::test]
+    async fn a_seat_whose_fixed_text_cannot_fit_its_budget_never_starts() {
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let text = crate::testkit::CONFIG
+            .replace("[access]", "[[endpoints]]\nid = \"agy-sub\"\nfamily = \"gemini\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\nmodels = { frontier = \"gemini-3.8-flash-low\", workhorse = \"gemini-3.8-flash-low\" }\n[access]\nrole_family = { architect = \"gemini\" }")
+            .replace("order = { claude = [\"direct\", \"backup\"] }", "order = { claude = [] }")
+            .replace("allowed_endpoints = [\"direct\", \"backup\"]", "allowed_endpoints = [\"agy-sub\"]");
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{text}\n[harness.agy]\nmax_prompt_bytes = 2000\n")).unwrap());
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        match &s {
+            crate::council::Stance::Abstained(why) => assert!(why.contains("the prompt cannot fit the carrier's budget (fixed text ") && why.contains("budget 2000)"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(events_of(&f, "harness.started").is_empty() && !dump.exists(), "the CLI was never started");
+        assert!(events_of(&f, "agent.usage").is_empty(), "no tokens recorded");
+        assert_eq!(events_of(&f, "harness.prompt_refused")[0].payload["budget"], 2000);
     }
 
     /// D7 (`specs/086` §6.4): a seat opened with `tools: "readonly"` runs read-only on a CLI too: the bridge serves no write tool and
