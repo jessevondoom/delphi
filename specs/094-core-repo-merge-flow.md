@@ -501,3 +501,8 @@ Total 52 hours, inside the CI plan's 56.
 - **AC-21 (S21).** A red rollup of four with one bad constituent isolates it in two rounds, merges the other three, and writes one `rollup-red` entry; red together and green apart sends all to the serial path.
 - **V-13.4 (operator, live).** Two scratch pull requests and a rollup of them, merged at a terminal; both constituents read `MERGED` afterwards, or are closed by the tool with a comment. This is the experiment of §13.6.
 - **V-13.5 (measurement).** For two weeks after S21 merges: merges per hour on busy days, CI runs per merged pull request, red rollups and their rounds.
+
+### 13.14 Build notes (recorded while building; the decisions above stand unless a note says otherwise)
+
+- **S19: the manifest's base must be the base tip.** §13.3 rebuilds from the manifest's base commit. The build also requires that commit to be the current tip of the base branch, or the rollup is `rollup-stale`: a rollup whose head contains a newer tip but whose tree is the old base plus the constituents would undo whatever landed in between, and the strict rule (§12.2.1) refuses a behind rollup anyway. A rollup whose base moved is built again, not refreshed.
+- **S19: what "recognised" lifts.** Only the rollup's own spec refusals (the cross-spec one among them) are lifted; each constituent's spec is judged on its own verdict, and the manifest's spec for it must be the one derived. Its checks, mergeability and freshness are judged as for any pull request.

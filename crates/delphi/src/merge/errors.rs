@@ -40,10 +40,16 @@ pub enum Class {
     /// belongs to the base, not to a pull request (its entry has pull request 0 and the base commit), stops `--all` and `--auto`
     /// until the base is current again, and `delphi merge repair-base` opens the pull request that repairs it.
     BaseDrift,
+    /// A rollup (spec 094 §13.8) could not be built or recognised: a constituent outside the closed list, a candidate that fails
+    /// invariant 1 or 3, or a rebuild that does not reproduce the rollup's tree. `merge fix` can take it.
+    RollupRefused,
+    /// A rollup's constituent head moved since the approval, or the base moved under the rollup. Nothing is broken: the operator
+    /// approves again, or the batch is built again.
+    RollupStale,
 }
 
 /// Every class, in one place (the slug round trip and `from_slug` read it).
-const ALL: [Class; 13] = [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup, Class::Behind, Class::RefreshRefused, Class::BaseDrift];
+const ALL: [Class; 15] = [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup, Class::Behind, Class::RefreshRefused, Class::BaseDrift, Class::RollupRefused, Class::RollupStale];
 
 impl Class {
     pub fn slug(self) -> &'static str {
@@ -61,6 +67,8 @@ impl Class {
             Class::Behind => "behind",
             Class::RefreshRefused => "refresh-refused",
             Class::BaseDrift => "base-drift",
+            Class::RollupRefused => "rollup-refused",
+            Class::RollupStale => "rollup-stale",
         }
     }
     pub fn from_slug(s: &str) -> Option<Class> {
@@ -68,7 +76,7 @@ impl Class {
     }
     /// Can a builder fix this by changing the branch? (Others are for a person: a missing `gh`, a damaged list.)
     pub fn builder_can_fix(self) -> bool {
-        matches!(self, Class::Conflict | Class::CiRed | Class::NoChecks | Class::Spec | Class::StaleRecord | Class::MergeFailed | Class::Behind | Class::RefreshRefused)
+        matches!(self, Class::Conflict | Class::CiRed | Class::NoChecks | Class::Spec | Class::StaleRecord | Class::MergeFailed | Class::Behind | Class::RefreshRefused | Class::RollupRefused)
     }
 }
 
@@ -77,6 +85,10 @@ pub fn classify_refusal(reason: &str) -> Option<Class> {
     // A refresh inside a merge command that was handed over (`refresh::Stop::HandOver`); checked first, its detail can say anything.
     if reason.contains(super::refresh::HANDED_OVER) {
         Some(Class::RefreshRefused)
+    } else if reason.starts_with(super::rollup_pr::REFUSED) {
+        Some(Class::RollupRefused)
+    } else if reason.starts_with(super::rollup_pr::STALE) {
+        Some(Class::RollupStale)
     } else if reason.contains(super::check::BEHIND_MARK) {
         Some(Class::Behind)
     } else if reason.contains("conflicts with") {
@@ -259,6 +271,8 @@ mod tests {
             (&super::super::check::behind_reason(7, 2, "main"), Some(Class::Behind)),
             (&super::super::refresh::Stop::HandOver("README.md conflicts with `main`, 3 commit(s) behind".into()).line(7), Some(Class::RefreshRefused)),
             ("#7: not refreshed: it is a draft", None),
+            ("rollup refused: the rebuild's tree differs", Some(Class::RollupRefused)),
+            ("rollup stale: #5 moved", Some(Class::RollupStale)),
         ] {
             assert_eq!(classify_refusal(r), want, "{r}");
         }
@@ -276,6 +290,7 @@ mod tests {
         assert!(Class::Behind.builder_can_fix(), "`merge fix` takes a behind entry (§11.3.5)");
         assert!(Class::RefreshRefused.builder_can_fix() && Class::from_slug("refresh-refused") == Some(Class::RefreshRefused));
         assert!(Class::from_slug("base-drift") == Some(Class::BaseDrift) && !Class::BaseDrift.builder_can_fix(), "`repair-base` takes it, not `merge fix`");
+        assert!(Class::RollupRefused.builder_can_fix() && !Class::RollupStale.builder_can_fix(), "a stale rollup needs the operator, not a fix");
     }
 
     #[test]

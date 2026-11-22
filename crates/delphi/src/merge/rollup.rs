@@ -6,8 +6,8 @@
 //! by `refresh`'s closed list with the earlier side first, runs the spec compile after each merge, and checks the invariants of
 //! §13.4: the candidate changes exactly what its constituents change (outside the generated files), and it touches no gate path.
 //!
-//! This slice pushes nothing, opens nothing and merges nothing: `delphi merge --batch` exists only with `--dry-run`, which prints
-//! what a rollup would be. Opening it is S19, merging it S20. This module is on the gate list.
+//! This module pushes nothing, opens nothing and merges nothing; `rollup_pr` opens a candidate as a pull request (S19), recognises
+//! it again by `rebuild` (§13.3) and merges it (S20). This module is on the gate list.
 
 use super::check::{evaluate, BEHIND_MARK};
 use super::forge::{Forge, ForgeError};
@@ -76,13 +76,18 @@ pub fn choose(forge: &dyn Forge, numbers: &[u64], max: usize) -> Choice {
             c.skipped.push((n, format!("its base is `{}`, not the batch's `{}`", v.pr.base_ref, c.base_ref)));
             continue;
         }
-        let spec = match &v.spec {
-            SpecState::Approved { path, .. } | SpecState::SpecPr { path, .. } => Some(path.clone()),
-            _ => None,
-        };
+        let spec = spec_of(&v);
         c.chosen.push(Constituent { pr: n, head_sha: v.pr.head_sha, head_ref: v.pr.head_ref, title: v.pr.title, spec });
     }
     c
+}
+
+/// The spec a constituent names, as its manifest line carries it (`None`: Markdown only or the bounded exemption).
+pub fn spec_of(v: &super::check::Verdict) -> Option<String> {
+    match &v.spec {
+        SpecState::Approved { path, .. } | SpecState::SpecPr { path, .. } => Some(path.clone()),
+        _ => None,
+    }
 }
 
 /// The manifest block a rollup pull request's body carries (§13.3).
@@ -215,23 +220,35 @@ impl Candidate {
 
 /// Build the candidate for `choice` in `dir` (removed at the end, whatever happened). `id` names the branch. Never pushes.
 pub fn build(forge: &dyn Forge, git: &Runner, home: &Path, choice: &Choice, id: &str) -> Result<Candidate, String> {
+    build_at(forge, git, home, choice, id, None)
+}
+
+/// The same build from `base_sha` (a manifest's base) instead of the base tip: how a rollup is recognised at merge time (§13.3).
+pub fn rebuild(forge: &dyn Forge, git: &Runner, home: &Path, choice: &Choice, id: &str, base_sha: &str) -> Result<Candidate, String> {
+    build_at(forge, git, home, choice, id, Some(base_sha))
+}
+
+fn build_at(forge: &dyn Forge, git: &Runner, home: &Path, choice: &Choice, id: &str, at: Option<&str>) -> Result<Candidate, String> {
     if choice.chosen.is_empty() {
         return Err("no pull request can be batched".into());
     }
     let dir = home.join("merge").join("rollup").join(id);
-    let result = work(forge, git, &dir, choice, id);
+    let result = work(forge, git, &dir, choice, id, at);
     let _ = std::fs::remove_dir_all(&dir);
     let _ = git.git(&git.repo, &["worktree", "prune"]);
     result
 }
 
-fn work(forge: &dyn Forge, g: &Runner, dir: &Path, choice: &Choice, id: &str) -> Result<Candidate, String> {
+fn work(forge: &dyn Forge, g: &Runner, dir: &Path, choice: &Choice, id: &str, at: Option<&str>) -> Result<Candidate, String> {
     let repo = g.repo.as_path();
     let base_ref = &choice.base_ref;
     let mut fetch = vec!["fetch", "-q", "origin", base_ref.as_str()];
     fetch.extend(choice.chosen.iter().map(|c| c.head_ref.as_str()));
     g.git(repo, &fetch).map_err(|e| format!("could not fetch: {e}"))?;
-    let base_sha = g.git(repo, &["rev-parse", "--verify", "-q", &format!("refs/remotes/origin/{base_ref}")])?.trim().to_string();
+    let base_sha = match at {
+        Some(sha) => g.git(repo, &["rev-parse", "--verify", "-q", &format!("{sha}^{{commit}}")]).map_err(|e| format!("the base `{sha}` is not a commit here: {e}"))?.trim().to_string(),
+        None => g.git(repo, &["rev-parse", "--verify", "-q", &format!("refs/remotes/origin/{base_ref}")])?.trim().to_string(),
+    };
     let patterns = match forge.file_at(base_ref, GATES_FILE).map_err(|e: ForgeError| e.to_string())? {
         Some(text) => gates::parse(&text).map_err(|e| format!("the gate list on `{base_ref}` cannot be used: {e}"))?,
         None => gates::DEFAULT_GATES.iter().map(|s| s.to_string()).collect(),

@@ -32,6 +32,10 @@ pub struct State {
     pub behind_others_on_merge: bool,
     /// Pull requests opened (`repair-base`): `(base, head, title, body)`; the first gets number 900.
     pub opened: Vec<(String, String, String, String)>,
+    /// A bare origin: an opened pull request's head is read from it, as GitHub reads the pushed branch (rollups, spec 094 §13).
+    pub origin: Option<std::path::PathBuf>,
+    /// The checks an opened pull request reports.
+    pub checks_on_open: Vec<Check>,
 }
 
 #[derive(Default)]
@@ -173,6 +177,12 @@ impl Forge for FakeForge {
     fn open_pr(&self, base: &str, head: &str, title: &str, body: &str) -> Result<u64, ForgeError> {
         let mut s = self.st.borrow_mut();
         s.opened.push((base.into(), head.into(), title.into(), body.into()));
-        Ok(899 + s.opened.len() as u64)
+        let n = 899 + s.opened.len() as u64;
+        let head_sha = s.origin.as_ref().map(|o| super::refresh_tests::git(o, &["rev-parse", &format!("refs/heads/{head}")])).unwrap_or_default();
+        let info = PrInfo { number: n, title: title.into(), state: "OPEN".into(), mergeable: "MERGEABLE".into(), head_sha, head_ref: head.into(), base_ref: base.into(), body: body.into(), ..PrInfo::default() };
+        s.prs.insert(n, info);
+        let checks = s.checks_on_open.clone();
+        s.checks.insert(n, checks);
+        Ok(n)
     }
 }

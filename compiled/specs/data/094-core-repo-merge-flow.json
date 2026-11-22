@@ -313,12 +313,18 @@
       "line": 495,
       "number": "13.13",
       "title": "Acceptance criteria and verification"
+    },
+    {
+      "level": 3,
+      "line": 505,
+      "number": "13.14",
+      "title": "Build notes (recorded while building; the decisions above stand unless a note says otherwise)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/094-core-repo-merge-flow.md",
-    "sha256": "623b681bb7ff466b4024c04a8784818e2a94367262e811d254d7e0c178b937d3"
+    "sha256": "05d7b45ce84599f147bc179b98db14eeec04d7e356edbe5aab3b664aad0f9646"
   },
   "source_status_at_hash": {
     "line": {
@@ -331,7 +337,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"approve the outstanding draft specs in this workstream\"); OD-1 to OD-5 take the recommendations, as when the operator approved the plan"
     },
-    "sha256": "623b681bb7ff466b4024c04a8784818e2a94367262e811d254d7e0c178b937d3",
+    "sha256": "05d7b45ce84599f147bc179b98db14eeec04d7e356edbe5aab3b664aad0f9646",
     "word": "approved"
   },
   "spec": {
