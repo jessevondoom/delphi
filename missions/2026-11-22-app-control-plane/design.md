@@ -101,60 +101,135 @@ Record: `missions/host-d4ee00f12c9cf42f/councils/002-red-team-the-design-note-cl
 9. **Removed friction:** the spend-setting and bulk-delete dialogs, PR-number typing for non-executable project merges, the 5-minute operator-scope re-arm on an armed connection.
 10. **Agent sandbox denies** opening apps or files through LaunchServices, AppleEvents, input-event posting and screen capture (macOS); display sockets and `DISPLAY`/`WAYLAND_DISPLAY` (Linux).
 
-## 4. Build plan (proposed 2026-11-22; builds on hold until the operator lifts it)
+## 4. Decisions and recommendations on the open questions (2026-11-22)
 
-One new spec (137, the control plane) plus a separate Red-tier charter amendment. Hours are programmer-hours for someone who knows the code; estimates, not measurements.
+Operator decisions, verbatim where short:
 
-| # | Slice | Depends on | Hours |
-| :-- | :-- | :-- | --: |
-| **Phase 0: decide and prove** | | | |
-| 0a | Spec 137 from this note; red-team pass on the revised design (G2) | — | 9-13 |
-| 0b | Probes: AX/Screen-Recording inheritance in a child of Terminal, launchd and the app; dialog answerable by `osascript`/`CGEvent` with and without Accessibility; sandboxed agent `open x.command`, AppleEvents, `CGEventPost`, `screencapture`; launchd daemon env (finds `claude`, `agy`, keys); Linux display sockets in the agent sandbox | — | 8-12 |
-| 0c | Spec 131 S1-S5 (red-team seat reliability) plus an amendment: Round 1 empty-finish retry and the fallback order | — (parallel track) | 28-34 |
-| **Phase 1: isolation (tightening only)** | | | |
-| 1 | Pathguard `app/`; sandbox denies of section 3 item 10; tests per deny | 0b | 10-14 |
-| 2 | UI-control self-report in daemon and clients; `ui_control` in hello and presence; doctor check | 0b | 6-8 |
-| **Phase 2: the core** | | | |
-| 3 | Action table + signed envelope (`Domain::app_action`), targets daemon and launcher, default Red, gate-file test; today's grants carried over byte-equivalent | 0a | 16-22 |
-| 4 | Per-connection arming for every acting class; terminal-code arming; arming state in the app | 3 | 10-14 |
-| 5 | Daemon dialog (macOS `CFUserNotification`, Linux `zenity`/`kdialog`), label sanitizing, spawn-site entries; dialog arming gated on `ui_control` and the probe | 2, 4, 0b | 12-16 |
-| **Phase 3: actions** | | | |
-| 6 | Zero-friction actions in the app (review, curation, KB edits, lesson accept, work output, safe settings) with undo history, undo by direction, no serving before accept, taint carried | 4 | 24-32 |
-| 7 | Merge classifier (host-executed, CI, deploy paths per ecosystem) and one-click clean project merges with daemon-rendered summaries | 3, 4 | 12-16 |
-| 8 | Amber and Red card answers in the app (armed session; Red per OQ-1) | 4, 5 | 12-16 |
-| 9 | Dialog pairing at `read` with app-window code match | 5 | 8-10 |
-| 10 | Clean daemon start: launchd starter for the terminal launcher, environment allowlist, `started_from` | 0b; plan 136 S1 | 10-14 |
-| 11 | `launch` from the app through the launcher target (replaces plan 136 S6b) | 3, 10; plan 136 S3, S4, S6a | 12-16 |
-| 12 | Charter amendment text (§5.4, §5.10, the zero-friction and taint clauses), after probe 1 | 0b | 4-6 |
-| G3 | Red-team pass with fixtures before 5, 8 and 9 merge | 5, 8, 9 | 3-5 |
+| # | Question | Answer |
+| :-- | :-- | :-- |
+| OQ-1 | Red answers once armed | **Operator: "one click plus dialog is good."** Each Red card: one click in the armed app plus a daemon dialog naming the action. |
+| OQ-2 | Arming lifetime | **Operator:** until the connection closes, and re-arm after sleep or screen lock **only if at least 8 hours have passed since the first arming**; within 8 hours a lock or sleep keeps the arming. |
+| OQ-5 | Host agents not using Delphi's plugin | **Operator: accepted** as a stated limit, with a `delphi doctor` warning. |
+| OQ-9 | Spec shape | **Operator:** the architect's choice, once all questions are reviewed and a final plan exists. Proposal in section 4.6. |
+| OQ-10 | Typing to agents in the app | **Operator: yes, after this work**, as its own spec. |
+| — | Enhancements | **Operator: "include your enhancements in the plan they're good."** Section 5, slices E1 to E9. |
 
-Totals: phases 0a-0b and 1-3 come to **155 to 213 hours**; with spec 131 (0c) **183 to 247 hours**. Plan 136 S0-S6a (about 31 to 46 hours) is a separate prerequisite for slice 11.
+Recommendations awaiting the operator's yes:
 
-Cut lines: **A** = 0a, 0b, 1-4, 6, 7 (low-friction app, arming by terminal code, no new Red path); **B** = 5, 8, 9, 12 (dialog arming, Red in the app, dialog pairing: only after the probes pass); **C** = 10, 11 (clean start and launch).
+### 4.1 OQ-3: the daemon's environment
 
-## 5. Open questions (the operator decides)
+**Today** (`crates/delphi-core/src/spawn.rs:266-273`): an ordinary daemon inherits the launcher's whole environment, so every variable the operator's shell exports (API keys, cloud credentials, tokens) reaches the daemon and every seat it starts. Only a spec 092 authorized daemon starts from an allowlist (`granted_env`, `spawn.rs:177`: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `XDG_CONFIG_HOME`). A daemon started by launchd or systemd would get the service manager's bare environment instead, and would not find `claude` or `agy` installed under Homebrew or `~/.local/bin`.
 
-1. **OQ-1 Red answers once armed:** one click, or one click plus a daemon dialog naming the action for each Red card? Recommended: the per-Red dialog (Red is rare and irreversible).
-2. **OQ-2 Arming lifetime:** until the app's connection closes, a cap (for example 12 hours), and re-arm after sleep or screen lock? Recommended: until the connection closes, re-arm after screen lock.
-3. **OQ-3 Environment allowlist:** which variables the daemon inherits and where they are set (config key, or captured at pairing).
-4. **OQ-4 How to leave the terminal's tree:** `launchctl submit` (public, deprecated), a LaunchAgent file (public, leaves a file), or the private disclaim spawn attribute (neat, undocumented).
-5. **OQ-5 Host agents that do not use Delphi's plugin** are invisible to the UI-control check: accept as a stated limit with a doctor warning?
-6. **OQ-6 Merge classifier scope:** which ecosystems' host-executed files in v1, and where a "production" branch flag comes from.
-7. **OQ-7 Safe settings list and "work output" accept:** exactly which settings and outputs are zero friction.
-8. **OQ-8 Linux without `zenity` or `kdialog`:** terminal arming only, or ship a tiny dialog helper?
-9. **OQ-9 Spec shape:** one spec 137, or isolation (Phase 1) as its own small spec so it can ship first.
-10. **OQ-10 Typing to agents in the app** (the driver seat, the console in the app): its own spec after this one?
+**Recommendation:**
+1. **Every daemon starts from a cleared environment**, whichever way it starts: the `granted_env` base, `LC_*`, and the `XDG_*` directories.
+2. **`PATH` and the harness binaries are recorded, not inherited.** `delphi doctor` (and `delphi init`) resolve the absolute paths of `claude`, `agy` and the other harness CLIs from the terminal's `PATH`, show them, and write them to the ratified config (`[harness.<cli>] path`). The daemon's `PATH` is a fixed system list plus those directories.
+3. **Credentials are not passed as environment by default.** The harness CLIs keep their own logins (Claude Code and agy store them themselves). A variable the operator wants passed is named in a ratified list, `[daemon] env_pass = ["HTTPS_PROXY", "ANTHROPIC_API_KEY", ...]`; nothing else gets through.
+4. **Seats get less than the daemon.** The daemon keeps `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` (it needs them to show its dialog); seats never get them. A seat gets only the `env_pass` entries its endpoint names.
+5. **What it fixes now:** closes the credential leak into every seat today, and makes the launchd and systemd start work.
 
-## 6. Enhancements suggested (not in the plan)
+### 4.2 OQ-4: leaving the terminal's process tree, cross-platform
 
-- An activity feed in the app: "what agents did since you armed", each line with one-click undo.
-- Batch accept of several Amber cards or lessons in one action, each shown in daemon-rendered text.
-- Per-project trust profiles (scratch project looser, production stricter) feeding the class table.
-- A "what this will execute" preview on merges and launches.
-- Touch ID as the arming presence step where it works unsigned (needs a probe).
-- A panic button: one click in the app, or `delphi app lockdown`, disarms every session and revokes the key.
-- Friction telemetry: count arms, clicks and fallbacks a day, to prove the low-friction promise with numbers.
-- The red-team fixtures kept as a permanent regression suite.
-- Needs-you notifications and a Dock badge (spec 130 §9 Q1).
+**Recommendation: one starter, `delphi daemon start`, used by the terminal launcher and the app alike, with a documented service-manager backend per platform:**
+
+| Platform | Backend | Why |
+| :-- | :-- | :-- |
+| macOS | `launchctl bootstrap gui/<uid> <plist>` with the job's plist written to `<home>/run/<h>.plist` (0600), `RunAtLoad` true, no `KeepAlive`; stop with `launchctl bootout`. Fallback: `launchctl submit` | Public and documented; the job is its own responsible process, so it inherits no terminal permission; no file left in `~/Library/LaunchAgents` |
+| Linux with a user systemd | `systemd-run --user --unit=delphi-<h> --collect` with `--setenv` for each allowed variable | Public; own cgroup, outside the terminal's session; survives the terminal; clean environment |
+| Linux without one | double fork plus `setsid`, environment cleared | Containers and non-systemd systems |
+
+Consequences:
+- **The daemon takes its lock itself by path** and signals readiness through its socket and presence file, since a service manager does not pass the launcher's descriptors. This is the lock proof of plan 136 S1 made the only path.
+- **Spec 092 authorized runs keep the direct spawn path** (they need the grant descriptor and a fresh home) and are never started through a service manager.
+- **Not recommended:** the private macOS "disclaim responsibility" spawn attribute (undocumented; can break with any update).
+- **Probe first:** that a launchd job running the unsigned `delphi` is its own responsible process (`AXIsProcessTrusted()` false under a terminal that holds Accessibility).
+
+### 4.3 OQ-6: the merge classifier
+
+**Rule:** a merge is Red if its diff touches anything that runs outside the OS sandbox (GOVERNANCE §5.5), changes what is installed, or triggers a deploy. Otherwise it is one click. The classifier is code over the git diff, deterministic, and the app shows the reason.
+
+v1 patterns (any ecosystem; the cost is a list, not a parser):
+- **The §5.5 list**: `build.rs`, `.cargo/config*`, `.envrc`, `.gitattributes`, `.gitmodules`, `.github/**`, `.vscode/**`.
+- **CI and deploy**: `.gitlab-ci.yml`, `.circleci/**`, `.buildkite/**`, `azure-pipelines.yml`, `bitbucket-pipelines.yml`, `Jenkinsfile`, `*.tf`, `fly.toml`, `vercel.json`, `netlify.toml`, `Procfile`, `serverless.yml`, `Dockerfile*`, `docker-compose*`, `.devcontainer/**`.
+- **Git and editor machinery**: `.githooks/**`, `.husky/**`, `.pre-commit-config.yaml`, `lefthook.yml`, `.idea/runConfigurations/**`.
+- **Build and install**: `Makefile`, `*.mk`, `CMakeLists.txt`, `justfile`, `Taskfile.yml`, `rust-toolchain*`, `package.json` changes to `scripts` or dependencies, every lockfile, `.npmrc`, `.yarnrc*`, `.pnpmfile.cjs`, `setup.py`, `setup.cfg`, `pyproject.toml` build-system or dependency changes, `requirements*.txt`, `conftest.py`, `noxfile.py`, `tox.ini`, `Cargo.toml` dependency changes, `Gemfile`, `Rakefile`, `build.gradle*`, `pom.xml`.
+- **Shape**: a new executable bit, a symbolic link, a binary file, a submodule pointer.
+
+**Production, two ways:** automatically, when the target branch triggers a CI workflow with a deploy step on push; and by the operator's ratified `[projects.<name>] production_branches`. A merge into a production branch is Red.
+
+Dependency and lockfile changes are Red on purpose: an install runs the new code on the host. It costs one click plus a dialog.
+
+### 4.4 OQ-7: safe settings and work output
+
+**Rule:** a setting is one click (once armed) when changing it can never raise a trust tier, a tool, path, network or approval ceiling, or add an endpoint, credential or hook, in either direction. Everything else is Red. The list is the class table; unlisted keys are Red.
+
+- **One click:** appearance (theme packs, which change display only; reduce motion; density); notifications; `/pace`; token budgets and limits, both ways (spend is the operator's own); model tier per role among configured endpoints; Council defaults (seats, tier); research depth; schedules of existing timers; the default workspace and display names; how often to check for updates.
+- **Red:** endpoints and harness options (flags, permission modes, allowed tools, plugin directories, `env_pass`); sandbox and network; trusted sources and allowlists; connectors; relay, step-up and authenticator settings; hooks; grants and every `--auto`; optimistic mode; role manifests and scopes; anything under governance ratification.
+
+**Work output:**
+- **One click:** keep an artifact in the workspace (a document, page, deck, chart); keep a research record in the knowledge base (its taint carried); take a builder's diff into its task branch; rebuild, re-run or discard; open a pull request (it can be closed).
+- **Red:** anything that leaves the machine and cannot be called back: sending a message or email, publishing or sharing an artifact outside, pushing to a protected or production branch, force-pushing.
+
+### 4.5 OQ-8: the Linux dialog
+
+**Broadest coverage: a small helper of Delphi's own, `delphi-dialog`**, built in Rust on a toolkit that speaks both X11 and Wayland with no GTK or Qt dependency (`eframe`/`egui` over `winit`, loading `libwayland-client`, `libX11` and `libxkbcommon` at run time). It works the same under GNOME, KDE, Xfce, sway, Hyprland and the rest, and ships in the release tarball beside `delphi`.
+
+- **Fallback order:** `delphi-dialog`, then `zenity`, then `kdialog`, then terminal arming.
+- **Dialog arming is never on under X11** unless the agent sandbox gives seats no X socket, because any X client can read and inject input. Under Wayland the compositor isolates windows.
+- **Headless:** terminal arming only.
+- **Costs:** a new crate passes the dependency gate (`cargo deny`, licences MIT or Apache) and adds a few MB to the Linux tarball.
+- macOS keeps `CFUserNotification` (no helper).
+
+### 4.6 Spec shape (proposal for OQ-9)
+
+1. **Spec 137, isolation and a clean start**: Phase 1 and slice 10 (cleared environment, starter, sandbox denies, UI-control self-report). It only tightens, needs no charter change, and can ship first.
+2. **Spec 138, the app control plane**: the action table, arming, the dialog, the actions, pairing, `launch` and the enhancements E1 to E9.
+3. **The charter amendment**: its own Red-tier pull request, written after the dialog probe.
+4. **Spec 139, typing to agents in the app**: after 138 (OQ-10).
+
+## 5. Build plan (revised 2026-11-22; builds on hold until the operator lifts the hold)
+
+Hours are programmer-hours for someone who knows the code; estimates, not measurements.
+
+| # | Slice | Spec | Depends on | Hours |
+| :-- | :-- | :-- | :-- | --: |
+| **Phase 0: decide and prove** | | | | |
+| 0a | Specs 137 and 138; red-team pass on them (G2) | — | this note final | 12-16 |
+| 0b | Probes: responsibility of a launchd or systemd job; AX and Screen Recording inheritance under Terminal, launchd and the app; dialog answerable by `osascript`/`CGEvent` with and without Accessibility; sandboxed agent `open x.command`, AppleEvents, `CGEventPost`, `screencapture`; Linux display sockets in the sandbox; Touch ID from an unsigned daemon | — | — | 10-14 |
+| 0c | Spec 131 S1-S5 plus amendment (red-team seat reliability) | 131 | — (parallel) | 28-34 |
+| **Phase 1: isolation and clean start (spec 137, tightening only)** | | | | |
+| 1 | Pathguard `app/`; sandbox denies (section 3 item 10); a test per deny | 137 | 0b | 10-14 |
+| 2 | UI-control self-report in daemon and clients; `ui_control` in hello and presence; doctor check | 137 | 0b | 6-8 |
+| 10 | Cleared environment for every daemon (4.1); `delphi daemon start` with launchd and systemd backends (4.2); lock by path and readiness without inherited descriptors; `started_from` | 137 | 0b; plan 136 S1 | 18-24 |
+| **Phase 2: the core (spec 138)** | | | | |
+| 3 | Action table and signed envelope; targets daemon and launcher; default Red; settings and work-output rows (4.4); gate-file test; today's grants carried over | 138 | 0a | 16-22 |
+| 4 | Arming for every acting class, with the 8-hour rule (OQ-2); terminal-code arming | 138 | 3 | 12-16 |
+| 5 | macOS daemon dialog (`CFUserNotification`), label sanitizing; dialog arming gated on `ui_control` and the probe | 138 | 2, 4, 0b | 10-14 |
+| 5L | Linux `delphi-dialog` helper, fallback chain, release packaging (4.5) | 138 | 4 | 12-18 |
+| **Phase 3: actions (spec 138)** | | | | |
+| 6 | Zero-friction actions in the app with undo history, undo by direction, nothing served before accept, taint carried | 138 | 4 | 24-32 |
+| 7 | Merge classifier (4.3) and one-click clean project merges with daemon-rendered summaries | 138 | 3, 4 | 14-18 |
+| 8 | Amber and Red answers in the app (Red: one click plus dialog, OQ-1) | 138 | 4, 5 | 12-16 |
+| 9 | Dialog pairing at `read` with app-window code match | 138 | 5 | 8-10 |
+| 11 | `launch` from the app through the starter (replaces plan 136 S6b) | 138 | 3, 10; plan 136 S3, S4, S6a | 10-14 |
+| 12 | Charter amendment (§5.4, §5.10, zero-friction and taint clauses), after probe 1 | charter | 0b | 4-6 |
+| **Enhancements (spec 138)** | | | | |
+| E1 | Activity feed: what agents did since you armed, one-click undo per line | 138 | 6 | 10-14 |
+| E2 | Batch accept of several Amber cards or lessons, each in daemon-rendered text | 138 | 6, 8 | 6-8 |
+| E3 | Per-project trust profiles (scratch looser, production stricter) feeding the class table | 138 | 3, 7 | 10-14 |
+| E4 | "What this will execute" preview on merges and launches | 138 | 7, 11 | 6-8 |
+| E5 | Touch ID as the arming step where the probe shows it works unsigned | 138 | 4, 0b | 8-12 |
+| E6 | Panic button: one click in the app or `delphi app lockdown` disarms every session and revokes the key | 138 | 4 | 4-6 |
+| E7 | Friction telemetry: arms, clicks and fallbacks per day, as counts (tokens, never money) | 138 | 4, 6 | 6-8 |
+| E8 | Red-team fixtures as a permanent regression suite (feeds G2 and G3) | 138 | 0a | 8-12 |
+| E9 | Needs-you notifications and a Dock badge (a Tauri plugin; amends spec 111 §2 and the dependency gate) | 138 | — | 8-12 |
+| G3 | Red-team pass with fixtures before 5, 5L, 8 and 9 merge | — | 5, 5L, 8, 9, E8 | 3-5 |
+
+**Totals:** core (0a, 0b, 1-12, G3) **183 to 249 hours**; enhancements E1-E9 **66 to 94 hours**; together **249 to 343 hours**; with spec 131 (0c) **277 to 377 hours**. Plan 136 S0-S6a (about 31 to 46 hours) is a prerequisite for slice 11.
+
+**Cut lines:**
+- **A, spec 137** (1, 2, 10): isolation, UI-control check, clean start. Tightening only; ships first.
+- **B, the low-friction app** (3, 4, 6, 7, E1, E4, E6, E7, E8): arming by terminal code, one-click work, executing merges Red. No new Red path.
+- **C, presence in the app** (5, 5L, 8, 9, 12, E5, G3): dialog arming, Red in the app, dialog pairing; only after the probes pass.
+- **D, reach** (11, E2, E3, E9): `launch`, batch accept, trust profiles, notifications.
 
 Related: the one-daemon switcher plan (`missions/2026-11-21-one-daemon-switcher/work-plan.md`, PR #843) parks its `launch` slice for this design and names the console seat a driver seat the app can hold.
