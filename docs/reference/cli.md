@@ -87,8 +87,13 @@ Sign in to, or out of, a model endpoint.
 Check that each model endpoint answers.
 
 ```
-  delphi endpoints test [<endpoint id>] [--probe] [--workspace <name>] [--home <dir>]
+  delphi endpoints test [<endpoint id>] [--probe [--yes]] [--workspace <name>] [--home <dir>]
 ```
+
+Without `--probe` it prints the cached results and spends nothing.
+`--probe` reads each harness CLI's version, prints the calls and their estimated cost,
+and runs only on your yes (`y` at a terminal, or `--yes`). It writes a conformance record
+per endpoint, model and CLI version to `local/carrier-conformance.json` for `delphi doctor`.
 
 ### `delphi connectors`
 

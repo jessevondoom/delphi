@@ -3,6 +3,10 @@
 //!
 //! Runs through `delphi-core endpoints …`. Probe spend is outside any mission, so it is not in the usage
 //! ledger; the command prints what it spent.
+//!
+//! The probe is the carrier conformance probe of `specs/132` §4.1 (slice C6): it reads every harness CLI's version, prints the calls
+//! and their estimated cost before anything runs, runs only on the operator's yes (`--yes`, or `y` at a terminal), and writes one
+//! record per harness endpoint, model and CLI version to `local/carrier-conformance.json`.
 
 use crate::boot::{effective_config, http_model_client};
 use crate::capabilities::{load, probe, save, Capability};
@@ -45,8 +49,13 @@ fn print_row(c: &Capability, at: i64) {
 }
 
 pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
+    run_with(ws_dir, args, &confirm)
+}
+
+/// [`run`], with the operator's yes asked by `yes` (tests answer it without a terminal).
+fn run_with(ws_dir: &Path, args: &[String], yes: &dyn Fn() -> bool) -> i32 {
     if args.first().map(String::as_str) != Some("test") {
-        eprintln!("usage: delphi endpoints test [<endpoint id>] [--probe]");
+        eprintln!("usage: delphi endpoints test [<endpoint id>] [--probe [--yes]]");
         return 2;
     }
     let live = match std::fs::read_to_string(ws_dir.join("config.toml")) {
@@ -86,6 +95,27 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
         return 0;
     }
 
+    // Before anything runs: every harness CLI's version, and what the probe will cost (§4.1 steps 1 and 2).
+    let mut versions: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    println!("The probe will make these calls (outside any mission's ledger):");
+    for ep in &targets {
+        if ep.path == AccessPath::Harness {
+            let cli = ep.harness.as_deref().and_then(crate::harness::Cli::from_harness);
+            let program = cli.map_or("claude", |c| c.program());
+            let version = versions.entry(program.to_string()).or_insert_with(|| crate::capabilities::cli_version_bounded(program, 10)).clone();
+            let model = TIERS.iter().find_map(|t| cfg.resolve_model(ep, t)).unwrap_or_default();
+            let gate = cli == Some(crate::harness::Cli::Agy) && cfg.harness.get("agy").is_none_or(|p| p.bridge);
+            let multiplier = if program == "copilot" { copilot_multiplier(ws_dir, version.as_deref(), &model) } else { None };
+            println!("  {} [{}]", crate::conformance::estimate_line(&ep.id, program, &model, crate::capabilities::harness_probe_prompt_bytes(gate), multiplier), version.as_deref().unwrap_or("version unknown"));
+        } else {
+            println!("  {:<16} api: up to 3 calls per configured model, each capped at 64 to 512 output tokens plus the model's minimum thinking budget", ep.id);
+        }
+    }
+    if !args.iter().any(|a| a == "--yes") && !yes() {
+        println!("nothing was run. Pass `--yes` to run these calls, or answer y at a terminal.");
+        return 2;
+    }
+
     let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(r) => r,
         Err(e) => {
@@ -101,8 +131,15 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
         for ep in &targets {
             if ep.path == AccessPath::Harness {
                 let program = ep.harness.as_deref().and_then(crate::harness::Cli::from_harness).map_or("claude", |c| c.program());
-                let version = if program == "agy" { tokio::task::spawn_blocking(|| crate::capabilities::agy_version("agy")).await.ok().flatten() } else { None };
-                let (cap, seat, gate) = crate::capabilities::probe_harness_full(&cfg, ep, program, now(), std::time::Duration::from_secs(10), version).await;
+                let version = versions.get(program).cloned().flatten();
+                let agy_version = if program == "agy" { version.clone() } else { None };
+                let (cap, seat, gate) = crate::capabilities::probe_harness_full(&cfg, ep, program, now(), std::time::Duration::from_secs(10), agy_version).await;
+                let bridge = cfg.harness.get(program).is_none_or(|p| p.bridge);
+                let rec = crate::conformance::from_probe(&cap, seat.as_ref(), gate.as_ref(), program, bridge, &ep.family, version.as_deref());
+                if let Err(e) = crate::conformance::save(&ws_dir.join(crate::conformance::FILE), &rec) {
+                    eprintln!("delphi endpoints: could not save the conformance record: {}", e);
+                }
+                println!("    conformance: {}", rec.rows.iter().map(|r| format!("{} {}", r.row, r.status.as_str())).collect::<Vec<_>>().join(", "));
                 // What the CLI said it can do goes where the daemon reads it, so the orchestrator knows before the first span.
                 if let Some(seat) = seat {
                     crate::inventory::Inventory::open(ws_dir.join("local/harness-tools.json")).record(seat);
@@ -141,5 +178,56 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
         1
     } else {
         0
+    }
+}
+
+/// Copilot's multiplier for `model`: the cached catalog when it was read on the installed version, else the shipped seed table. A cost
+/// input for the line printed before the probe, never a choice.
+fn copilot_multiplier(ws_dir: &Path, version: Option<&str>, model: &str) -> Option<f64> {
+    use crate::model_catalog as mc;
+    let cat = version.and_then(|v| mc::fresh(&ws_dir.join("local"), v, now()));
+    cat.as_ref().and_then(|c| c.model(model)).and_then(|m| m.multiplier).or_else(|| mc::Seed::shipped().model("copilot", model).map(|m| m.multiplier).filter(|m| *m > 0.0))
+}
+
+/// The operator's yes at a terminal. Anything else (a pipe, a script, an agent) is a no: the probe spends the operator's tokens.
+fn confirm() -> bool {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    print!("Run these calls? [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line).is_ok() && matches!(line.trim(), "y" | "Y" | "yes")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use delphi_core::lock;
+
+    // specs/132 AC-11: the cost is printed before any call, and nothing runs without the operator's yes.
+    #[test]
+    fn the_probe_runs_nothing_without_the_operators_yes() {
+        let w = tempfile::tempdir().unwrap();
+        let cfg = "[[endpoints]]\nid = \"direct\"\nfamily = \"claude\"\npath = \"api\"\ncredential = \"env:DELPHI_TEST_NO_SUCH_KEY\"\n[models.claude]\nfast = \"m\"\n";
+        std::fs::create_dir_all(w.path().join("local/ratified")).unwrap();
+        std::fs::write(w.path().join("config.toml"), cfg).unwrap();
+        let blocks = lock::access_blocks(cfg);
+        std::fs::write(w.path().join("local/ratified").join(crate::ratify::CONFIG_COPY), &blocks).unwrap();
+        let mut l = lock::LockFile::default();
+        l.files.insert(crate::ratify::CONFIG_KEY.into(), lock::hash(blocks.as_bytes()));
+        lock::write(&w.path().join("local/ratified.lock"), &l).unwrap();
+        let asked = std::cell::Cell::new(0);
+        let no = || {
+            asked.set(asked.get() + 1);
+            false
+        };
+        assert_eq!(run_with(w.path(), &["test".into(), "--probe".into()], &no), 2);
+        assert_eq!(asked.get(), 1, "the operator was asked once");
+        assert!(!w.path().join("local/endpoint-capabilities.json").exists() && !w.path().join(crate::conformance::FILE).exists(), "nothing ran, nothing was written");
+        // Without --probe nothing is asked and nothing is spent.
+        assert_eq!(run_with(w.path(), &["test".into()], &no), 0);
+        assert_eq!(asked.get(), 1);
     }
 }
