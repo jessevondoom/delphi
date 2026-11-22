@@ -119,3 +119,42 @@ Recorded here, as `specs/031` does, so the spec says what was built. The operato
 ## 10. Tests that pin this spec
 
 The slice tests above are the spec's tests. In addition: the spawn list test is run in the normal `cargo test --workspace` (not behind a feature), and the must-run helper has a unit test for each of its three outcomes (required and present, required and missing, not required).
+
+## 11. Amendment 093-A1: outside events check on a schedule, not on unrelated PRs (operator, 2026-11-22)
+
+**Approved by the operator, 2026-11-22**, as item B of this instruction: "start on A, B, F, L, and K1 now. run with subagents. i've freed up as many resources as possible sun run hard at all of the slices with subagents and think about CI/CD speed as a bottleneck you're solving. use a batched strategy if possible to get this into the codebase faster". This amendment changes **where** the item P checks run, not what they check: `deny.toml`, the cargo-deny version and the policy test are unchanged in strength.
+
+### 11.1 Scope
+
+Item P (§4) runs `cargo deny check` against the RustSec advisory database read fresh on every run, and `deny_policy.rs` compares each exception's review date with today. Both depend on the calendar and on the outside world, not on the change under test. Measured on 2026-11-22: over the ten days before, a new advisory or a passed review date caused 9 of 40 red `main` runs and 11 red pull-request runs; `main` was red on 20.7% of all its runs. Every open pull request turned red at once, though none of them had changed a dependency.
+
+The rule after this amendment: **a check that depends on outside events runs on a schedule, on every push to `main`, and on a pull request that touches what it checks; it does not run on an unrelated pull request.** A check that depends only on the repository (bans, licences, sources, an exception's reason) still runs on every pull request.
+
+### 11.2 Simpler Alternative Considered
+
+1. **Leave it as it is.** Rejected: one outside event blocks every open pull request at once and costs a rerun or a rebase on each, which is the CI bottleneck the operator asked to remove.
+2. **Mark the advisory check `continue-on-error` on pull requests.** Rejected: a red check that does not count is noise people learn to ignore, and a pull request that does change `Cargo.lock` must still be refused when it brings in a known vulnerability.
+3. **Pin a snapshot of the advisory database in the repository.** Rejected: it needs a refresh process of its own and delays every new advisory until someone refreshes it; the daily run below is simpler.
+4. **Open an issue automatically when the daily run fails** (`issues: write`). Considered and left out: it would give the scheduled workflow a token that can write to the repository. A failed scheduled run is already red in Actions and GitHub emails the repository owner by default, so the workflow keeps `permissions: contents: read`.
+5. **Skip the date check with an environment variable read by the test.** Not chosen: CI must decide per pull request anyway (has `deny.toml` changed?), and a skip in the test command keeps the decision in one visible place and the test free of switches.
+
+### 11.3 The trade-off
+
+A pull request may merge up to a day after an advisory is published, or after an exception's review date has passed, without being stopped. That pull request did not introduce the advisory or the date. `main` still goes red on its next push run, and the daily run goes red even when nothing is pushed, as item P intends: the warning reaches the operator within a day and a fix is its own pull request. A pull request that changes `Cargo.lock`, `deny.toml` or any `Cargo.toml` is checked in full, so no new dependency enters without the advisory check.
+
+### 11.4 Slices
+
+| Slice | Content |
+| :-- | :-- |
+| A1 | this amendment and its tracker entry |
+| P1 | the `deny` job in `.github/workflows/ci.yml`: on `pull_request`, `cargo deny --locked check bans licenses sources` always, and `advisories` only when the pull request changes `Cargo.lock`, `deny.toml` or a `Cargo.toml` (`git diff --name-only` between the test merge commit and its first parent, the base; plain shell, no path-filter action). When the list of changed files cannot be read, the full check runs. On `push` to `main`, the full `cargo deny --locked check`, unchanged. cargo-deny stays pinned by version. |
+| P2 | `.github/workflows/advisories.yml`: daily `schedule` and `workflow_dispatch`, the full `cargo deny --locked check` and `cargo test -p delphi --test deny_policy --locked`, `permissions: contents: read`, a `timeout-minutes`, the same pinned install and action SHAs as `ci.yml`. |
+| P3 | the review-date check on pull requests: `deny_policy.rs` splits its exception test in two, the reason check (every pull request) and the date check; the Linux integration job and the macOS job skip the date check (`--exact --skip <name>`) on a `pull_request` that does not change `deny.toml`. Push runs and the daily run keep it. The Linux job confirms the skipped name names exactly one test, so a rename cannot turn the skip into a silent no-op or a skip of something else. |
+
+All four are in one pull request (same spec, one commit per slice, CONTRIBUTING's trial). P3's test split is a small Rust change in a pull request that also changes `.github/`; it is its own commit so it can be reverted alone.
+
+### 11.5 Verification Plan
+
+- The pull request's own CI: the `deny` job log shows `advisories` skipped and `bans licenses sources` run (no lockfile change); the integration job log shows the date test skipped and the reason test run.
+- After merge, a manual `workflow_dispatch` of `advisories.yml` runs the full check and the date test on `main`.
+- `actionlint` and a YAML parse of both workflows before the push.
