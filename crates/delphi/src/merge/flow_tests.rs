@@ -28,7 +28,7 @@ fn world() -> World {
 fn with_ctx<R>(w: &World, term: &mut FakeTerminal, quote: Option<&str>, dry_run: bool, f: impl FnOnce(&mut Ctx) -> R) -> R {
     let ledger = Ledger::at(w.home.path());
     let errors = Errors::at(w.home.path());
-    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, errors: &errors, term, quote: quote.map(String::from), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string(), refresh: None };
+    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, errors: &errors, term, quote: quote.map(String::from), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string(), refresh: None, claims: None };
     f(&mut ctx)
 }
 
@@ -582,4 +582,90 @@ fn a_behind_pull_request_can_still_be_queued_and_status_names_it_as_behind() {
     w.forge.st.borrow_mut().behind.insert("h2".into(), 1);
     w.forge.st.borrow_mut().checks.insert(2, vec![Check { name: "ui".into(), bucket: "fail".into() }]);
     assert!(queue_one(&w.forge, 2).unwrap_err().contains("checks failed"));
+}
+
+// ---- spec 135 F0b: a merge releases the merged branch's slice claims; another holder's claim is a note, never a refusal ----
+
+const REPO_ID: &str = "/repo/.git";
+const NOW: i64 = 1_795_000_000;
+const STEM: &str = "094-core-repo-merge-flow";
+
+fn claim_row(spec: &str, slice: &str, branch: &str, repo: &str, expires: i64) -> serde_json::Value {
+    let t = |s: i64| delphi_core::time::format_unix_millis(s, 0);
+    serde_json::json!({"repo": repo, "spec": spec, "slice": slice, "by": branch, "branch": branch, "at": t(NOW - 60), "expires": t(expires)})
+}
+
+fn write_claims(w: &World, claims: &[serde_json::Value]) {
+    let dir = w.home.path().join("forge");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("claims.json"), serde_json::to_vec(&serde_json::json!({"version": 1, "claims": claims})).unwrap()).unwrap();
+}
+
+fn claim_slices(w: &World) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(w.home.path().join("forge/claims.json")).unwrap()).unwrap();
+    v["claims"].as_array().unwrap().iter().map(|c| format!("{} {}", c["slice"].as_str().unwrap(), c["branch"].as_str().unwrap())).collect()
+}
+
+fn merge_with_claims(w: &World, term: &mut FakeTerminal, dry_run: bool) -> Outcome {
+    let ledger = Ledger::at(w.home.path());
+    let errors = Errors::at(w.home.path());
+    let claims = super::Claims { home: w.home.path(), repo: REPO_ID, now: || NOW };
+    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, errors: &errors, term, quote: Some("merge #7".into()), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-19T00:00:00Z".to_string(), refresh: None, claims: Some(claims) };
+    merge_one(&mut ctx, 7, None)
+}
+
+#[test]
+fn a_merge_releases_the_claims_of_its_branch_in_this_repository_only() {
+    let w = world();
+    w.forge.with_ready_pr(7, "head7", &["a.rs"]);
+    write_claims(
+        &w,
+        &[
+            claim_row(STEM, "S1", "branch-7", REPO_ID, NOW + 3600),
+            claim_row(STEM, "S1b", "branch-7", REPO_ID, NOW - 10),
+            claim_row(STEM, "S1", "branch-7", "/elsewhere/.git", NOW + 3600),
+            claim_row(STEM, "S2", "branch-8", REPO_ID, NOW + 3600),
+        ],
+    );
+    let mut term = FakeTerminal::new(false, &[]);
+    let out = merge_with_claims(&w, &mut term, false);
+    assert_eq!(out, Outcome::Merged { pr: 7, head: "head7".into() });
+    assert_eq!(claim_slices(&w), vec!["S1 branch-7", "S2 branch-8"], "only this repository's branch-7 claims (live or expired) are gone");
+    let released: Vec<&String> = term.shown.iter().filter(|l| l.contains("released the claim")).collect();
+    assert_eq!(released.len(), 2, "one line per released claim: {:?}", term.shown);
+    assert!(released.iter().all(|l| l.starts_with("#7: ") && l.contains("branch-7")), "{released:?}");
+}
+
+#[test]
+fn another_holders_claim_on_the_same_spec_is_noted_and_the_merge_still_proceeds() {
+    let w = world();
+    w.forge.with_ready_pr(7, "head7", &["a.rs"]);
+    write_claims(&w, &[claim_row(STEM, "S2", "branch-8", REPO_ID, NOW + 3600), claim_row(STEM, "S3", "branch-9", REPO_ID, NOW - 10), claim_row("095-other", "S1", "branch-9", REPO_ID, NOW + 3600)]);
+    let notes = |t: &FakeTerminal| t.shown.iter().filter(|l| l.contains("note: another session")).cloned().collect::<Vec<_>>();
+    // The dry run says so too, and changes nothing.
+    let mut dry = FakeTerminal::new(false, &[]);
+    assert!(matches!(merge_with_claims(&w, &mut dry, true), Outcome::DryRun { .. }));
+    assert_eq!(notes(&dry).len(), 1, "{:?}", dry.shown);
+    assert!(notes(&dry)[0].contains("S2") && notes(&dry)[0].contains("branch-8"), "{:?}", notes(&dry));
+    let mut term = FakeTerminal::new(false, &[]);
+    let out = merge_with_claims(&w, &mut term, false);
+    assert_eq!(out, Outcome::Merged { pr: 7, head: "head7".into() }, "a claim never refuses a merge");
+    assert_eq!(notes(&term).len(), 1, "expired claims and other specs are not noted: {:?}", term.shown);
+    assert_eq!(claim_slices(&w).len(), 3, "another holder's claims are not released");
+}
+
+#[test]
+fn a_broken_claims_file_does_not_block_the_merge_and_is_logged_as_cleanup() {
+    let w = world();
+    w.forge.with_ready_pr(7, "head7", &["a.rs"]);
+    std::fs::create_dir_all(w.home.path().join("forge")).unwrap();
+    std::fs::write(w.home.path().join("forge/claims.json"), b"{not json").unwrap();
+    let mut term = FakeTerminal::new(false, &[]);
+    let out = merge_with_claims(&w, &mut term, false);
+    assert_eq!(out, Outcome::Merged { pr: 7, head: "head7".into() });
+    assert_eq!(merged(&w), vec![(7, "head7".to_string())]);
+    assert!(term.shown.iter().any(|l| l.contains("could not be read")), "{:?}", term.shown);
+    let open: Vec<_> = Errors::at(w.home.path()).entries().into_iter().filter(|e| e.open()).collect();
+    assert!(open.iter().any(|e| e.detail.contains("slice claims") && e.class == "cleanup"), "{open:?}");
+    assert_eq!(std::fs::read(w.home.path().join("forge/claims.json")).unwrap(), b"{not json", "a malformed file is never overwritten");
 }
