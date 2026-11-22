@@ -17,6 +17,7 @@ pub mod forge;
 pub mod gates;
 pub mod record;
 pub mod refresh;
+pub mod rollup;
 pub mod wait;
 
 #[cfg(test)]
@@ -31,6 +32,8 @@ mod fake;
 mod flow_tests;
 #[cfg(test)]
 mod refresh_tests;
+#[cfg(test)]
+mod rollup_tests;
 #[cfg(test)]
 mod wait_tests;
 
@@ -429,6 +432,21 @@ struct Parsed {
     wait_given: bool,
     /// `repair-base --base <branch>`: the base to repair (default `main`).
     base: Option<String>,
+    /// `--batch[=N]` (spec 094 §13): build a rollup of up to N pull requests. Only with `--dry-run` until S19.
+    batch: Option<usize>,
+}
+
+/// `--batch` (the default size) or `--batch=N`, N from 2 to the ceiling (§13.9).
+fn batch_size(flag: &str) -> Result<Option<usize>, String> {
+    let n = match flag.strip_prefix("--batch") {
+        Some("") => rollup::DEFAULT_BATCH,
+        Some(rest) => rest.strip_prefix('=').and_then(|n| n.parse::<usize>().ok()).ok_or(format!("`{flag}`: write --batch or --batch=N"))?,
+        None => return Ok(None),
+    };
+    if !(2..=rollup::MAX_BATCH).contains(&n) {
+        return Err(format!("--batch takes 2 to {} pull requests", rollup::MAX_BATCH));
+    }
+    Ok(Some(n))
 }
 
 fn pr_number(s: &str) -> Option<u64> {
@@ -443,6 +461,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     let mut caps_given = false;
     let (mut wait, mut wait_given) = (Some(wait::DEFAULT_WAIT), false);
     let mut base = None;
+    let mut batch = None;
     let mut words: Vec<&str> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -488,6 +507,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
             "--base" => base = Some(it.next().cloned().ok_or("--base needs a branch name")?),
             "--merged" => merged = true,
             "--yes" => yes = true,
+            f if f == "--batch" || f.starts_with("--batch=") => batch = batch_size(f)?,
             f if f.starts_with("--") => return Err(format!("unknown option `{f}` (see `delphi help merge`)")),
             w => words.push(w),
         }
@@ -522,10 +542,16 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     if base.is_some() && sub != Sub::RepairBase {
         return Err("--base belongs to `delphi merge repair-base`".into());
     }
+    if batch.is_some() && !matches!(sub, Sub::Merge(_) | Sub::All) {
+        return Err("--batch belongs to `delphi merge <PR>...` and `--all` (spec 094 §13.9)".into());
+    }
+    if batch.is_some() && !dry_run {
+        return Err("--batch builds and prints a rollup only with --dry-run in this build; opening and merging a rollup are slices S19 and S20 of spec 094 §13".into());
+    }
     if sub == Sub::Auto {
         caps.validate()?;
     }
-    Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human, merged, yes, caps, caps_given, wait, wait_given, base })
+    Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human, merged, yes, caps, caps_given, wait, wait_given, base, batch })
 }
 
 pub fn cli(args: &[String]) -> i32 {
@@ -571,12 +597,14 @@ pub fn cli(args: &[String]) -> i32 {
         Sub::RepairBase => repair_cmd(&p, &forge),
         Sub::Cleanup(ref numbers) => cleanup::run(&forge, numbers, p.merged, p.dry_run, p.yes),
         Sub::Auto => auto_cmd(&p, &forge),
+        Sub::Merge(ref numbers) if p.batch.is_some() => batch_dry_run(&p, &forge, numbers),
         Sub::Merge(ref numbers) => run_merges(&p, &forge, numbers.clone(), false),
         Sub::All => match forge.queued(QUEUE_LABEL) {
             Ok(list) if list.is_empty() => {
                 println!("nothing is queued");
                 0
             }
+            Ok(list) if p.batch.is_some() => batch_dry_run(&p, &forge, &list),
             Ok(list) => run_merges(&p, &forge, list, true),
             Err(e) => {
                 eprintln!("delphi merge: {e}");
@@ -688,6 +716,35 @@ fn refresh_cmd(p: &Parsed, forge: &Gh, n: u64) -> i32 {
         }
         Err(stop) => {
             eprintln!("delphi merge refresh: {}", stop.line(n));
+            1
+        }
+    }
+}
+
+/// `--batch --dry-run` (spec 094 §13, S18): choose the pull requests a rollup would carry, build the candidate in a temporary
+/// worktree, check its invariants and print it. Pushes, opens, writes and merges nothing; needs no approval.
+fn batch_dry_run(p: &Parsed, forge: &Gh, numbers: &[u64]) -> i32 {
+    let home = crate::home::delphi_home(p.home.as_deref());
+    let repo = match std::env::current_dir() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("delphi merge --batch: {e}");
+            return 2;
+        }
+    };
+    let choice = rollup::choose(forge, numbers, p.batch.unwrap_or(rollup::DEFAULT_BATCH));
+    for (n, why) in &choice.skipped {
+        println!("#{n}: not in the batch: {why}");
+    }
+    let id = delphi_core::time::now_rfc3339().chars().filter(|c| c.is_ascii_digit()).take(14).collect::<String>();
+    match rollup::build(forge, &refresh::Runner::new(&repo), &home, &choice, &id) {
+        Ok(c) => {
+            c.lines().iter().for_each(|l| println!("{l}"));
+            println!("dry run: nothing was pushed, opened or merged");
+            0
+        }
+        Err(e) => {
+            eprintln!("delphi merge --batch: no rollup: {e}");
             1
         }
     }
@@ -873,6 +930,19 @@ mod parse_tests {
         assert_eq!(parse(&a("merge --all --no-wait")).unwrap().wait, None);
         let q = vec!["5".to_string(), "--operator-said".to_string(), "merge #5 now".to_string()];
         assert_eq!(parse(&q).unwrap().quote.as_deref(), Some("merge #5 now"));
+        assert_eq!(parse(&a("merge --all --batch --dry-run")).unwrap().batch, Some(rollup::DEFAULT_BATCH));
+        let b = parse(&a("merge 5 6 --batch=8 --dry-run")).unwrap();
+        assert_eq!((b.sub, b.batch), (Sub::Merge(vec![5, 6]), Some(8)));
+        assert_eq!(parse(&a("merge --all")).unwrap().batch, None);
+    }
+
+    #[test]
+    fn batch_is_a_dry_run_only_in_this_build_and_its_size_is_bounded() {
+        // §13.13 AC-18 (g): without --dry-run nothing is built, so nothing can be pushed or merged.
+        assert!(parse(&a("merge --all --batch")).unwrap_err().contains("--dry-run"));
+        for bad in ["merge --all --batch=1 --dry-run", "merge --all --batch=9 --dry-run", "merge --all --batch=x --dry-run", "merge --all --batchy --dry-run", "merge --auto --batch --dry-run", "merge status --batch --dry-run"] {
+            assert!(parse(&a(bad)).is_err(), "{bad}");
+        }
     }
 
     #[test]
