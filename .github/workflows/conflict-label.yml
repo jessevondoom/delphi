@@ -1,0 +1,71 @@
+name: conflict label
+
+# Marks open pull requests that conflict with their base (spec 094 §12.2.2, S14). A conflicting pull request runs no CI at
+# all, so its check list is empty, which reads as green; the `conflict` label makes it visible in the list. The label is a
+# signal only: nothing reads it to allow or refuse a merge.
+#
+# It runs after every push to main (the push that made other pull requests conflict), every 30 minutes, and by hand
+# (`gh workflow run conflict-label.yml`). It checks out nothing and runs no code from any pull request; it uses the `gh`
+# command already on the runner with this workflow's own token.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+# Labels on pull requests need `pull-requests: write`. Creating the label the first time needs `issues: write` (GitHub keeps
+# repository labels under issues). Nothing else, and no `contents` at all.
+permissions:
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: conflict-label
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: label conflicting pull requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Make sure the label exists
+        run: |
+          if gh api "repos/$GH_REPO/labels/conflict" >/dev/null 2>&1; then
+            echo "label exists"
+          else
+            gh api -X POST "repos/$GH_REPO/labels" -f name=conflict -f color=b60205 \
+              -f description="Conflicts with its base: CI cannot run until it is updated" >/dev/null
+            echo "label created"
+          fi
+      - name: Label or unlabel each open pull request
+        run: |
+          # GitHub computes `mergeable` lazily: right after a push to main it says UNKNOWN for a while. Ask again, up to five
+          # times ten seconds apart; one still UNKNOWN keeps whatever label it has until the next run.
+          gh pr list --state open --limit 200 --json number,mergeable,labels \
+            --jq '.[] | "\(.number) \(.mergeable) \([.labels[].name] | index("conflict") != null)"' > prs.txt
+          changed=0
+          while read -r number state labelled; do
+            tries=0
+            while [ "$state" = "UNKNOWN" ] && [ "$tries" -lt 5 ]; do
+              sleep 10
+              tries=$((tries + 1))
+              state="$(gh pr view "$number" --json mergeable --jq .mergeable)"
+            done
+            if [ "$state" = "CONFLICTING" ] && [ "$labelled" = "false" ]; then
+              gh api -X POST "repos/$GH_REPO/issues/$number/labels" -f "labels[]=conflict" >/dev/null
+              echo "#$number: conflicting, labelled"
+              changed=$((changed + 1))
+            elif [ "$state" = "MERGEABLE" ] && [ "$labelled" = "true" ]; then
+              gh api -X DELETE "repos/$GH_REPO/issues/$number/labels/conflict" >/dev/null
+              echo "#$number: mergeable again, label removed"
+              changed=$((changed + 1))
+            else
+              echo "#$number: $state (labelled: $labelled), no change"
+            fi
+          done < prs.txt
+          echo "$changed change(s)"

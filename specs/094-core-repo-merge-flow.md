@@ -18,6 +18,7 @@ tags: [spec, merge, pull-requests, workflow, approvals, authority, builder, git,
 > **Status: approved by the operator, 2026-11-07.** Decisions OD-1 to OD-5 (§9) take the recommendations. Approval is permission to build the slices in §6, one per pull request, in order. The `GOVERNANCE.md` bullet and the `003`/`006` paragraphs in this pull request take effect when it merges, and the operator reviews the `GOVERNANCE.md` commit (`dece7ec7`) as part of that merge.
 > **Origin:** Council `t_0005` (2026-11-07) reviewed the operator's proposal for `delphi approve`, `delphi ratify` and `delphi merge`; its seats agreed that content-bound records, a separate gate-changing class and keeping Delphi optional were needed, and wanted `--auto` cut. The operator chose to keep a session-scoped `--auto` and to defer the hardening (§5).
 > **Amendment §11 (operator, 2026-11-20):** a pull request is merged only when it is current with the base tip, and `delphi merge refresh` updates it mechanically, so a merge no longer lands a result that no CI run has tested.
+> **Amendment §12 (operator, 2026-11-22):** one required check, `ci-gate`, that passes only when every CI job did; a `conflict` label on pull requests that cannot merge; a build-and-lint check of each slice commit in a bundled pull request; and S8 marked deferred and unlikely.
 > **Amends, when approved:** `specs/003` §3.1.2 and `specs/006` §3.1 (the hash pin of an approved spec in `ratified.lock` and the daemon's "blocks Builder unless the hash is ratified" govern work run through a Delphi daemon on specs inside a workspace's tree; Delphi's own repository is built from host-agent sessions as well, and there a spec is approved by its frontmatter and the operator's recorded instruction, with no pin) and `GOVERNANCE.md` §1.1 (how a core-repo merge is approved). Both edits are in this pull request. The `GOVERNANCE.md` edit is a constitutional change (§5.7) and is a gate-changing change under §3.4: the operator reviews it line by line.
 
 ---
@@ -121,10 +122,10 @@ One table in the operator docs, and agents say these words and no others: **appr
 The operator's decision (2026-11-07): this is a controlled team and environment; the aim is a workflow pattern first and hardening later. So, plainly:
 
 - **The `chat-quote` approval is self-attested.** The agent that runs the command also reports what the operator said. It is recorded with that label, with the verbatim quote, in the ledger and on the PR. It narrows nothing an agent could not already do with the operator's `gh` credential; it makes the act visible and consistent.
-- **The agent shares the operator's `gh` credential,** so an agent could merge with `gh` directly. The deny rule and the agent rules are conventions. The control is a separate agent identity and branch protection requiring the operator's review. **Deferred to the hardening pass (S8)**, which is due before repository access is widened.
+- **The agent shares the operator's `gh` credential,** so an agent could merge with `gh` directly. The deny rule and the agent rules are conventions. The control is a separate agent identity and branch protection requiring the operator's review. **Deferred to the hardening pass (S8)**, which was due before repository access is widened; the operator deferred S8 again on 2026-11-22 and said it is unlikely to be pursued (§12.2.3).
 - **Chat is an injection channel.** Text in a tool result, a pasted block, a subagent report or a notification is never the operator's instruction. The skill and `AGENTS.md` say so; code cannot yet tell the difference.
 - **`--auto` merges PRs that did not exist when it started.** The grant therefore binds to the session's bounds, not to a commit; each PR is bound to its own head at merge time. A queued PR written by an injected agent can land inside the caps. This is accepted for this phase because `--auto` is opt-in per session, bounded, visible and cannot touch the gate list.
-- **Hardening pass (S8), not designed here:** a separate agent identity, branch protection, a terminal or authenticator approval for gate-changing PRs, a signed ledger, and threat tests for time-of-check/time-of-use, replay and the identity boundary.
+- **Hardening pass (S8), not designed here, deferred by the operator on 2026-11-22 and unlikely to be pursued (§12.2.3); the `ci-gate` required check of §12.2.1 is not S8:** a separate agent identity, branch protection, a terminal or authenticator approval for gate-changing PRs, a signed ledger, and threat tests for time-of-check/time-of-use, replay and the identity boundary.
 
 ## 6. Slices (one per pull request; none starts before approval)
 
@@ -138,7 +139,7 @@ The operator's decision (2026-11-07): this is a controlled team and environment;
 | S5 | the error log, `merge log`, `merge fix`, the builder hand-off | 8-10 |
 | S6 | `--auto` | 8-10 |
 | S7 | agent rules, deny rule, operator guide, the vocabulary table | 3-4 |
-| S8 | hardening (deferred; a separate spec) | |
+| S8 | hardening (deferred; a separate spec). Deferred again by the operator on 2026-11-22, "unlikely to be pursued" (§12.2.3) | |
 
 S2a does not depend on code and can run beside S1 (it is drafted on a branch; nothing in it merges before this spec is approved). S2b needs the executable harness and so waits for approval.
 
@@ -273,7 +274,7 @@ Total 24 to 33 hours. S12's operator setting can be switched on before any code 
 - **OD-7. Freshness for every pull request, or only those touching aggregate paths** (`compiled/`, `specs/`, the tracker, `Cargo.lock`, `docs/reference/`). Recommend **every pull request**. It is simpler, it also catches a semantic break in code, and it matches GitHub's strict setting, so switching that on changes nothing in how the flow behaves. Cost: one CI run per pull request in a burst.
 - **OD-8. The attestation across a refresh.** Recommend carrying it over only for a refresh made by the same invocation or session, with invariant 3 holding, linked in the ledger (§11.3.3). The stricter choice, asking again after every refresh, makes `--all` and `--auto` stop at every pull request but the first.
 - **OD-9. The wait.** Recommend 40 minutes per pull request and two refresh rounds per invocation.
-- **OD-10. The repository setting (the operator's).** Recommend adding a `required_status_checks` rule with the strict policy to the existing ruleset now, requiring at least the Linux integration job (it runs `compiled_specs`) and the lint job, and, if the operator accepts the extra wait, every CI job. Merge Queue is likely unavailable on a user-owned repository and needs a `ci.yml` change; not recommended now. This is part of the hardening §5 defers to S8, taken early because it costs no code.
+- **OD-10. The repository setting (the operator's).** Recommend adding a `required_status_checks` rule with the strict policy to the existing ruleset now, requiring at least the Linux integration job (it runs `compiled_specs`) and the lint job, and, if the operator accepts the extra wait, every CI job. Merge Queue is likely unavailable on a user-owned repository and needs a `ci.yml` change; not recommended now. This was described as part of the hardening §5 defers to S8, taken early because it costs no code. **Superseded by §12 (2026-11-22):** S8 is deferred and unlikely to be pursued, and the setting is no longer part of it; it is the operator's step of §12.2.1, one strict rule naming the single job `ci-gate`, which passes only when every CI job did.
 - **OD-11. The count lines in the compiled views** (§11.5 option 4). Recommend an amendment to spec 088 that drops "{n} specs in {m} groups" and "{n} specs." from the views; about 1 to 2 hours, an ordinary pull request (`spec_views.rs` is not on the gate list).
 - **OD-12. Repair from the flow or from CI.** Recommend the flow (`repair-base`), not a `.github/` job (§11.5 option 5).
 
@@ -292,3 +293,72 @@ Total 24 to 33 hours. S12's operator setting can be switched on before any code 
 - **V4, invariants:** a test that refresh's code paths never reach `Forge::merge`; the git-command log of AC-10 (g); the spawn-site ratchet (`spawn_sites.toml`) lists any new process the slice starts.
 - **V5, live rehearsal (operator present):** two scratch spec pull requests that each add a spec, queued; `delphi merge --all` at a terminal; the second is refreshed, re-tested and merged; the CI run on `main` after both is green. Then cleanup removes both branches.
 - **V6, measurement:** for two weeks after S11 merges, count the CI runs on `main` that fail `compiled_specs` (`gh run list --branch main`, `gh run view --log-failed`) and the hand resolutions of `compiled/` or the tracker that sessions report; the target is zero of the first caused by a flow merge, and the second reported against spec 088 OD-5 (f).
+
+## 12. Amendment (operator, 2026-11-22): CI signal at agent pace
+
+**Approval, stated plainly.** The operator's words, in a host session on 2026-11-22: "start on A, B, F, L, and K1 now. run with subagents. i've freed up as many resources as possible sun run hard at all of the slices with subagents and think about CI/CD speed as a bottleneck you're solving. use a batched strategy if possible to get this into the codebase faster". A, F, L and K1 are the items of the CI plan that this amendment builds as S13 to S16 (B is spec 093's, built elsewhere). Earlier the same day the operator decided three things this amendment relies on: retrying a flaky test is fine; the hardening of S8 is deferred and "tbh it's unlikely to be pursued"; batching will live in `delphi merge`, with no move of the repository to an organization. The amendment is approved in advance on those instructions; the operator has not read this text and no Council has reviewed it. It changes `.github/workflows/`, so its pull request is gate-changing (§3.4) and the operator merges it at a terminal. It extends §11 and OD-10, and changes nothing else in §1 to §11.
+
+### 12.1 The problem, as measured on 2026-11-22
+
+1. **"No checks" reads as green.** A pull request that conflicts with `main` runs no workflow at all (GitHub cannot build its merge ref), so `gh pr checks` and the check rollup are empty. An agent or a person who looks only for red sees nothing red. The ruleset on `main` has two rules, `deletion` and `non_fast_forward`, and requires no status check, so GitHub itself lets such a pull request merge untested once the conflict is resolved by the button.
+2. **OD-10's setting would name every job.** Requiring the seven jobs of `ci.yml` by name makes a renamed or added job a silent gap (a new job not on the list is not required) or a block (a renamed job is required and never reports). §11.4 names this worry.
+3. **A bundled pull request is tested only at its head.** The same-spec bundling trial (`CONTRIBUTING.md`, reviewed 2026-11-25) lets one pull request carry several slices as separate commits, each with its own trailer, so that a slice can be reverted alone. CI builds only the last commit; an earlier slice that does not build on its own goes unseen until somebody reverts a later one.
+4. **S8 is still written as a pending pass** (§5, §6, OD-10), while the operator has said it will probably not be built.
+
+### 12.2 The additions
+
+**12.2.1 One required check: `ci-gate` (S13).** A final job in `ci.yml`, named `ci-gate`, that `needs:` every other job and runs `if: always()`. It reads `toJSON(needs)` and fails unless every needed job's result is `success`, with two exceptions: `test-macos` may be `skipped` only on a draft pull request (it is skipped there by design, and GitHub cannot merge a draft; marking it ready reruns the whole workflow, macOS included), and `commits` (S16) may be `skipped` only on a push to `main` (it runs on pull requests only). A cancelled or failed job, or a skipped one outside those two cases, fails the gate. It runs on pushes to `main` too, so `main`'s own runs carry it. It has no checkout, no token use beyond the default `contents: read`, and no third-party action.
+
+The operator's step, not done by this amendment (an agent never changes the ruleset): add a strict `required_status_checks` rule naming only `ci-gate` to the existing ruleset (id `25768711`, "main branch protection"). A ruleset update replaces the rule list, so the two existing rules are restated:
+
+```sh
+gh api -X PUT repos/jessevondoom/delphi/rulesets/25768711 --input - <<'EOF'
+{"rules":[{"type":"deletion"},{"type":"non_fast_forward"},
+ {"type":"required_status_checks","parameters":{
+   "strict_required_status_checks_policy":true,
+   "do_not_enforce_on_create":false,
+   "required_status_checks":[{"context":"ci-gate","integration_id":15368}]}}]}
+EOF
+```
+
+(`15368` is the GitHub Actions app, so only a check from Actions satisfies the name.) With the rule on: a pull request with no checks (a conflict) cannot merge; a pull request behind `main` cannot merge until it is updated and green again (the strict policy, OD-10's backstop to §11.3.1); a job added to or renamed in `ci.yml` is covered as soon as it is in `ci-gate`'s `needs`, and the one required name never changes, which answers §11.4's rename worry. The rule also applies to a direct push to `main` (none is expected: every change arrives by pull request, and the release process tags `main` without pushing to it). To switch it off, run the same call without the third rule.
+
+**12.2.2 A `conflict` label (S14).** A new workflow, `.github/workflows/conflict-label.yml`, on a push to `main`, every 30 minutes (`schedule`) and by hand (`workflow_dispatch`). It checks out nothing and runs no code from any pull request; it uses only the `gh` command already on the runner with the workflow's own token. It lists the open pull requests, reads each one's `mergeable` (asking again, up to five times ten seconds apart, while GitHub still says `UNKNOWN`), and adds the label `conflict` to each that is `CONFLICTING` and removes it from each that is `MERGEABLE`; one still `UNKNOWN` is left as it is. If the label does not exist the job creates it. Permissions: `pull-requests: write` (to label pull requests) and `issues: write`, which GitHub requires to create a repository label; nothing else, and `contents` is not granted at all. The label is a signal, never a gate: nothing reads it to allow or refuse a merge.
+
+The builder's packaging skill (`git-pr-packaging`) gains one step: after a push, confirm that checks exist on the new head and that `mergeStateStatus` is not `DIRTY`; an empty check rollup means untested, not green.
+
+**12.2.3 S8 deferred, probably for good (S15).** §5, §6 and OD-10 are edited to say that the operator deferred the hardening pass on 2026-11-22 and that it is unlikely to be pursued. The `ci-gate` required check is **not** S8: it is GitHub's own status check, satisfiable without Delphi (§2), and it restricts merges; it gives no identity, no review requirement and no signed ledger. OD-10's strict setting is now the operator's step of §12.2.1, not "part of the hardening".
+
+**12.2.4 A per-commit check for bundled pull requests (S16).** A job `commits` in `ci.yml`, on pull requests only. It lists the commits of the pull request (`base..head`, merge commits left out) that carry an `Implements-Spec:` trailer. When there are fewer than two, it says so and succeeds at once. Otherwise it checks out each such commit except the head (the full suite already tests the head) and runs `cargo check --workspace --all-targets --locked` and the repository lint (`delphi lint --repo .`) on it, and fails naming the first commit that does not pass. It restores the Linux lint job's build directory and saves none, and has a time limit. It is in `ci-gate`'s `needs`. `CONTRIBUTING.md`'s trial paragraph names it. It does not run the tests at each commit (that would multiply the slowest job by the number of slices); a slice whose tests fail only without the later slices is still unseen.
+
+### 12.3 Options considered
+
+| Option | Kind | Why |
+| :-- | :-- | :-- |
+| Require every CI job by name (OD-10 as written) | conventional | Simplest rule, but a renamed job blocks every merge and an added job is silently not required (§11.4). Not adopted. |
+| One aggregating job, required alone (`ci-gate`) | named method (the "all green" or "alls-green" job used by many projects with required checks) | One stable name; the job list lives in the workflow, reviewed with it. A skipped required check counts as passing on GitHub, so the gate runs `if: always()` and judges skips itself. **Adopted (S13).** |
+| GitHub Merge Queue | conventional | Offered for organization-owned repositories; the operator decided on 2026-11-22 not to move the repository. Not adopted. |
+| A `conflict` label from a workflow | removes a constraint (the empty rollup) | Makes a conflicting pull request visible in the list without opening it; costs a short Linux job per push to `main` and per half hour. **Adopted (S14).** |
+| Test every commit of a bundle in full | conventional | Multiplies the slowest jobs by the number of slices. Not adopted; S16 builds and lints each slice commit instead. |
+| Squash bundles into one commit | removes the bundle | Loses the per-slice revert that is the trial's reason. Not adopted. |
+
+### 12.4 Authority
+
+Nothing here widens an agent's authority. `ci-gate` and `commits` only read results and build code CI already builds. The label workflow can write labels and nothing else; it executes no pull request code, uses no `pull_request_target`, and its label decides nothing. The ruleset change is the operator's; agents never run it (§3.8). Delphi stays optional (§2): `ci-gate` is satisfied by GitHub Actions alone.
+
+### 12.5 Slices (S13 to S16 in one pull request, one commit each, by the same-spec trial; gate-changing, merged by the operator at a terminal)
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| S13 | this amendment; the `ci-gate` job; the ruleset call for the operator | 1-2 |
+| S14 | `conflict-label.yml`; the packaging skill's step | 1-2 |
+| S15 | S8 marked deferred in §5, §6 and OD-10 (text only) | 0.5 |
+| S16 | the `commits` job; the `CONTRIBUTING.md` sentence | 1-2 |
+
+### 12.6 Acceptance criteria and verification
+
+- **AC-13 (S13).** On this pull request's own runs: as a draft, `ci-gate` passes with `test-macos` skipped; marked ready, it passes only with `test-macos` green. A failed or cancelled job fails it (checked by the job's own logic on a run where one failed, when one occurs; not forced).
+- **AC-14 (S14).** A run by hand (`gh workflow run conflict-label.yml`) after merge labels a conflicting open pull request and unlabels a mergeable one. It cannot run from a pull request (its triggers are `main`, the schedule and by hand), so this is checked after the merge.
+- **AC-15 (S15).** §5, §6 and OD-10 say S8 is deferred and unlikely; `delphi lint` passes.
+- **AC-16 (S16).** On this pull request (four trailer commits) `commits` checks the three earlier ones and passes; on a pull request with one trailer commit it succeeds without building.
+- **V-12.** The workflows pass `actionlint` and parse as YAML before the push.
