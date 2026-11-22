@@ -438,3 +438,38 @@ jobs:
         with:
           path: target
           key: cargo-target-${{ runner.os }}-sandbox-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+
+  # The one check the ruleset on main requires (spec 094 §12.2.1, S13). It needs every other job and passes only when each
+  # passed, so a job added to or renamed in this file is covered by adding it here, and the required name never changes.
+  # `if: always()` matters: GitHub counts a SKIPPED required check as passing, so this job must run (and judge) even when a
+  # job it needs failed or was cancelled. The two allowed skips: `test-macos` on a draft pull request (skipped there by
+  # design; GitHub cannot merge a draft, and marking it ready reruns everything) and `commits` on a push to main (it runs on
+  # pull requests only). A pull request that conflicts with main runs no workflow at all, so it has no `ci-gate` and cannot
+  # merge once the rule is on.
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [test-linux-lib, test-linux-integration, test-macos, lint, deny, ui, linux-sandbox]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          failed="$(echo "$NEEDS" | jq -r --arg event "$EVENT" --arg draft "$DRAFT" '
+            to_entries[]
+            | select(.value.result != "success")
+            | select((.value.result == "skipped"
+                      and ((.key == "test-macos" and $event == "pull_request" and $draft == "true")
+                           or (.key == "commits" and $event != "pull_request"))) | not)
+            | "\(.key) (\(.value.result))"')" || { echo "could not read the job results"; exit 1; }
+          if [ -n "$failed" ]; then
+            echo "not every job passed:"
+            echo "$failed"
+            exit 1
+          fi
+          echo "every job passed"
