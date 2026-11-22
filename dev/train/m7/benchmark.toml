@@ -1,0 +1,35 @@
+# The M7 routing benchmark (`specs/056` §10.6), pre-registered in PREREG.md beside this file.
+# `delphi train run --bench dev/train/m7/benchmark.toml ...` runs exactly these cases with these caps;
+# `delphi train gate --bench dev/train/m7/benchmark.toml --work-dir <dir>` prints the verdict.
+# Changing anything here after the first run voids the benchmark: register a new one instead.
+
+name = "m7-discovered-vs-static"
+runs = 3            # graded runs per arm per case (criterion 1)
+margin = 2          # D passes at least S's passes minus 2 (criterion 2)
+cost_ratio = 1.25   # D's tokens (and premium requests) per passing run at most 1.25 x S's (criterion 4)
+low_contrast = 0.25 # under 25 % of D's dispatches differing from S's, the result is labelled low contrast
+
+# Review cases are generated from these seeds only after this file is on main (PREREG.md has the commands).
+# A calibration run (slice M5) must use other seeds.
+review_seeds = [56071, 56072, 56073, 56074]
+
+cases = [
+  "code/agy-builder-ready",
+  "code/ollama-keyless",
+  "code/snapshot-loaded",
+  "research/motogp-2027-regs",
+  "research/mycorrhizal-networks",
+  "research/phantom-paper",
+  "research/lions-mane-claim",
+  "research/livewire-strategy",
+  "review/m7-rev-56071",
+  "review/m7-rev-56072",
+  "review/m7-rev-56073",
+  "review/m7-rev-56074",
+]
+
+# Tokens one run may spend (input + cache read + cache write + output); a run stopped at its cap is not passed.
+[token_cap]
+code = 600000
+research = 400000
+review = 150000
