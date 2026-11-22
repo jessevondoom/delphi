@@ -2642,9 +2642,35 @@ pub(crate) mod tests {
         assert!(after.contains("runs read-only"), "the write was refused at call time: {after}");
         assert!(!f.engine.ws.dir.join(target).exists(), "nothing was written");
         assert!(f.engine.readonly_tasks.lock().unwrap().is_empty(), "the mark does not outlive the Council");
-        // The same Council raised by the operator is unchanged: red-team's Round 1 seat has its manifest's write tools.
-        let (_g, offered, _, _) = council_seat_tries_a_write(false).await;
-        assert!(offered.iter().any(|(r, t)| r == "red-team" && t.contains(&"write_file".to_string())), "{offered:?}");
+    }
+
+    /// `specs/131` S5 (AC-12, AC-13): a Council seat raised by the operator is offered reading tools only, though red-team's manifest
+    /// has a write scope; its write is refused at call time and nothing is written. Round 2 seats stay toolless (spec 128 S1).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_council_seat_is_offered_reading_tools_only_and_its_write_is_refused() {
+        let (f, offered, after, target) = council_seat_tries_a_write(false).await;
+        let mut red: Vec<String> = offered.iter().find(|(r, t)| r == "red-team" && !t.is_empty()).map(|(_, t)| t.clone()).unwrap_or_else(|| panic!("red-team sat with tools: {offered:?}"));
+        red.sort();
+        let mut want: Vec<String> = crate::tools::SEAT_READING_TOOLS.iter().map(|s| s.to_string()).collect();
+        want.sort();
+        assert_eq!(red, want, "exactly the reading tools of spec 131 section 3.5");
+        for (role, tools) in &offered {
+            assert!(tools.iter().all(|t| crate::tools::SEAT_READING_TOOLS.contains(&t.as_str())), "{role} was offered more than reading tools: {tools:?}");
+        }
+        assert!(after.contains("is not a reading tool"), "the write was refused at call time: {after}");
+        assert!(!f.engine.ws.dir.join(target).exists(), "nothing was written");
+        assert!(events_of(&f, "council.critique").iter().all(|e| e.payload["readable"] == true), "the Council still deliberated");
+    }
+
+    /// A span that is not a Council seat keeps its whole offer: red-team's ordinary task still has its write tools and `request_research`.
+    #[tokio::test]
+    async fn a_span_that_is_not_a_council_seat_keeps_its_offer() {
+        let f = crate::testkit::setup(vec![Step::text("done")], 50.0, |_| {});
+        f.engine.run_task(&f.m, "red-team", "Look at the plan.").await.unwrap();
+        let tools = f.model.requests()[0].body["tools"].to_string();
+        for t in ["write_file", "request_research", "record_finding"] {
+            assert!(tools.contains(&format!("\"{t}\"")), "`{t}` missing from an ordinary span: {tools}");
+        }
     }
 
     /// Run one Round 1 Panel seat that reads `@project/app/src/lib.rs` and then asks for a second tool. Returns the fixture and the

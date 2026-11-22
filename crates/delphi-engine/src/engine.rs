@@ -2283,6 +2283,11 @@ impl Engine {
         if granted {
             defs.retain(|d| crate::authorization_grant::tool_allowed(&d.name));
         }
+        // `specs/131` S5: a Council or Panel seat (a span with injected slices) is offered reading tools only: no `write_*`, no
+        // `request_research` (whose writer puts files in the project), no record, card, dispatch, timer or connector.
+        if sc.council_seat {
+            defs.retain(|d| crate::tools::SEAT_READING_TOOLS.contains(&d.name.as_str()));
+        }
         if sc.toolless {
             defs.clear();
         }
@@ -2379,6 +2384,10 @@ impl Engine {
         // The refusal does not rely on the model only calling what it was offered.
         if sc.readonly && !self.span_tool_defs(sc).await?.iter().any(|d| d.name == name) {
             return Ok(tool_result_error("this task was raised by a host agent and runs read-only: it can read and advise, not write, run commands or use connectors"));
+        }
+        // `specs/131` S5, at call time too: a Council or Panel seat may call a reading tool only, whatever it was offered.
+        if sc.council_seat && !crate::tools::SEAT_READING_TOOLS.contains(&name) {
+            return Ok(tool_result_error(format!("denied: `{name}` is not a reading tool, and a Council or Panel seat is offered reading tools only")));
         }
         if name == "run_command" {
             return self.exec_command(sc, call_id, args).await;
