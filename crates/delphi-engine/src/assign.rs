@@ -467,6 +467,22 @@ assignment = "discovered"
         assert!(class_of("validator", -2).starts_with("m-mid"), "a floor of steady holds");
     }
 
+    /// `specs/056` §8 (M4b): a grade of -1 on top of the ratchet's step down is bounded at the pool's lowest class.
+    #[test]
+    fn a_grade_on_top_of_the_ratchet_is_bounded_at_the_pools_lowest_class() {
+        let c = cfg();
+        let (b, follows) = crate::ratchet::bounds(&ClassRules::shipped(), "builder");
+        let mut e = crate::ratchet::Entry::default();
+        for _ in 0..b.k {
+            e.apply(b.preferred, true, b);
+        }
+        let mut a = assign_for(&c, "builder");
+        a.step = e.wanted(b) + c.grades.of("builder", None) - 1;
+        assert!(follows && a.step == -2, "{a:?}");
+        assert!(resolve(&c, &[], &req("builder", a)).key().unwrap().model_id.starts_with("m-small"), "quick, the floor and the pool's lowest");
+        assert!(!crate::ratchet::bounds(&ClassRules::shipped(), "architect").1, "a plan-making role has no ratchet");
+    }
+
     /// Give one pool member a measured record.
     fn with_measured(mut a: Assign, model: &str, m: Measured) -> Assign {
         let k = a.classes.iter().find(|(_, id, _)| id == model).map(|(e, id, _)| (e.clone(), id.clone())).unwrap();

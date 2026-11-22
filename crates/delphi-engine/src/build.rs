@@ -130,7 +130,29 @@ impl Engine {
         let outcome = self.build_ladder(m, &task_id, prompt).await;
         self.broker.end_task(&task_id);
         let (status, text) = outcome?;
-        self.finish_task(m, task_id, crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await
+        let done = self.finish_task(m, task_id.clone(), crate::engine::SpanOutcome { status, text, turns: 0, ceiling: delphi_core::provenance::Tier::L5 }).await?;
+        self.record_retro(m, &task_id).await?;
+        Ok(done)
+    }
+
+    /// The finished build as a retrospective row (`specs/056` §2.3, slice M4b): its evidence row, and for a plan-following role whose
+    /// first attempt ran at a known class (discovered assignment), one step of the ratchet, each move logged as `model.ratchet`.
+    /// The local files are best effort: a write that fails loses one row, never the task.
+    async fn record_retro(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str) -> Result<(), EngineError> {
+        let role = "builder";
+        let Some(r) = m.replay().ok().and_then(|events| crate::ratchet::retro(&events, task_id, role)) else { return Ok(()) };
+        let cfg = self.cfg.get();
+        let _ = crate::assign::record_evidence(&self.ws.dir, &[r.row(role, crate::ratchet::BUILD, |e, md| crate::route::pair_cost(&cfg, e, md).1)]);
+        let rules = crate::models::ClassRules::load(&self.ws.dir).unwrap_or_else(|_| crate::models::ClassRules::shipped());
+        let (bounds, follows) = crate::ratchet::bounds(&rules, role);
+        let Some(at) = r.class.and_then(crate::assign::level).filter(|_| follows) else { return Ok(()) };
+        for mv in crate::ratchet::record(&self.ws.dir, role, crate::ratchet::BUILD, at, r.first_pass, bounds).unwrap_or_default() {
+            let mut e = EventEnvelope::new(&m.id, "model.ratchet", mv.payload(role, crate::ratchet::BUILD, task_id));
+            e.task_id = Some(task_id.to_string());
+            e.agent = Some(role.to_string());
+            m.append(e).await?;
+        }
+        Ok(())
     }
 
     async fn build_ladder(self: &Arc<Self>, m: &Arc<MissionState>, task_id: &str, prompt: &str) -> Result<(Status, String), EngineError> {
@@ -353,6 +375,11 @@ mod tests {
         assert!(second.contains("failed verification") && second.contains("gate 1"), "the diagnostic reaches the next attempt: {}", second);
         let audits = events_of(&f, "audit.recorded");
         assert_eq!(audits.len(), 1, "no audit for a commit whose tests failed");
+        // specs/056 M4b: the finished build is one retrospective row for its first pick, not first-pass; under static assignment no
+        // class is known, so the ratchet does not move.
+        let ev = crate::assign::read_evidence(&f.engine.ws.dir, "builder");
+        assert_eq!((ev.len(), ev[0].model_id.as_str(), ev[0].runs, ev[0].accepted), (1, "sonnet-x", 1, 0), "{ev:?}");
+        assert!(events_of(&f, "model.ratchet").is_empty() && crate::ratchet::load(&f.engine.ws.dir).is_empty());
     }
 
     #[tokio::test]
