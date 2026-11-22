@@ -12,8 +12,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Event kinds the Narrator consumes. The snapshot is filtered to these so it stays small.
-pub const KINDS: [&str; 55] = [
-    "model.cost_capped", "emergency.saved", "emergency.recovered", "emergency.blocked",
+pub const KINDS: [&str; 56] = [
+    "model.cost_capped", "model.ratchet", "emergency.saved", "emergency.recovered", "emergency.blocked",
     "task.created", "task.output", "task.completed", "task.failed", "dag.node.added", "dag.node.state", "agent.usage", "approval.requested", "approval.resolved", "span.taint", "build.attempt", "gates.evaluated", "audit.recorded", "merge.approved", "worktree.created", "action.result", "gate.flaky",
     "council.started", "council.lens_assigned", "council.barrier.released", "council.stance", "council.critique", "council.verdict", "endpoint.throttled", "harness.fallback", "model.exhausted", "model.recovered", "task.blocked", "task.unblocked", "model.degraded_confirm", "model.homogeneous", "budget.reserve", "harness.started", "thread.named", "session.started", "model.promoted", "change.recorded", "bundle.added", "bundle.trust_changed", "bundle.updated", "bundle.rolled_back", "bundle.removed", "bundle.vectors_progress", "bundle.vectors_rejected", "org_context.built", "bundle.cited", "align.finding", "xenia.synced", "xenia.alert", "xenia.published", "investigator.tenacity_pushback",
 ];
@@ -1047,6 +1047,8 @@ impl ObserverState {
             "emergency.blocked" => self.say(format!("held by the emergency record ({}): {}", s(&p["stage"]), sanitize(p["reason"].as_str().unwrap_or("")).chars().take(160).collect::<String>())),
             // specs/056 §10.5: a cost cap passed over a model that meets the floor; the task was served by another, or waits.
             "model.cost_capped" => self.say(format!("{}: {} model(s) over the {} cap were passed over ({})", s(&p["role"]), p["passed_over"].as_array().map(|a| a.len()).unwrap_or(0), s(&p["cap"]), if p["outcome"] == "waiting" { "nothing within the cap meets the floor, so the task waits" } else { "another model served" })),
+            // specs/056 §3.2: the ratchet moved a plan-following role's builds a class down, back up, or stopped trying a class.
+            "model.ratchet" => self.say(format!("{} {} builds: {} -> {} ({})", s(&p["role"]), s(&p["kind"]), s(&p["from"]), s(&p["to"]), s(&p["reason"]))),
             "model.homogeneous" => self.say(format!("no model outside {} was usable; this pass is homogeneous", s(&p["avoided"]))),
             "model.degraded_confirm" if p["state"] == "asked" => self.say("asking whether a weaker model may run this task".to_string()),
             "model.recovered" => {

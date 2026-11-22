@@ -335,6 +335,20 @@ pub struct ClassRules {
     pub rules: Vec<Rule>,
     #[serde(default)]
     pub roles: std::collections::BTreeMap<String, RoleRule>,
+    #[serde(default)]
+    pub ratchet: RatchetRule,
+}
+
+/// `[ratchet] k` (`specs/056` §3.2, OD-3): first-pass successes in a row before a plan-following build tries the class below.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct RatchetRule {
+    pub k: u32,
+}
+
+impl Default for RatchetRule {
+    fn default() -> Self {
+        RatchetRule { k: 5 }
+    }
 }
 
 impl ClassRules {
@@ -359,6 +373,9 @@ impl ClassRules {
                     return Err(format!("class rules: role `{id}` has {what} `{v}`; use deep, steady, quick or local"));
                 }
             }
+        }
+        if r.ratchet.k == 0 {
+            return Err("class rules: [ratchet] k must be at least 1".into());
         }
         Ok(r)
     }
