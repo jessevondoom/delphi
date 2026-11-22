@@ -1,8 +1,10 @@
 //! `delphi forge finish --gates` (spec 135 §14.4, F1b): the three gates of `AGENTS.md`, run in order in the checkout as the
 //! operator's own process (not sandboxed: the finisher is a terminal command), stopping at the first that fails. A failing
 //! `cargo test` is rerun once for its failing tests only, by name with `--exact`; a test that passes on the rerun is `flaky`
-//! and the gate passes with that note, as `delphi-engine` `finalize.rs` does for a Builder. The process start is behind
-//! [`Runner`], so the tests use a fake.
+//! and the gate passes with that note, as `delphi-engine` `finalize.rs` does for a Builder. When `cargo nextest` is
+//! installed (spec 125-A1 rule 5) the tests run as CI runs them instead: nextest's `ci` profile, whose own single retry
+//! replaces the rerun here (its FLAKY tests are named the same way), then the doc tests by `cargo test --doc`. The process
+//! start is behind [`Runner`], so the tests use a fake.
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +28,11 @@ pub struct Ran {
 /// Starts a gate's process in the checkout. [`SystemRunner`] is the real one.
 pub trait Runner {
     fn run(&mut self, repo: &Path, cmd: &GateCmd) -> Ran;
+    /// Whether `cargo nextest` can be run here. When it can, the tests run as CI runs them (spec 125-A1): nextest's `ci`
+    /// profile, which retries a failing test once itself. A runner that does not say so has none (the tests' fakes).
+    fn has_nextest(&mut self, _repo: &Path) -> bool {
+        false
+    }
 }
 
 /// The operator's own process, in the checkout, its output read after it ends (and its start printed to standard error,
@@ -53,6 +60,12 @@ impl Runner for SystemRunner {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ran { started: false, ok: false, output: format!("{}`{}` was not found (is it on PATH?), so this gate did not run: it FAILED, it did not pass", output, cmd.program.display()) },
             Err(e) => Ran { started: false, ok: false, output: format!("{}cannot start `{}`: {}; this gate did not run: it FAILED, it did not pass", output, cmd.program.display(), e) },
         }
+    }
+
+    /// Asked through [`Runner::run`], the one place this file starts a process.
+    fn has_nextest(&mut self, repo: &Path) -> bool {
+        let r = self.run(repo, &GateCmd { program: "cargo".into(), args: strs(&["nextest", "--version"]), env: Vec::new() });
+        r.started && r.ok
     }
 }
 
@@ -84,6 +97,34 @@ pub fn commands(exe: &Path, repo: &Path) -> [GateCmd; 3] {
         GateCmd { program: "cargo".into(), args: strs(&["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"]), env: Vec::new() },
         GateCmd { program: exe.to_path_buf(), args: vec!["lint".into(), "--repo".into(), repo.display().to_string()], env: Vec::new() },
     ]
+}
+
+/// The gates when nextest is installed (spec 125-A1 rule 5): the same tests as `cargo test --workspace`, split as CI splits
+/// them. nextest's `ci` profile (`.config/nextest.toml`) runs every test but the doc tests and retries a failing one once
+/// itself; the doc tests, which nextest does not run, follow with `cargo test --doc` and are not retried. Then Clippy and
+/// the lint as in [`commands`].
+pub fn nextest_commands(exe: &Path, repo: &Path) -> [GateCmd; 4] {
+    let [_, clippy, lint] = commands(exe, repo);
+    [
+        GateCmd { program: "cargo".into(), args: strs(&["nextest", "run", "--workspace", "--locked", "--profile", "ci"]), env: LEAN.to_vec() },
+        GateCmd { program: "cargo".into(), args: strs(&["test", "--workspace", "--locked", "--doc"]), env: LEAN.to_vec() },
+        clippy,
+        lint,
+    ]
+}
+
+/// The tests nextest reports as flaky: its `FLAKY <try>/<tries> [ <time>] <binary> <test>` lines, as `<binary> <test>`.
+pub fn nextest_flaky(output: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for l in output.lines() {
+        let Some(rest) = l.trim_start().strip_prefix("FLAKY ") else { continue };
+        let Some((_, name)) = rest.split_once("] ") else { continue };
+        let name = name.trim();
+        if !name.is_empty() && !names.iter().any(|x| x == name) {
+            names.push(name.to_string());
+        }
+    }
+    names
 }
 
 /// The rerun of `cargo test` for the named tests only. The names go to every test binary of the workspace; a binary that
@@ -155,18 +196,24 @@ fn tail(output: &str) -> String {
     lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n")
 }
 
-/// Runs the gates in order and stops at the first that fails; the rest are `NotRun`.
+/// Runs the gates in order and stops at the first that fails; the rest are `NotRun`. With nextest installed the tests run
+/// by [`nextest_commands`] and nextest does the one retry; without, by [`commands`] and a failing test is rerun here.
 pub fn run(repo: &Path, exe: &Path, runner: &mut dyn Runner) -> Vec<GateResult> {
+    let nextest = runner.has_nextest(repo);
+    let cmds: Vec<GateCmd> = if nextest { nextest_commands(exe, repo).to_vec() } else { commands(exe, repo).to_vec() };
     let mut out = Vec::new();
     let mut stopped = false;
-    for (i, cmd) in commands(exe, repo).into_iter().enumerate() {
+    for (i, cmd) in cmds.into_iter().enumerate() {
         let shown = shown(&cmd);
         if stopped {
             out.push(GateResult { shown, state: State::NotRun, flaky: Vec::new() });
             continue;
         }
         let first = runner.run(repo, &cmd);
-        let (state, flaky) = if first.started && first.ok {
+        let (state, flaky) = if nextest && i == 0 {
+            // nextest has already retried each failing test once: a pass is a pass (its flaky tests named), a failure is final.
+            if first.started && first.ok { (State::Passed, nextest_flaky(&first.output)) } else { (State::Failed { tail: tail(&first.output) }, Vec::new()) }
+        } else if first.started && first.ok {
             (State::Passed, Vec::new())
         } else if i == 0 && first.started {
             test_rerun(repo, runner, &first)
@@ -318,6 +365,48 @@ mod tests {
         let r = run(Path::new("/r"), Path::new("/bin/delphi"), &mut f);
         let State::Failed { tail } = &r[0].state else { panic!("{:?}", r[0]) };
         assert!(tail.starts_with("did not pass on the rerun: three\n"), "{}", tail);
+    }
+
+    /// A [`Fake`] on a machine where nextest is installed.
+    struct WithNextest(Fake);
+
+    impl Runner for WithNextest {
+        fn run(&mut self, repo: &Path, cmd: &GateCmd) -> Ran {
+            self.0.run(repo, cmd)
+        }
+        fn has_nextest(&mut self, _repo: &Path) -> bool {
+            true
+        }
+    }
+
+    const NEXTEST_FLAKY: &str = "    Starting 3 tests across 2 binaries\n        PASS [   0.010s] delphi-engine kb::tests::a\n   TRY 1 FAIL [   0.200s] delphi-engine service::tests::cancelling\n     TRY 2 PASS [   0.190s] delphi-engine service::tests::cancelling\n       FLAKY 2/2 [   0.190s] delphi-engine service::tests::cancelling\n        PASS [   0.020s] delphi::e2e three\n     Summary [   0.400s] 3 tests run: 3 passed (1 flaky), 0 skipped\n   FLAKY 2/2 [   0.190s] delphi-engine service::tests::cancelling\n";
+
+    #[test]
+    fn spec_125_a1_with_nextest_the_tests_run_as_ci_runs_them_and_a_flaky_pass_is_named() {
+        let mut f = WithNextest(fake(vec![(true, NEXTEST_FLAKY), (true, ""), (true, ""), (true, "")]));
+        let r = run(Path::new("/r"), Path::new("/bin/delphi"), &mut f);
+        assert_eq!(r.len(), 4);
+        assert!(r.iter().all(|g| g.state == State::Passed), "{:?}", r);
+        assert_eq!(f.0.ran[0].args, strs(&["nextest", "run", "--workspace", "--locked", "--profile", "ci"]));
+        assert_eq!(f.0.ran[0].env, LEAN.to_vec());
+        assert_eq!(f.0.ran[1].args, strs(&["test", "--workspace", "--locked", "--doc"]));
+        assert_eq!(f.0.ran[3].args, strs(&["lint", "--repo", "/r"]));
+        assert_eq!(r[0].flaky, vec!["delphi-engine service::tests::cancelling".to_string()], "named once, though nextest prints it twice");
+        assert!(r[1].flaky.is_empty());
+        assert!(checked_lines(&r).starts_with("- [x] `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo nextest run --workspace --locked --profile ci` (flaky, passed on a rerun: `delphi-engine service::tests::cancelling`)"), "{}", checked_lines(&r));
+    }
+
+    #[test]
+    fn spec_125_a1_with_nextest_a_failure_is_final_and_is_not_rerun_again() {
+        // nextest has retried already: no rerun by name here, and nothing after the failing gate runs.
+        let mut f = WithNextest(fake(vec![(false, "   TRY 1 FAIL [ 0.2s] delphi-engine x::y\n   TRY 2 FAIL [ 0.2s] delphi-engine x::y\nerror: test run failed\n")]));
+        let r = run(Path::new("/r"), Path::new("/bin/delphi"), &mut f);
+        assert_eq!(f.0.ran.len(), 1);
+        let State::Failed { tail } = &r[0].state else { panic!("{:?}", r[0]) };
+        assert!(tail.contains("TRY 2 FAIL"), "{}", tail);
+        assert!(r[1..].iter().all(|g| g.state == State::NotRun));
+        // A run with no FLAKY line names none.
+        assert!(nextest_flaky("        PASS [   0.010s] delphi-engine kb::tests::a\n").is_empty());
     }
 
     #[test]
