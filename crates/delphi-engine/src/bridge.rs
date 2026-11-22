@@ -175,6 +175,18 @@ pub struct HookNote {
     pub allowed: bool,
     /// The first useful argument (a path, a command, a query), shortened, for the log. Never a secret the model was not already given.
     pub summary: String,
+    /// The gate's reason for a refusal (empty when allowed), for a forge probe's record (`specs/135` §14.9 item 2).
+    pub reason: String,
+    /// The call's argument names (never their values), at most [`MAX_NOTE_KEYS`], each cut to 40 characters.
+    pub arg_keys: Vec<String>,
+}
+
+/// The most argument names a [`HookNote`] keeps.
+pub const MAX_NOTE_KEYS: usize = 16;
+
+/// A call's argument names, never their values: at most [`MAX_NOTE_KEYS`], each cut to 40 characters.
+pub fn arg_keys(args: &Value) -> Vec<String> {
+    args.as_object().map(|o| o.keys().take(MAX_NOTE_KEYS).map(|k| k.chars().take(40).collect()).collect()).unwrap_or_default()
 }
 
 /// A short, printable stand-in for a tool call's arguments.
@@ -486,7 +498,7 @@ async fn handle(shared: &Shared, req: &Value) -> Option<Value> {
                         answer.await.unwrap_or((false, "denied by Delphi: this task ended before the call was judged".to_string()))
                     };
                 }
-                let _ = shared.notes.send(HookNote { tool: tool.to_string(), allowed, summary: summarize_args(&call["args"]) });
+                let _ = shared.notes.send(HookNote { tool: tool.to_string(), allowed, summary: summarize_args(&call["args"]), reason: if allowed { String::new() } else { reason.chars().take(300).collect() }, arg_keys: arg_keys(&call["args"]) });
                 json!({"jsonrpc": "2.0", "id": id, "result": {"decision": if allowed { "allow" } else { "deny" }, "reason": reason}})
             }
             None => error(&id, -32601, "this task has no gate"),
@@ -944,8 +956,10 @@ mod tests {
         let nameless = ask(&mut r, &mut w, json!({"jsonrpc": "2.0", "id": 6, "method": "delphi/hook", "params": {}})).await;
         assert_eq!(nameless["result"]["decision"], "deny", "a payload without a tool is refused, not waved through");
         let seen: Vec<HookNote> = std::iter::from_fn(|| notes.try_recv().ok()).collect();
-        assert_eq!(seen[0], HookNote { tool: "mcp_delphi_delphi_timer".into(), allowed: true, summary: String::new() });
+        assert_eq!(seen[0], HookNote { tool: "mcp_delphi_delphi_timer".into(), allowed: true, summary: String::new(), reason: String::new(), arg_keys: vec!["note".into()] });
         assert_eq!((seen[1].tool.as_str(), seen[1].allowed, seen[1].summary.as_str()), ("run_command", false, "echo leaked > proof.txt"));
+        // `specs/135` §14.9 item 2: a refusal carries the gate's reason and the argument names, never their values.
+        assert!(seen[1].reason.contains("run_command") && seen[1].arg_keys == vec!["CommandLine".to_string()], "{:?}", seen[1]);
         assert_eq!(seen.len(), 3);
     }
 
