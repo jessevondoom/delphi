@@ -1,6 +1,6 @@
 //! Slice claims (spec 135 §4): a courtesy between sessions that says "this slice is being built", kept in
 //! `$DELPHI_HOME/forge/claims.json` under a lock. Not a lock on the repository: it binds only sessions that ask, and nothing
-//! refuses a pull request for a claimed slice (that is F0b, in `delphi merge`).
+//! refuses a pull request for a claimed slice: `delphi merge` (F0b) releases the merged branch's claims and only notes another holder's.
 //!
 //! Named `slice_claims`, not `forge`: `merge/forge.rs` is spec 094's "forge", the GitHub host.
 
@@ -338,6 +338,30 @@ pub fn list(repo: &Path, home: &Path, all: bool, json: bool, now: i64) -> Out {
         return Out::ok(if all { "no claims\n".into() } else { "no live claims on this repository\n".into() });
     }
     Out::ok(shown.iter().map(|c| format!("{}{}\n", describe(c, now), if all { format!("  [{}]", c.repo) } else { String::new() })).collect())
+}
+
+/// After `delphi merge` merged a pull request (F0b, §14.9 item 4): drop every claim in repository `repo_id` whose branch is the
+/// merged head branch, live or expired. Returns one line per claim released. A missing file releases nothing; a malformed one is
+/// an error and is left as it is.
+pub fn release_branch(home: &Path, repo_id: &str, branch: &str) -> Result<Vec<String>, String> {
+    if branch.is_empty() || !file_path(home).exists() {
+        return Ok(Vec::new());
+    }
+    with_file(home, |f| {
+        let (gone, kept): (Vec<Claim>, Vec<Claim>) = std::mem::take(&mut f.claims).into_iter().partition(|c| c.repo == repo_id && c.branch.as_deref() == Some(branch));
+        f.claims = kept;
+        let lines: Vec<String> = gone.iter().map(|c| format!("released the claim on {} {} (held by {}; its branch {} merged)", tracker::spec_number(&c.spec).unwrap_or_else(|| c.spec.clone()), c.slice, c.by, branch)).collect();
+        let changed = !gone.is_empty();
+        Ok((lines, changed))
+    })
+}
+
+/// The live claims in repository `repo_id` on spec `spec_path` (a `specs/<stem>.md` path) held by a branch other than `branch`,
+/// described for a person. Read without the lock: it only informs.
+pub fn others_on_spec(home: &Path, repo_id: &str, spec_path: &str, branch: &str, now: i64) -> Result<Vec<String>, String> {
+    let stem = spec_path.trim_start_matches("specs/").trim_end_matches(".md");
+    let f = load(home)?;
+    Ok(f.claims.iter().filter(|c| c.repo == repo_id && c.spec == stem && c.live(now) && c.branch.as_deref() != Some(branch)).map(|c| describe(c, now)).collect())
 }
 
 /// The live claim of a branch in this repository, for the finisher (§5.3) and its renewal (§5.4).

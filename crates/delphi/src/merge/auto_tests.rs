@@ -31,7 +31,7 @@ fn session(forge: &FakeForge, caps: &Caps, stop: &dyn Fn() -> bool) -> (Summary,
     let ledger = Ledger::at(home.path());
     let errors = Errors::at(home.path());
     let mut term = FakeTerminal::new(false, &[]);
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: None, dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string(), refresh: None };
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: None, dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string(), refresh: None, claims: None };
     let clock = FakeClock(Cell::new(1_000_000));
     let mut said = Vec::new();
     let s = run(&mut ctx, caps, &Attestation::ChatQuote("run auto for the evening".into()), &clock, stop, &mut |l| said.push(l.to_string()));

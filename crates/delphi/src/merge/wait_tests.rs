@@ -110,7 +110,7 @@ fn with<R>(w: &World, wait: Option<Duration>, f: impl FnOnce(&mut Ctx) -> R) -> 
     let made = RefCell::new(HashMap::new());
     let refresh = Refreshing { refresher: w, clock: w, wait, poll: Duration::from_secs(60), made: &made };
     let mut term = FakeTerminal::new(false, &[]);
-    let mut ctx = Ctx { forge: w.forge, ledger: &ledger, errors: &errors, term: &mut term, quote: Some("merge #7".into()), dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-21T00:00:00Z".to_string(), refresh: Some(refresh) };
+    let mut ctx = Ctx { forge: w.forge, ledger: &ledger, errors: &errors, term: &mut term, quote: Some("merge #7".into()), dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-21T00:00:00Z".to_string(), refresh: Some(refresh), claims: None };
     let out = f(&mut ctx);
     (out, run)
 }

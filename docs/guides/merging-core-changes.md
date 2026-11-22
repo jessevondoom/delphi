@@ -70,6 +70,8 @@ Such a PR is never queueable and never merged by `--all` or `--auto`. `delphi me
 
 After a merge the command removes the remote branch, the local branch (`git branch -D`, but only after it proves the branch is in the fetched `origin/<base>`, so a stale local `main` does not block it) and every worktree on that branch, then prunes. It never deletes an unmerged PR's branch or the base, and skips and reports a worktree that is locked, dirty or its own directory. `delphi merge cleanup --dry-run` prints the plan; `--merged` sweeps the backlog of already-merged PRs (dry-run first).
 
+It also releases the slice claims held by the merged branch in this repository (`$DELPHI_HOME/forge/claims.json`, [specs/135](../../specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md) F0b) and prints one line per claim. A claims file it cannot read is logged as a cleanup problem and never changes the merge. Before a merge, and in a `--dry-run`, a live claim another branch holds on the same spec is printed as a note; a claim never refuses a merge.
+
 ## Errors and `merge fix` (S5)
 
 A PR that cannot merge (conflict, red check, behind the base, stale record, auth or network failure, locked worktree, refused match-head) gets an entry in `$DELPHI_HOME/merge/errors.jsonl` and a line in the central error log (component `merge`; see [Debugging](debugging.md)). `delphi merge log [--open] [--pr N]` reads it. `delphi merge fix <PR>` hands an open entry to the builder on the PR's branch. The builder pushes ordinary commits, never a force-push, and stops for a human when a gate path conflicts, more than 10 files conflict, or tests fail after its resolution. A new head commit voids the record, so you ask again.

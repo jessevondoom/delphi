@@ -93,6 +93,42 @@ pub struct Ctx<'a> {
     pub now: fn() -> String,
     /// Refresh a pull request that is behind and otherwise ready (§11.3.3); `None` refuses it instead (tests of the refusal).
     pub refresh: Option<wait::Refreshing<'a>>,
+    /// Where slice claims live and which repository this is (spec 135 F0b); `None` leaves them alone.
+    pub claims: Option<Claims<'a>>,
+}
+
+/// The slice claims a merge reads and releases (spec 135 §4, F0b): `home` holds `forge/claims.json`, `repo` is this
+/// repository's id there (its common git directory).
+#[derive(Clone, Copy)]
+pub struct Claims<'a> {
+    pub home: &'a std::path::Path,
+    pub repo: &'a str,
+    pub now: fn() -> i64,
+}
+
+impl Claims<'_> {
+    /// Live claims on the pull request's linked spec held by another branch: a note, never a refusal (§14.9 item 4).
+    fn notes(&self, v: &Verdict) -> Vec<String> {
+        let mut out = Vec::new();
+        for s in &v.specs {
+            let (record::SpecState::Approved { path, .. } | record::SpecState::SpecPr { path, .. }) = s else { continue };
+            match crate::slice_claims::others_on_spec(self.home, self.repo, path, &v.pr.head_ref, (self.now)()) {
+                Ok(list) => out.extend(list.into_iter().map(|c| format!("#{}: note: another session holds a live slice claim on this spec: {c}", v.pr.number))),
+                Err(e) => out.push(format!("#{}: note: the slice claims could not be read ({e})", v.pr.number)),
+            }
+        }
+        out
+    }
+}
+
+/// Claims of this repository in the Delphi home, for the command line: `None` outside a git checkout.
+fn claims_here(home: &std::path::Path) -> Option<(std::path::PathBuf, String)> {
+    let repo = crate::slice_claims::git_facts(&std::env::current_dir().ok()?).ok()?;
+    Some((home.to_path_buf(), repo.common.display().to_string()))
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 /// Evaluate, and ask again a few times while the only objection is that GitHub is still computing mergeability (it is, right after
@@ -161,6 +197,11 @@ fn decide_one(ctx: &mut Ctx, n: u64, batch: Option<&Attestation>) -> Outcome {
     let refresh = ctx.refresh.filter(|_| !ctx.dry_run && wait::refreshable(&v));
     if !reasons.is_empty() && refresh.is_none() {
         return Outcome::Refused { pr: n, reasons, head: v.pr.head_sha };
+    }
+    if let Some(c) = ctx.claims {
+        for line in c.notes(&v) {
+            ctx.term.show(&line);
+        }
     }
     if v.gate_changing() && batch.is_some() {
         let _ = ctx.forge.set_label(n, REVIEW_LABEL, true);
@@ -232,12 +273,22 @@ fn finish(ctx: &mut Ctx, v: &Verdict, rec: Record) -> Outcome {
     }
 }
 
-/// Remove the remote branch, the local branch and the worktrees of the merged pull request. Returns the failures.
+/// Remove the remote branch, the local branch and the worktrees of the merged pull request, and release its branch's slice
+/// claims. Returns the failures.
 fn after_merge(ctx: &mut Ctx, v: &Verdict) -> Vec<String> {
-    match ctx.git {
+    let mut problems = match ctx.git {
         Some(git) => cleanup::cleanup_pr(git, ctx.forge, v.pr.number, false).problems,
         None => Vec::new(),
+    };
+    // Spec 135 F0b: the merged branch's slice claims are done. A failure is a cleanup problem, never a change to the merge. A
+    // fork's branch is not a branch of this repository, so a same-named local branch keeps its claims.
+    if let Some(c) = ctx.claims.filter(|_| !v.pr.cross_repo) {
+        match crate::slice_claims::release_branch(c.home, c.repo, &v.pr.head_ref) {
+            Ok(lines) => lines.iter().for_each(|l| ctx.term.show(&format!("#{}: {l}", v.pr.number))),
+            Err(e) => problems.push(format!("the slice claims of branch {} could not be released: {e}", v.pr.head_ref)),
+        }
     }
+    problems
 }
 
 /// Merge several queued pull requests, each re-evaluated just before it merges (the base moved after the last one).
@@ -623,7 +674,9 @@ fn auto_cmd(p: &Parsed, forge: &Gh) -> i32 {
     };
     // A session refreshes a behind pull request and moves on; its next poll merges it once CI is green (§11.3.3).
     let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: None, poll: p.caps.poll, made: &made };
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: None, dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh) };
+    let here = claims_here(&home);
+    let claims = here.as_ref().map(|(h, r)| Claims { home: h, repo: r, now: unix_now });
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: None, dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh), claims };
     let stop = || INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) || stop_file.exists();
     let summary = auto::run(&mut ctx, &p.caps, &att, &auto::SystemClock, &stop, &mut |l| println!("{l}"));
     summary.lines().iter().for_each(|l| println!("{l}"));
@@ -673,7 +726,9 @@ fn run_merges(p: &Parsed, forge: &Gh, numbers: Vec<u64>, batch: bool) -> i32 {
         }
     };
     let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: p.wait, poll: Duration::from_secs(30), made: &made };
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh) };
+    let here = claims_here(&home);
+    let claims = here.as_ref().map(|(h, r)| Claims { home: h, repo: r, now: unix_now });
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh), claims };
     let outcomes = if batch { merge_many(&mut ctx, &numbers, batch_att.as_ref()) } else { numbers.iter().map(|n| merge_one(&mut ctx, *n, None)).collect() };
     outcomes.iter().for_each(|o| println!("{}", o.line()));
     if outcomes.iter().any(|o| matches!(o, Outcome::Failed { detail, .. } if detail.contains("cannot run `gh`"))) {
