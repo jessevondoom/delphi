@@ -50,11 +50,11 @@ pub fn exec(args: &[String]) -> Out {
                 Some(Ok(d)) => d.as_secs() as i64,
                 Some(Err(e)) => return usage_err(&e),
             };
-            slice_claims::claim(&slice_claims::ClaimReq { repo: &repo, home: &home, spec, slice, by: by.as_deref(), ttl_secs: ttl, take: has(rest, "--take"), now: now() })
+            crate::claim_refs::claim(&slice_claims::ClaimReq { repo: &repo, home: &home, spec, slice, by: by.as_deref(), ttl_secs: ttl, take: has(rest, "--take"), now: now() }, has(rest, "--local"))
         }
         Some("release") => {
             let [spec, slice] = &pos[..] else { return usage_err("release takes a spec and a slice") };
-            slice_claims::release(&repo, &home, spec, slice, by.as_deref(), now())
+            crate::claim_refs::release(&repo, &home, spec, slice, by.as_deref(), has(rest, "--local"), now())
         }
         Some("list") if pos.is_empty() => slice_claims::list(&repo, &home, has(rest, "--all"), has(rest, "--json"), now()),
         Some("finish") if pos.is_empty() => {

@@ -22,6 +22,7 @@ mod bundle_xenia;
 mod bundle_report;
 mod check;
 mod chat;
+mod claim_refs;
 mod console;
 mod decisions;
 mod docs_cmd;

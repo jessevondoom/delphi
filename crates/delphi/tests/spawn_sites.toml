@@ -141,6 +141,14 @@ file = "crates/delphi/src/chat.rs"
 count = 1
 class = "operator-cli"
 
+# Slice claims on the remote (specs/135 section 14.11): the checkout's own git with the operator's configuration, to fetch, read and
+# push refs under refs/delphi/claims/ with a lease. Hooks off, no prompt, 20 s limit; the arguments are a resolved spec number and a
+# checked slice id, never agent prose.
+[[site]]
+file = "crates/delphi/src/claim_refs.rs"
+count = 1
+class = "git"
+
 [[site]]
 file = "crates/delphi/src/merge/cleanup.rs"
 count = 1
