@@ -214,12 +214,18 @@ jobs:
   # The Rust dependency policy (spec 093 P, deny.toml): known vulnerabilities, yanked crates, licences, sources. The tool is
   # built at a fixed version from crates.io, not fetched through a third-party action, and it reads the advisory database
   # fresh, so a new advisory turns the next run red. An exception in deny.toml carries a reason and a review date.
+  # Amendment 093-A1: a new advisory is an outside event, so on a pull request the advisory check runs only when the pull
+  # request changes Cargo.lock, deny.toml or a Cargo.toml; bans, licences and sources run on every pull request. A push to
+  # main runs the full check, and `advisories.yml` runs it daily.
   deny:
     name: dependency policy (cargo deny)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The test merge commit and its parents: its first parent is the base, so the pull request's files are one diff.
+          fetch-depth: 2
       - name: Rust toolchain
         run: rustup show active-toolchain && rustc --version
       # The binary is kept between runs (building it took 114 s of the job's 130 s). The key names the version: change the
@@ -247,9 +253,28 @@ jobs:
             sleep 20
           done
       - name: Check
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           cargo deny --version
-          cargo deny --locked check
+          checks=""
+          if [ "$EVENT" = "pull_request" ]; then
+            if changed=$(git diff --name-only HEAD^1 HEAD); then
+              echo "files changed by this pull request: $(grep -c . <<<"$changed" || true)"
+              # A here-string, not a pipe into `grep -q`: an early exit could fail the pipe under pipefail.
+              if grep -qE '(^|/)Cargo\.(toml|lock)$|^deny\.toml$' <<<"$changed"; then
+                echo "dependencies changed: full check, advisories included"
+              else
+                checks="bans licenses sources"
+                echo "no dependency file changed: advisories skipped (checked on push to main and daily, spec 093-A1)"
+              fi
+            else
+              echo "could not list the changed files: full check"
+            fi
+          fi
+          # Word splitting is intended: an empty list is the full check.
+          # shellcheck disable=SC2086
+          cargo deny --locked check $checks
 
   # The full-screen console (D-28): typecheck, unit tests, and the dependency gate. Runners ship Node.
   ui:
