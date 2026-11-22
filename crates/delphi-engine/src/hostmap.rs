@@ -41,6 +41,10 @@ pub struct CliEntry {
     pub asked: Option<String>,
     /// What could not be read, and why.
     pub notes: Vec<String>,
+    /// The account's own meter, read without a model call (`specs/132` F1): Codex's rate-limit window, and Copilot's pool only when
+    /// the operator turned on `[harness.copilot] quota_source = "gh"`. Empty when not read. Information only: nothing decides on it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub meter: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

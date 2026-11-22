@@ -205,6 +205,9 @@ pub struct Receipt {
     pub prompt_bytes: Option<u64>,
     /// What the carrier's byte budget cut from the prompt (`specs/131` S2): counts and pointer labels, never contents. `None`: nothing.
     pub context_cut: Option<Value>,
+    /// The prompt may have been cut in transit (`specs/131` S4 item 0): the answer is a cut complaint, or the carrier reported fewer
+    /// than a quarter of the input tokens the bytes sent imply. A diagnostic: it never changes a budget.
+    pub cut_suspected: bool,
     pub tokens_in: u64,
     pub tokens_out: u64,
     /// `ok`, `error`, or `model_mismatch`.
@@ -233,6 +236,9 @@ impl Receipt {
         }
         if let Some(c) = &self.context_cut {
             v["context_cut"] = c.clone();
+        }
+        if self.cut_suspected {
+            v["cut_suspected"] = json!(true);
         }
         v
     }
@@ -293,6 +299,7 @@ impl SeatBook {
                 prompt_hash: s.prompt_hash,
                 prompt_bytes: None,
                 context_cut: None,
+                cut_suspected: false,
                 tokens_in: s.tokens_in,
                 tokens_out: s.tokens_out,
                 outcome: outcome.into(),
@@ -351,16 +358,34 @@ impl Diversity {
     }
 }
 
+/// The carrier-neutral check (`specs/131` S4 item 0, b): the seat reported fewer than a quarter of the input tokens its prompt's bytes
+/// imply (about four bytes a token, so under `prompt_bytes / 16`). A carrier that reported no tokens is not judged. The ratio is a
+/// starting guess for S1's data to tune; it only raises a flag.
+pub fn tokens_suggest_cut(prompt_bytes: Option<u64>, tokens_in: u64) -> bool {
+    prompt_bytes.is_some_and(|b| tokens_in > 0 && tokens_in < b / 16)
+}
+
 /// The served family of every receipt of `task_id` that ended `ok`, and the tokens those seats used (in plus out).
 pub fn served_for_task(events: &[delphi_core::event::EventEnvelope], task_id: &str) -> (Vec<String>, u64) {
     served_except(events, task_id, &[])
 }
 
-/// The roles whose Round 1 stance in `task_id` is an abstention, from the log's `council.stance` events.
+/// The roles whose Round 1 stance in `task_id` is an abstention, or was not heard (`specs/131` S4: a decline or a cut complaint), from
+/// the log's `council.stance` events. A stance written before `heard` existed counts as heard.
 pub fn round1_abstained(events: &[delphi_core::event::EventEnvelope], task_id: &str) -> Vec<String> {
     events
         .iter()
-        .filter(|e| e.kind == "council.stance" && e.task_id.as_deref() == Some(task_id) && e.payload["round"] == 1 && e.payload["status"] == "abstained")
+        .filter(|e| e.kind == "council.stance" && e.task_id.as_deref() == Some(task_id) && e.payload["round"] == 1 && (e.payload["status"] == "abstained" || e.payload["heard"] == false))
+        .filter_map(|e| e.payload["role"].as_str().map(String::from))
+        .collect()
+}
+
+/// The roles whose Round 2 critique in `task_id` was not heard (`specs/131` S4 item 4: no readable critique). A seat with no critique
+/// at all (the barrier released it only in Round 1) is not listed: it counts as heard in Round 1 only.
+pub fn round2_not_heard(events: &[delphi_core::event::EventEnvelope], task_id: &str) -> Vec<String> {
+    events
+        .iter()
+        .filter(|e| e.kind == "council.critique" && e.task_id.as_deref() == Some(task_id) && e.payload["heard"] == false)
         .filter_map(|e| e.payload["role"].as_str().map(String::from))
         .collect()
 }
@@ -379,7 +404,7 @@ pub fn sat_for_task(events: &[delphi_core::event::EventEnvelope], task_id: &str,
 /// log's `council.stance` events say. A log with no Round 1 stance of a host seat yet (before the release) keeps the host's family.
 pub fn host_sat(events: &[delphi_core::event::EventEnvelope], task_id: &str, host_roles: &[&str]) -> bool {
     let mine: Vec<&delphi_core::event::EventEnvelope> = events.iter().filter(|e| e.kind == "council.stance" && e.task_id.as_deref() == Some(task_id) && e.payload["round"] == 1 && e.payload["role"].as_str().is_some_and(|r| host_roles.contains(&r))).collect();
-    mine.is_empty() || mine.iter().any(|e| e.payload["status"] != "abstained")
+    mine.is_empty() || mine.iter().any(|e| e.payload["status"] != "abstained" && e.payload["heard"] != false)
 }
 
 fn served_except(events: &[delphi_core::event::EventEnvelope], task_id: &str, skip: &[String]) -> (Vec<String>, u64) {
@@ -451,11 +476,13 @@ pub struct SeatSummary {
     pub tokens: u64,
     /// The last `context_cut` its receipts carry (`specs/131` S2): the seat sat on less than it was given.
     pub context_cut: Option<Value>,
+    /// A receipt of it suspects its prompt was cut in transit (`specs/131` S4 item 0). A diagnostic only.
+    pub cut_suspected: bool,
 }
 
 impl SeatSummary {
     pub fn to_value(&self) -> Value {
-        json!({"seat": self.role, "served_model": self.served_model, "family": self.family, "carrier": self.carrier, "tools_offered": self.tools_offered, "native_tools": self.native_tools, "sat": self.sat, "unverified_against_repo": self.unverified_against_repo, "tokens": self.tokens, "context_cut": self.context_cut})
+        json!({"seat": self.role, "served_model": self.served_model, "family": self.family, "carrier": self.carrier, "tools_offered": self.tools_offered, "native_tools": self.native_tools, "sat": self.sat, "unverified_against_repo": self.unverified_against_repo, "tokens": self.tokens, "context_cut": self.context_cut, "cut_suspected": self.cut_suspected})
     }
 }
 
@@ -470,7 +497,7 @@ pub fn seat_summaries(events: &[delphi_core::event::EventEnvelope], task_id: &st
         let at = match out.iter().position(|s| s.role == role) {
             Some(i) => i,
             None => {
-                out.push(SeatSummary { role: role.clone(), served_model: None, family: UNKNOWN.into(), carrier: String::new(), tools_offered: Vec::new(), native_tools: None, sat: false, unverified_against_repo: false, tokens: 0, context_cut: None });
+                out.push(SeatSummary { role: role.clone(), served_model: None, family: UNKNOWN.into(), carrier: String::new(), tools_offered: Vec::new(), native_tools: None, sat: false, unverified_against_repo: false, tokens: 0, context_cut: None, cut_suspected: false });
                 out.len() - 1
             }
         };
@@ -479,6 +506,7 @@ pub fn seat_summaries(events: &[delphi_core::event::EventEnvelope], task_id: &st
         if e.payload.get("context_cut").is_some_and(|c| c.is_object()) {
             s.context_cut = Some(e.payload["context_cut"].clone());
         }
+        s.cut_suspected |= e.payload["cut_suspected"] == true;
         // The seat is described by its first receipt that sat (the first at all while none has).
         if ok && !s.sat {
             s.sat = true;
@@ -626,6 +654,7 @@ mod tests {
             prompt_hash: prompt_hash("sys", secret),
             prompt_bytes: Some(3 + secret.len() as u64),
             context_cut: None,
+            cut_suspected: true,
             tokens_in: 10,
             tokens_out: 3,
             outcome: "model_mismatch".into(),
@@ -758,6 +787,44 @@ mod tests {
         // The same model through a second carrier is the host's own family again: one family.
         let v = view("claude", None);
         assert_eq!((v["ruling"]["families"].clone(), v["ruling"]["homogeneous"].clone(), v["ruling"]["require_families_met"].clone()), (json!(["claude"]), json!(true), json!(null)), "{v}");
+    }
+
+    /// `specs/131` AC-9: a daemon Council's `require_families` is judged on seats heard in Round 1 AND Round 2. The gemini seat's
+    /// unreadable Round 2 leaves one family; a readable one makes two. The unheard seat's tokens still count in the spend.
+    #[test]
+    fn require_families_counts_only_the_seats_heard_in_both_rounds() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("councils")).unwrap();
+        std::fs::write(dir.path().join("councils/001-x.md"), "## Decision\n\nx\n").unwrap();
+        let ev = |kind: &str, payload: serde_json::Value, agent: Option<&str>| {
+            let mut e = delphi_core::event::EventEnvelope::new("m", kind, payload);
+            e.task_id = Some("t-1".into());
+            e.agent = agent.map(String::from);
+            e
+        };
+        let receipt = |family: &str| json!({"served": {"family": family}, "carrier": {"kind": "agy"}, "tokens_in": 100, "tokens_out": 1, "outcome": "ok"});
+        let view = |red_readable: bool| {
+            let log = vec![
+                delphi_core::event::EventEnvelope::new("m", crate::host_rpc::COUNCIL_EVENT, json!({"task_id": "t-1"})),
+                ev("council.started", json!({"require_families": 2, "seats": [{"role": "architect", "family": "claude"}, {"role": "red-team", "family": "gemini"}], "homogeneous": false}), None),
+                ev(RECEIPT_KIND, receipt("claude"), Some("architect")),
+                ev(RECEIPT_KIND, receipt("gemini"), Some("red-team")),
+                ev("council.stance", json!({"round": 1, "role": "architect", "status": "answered", "heard": true}), None),
+                ev("council.stance", json!({"round": 1, "role": "red-team", "status": "answered", "heard": true}), None),
+                ev("council.critique", json!({"round": 2, "role": "architect", "readable": true, "heard": true}), None),
+                ev("council.critique", json!({"round": 2, "role": "red-team", "readable": red_readable, "heard": red_readable, "why": if red_readable { Value::Null } else { json!("unreadable") }}), None),
+                ev(&format!("council.{}", "verdict"), json!({"decision": "d", "path": "missions/m/councils/001-x.md", "options": [], "steps": [], "homogeneous": false}), None),
+                ev("task.completed", json!({"status": "done", "reason": ""}), None),
+            ];
+            crate::host_rpc::council_view(&log, dir.path(), "t-1").unwrap()
+        };
+        let v = view(false);
+        assert_eq!((v["ruling"]["families"].clone(), v["ruling"]["require_families_met"].clone(), v["ruling"]["homogeneous"].clone()), (json!(["claude"]), json!(false), json!(true)), "{v}");
+        let red = v["ruling"]["seats_run_by_delphi"].as_array().unwrap().iter().find(|d| d["seat"] == "red-team").unwrap().clone();
+        assert_eq!((red["heard"].clone(), red["why"].clone(), red["tokens"].clone()), (json!(false), json!("unreadable"), json!(101)), "{red}");
+        assert!(v["display"].as_str().unwrap().contains("not heard (unreadable)"), "{}", v["display"]);
+        let v = view(true);
+        assert_eq!((v["ruling"]["families"].clone(), v["ruling"]["require_families_met"].clone()), (json!(["claude", "gemini"]), json!(true)), "{v}");
     }
 
     // specs/086 §7: the label that travels with a tool-less seat's verdict.

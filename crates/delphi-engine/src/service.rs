@@ -186,11 +186,10 @@ async fn panel_after(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, 
                 g.get(&key).map(|pn| stances.keys().filter_map(|r| pn.brief_hash(r, 1).map(|h| (r.clone(), h))).collect()).unwrap_or_default()
             };
             engine.panel_released(&m, &id, &prop, &stances, &models, &foreign, &blind, (claims.0, claims.1.as_deref()), &hashes, host, &relay).await.map_err(engine_err)?;
-            let answered = stances.values().filter(|s| s.text().is_some()).count();
-            if answered < 2 {
+            // `specs/131` S4: the threshold counts seats heard (not a decline, not a cut complaint), as a daemon Council's does.
+            if let Some(why) = crate::council::too_few_heard(&stances) {
                 panels.lock().unwrap().remove(&key);
                 crate::standing::settle(&engine.ws.dir, &format!("{}/{}", m.id, id), engine.panel_foreign_tokens(&m, &id), (engine.clock_unix)());
-                let why = format!("only {answered} seat(s) answered Round 1, too few to deliberate; nothing was decided");
                 engine.panel_escalate(&m, id.clone(), why.clone()).await.map_err(engine_err)?;
                 return Ok(json!({"council_id": id, "accepted": true, "state": "not_decided", "reason": why}));
             }
@@ -1535,8 +1534,14 @@ impl EngineService {
         let standing_id = format!("{}/{}", m.id, task_id);
         let job = tokio::spawn(async move {
             let stance = engine.panel_foreign_run_seat(&mm, &tid, brief, &proposition, role, &family, 1, None, true).await;
+            // `specs/131` S4 item 5: a decline or a cut complaint is unanswered, with the reason in fixed words; the answer is not passed on.
             let (answer, abstained) = match stance {
-                crate::council::Stance::Said(t) => (Some(engine.secrets.redact(&t)), None),
+                crate::council::Stance::Said(t) => match crate::refusal::not_heard(Some(&t), None, None) {
+                    Some("declined") => (None, Some("the seat declines: a refusal, not an answer".to_string())),
+                    Some("cut_complaint") => (None, Some(format!("{}: a complaint, not an answer", crate::refusal::CUT_FAILURE))),
+                    Some(_) => (None, Some("the seat gave an empty answer".to_string())),
+                    None => (Some(engine.secrets.redact(&t)), None),
+                },
                 crate::council::Stance::Abstained(w) => (None, Some(w)),
             };
             let status = if answer.is_some() { crate::engine::Status::Done } else { crate::engine::Status::Escalated(abstained.clone().unwrap_or_default()) };
@@ -11210,6 +11215,30 @@ mod tests {
         // Spec 104 §2 item 3: the answer says who gave it, as a help answer does.
         assert_eq!((ok["status"].as_str(), ok["answered_by"].as_str()), (Some("answered"), Some("strategist")), "{ok}");
         assert!(ok["display"].as_str().is_some_and(|d| d.contains("(strategist, via delphi)")) && ok["signature"] == ok["display"] && ok["identity"]["role"] == "strategist", "{ok}");
+    }
+
+    /// `specs/131` AC-10: an API seat that answers with a cut complaint (the API path has no retry for it) or a decline is unanswered,
+    /// with the reason in fixed words and without its text.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ask_family_calls_a_cut_complaint_or_a_decline_unanswered() {
+        for (reply, want) in [("Your prompt was truncated; the task is missing.", "prompt was cut"), ("I can't help with that.", "declines")] {
+            let f = setup(vec![], 50.0, roomy);
+            crate::council::tests::two_families(&f);
+            f.model.respond_with(move |_| Step::text(reply));
+            f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+            let cwd = f.root.to_string_lossy().to_string();
+            let s = serve(&f).await;
+            let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+            let got = blocking(move || {
+                let mut c = Client::connect(&hsock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+                c.hello(&htok).unwrap();
+                ask(&mut c, pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus", "operator_confirmed": true})))
+            })
+            .await;
+            assert_eq!((got["status"].as_str(), got["answer"].clone()), (Some("unanswered"), Value::Null), "{got}");
+            assert!(got["unanswered"].as_str().is_some_and(|u| u.contains(want) && !u.contains(reply)), "{got}");
+        }
     }
 
     /// Spec 104 §2 (§12 A1): the daemon hands back an `ask_id` at once; `ask_result` says `working`, then gives the answer once, to the
