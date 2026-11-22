@@ -197,54 +197,96 @@ Dependency and lockfile changes are Red on purpose: an install runs the new code
 ### 4.6 Spec shape (proposal for OQ-9)
 
 1. **Spec 137, isolation and a clean start**: Phase 1 and slice 10 (cleared environment, starter, sandbox denies, UI-control self-report). It only tightens, needs no charter change, and can ship first.
-2. **Spec 138, the app control plane**: the action table, arming, the dialog, the actions, pairing, `launch` and the enhancements E1 to E9.
+2. **Spec 138a, the app control plane** (the action table, arming, the dialogs, the actions, pairing, `launch`, with E6, E7 and E8), and **spec 138b, the enhancements** (E1 to E5, E9). Split on the Council's advice (t_0005), accepted by the operator 2026-11-22.
 3. **The charter amendment**: its own Red-tier pull request, written after the dialog probe.
 4. **Spec 139, typing to agents in the app**: after 138 (OQ-10).
 
-## 5. Build plan (revised 2026-11-22; builds on hold until the operator lifts the hold)
+## 5. Final build plan (2026-11-22)
 
-Hours are programmer-hours for someone who knows the code; estimates, not measurements.
+**Status: final.** Every recommendation in section 4 and every change from the final-candidate Council (t_0005, RD-003 resolved 2026-11-22) is accepted by the operator ("accept all recommendations"). **Nothing starts until the operator says go** (other sessions are working on this machine). Hours are programmer-hours for someone who knows the code: guessed ranges, not measurements; slices 137-5 and 138a-8 carry a 35% contingency.
 
-| # | Slice | Spec | Depends on | Hours |
-| :-- | :-- | :-- | :-- | --: |
-| **Phase 0: decide and prove** | | | | |
-| 0a | Specs 137 and 138; red-team pass on them (G2) | — | this note final | 12-16 |
-| 0b | Probes: responsibility of a launchd or systemd job; AX and Screen Recording inheritance under Terminal, launchd and the app; dialog answerable by `osascript`/`CGEvent` with and without Accessibility; sandboxed agent `open x.command`, AppleEvents, `CGEventPost`, `screencapture`; Linux display sockets in the sandbox; Touch ID from an unsigned daemon | — | — | 10-14 |
-| 0c | Spec 131 S1-S5 plus amendment (red-team seat reliability) | 131 | — (parallel) | 28-34 |
-| **Phase 1: isolation and clean start (spec 137, tightening only)** | | | | |
-| 1 | Pathguard `app/`; sandbox denies (section 3 item 10); a test per deny | 137 | 0b | 10-14 |
-| 2 | UI-control self-report in daemon and clients; `ui_control` in hello and presence; doctor check | 137 | 0b | 6-8 |
-| 10 | Cleared environment for every daemon (4.1); `delphi daemon start` with launchd and systemd backends (4.2); lock by path and readiness without inherited descriptors; `started_from` | 137 | 0b; plan 136 S1 | 18-24 |
-| **Phase 2: the core (spec 138)** | | | | |
-| 3 | Action table and signed envelope; targets daemon and launcher; default Red; settings and work-output rows (4.4); gate-file test; today's grants carried over | 138 | 0a | 16-22 |
-| 4 | Arming for every acting class, with the 8-hour rule (OQ-2); terminal-code arming | 138 | 3 | 12-16 |
-| 5 | macOS daemon dialog (`CFUserNotification`), label sanitizing; dialog arming gated on `ui_control` and the probe | 138 | 2, 4, 0b | 10-14 |
-| 5L | Linux `delphi-dialog` helper, fallback chain, release packaging (4.5) | 138 | 4 | 12-18 |
-| **Phase 3: actions (spec 138)** | | | | |
-| 6 | Zero-friction actions in the app with undo history, undo by direction, nothing served before accept, taint carried | 138 | 4 | 24-32 |
-| 7 | Merge classifier (4.3) and one-click clean project merges with daemon-rendered summaries | 138 | 3, 4 | 14-18 |
-| 8 | Amber and Red answers in the app (Red: one click plus dialog, OQ-1) | 138 | 4, 5 | 12-16 |
-| 9 | Dialog pairing at `read` with app-window code match | 138 | 5 | 8-10 |
-| 11 | `launch` from the app through the starter (replaces plan 136 S6b) | 138 | 3, 10; plan 136 S3, S4, S6a | 10-14 |
-| 12 | Charter amendment (§5.4, §5.10, zero-friction and taint clauses), after probe 1 | charter | 0b | 4-6 |
-| **Enhancements (spec 138)** | | | | |
-| E1 | Activity feed: what agents did since you armed, one-click undo per line | 138 | 6 | 10-14 |
-| E2 | Batch accept of several Amber cards or lessons, each in daemon-rendered text | 138 | 6, 8 | 6-8 |
-| E3 | Per-project trust profiles (scratch looser, production stricter) feeding the class table | 138 | 3, 7 | 10-14 |
-| E4 | "What this will execute" preview on merges and launches | 138 | 7, 11 | 6-8 |
-| E5 | Touch ID as the arming step where the probe shows it works unsigned | 138 | 4, 0b | 8-12 |
-| E6 | Panic button: one click in the app or `delphi app lockdown` disarms every session and revokes the key | 138 | 4 | 4-6 |
-| E7 | Friction telemetry: arms, clicks and fallbacks per day, as counts (tokens, never money) | 138 | 4, 6 | 6-8 |
-| E8 | Red-team fixtures as a permanent regression suite (feeds G2 and G3) | 138 | 0a | 8-12 |
-| E9 | Needs-you notifications and a Dock badge (a Tauri plugin; amends spec 111 §2 and the dependency gate) | 138 | — | 8-12 |
-| G3 | Red-team pass with fixtures before 5, 5L, 8 and 9 merge | — | 5, 5L, 8, 9, E8 | 3-5 |
+Accepted Council changes, folded in below: the merge rule is default Red with the inert allowlist of 4.7; the charter amendment is drafted in parallel and merges before any Red-in-app slice; the probe results gate acting in code (the `ui_control` self-report), not only in this plan; dialogs, summaries and cards are built from ids, counts, file lists and the classifier's reason, with agent text only quoted and length-capped; `PATH` and harness binary paths may not include agent-writable directories, changing them is Red, and `delphi doctor` re-hashes them; a stated threat line for same-user software that is not an agent (out of scope); a rollback when the starter fails, and defined behaviour for an unclean daemon; migration of keys already paired; an unanswered dialog is denied on timeout; spec 129's separate five-minute clock is removed; per-role accept caps and origin labels against persuasive agent text; batch accept only within one class and one origin, never Red; a per-branch "allow dependency changes" option, kept only if E7 shows lockfile friction; E7 and E8 move into the core; 138 is split into 138a (core) and 138b (enhancements), with E3, E5 and E9 ordered after E7's friction data.
 
-**Totals:** core (0a, 0b, 1-12, G3) **183 to 249 hours**; enhancements E1-E9 **66 to 94 hours**; together **249 to 343 hours**; with spec 131 (0c) **277 to 377 hours**. Plan 136 S0-S6a (about 31 to 46 hours) is a prerequisite for slice 11.
+### 5.1 Spec 137: isolation and a clean start (tightening only; ships first)
 
-**Cut lines:**
-- **A, spec 137** (1, 2, 10): isolation, UI-control check, clean start. Tightening only; ships first.
-- **B, the low-friction app** (3, 4, 6, 7, E1, E4, E6, E7, E8): arming by terminal code, one-click work, executing merges Red. No new Red path.
-- **C, presence in the app** (5, 5L, 8, 9, 12, E5, G3): dialog arming, Red in the app, dialog pairing; only after the probes pass.
-- **D, reach** (11, E2, E3, E9): `launch`, batch accept, trust profiles, notifications.
+| Slice | Content | Depends on | Hours |
+| :-- | :-- | :-- | --: |
+| 137-0 | Spec 137 drafted from sections 3, 4.1, 4.2, 4.7; red-team pass on it (G2a) | — | 6-8 |
+| 137-1 | Probes: responsibility of a launchd or systemd job; AX and Screen Recording inheritance under Terminal, launchd and the app; dialog answerable by `osascript` or `CGEvent` with and without Accessibility; sandboxed agent `open x.command`, AppleEvents, `CGEventPost`, `screencapture`; Linux display sockets in the agent sandbox; Touch ID from an unsigned daemon | — | 10-14 |
+| 137-2 | Pathguard `app/`; sandbox denies (LaunchServices open, AppleEvents, input posting, screen capture; Linux display sockets and variables); a test per deny | 137-1 | 10-14 |
+| 137-3 | UI-control self-report in the daemon and every client (`ui_control` in hello and presence); `delphi doctor` names a terminal holding Accessibility; the stated limits (OQ-5, same-user software) | 137-1 | 6-8 |
+| 137-4 | Cleared environment for every daemon; ratified `[daemon] env_pass`; harness paths recorded by `doctor`; `PATH` validation (no agent-writable directory); binary re-hash; seats get less than the daemon | — | 10-13 |
+| 137-5 | `delphi daemon start` with launchd, systemd and `setsid` backends; the daemon locks by path and signals readiness without inherited descriptors (includes plan 136 S1's lock proof); `started_from`; rollback when a start fails; unclean-daemon behaviour; spec 092 authorized runs keep the direct path | 137-4 | 20-25 |
+| | **Subtotal** | | **62-82** |
+
+### 5.2 Charter amendment (Red-tier; the operator merges at a terminal)
+
+| Slice | Content | Depends on | Hours |
+| :-- | :-- | :-- | --: |
+| CH-1 | §5.4 and §5.10 (app answers; Red as one click plus the daemon dialog), the zero-friction clause (undo plus audit), the taint clause, the isolation precondition, "a click is an attributable input event"; drafted in parallel with 138a; **merged before 138a-9 and 138a-10** | 137-1 result | 4-6 |
+
+### 5.3 Spec 138a: the control plane (core)
+
+| Slice | Content | Depends on | Hours |
+| :-- | :-- | :-- | --: |
+| 138a-0 | Spec 138a; red-team pass on it (G2b) | 137-1 | 8-10 |
+| 138a-1 | E8: the red-team fixtures as a permanent regression suite (built first; feeds every later gate) | 138a-0 | 8-12 |
+| 138a-2 | Action table and signed envelope (`Domain::app_action`); targets daemon and launcher; unclassified kinds Red; settings and work-output rows (4.4); gate-file test; migration of existing `read`/`request` keys | 138a-0 | 18-24 |
+| 138a-3 | Arming for every acting class; the 8-hour rule (OQ-2); terminal-code arming; acting gated in code on `ui_control` and the probe; dialog timeout denies; spec 129's five-minute clock removed | 138a-2, 137-3 | 12-16 |
+| 138a-4 | E7: friction telemetry (arms, clicks, fallbacks, Red share of merges, as counts); exit criterion for cut B: median clicks per day | 138a-3 | 6-8 |
+| 138a-5 | Zero-friction actions in the app with undo history, undo by direction, nothing served before accept, taint carried, per-role accept caps, origin labels, deterministic cards | 138a-3 | 26-34 |
+| 138a-6 | Merge classifier (default Red, 4.7 allowlist, CI references, proc-macro crates, `inert_extra`, per-branch dependency allowance) and one-click clean project merges with deterministic summaries | 138a-2, 138a-3 | 16-22 |
+| 138a-7 | E6: panic button (one click in the app or `delphi app lockdown` disarms every session and revokes the key) | 138a-3 | 4-6 |
+| 138a-8 | macOS daemon dialog (`CFUserNotification`), label sanitizing; dialog arming only where the probe passed | 138a-3, 137-1 | 10-14 |
+| 138a-9 | Linux `delphi-dialog` helper (egui over winit), fallback to `zenity`, `kdialog`, terminal; never dialog arming on X11 without the sandbox rule; release packaging | 138a-3 | 16-24 |
+| 138a-10 | Amber and Red answers in the app (Red: one click plus dialog) | 138a-8 or -9, **CH-1 merged**, G3 | 12-16 |
+| 138a-11 | Dialog pairing at `read` with an app-window code match | 138a-8 or -9, **CH-1 merged**, G3 | 8-10 |
+| 138a-12 | `launch` from the app through the starter (replaces plan 136 S6b) | 138a-2, 137-5; plan 136 S3, S4, S6a | 10-14 |
+| G3 | Red-team pass with the fixtures before 138a-8 to 138a-11 merge | 138a-1, 138a-8, 138a-9 | 3-5 |
+| | **Subtotal** | | **157-215** |
+
+### 5.4 Spec 138b: enhancements
+
+| Slice | Content | Depends on | Hours |
+| :-- | :-- | :-- | --: |
+| 138b-0 | Spec 138b | 138a-0 | 3-4 |
+| E1 | Activity feed: what agents did since you armed, one-click undo per line | 138a-5 | 10-14 |
+| E2 | Batch accept: one class, one origin, never Red, each item in daemon-rendered text | 138a-5, 138a-10 | 6-8 |
+| E4 | "What this will execute" preview on merges and launches | 138a-6, 138a-12 | 6-8 |
+| E3 | Per-project trust profiles feeding the class table | E7 data (at least two weeks), 138a-6 | 10-14 |
+| E5 | Touch ID as the arming step where the probe shows it works unsigned | E7 data, 137-1 | 8-12 |
+| E9 | Needs-you notifications and a Dock badge (a Tauri plugin; amends spec 111 §2 and the dependency gate) | E7 data | 8-12 |
+| | **Subtotal** | | **51-72** |
+
+### 5.5 Totals and outside dependencies
+
+| Part | Hours |
+| :-- | --: |
+| Spec 137 | 62-82 |
+| Charter amendment | 4-6 |
+| Spec 138a | 157-215 |
+| Spec 138b | 51-72 |
+| **Total** | **274-375** |
+
+Outside dependencies, not counted: plan 136 S0 to S6a (about 31 to 46 hours; 138a-12 needs S3, S4 and S6a; 137-5 absorbs S1's lock proof); spec 131 and spec 132 C4 (red-team reliability and Copilot Council seats), which other sessions are merging; verify their state before G2a.
+
+### 5.6 Order of work (waves)
+
+1. **Wave 0:** 137-0 and 137-1 (the probes decide 137-2, 137-3 and the dialog path).
+2. **Wave 1:** 137-2, 137-3 and 137-4 in parallel; then 137-5. **Cut A ships (spec 137).**
+3. **Wave 2:** 138a-0 and CH-1 drafted in parallel; 138a-1 (fixtures); 138a-2 (table).
+4. **Wave 3:** 138a-3 (arming); then 138a-4, 138a-6 and 138a-7 in parallel.
+5. **Wave 4:** 138a-5 (actions); 138a-8 and 138a-9 (dialogs). **Cut B: the low-friction app with terminal-code arming; exit when E7 shows the median clicks per day.**
+6. **Wave 5:** G3; CH-1 merged by the operator; 138a-10 and 138a-11. **Cut C: Red and pairing in the app.**
+7. **Wave 6:** 138a-12 (after plan 136 S3, S4, S6a). 138b-0, E1, E2, E4. **Cut D.**
+8. **Wave 7:** E3, E5, E9 after at least two weeks of E7 data.
+
+### 5.7 What the operator does
+
+- Approves specs 137, 138a and 138b; reads the red-team passes G2a, G2b and G3.
+- Merges CH-1 and every pull request that changes a gate file (`app_grants.toml`, `spawn_sites.toml`, `merge-gates.toml` entries) at a terminal.
+- Grants `env_pass` entries and the `launch` grant at a terminal; reviews `delphi doctor`'s harness paths once.
+- Runs the probes that need a person at the Mac (Touch ID; the dialog with and without Accessibility).
+- Reads E7's numbers before cut B is called done and before Wave 7.
 
 Related: the one-daemon switcher plan (`missions/2026-11-21-one-daemon-switcher/work-plan.md`, PR #843) parks its `launch` slice for this design and names the console seat a driver seat the app can hold.
