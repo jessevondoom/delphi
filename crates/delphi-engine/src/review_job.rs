@@ -478,8 +478,8 @@ pub struct Outcome {
     /// The last text the seat gave when no answer could be read, or why it gave none.
     pub unanswered: Option<String>,
     pub commands: Vec<CommandResult>,
-    /// At least one configured command ran the tests (§14.1 item 1, §14.9 item 1): it ran to an exit status, and when its runner is
-    /// known (`cargo test`, or a `result` pattern) its output shows the runner's result.
+    /// At least one configured command ran the tests (§14.1 item 1, §14.9 item 1). When a recognised test runner is configured (`cargo
+    /// test`, or a `result` pattern), only a runner whose output shows its result counts; otherwise a command that ran to an exit status.
     pub tests_run: bool,
     /// Why `tests_run` is false: `no_sandbox`, `not_configured`, `not_started` (the sandbox could not start a program) or `setup` (a
     /// command started and stopped before any test result: a toolchain or build failure). `None` when tests ran.
@@ -522,8 +522,18 @@ struct Tests {
     note: String,
 }
 
-fn tests_of(commands: &[CommandResult], sandbox: bool, configured: usize) -> Tests {
-    let run = commands.iter().any(CommandResult::ran_tests);
+/// Is this configured command a recognised test runner (`cargo test`, or one with a `result` pattern)?
+pub fn is_test_runner(c: &ReviewCommand) -> bool {
+    c.result.is_some() || is_cargo_test(&c.argv)
+}
+
+/// `commands` are the configured commands' results, in the order of `configured` (empty without a sandbox). When any configured command
+/// is a recognised test runner, the review's `tests_run` comes from those only: a command judged by its exit status alone (a lint, a
+/// check) never makes it true while the runner stopped at setup (F4b). With no runner configured, the exit-status rule applies.
+fn tests_of(commands: &[CommandResult], sandbox: bool, configured: &[ReviewCommand]) -> Tests {
+    let any_runner = configured.iter().any(is_test_runner);
+    let run = commands.iter().zip(configured).any(|(c, cfg)| (!any_runner || is_test_runner(cfg)) && c.ran_tests());
+    let configured = configured.len();
     let first = |c: &CommandResult| format!("`{}`", c.argv.first().map(String::as_str).unwrap_or(""));
     let not_started: Vec<String> = commands.iter().filter(|c| c.ran() && !c.started).map(first).collect();
     let setup: Vec<String> = commands.iter().filter(|c| c.setup_failed()).map(first).collect();
@@ -588,7 +598,7 @@ where
             commands.push(cmd(c.argv.clone(), "delphi", c.result.clone()).await);
         }
     }
-    let tests = tests_of(&commands, sandbox, configured.len());
+    let tests = tests_of(&commands, sandbox, configured);
     let b1 = brief_round1(input, &context.brief, &commands, &tests.note);
     let tests_note = Some(tests.note.clone()).filter(|n| !n.is_empty());
     let done = |answer: Option<Answer>, unanswered: Option<String>, commands: Vec<CommandResult>, rounds: u8| Outcome {

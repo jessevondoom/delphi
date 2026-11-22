@@ -211,9 +211,10 @@ async fn ac12_a_command_that_cannot_start_is_not_a_test_run_and_the_note_says_ho
     assert!(briefs.lock().unwrap()[0].contains("could not start this program"), "the seat is told it did not run");
     // One that ran and failed is a test run: its exit is evidence.
     let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "changes", "findings": []}"#.to_string()));
-    let out = review(&input(&d), &[argv(&["cargo", "test"]).into(), argv(&["make", "test"]).into()], true, seat, failing_runner()).await;
+    // (No recognised test runner is configured here, so the exit-status rule applies; with `cargo test` configured only it would count.)
+    let out = review(&input(&d), &[argv(&["/usr/bin/env", "missing"]).into(), argv(&["make", "test"]).into()], true, seat, failing_runner()).await;
     assert!(out.tests_run, "a non-zero exit is a run");
-    assert_eq!(out.commands.iter().map(|c| (c.started, c.exit)).collect::<Vec<_>>(), vec![(false, Some(71)), (true, Some(101))]);
+    assert_eq!(out.commands.iter().map(|c| (c.started, c.exit)).collect::<Vec<_>>(), vec![(false, Some(127)), (true, Some(101))]);
     assert!(out.tests_note.as_deref().is_some_and(|n| n.contains("1 configured command(s)")), "the one that did not start is still named");
     // Nothing configured: no run, and the note says why.
     let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "accept", "findings": []}"#.to_string()));
@@ -280,10 +281,13 @@ async fn ac21_a_start_up_failure_is_setup_and_a_failing_test_is_a_test_run() {
     assert_eq!(out.commands[1].to_json().get("tests_run"), None, "no runner known: no judgement either way");
     assert_eq!(out.tests_note, None);
 
-    // A setup failure beside a check that passed: tests_run stays true by the exit-status rule, and the note still names the setup failure.
+    // F4b's confusion: the test runner stopped at setup while a check beside it exited 0. With a test runner configured, only a runner's
+    // result counts, so the review's tests_run is false with reason setup; the check keeps its own entry, judged by nothing.
     let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "accept", "findings": []}"#.to_string()));
-    let out = review(&input(&d), &[argv(&["cargo", "test"]).into(), argv(&["make", "lint"]).into()], true, seat, scripted_runner(vec![("cargo", 1, setup_fail), ("make", 0, "ok")])).await;
-    assert!(out.tests_run && out.tests_note.as_deref().is_some_and(|n| n.contains("1 configured command(s) started but showed no test result")), "{:?}", out.tests_note);
+    let out = review(&input(&d), &[argv(&["cargo", "test"]).into(), argv(&["cargo", "clippy"]).into()], true, seat, scripted_runner(vec![("clippy", 0, "Finished"), ("cargo", 1, setup_fail)])).await;
+    assert_eq!((out.tests_run, out.tests_reason), (false, Some("setup")), "{:?}", out.commands);
+    assert!(out.tests_note.as_deref().is_some_and(|n| n.contains("1 configured command(s) started but showed no test result")), "{:?}", out.tests_note);
+    assert_eq!((out.commands[1].exit, out.commands[1].to_json().get("tests_run")), (Some(0), None), "the per-command entry is unchanged");
     // A configured pattern decides for its own runner.
     let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "accept", "findings": []}"#.to_string()));
     let cmd = ReviewCommand { argv: argv(&["pytest", "-q"]), result: Some(r"(?P<failed>\d+) failed".into()) };
