@@ -858,6 +858,13 @@ From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` 
 | S14 | §12: `.github/workflows/conflict-label.yml` (push to `main`, every 30 minutes, by hand; `gh` only, no checkout; labels `CONFLICTING` pull requests `conflict` and unlabels `MERGEABLE` ones, creating the label if missing); step 8 of the `git-pr-packaging` skill (after a push, checks exist and `mergeStateStatus` is not `DIRTY`) | 1-2 | built (PR open, gate-changing): `actionlint` clean, the listing query run locally against the open pull requests; the workflow cannot run from a pull request, so its first real run is after merge (`gh workflow run conflict-label.yml`) |
 | S15 | §12: S8 marked deferred by the operator (2026-11-22) and unlikely to be pursued in §5, §6 and OD-10; the `ci-gate` check is not S8 (text only) | 0.5 | built (PR open) |
 | S16 | §12: the `commits` job in `ci.yml` (pull requests only): with two or more commits carrying an `Implements-Spec:` line, `cargo check --workspace --all-targets --locked` and the repo lint at each one before the head; restores the lint job's build directory, saves none; in `ci-gate`'s `needs`; one sentence in `CONTRIBUTING.md`'s trial paragraph | 1-2 | built (PR open, gate-changing): `actionlint` clean; the commit listing checked locally on this branch; its first real run is this pull request's own CI (four slice commits) |
+| S17 | §13 amendment (2026-11-22, approved in advance on the operator's words "batching should be included in delphi merge. don't rely on an org." and "can we start on C and D ..."; text not read by the operator, no Council): batched merges through a rollup pull request, invariants, bisection, error classes `rollup-refused`/`rollup-red`/`rollup-stale`, OD-13 to OD-19 | 3 | built (PR open, gate-changing) |
+| S18 | §13: the rollup candidate builder (`merge/rollup.rs`): choose constituents, build in a temporary worktree with refresh's closed list, compile, union-of-diffs and gate invariants, manifest; `--batch[=N] --dry-run` | 10 | not built |
+| S19 | §13: open the rollup pull request; recognition by branch, manifest and rebuild; cross-spec acceptance | 10 | not built |
+| S20 | §13: merge the rollup; per-constituent ledger rows; verify constituents marked merged, close with comment otherwise; cleanup | 9 | not built |
+| S21 | §13: red rollups: rerun before group C, bisection in halves (two rounds), serial fallback, `rollup-red` | 10 | not built |
+| S22 | §13: `--auto --batch`, status lines, guide and skill row | 6 | not built |
+| S23 | §13: the operator's rehearsal (V-13.4, the indirect-merge experiment) and measurement (V-13.5) | 4 | not started |
 
 ## Spec 093: authority invariants as tests (2026-11-07, approved)
 
