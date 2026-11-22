@@ -356,6 +356,8 @@ struct Ctl<'a> {
     bridge_on: bool,
     /// The profile delegates approvals and this role is not a Builder.
     delegate: bool,
+    /// A read outside the worktree is refused, never put to the operator (a Copilot ACP seat, `specs/132` §17.2 item 2).
+    refuse_outside_reads: bool,
     profile: &'a HarnessProfile,
 }
 
@@ -422,6 +424,10 @@ impl Engine {
                 };
                 if in_tree {
                     return Ok(Decision::Allow);
+                }
+                if ctl.refuse_outside_reads {
+                    sc.m.append(sc.ev("harness.read_refused", json!({"tool": name, "summary": self.secrets.redact(&summarize(name, &p.input)), "reason": "outside the seat's worktree"}))).await?;
+                    return deny("this seat reads only inside its worktree; a read outside it is refused");
                 }
                 let payload = json!({"tool": name, "input": p.input});
                 let summary = format!("{} {} (outside the task worktree)", name, summarize(name, &p.input));
@@ -546,7 +552,7 @@ impl Engine {
         if names_gate {
             return deny("the `.agents` directory is the gate's own and is off limits");
         }
-        let p = Permission { request_id: String::new(), tool_name: name.into(), input, tool_use_id: None, blocked_path: None, description: None };
+        let p = Permission { request_id: String::new(), tool_name: name.into(), input, tool_use_id: None, blocked_path: None, description: None, acp_options: vec![] };
         Ok(match self.harness_decide(sc, wt, &p, ctl).await? {
             Decision::Allow => (true, String::new()),
             Decision::Deny(why) => (false, format!("denied by Delphi: {}", why)),
@@ -780,6 +786,12 @@ impl Engine {
             // A Builder's file edits and commands are judged through the ACP approval bridge.
             opts.app_server = true;
         }
+        if cli == Cli::Copilot {
+            // The seat's own scratch, outside its working directory: its configuration home and logs (`specs/132` §17.2 item 3).
+            let d = self.exec.scratch_for(&sc.task_id).join("copilot-seat");
+            std::fs::create_dir_all(&d).map_err(|e| EngineError::Invalid(e.to_string()))?;
+            opts.scratch = Some(d);
+        }
         // A granted run leaves no transcript behind: the CLI would write it under the operator's real `~/.claude/projects`, outside the
         // throwaway home, whatever `[harness.claude] session` says (spec 092 S2d2a). Resume is a saved session of another run: not either.
         if granted {
@@ -939,7 +951,7 @@ impl Engine {
         };
         let user_prompt = format!("{}{}", sent.first_user_text(), retry_note);
         let launch = Launch { cli, program, model, system_prompt, user_prompt, cwd, tools, env: cli_env_with(&profile.env_allow), profile: lp, opts };
-        let ctl = Ctl { bridge_on, delegate, profile: &profile };
+        let ctl = Ctl { bridge_on, delegate, refuse_outside_reads: cli == Cli::Copilot, profile: &profile };
         let guard = builder.then(|| GitGuard::snapshot(&wt.as_ref().expect("builder has a worktree").git_internals()));
         let before = builder.then(|| exec::snapshot(&wt.as_ref().expect("builder has a worktree").path));
         let builtin = if builder { "standard" } else if native_for_note.is_empty() { "none" } else { "native" };
@@ -1097,6 +1109,22 @@ impl Engine {
                     }
                 }
                 Event::McpStatus(_) => {}
+                // The version the carrier's protocol server reported, which can differ from `--version` (`specs/132` §17.2 item 5).
+                Event::AgentVersion(v) => {
+                    sc.m.append(sc.agent_ev("harness.agent_version", json!({"harness": cli.program(), "agent_version": self.secrets.redact(&v)}), ep, &launch.model)).await?;
+                }
+                // A Copilot ACP seat read outside its places without asking (`specs/132` §17.2 item 4): stopped and logged, and what it
+                // returns is not vouched for. Not retried: the same seat would be started again.
+                Event::Result { ref text, ref subtype, .. } if subtype.as_str() == crate::harness::ACP_READ_WATCHDOG => {
+                    session.kill().await;
+                    let why = self.secrets.redact(text);
+                    sc.m.append(sc.agent_ev("harness.read_watchdog", json!({"harness": cli.program(), "reason": why}), ep, &launch.model)).await?;
+                    if sc.span.observe_input(Tier::L0) {
+                        sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "copilot seat read outside its places without asking"}))).await?;
+                    }
+                    failure = Some((why, false));
+                    break;
+                }
                 // Listed at init, no tool bypass seen: recorded in the log as a launch note, never a reason to stop (spec 092 S2d1).
                 Event::InitExtras { ref slash_commands, ref skills, ref agents, ref plugins } => {
                     if granted {
@@ -2387,7 +2415,7 @@ open(sys.argv[1], "w").write(json.dumps(out))
     async fn a_copilot_tier_whose_model_a_fresh_catalog_lacks_is_refused() {
         use crate::model_catalog::{save, Catalog, CatalogModel};
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-        let listed = |ids: &[&str], ver: &str| Catalog { cli_version: ver.into(), read_unix: now, models: ids.iter().map(|id| CatalogModel { id: id.to_string(), multiplier: Some(1.0), price_category: "medium".into(), enabled: true }).collect() };
+        let listed = |ids: &[&str], ver: &str| Catalog { cli_version: ver.into(), read_unix: now, models: ids.iter().map(|id| CatalogModel { id: id.to_string(), multiplier: Some(1.0), price_category: "medium".into(), enabled: true }).collect(), acp_version: None };
         for (catalog, runs) in [(listed(&["gpt-6-luna"], "GitHub Copilot CLI 9.9.9."), false), (listed(&["m-1"], "GitHub Copilot CLI 9.9.9."), true), (listed(&["gpt-6-luna"], "GitHub Copilot CLI 9.9.8."), true)] {
             let scripts = tempfile::tempdir().unwrap();
             let prog = crate::harness::tests::fake_cli_versioned(scripts.path(), &fake_copilot_body(&scripts.path().join("dump"), "m-1"), "GitHub Copilot CLI 9.9.9.");
@@ -2456,6 +2484,49 @@ open(sys.argv[1], "w").write(json.dumps(out))
         }
         body.push_str("fi\nprintf '%s\\n' '{\"type\":\"result\",\"sessionId\":\"s\",\"exitCode\":0}'");
         fake_cli(dir, &body)
+    }
+
+    /// specs/132 §17.2: a Copilot ACP Builder is launched confined (an explicit tool list without the shell, its configuration home in its
+    /// scratch outside the worktree); a read it asks for outside the worktree is refused without a card; a read outside that ran unasked
+    /// stops the seat and is logged; the ACP server's version is recorded.
+    #[tokio::test]
+    async fn a_copilot_builder_is_confined_its_outside_reads_are_refused_and_an_unasked_one_stops_it() {
+        let scripts = tempfile::tempdir().unwrap();
+        let d = scripts.path().display();
+        let body = format!(
+            r#"printf '%s\n' "$@" > '{d}/args'
+printf '%s' "$COPILOT_HOME" > '{d}/home'
+echo '{{"jsonrpc":"2.0","id":1,"result":{{"agentInfo":{{"name":"Copilot","version":"9.9.9"}}}}}}'
+read new_session
+echo '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"s"}}}}'
+read prompt
+echo '{{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{{"toolCall":{{"toolCallId":"r1","kind":"read","title":"view","rawInput":{{"path":"/etc/hosts"}},"locations":[{{"path":"/etc/hosts"}}]}},"options":[{{"optionId":"a1","kind":"allow_once"}},{{"optionId":"r1","kind":"reject_once"}}]}}}}'
+read answer
+echo "$answer" > '{d}/answer'
+echo '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"tool_call","toolCallId":"r2","kind":"read","rawInput":{{"path":"/etc/passwd"}}}}}}}}'
+echo '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"tool_call_update","toolCallId":"r2","status":"completed"}}}}}}'
+read never"#
+        );
+        let prog = fake_cli(scripts.path(), &body);
+        let f = setup_with_exec(vec![], 5.0, |s| s.copilot_program = prog, |c| c.sandbox = crate::exec::SandboxMode::Off);
+        crate::worktree::tests::init_repo(&f.root.join("proj"), &f.root.join("git-home"));
+        crate::testkit::ratify_spec(&f);
+        use_keyed_harness(&f, "copilot");
+        *f.model.harness_key.lock().unwrap() = Some("ghp-cp-1".into());
+        let out = f.engine.run_task(&f.m, "builder", "Implement @specs/011-retry.md in @project/app/src/lib.rs").await.unwrap();
+        assert_ne!(out.status, Status::Done, "{}", out.text);
+        let args = read(scripts.path(), "args");
+        assert!(args.contains("--acp\n") && args.contains("--available-tools\nview\ngrep\nglob\nedit\ncreate\napply_patch\n") && args.contains("--disallow-temp-dir"), "{args}");
+        assert!(!args.lines().any(|a| a == "bash" || a == "shell"), "{args}");
+        let wt = f.root.join("workspaces/w/worktrees").join(&out.task_id);
+        let home = read(scripts.path(), "home");
+        assert!(home.ends_with(crate::harness::COPILOT_HOME_DIR) && !std::path::Path::new(&home).starts_with(&wt), "the config home is in the scratch, not the worktree: {home}");
+        assert!(read(scripts.path(), "answer").contains(r#""outcome":{"optionId":"r1","outcome":"selected"}"#), "the outside read is refused: {}", read(scripts.path(), "answer"));
+        assert!(f.engine.broker.pending().is_empty() && events_of(&f, "approval.requested").is_empty(), "refused without a card");
+        assert_eq!(events_of(&f, "harness.read_refused").len(), 1);
+        let stop = events_of(&f, "harness.read_watchdog");
+        assert!(stop.len() == 1 && stop[0].payload["reason"].as_str().unwrap().contains("/etc/passwd"), "{stop:?}");
+        assert_eq!(events_of(&f, "harness.agent_version")[0].payload["agent_version"], "9.9.9");
     }
 
     fn copilot_fx(prog: String) -> Fx {

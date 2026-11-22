@@ -933,6 +933,12 @@ fn check_copilot_catalog(ws: Option<&Path>, cfg_text: &str, run: &dyn Fn(&str, &
         (Some(ws), Some(ver)) => mc::refresh(&ws.join("local"), ver, now, read),
         _ => None,
     };
+    // The ACP server can run another version than `--version` names (`specs/132` §17.1, §17.2 item 5): the seat runs the ACP one.
+    if let (Some(cat), Some(ver)) = (&catalog, &version) {
+        if let Some(line) = mc::version_mismatch(ver, cat.acp_version.as_deref()) {
+            r.warn("10 harness", "copilot acp version", line);
+        }
+    }
     for e in eps {
         let id = e.get("id").and_then(|i| i.as_str()).unwrap_or("?");
         let loc = format!("{id} models");
@@ -2457,6 +2463,21 @@ mod tests {
         let mut none = Report::default();
         check_copilot_catalog(Some(tempfile::tempdir().unwrap().path()), cfg, &run, &|| None, 1_793_000_000, &mut none);
         assert!(none.findings.iter().all(|f| f.level == Level::Skipped && f.message.contains("not checked")), "{:?}", none.findings);
+    }
+
+    /// specs/132 §17.2 item 5: the version the ACP server reports is kept with the catalog, and a mismatch with `--version` is a warning.
+    #[test]
+    fn a_copilot_acp_version_other_than_the_cli_version_is_shown() {
+        let cfg = "[[endpoints]]\nid=\"copilot-claude\"\nfamily=\"claude\"\npath=\"harness\"\nharness=\"copilot\"\ncredential=\"harness-login\"\nmodels = { fast = \"claude-haiku-4.5\" }\n";
+        let run = |p: &str, a: &[&str]| -> CliRun { (p == "copilot" && a == ["--version"]).then(|| (0, "GitHub Copilot CLI 1.0.114.\n".into())) };
+        let answer = |v: &str| serde_json::json!({"agentInfo": {"name": "Copilot", "version": v}, "models": {"availableModels": [{"modelId": "claude-haiku-4.5", "_meta": {"copilotUsage": "0.33x"}}]}});
+        let mut r = Report::default();
+        check_copilot_catalog(Some(tempfile::tempdir().unwrap().path()), cfg, &run, &|| Some(answer("1.0.107")), 1_793_000_000, &mut r);
+        let f = r.findings.iter().find(|f| f.location == "copilot acp version").expect("a mismatch line");
+        assert!(f.level == Level::Warn && f.message.contains("1.0.114") && f.message.contains("1.0.107"), "{}", f.message);
+        let mut same = Report::default();
+        check_copilot_catalog(Some(tempfile::tempdir().unwrap().path()), cfg, &run, &|| Some(answer("1.0.114")), 1_793_000_000, &mut same);
+        assert!(same.findings.iter().all(|f| f.location != "copilot acp version"), "{:?}", same.findings);
     }
 
     #[test]
