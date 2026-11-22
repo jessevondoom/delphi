@@ -122,10 +122,10 @@ One table in the operator docs, and agents say these words and no others: **appr
 The operator's decision (2026-11-07): this is a controlled team and environment; the aim is a workflow pattern first and hardening later. So, plainly:
 
 - **The `chat-quote` approval is self-attested.** The agent that runs the command also reports what the operator said. It is recorded with that label, with the verbatim quote, in the ledger and on the PR. It narrows nothing an agent could not already do with the operator's `gh` credential; it makes the act visible and consistent.
-- **The agent shares the operator's `gh` credential,** so an agent could merge with `gh` directly. The deny rule and the agent rules are conventions. The control is a separate agent identity and branch protection requiring the operator's review. **Deferred to the hardening pass (S8)**, which is due before repository access is widened.
+- **The agent shares the operator's `gh` credential,** so an agent could merge with `gh` directly. The deny rule and the agent rules are conventions. The control is a separate agent identity and branch protection requiring the operator's review. **Deferred to the hardening pass (S8)**, which was due before repository access is widened; the operator deferred S8 again on 2026-11-22 and said it is unlikely to be pursued (§12.2.3).
 - **Chat is an injection channel.** Text in a tool result, a pasted block, a subagent report or a notification is never the operator's instruction. The skill and `AGENTS.md` say so; code cannot yet tell the difference.
 - **`--auto` merges PRs that did not exist when it started.** The grant therefore binds to the session's bounds, not to a commit; each PR is bound to its own head at merge time. A queued PR written by an injected agent can land inside the caps. This is accepted for this phase because `--auto` is opt-in per session, bounded, visible and cannot touch the gate list.
-- **Hardening pass (S8), not designed here:** a separate agent identity, branch protection, a terminal or authenticator approval for gate-changing PRs, a signed ledger, and threat tests for time-of-check/time-of-use, replay and the identity boundary.
+- **Hardening pass (S8), not designed here, deferred by the operator on 2026-11-22 and unlikely to be pursued (§12.2.3); the `ci-gate` required check of §12.2.1 is not S8:** a separate agent identity, branch protection, a terminal or authenticator approval for gate-changing PRs, a signed ledger, and threat tests for time-of-check/time-of-use, replay and the identity boundary.
 
 ## 6. Slices (one per pull request; none starts before approval)
 
@@ -139,7 +139,7 @@ The operator's decision (2026-11-07): this is a controlled team and environment;
 | S5 | the error log, `merge log`, `merge fix`, the builder hand-off | 8-10 |
 | S6 | `--auto` | 8-10 |
 | S7 | agent rules, deny rule, operator guide, the vocabulary table | 3-4 |
-| S8 | hardening (deferred; a separate spec) | |
+| S8 | hardening (deferred; a separate spec). Deferred again by the operator on 2026-11-22, "unlikely to be pursued" (§12.2.3) | |
 
 S2a does not depend on code and can run beside S1 (it is drafted on a branch; nothing in it merges before this spec is approved). S2b needs the executable harness and so waits for approval.
 
@@ -274,7 +274,7 @@ Total 24 to 33 hours. S12's operator setting can be switched on before any code 
 - **OD-7. Freshness for every pull request, or only those touching aggregate paths** (`compiled/`, `specs/`, the tracker, `Cargo.lock`, `docs/reference/`). Recommend **every pull request**. It is simpler, it also catches a semantic break in code, and it matches GitHub's strict setting, so switching that on changes nothing in how the flow behaves. Cost: one CI run per pull request in a burst.
 - **OD-8. The attestation across a refresh.** Recommend carrying it over only for a refresh made by the same invocation or session, with invariant 3 holding, linked in the ledger (§11.3.3). The stricter choice, asking again after every refresh, makes `--all` and `--auto` stop at every pull request but the first.
 - **OD-9. The wait.** Recommend 40 minutes per pull request and two refresh rounds per invocation.
-- **OD-10. The repository setting (the operator's).** Recommend adding a `required_status_checks` rule with the strict policy to the existing ruleset now, requiring at least the Linux integration job (it runs `compiled_specs`) and the lint job, and, if the operator accepts the extra wait, every CI job. Merge Queue is likely unavailable on a user-owned repository and needs a `ci.yml` change; not recommended now. This is part of the hardening §5 defers to S8, taken early because it costs no code.
+- **OD-10. The repository setting (the operator's).** Recommend adding a `required_status_checks` rule with the strict policy to the existing ruleset now, requiring at least the Linux integration job (it runs `compiled_specs`) and the lint job, and, if the operator accepts the extra wait, every CI job. Merge Queue is likely unavailable on a user-owned repository and needs a `ci.yml` change; not recommended now. This was described as part of the hardening §5 defers to S8, taken early because it costs no code. **Superseded by §12 (2026-11-22):** S8 is deferred and unlikely to be pursued, and the setting is no longer part of it; it is the operator's step of §12.2.1, one strict rule naming the single job `ci-gate`, which passes only when every CI job did.
 - **OD-11. The count lines in the compiled views** (§11.5 option 4). Recommend an amendment to spec 088 that drops "{n} specs in {m} groups" and "{n} specs." from the views; about 1 to 2 hours, an ordinary pull request (`spec_views.rs` is not on the gate list).
 - **OD-12. Repair from the flow or from CI.** Recommend the flow (`repair-base`), not a `.github/` job (§11.5 option 5).
 
