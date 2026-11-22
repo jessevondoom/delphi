@@ -114,7 +114,7 @@ Operator decisions, verbatim where short:
 | OQ-10 | Typing to agents in the app | **Operator: yes, after this work**, as its own spec. |
 | — | Enhancements | **Operator: "include your enhancements in the plan they're good."** Section 5, slices E1 to E9. |
 
-Recommendations awaiting the operator's yes:
+Recommendations 4.1 to 4.5 below: **accepted by the operator, 2026-11-22** ("yes your recommendations are accepted"). The spec shape of 4.6 is the architect's proposal under OQ-9. This plan is the final candidate, put to a Council before specs are drafted.
 
 ### 4.1 OQ-3: the daemon's environment
 
