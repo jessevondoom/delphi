@@ -200,6 +200,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_seat_quota(&cfg, &run_cli, &codex_meter, now_unix, &mut r);
     let copilot_catalog = || delphi_engine::model_catalog::read_live("copilot", std::time::Duration::from_secs(20));
     check_copilot_catalog(Some(&ws.dir), &cfg, &run_cli, &copilot_catalog, now_unix, &mut r);
+    check_conformance(&ws.dir, &cfg, &run_cli, now_unix, &mut r);
     check_coverage_drift(&cfg, &help_page, &mut r);
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
 
@@ -896,6 +897,22 @@ fn check_harnesses(ws: Option<&Path>, cfg_text: &str, run: &dyn Fn(&str, &[&str]
             Some("gemini") => r.warn("10 harness", id.to_string(), "the Gemini CLI no longer supports personal Google sign-in (it points to Antigravity); use `harness = \"agy\"`"),
             other => r.warn("10 harness", id.to_string(), format!("the `{}` harness is not implemented yet", other.unwrap_or("?"))),
         }
+    }
+}
+
+/// One line per harness endpoint from the carrier conformance record (`specs/132` §4.1 step 5, C6): the installed version, the rows
+/// met, the budget and its source, the tool level, and "unprobed version" when the CLI moved since the record. Information only.
+fn check_conformance(ws: &Path, cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, now: i64, r: &mut Report) {
+    let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let Some(list) = v.get("endpoints").and_then(|e| e.as_array()) else { return };
+    let records = delphi_engine::conformance::load(&ws.join(delphi_engine::conformance::FILE));
+    let mut versions: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    for e in list.iter().filter(|e| e.get("path").and_then(|p| p.as_str()) == Some("harness")) {
+        let id = e.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+        let Some(program) = e.get("harness").and_then(|h| h.as_str()).and_then(delphi_engine::harness::Cli::from_harness).map(|c| c.program()) else { continue };
+        let version = versions.entry(program.into()).or_insert_with(|| run(program, &["--version"]).filter(|(code, _)| *code == 0).and_then(|(_, out)| out.lines().next().map(|l| l.trim().to_string())).filter(|l| !l.is_empty()));
+        let line = delphi_engine::conformance::doctor_line(&records, id, version.as_deref(), now);
+        r.push(Level::Ok, "10 harness", format!("{id} conformance"), line);
     }
 }
 
@@ -2380,6 +2397,28 @@ mod tests {
         assert!(on[1].0 == Level::Ok && on[1].1.contains("business plan") && on[1].1.contains("10% of 100 credits used"), "{:?}", on);
         let silent = say(&cfg, &|_: &str, _: &[&str]| None, &|| None);
         assert!(silent[0].0 == Level::Skipped && silent[0].1.contains("unknown"), "{:?}", silent);
+    }
+
+    /// specs/132 AC-12: doctor reads the conformance record for the installed CLI version only; a moved CLI is an unprobed version.
+    #[test]
+    fn doctor_prints_the_conformance_record_for_the_installed_cli_version_only() {
+        use delphi_engine::conformance as cf;
+        let ws = tempfile::tempdir().unwrap();
+        let cfg = "[[endpoints]]\nid=\"cp\"\nfamily=\"claude\"\npath=\"harness\"\nharness=\"copilot\"\ncredential=\"harness-login\"\n[[endpoints]]\nid=\"ag\"\nfamily=\"gemini\"\npath=\"harness\"\nharness=\"agy\"\ncredential=\"harness-login\"\n";
+        let rec = cf::Record { endpoint_id: "cp".into(), harness: "copilot".into(), model: "claude-haiku-4.5".into(), cli_version: "GitHub Copilot CLI 1.0.112.".into(), at: 1_000, tool_level: "L0".into(), rows: vec![cf::Row { row: "C2".into(), status: cf::Status::Met, note: String::new(), count: None }, cf::Row { row: "C5".into(), status: cf::Status::NotMet, note: String::new(), count: None }] };
+        cf::save(&ws.path().join(cf::FILE), &rec).unwrap();
+        let say = |copilot: &'static str| {
+            let run = move |p: &str, a: &[&str]| -> CliRun { (a == ["--version"]).then(|| (0, if p == "copilot" { copilot.to_string() } else { "1.4.7\n".to_string() })) };
+            let mut r = Report::default();
+            check_conformance(ws.path(), cfg, &run, 2_000, &mut r);
+            r
+        };
+        let r = say("GitHub Copilot CLI 1.0.112.\nRun 'copilot update'\n");
+        let cp = r.findings.iter().find(|f| f.location == "cp conformance").unwrap();
+        assert!(cp.message.contains("met C2, NOT met C5") && cp.message.contains("tool level L0") && cp.message.contains("spec 131 S2 not built"), "{}", cp.message);
+        assert!(r.findings.iter().find(|f| f.location == "ag conformance").unwrap().message.contains("not probed"));
+        let moved = say("GitHub Copilot CLI 1.0.120.\n");
+        assert!(moved.findings.iter().find(|f| f.location == "cp conformance").unwrap().message.contains("unprobed version"), "{:?}", moved.findings);
     }
 
     /// specs/132 AC-5: with a fake `session/new` answer the catalog is cached with its CLI version; a configured model missing from it
