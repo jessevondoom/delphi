@@ -219,6 +219,7 @@ pub mod research_setup;
 pub mod route;
 pub mod customize;
 pub mod ratify;
+pub mod ratchet;
 pub mod retro;
 pub mod trace_mine;
 pub mod trace_miner;

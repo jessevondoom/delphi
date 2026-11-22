@@ -21,6 +21,12 @@ min_context_ratio = 3.0
 tasks = ["read", "summarise", "write-state"]
 label = "unverified, generated"
 
+# The ratchet (§3.2, OD-3): after k first-pass successes in a row (gates green, no retry) a plan-following role's build tries the
+# class below its preferred one, never below its floor; one failure puts it back, two in a row on a class stop trying that class
+# until the operator clears it (`delphi agent clear`).
+[ratchet]
+k = 5
+
 [[rule]]
 id = "open-weights-here"
 local = true

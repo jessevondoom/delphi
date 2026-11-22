@@ -112,7 +112,7 @@ _No standard scope section; open the spec._
 
 ## 056-discovered-model-assignment
 
-**056: Discovered Model Assignment: Capability Classes, Plan and Execute Split, Promote and Nerf** · approved (per source at `f0da7ad813e4`) · tier 0 · [source](../../specs/056-discovered-model-assignment.md)
+**056: Discovered Model Assignment: Capability Classes, Plan and Execute Split, Promote and Nerf** · approved (per source at `9fcd4deb0a37`) · tier 0 · [source](../../specs/056-discovered-model-assignment.md)
 
 _No standard scope section; open the spec._
 

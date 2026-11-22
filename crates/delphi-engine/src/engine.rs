@@ -2114,6 +2114,11 @@ impl Engine {
         a.near_cap = crate::assign::read_near_cap(&self.ws.dir);
         let rank = |t: &str| match t { "fast" => 0, "frontier" => 2, _ => 1 };
         a.step = rank(&sc.tier) - rank(&self.default_tier_of(&sc.role, &sc.manifest)) + cfg.grades.of(&sc.role, None);
+        // The ratchet (`specs/056` §3.2): only a plan-following role's build, which runs in a worktree under deterministic gates.
+        let (bounds, follows) = crate::ratchet::bounds(&rules, &sc.role);
+        if follows && sc.guard.zones.worktree.is_some() && builds(&sc.manifest) {
+            a.step += crate::ratchet::step_for(&self.ws.dir, &sc.role, crate::ratchet::BUILD, bounds);
+        }
         Some(a)
     }
 
