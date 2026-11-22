@@ -115,6 +115,10 @@ pub fn run(ws_dir: &Path, args: &[String]) -> i32 {
     }
 
     print!("{}", render(&cfg, &pool.snapshot(), clock()));
+    // `specs/056` §10.9: what `delphi models calibrate` measured, as counts, and any class proposal (never applied).
+    let known = crate::models::load(ws_dir);
+    let class_of = |e: &str, m: &str| known.iter().find(|c| c.endpoint_id == e && c.model_id == m).map(|c| c.class).unwrap_or_default();
+    print!("{}", crate::calibration::report(&crate::calibration::load_all(ws_dir), &class_of));
     if failed {
         1
     } else {

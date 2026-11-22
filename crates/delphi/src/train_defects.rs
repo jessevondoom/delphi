@@ -21,7 +21,12 @@
 //! One use is different, and `specs/056` §10.4 approves it: in the M7 routing benchmark (`train_gate`, `dev/train/m7/`), the pass
 //! bits of four holdout review cases are one third of the gate on which a default (`[routing] assignment`) may change. That
 //! compares two routing settings on fresh, pre-registered seeds; it measures no seat, no model sees it and it never reaches a
-//! prompt. (Slice M5, when built, adds model-level calibration counts as a routing input under the same section.)
+//! prompt.
+//!
+//! A second use, approved by the same section: `delphi models calibrate` (slice M5, `models_calibrate.rs`) sends ten
+//! medium cases with its own fixed seeds to a model as bare carrier calls, with no Delphi role, and keeps the counts as **routing
+//! evidence** for task kind `review` and as class proposals the operator ratifies. That measures a model on fixed offline cases,
+//! not a seat; no model sees a result and nothing reaches a prompt.
 //!
 //! Nothing here calls a model.
 
@@ -634,7 +639,7 @@ fn prompt(d: Difficulty) -> String {
 }
 
 /// What an inline case asks: the module is in the prompt, with line numbers, so a seat with no tools can take it.
-fn inline_prompt(source: &str, d: Difficulty) -> String {
+pub(crate) fn inline_prompt(source: &str, d: Difficulty) -> String {
     let numbered = numbered(source);
     format!("Below is a small Python module with line numbers. Each function has a docstring stating what it should do. Review it. {}\n\n---\n{}---", format_rules(d), numbered)
 }

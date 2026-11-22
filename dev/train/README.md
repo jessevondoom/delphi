@@ -169,6 +169,11 @@ verdict on a seat. One use differs, approved by `specs/056` §10.4: the pass bit
 routing benchmark (below) are one third of the gate on which `[routing] assignment` may become `discovered`. That compares two
 routing settings on fresh pre-registered seeds; no seat is scored, no model sees it, and nothing reaches a prompt.
 
+A second use, approved by the same section (slice M5): `delphi models calibrate` sends ten medium inline cases, with seeds
+56051 to 56060 fixed in `crates/delphi/src/models_calibrate.rs` (disjoint from the M7 benchmark's 56071 to 56074), to one model at a time as
+bare carrier calls with no Delphi role text. The counts (caught of planted, false positives) stay in the workspace's `local/`
+and are **routing evidence** for task kind `review`, plus class proposals the operator ratifies; they measure a model on fixed
+offline cases, not a seat, and they never reach a prompt.
 
 ### Harder cases: `--difficulty easy|medium|hard`
 

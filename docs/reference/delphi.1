@@ -634,7 +634,14 @@ the model pool: usable, out of quota, cooling down.
 .PP
 .nf
   delphi models [\-\-probe] [\-\-workspace <name>] [\-\-home <dir>]
+  delphi models calibrate <endpoint>/<model> | \-\-all\-at low|standard|premium
+    [\-\-concurrency 1|2] [\-\-dry\-run]
 .fi
+.PP
+calibrate (spec 056 M5) SPENDS tokens and premium requests: ten seeded\-defect review cases, one bare call per
+model. It prints the calls and cost first, and runs only on y or yes typed at a terminal (no \-\-yes; not in a seat).
+\-\-all\-at standard is the 1x\-and\-below run. Cached cases are free. Counts feed routing only, never a prompt;
+`delphi models` shows them and any class proposal, which you ratify in model\-classes.toml.
 .SS delphi daemon
 the background process: status, stop, restart.
 .PP
