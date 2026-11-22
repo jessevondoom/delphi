@@ -175,6 +175,13 @@ fn sort_args<'a>(tool: &str, input: &'a Value) -> Result<Args<'a>, String> {
     Ok(a)
 }
 
+/// The argument names of a call to a read tool that Delphi's key list for it does not know (§14.9 item 2): the reason such a call is
+/// refused, named so the key lists of §14.7 rule 1 can be corrected from evidence. Empty for a tool with no key list.
+pub fn unknown_arg_keys(tool: &str, keys: &[String]) -> Vec<String> {
+    let Some(s) = schema(tool) else { return vec![] };
+    keys.iter().filter(|k| ![s.path, s.glob, s.text, s.other].iter().any(|l| l.contains(&k.as_str()))).cloned().collect()
+}
+
 /// The gate for a forge reader's native call (§14.7 rule 1): the tool must be on `read`; every argument must be one Delphi knows for
 /// that tool; every path must be absolute and inside `root` (through symlinks, never under `.git`: `harness_run::inside`); every glob
 /// must stay where it is searched from. A call that names no path is refused too: a CLI would run it in its own working directory,
@@ -392,6 +399,150 @@ pub struct VersionRecord {
     /// grace), so a carrier that never tries the write step does not cost a probe an hour for ever.
     #[serde(default)]
     pub undecided: u32,
+    /// The last [`MAX_ATTEMPTS`] probe attempts, oldest first, each with the tool calls the seat made (§14.9 item 2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<ProbeAttempt>,
+}
+
+/// Probe attempts kept per version, and tool calls kept per attempt.
+pub const MAX_ATTEMPTS: usize = 5;
+pub const MAX_PROBE_CALLS: usize = 24;
+
+/// One tool call a probe's seat made (§14.9 item 2): its name, its argument names (never their values), the gate's decision and reason,
+/// and whether a result came back.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeCall {
+    pub tool: String,
+    #[serde(default)]
+    pub arg_keys: Vec<String>,
+    /// `Some(true)` the gate allowed it, `Some(false)` it refused it, `None` the call never reached the gate.
+    #[serde(default)]
+    pub allowed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// `ok` or `error` when a result came back; `None` when none did.
+    #[serde(default)]
+    pub result: Option<String>,
+    /// Argument names Delphi's key list for this read tool does not know: why a read was refused.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unknown_keys: Vec<String>,
+    /// The stream's call id, to match a result to its call. Not stored.
+    #[serde(skip)]
+    pub id: Option<String>,
+}
+
+/// One probe attempt, as the store keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeAttempt {
+    pub at: i64,
+    /// `pass`, `fail` or `undecided`.
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub tokens: u64,
+    #[serde(default)]
+    pub calls: Vec<ProbeCall>,
+}
+
+/// The tool calls of one probe, gathered from the seat's stream and the gate's decisions in whichever order they arrive.
+#[derive(Debug, Default)]
+pub struct CallLog {
+    calls: Vec<ProbeCall>,
+}
+
+impl CallLog {
+    fn push(&mut self, c: ProbeCall) {
+        if self.calls.len() < MAX_PROBE_CALLS {
+            self.calls.push(c);
+        }
+    }
+
+    /// A call in the seat's stream (before it runs). A gate decision for the same tool that came first, with no id yet, is this call.
+    pub fn used(&mut self, id: &str, tool: &str, input: &Value) {
+        if self.calls.iter().any(|c| c.id.as_deref() == Some(id)) {
+            return;
+        }
+        let keys = crate::bridge::arg_keys(input);
+        match self.calls.iter_mut().find(|c| c.tool == tool && c.id.is_none() && c.allowed.is_some()) {
+            Some(c) => {
+                c.id = Some(id.to_string());
+                if c.arg_keys.is_empty() {
+                    c.arg_keys = keys;
+                }
+            }
+            None => self.push(ProbeCall { tool: tool.to_string(), arg_keys: keys, id: Some(id.to_string()), ..Default::default() }),
+        }
+    }
+
+    /// The gate decided a call (`id` when the carrier gives one). A refused call to a read tool names the argument names it did not know.
+    pub fn decided(&mut self, tool: &str, id: Option<&str>, arg_keys: Vec<String>, allowed: bool, reason: &str) {
+        let id = id.filter(|i| !i.is_empty());
+        let at = match id {
+            Some(i) => self.calls.iter().position(|c| c.id.as_deref() == Some(i)),
+            None => None,
+        }
+        .or_else(|| self.calls.iter().position(|c| c.tool == tool && c.allowed.is_none()));
+        let at = match at {
+            Some(i) => i,
+            None => {
+                if self.calls.len() >= MAX_PROBE_CALLS {
+                    return;
+                }
+                self.calls.push(ProbeCall { tool: tool.to_string(), id: id.map(String::from), ..Default::default() });
+                self.calls.len() - 1
+            }
+        };
+        let c = &mut self.calls[at];
+        if c.arg_keys.is_empty() {
+            c.arg_keys = arg_keys;
+        }
+        c.allowed = Some(allowed);
+        if !allowed {
+            c.reason = Some(reason.chars().take(300).collect()).filter(|r: &String| !r.is_empty());
+            c.unknown_keys = unknown_arg_keys(tool, &c.arg_keys);
+        }
+    }
+
+    /// A call's result arrived.
+    pub fn returned(&mut self, id: &str, is_error: bool) {
+        if let Some(c) = self.calls.iter_mut().find(|c| c.id.as_deref() == Some(id)) {
+            c.result = Some(if is_error { "error" } else { "ok" }.to_string());
+        }
+    }
+
+    pub fn into_calls(self) -> Vec<ProbeCall> {
+        self.calls
+    }
+}
+
+/// What one probe found, with the calls that show why (§14.9 item 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeRun {
+    pub outcome: ProbeOutcome,
+    pub calls: Vec<ProbeCall>,
+}
+
+impl ProbeRun {
+    /// A probe that stopped before the seat made any call.
+    pub fn bare(outcome: ProbeOutcome) -> ProbeRun {
+        ProbeRun { outcome, calls: vec![] }
+    }
+}
+
+/// A probe that did not pass and whose seat had a read refused for an argument name Delphi does not know says so in its reason (§14.9
+/// item 2), so the key list can be corrected from evidence.
+pub fn diagnose(outcome: ProbeOutcome, calls: &[ProbeCall]) -> ProbeOutcome {
+    let unknown: Vec<String> = calls.iter().filter(|c| !c.unknown_keys.is_empty()).map(|c| format!("`{}` with {}", c.tool, c.unknown_keys.iter().map(|k| format!("`{k}`")).collect::<Vec<_>>().join(", "))).collect();
+    if unknown.is_empty() {
+        return outcome;
+    }
+    let add = format!("; a read was refused for an argument Delphi's key list does not know ({}): the key list of specs/135 section 14.7 rule 1 may need it", unknown.join("; "));
+    match outcome {
+        ProbeOutcome::Fail { reason, tokens } => ProbeOutcome::Fail { reason: reason + &add, tokens },
+        ProbeOutcome::Undecided { reason, tokens } => ProbeOutcome::Undecided { reason: reason + &add, tokens },
+        pass => pass,
+    }
 }
 
 pub fn store_path(ws_dir: &Path) -> PathBuf {
@@ -440,7 +591,7 @@ pub fn observe(recs: &mut Vec<VersionRecord>, harness: &str, version: Option<&st
     }
     let earlier_pass = recs.iter().any(|r| r.harness == harness && r.state == State::ProbedPass);
     let (state, grace_until) = if earlier_pass { (State::Grace, Some(now + GRACE_SECS)) } else { (State::Unprobed, None) };
-    recs.push(VersionRecord { harness: harness.into(), version: version.into(), state, first_seen: now, grace_until, probed_at: None, attempted_at: None, probe_tokens: 0, reason: None, fails: 0, watchdog: false, undecided: 0 });
+    recs.push(VersionRecord { harness: harness.into(), version: version.into(), state, first_seen: now, grace_until, probed_at: None, attempted_at: None, probe_tokens: 0, reason: None, fails: 0, watchdog: false, undecided: 0, attempts: vec![] });
     observe(recs, harness, Some(version), now)
 }
 
@@ -517,25 +668,69 @@ pub fn drop_version(recs: &mut Vec<VersionRecord>, harness: &str, version: &str,
     let reason = format!("watchdog: {reason}");
     match recs.iter_mut().find(|r| r.harness == harness && r.version == version) {
         Some(r) => (r.state, r.grace_until, r.reason, r.watchdog) = (State::ProbedFail, None, Some(reason), true),
-        None => recs.push(VersionRecord { harness: harness.into(), version: version.into(), state: State::ProbedFail, first_seen: now, grace_until: None, probed_at: None, attempted_at: None, probe_tokens: 0, reason: Some(reason), fails: 0, watchdog: true, undecided: 0 }),
+        None => recs.push(VersionRecord { harness: harness.into(), version: version.into(), state: State::ProbedFail, first_seen: now, grace_until: None, probed_at: None, attempted_at: None, probe_tokens: 0, reason: Some(reason), fails: 0, watchdog: true, undecided: 0, attempts: vec![] }),
     }
 }
 
-/// One line per record, for `delphi doctor`.
-pub fn doctor_lines(recs: &[VersionRecord], now: i64) -> Vec<(bool, String)> {
-    recs.iter()
-        .map(|r| {
-            let cost = if r.probe_tokens > 0 { format!("; probes spent {} tokens", r.probe_tokens) } else { String::new() };
-            match r.state {
-                State::ProbedPass => (true, format!("{} {}: read tools (probed{}){}", r.harness, r.version, r.probed_at.map(|t| format!(" {}", age(now - t))).unwrap_or_default(), cost)),
-                State::Grace if r.grace_until.is_some_and(|g| now < g) => (true, format!("{} {}: read tools in the grace period ({} left), a background probe is due{}", r.harness, r.version, age(r.grace_until.unwrap_or(now) - now), cost)),
-                State::Grace => (false, format!("{} {}: BRIDGE-ONLY, the grace ended before a probe passed{}", r.harness, r.version, cost)),
-                State::Unprobed => (true, format!("{} {}: tool-less until the background probe passes{}", r.harness, r.version, cost)),
-                State::ProbedFail => (false, format!("{} {}: BRIDGE-ONLY, {}{}", r.harness, r.version, r.reason.as_deref().unwrap_or("its probe failed"), cost)),
-            }
-        })
-        .collect()
+/// [`record_probe`], and the attempt with its tool calls kept in the record (§14.9 item 2): the last [`MAX_ATTEMPTS`] attempts.
+pub fn record_run(recs: &mut [VersionRecord], harness: &str, version: &str, run: &ProbeRun, now: i64) {
+    record_probe(recs, harness, version, &run.outcome, now);
+    let Some(r) = recs.iter_mut().find(|r| r.harness == harness && r.version == version) else { return };
+    let reason = match &run.outcome {
+        ProbeOutcome::Pass { .. } => None,
+        ProbeOutcome::Fail { reason, .. } | ProbeOutcome::Undecided { reason, .. } => Some(reason.chars().take(600).collect()),
+    };
+    r.attempts.push(ProbeAttempt { at: now, outcome: run.outcome.label().to_string(), reason, tokens: run.outcome.tokens(), calls: run.calls.iter().take(MAX_PROBE_CALLS).cloned().collect() });
+    let over = r.attempts.len().saturating_sub(MAX_ATTEMPTS);
+    r.attempts.drain(..over);
 }
+
+/// One call of a probe, as `delphi doctor` prints it: the tool, its argument names, the gate's decision and reason, and its result.
+pub fn call_line(c: &ProbeCall) -> String {
+    let gate = match c.allowed {
+        Some(true) => "allowed by the gate".to_string(),
+        Some(false) => format!("REFUSED by the gate{}", c.reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default()),
+        None => "never reached the gate".to_string(),
+    };
+    let result = match c.result.as_deref() {
+        Some("ok") => "a result came back",
+        Some(_) => "an error came back",
+        None => "no result came back",
+    };
+    let unknown = if c.unknown_keys.is_empty() { String::new() } else { format!("; UNKNOWN ARGUMENT {}: the key list of specs/135 section 14.7 rule 1 does not have it", c.unknown_keys.join(", ")) };
+    format!("{}({}): {gate}; {result}{unknown}", c.tool, c.arg_keys.join(", "))
+}
+
+/// One line per record, for `delphi doctor`; a record not passed whose last failing (or undecided) attempt recorded calls is followed by
+/// one line per call of that attempt (§14.9 item 2).
+pub fn doctor_lines(recs: &[VersionRecord], now: i64) -> Vec<(bool, String)> {
+    let mut out = Vec::new();
+    for r in recs {
+        let cost = if r.probe_tokens > 0 { format!("; probes spent {} tokens", r.probe_tokens) } else { String::new() };
+        let line = match r.state {
+            State::ProbedPass => (true, format!("{} {}: read tools (probed{}){}", r.harness, r.version, r.probed_at.map(|t| format!(" {}", age(now - t))).unwrap_or_default(), cost)),
+            State::Grace if r.grace_until.is_some_and(|g| now < g) => (true, format!("{} {}: read tools in the grace period ({} left), a background probe is due{}", r.harness, r.version, age(r.grace_until.unwrap_or(now) - now), cost)),
+            State::Grace => (false, format!("{} {}: BRIDGE-ONLY, the grace ended before a probe passed{}", r.harness, r.version, cost)),
+            State::Unprobed => (true, format!("{} {}: tool-less until the background probe passes{}", r.harness, r.version, cost)),
+            State::ProbedFail => (false, format!("{} {}: BRIDGE-ONLY, {}{}", r.harness, r.version, r.reason.as_deref().unwrap_or("its probe failed"), cost)),
+        };
+        let ok = line.0;
+        out.push(line);
+        if r.state == State::ProbedPass {
+            continue;
+        }
+        if let Some(a) = r.attempts.iter().rev().find(|a| a.outcome != "pass") {
+            if a.calls.is_empty() {
+                out.push((ok, format!("{} {}: its last {} probe ({} ago) made no tool call", r.harness, r.version, a.outcome, age(now - a.at))));
+            }
+            for (i, c) in a.calls.iter().enumerate() {
+                out.push((ok, format!("{} {}: last {} probe ({} ago), call {} of {}: {}", r.harness, r.version, a.outcome, age(now - a.at), i + 1, a.calls.len(), call_line(c))));
+            }
+        }
+    }
+    out
+}
+
 
 fn age(secs: i64) -> String {
     let s = secs.max(0);
@@ -548,14 +743,15 @@ fn age(secs: i64) -> String {
     }
 }
 
+
 /// The background probe of one carrier version (`specs/132` §4.1's C6 row, run by the daemon itself). Injected so tests use fakes.
 pub trait CarrierProbe: Send + Sync {
-    fn probe<'a>(&'a self, harness: &'a str, version: &'a str) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + 'a>>;
+    fn probe<'a>(&'a self, harness: &'a str, version: &'a str) -> Pin<Box<dyn Future<Output = ProbeRun> + Send + 'a>>;
 }
 
-/// Find one version that wants a probe, run it, and record what it found. Returns what was probed. Nothing here asks anyone: the
-/// caller runs it only when the daemon is idle (no task, operator quiet), and a run never waits for it.
-pub async fn probe_one_due(store: &Path, now: i64, prober: &dyn CarrierProbe) -> Option<(String, String, ProbeOutcome)> {
+/// Find one version that wants a probe, run it, and record what it found with its calls. Returns what was probed. Nothing here asks
+/// anyone: the caller runs it only when the daemon is idle (no task, operator quiet), and a run never waits for it.
+pub async fn probe_one_due(store: &Path, now: i64, prober: &dyn CarrierProbe) -> Option<(String, String, ProbeRun)> {
     let (h, v) = update(store, |r| {
         let due = probe_due(r, now);
         if let Some((h, v)) = &due {
@@ -567,9 +763,9 @@ pub async fn probe_one_due(store: &Path, now: i64, prober: &dyn CarrierProbe) ->
         due
     })
     .ok()??;
-    let outcome = prober.probe(&h, &v).await;
-    let _ = update(store, |r| record_probe(r, &h, &v, &outcome, now));
-    Some((h, v, outcome))
+    let run = prober.probe(&h, &v).await;
+    let _ = update(store, |r| record_run(r, &h, &v, &run, now));
+    Some((h, v, run))
 }
 
 /// `<program> --version` (first line), asked at most once every five minutes per program by a running daemon.
@@ -597,7 +793,7 @@ pub struct LiveProbe {
 }
 
 impl CarrierProbe for LiveProbe {
-    fn probe<'a>(&'a self, harness: &'a str, version: &'a str) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + 'a>> {
+    fn probe<'a>(&'a self, harness: &'a str, version: &'a str) -> Pin<Box<dyn Future<Output = ProbeRun> + Send + 'a>> {
         Box::pin(self.run(harness, version))
     }
 }
@@ -605,7 +801,15 @@ impl CarrierProbe for LiveProbe {
 const PROBE_WRITE: &str = "forge-probe-write.txt";
 
 impl LiveProbe {
-    async fn run(&self, harness: &str, version: &str) -> ProbeOutcome {
+    /// The probe, with every tool call the seat made (§14.9 item 2) and a reason that names an unknown argument when one was refused.
+    async fn run(&self, harness: &str, version: &str) -> ProbeRun {
+        let mut log = CallLog::default();
+        let outcome = self.run_logged(harness, version, &mut log).await;
+        let calls = log.into_calls();
+        ProbeRun { outcome: diagnose(outcome, &calls), calls }
+    }
+
+    async fn run_logged(&self, harness: &str, version: &str, log: &mut CallLog) -> ProbeOutcome {
         use crate::harness::{Cli, Decision, Event, Launch, LaunchProfile, Session, Tools};
         let undecided = |reason: String, tokens: u64| ProbeOutcome::Undecided { reason, tokens };
         let Some(cli) = Cli::from_harness(harness) else { return undecided("not a harness".into(), 0) };
@@ -689,6 +893,7 @@ impl LiveProbe {
                         biased;
                         Some(n) = async { match notes.as_mut() { Some(rx) => rx.recv().await, None => std::future::pending().await } } => {
                             wd.gate_decided(&n.tool, None, n.allowed);
+                            log.decided(&n.tool, None, n.arg_keys.clone(), n.allowed, &n.reason);
                             if n.allowed && read.contains(&n.tool) {
                                 reads_allowed += 1;
                             }
@@ -707,6 +912,11 @@ impl LiveProbe {
                             };
                             let ok = d == Decision::Allow;
                             wd.gate_decided(&p.tool_name, p.tool_use_id.as_deref(), ok);
+                            let why = match &d {
+                                Decision::Deny(w) => w.as_str(),
+                                _ => "",
+                            };
+                            log.decided(&p.tool_name, p.tool_use_id.as_deref(), crate::bridge::arg_keys(&p.input), ok, why);
                             if ok {
                                 reads_allowed += 1;
                             } else if is_write_kind(&p.tool_name) {
@@ -716,8 +926,12 @@ impl LiveProbe {
                                 break;
                             }
                         }
-                        Event::ToolUse { id, name, input } => wd.saw_use(&id, &name, &input),
+                        Event::ToolUse { id, name, input } => {
+                            log.used(&id, &name, &input);
+                            wd.saw_use(&id, &name, &input)
+                        }
                         Event::ToolResult { id, is_error } => {
+                            log.returned(&id, is_error);
                             if let Some(why) = wd.ran(&id, is_error) {
                                 ungated = Some(why);
                                 s.kill().await;
@@ -1110,9 +1324,9 @@ mod tests {
         assert!(!lines[0].0 && lines[0].1.contains("BRIDGE-ONLY") && lines[0].1.contains("watchdog") && lines[0].1.contains("2 tokens"), "{lines:?}");
     }
 
-    struct Fake(std::sync::Mutex<Vec<(String, String)>>, ProbeOutcome);
+    struct Fake(std::sync::Mutex<Vec<(String, String)>>, ProbeRun);
     impl CarrierProbe for Fake {
-        fn probe<'a>(&'a self, harness: &'a str, version: &'a str) -> Pin<Box<dyn Future<Output = ProbeOutcome> + Send + 'a>> {
+        fn probe<'a>(&'a self, harness: &'a str, version: &'a str) -> Pin<Box<dyn Future<Output = ProbeRun> + Send + 'a>> {
             self.0.lock().unwrap().push((harness.into(), version.into()));
             Box::pin(async move { self.1.clone() })
         }
@@ -1129,13 +1343,78 @@ mod tests {
             assert_eq!(observe(r, "agy", Some("agy 2"), 100), Access::Read);
         })
         .unwrap();
-        let fake = Fake(Default::default(), ProbeOutcome::Fail { reason: "no read on the list was seen".into(), tokens: 12 });
+        let fake = Fake(Default::default(), ProbeRun::bare(ProbeOutcome::Fail { reason: "no read on the list was seen".into(), tokens: 12 }));
         let (h, v, o) = probe_one_due(&store, 200, &fake).await.expect("one is due");
-        assert_eq!((h.as_str(), v.as_str(), o.label()), ("agy", "agy 2", "fail"));
+        assert_eq!((h.as_str(), v.as_str(), o.outcome.label()), ("agy", "agy 2", "fail"));
         assert!(probe_one_due(&store, 300, &fake).await.is_none(), "nothing else is due");
         assert_eq!(fake.0.lock().unwrap().len(), 1, "one small call per version");
         let mut recs = load(&store);
         assert!(matches!(observe(&mut recs, "agy", Some("agy 2"), 300), Access::BridgeOnly(_)));
         assert_eq!(recs.iter().find(|r| r.version == "agy 2").unwrap().probe_tokens, 12, "the probe's cost is kept");
+    }
+
+    /// Spec 135 AC-22 (§14.9 item 2): a failed probe's calls (name, argument names, the gate's decision and reason, whether a result came
+    /// back) are kept in the store, a read refused for an unknown argument name is called out in the reason, and doctor prints the calls
+    /// of the last failing attempt. The log matches calls whichever comes first, the gate's decision or the stream's call.
+    #[tokio::test]
+    async fn ac22_a_failed_probes_calls_and_the_gates_reasons_are_in_the_store_and_doctor() {
+        let (_t, root) = copy();
+        let read = default_read("agy");
+        let mut log = CallLog::default();
+        // agy: the hook's decision arrives before the stream's call (no id), then the result.
+        let input = json!({"AbsolutePath": root.join("src/lib.rs").to_str().unwrap(), "IsArtifact": false});
+        let why = gate(&read, &root, "view_file", &input).unwrap_err();
+        log.decided("view_file", None, crate::bridge::arg_keys(&input), false, &why);
+        log.used("t1", "view_file", &input);
+        log.returned("t1", true);
+        // Claude: the stream's call first, then the permission with its id; an allowed read whose result came back.
+        log.used("t2", "list_dir", &json!({"DirectoryPath": root.to_str().unwrap()}));
+        log.decided("list_dir", Some("t2"), vec!["DirectoryPath".into()], true, "");
+        log.returned("t2", false);
+        // A write refused, and a call that never reached the gate and never returned.
+        log.decided("write_to_file", None, vec!["TargetFile".into(), "CodeContent".into()], false, "denied by Delphi: write_to_file is not available");
+        log.used("t4", "browser_open", &json!({"Url": "https://example.invalid/secret-value"}));
+        let calls = log.into_calls();
+        assert_eq!(calls.len(), 4, "{calls:?}");
+        assert_eq!((calls[0].allowed, calls[0].result.as_deref(), calls[0].unknown_keys.clone()), (Some(false), Some("error"), vec!["IsArtifact".to_string()]), "{calls:?}");
+        assert!(calls[0].reason.as_deref().is_some_and(|r| r.contains("IsArtifact") && r.contains("does not know")), "{calls:?}");
+        assert_eq!((calls[1].allowed, calls[1].result.as_deref()), (Some(true), Some("ok")));
+        assert_eq!((calls[3].allowed, calls[3].result.clone(), calls[3].arg_keys.clone()), (None, None, vec!["Url".to_string()]), "names only, never values");
+        let outcome = diagnose(verdict(&ProbeEvidence { result_ok: true, reads_allowed: 0, ..Default::default() }, &read), &calls);
+        let ProbeOutcome::Fail { reason, .. } = &outcome else { panic!("{outcome:?}") };
+        assert!(reason.contains("`view_file` with `IsArtifact`") && reason.contains("key list"), "{reason}");
+
+        // Into the store, through the background probe, and out through doctor.
+        let d = tempfile::tempdir().unwrap();
+        let store = store_path(d.path());
+        update(&store, |r| {
+            observe(r, "agy", Some("agy 1.5.14"), 0);
+        })
+        .unwrap();
+        let fake = Fake(Default::default(), ProbeRun { outcome, calls: calls.clone() });
+        let (_, _, got) = probe_one_due(&store, 10, &fake).await.expect("due");
+        assert_eq!(got.calls, calls);
+        let text = std::fs::read_to_string(&store).unwrap();
+        assert!(text.contains("\"attempts\"") && text.contains("IsArtifact") && !text.contains("secret-value") && !text.contains("\"id\""), "{text}");
+        let recs = load(&store);
+        assert_eq!((recs[0].attempts.len(), recs[0].attempts[0].outcome.as_str(), recs[0].attempts[0].calls.len()), (1, "fail", 4));
+        let lines = doctor_lines(&recs, 70);
+        assert!(!lines[0].0 && lines[0].1.contains("BRIDGE-ONLY") && lines[0].1.contains("IsArtifact"), "{lines:?}");
+        let calls_shown: Vec<&String> = lines.iter().skip(1).map(|(_, l)| l).collect();
+        assert_eq!(calls_shown.len(), 4, "{lines:?}");
+        assert!(calls_shown[0].contains("call 1 of 4: view_file(AbsolutePath, IsArtifact): REFUSED by the gate") && calls_shown[0].contains("UNKNOWN ARGUMENT IsArtifact") && calls_shown[0].contains("an error came back"), "{calls_shown:?}");
+        assert!(calls_shown[1].contains("list_dir(DirectoryPath): allowed by the gate; a result came back"), "{calls_shown:?}");
+        assert!(calls_shown[3].contains("browser_open(Url): never reached the gate; no result came back"), "{calls_shown:?}");
+        // A later pass hides the old failure's calls; the store keeps at most MAX_ATTEMPTS attempts.
+        let mut recs = recs;
+        for i in 0..7 {
+            record_run(&mut recs, "agy", "agy 1.5.14", &ProbeRun::bare(ProbeOutcome::Undecided { reason: "no answer".into(), tokens: 1 }), 100 + i);
+        }
+        assert_eq!(recs[0].attempts.len(), MAX_ATTEMPTS);
+        assert!(doctor_lines(&recs, 200).iter().any(|(_, l)| l.contains("made no tool call")));
+        record_run(&mut recs, "agy", "agy 1.5.14", &ProbeRun::bare(ProbeOutcome::Pass { tokens: 1 }), 300);
+        if recs[0].state == State::ProbedPass {
+            assert_eq!(doctor_lines(&recs, 400).len(), 1, "a passed version shows no old calls");
+        }
     }
 }

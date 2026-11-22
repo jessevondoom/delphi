@@ -92,6 +92,71 @@ pub struct CommandResult {
     /// False when the sandbox could not start the program at all (§14.1 item 1): it never ran, whatever its exit says.
     pub started: bool,
     pub tail: String,
+    /// Did its output show the test runner's result (§14.9 item 1)? `None`: no runner is known for it (no pattern, not `cargo test`),
+    /// so its exit status is the evidence, as before.
+    pub result_seen: Option<bool>,
+    /// Failing tests the runner's result lines count (`N failed` of `cargo test`, or a pattern's `failed` group), when it says.
+    pub failed: Option<u64>,
+}
+
+/// One configured review command (`[forge] review_commands`): an argv, and optionally a regular expression that the test runner's
+/// result matches in its output (§14.9 item 1). Without one, `cargo test` is known by its `test result:` lines; any other command
+/// counts by its exit status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewCommand {
+    pub argv: Vec<String>,
+    pub result: Option<String>,
+}
+
+impl From<Vec<String>> for ReviewCommand {
+    fn from(argv: Vec<String>) -> ReviewCommand {
+        ReviewCommand { argv, result: None }
+    }
+}
+
+/// The longest `result` pattern a review command may carry.
+pub const MAX_RESULT_PATTERN: usize = 200;
+
+/// A `result` pattern as configured, or why it is not accepted (empty, too long, or not a regular expression).
+pub fn result_pattern(p: &str) -> Result<regex::Regex, String> {
+    if p.is_empty() || p.len() > MAX_RESULT_PATTERN {
+        return Err(format!("a `result` pattern has 1 to {MAX_RESULT_PATTERN} characters"));
+    }
+    regex::RegexBuilder::new(p).multi_line(true).size_limit(1 << 20).build().map_err(|e| format!("`result` is not a regular expression: {e}"))
+}
+
+/// Is this argv `cargo test`: the program `cargo` (by name or path, also after `env`), whose first word that is not a `+toolchain` or
+/// an option is `test`?
+pub fn is_cargo_test(argv: &[String]) -> bool {
+    let Some(i) = argv.iter().position(|a| a.rsplit('/').next() == Some("cargo")) else { return false };
+    argv[i + 1..].iter().find(|a| !a.starts_with('+') && !a.starts_with('-')).is_some_and(|a| a == "test")
+}
+
+/// What a command's whole output shows of its test runner (§14.9 item 1): `(Some(true), failed)` when the result is there, with the
+/// failing count when it gives one; `(Some(false), None)` when a runner is known and its result is not there; `(None, None)` when no
+/// runner is known (no pattern, not `cargo test`). With a pattern, a named group `failed` is summed over its matches.
+pub fn runner_result(argv: &[String], pattern: Option<&str>, output: &str) -> (Option<bool>, Option<u64>) {
+    if let Some(re) = pattern.and_then(|p| result_pattern(p).ok()) {
+        let mut seen = false;
+        let mut failed: Option<u64> = None;
+        for c in re.captures_iter(output) {
+            seen = true;
+            if let Some(n) = c.name("failed").and_then(|m| m.as_str().parse::<u64>().ok()) {
+                failed = Some(failed.unwrap_or(0) + n);
+            }
+        }
+        return (Some(seen), failed);
+    }
+    if !is_cargo_test(argv) {
+        return (None, None);
+    }
+    let lines: Vec<&str> = output.lines().filter(|l| l.contains("test result:")).collect();
+    if lines.is_empty() {
+        return (Some(false), None);
+    }
+    // `test result: FAILED. 3 passed; 1 failed; 0 ignored; ...`, once per test binary.
+    let failed = lines.iter().map(|l| l.split(';').find_map(|part| part.trim().strip_suffix(" failed").and_then(|n| n.rsplit(' ').next()).and_then(|n| n.parse::<u64>().ok())).unwrap_or(0)).sum();
+    (Some(true), Some(failed))
 }
 
 /// How to make a review's commands start in the sandbox (`specs/135` §14.1 item 1, §14.2).
@@ -113,7 +178,7 @@ pub fn could_not_start(exit: Option<i32>, output: &str) -> bool {
 
 impl CommandResult {
     pub fn refused(argv: Vec<String>, requested_by: &'static str, why: impl Into<String>) -> CommandResult {
-        CommandResult { argv, exit: None, elapsed_ms: 0, requested_by, refused: Some(why.into()), timed_out: false, started: false, tail: String::new() }
+        CommandResult { argv, exit: None, elapsed_ms: 0, requested_by, refused: Some(why.into()), timed_out: false, started: false, tail: String::new(), result_seen: None, failed: None }
     }
 
     pub fn ran(&self) -> bool {
@@ -123,6 +188,16 @@ impl CommandResult {
     /// It ran to an exit status: the only kind that counts as tests run (§14.1 item 1).
     pub fn finished(&self) -> bool {
         self.ran() && self.started && self.exit.is_some()
+    }
+
+    /// It ran the tests (§14.9 item 1): it finished, and its output shows the runner's result when a runner is known.
+    pub fn ran_tests(&self) -> bool {
+        self.finished() && self.result_seen != Some(false)
+    }
+
+    /// It started, but its output shows no result of a known runner: it stopped before the tests (a toolchain or build failure).
+    pub fn setup_failed(&self) -> bool {
+        self.ran() && self.started && self.result_seen == Some(false)
     }
 
     pub fn to_json(&self) -> Value {
@@ -135,6 +210,15 @@ impl CommandResult {
         if self.timed_out {
             v["timed_out"] = json!(true);
         }
+        if self.result_seen.is_some() {
+            v["tests_run"] = json!(self.ran_tests());
+        }
+        if self.setup_failed() {
+            v["reason"] = json!("setup");
+        }
+        if let Some(n) = self.failed {
+            v["failed"] = json!(n);
+        }
         v
     }
 
@@ -144,7 +228,14 @@ impl CommandResult {
         match &self.refused {
             Some(r) => format!("$ {cmd}\n(refused, not run: {r})\n"),
             None if !self.started => format!("$ {cmd}\n(the sandbox could not start this program: it did not run, so it says nothing about the code)\n{}\n", self.tail),
-            None => format!("$ {cmd}\n(exit {}{}, {} ms)\n{}\n", self.exit.map(|c| c.to_string()).unwrap_or_else(|| "none".into()), if self.timed_out { ", timed out" } else { "" }, self.elapsed_ms, self.tail),
+            None => format!(
+                "$ {cmd}\n(exit {}{}, {} ms{})\n{}\n",
+                self.exit.map(|c| c.to_string()).unwrap_or_else(|| "none".into()),
+                if self.timed_out { ", timed out" } else { "" },
+                self.elapsed_ms,
+                if self.setup_failed() { "; its output shows no test result: it stopped before the tests ran (a toolchain or build failure), so it says nothing about the code" } else { "" },
+                self.tail
+            ),
         }
     }
 }
@@ -387,83 +478,142 @@ pub struct Outcome {
     /// The last text the seat gave when no answer could be read, or why it gave none.
     pub unanswered: Option<String>,
     pub commands: Vec<CommandResult>,
-    /// At least one configured command ran to an exit status (§14.1 item 1).
+    /// At least one configured command ran the tests (§14.1 item 1, §14.9 item 1): it ran to an exit status, and when its runner is
+    /// known (`cargo test`, or a `result` pattern) its output shows the runner's result.
     pub tests_run: bool,
+    /// Why `tests_run` is false: `no_sandbox`, `not_configured`, `not_started` (the sandbox could not start a program) or `setup` (a
+    /// command started and stopped before any test result: a toolchain or build failure). `None` when tests ran.
+    pub tests_reason: Option<&'static str>,
+    /// The failing tests the configured commands' results count, when any says (§14.9 item 1).
+    pub tests_failed: Option<u64>,
     /// Why there is no test evidence: nothing configured, no sandbox, or a configured command that could not start and how to fix it.
     pub tests_note: Option<String>,
     pub rounds: u8,
     /// What context Round 1 was given (§14.3): `null` when there was none to gather.
     pub context: Value,
+    /// The round of each call made to the seat, in order (0, 1, 2; a repair is a second call of the same round), so the daemon can name
+    /// the endpoint that served each one (§14.9 item 3).
+    pub seat_calls: Vec<u8>,
 }
 
-/// Ask the seat once, and once more if the answer does not parse.
-async fn ask<S, SF>(seat: &S, brief: String, allow_run: bool) -> Result<(Answer, String), String>
+/// Ask the seat once, and once more if the answer does not parse. Each call is noted with its round.
+async fn ask<S, SF>(seat: &S, calls: &std::sync::Mutex<Vec<u8>>, round: u8, brief: String, allow_run: bool) -> Result<(Answer, String), String>
 where
     S: Fn(String) -> SF,
     SF: Future<Output = Result<String, String>>,
 {
+    calls.lock().unwrap().push(round);
     let text = seat(brief.clone()).await?;
     match parse_answer(&text, allow_run) {
         Ok(a) => Ok((a, text)),
         Err(why) => {
+            calls.lock().unwrap().push(round);
             let again = seat(repair_brief(&brief, &text, &why)).await?;
             parse_answer(&again, allow_run).map(|a| (a, again.clone())).map_err(|_| again)
         }
     }
 }
 
+/// What the configured commands showed of the tests (§14.1 item 1, §14.9 item 1).
+struct Tests {
+    run: bool,
+    reason: Option<&'static str>,
+    failed: Option<u64>,
+    note: String,
+}
+
+fn tests_of(commands: &[CommandResult], sandbox: bool, configured: usize) -> Tests {
+    let run = commands.iter().any(CommandResult::ran_tests);
+    let first = |c: &CommandResult| format!("`{}`", c.argv.first().map(String::as_str).unwrap_or(""));
+    let not_started: Vec<String> = commands.iter().filter(|c| c.ran() && !c.started).map(first).collect();
+    let setup: Vec<String> = commands.iter().filter(|c| c.setup_failed()).map(first).collect();
+    let failed = commands.iter().filter_map(|c| c.failed).fold(None, |acc: Option<u64>, n| Some(acc.unwrap_or(0) + n));
+    let mut notes: Vec<String> = Vec::new();
+    if !sandbox {
+        notes.push("tests not run: this machine has no OS sandbox, and a review's commands run only in it".into());
+    } else if configured == 0 {
+        notes.push("tests not run: no command is configured ([forge] review_commands, or [exec] test_command and check_command)".into());
+    }
+    if !setup.is_empty() {
+        notes.push(format!(
+            "{} configured command(s) started but showed no test result ({}): the tests did not run; each stopped before them (a toolchain or build failure), and its last lines are in `commands`",
+            setup.len(),
+            setup.join(", ")
+        ));
+    }
+    if !not_started.is_empty() {
+        notes.push(format!("{} configured command(s) could not start in the sandbox ({}): {START_FIX}", not_started.len(), not_started.join(", ")));
+    }
+    let reason = if run {
+        None
+    } else if !sandbox {
+        Some("no_sandbox")
+    } else if configured == 0 {
+        Some("not_configured")
+    } else if !setup.is_empty() {
+        Some("setup")
+    } else {
+        Some("not_started")
+    };
+    Tests { run, reason, failed, note: notes.join("; ") }
+}
+
 /// The review, in order (§6.2 items 3 to 6). `seat` runs the foreign seat on a brief (Err: it gave no answer, and why); `cmd` runs
-/// one argv in the copy. `sandbox` false: nothing runs, and the result says so.
-pub async fn review<S, SF, C, CF>(input: &Input<'_>, configured: &[Vec<String>], sandbox: bool, seat: S, cmd: C) -> Outcome
+/// one argv in the copy, with the `result` pattern its output is judged by (`runner_result`), if any. `sandbox` false: nothing runs,
+/// and the result says so.
+pub async fn review<S, SF, C, CF>(input: &Input<'_>, configured: &[ReviewCommand], sandbox: bool, seat: S, cmd: C) -> Outcome
 where
     S: Fn(String) -> SF,
     SF: Future<Output = Result<String, String>>,
-    C: Fn(Vec<String>, &'static str) -> CF,
+    C: Fn(Vec<String>, &'static str, Option<String>) -> CF,
     CF: Future<Output = CommandResult>,
 {
+    let calls = std::sync::Mutex::new(Vec::new());
     // §14.3: Round 0 first (it is cheap, and a seat that gives no answer stops the review before any command runs), then the call
     // sites and the items it asked for, searched in the copy.
     let mut context = Context::default();
     if let Some(corpus) = input.copy.filter(|_| input.context_chars > 0) {
+        calls.lock().unwrap().push(0);
         let asked = match seat(brief_round0(input)).await {
             Ok(text) => parse_needs(&text),
-            Err(why) => return Outcome { answer: None, unanswered: Some(format!("round 0 gave no answer: {why}")), commands: vec![], tests_run: false, tests_note: None, rounds: 0, context: Value::Null },
+            Err(why) => {
+                return Outcome { answer: None, unanswered: Some(format!("round 0 gave no answer: {why}")), commands: vec![], tests_run: false, tests_reason: None, tests_failed: None, tests_note: None, rounds: 0, context: Value::Null, seat_calls: calls.into_inner().unwrap_or_default() }
+            }
         };
         context = gather_context(corpus, input.diff, asked, input.context_chars);
     }
     let mut commands = Vec::new();
-    let tests_note = if !sandbox {
-        "tests not run: this machine has no OS sandbox, and a review's commands run only in it"
-    } else if configured.is_empty() {
-        "tests not run: no command is configured ([forge] review_commands, or [exec] test_command and check_command)"
-    } else {
-        ""
-    };
     if sandbox {
-        for argv in configured {
-            commands.push(cmd(argv.clone(), "delphi").await);
+        for c in configured {
+            commands.push(cmd(c.argv.clone(), "delphi", c.result.clone()).await);
         }
     }
-    let tests_run = commands.iter().any(CommandResult::finished);
-    let not_started: Vec<String> = commands.iter().filter(|c| c.ran() && !c.started).map(|c| format!("`{}`", c.argv.first().map(String::as_str).unwrap_or(""))).collect();
-    let tests_note = if !not_started.is_empty() {
-        format!("{} configured command(s) could not start in the sandbox ({}): {START_FIX}", not_started.len(), not_started.join(", "))
-    } else {
-        tests_note.to_string()
+    let tests = tests_of(&commands, sandbox, configured.len());
+    let b1 = brief_round1(input, &context.brief, &commands, &tests.note);
+    let tests_note = Some(tests.note.clone()).filter(|n| !n.is_empty());
+    let done = |answer: Option<Answer>, unanswered: Option<String>, commands: Vec<CommandResult>, rounds: u8| Outcome {
+        answer,
+        unanswered,
+        commands,
+        tests_run: tests.run,
+        tests_reason: tests.reason,
+        tests_failed: tests.failed,
+        tests_note: tests_note.clone(),
+        rounds,
+        context: context.report.clone(),
+        seat_calls: calls.lock().unwrap().clone(),
     };
-    let b1 = brief_round1(input, &context.brief, &commands, &tests_note);
-    let tests_note = Some(tests_note).filter(|n| !n.is_empty());
-    let (first, first_text) = match ask(&seat, b1.clone(), true).await {
+    let (first, first_text) = match ask(&seat, &calls, 1, b1.clone(), true).await {
         Ok(x) => x,
-        Err(text) => return Outcome { answer: None, unanswered: Some(text), commands, tests_run, tests_note: tests_note.clone(), context: context.report.clone(), rounds: 1 },
+        Err(text) => return done(None, Some(text), commands, 1),
     };
     if first.run.is_empty() {
-        return Outcome { answer: Some(first), unanswered: None, commands, tests_run, tests_note: tests_note.clone(), context: context.report.clone(), rounds: 1 };
+        return done(Some(first), None, commands, 1);
     }
     let (allowed, mut requested) = filter_requested(&first.run);
     for argv in allowed {
         if sandbox {
-            requested.push(cmd(argv, "seat").await);
+            requested.push(cmd(argv, "seat", None).await);
         } else {
             requested.push(CommandResult::refused(argv, "seat", "no OS sandbox on this machine: nothing runs"));
         }
@@ -471,13 +621,92 @@ where
     commands.extend(requested.iter().cloned());
     if !requested.iter().any(CommandResult::ran) {
         // Nothing the seat asked for ran: its Round 1 answer is final, with the refusals listed.
-        return Outcome { answer: Some(Answer { run: vec![], ..first }), unanswered: None, commands, tests_run, tests_note: tests_note.clone(), context: context.report.clone(), rounds: 1 };
+        return done(Some(Answer { run: vec![], ..first }), None, commands, 1);
     }
-    match ask(&seat, brief_round2(&b1, &first_text, &requested), false).await {
-        Ok((a, _)) => Outcome { answer: Some(a), unanswered: None, commands, tests_run, tests_note: tests_note.clone(), context: context.report.clone(), rounds: 2 },
+    match ask(&seat, &calls, 2, brief_round2(&b1, &first_text, &requested), false).await {
+        Ok((a, _)) => done(Some(a), None, commands, 2),
         // Round 2 gave nothing readable: Round 1's answer stands, and the result says Round 2 is missing.
-        Err(text) => Outcome { answer: Some(Answer { run: vec![], ..first }), unanswered: Some(format!("round 2 gave no readable answer; round 1's stands: {}", text.chars().take(500).collect::<String>())), commands, tests_run, tests_note: tests_note.clone(), context: context.report.clone(), rounds: 2 },
+        Err(text) => done(Some(Answer { run: vec![], ..first }), Some(format!("round 2 gave no readable answer; round 1's stands: {}", text.chars().take(500).collect::<String>())), commands, 2),
     }
+}
+
+/// The endpoint that served each round of a review (§14.9 item 3), from the task's own events. `marks[i]` is how many of `task_events`
+/// there were when seat call `i` returned, and `seat_calls[i]` its round (`Outcome::seat_calls`). For each round: the endpoint of its
+/// last receipt (one that sat, if any did), that receipt's family, model and outcome, and every fall-back the round took: a
+/// `harness.fallback` event (from, to, why), or an endpoint left for quota (`model.exhausted`) or for throttling (`endpoint.throttled`)
+/// when another endpoint then served. A fall-back `to: "api"` names the endpoint that then served when there is one.
+pub fn served_by_round(task_events: &[delphi_core::event::EventEnvelope], marks: &[usize], seat_calls: &[u8]) -> Vec<Value> {
+    let mut rounds: Vec<(u8, Vec<&delphi_core::event::EventEnvelope>)> = Vec::new();
+    let mut from = 0usize;
+    for (i, round) in seat_calls.iter().enumerate() {
+        let to = marks.get(i).copied().unwrap_or(task_events.len()).min(task_events.len());
+        let seg: Vec<&delphi_core::event::EventEnvelope> = task_events[from.min(to)..to].iter().collect();
+        from = to;
+        match rounds.iter_mut().find(|(r, _)| r == round) {
+            Some((_, evs)) => evs.extend(seg),
+            None => rounds.push((*round, seg)),
+        }
+    }
+    rounds
+        .into_iter()
+        .map(|(round, evs)| {
+            let receipts: Vec<(usize, &Value)> = evs.iter().enumerate().filter(|(_, e)| e.kind == crate::seat::RECEIPT_KIND).map(|(i, e)| (i, &e.payload)).collect();
+            let endpoint_of = |p: &Value| p["requested"]["endpoint"].as_str().filter(|s| !s.is_empty()).map(String::from);
+            let chosen = receipts.iter().rev().find(|(_, p)| p["outcome"] == "ok").or(receipts.last()).map(|(_, p)| *p);
+            // The endpoint that served after event `i`: the first later receipt's.
+            let next_endpoint = |i: usize, not: &str| receipts.iter().filter(|(j, _)| *j > i).filter_map(|(_, p)| endpoint_of(p)).find(|e| e != not);
+            let mut fallback: Vec<Value> = Vec::new();
+            for (i, e) in evs.iter().enumerate() {
+                let p = &e.payload;
+                let (from, to, why) = match e.kind.as_str() {
+                    "harness.fallback" => {
+                        let from = p["from"].as_str().unwrap_or("").to_string();
+                        let to = match p["to"].as_str() {
+                            Some("api") | None => next_endpoint(i, &from).unwrap_or_else(|| "api".into()),
+                            Some(t) => t.to_string(),
+                        };
+                        let cause = p["cause"].as_str().map(|c| c.replace('_', " "));
+                        let reason = p["reason"].as_str().map(String::from);
+                        (from, Some(to), [cause, reason].into_iter().flatten().collect::<Vec<_>>().join(": "))
+                    }
+                    "model.exhausted" | "endpoint.throttled" => {
+                        let from = p["endpoint_id"].as_str().unwrap_or("").to_string();
+                        let Some(to) = next_endpoint(i, &from) else { continue };
+                        let why = if e.kind == "model.exhausted" { format!("out of quota: {}", p["reason"].as_str().unwrap_or("")) } else { "throttled".to_string() };
+                        (from, Some(to), why)
+                    }
+                    _ => continue,
+                };
+                let entry = json!({"from": from, "to": to, "why": why.chars().take(300).collect::<String>()});
+                if !fallback.contains(&entry) {
+                    fallback.push(entry);
+                }
+            }
+            json!({
+                "round": round,
+                "endpoint": chosen.and_then(endpoint_of),
+                "family": chosen.and_then(|p| p["served"]["family"].as_str()),
+                "model": chosen.and_then(|p| p["served"]["model"].as_str()),
+                "outcome": chosen.and_then(|p| p["outcome"].as_str()),
+                "fallback": fallback,
+            })
+        })
+        .collect()
+}
+
+/// One sentence for the result's note naming each fall-back of `served_by_round`, or `None` when no round fell back.
+pub fn fallback_line(rounds: &[Value]) -> Option<String> {
+    let parts: Vec<String> = rounds
+        .iter()
+        .flat_map(|r| {
+            let round = r["round"].as_u64().unwrap_or(0);
+            r["fallback"].as_array().cloned().unwrap_or_default().into_iter().map(move |f| {
+                let why = f["why"].as_str().filter(|w| !w.is_empty()).map(|w| format!(" ({w})")).unwrap_or_default();
+                format!("round {round} fell back from `{}` to `{}`{why}", f["from"].as_str().unwrap_or("?"), f["to"].as_str().unwrap_or("?"))
+            })
+        })
+        .collect();
+    (!parts.is_empty()).then(|| format!("Endpoints: {}.", parts.join("; ")))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------

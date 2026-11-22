@@ -149,6 +149,10 @@ per_watch_max_wakes_per_day = 10
 # must be on the sandbox's PATH and in a system or `[exec] toolchain` directory (see [exec] below). Read when the daemon starts.
 # [forge]
 # review_commands = [["cargo", "test", "--offline"]]   # unset (default): the [exec] test_command and check_command, when set; [] runs none
+# A command counts as having run the tests only when its output shows the runner's result (specs/135 section 14.9): `cargo test` by
+# its `test result:` lines; another runner by a regular expression given with it, in a table (a `failed` group gives the count):
+# review_commands = [["cargo", "test", "--offline"], { argv = ["pytest", "-q"], result = '(?P<failed>\d+) failed|\d+ passed' }]
+# Any other command counts by its exit status. One that started and showed no result is `tests_run: false`, `reason: "setup"`.
 # review_diff_chars = 40000          # the most diff the reviewer is shown (1000 to 200000); whole files past it are left out and named
 # review_context_chars = 12000       # call sites and what the reviewer asks to see in Round 0, found in the copy (0 to 100000; 0 turns both off)
 # The reviewer's own read tools on the copy (specs/135 section 14.7), per CLI. Unset: the defaults below. A list can only pick from the

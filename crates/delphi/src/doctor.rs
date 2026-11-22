@@ -380,7 +380,10 @@ fn check_removed_settings(cfg_text: &str, r: &mut Report) {
 fn check_review_commands(cfg_text: &str, user_home: &Path, r: &mut Report) {
     let Ok(root) = toml::from_str::<toml::Value>(cfg_text) else { return };
     let exec = delphi_engine::exec::ExecConfig::from_root(&root, user_home);
-    let configured = delphi_engine::boot::settings_from(&root).review_commands.unwrap_or_else(|| [exec.test_command.clone(), exec.check_command.clone()].into_iter().flatten().collect());
+    let configured: Vec<Vec<String>> = match delphi_engine::boot::settings_from(&root).review_commands {
+        Some(cmds) => cmds.into_iter().map(|c| c.argv).collect(),
+        None => [exec.test_command.clone(), exec.check_command.clone()].into_iter().flatten().collect(),
+    };
     let path = exec.env.get("PATH").cloned().unwrap_or_else(|| "/usr/bin:/bin".into());
     let roots: Vec<PathBuf> = delphi_sandbox::system_read_only().into_iter().chain(exec.toolchain.iter().cloned()).collect();
     for argv in &configured {
@@ -1712,6 +1715,10 @@ mod tests {
             ft::observe(r, "agy", Some("agy 2"), 100);
             ft::observe(r, "claude", Some("2.1.1"), 100);
             ft::drop_version(r, "claude", "2.1.1", "the seat's own tool `Read` ran although Delphi's gate never allowed it", 200);
+            // §14.9 item 2 (AC-22): a failed probe's calls are printed, with the gate's reason and an unknown argument called out.
+            ft::observe(r, "agy", Some("agy 1.5.14"), 100);
+            let call = ft::ProbeCall { tool: "view_file".into(), arg_keys: vec!["AbsolutePath".into(), "IsArtifact".into()], allowed: Some(false), reason: Some("`view_file` was called with `IsArtifact`, an argument Delphi does not know; it is refused".into()), result: None, unknown_keys: vec!["IsArtifact".into()], id: None };
+            ft::record_run(r, "agy", "agy 1.5.14", &ft::ProbeRun { outcome: ft::ProbeOutcome::Fail { reason: "no read passed".into(), tokens: 9 }, calls: vec![call] }, 200);
         })
         .unwrap();
         let mut r = Report::default();
@@ -1720,6 +1727,7 @@ mod tests {
         assert!(got.iter().any(|(l, m)| *l == Level::Ok && m.contains("agy 1: read tools (probed") && m.contains("7 tokens")), "{got:?}");
         assert!(got.iter().any(|(l, m)| *l == Level::Ok && m.contains("agy 2: read tools in the grace period")), "{got:?}");
         assert!(got.iter().any(|(l, m)| *l == Level::Warn && m.contains("claude 2.1.1: BRIDGE-ONLY") && m.contains("watchdog")), "{got:?}");
+        assert!(got.iter().any(|(l, m)| *l == Level::Warn && m.contains("agy 1.5.14: last fail probe") && m.contains("view_file(AbsolutePath, IsArtifact): REFUSED by the gate") && m.contains("UNKNOWN ARGUMENT IsArtifact")), "{got:?}");
         assert!(got.iter().any(|(_, m)| m.starts_with("codex: bridge-only")) && got.iter().any(|(_, m)| m.starts_with("copilot: bridge-only")), "{got:?}");
     }
 

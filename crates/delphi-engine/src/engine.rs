@@ -127,8 +127,8 @@ pub struct Settings {
     /// per 24 hours. Read from the ratified copy only (`[access]` is pinned); 0, the default, is off.
     pub standing_foreign_tokens: u64,
     /// `[forge] review_commands` (`specs/135` §6.2 item 3): the commands a review runs in its sandboxed copy. `None`: the `[exec]`
-    /// test and check commands, when they are set.
-    pub review_commands: Option<Vec<Vec<String>>>,
+    /// test and check commands, when they are set. Each may carry the pattern its runner's result matches (§14.9 item 1).
+    pub review_commands: Option<Vec<crate::review_job::ReviewCommand>>,
     /// `[forge] review_diff_chars` (`specs/135` §6.3): the most diff a review's seat is shown.
     pub review_diff_chars: usize,
     /// `[forge] review_context_chars` (`specs/135` §14.3 item 1): the most call sites and Round 0 excerpts a review's seat is shown.

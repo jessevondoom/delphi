@@ -94,8 +94,24 @@ pub fn settings_from(root: &toml::Value) -> Settings {
     // Spec 135 §6: a review's commands (a list of argv lists, at most 8, each non-empty) and its diff cap (1,000 to 200,000
     // characters). A value of the wrong shape keeps the default.
     if let Some(fg) = root.get("forge") {
+        // §14.9 item 1: an entry is an argv, or a table `{ argv = [...], result = "regex" }` whose pattern the test runner's result
+        // matches in the command's output.
         if let Some(list) = fg.get("review_commands").and_then(|v| v.as_array()) {
-            let parsed: Option<Vec<Vec<String>>> = list.iter().map(|a| a.as_array().map(|w| w.iter().map(|x| x.as_str().map(String::from)).collect::<Option<Vec<_>>>()).unwrap_or(None).filter(|w| !w.is_empty())).collect();
+            let argv_of = |a: &toml::Value| a.as_array().map(|w| w.iter().map(|x| x.as_str().map(String::from)).collect::<Option<Vec<_>>>()).unwrap_or(None).filter(|w| !w.is_empty());
+            let entry = |a: &toml::Value| -> Option<crate::review_job::ReviewCommand> {
+                match a.as_table() {
+                    None => argv_of(a).map(crate::review_job::ReviewCommand::from),
+                    Some(t) if t.keys().all(|k| k == "argv" || k == "result") => {
+                        let result = match t.get("result") {
+                            None => None,
+                            Some(r) => Some(r.as_str().filter(|p| crate::review_job::result_pattern(p).is_ok())?.to_string()),
+                        };
+                        Some(crate::review_job::ReviewCommand { argv: argv_of(t.get("argv")?)?, result })
+                    }
+                    Some(_) => None,
+                }
+            };
+            let parsed: Option<Vec<crate::review_job::ReviewCommand>> = list.iter().map(entry).collect();
             if let Some(cmds) = parsed.filter(|c| c.len() <= 8) {
                 s.review_commands = Some(cmds);
             }
@@ -809,8 +825,15 @@ mod tests {
         let d = settings_from(&toml::from_str("").unwrap());
         assert_eq!((d.review_commands.clone(), d.review_diff_chars), (None, 40_000));
         let s = settings_from(&toml::from_str("[forge]\nreview_commands = [[\"cargo\", \"test\", \"--offline\"], [\"cargo\", \"clippy\"]]\nreview_diff_chars = 20000\n").unwrap());
-        assert_eq!(s.review_commands, Some(vec![vec!["cargo".to_string(), "test".into(), "--offline".into()], vec!["cargo".to_string(), "clippy".into()]]));
+        assert_eq!(s.review_commands, Some(vec![vec!["cargo".to_string(), "test".into(), "--offline".into()].into(), vec!["cargo".to_string(), "clippy".into()].into()]));
         assert_eq!(s.review_diff_chars, 20_000);
+        // §14.9 item 1: a table entry carries its runner's result pattern; plain argv lists still read as before, mixed in one list.
+        let s = settings_from(&toml::from_str("[forge]\nreview_commands = [[\"cargo\", \"test\"], { argv = [\"pytest\", \"-q\"], result = '(?P<failed>\\d+) failed|\\d+ passed' }, { argv = [\"make\"] }]\n").unwrap());
+        let cmds = s.review_commands.unwrap();
+        assert_eq!((cmds.len(), cmds[1].argv.clone(), cmds[1].result.as_deref(), cmds[2].result.clone()), (3, vec!["pytest".to_string(), "-q".into()], Some("(?P<failed>\\d+) failed|\\d+ passed"), None));
+        for bad in ["{ argv = [\"x\"], result = \"(\" }", "{ argv = [\"x\"], result = 3 }", "{ argv = [] }", "{ result = \"x\" }", "{ argv = [\"x\"], shell = true }"] {
+            assert_eq!(settings_from(&toml::from_str(&format!("[forge]\nreview_commands = [{bad}]\n")).unwrap()).review_commands, None, "{bad}");
+        }
         assert_eq!((d.review_context_chars, settings_from(&toml::from_str("[forge]\nreview_context_chars = 0\n").unwrap()).review_context_chars), (12_000, 0));
         assert_eq!(settings_from(&toml::from_str("[forge]\nreview_context_chars = 999999\n").unwrap()).review_context_chars, 12_000, "out of range keeps the default");
         assert_eq!(settings_from(&toml::from_str("[forge]\nreview_commands = []\n").unwrap()).review_commands, Some(vec![]), "an empty list runs nothing");
