@@ -373,7 +373,7 @@ pub fn render(rows: &[&Row], bad: &[(String, Vec<String>)]) -> String {
     let cut = |s: &str, n: usize| if s.chars().count() > n { format!("{}...", s.chars().take(n).collect::<String>()) } else { s.to_string() };
     let cell = |s: &str, n: usize| cut(s, n).replace('|', "\\|").replace('\n', " ");
     let mut sorted = rows.to_vec();
-    sorted.sort_by(|a, b| (a.spec.to_lowercase(), a.slice.to_lowercase()).cmp(&(b.spec.to_lowercase(), b.slice.to_lowercase())));
+    sorted.sort_by_key(|a| (a.spec.to_lowercase(), a.slice.to_lowercase()));
     let mut out = String::from("| Spec | Slice | State | Where | What |\n| :-- | :-- | :-- | :-- | :-- |\n");
     for r in sorted {
         let place = r.file.as_deref().map(|f| f.strip_prefix(DIR).map(|p| format!("tracker{}", p)).unwrap_or(f.to_string())).unwrap_or_else(|| format!("spec-tracker.md:{}", r.line));
