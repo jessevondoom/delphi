@@ -36,10 +36,14 @@ pub enum Class {
     /// `merge refresh` could not update the branch mechanically (a conflict outside its closed list, a gate path, a compile
     /// that failed, a widened diff or a rejected push, §11.3.2). Nothing was pushed; `merge fix` takes it to the builder.
     RefreshRefused,
+    /// The base's compiled spec tree is not what the spec compile writes (spec 094 §11.3.4): drift that entered by any route. It
+    /// belongs to the base, not to a pull request (its entry has pull request 0 and the base commit), stops `--all` and `--auto`
+    /// until the base is current again, and `delphi merge repair-base` opens the pull request that repairs it.
+    BaseDrift,
 }
 
 /// Every class, in one place (the slug round trip and `from_slug` read it).
-const ALL: [Class; 12] = [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup, Class::Behind, Class::RefreshRefused];
+const ALL: [Class; 13] = [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup, Class::Behind, Class::RefreshRefused, Class::BaseDrift];
 
 impl Class {
     pub fn slug(self) -> &'static str {
@@ -56,6 +60,7 @@ impl Class {
             Class::Cleanup => "cleanup",
             Class::Behind => "behind",
             Class::RefreshRefused => "refresh-refused",
+            Class::BaseDrift => "base-drift",
         }
     }
     pub fn from_slug(s: &str) -> Option<Class> {
@@ -124,7 +129,8 @@ impl Entry {
         self.state != "resolved"
     }
     pub fn line(&self) -> String {
-        format!("{} #{} {} [{}] x{} {}{}", self.id, self.pr, self.class, self.state, self.attempts, self.detail, if self.note.is_empty() { String::new() } else { format!(" ({})", self.note) })
+        let who = if self.pr == 0 { "base".to_string() } else { format!("#{}", self.pr) };
+        format!("{} {who} {} [{}] x{} {}{}", self.id, self.class, self.state, self.attempts, self.detail, if self.note.is_empty() { String::new() } else { format!(" ({})", self.note) })
     }
 }
 
@@ -269,6 +275,7 @@ mod tests {
         assert_eq!(Class::from_slug("behind"), Some(Class::Behind));
         assert!(Class::Behind.builder_can_fix(), "`merge fix` takes a behind entry (§11.3.5)");
         assert!(Class::RefreshRefused.builder_can_fix() && Class::from_slug("refresh-refused") == Some(Class::RefreshRefused));
+        assert!(Class::from_slug("base-drift") == Some(Class::BaseDrift) && !Class::BaseDrift.builder_can_fix(), "`repair-base` takes it, not `merge fix`");
     }
 
     #[test]

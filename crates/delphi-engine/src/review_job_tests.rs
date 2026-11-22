@@ -61,10 +61,13 @@ fn input<'a>(diff: &'a CappedDiff) -> Input<'a> {
 
 type Log = Arc<Mutex<Vec<String>>>;
 
-fn runner(log: Log) -> impl Fn(Vec<String>, &'static str) -> std::future::Ready<CommandResult> {
-    move |argv: Vec<String>, by: &'static str| {
+/// A runner whose command passes: its output has the runner's result line, judged as the daemon judges it (`runner_result`).
+fn runner(log: Log) -> impl Fn(Vec<String>, &'static str, Option<String>) -> std::future::Ready<CommandResult> {
+    move |argv: Vec<String>, by: &'static str, result: Option<String>| {
         log.lock().unwrap().push(format!("{by}: {}", argv.join(" ")));
-        std::future::ready(CommandResult { tail: format!("OUTPUT-OF-{}", argv.join("-")), argv, exit: Some(0), elapsed_ms: 1, requested_by: by, refused: None, timed_out: false, started: true })
+        let out = format!("OUTPUT-OF-{}\ntest result: ok. 1 passed; 0 failed; 0 ignored", argv.join("-"));
+        let (result_seen, failed) = if by == "delphi" { runner_result(&argv, result.as_deref(), &out) } else { (None, None) };
+        std::future::ready(CommandResult { tail: out, argv, exit: Some(0), elapsed_ms: 1, requested_by: by, refused: None, timed_out: false, started: true, result_seen, failed })
     }
 }
 
@@ -82,7 +85,7 @@ async fn ac8_configured_commands_run_requested_ones_are_filtered_and_round_two_s
             r#"{"verdict": "changes", "findings": [{"severity": "medium", "claim": "the test fails"}]}"#.to_string()
         }))
     };
-    let out = review(&input(&d), &[argv(&["cargo", "test"])], true, seat, runner(ran.clone())).await;
+    let out = review(&input(&d), &[argv(&["cargo", "test"]).into()], true, seat, runner(ran.clone())).await;
     assert_eq!(*ran.lock().unwrap(), vec!["delphi: cargo test", "seat: cargo test -p a"]);
     let briefs = briefs.lock().unwrap();
     assert_eq!(briefs.len(), 2);
@@ -103,7 +106,7 @@ async fn ac10_with_no_sandbox_nothing_runs_and_the_brief_says_so() {
         b2.lock().unwrap().push(brief);
         std::future::ready(Ok(r#"{"verdict": "accept", "findings": [], "run": [["cargo", "test"]]}"#.to_string()))
     };
-    let out = review(&input(&d), &[argv(&["cargo", "test"])], false, seat, runner(ran.clone())).await;
+    let out = review(&input(&d), &[argv(&["cargo", "test"]).into()], false, seat, runner(ran.clone())).await;
     assert!(ran.lock().unwrap().is_empty(), "nothing runs without the sandbox");
     assert!(!out.tests_run && out.rounds == 1);
     assert!(briefs.lock().unwrap()[0].contains("no OS sandbox"));
@@ -172,8 +175,8 @@ fn the_slice_row_is_found_by_spec_number_and_slice() {
 }
 
 /// A runner whose configured command cannot start (the macOS sandbox's `execvp` failure) or exits non-zero, by program name.
-fn failing_runner() -> impl Fn(Vec<String>, &'static str) -> std::future::Ready<CommandResult> {
-    move |argv: Vec<String>, by: &'static str| {
+fn failing_runner() -> impl Fn(Vec<String>, &'static str, Option<String>) -> std::future::Ready<CommandResult> {
+    move |argv: Vec<String>, by: &'static str, _result: Option<String>| {
         // The program is the first word, or the word after `env`.
         let program = if argv[0].ends_with("/env") { argv[1].as_str() } else { argv[0].as_str() };
         let (exit, out) = match program {
@@ -181,7 +184,7 @@ fn failing_runner() -> impl Fn(Vec<String>, &'static str) -> std::future::Ready<
             "missing" => (Some(127), "env: missing: No such file or directory".to_string()),
             _ => (Some(101), "test result: FAILED. 1 failed".to_string()),
         };
-        std::future::ready(CommandResult { started: !could_not_start(exit, &out), tail: out, argv, exit, elapsed_ms: 1, requested_by: by, refused: None, timed_out: false })
+        std::future::ready(CommandResult { started: !could_not_start(exit, &out), tail: out, argv, exit, elapsed_ms: 1, requested_by: by, refused: None, timed_out: false, result_seen: None, failed: None })
     }
 }
 
@@ -200,7 +203,7 @@ async fn ac12_a_command_that_cannot_start_is_not_a_test_run_and_the_note_says_ho
         b2.lock().unwrap().push(brief);
         std::future::ready(Ok(r#"{"verdict": "unsure", "findings": []}"#.to_string()))
     };
-    let out = review(&input(&d), &[argv(&["cargo", "test"]), argv(&["/usr/bin/env", "missing"])], true, seat, failing_runner()).await;
+    let out = review(&input(&d), &[argv(&["cargo", "test"]).into(), argv(&["/usr/bin/env", "missing"]).into()], true, seat, failing_runner()).await;
     assert!(!out.tests_run, "nothing started: {:?}", out.commands);
     assert!(out.commands.iter().all(|c| !c.started && c.to_json()["started"] == json!(false)), "{:?}", out.commands);
     let note = out.tests_note.as_deref().unwrap();
@@ -208,14 +211,149 @@ async fn ac12_a_command_that_cannot_start_is_not_a_test_run_and_the_note_says_ho
     assert!(briefs.lock().unwrap()[0].contains("could not start this program"), "the seat is told it did not run");
     // One that ran and failed is a test run: its exit is evidence.
     let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "changes", "findings": []}"#.to_string()));
-    let out = review(&input(&d), &[argv(&["cargo", "test"]), argv(&["make", "test"])], true, seat, failing_runner()).await;
+    // (No recognised test runner is configured here, so the exit-status rule applies; with `cargo test` configured only it would count.)
+    let out = review(&input(&d), &[argv(&["/usr/bin/env", "missing"]).into(), argv(&["make", "test"]).into()], true, seat, failing_runner()).await;
     assert!(out.tests_run, "a non-zero exit is a run");
-    assert_eq!(out.commands.iter().map(|c| (c.started, c.exit)).collect::<Vec<_>>(), vec![(false, Some(71)), (true, Some(101))]);
+    assert_eq!(out.commands.iter().map(|c| (c.started, c.exit)).collect::<Vec<_>>(), vec![(false, Some(127)), (true, Some(101))]);
     assert!(out.tests_note.as_deref().is_some_and(|n| n.contains("1 configured command(s)")), "the one that did not start is still named");
     // Nothing configured: no run, and the note says why.
     let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "accept", "findings": []}"#.to_string()));
     let out = review(&input(&d), &[], true, seat, failing_runner()).await;
     assert!(!out.tests_run && out.tests_note.as_deref().is_some_and(|n| n.contains("no command is configured")));
+    assert_eq!(out.tests_reason, Some("not_configured"));
+}
+
+/// A runner that prints the output given per program and exits with the code given, judged as the daemon judges it.
+fn scripted_runner(script: Vec<(&'static str, i32, &'static str)>) -> impl Fn(Vec<String>, &'static str, Option<String>) -> std::future::Ready<CommandResult> {
+    move |argv: Vec<String>, by: &'static str, result: Option<String>| {
+        let (_, code, out) = *script.iter().find(|(p, _, _)| argv.iter().any(|a| a == p)).expect("scripted");
+        let (result_seen, failed) = runner_result(&argv, result.as_deref(), out);
+        std::future::ready(CommandResult { tail: tail(out, 40), argv, exit: Some(code), elapsed_ms: 82, requested_by: by, refused: None, timed_out: false, started: true, result_seen, failed })
+    }
+}
+
+#[test]
+fn the_test_runners_result_is_read_from_the_whole_output() {
+    let a = |v: &[&str]| argv(v);
+    assert!(is_cargo_test(&a(&["cargo", "test"])) && is_cargo_test(&a(&["/x/.cargo/bin/cargo", "+nightly", "--locked", "test", "-p", "x"])) && is_cargo_test(&a(&["/usr/bin/env", "A=1", "cargo", "test"])));
+    assert!(!is_cargo_test(&a(&["cargo", "clippy"])) && !is_cargo_test(&a(&["make", "test"])) && !is_cargo_test(&a(&["cargo"])));
+    let two = "running 3 tests\ntest result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured\n...\ntest result: ok. 4 passed; 0 failed; 0 ignored\n";
+    assert_eq!(runner_result(&a(&["cargo", "test"]), None, two), (Some(true), Some(2)), "summed over the test binaries");
+    assert_eq!(runner_result(&a(&["cargo", "test"]), None, "error: could not compile `x`"), (Some(false), None));
+    assert_eq!(runner_result(&a(&["make", "test"]), None, "anything"), (None, None), "no runner known: the exit status counts");
+    // A configured pattern, with a `failed` group, for another runner; it overrides the cargo rule.
+    let pat = r"^=+ (?:(?P<failed>\d+) failed, )?\d+ passed";
+    assert_eq!(runner_result(&a(&["pytest"]), Some(pat), "== 3 failed, 9 passed in 1s ==\n"), (Some(true), Some(3)));
+    assert_eq!(runner_result(&a(&["pytest"]), Some(pat), "== 9 passed in 1s ==\n"), (Some(true), None));
+    assert_eq!(runner_result(&a(&["pytest"]), Some(pat), "ImportError: no module named x\n"), (Some(false), None));
+    assert!(result_pattern("(").is_err() && result_pattern("").is_err() && result_pattern(&"x".repeat(MAX_RESULT_PATTERN + 1)).is_err());
+}
+
+/// Spec 135 AC-21 (§14.9 item 1): a configured command that started and stopped before any test result (F4b: `cargo` exit 1 after 82
+/// ms) is `tests_run: false, reason: "setup"`, with its last lines, and the note and the brief say the tests did not run; a failing test
+/// is `tests_run: true` with the failing count.
+#[tokio::test]
+async fn ac21_a_start_up_failure_is_setup_and_a_failing_test_is_a_test_run() {
+    let d = cap_diff(&diff_of(&[("a.rs", 1)]), 10_000);
+    let briefs: Log = Default::default();
+    let b2 = briefs.clone();
+    let seat = move |brief: String| {
+        b2.lock().unwrap().push(brief);
+        std::future::ready(Ok(r#"{"verdict": "unsure", "findings": []}"#.to_string()))
+    };
+    let setup_fail = "    Updating crates.io index\nerror: failed to get `serde` as a dependency of package `x`\n  network is unreachable";
+    let out = review(&input(&d), &[argv(&["cargo", "test", "--offline"]).into()], true, seat, scripted_runner(vec![("cargo", 1, setup_fail)])).await;
+    assert_eq!((out.tests_run, out.tests_reason, out.tests_failed), (false, Some("setup"), None), "{:?}", out.commands);
+    let c = out.commands[0].to_json();
+    assert_eq!((c["tests_run"].clone(), c["reason"].clone(), c["started"].clone(), c["exit"].clone()), (json!(false), json!("setup"), json!(true), json!(1)), "{c}");
+    assert!(c["tail"].as_str().unwrap().ends_with("network is unreachable"), "its last lines are kept: {c}");
+    let note = out.tests_note.as_deref().unwrap();
+    assert!(note.contains("showed no test result") && note.contains("the tests did not run") && note.contains("`cargo`"), "{note}");
+    assert!(briefs.lock().unwrap()[0].contains("no test result: it stopped before the tests ran"), "the seat is told too");
+
+    // A failing test is a test run, with the count; a check command beside it (no runner) counts by its exit status as before.
+    let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "changes", "findings": []}"#.to_string()));
+    let failing = "test a ... FAILED\ntest result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out";
+    let out = review(&input(&d), &[argv(&["cargo", "test"]).into(), argv(&["make", "lint"]).into()], true, seat, scripted_runner(vec![("cargo", 101, failing), ("make", 0, "ok")])).await;
+    assert_eq!((out.tests_run, out.tests_reason, out.tests_failed), (true, None, Some(2)));
+    let c = out.commands[0].to_json();
+    assert_eq!((c["tests_run"].clone(), c["failed"].clone(), c.get("reason")), (json!(true), json!(2), None), "{c}");
+    assert_eq!(out.commands[1].to_json().get("tests_run"), None, "no runner known: no judgement either way");
+    assert_eq!(out.tests_note, None);
+
+    // F4b's confusion: the test runner stopped at setup while a check beside it exited 0. With a test runner configured, only a runner's
+    // result counts, so the review's tests_run is false with reason setup; the check keeps its own entry, judged by nothing.
+    let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "accept", "findings": []}"#.to_string()));
+    let out = review(&input(&d), &[argv(&["cargo", "test"]).into(), argv(&["cargo", "clippy"]).into()], true, seat, scripted_runner(vec![("clippy", 0, "Finished"), ("cargo", 1, setup_fail)])).await;
+    assert_eq!((out.tests_run, out.tests_reason), (false, Some("setup")), "{:?}", out.commands);
+    assert!(out.tests_note.as_deref().is_some_and(|n| n.contains("1 configured command(s) started but showed no test result")), "{:?}", out.tests_note);
+    assert_eq!((out.commands[1].exit, out.commands[1].to_json().get("tests_run")), (Some(0), None), "the per-command entry is unchanged");
+    // A configured pattern decides for its own runner.
+    let seat = |_b: String| std::future::ready(Ok::<String, String>(r#"{"verdict": "accept", "findings": []}"#.to_string()));
+    let cmd = ReviewCommand { argv: argv(&["pytest", "-q"]), result: Some(r"(?P<failed>\d+) failed".into()) };
+    let out = review(&input(&d), &[cmd], true, seat, scripted_runner(vec![("pytest", 2, "ModuleNotFoundError: x")])).await;
+    assert_eq!((out.tests_run, out.tests_reason), (false, Some("setup")));
+}
+
+fn ev(kind: &str, payload: Value) -> delphi_core::event::EventEnvelope {
+    let mut e = delphi_core::event::EventEnvelope::new("m", kind, payload);
+    e.task_id = Some("t1".into());
+    e
+}
+
+fn receipt(endpoint: &str, outcome: &str) -> delphi_core::event::EventEnvelope {
+    ev(crate::seat::RECEIPT_KIND, json!({"requested": {"endpoint": endpoint, "model": "m"}, "served": {"model": "gemini-x", "family": "gemini"}, "outcome": outcome}))
+}
+
+/// Spec 135 AC-23 (§14.9 item 3): the result names the endpoint that served each round, and a round that fell back to another endpoint of
+/// the family says from which, to which, and why (F4b: a fall-back to `gemini-key` that timed out was invisible).
+#[test]
+fn ac23_the_endpoint_of_each_round_and_any_fallback_are_named() {
+    let events = vec![
+        // Round 0 on the CLI endpoint.
+        receipt("gemini-cli", "ok"),
+        // Round 1: the CLI gave no first event, the span fell back to the API, where `gemini-key` timed out.
+        ev("harness.fallback", json!({"from": "gemini-cli", "to": "api", "reason": "agy gave no first event"})),
+        receipt("gemini-key", "error"),
+        // Round 1's repair call (a second call of the same round), then round 2 out of quota on one key and served by another.
+        receipt("gemini-key", "ok"),
+        ev("model.exhausted", json!({"endpoint_id": "gemini-key", "model_id": "m", "reason": "daily quota"})),
+        receipt("gemini-key-2", "ok"),
+    ];
+    let rounds = served_by_round(&events, &[1, 3, 4, 6], &[0, 1, 1, 2]);
+    assert_eq!(rounds.len(), 3, "{rounds:?}");
+    assert_eq!((rounds[0]["round"].clone(), rounds[0]["endpoint"].clone(), rounds[0]["fallback"].clone()), (json!(0), json!("gemini-cli"), json!([])));
+    assert_eq!((rounds[1]["endpoint"].clone(), rounds[1]["family"].clone(), rounds[1]["model"].clone(), rounds[1]["outcome"].clone()), (json!("gemini-key"), json!("gemini"), json!("gemini-x"), json!("ok")));
+    assert_eq!(rounds[1]["fallback"], json!([{"from": "gemini-cli", "to": "gemini-key", "why": "agy gave no first event"}]), "`to: api` names the endpoint that served");
+    assert_eq!(rounds[2]["endpoint"], "gemini-key-2");
+    assert_eq!(rounds[2]["fallback"], json!([{"from": "gemini-key", "to": "gemini-key-2", "why": "out of quota: daily quota"}]));
+    let line = fallback_line(&rounds).unwrap();
+    assert!(line.contains("round 1 fell back from `gemini-cli` to `gemini-key` (agy gave no first event)") && line.contains("round 2 fell back from `gemini-key` to `gemini-key-2`"), "{line}");
+    // A review with no fall-back says nothing; a round whose only receipt failed still names its endpoint.
+    let plain = served_by_round(&[receipt("gemini-cli", "error")], &[1], &[1]);
+    assert_eq!((plain[0]["endpoint"].clone(), plain[0]["outcome"].clone()), (json!("gemini-cli"), json!("error")));
+    assert_eq!(fallback_line(&plain), None);
+}
+
+/// §14.9 item 3: `review` notes the round of every seat call, a repair included, so the daemon can split the receipts by round.
+#[tokio::test]
+async fn every_seat_call_is_noted_with_its_round() {
+    let d = cap_diff(DIFF14, 10_000);
+    let c = corpus();
+    let n: Log = Default::default();
+    let n2 = n.clone();
+    let seat = move |brief: String| {
+        n2.lock().unwrap().push(brief.clone());
+        let k = n2.lock().unwrap().len();
+        std::future::ready(Ok::<String, String>(match k {
+            1 => r#"{"need": []}"#.into(),
+            2 => "not json".into(),
+            3 => r#"{"verdict": "unsure", "findings": [], "run": [["ls"]]}"#.into(),
+            _ => r#"{"verdict": "accept", "findings": []}"#.into(),
+        }))
+    };
+    let out = review(&Input { copy: Some(&c), context_chars: 1000, ..input(&d) }, &[], true, seat, runner(Default::default())).await;
+    assert_eq!((out.seat_calls.clone(), out.rounds), (vec![0, 1, 1, 2], 2));
 }
 
 /// A copy of a small project, as the review would read it.
@@ -277,7 +415,7 @@ async fn ac14_round_zeros_items_and_the_call_sites_reach_round_one_within_the_ca
     };
     let ran: Log = Default::default();
     let i = Input { copy: Some(&c), context_chars: DEFAULT_CONTEXT_CHARS, ..input(&d) };
-    let out = review(&i, &[argv(&["cargo", "test"])], true, seat, runner(ran.clone())).await;
+    let out = review(&i, &[argv(&["cargo", "test"]).into()], true, seat, runner(ran.clone())).await;
     let briefs = briefs.lock().unwrap().clone();
     assert_eq!(briefs.len(), 2, "round 0, then round 1");
     assert!(briefs[0].contains("ROUND 0") && briefs[0].contains("changed_fn") && !briefs[0].contains("CALL SITES") && !briefs[0].contains("OUTPUT-OF"), "round 0 sees the diff only");
@@ -318,7 +456,7 @@ async fn ac14_round_zeros_items_and_the_call_sites_reach_round_one_within_the_ca
     // A seat that gives no answer in Round 0 stops the review before any command runs.
     let ran: Log = Default::default();
     let seat = |_b: String| std::future::ready(Err::<String, String>("quota".into()));
-    let out = review(&Input { copy: Some(&c), context_chars: 1000, ..input(&d) }, &[argv(&["cargo", "test"])], true, seat, runner(ran.clone())).await;
+    let out = review(&Input { copy: Some(&c), context_chars: 1000, ..input(&d) }, &[argv(&["cargo", "test"]).into()], true, seat, runner(ran.clone())).await;
     assert!(out.answer.is_none() && out.unanswered.as_deref().is_some_and(|u| u.contains("round 0")) && ran.lock().unwrap().is_empty());
 }
 

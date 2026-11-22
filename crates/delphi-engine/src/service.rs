@@ -186,11 +186,10 @@ async fn panel_after(engine: Arc<Engine>, panels: Panels, m: Arc<MissionState>, 
                 g.get(&key).map(|pn| stances.keys().filter_map(|r| pn.brief_hash(r, 1).map(|h| (r.clone(), h))).collect()).unwrap_or_default()
             };
             engine.panel_released(&m, &id, &prop, &stances, &models, &foreign, &blind, (claims.0, claims.1.as_deref()), &hashes, host, &relay).await.map_err(engine_err)?;
-            let answered = stances.values().filter(|s| s.text().is_some()).count();
-            if answered < 2 {
+            // `specs/131` S4: the threshold counts seats heard (not a decline, not a cut complaint), as a daemon Council's does.
+            if let Some(why) = crate::council::too_few_heard(&stances) {
                 panels.lock().unwrap().remove(&key);
                 crate::standing::settle(&engine.ws.dir, &format!("{}/{}", m.id, id), engine.panel_foreign_tokens(&m, &id), (engine.clock_unix)());
-                let why = format!("only {answered} seat(s) answered Round 1, too few to deliberate; nothing was decided");
                 engine.panel_escalate(&m, id.clone(), why.clone()).await.map_err(engine_err)?;
                 return Ok(json!({"council_id": id, "accepted": true, "state": "not_decided", "reason": why}));
             }
@@ -1535,8 +1534,14 @@ impl EngineService {
         let standing_id = format!("{}/{}", m.id, task_id);
         let job = tokio::spawn(async move {
             let stance = engine.panel_foreign_run_seat(&mm, &tid, brief, &proposition, role, &family, 1, None, true).await;
+            // `specs/131` S4 item 5: a decline or a cut complaint is unanswered, with the reason in fixed words; the answer is not passed on.
             let (answer, abstained) = match stance {
-                crate::council::Stance::Said(t) => (Some(engine.secrets.redact(&t)), None),
+                crate::council::Stance::Said(t) => match crate::refusal::not_heard(Some(&t), None, None) {
+                    Some("declined") => (None, Some("the seat declines: a refusal, not an answer".to_string())),
+                    Some("cut_complaint") => (None, Some(format!("{}: a complaint, not an answer", crate::refusal::CUT_FAILURE))),
+                    Some(_) => (None, Some("the seat gave an empty answer".to_string())),
+                    None => (Some(engine.secrets.redact(&t)), None),
+                },
                 crate::council::Stance::Abstained(w) => (None, Some(w)),
             };
             let status = if answer.is_some() { crate::engine::Status::Done } else { crate::engine::Status::Escalated(abstained.clone().unwrap_or_default()) };
@@ -1685,22 +1690,28 @@ impl EngineService {
                 }
                 Ok((guard, stat, diff, corpus)) => {
                     let capped = rj::cap_diff(&diff, engine.settings.review_diff_chars);
-                    let configured: Vec<Vec<String>> = engine.settings.review_commands.clone().unwrap_or_else(|| [engine.exec.cfg.test_command.clone(), engine.exec.cfg.check_command.clone()].into_iter().flatten().collect());
+                    let configured: Vec<rj::ReviewCommand> = engine.settings.review_commands.clone().unwrap_or_else(|| [engine.exec.cfg.test_command.clone(), engine.exec.cfg.check_command.clone()].into_iter().flatten().map(rj::ReviewCommand::from).collect());
                     let sandbox = engine.exec.sandbox.is_some();
                     let input = rj::Input { branch: &branch, base: &base, spec: spec.as_ref().map(|(s, t)| (s.as_str(), t.as_str())), slice: slice.as_deref(), stat: &stat, diff: &capped, spec_chars: 20_000, copy: Some(&corpus), context_chars: engine.settings.review_context_chars };
                     // §14.7: the seat may be given its CLI's own read tools on this copy; `run_harness` decides per carrier and version,
                     // gates every call and watches the stream. Without them it is tool-less, as before.
                     let read_root = guard.inv.tree.clone();
+                    // §14.9 item 3: after each seat call, how many of the task's events there are, so the receipts and fallbacks of each
+                    // call (and so of each round) can be told apart afterwards.
+                    let marks: Arc<Mutex<Vec<usize>>> = Arc::default();
                     let seat = |brief: String| {
-                        let (engine, mm, tid, proposition, family, root) = (engine.clone(), mm.clone(), tid.clone(), proposition.clone(), family.clone(), read_root.clone());
+                        let (engine, mm, tid, proposition, family, root, marks) = (engine.clone(), mm.clone(), tid.clone(), proposition.clone(), family.clone(), read_root.clone(), marks.clone());
                         async move {
-                            match engine.panel_foreign_run_seat_reading(&mm, &tid, brief, &proposition, role, &family, 1, None, true, Some(&root)).await {
+                            let said = engine.panel_foreign_run_seat_reading(&mm, &tid, brief, &proposition, role, &family, 1, None, true, Some(&root)).await;
+                            let seen = mm.replay().map(|evs| evs.iter().filter(|e| e.task_id.as_deref() == Some(tid.as_str())).count()).unwrap_or(0);
+                            marks.lock().unwrap().push(seen);
+                            match said {
                                 crate::council::Stance::Said(t) => Ok(t),
                                 crate::council::Stance::Abstained(w) => Err(w),
                             }
                         }
                     };
-                    let cmd = |argv: Vec<String>, by: &'static str| {
+                    let cmd = |argv: Vec<String>, by: &'static str, result: Option<String>| {
                         let (exec, inv) = (engine.exec.clone(), guard.inv.clone());
                         async move {
                             let a2 = argv.clone();
@@ -1710,10 +1721,12 @@ impl EngineService {
                                     let (exit, output) = (r.outcome.status.and_then(|s| s.code()), format!("{}{}", r.outcome.stdout, r.outcome.stderr));
                                     // §14.1 item 1: a program the sandbox could not start did not run, whatever the exit code.
                                     let started = !rj::could_not_start(exit, &output);
-                                    rj::CommandResult { argv, exit, elapsed_ms: r.elapsed.as_millis() as u64, requested_by: by, refused: None, timed_out: r.outcome.timed_out, started, tail: rj::tail(&output, rj::TAIL_CHARS) }
+                                    // §14.9 item 1: the whole output is searched for the runner's result, not only the tail kept.
+                                    let (result_seen, failed) = if started && by == "delphi" { rj::runner_result(&argv, result.as_deref(), &output) } else { (None, None) };
+                                    rj::CommandResult { argv, exit, elapsed_ms: r.elapsed.as_millis() as u64, requested_by: by, refused: None, timed_out: r.outcome.timed_out, started, tail: rj::tail(&output, rj::TAIL_CHARS), result_seen, failed }
                                 }
-                                Ok(Err(e)) => rj::CommandResult { argv, exit: None, elapsed_ms: 0, requested_by: by, refused: None, timed_out: false, started: false, tail: format!("could not run: {e}") },
-                                Err(e) => rj::CommandResult { argv, exit: None, elapsed_ms: 0, requested_by: by, refused: None, timed_out: false, started: false, tail: format!("could not run: {e}") },
+                                Ok(Err(e)) => rj::CommandResult { argv, exit: None, elapsed_ms: 0, requested_by: by, refused: None, timed_out: false, started: false, tail: format!("could not run: {e}"), result_seen: None, failed: None },
+                                Err(e) => rj::CommandResult { argv, exit: None, elapsed_ms: 0, requested_by: by, refused: None, timed_out: false, started: false, tail: format!("could not run: {e}"), result_seen: None, failed: None },
                             }
                         }
                     };
@@ -1751,6 +1764,13 @@ impl EngineService {
                             if let Some(t) = &out.tests_note {
                                 note.push_str(&format!(" Tests: {t}."));
                             }
+                            // §14.9 item 3: the endpoint that served each round, and any fall-back to another endpoint of the family.
+                            let task_events: Vec<EventEnvelope> = events.iter().filter(|e| e.task_id.as_deref() == Some(tid.as_str())).cloned().collect();
+                            let served_rounds = rj::served_by_round(&task_events, &marks.lock().unwrap(), &out.seat_calls);
+                            let endpoint = served_rounds.iter().rev().find_map(|r| r["endpoint"].as_str()).map(String::from);
+                            if let Some(fb) = rj::fallback_line(&served_rounds) {
+                                note.push_str(&format!(" {}", redact(&fb)));
+                            }
                             let commands: Vec<Value> = out.commands.iter().map(|c| {
                                 let mut v = c.to_json();
                                 v["tail"] = json!(redact(&c.tail));
@@ -1768,7 +1788,11 @@ impl EngineService {
                                 "unanswered": out.unanswered.as_deref().map(redact),
                                 "commands": commands,
                                 "tests_run": out.tests_run,
+                                "tests_reason": out.tests_reason,
+                                "tests_failed": out.tests_failed,
                                 "tests_note": out.tests_note,
+                                "endpoint": endpoint,
+                                "served_rounds": served_rounds,
                                 "rounds": out.rounds,
                                 "context": out.context,
                                 "tools": {"read": read_with, "seats": forge_tools},
@@ -3050,10 +3074,16 @@ impl EngineService {
             let e = &svc.engine;
             let programs: std::collections::BTreeMap<String, String> = [("claude", &e.settings.harness_program), ("agy", &e.settings.agy_program), ("codex", &e.settings.codex_program), ("copilot", &e.settings.copilot_program)].into_iter().map(|(h, p)| (h.to_string(), p.clone())).collect();
             let prober = crate::forge_tools::LiveProbe { cfg: (*e.cfg.get()).clone(), programs, read: e.settings.forge_tools.clone() };
-            if let Some((h, v, outcome)) = crate::forge_tools::probe_one_due(&store, now, &prober).await {
-                // The probe's cost goes in the log with the other seat costs, and in the record `delphi doctor` reads.
+            if let Some((h, v, run)) = crate::forge_tools::probe_one_due(&store, now, &prober).await {
+                let outcome = run.outcome;
+                // The probe's cost goes in the log with the other seat costs, and in the record `delphi doctor` reads; with its tool calls
+                // (names, argument names, the gate's decision and reason, whether a result came back) and its reason (§14.9 item 2).
+                let reason = match &outcome {
+                    crate::forge_tools::ProbeOutcome::Pass { .. } => None,
+                    crate::forge_tools::ProbeOutcome::Fail { reason, .. } | crate::forge_tools::ProbeOutcome::Undecided { reason, .. } => Some(svc.engine.secrets.redact(reason)),
+                };
                 if let Ok(m) = svc.mission(None).await {
-                    let _ = m.append(EventEnvelope::new(&m.id, "forge.tools_probe", json!({"harness": h, "version": v, "outcome": outcome.label(), "tokens": outcome.tokens()}))).await;
+                    let _ = m.append(EventEnvelope::new(&m.id, "forge.tools_probe", json!({"harness": h, "version": v, "outcome": outcome.label(), "tokens": outcome.tokens(), "reason": reason, "calls": run.calls}))).await;
                 }
                 if let crate::forge_tools::ProbeOutcome::Fail { .. } = outcome {
                     delphi_core::elog::warn("forge", "forge_probe_failed", &format!("the background probe of {h} failed; that CLI version gets no read tools in reviews"), json!({"harness": h, "status": "bridge-only"}));
@@ -11187,6 +11217,30 @@ mod tests {
         assert!(ok["display"].as_str().is_some_and(|d| d.contains("(strategist, via delphi)")) && ok["signature"] == ok["display"] && ok["identity"]["role"] == "strategist", "{ok}");
     }
 
+    /// `specs/131` AC-10: an API seat that answers with a cut complaint (the API path has no retry for it) or a decline is unanswered,
+    /// with the reason in fixed words and without its text.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ask_family_calls_a_cut_complaint_or_a_decline_unanswered() {
+        for (reply, want) in [("Your prompt was truncated; the task is missing.", "prompt was cut"), ("I can't help with that.", "declines")] {
+            let f = setup(vec![], 50.0, roomy);
+            crate::council::tests::two_families(&f);
+            f.model.respond_with(move |_| Step::text(reply));
+            f.model.served_with(|_| Some("gemini-4-argon".to_string()));
+            let cwd = f.root.to_string_lossy().to_string();
+            let s = serve(&f).await;
+            let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+            let got = blocking(move || {
+                let mut c = Client::connect(&hsock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+                c.hello(&htok).unwrap();
+                ask(&mut c, pbody(&cwd, json!({"question": "Table or file?", "model": "claude-opus", "operator_confirmed": true})))
+            })
+            .await;
+            assert_eq!((got["status"].as_str(), got["answer"].clone()), (Some("unanswered"), Value::Null), "{got}");
+            assert!(got["unanswered"].as_str().is_some_and(|u| u.contains(want) && !u.contains(reply)), "{got}");
+        }
+    }
+
     /// Spec 104 §2 (§12 A1): the daemon hands back an `ask_id` at once; `ask_result` says `working`, then gives the answer once, to the
     /// session that asked only, and every other read is the same refusal.
     #[tokio::test(flavor = "multi_thread")]
@@ -11270,7 +11324,7 @@ mod tests {
     async fn a_review_runs_the_tests_in_a_copy_of_the_branch_and_a_seat_of_another_family_reviews_with_their_output() {
         let f = setup(vec![], 50.0, |s| {
             roomy(s);
-            s.review_commands = Some(vec![vec!["/bin/echo".into(), "TESTS-PASSED-MARKER".into()]]);
+            s.review_commands = Some(vec![crate::review_job::ReviewCommand { argv: vec!["/bin/echo".into(), "TESTS-PASSED-MARKER".into()], result: Some("TESTS-PASSED".into()) }]);
         });
         crate::council::tests::two_families(&f);
         if f.engine.exec.sandbox.is_none() {
@@ -11307,6 +11361,13 @@ mod tests {
         assert_eq!(got["model"].as_str(), Some("gemini-4-argon"), "{got}");
         assert!(got["tokens_in"].as_u64().is_some_and(|n| n > 0) && got["tokens_out"].as_u64().is_some(), "{got}");
         assert_eq!((got["commands"][0]["started"].as_bool(), got["tests_note"].as_str()), (Some(true), None), "{got}");
+        // §14.9 item 1: the configured pattern was found in its output, so it ran the tests.
+        assert_eq!((got["commands"][0]["tests_run"].as_bool(), got["tests_reason"].clone()), (Some(true), Value::Null), "{got}");
+        // §14.9 item 3: the endpoint that served each round (0, 1 and 2), with no fall-back.
+        let rounds = got["served_rounds"].as_array().unwrap();
+        assert_eq!(rounds.iter().map(|r| r["round"].as_u64().unwrap()).collect::<Vec<_>>(), vec![0, 1, 2], "{got}");
+        assert!(rounds.iter().all(|r| r["endpoint"].is_string() && r["family"] == "gemini" && r["fallback"] == json!([])), "{got}");
+        assert_eq!(got["endpoint"], rounds[2]["endpoint"], "{got}");
         let cmds = got["commands"].as_array().unwrap();
         let by: Vec<(&str, &str, bool)> = cmds.iter().map(|c| (c["argv"][0].as_str().unwrap(), c["requested_by"].as_str().unwrap(), c.get("refused").is_some())).collect();
         assert_eq!(by, vec![("/bin/echo", "delphi", false), ("git", "seat", true), ("/bin/cat", "seat", false)], "{got}");

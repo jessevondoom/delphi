@@ -30,6 +30,8 @@ pub struct State {
     pub fail_compare: Option<String>,
     /// After any merge, every other open pull request's head is one commit behind (the base moved under them).
     pub behind_others_on_merge: bool,
+    /// Pull requests opened (`repair-base`): `(base, head, title, body)`; the first gets number 900.
+    pub opened: Vec<(String, String, String, String)>,
 }
 
 #[derive(Default)]
@@ -167,5 +169,10 @@ impl Forge for FakeForge {
             return Err(ForgeError::Failed { what: "compare the branch with its base".into(), detail: d });
         }
         Ok(s.behind.get(head_sha).copied().unwrap_or(0))
+    }
+    fn open_pr(&self, base: &str, head: &str, title: &str, body: &str) -> Result<u64, ForgeError> {
+        let mut s = self.st.borrow_mut();
+        s.opened.push((base.into(), head.into(), title.into(), body.into()));
+        Ok(899 + s.opened.len() as u64)
     }
 }

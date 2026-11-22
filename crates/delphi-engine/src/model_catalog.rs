@@ -4,8 +4,8 @@
 //! seat's trust.
 //! * The **seed table** (`model_capabilities.toml`, shipped): what was measured on 2026-11-20 of each latest-generation model (vendor
 //!   and family, Copilot multiplier and price category, prompt budget in tokens, bytes per token, JSON-in-text behaviour). It is the
-//!   default until a live read replaces it. Spec 131 S2 (the per-carrier input budget) is not built; it can read
-//!   [`SeedModel::prompt_budget_tokens`].
+//!   default until a live read replaces it. Spec 131's per-carrier byte budget (S2, lowered by S6's measured ceiling) does not
+//!   read [`SeedModel::prompt_budget_tokens`].
 //! * The **Copilot catalog**: the account's own model list, read through `copilot --acp` `session/new` (`models.availableModels[]`,
 //!   each with `modelId` and `_meta {copilotUsage, copilotEnablement, copilotPriceCategory}`), cached in
 //!   `local/copilot-catalog.json` with the CLI version it was read on. The survey read it free (no prompt is sent).

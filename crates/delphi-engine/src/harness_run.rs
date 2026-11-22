@@ -111,6 +111,9 @@ pub(crate) enum FailKind {
     AnswerRefused,
     /// The CLI reported success but its answer is one of its own error messages.
     InBandError,
+    /// A Council, Panel or `ask_family` seat's answer says its prompt was cut (`specs/131` S4 item 7): it takes the seat's one retry,
+    /// with half the carrier's budget.
+    CutComplaint,
 }
 
 /// The CLI's own error line sent as a successful answer (a "cannot load model" style message). Deliberately narrow: only the
@@ -937,7 +940,20 @@ impl Engine {
         // The carrier's byte budget (`specs/131` S2): counted on the whole prompt before the CLI starts. Over it, the slices that came from
         // pointers are shortened (never the system text, the contract or a peer's text); if what may not be cut is alone over it, the seat
         // does not start and nothing is spent.
-        let budget = crate::prompt_budget::budget(profile.max_prompt_bytes);
+        // The one retry after a cut complaint runs with half the carrier's budget (`specs/131` S4 item 7, OD-7).
+        // A ceiling the operator measured with the input ladder (`specs/131` S6) lowers it, on the installed CLI version only; the CLI's
+        // version is asked only when a measurement for this endpoint exists.
+        let (full_budget, budget_source) = {
+            let records: Vec<crate::conformance::Record> = crate::conformance::load(&self.ws.dir.join(crate::conformance::FILE)).into_iter().filter(|r| r.endpoint_id == ep.id && r.ladder_at.is_some()).collect();
+            let version = if records.is_empty() {
+                None
+            } else {
+                let p = program.clone();
+                tokio::task::spawn_blocking(move || crate::forge_tools::installed_cli_version(&p)).await.ok().flatten()
+            };
+            crate::conformance::effective_budget(profile.max_prompt_bytes, &records, &ep.id, version.as_deref(), (self.clock_unix)())
+        };
+        let budget = full_budget / if sc.half_budget { 2 } else { 1 };
         let fit = crate::prompt_budget::fit(ipr, (system_prompt.len() + retry_note.len()) as u64, budget);
         let context_cut = fit.record(budget);
         let sent: std::borrow::Cow<Ipr> = match fit {
@@ -961,6 +977,7 @@ impl Engine {
         if let (Some(o), Some(c)) = (started.as_object_mut(), counts.as_object()) {
             o.extend(c.clone());
             o.insert("budget".into(), json!(budget));
+            o.insert("budget_source".into(), json!(budget_source));
             if let Some(cut) = &context_cut {
                 o.insert("context_cut".into(), cut.clone());
             }
@@ -1001,6 +1018,9 @@ impl Engine {
         let mut tool_names: Vec<String> = Vec::new();
         // Calls the `agy` gate allowed: a toolless seat's gate allows none (`specs/089` §18 rule 2).
         let mut gate_allowed = 0u32;
+        // Every decision the daemon's gate made for this run (`specs/131` S4 item 6): calls the CLI made that the daemon never decided
+        // mean the hook did not reach it.
+        let mut gate_decisions = 0u32;
         let (hub, span_id) = (self.hub.clone(), sc.span_id.clone());
         let mut live = LiveRedactor::new(sc.m.secrets());
         loop {
@@ -1043,6 +1063,7 @@ impl Engine {
                 }
                 // Each decision the `agy` gate makes is logged (the Delphi tools are logged as bridge calls when they run).
                 Some(note) = async { match gate_rx.as_mut() { Some(rx) => rx.recv().await, None => std::future::pending().await } } => {
+                    gate_decisions += 1;
                     if let Some(w) = watchdog.as_mut() {
                         w.gate_decided(&note.tool, None, note.allowed);
                     }
@@ -1239,7 +1260,11 @@ impl Engine {
                     if !is_error {
                         match fail_kind {
                             FailKind::InBandError => failure = Some((format!("the CLI reported success but its answer is an error: {}", text.trim().chars().take(100).collect::<String>()), !used_tools)),
-                            FailKind::AnswerNotFound if wants_schema => failure = Some(("the CLI finished without the schema-validated answer that was asked for".into(), !used_tools)),
+                            // `specs/131` S4 item 6: why, in counts only (never the text).
+                            FailKind::AnswerNotFound if wants_schema => {
+                                let words = text.split_whitespace().count() + text_parts.iter().map(|t| t.split_whitespace().count()).sum::<usize>();
+                                failure = Some((format!("the CLI finished without the answer that was asked for (prompt {} bytes; budget {budget}; {} tool calls; {words} words)", counts["prompt_bytes"], tool_names.len()), !used_tools));
+                            }
                             FailKind::AnswerNotFound => failure = Some(("the CLI finished with success and no words (an empty finish)".into(), !used_tools)),
                             _ => {}
                         }
@@ -1291,6 +1316,19 @@ impl Engine {
                 retry_note = Some(crate::json_answer::retry_message("no JSON object was found"));
             }
         }
+        // A seat's answer that says its prompt was cut (`specs/131` S4 items 1 and 7) is not an answer: a Council, Panel or `ask_family`
+        // seat fails with fixed words and counts, never the text. It takes the seat's one retry (with half the budget) only when this run
+        // was not already that retry; a second complaint abstains.
+        let complained = failure.is_none() && crate::refusal::cut_complaint(final_text.as_deref().filter(|t| !t.trim().is_empty()).unwrap_or(&text_parts.join("\n"))).is_some();
+        if complained && sc.council_seat {
+            failure = Some((format!("{} (prompt {} bytes; budget {budget})", crate::refusal::CUT_FAILURE, counts["prompt_bytes"]), !used_tools && !sc.half_budget));
+            fail_kind = FailKind::CutComplaint;
+        }
+        let usage_in = match &result {
+            Some(Event::Result { usage, .. }) => usage.input + usage.cache_read + usage.cache_write,
+            _ => 0,
+        };
+        let cut_suspected = complained || crate::seat::tokens_suggest_cut(counts["prompt_bytes"].as_u64(), usage_in);
         session.kill().await;
         // No event, no tool, no token, and killed by the first-event clock: nothing was spent, so another try repeats nothing.
         let stalled = !seen_event && !any_tool && metered == 0 && result.is_none() && session.idle_killed();
@@ -1356,6 +1394,7 @@ impl Engine {
                 prompt_hash: crate::seat::prompt_hash(&launch.system_prompt, &launch.user_prompt),
                 prompt_bytes: counts["prompt_bytes"].as_u64(),
                 context_cut: context_cut.clone(),
+                cut_suspected,
                 tokens_in: usage.input + usage.cache_read + usage.cache_write,
                 tokens_out: usage.output,
                 outcome: if mismatch { "model_mismatch" } else if failure.is_some() { "error" } else { "ok" }.into(),
@@ -1439,12 +1478,12 @@ impl Engine {
         if let Some((reason, retryable)) = failure {
             // A run that ended with no answer at all says what it did, in counts and names (`specs/128` S2): the CLI's status, the tools it
             // called, how many text events and output tokens it produced, and its exit code. Never text, arguments or a path.
-            if fail_kind == FailKind::AnswerNotFound {
+            if matches!(fail_kind, FailKind::AnswerNotFound | FailKind::CutComplaint) {
                 let (status, out_tokens) = match &result {
                     Some(Event::Result { subtype, usage, .. }) => (subtype.clone(), usage.output),
                     _ => (String::new(), 0),
                 };
-                batch.push(sc.agent_ev("harness.no_answer", json!({"task_id": sc.task_id, "status": status, "tool_calls": tool_names.len(), "tools": tool_names, "text_events": text_parts.len(), "text_bytes": text_parts.iter().map(|t| t.len()).sum::<usize>(), "output_tokens": out_tokens, "structured_output": false, "json_in_text": text_schema.is_some(), "exit_code": exit_code}), ep, &launch.model));
+                batch.push(sc.agent_ev("harness.no_answer", json!({"task_id": sc.task_id, "status": status, "tool_calls": tool_names.len(), "tools": tool_names, "text_events": text_parts.len(), "text_bytes": text_parts.iter().map(|t| t.len()).sum::<usize>(), "output_tokens": out_tokens, "structured_output": false, "json_in_text": text_schema.is_some(), "exit_code": exit_code, "prompt_bytes": counts["prompt_bytes"], "budget": budget, "gate_decisions": gate_decisions, "cut_complaint": fail_kind == FailKind::CutComplaint}), ep, &launch.model));
             }
             // A failed harness run in the central error log (`specs/039`): the reason, the exit code and the redacted tail of stderr.
             // A spent quota is a decision (warn), anything else an error. The gate is the level of the record itself: at the default
@@ -1700,7 +1739,7 @@ echo "$a_{t}" >> answers.txt"#, t = tool, i = input);
     async fn a_schema_answer_that_never_came_is_told_apart_from_one_the_cli_refused() {
         let empty = r#"echo '{"type":"result","subtype":"success","result":"","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'"#;
         let refused = r#"echo '{"type":"result","subtype":"error_max_structured_output_retries","is_error":true,"result":"","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'"#;
-        for (body, want) in [(empty, "without the schema-validated answer"), (refused, "the CLI reported an error")] {
+        for (body, want) in [(empty, "without the answer that was asked for"), (refused, "the CLI reported an error")] {
             let (f, _s) = fixture(&format!("{}\n{}", INIT, body), |_| {});
             let tid = f.m.next_task_id();
             f.engine.schemas.lock().unwrap().insert(format!("ho_{}", tid), crate::council::critique_schema());
@@ -3190,7 +3229,7 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
         assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
         let started = &events_of(&f, "harness.started")[0].payload;
-        assert_eq!(started["budget"], 150_000, "{started}");
+        assert_eq!((started["budget"].as_u64(), started["budget_source"].as_str()), (Some(150_000), Some("default, unmeasured")), "{started}");
         assert!(started["prompt_bytes"].as_u64().unwrap() <= 150_000, "{started}");
         let r = &events_of(&f, crate::seat::RECEIPT_KIND)[0].payload;
         let cut = &r["context_cut"];
@@ -3203,6 +3242,32 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         let sent = fs::read_to_string(&dump).unwrap();
         assert_eq!(sent.matches("[cut by Delphi: the carrier takes at most 150000 bytes of prompt; lines 1 to ").count(), 10);
         assert!(sent.trim_end().trim_end_matches(['}', '"']).ends_with("</contract>"), "the contract is still the end of the prompt");
+    }
+
+    /// `specs/131` S6 (AC-14): a ceiling the input ladder measured on the installed CLI version lowers the seat's budget to 80% of it; a
+    /// record for another version is ignored.
+    #[tokio::test]
+    async fn a_measured_ceiling_on_the_installed_version_lowers_an_agy_seats_budget() {
+        use crate::conformance as cf;
+        let scripts = tempfile::tempdir().unwrap();
+        let dump = scripts.path().join("stdin.txt");
+        let (f, q) = ten_big_pointers(&dump, scripts.path());
+        let now = (f.engine.clock_unix)();
+        let rec = |v: &str, ceiling: u64| cf::Record { endpoint_id: "agy-sub".into(), harness: "agy".into(), model: "gemini-3.8-flash-low".into(), cli_version: v.into(), at: now, tool_level: "L1".into(), rows: vec![cf::ladder_row(&[(ceiling, true), (ceiling + 50_000, false)])], ladder_at: Some(now) };
+        let file = f.engine.ws.dir.join(cf::FILE);
+        cf::save(&file, &rec("2.1.319 (Claude Code)", 100_000)).unwrap();
+        cf::save(&file, &rec("0.9.0", 20_000)).unwrap();
+        let tid = f.m.next_task_id();
+        let mut created = delphi_core::event::EventEnvelope::new(&f.m.id, "task.created", json!({"prompt": "q", "target": "council", "flow": "council"}));
+        created.task_id = Some(tid.clone());
+        f.m.append(created).await.unwrap();
+        let s = f.engine.panel_foreign_run(&f.m, &tid, q.clone(), &q, "architect", "gemini", 1, None).await;
+        assert!(matches!(&s, crate::council::Stance::Said(_)), "{s:?}");
+        let started = &events_of(&f, "harness.started")[0].payload;
+        assert_eq!(started["budget"], 80_000, "{started}");
+        assert!(started["budget_source"].as_str().unwrap().starts_with("measured on 2.1.319 (Claude Code): 80% of 100000 bytes"), "{started}");
+        assert!(started["prompt_bytes"].as_u64().unwrap() <= 80_000, "{started}");
+        assert!(fs::read_to_string(&dump).unwrap().contains("[cut by Delphi: the carrier takes at most 80000 bytes of prompt"));
     }
 
     /// `specs/131` S3 (AC-5): an agy seat's one user event starts with the task and ends with the contract, and with the last 70 KB gone
@@ -3338,7 +3403,7 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert_eq!(starts(&count), 2);
         let r = events_of(&f, "harness.retry");
         assert_eq!(r.len(), 1);
-        assert!(r[0].payload["reason"].as_str().unwrap().contains("without the schema-validated answer"));
+        assert!(r[0].payload["reason"].as_str().unwrap().contains("without the answer that was asked for"));
         let n = events_of(&f, "harness.no_answer");
         assert_eq!(n.len(), 1, "only the first run ended with no answer");
         let p = &n[0].payload;
@@ -3352,8 +3417,55 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         let count = scripts.path().join("count");
         let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_EMPTY_FINISH), Duration::from_secs(600));
         let s = seat_r2(&f).await;
-        assert!(matches!(&s, crate::council::Stance::Abstained(r) if r.contains("without the schema-validated answer")), "{s:?}");
+        assert!(matches!(&s, crate::council::Stance::Abstained(r) if r.contains("without the answer that was asked for")), "{s:?}");
         assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.no_answer").len()), (2, 1, 2));
+        // `specs/131` S4 item 6: the failure line and the event carry counts, never text.
+        let reason = events_of(&f, "harness.retry")[0].payload["reason"].as_str().unwrap().to_string();
+        assert!(reason.contains("bytes; budget 150000; 0 tool calls; 0 words)"), "{reason}");
+        let p = &events_of(&f, "harness.no_answer")[0].payload;
+        assert!(p["prompt_bytes"].as_u64().is_some_and(|b| b > 0) && p["budget"] == 150000 && p["gate_decisions"].as_u64().is_some(), "{p}");
+    }
+
+    const AGY_CUT_COMPLAINT: &str = r#"echo '{"event":"result","result":{"status":"SUCCESS","response":"<truncated 76525 bytes> The task is missing.","usage":{"input_tokens":50,"output_tokens":9}}}'"#;
+
+    /// `specs/131` AC-11: a first answer that is a cut complaint takes the seat's one retry, with half the budget; the retry's answer
+    /// is kept, and the complaint was never the stance.
+    #[tokio::test]
+    async fn a_cut_complaint_is_retried_once_with_half_the_budget() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 1, AGY_CUT_COMPLAINT), Duration::from_secs(600));
+        let s = seat(&f).await;
+        assert!(matches!(&s, crate::council::Stance::Said(t) if t == "a good answer"), "{s:?}");
+        let r = events_of(&f, "harness.retry");
+        assert_eq!((starts(&count), r.len(), r[0].payload["budget_halved"].as_bool()), (2, 1, Some(true)), "{r:?}");
+        assert!(r[0].payload["reason"].as_str().unwrap().starts_with(crate::refusal::CUT_FAILURE) && !r[0].payload.to_string().contains("76525"), "counts only: {r:?}");
+        let budgets: Vec<u64> = events_of(&f, "harness.started").iter().filter_map(|e| e.payload["budget"].as_u64()).collect();
+        assert_eq!(budgets, vec![150_000, 75_000]);
+        let receipts = events_of(&f, crate::seat::RECEIPT_KIND);
+        assert_eq!(receipts[0].payload["cut_suspected"], true, "the complaint is a cut suspected");
+        assert_eq!(events_of(&f, "harness.no_answer")[0].payload["cut_complaint"], true);
+    }
+
+    /// A second complaint abstains after that one retry, and the abstention still says it was a cut complaint.
+    #[tokio::test]
+    async fn two_cut_complaints_abstain_after_exactly_one_retry() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_CUT_COMPLAINT), Duration::from_secs(600));
+        let s = seat(&f).await;
+        assert_eq!(crate::council::round1_not_heard(&s), Some("cut_complaint"), "{s:?}");
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (2, 1));
+    }
+
+    /// An ordinary first answer is not retried by this rule.
+    #[tokio::test]
+    async fn an_answer_that_is_not_a_complaint_is_not_retried() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 0, AGY_CUT_COMPLAINT), Duration::from_secs(600));
+        assert!(matches!(seat(&f).await, crate::council::Stance::Said(_)));
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0));
     }
 
     /// `specs/128` S2 (amended 2026-11-21): a Round 1 seat asks no schema, and a wordless success there is an empty finish too: one

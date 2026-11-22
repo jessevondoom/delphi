@@ -498,6 +498,7 @@ fn a_seat_receipt_satisfies_its_schema() {
         prompt_hash: prompt_hash("system", "user"),
         prompt_bytes: Some(10),
         context_cut: Some(json!({"budget": 150000, "prompt_bytes_before": 200000, "prompt_bytes_after": 149000, "slices_cut": [{"label": "@project/app/a.md", "kept_lines": 10, "total_lines": 400}]})),
+        cut_suspected: true,
         tokens_in: 10,
         tokens_out: 4,
         outcome: "model_mismatch".into(),

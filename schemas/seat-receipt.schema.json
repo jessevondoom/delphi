@@ -59,6 +59,7 @@
       },
       "additionalProperties": false
     },
+    "cut_suspected": { "const": true, "description": "Present only when the prompt may have been cut in transit (spec 131 S4 item 0): the answer complains of a cut, or the carrier reported fewer than a quarter of the input tokens the bytes sent imply. A diagnostic; it never changes a budget." },
     "tokens_in": { "type": "integer", "minimum": 0 },
     "tokens_out": { "type": "integer", "minimum": 0 },
     "outcome": { "enum": ["ok", "error", "model_mismatch"] },

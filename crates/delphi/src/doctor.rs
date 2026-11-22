@@ -202,6 +202,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     check_copilot_catalog(Some(&ws.dir), &cfg, &run_cli, &copilot_catalog, now_unix, &mut r);
     check_conformance(&ws.dir, &cfg, &run_cli, now_unix, &mut r);
     check_coverage_drift(&cfg, &help_page, &mut r);
+    check_version_drift(&cfg, &run_cli, &mut r);
     check_mcp_policy(&cfg, &delphi_engine::policy::local_policy(&std::env::current_exe().unwrap_or_default()), &std::env::current_exe().unwrap_or_default(), &mut r);
 
     // 11. Model pool (specs/002 §4.1): which models are out of quota right now, from the daemon's saved state.
@@ -380,7 +381,10 @@ fn check_removed_settings(cfg_text: &str, r: &mut Report) {
 fn check_review_commands(cfg_text: &str, user_home: &Path, r: &mut Report) {
     let Ok(root) = toml::from_str::<toml::Value>(cfg_text) else { return };
     let exec = delphi_engine::exec::ExecConfig::from_root(&root, user_home);
-    let configured = delphi_engine::boot::settings_from(&root).review_commands.unwrap_or_else(|| [exec.test_command.clone(), exec.check_command.clone()].into_iter().flatten().collect());
+    let configured: Vec<Vec<String>> = match delphi_engine::boot::settings_from(&root).review_commands {
+        Some(cmds) => cmds.into_iter().map(|c| c.argv).collect(),
+        None => [exec.test_command.clone(), exec.check_command.clone()].into_iter().flatten().collect(),
+    };
     let path = exec.env.get("PATH").cloned().unwrap_or_else(|| "/usr/bin:/bin".into());
     let roots: Vec<PathBuf> = delphi_sandbox::system_read_only().into_iter().chain(exec.toolchain.iter().cloned()).collect();
     for argv in &configured {
@@ -911,7 +915,9 @@ fn check_conformance(ws: &Path, cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> C
         let id = e.get("id").and_then(|i| i.as_str()).unwrap_or("?");
         let Some(program) = e.get("harness").and_then(|h| h.as_str()).and_then(delphi_engine::harness::Cli::from_harness).map(|c| c.program()) else { continue };
         let version = versions.entry(program.into()).or_insert_with(|| run(program, &["--version"]).filter(|(code, _)| *code == 0).and_then(|(_, out)| out.lines().next().map(|l| l.trim().to_string())).filter(|l| !l.is_empty()));
-        let line = delphi_engine::conformance::doctor_line(&records, id, version.as_deref(), now);
+        // The operator's `[harness.<cli>] max_prompt_bytes`, which a measured ceiling can only lower (`specs/131` S6).
+        let configured = v.get("harness").and_then(|h| h.get(program)).and_then(|p| p.get("max_prompt_bytes")).and_then(|n| n.as_integer()).and_then(|n| u64::try_from(n).ok());
+        let line = delphi_engine::conformance::doctor_line(&records, id, version.as_deref(), now, configured);
         r.push(Level::Ok, "10 harness", format!("{id} conformance"), line);
     }
 }
@@ -1025,6 +1031,34 @@ fn check_coverage_drift(cfg_text: &str, help: &dyn Fn(&str, &[&str]) -> Option<S
             let shown: Vec<String> = items.iter().take(6).map(|i| i.describe()).collect();
             let more = if items.len() > 6 { format!(" and {} more", items.len() - 6) } else { String::new() };
             r.warn("10 harness", format!("{} surface", cli), format!("the installed {} shows {}{} with no disposition in crates/delphi-engine/coverage/{}.cov: it is newer than this Delphi knows. Nothing breaks (Delphi passes only the flags it uses); a Delphi update classifies it", cli, shown.join(", "), more, cli));
+        }
+    }
+}
+
+/// For every CLI a `path = "harness"` endpoint uses: its installed `--version` against the version its coverage manifest is pinned to
+/// (`specs/132` row C9, F1, AC-18). A newer CLI is the drift line and the "unprobed version" line together: surface it added is not
+/// classified, and no probe record of the pinned version speaks for it. Read-only: `--version` only. Information, never a gate.
+fn check_version_drift(cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> CliRun, r: &mut Report) {
+    use delphi_engine::coverage::{version_drift, VersionDrift};
+    let Ok(v) = toml::from_str::<toml::Value>(cfg_text) else { return };
+    let Some(list) = v.get("endpoints").and_then(|e| e.as_array()) else { return };
+    let mut seen = std::collections::BTreeSet::new();
+    for e in list.iter().filter(|e| e.get("path").and_then(|p| p.as_str()) == Some("harness")) {
+        let Some(cli) = e.get("harness").and_then(|h| h.as_str()).filter(|c| delphi_engine::coverage::CLIS.contains(c)) else { continue };
+        if !seen.insert(cli.to_string()) {
+            continue;
+        }
+        let Some(installed) = run(cli, &["--version"]).filter(|(code, _)| *code == 0).map(|(_, out)| out) else { continue }; // not installed: check 10 says so
+        let at = format!("{cli} version");
+        match version_drift(cli, Some(&installed)) {
+            VersionDrift::Pinned(p) => r.push(Level::Ok, "10 harness", at, format!("{cli} {p} is the version its coverage manifest is pinned to")),
+            VersionDrift::Newer { installed, pinned } => {
+                // A Claude seat's tools come from its own allow-list, never from the probe record; every other carrier is L0 without one.
+                let seats = if cli == "claude" { "no probe record speaks for it" } else { "its seats stay at L0 with spec 131's default budget" };
+                r.warn("10 harness", at, format!("drift: the installed {cli} {installed} is newer than its coverage manifest ({pinned}); unprobed version: {seats} until `delphi endpoints test --probe` records {installed}, and a Delphi update classifies what it added"))
+            }
+            VersionDrift::Older { installed, pinned } => r.push(Level::Ok, "10 harness", at, format!("the installed {cli} {installed} is older than its coverage manifest ({pinned}); flags the manifest lists may be missing from it")),
+            VersionDrift::Unknown => r.push(Level::Skipped, "10 harness", at, format!("{cli}'s version could not be read as a number, so it is not compared with its coverage manifest")),
         }
     }
 }
@@ -1712,6 +1746,10 @@ mod tests {
             ft::observe(r, "agy", Some("agy 2"), 100);
             ft::observe(r, "claude", Some("2.1.1"), 100);
             ft::drop_version(r, "claude", "2.1.1", "the seat's own tool `Read` ran although Delphi's gate never allowed it", 200);
+            // §14.9 item 2 (AC-22): a failed probe's calls are printed, with the gate's reason and an unknown argument called out.
+            ft::observe(r, "agy", Some("agy 1.5.14"), 100);
+            let call = ft::ProbeCall { tool: "view_file".into(), arg_keys: vec!["AbsolutePath".into(), "IsArtifact".into()], allowed: Some(false), reason: Some("`view_file` was called with `IsArtifact`, an argument Delphi does not know; it is refused".into()), result: None, unknown_keys: vec!["IsArtifact".into()], id: None };
+            ft::record_run(r, "agy", "agy 1.5.14", &ft::ProbeRun { outcome: ft::ProbeOutcome::Fail { reason: "no read passed".into(), tokens: 9 }, calls: vec![call] }, 200);
         })
         .unwrap();
         let mut r = Report::default();
@@ -1720,6 +1758,7 @@ mod tests {
         assert!(got.iter().any(|(l, m)| *l == Level::Ok && m.contains("agy 1: read tools (probed") && m.contains("7 tokens")), "{got:?}");
         assert!(got.iter().any(|(l, m)| *l == Level::Ok && m.contains("agy 2: read tools in the grace period")), "{got:?}");
         assert!(got.iter().any(|(l, m)| *l == Level::Warn && m.contains("claude 2.1.1: BRIDGE-ONLY") && m.contains("watchdog")), "{got:?}");
+        assert!(got.iter().any(|(l, m)| *l == Level::Warn && m.contains("agy 1.5.14: last fail probe") && m.contains("view_file(AbsolutePath, IsArtifact): REFUSED by the gate") && m.contains("UNKNOWN ARGUMENT IsArtifact")), "{got:?}");
         assert!(got.iter().any(|(_, m)| m.starts_with("codex: bridge-only")) && got.iter().any(|(_, m)| m.starts_with("copilot: bridge-only")), "{got:?}");
     }
 
@@ -2411,7 +2450,11 @@ mod tests {
         use delphi_engine::conformance as cf;
         let ws = tempfile::tempdir().unwrap();
         let cfg = "[[endpoints]]\nid=\"cp\"\nfamily=\"claude\"\npath=\"harness\"\nharness=\"copilot\"\ncredential=\"harness-login\"\n[[endpoints]]\nid=\"ag\"\nfamily=\"gemini\"\npath=\"harness\"\nharness=\"agy\"\ncredential=\"harness-login\"\n";
-        let rec = cf::Record { endpoint_id: "cp".into(), harness: "copilot".into(), model: "claude-haiku-4.5".into(), cli_version: "GitHub Copilot CLI 1.0.112.".into(), at: 1_000, tool_level: "L0".into(), rows: vec![cf::Row { row: "C2".into(), status: cf::Status::Met, note: String::new(), count: None }, cf::Row { row: "C5".into(), status: cf::Status::NotMet, note: String::new(), count: None }] };
+        let rec = cf::Record { endpoint_id: "cp".into(), harness: "copilot".into(), model: "claude-haiku-4.5".into(), cli_version: "GitHub Copilot CLI 1.0.112.".into(), at: 1_000, tool_level: "L0".into(), rows: vec![cf::Row { row: "C2".into(), status: cf::Status::Met, note: String::new(), count: None }, cf::Row { row: "C5".into(), status: cf::Status::NotMet, note: String::new(), count: None }], ladder_at: None };
+        // specs/131 S6: agy's ladder answered 150,000 bytes on 1.4.7, so its budget is 80% of that, below the operator's 140,000.
+        let agy = cf::Record { endpoint_id: "ag".into(), harness: "agy".into(), model: "gemini-3.8-flash".into(), cli_version: "1.4.7".into(), at: 1_000, tool_level: "L1".into(), rows: vec![cf::ladder_row(&[(150_000, true), (200_000, false)])], ladder_at: Some(1_000) };
+        cf::save(&ws.path().join(cf::FILE), &agy).unwrap();
+        let cfg = &format!("{cfg}[harness.agy]\nmax_prompt_bytes = 140000\n");
         cf::save(&ws.path().join(cf::FILE), &rec).unwrap();
         let say = |copilot: &'static str| {
             let run = move |p: &str, a: &[&str]| -> CliRun { (a == ["--version"]).then(|| (0, if p == "copilot" { copilot.to_string() } else { "1.4.7\n".to_string() })) };
@@ -2421,10 +2464,48 @@ mod tests {
         };
         let r = say("GitHub Copilot CLI 1.0.112.\nRun 'copilot update'\n");
         let cp = r.findings.iter().find(|f| f.location == "cp conformance").unwrap();
-        assert!(cp.message.contains("met C2, NOT met C5") && cp.message.contains("tool level L0") && cp.message.contains("spec 131 S2 not built"), "{}", cp.message);
-        assert!(r.findings.iter().find(|f| f.location == "ag conformance").unwrap().message.contains("not probed"));
+        assert!(cp.message.contains("met C2, NOT met C5") && cp.message.contains("tool level L0") && cp.message.contains("input budget 150000 bytes (default, unmeasured)"), "{}", cp.message);
+        let ag = &r.findings.iter().find(|f| f.location == "ag conformance").unwrap().message;
+        assert!(ag.contains("met C3") && ag.contains("input budget 120000 bytes (measured on 1.4.7: 80% of 150000 bytes answered, below the config 140000)"), "{ag}");
         let moved = say("GitHub Copilot CLI 1.0.120.\n");
         assert!(moved.findings.iter().find(|f| f.location == "cp conformance").unwrap().message.contains("unprobed version"), "{:?}", moved.findings);
+    }
+
+    /// specs/132 AC-18 (F1): a CLI newer than its manifest, with a fake newer `--help` and `--version`, prints the drift line and the
+    /// "unprobed version" line for that carrier; the pinned version is quiet; every carrier is judged the same way.
+    #[test]
+    fn a_cli_newer_than_its_manifest_prints_the_drift_and_unprobed_version_lines() {
+        use delphi_engine::coverage::{pinned_version, snapshot_text};
+        let ep = |id: &str, h: &str| format!("[[endpoints]]\nid=\"{id}\"\nfamily=\"x\"\npath=\"harness\"\nharness=\"{h}\"\ncredential=\"harness-login\"\n");
+        for cli in delphi_engine::coverage::CLIS {
+            let cfg = format!("{}{}", ep("one", cli), ep("two", cli));
+            let pin = pinned_version(cli).unwrap();
+            let newer = format!("{pin}.3");
+            let say = |version: String| {
+                let run = move |p: &str, a: &[&str]| -> CliRun { (p == *cli && a == ["--version"]).then(|| (0, format!("{cli} {version}\n"))) };
+                let mut r = Report::default();
+                check_version_drift(&cfg, &run, &mut r);
+                r
+            };
+            let r = say(newer.clone());
+            let lines: Vec<_> = r.findings.iter().filter(|f| f.location == format!("{cli} version")).collect();
+            assert_eq!(lines.len(), 1, "one line per CLI, not per endpoint: {:?}", r.findings);
+            assert!(lines[0].level == Level::Warn && lines[0].message.contains("drift") && lines[0].message.contains("unprobed version") && lines[0].message.contains(&newer) && lines[0].message.contains(&pin), "{}", lines[0].message);
+            let quiet = say(pin.clone());
+            assert!(quiet.findings.iter().all(|f| f.level == Level::Ok && !f.message.contains("unprobed")), "{:?}", quiet.findings);
+            // The newer `--help` shows a flag no manifest row covers: the surface drift line, from the same fake release.
+            let help = move |p: &str, words: &[&str]| -> Option<String> {
+                let page = snapshot_text(p).split("##### ").find(|s| s.lines().next().map(|h| h.split_whitespace().skip(1).collect::<Vec<_>>()) == Some(words.to_vec()))?;
+                let body: String = page.lines().skip(1).collect::<Vec<_>>().join("\n");
+                Some(if words.is_empty() { format!("{body}\nOptions:\n  --f1-brand-new-flag   added in {newer}\n") } else { body })
+            };
+            let mut s = Report::default();
+            check_coverage_drift(&cfg, &help, &mut s);
+            assert!(s.findings.iter().any(|f| f.level == Level::Warn && f.message.contains("--f1-brand-new-flag")), "{cli}: {:?}", s.findings);
+        }
+        let mut none = Report::default();
+        check_version_drift(&ep("one", "copilot"), &|_: &str, _: &[&str]| None, &mut none);
+        assert!(none.findings.is_empty(), "a CLI that is not installed is check 10's to report");
     }
 
     /// specs/132 AC-5: with a fake `session/new` answer the catalog is cached with its CLI version; a configured model missing from it

@@ -1,0 +1,18 @@
+# The two arms of the M7 routing benchmark (`specs/056` §10.6). Copy it next to your template home and fill in the two lists.
+# Both arms name ONE template home (a copy of a home whose pool, tiers, grades and `max_cost_class` you ratified once; never your
+# real home), the same `expect_models` (every pool model: discovered may choose any of them) and no overlay. `delphi train run`
+# refuses a pair that differs in anything but `[arm.routing] assignment`.
+
+[[arm]]
+name = "static"
+template_home = "homes/m7"
+expect_models = ["<every pool model id>"]
+[arm.routing]
+assignment = "static"
+
+[[arm]]
+name = "discovered"
+template_home = "homes/m7"
+expect_models = ["<every pool model id>"]
+[arm.routing]
+assignment = "discovered"
