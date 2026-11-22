@@ -909,6 +909,55 @@ pub fn seat_where(family: Option<&str>, endpoint: Option<&str>) -> (String, Opti
 }
 
 /// A redacted reason cut to [`ABSTENTION_MAX`] characters; a cut one ends by saying where the whole error is.
+/// Why a Round 1 stance was not heard (`specs/131` §3.4 item 2), or `None`.
+pub fn round1_not_heard(s: &Stance) -> Option<&'static str> {
+    match s {
+        Stance::Said(t) => crate::refusal::not_heard(Some(t), None, None),
+        Stance::Abstained(w) => crate::refusal::not_heard(None, Some(w), None),
+    }
+}
+
+/// Why a Round 2 critique was not heard, or `None`: a readable critique is heard; an abstention is kept as `(no Round 2: ...)` text.
+pub fn round2_not_heard(text: Option<&str>, readable: bool) -> Option<&'static str> {
+    match text {
+        Some(t) if t.starts_with("(no Round 2:") => crate::refusal::not_heard(None, Some(t), Some(readable)),
+        t => crate::refusal::not_heard(Some(t.unwrap_or("")), None, Some(readable)),
+    }
+}
+
+/// The `heard`, `why` and `cut_suspected` fields of a `council.stance` or `council.critique` event (`specs/131` §3.4 items 0 and 2).
+/// `cut_suspected` is the diagnostic: a cut complaint, or (Round 2) no Round 1 shape and no readable critique.
+fn heard_fields(why: Option<&'static str>, round1_shapeless: bool) -> Value {
+    json!({"heard": why.is_none(), "why": why, "cut_suspected": why == Some("cut_complaint") || (round1_shapeless && why.is_some())})
+}
+
+fn merge_into(into: &mut Value, from: Value) {
+    if let (Some(o), Value::Object(f)) = (into.as_object_mut(), from) {
+        o.extend(f);
+    }
+}
+
+/// Fewer than two seats heard in Round 1: the escalation sentence, naming each seat not heard and why (`specs/131` §3.4 item 3).
+pub fn too_few_heard(stances: &BTreeMap<String, Stance>) -> Option<String> {
+    let heard = stances.values().filter(|s| round1_not_heard(s).is_none()).count();
+    if heard >= 2 {
+        return None;
+    }
+    let causes: Vec<String> = stances
+        .iter()
+        .filter_map(|(r, s)| {
+            round1_not_heard(s).map(|w| match w {
+                "cut_complaint" => format!("the {r}'s Round 1 says its prompt was cut"),
+                "declined" => format!("the {r} declined"),
+                "empty" => format!("the {r} gave an empty answer"),
+                _ => format!("the {r} abstained"),
+            })
+        })
+        .collect();
+    let causes = if causes.is_empty() { String::new() } else { format!(": {}", causes.join("; ")) };
+    Some(format!("only {heard} seat(s) were heard in Round 1, too few to deliberate; nothing was decided{causes}"))
+}
+
 pub fn abstention_reason(text: &str, mission: &str) -> String {
     if text.chars().count() <= ABSTENTION_MAX {
         return text.to_string();
@@ -1523,10 +1572,11 @@ impl Engine {
     /// 2026-11-21): with `round1` (the released Round 1), a seat Delphi ran that abstained adds no family, and the host's family counts
     /// only if one of the host's own seats (those not in `foreign`) said something. Without it, the log's Round 1 stances decide.
     pub fn panel_diversity(&self, m: &MissionState, task_id: &str, host_family: Option<&str>, round1: Option<&BTreeMap<String, Stance>>, foreign: &[String]) -> crate::seat::Diversity {
-        let abstained: Vec<String> = round1.into_iter().flatten().filter(|(_, s)| s.text().is_none()).map(|(r, _)| r.clone()).collect();
+        // `specs/131` S4: a seat not heard (a decline or a cut complaint, as well as an abstention) adds no family.
+        let abstained: Vec<String> = round1.into_iter().flatten().filter(|(_, s)| round1_not_heard(s).is_some()).map(|(r, _)| r.clone()).collect();
         let evs = m.replay().unwrap_or_default();
         let host_said = match round1 {
-            Some(st) => st.iter().any(|(r, s)| !foreign.contains(r) && s.text().is_some()),
+            Some(st) => st.iter().any(|(r, s)| !foreign.contains(r) && round1_not_heard(s).is_none()),
             None => {
                 let host_roles: Vec<&str> = evs.iter().filter(|e| e.kind == "council.stance" && e.task_id.as_deref() == Some(task_id) && e.payload["round"] == 1).filter_map(|e| e.payload["role"].as_str()).filter(|r| !foreign.iter().any(|f| f == r)).collect();
                 crate::seat::host_sat(&evs, task_id, &host_roles)
@@ -1623,7 +1673,9 @@ impl Engine {
                 Stance::Said(t) => ("answered", t.clone()),
                 Stance::Abstained(w) => ("abstained", w.clone()),
             };
-            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": self.secrets.redact(&text), "model": models.get(role), "brief_hash": brief_hashes.get(role), "submission": relay["submissions"].get(role), "parsed": st.text().map(crate::refusal::round1_parsed), "declined": st.text().is_some_and(|t| crate::refusal::declines(t).is_some())}))).await?;
+            let mut p = json!({"round": 1, "role": role, "status": status, "text": self.secrets.redact(&text), "model": models.get(role), "brief_hash": brief_hashes.get(role), "submission": relay["submissions"].get(role), "parsed": st.text().map(crate::refusal::round1_parsed), "declined": st.text().is_some_and(|t| crate::refusal::declines(t).is_some())});
+            merge_into(&mut p, heard_fields(round1_not_heard(st), false));
+            m.append(emit("council.stance", p)).await?;
         }
         Ok(())
     }
@@ -1640,7 +1692,10 @@ impl Engine {
         let (round2, round2_text) = panel.parsed_round2();
         for (role, c) in &round2 {
             let st = round2_standing(round2_text.get(role).map(String::as_str));
-            let mut e = EventEnvelope::new(&m.id, "council.critique", json!({"round": 2, "role": role, "cause": st.cause.map(Round2Cause::name), "kept": st.kept, "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2), "format_retries": panel.format_retries(role), "submission": panel.submission(2, role), "trailer": trailer_json(round2_text.get(role))}));
+            let mut p = json!({"round": 2, "role": role, "cause": st.cause.map(Round2Cause::name), "kept": st.kept, "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role).map(|t| self.secrets.redact(t)), "brief_hash": panel.brief_hash(role, 2), "format_retries": panel.format_retries(role), "submission": panel.submission(2, role), "trailer": trailer_json(round2_text.get(role))});
+            let shapeless = stances.get(role).and_then(Stance::text).is_some_and(|t| !crate::refusal::round1_parsed(t));
+            merge_into(&mut p, heard_fields(round2_not_heard(round2_text.get(role).map(String::as_str), c.is_some()), shapeless));
+            let mut e = EventEnvelope::new(&m.id, "council.critique", p);
             e.task_id = Some(task_id.clone());
             m.append(e).await?;
         }
@@ -1805,18 +1860,22 @@ impl Engine {
                 Stance::Said(t) => ("answered", t.clone()),
                 Stance::Abstained(w) => ("abstained", w.clone()),
             };
-            m.append(emit("council.stance", json!({"round": 1, "role": role, "status": status, "text": text, "parsed": s.text().map(crate::refusal::round1_parsed), "declined": s.text().is_some_and(|t| crate::refusal::declines(t).is_some())}))).await?;
+            let mut p = json!({"round": 1, "role": role, "status": status, "text": text, "parsed": s.text().map(crate::refusal::round1_parsed), "declined": s.text().is_some_and(|t| crate::refusal::declines(t).is_some())});
+            merge_into(&mut p, heard_fields(round1_not_heard(s), false));
+            m.append(emit("council.stance", p)).await?;
+        }
+        // `specs/131` S4: the threshold counts seats HEARD (not a decline, not a cut complaint), and says who was not and why.
+        if let Some(why) = too_few_heard(&stances) {
+            return Ok((Status::Escalated(why), String::new()));
         }
         let answered: Vec<&String> = stances.iter().filter(|(_, s)| s.text().is_some()).map(|(r, _)| r).collect();
-        if answered.len() < 2 {
-            return Ok((Status::Escalated(format!("only {} seat(s) answered Round 1, too few to deliberate; nothing was decided", answered.len())), String::new()));
-        }
-        // `specs/091` SR-3 (amended 2026-11-21): a seat counts toward families only if it gave a stance. The plan spanned two families;
-        // if the seats that answered do not, the record is labelled homogeneous.
-        let said_families: std::collections::BTreeSet<&str> = plan.seats.iter().filter(|s| answered.contains(&&s.role)).map(|s| s.family.as_str()).collect();
+        let heard: Vec<&String> = stances.iter().filter(|(_, s)| round1_not_heard(s).is_none()).map(|(r, _)| r).collect();
+        // `specs/091` SR-3 (amended 2026-11-21) and `specs/131` S4: a seat counts toward families only if it was heard. The plan spanned
+        // two families; if the seats heard do not, the record is labelled homogeneous.
+        let said_families: std::collections::BTreeSet<&str> = plan.seats.iter().filter(|s| heard.contains(&&s.role)).map(|s| s.family.as_str()).collect();
         if !plan.homogeneous && said_families.len() < 2 {
             plan.homogeneous = true;
-            plan.notes.push(format!("only one model family answered Round 1 ({}): the seats on the other family abstained, so the verdict is labeled homogeneous", said_families.iter().next().copied().unwrap_or("none")));
+            plan.notes.push(format!("only one model family answered Round 1 ({}): the seats on the other family abstained or were not heard, so the verdict is labeled homogeneous", said_families.iter().next().copied().unwrap_or("none")));
         }
         if let Some(why) = over_budget(self, "Round 1") {
             return Ok((Status::Escalated(why), String::new()));
@@ -1884,7 +1943,10 @@ impl Engine {
         }
         for (role, c) in &round2 {
             let st = round2_standing(round2_text.get(role).map(String::as_str));
-            m.append(emit("council.critique", json!({"round": 2, "role": role, "cause": st.cause.map(Round2Cause::name), "kept": st.kept, "repair": repair.get(role).copied(), "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role), "trailer": trailer_json(round2_text.get(role))}))).await?;
+            let mut p = json!({"round": 2, "role": role, "cause": st.cause.map(Round2Cause::name), "kept": st.kept, "repair": repair.get(role).copied(), "readable": c.is_some(), "declined": round2_text.get(role).is_some_and(|t| crate::refusal::declines(t).is_some()), "recommendation": c.as_ref().map(|c| c.recommendation.label()), "concur": c.as_ref().and_then(|c| c.concur), "findings": c.as_ref().map(|c| c.findings.iter().map(|(s, t)| json!({"severity": s, "title": t})).collect::<Vec<_>>()).unwrap_or_default(), "text": round2_text.get(role), "trailer": trailer_json(round2_text.get(role))});
+            let shapeless = stances.get(role).and_then(Stance::text).is_some_and(|t| !crate::refusal::round1_parsed(t));
+            merge_into(&mut p, heard_fields(round2_not_heard(round2_text.get(role).map(String::as_str), c.is_some()), shapeless));
+            m.append(emit("council.critique", p)).await?;
         }
         let decision = decide(&round2);
 
@@ -2580,9 +2642,35 @@ pub(crate) mod tests {
         assert!(after.contains("runs read-only"), "the write was refused at call time: {after}");
         assert!(!f.engine.ws.dir.join(target).exists(), "nothing was written");
         assert!(f.engine.readonly_tasks.lock().unwrap().is_empty(), "the mark does not outlive the Council");
-        // The same Council raised by the operator is unchanged: red-team's Round 1 seat has its manifest's write tools.
-        let (_g, offered, _, _) = council_seat_tries_a_write(false).await;
-        assert!(offered.iter().any(|(r, t)| r == "red-team" && t.contains(&"write_file".to_string())), "{offered:?}");
+    }
+
+    /// `specs/131` S5 (AC-12, AC-13): a Council seat raised by the operator is offered reading tools only, though red-team's manifest
+    /// has a write scope; its write is refused at call time and nothing is written. Round 2 seats stay toolless (spec 128 S1).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_council_seat_is_offered_reading_tools_only_and_its_write_is_refused() {
+        let (f, offered, after, target) = council_seat_tries_a_write(false).await;
+        let mut red: Vec<String> = offered.iter().find(|(r, t)| r == "red-team" && !t.is_empty()).map(|(_, t)| t.clone()).unwrap_or_else(|| panic!("red-team sat with tools: {offered:?}"));
+        red.sort();
+        let mut want: Vec<String> = crate::tools::SEAT_READING_TOOLS.iter().map(|s| s.to_string()).collect();
+        want.sort();
+        assert_eq!(red, want, "exactly the reading tools of spec 131 section 3.5");
+        for (role, tools) in &offered {
+            assert!(tools.iter().all(|t| crate::tools::SEAT_READING_TOOLS.contains(&t.as_str())), "{role} was offered more than reading tools: {tools:?}");
+        }
+        assert!(after.contains("is not a reading tool"), "the write was refused at call time: {after}");
+        assert!(!f.engine.ws.dir.join(target).exists(), "nothing was written");
+        assert!(events_of(&f, "council.critique").iter().all(|e| e.payload["readable"] == true), "the Council still deliberated");
+    }
+
+    /// A span that is not a Council seat keeps its whole offer: red-team's ordinary task still has its write tools and `request_research`.
+    #[tokio::test]
+    async fn a_span_that_is_not_a_council_seat_keeps_its_offer() {
+        let f = crate::testkit::setup(vec![Step::text("done")], 50.0, |_| {});
+        f.engine.run_task(&f.m, "red-team", "Look at the plan.").await.unwrap();
+        let tools = f.model.requests()[0].body["tools"].to_string();
+        for t in ["write_file", "request_research", "record_finding"] {
+            assert!(tools.contains(&format!("\"{t}\"")), "`{t}` missing from an ordinary span: {tools}");
+        }
     }
 
     /// Run one Round 1 Panel seat that reads `@project/app/src/lib.rs` and then asks for a second tool. Returns the fixture and the
@@ -3125,6 +3213,51 @@ pub(crate) mod tests {
         let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
         assert!(matches!(&out.status, Status::Escalated(w) if w.contains("too few")), "{:?}", out.status);
         assert!(!f.m.dir.join("councils").exists());
+    }
+
+    /// A Council whose Round 1 seats answer with the text `r1(role)`; Round 2 and the synthesis answer as in [`fixture`].
+    fn round1_fixture(r1: fn(&str) -> &'static str) -> Fx {
+        let f = crate::testkit::setup(vec![], 50.0, |_| {});
+        two_families(&f);
+        f.model.respond_with(move |body| {
+            let t = body.to_string();
+            let role = who(body);
+            if t.contains("COUNCIL, ROUND 1") {
+                Step::text(r1(role))
+            } else if t.contains("COUNCIL, ROUND 2") {
+                Step::text("Reasoning.\nRECOMMENDATION: PROCEED\nROUND 2 COMPLETE")
+            } else {
+                Step::text("The Council recommends the queue.")
+            }
+        });
+        f
+    }
+
+    /// `specs/131` AC-7 and AC-8: three seats of which two decline or complain of a cut end in the escalation sentence naming them,
+    /// and every stance says whether it was heard and why not.
+    #[tokio::test]
+    async fn fewer_than_two_heard_seats_escalate_and_name_why() {
+        let f = round1_fixture(|role| match role {
+            "red-team" => "<truncated 76525 bytes> The task is missing.",
+            "strategist" => "I can't help with that.",
+            _ => "OPTION: queue\nA queue is safer.",
+        });
+        let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        match &out.status {
+            Status::Escalated(w) => assert!(w.contains("only 1 seat(s) were heard") && w.contains("the red-team's Round 1 says its prompt was cut") && w.contains("the strategist declined"), "{w}"),
+            other => panic!("{other:?}"),
+        }
+        let stances = events_of(&f, "council.stance");
+        let of = |r: &str| stances.iter().find(|e| e.payload["role"] == r).unwrap().payload.clone();
+        assert_eq!((of("red-team")["heard"].clone(), of("red-team")["why"].clone(), of("red-team")["cut_suspected"].clone()), (json!(false), json!("cut_complaint"), json!(true)));
+        assert_eq!((of("strategist")["heard"].clone(), of("strategist")["why"].clone()), (json!(false), json!("declined")));
+        assert_eq!((of("architect")["heard"].clone(), of("architect")["why"].clone()), (json!(true), Value::Null));
+        assert!(events_of(&f, "council.critique").is_empty(), "nothing deliberated");
+        // Two heard seats deliberate.
+        let f = round1_fixture(|role| if role == "strategist" { "I can't help with that." } else { "OPTION: queue\nA queue is safer." });
+        let out = f.engine.run_council(&f.m, f.m.next_task_id(), "Queue or cron?", CouncilOpts::default()).await.unwrap();
+        assert!(out.text.contains("Saved:"), "{:?} {}", out.status, out.text);
+        assert!(events_of(&f, "council.critique").iter().all(|e| e.payload["heard"] == true), "readable critiques are heard");
     }
 
     /// `specs/091` SR-3 (amended 2026-11-21): a seat counts toward families only if it gave a stance. The plan spans two families; the

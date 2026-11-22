@@ -539,6 +539,8 @@ pub(crate) struct SpanCtx {
     /// The fixed message of a JSON-in-text answer's one retry (`specs/132` §6.1 item 4), set by the engine before that retry and
     /// taken by the next harness run.
     pub(crate) json_retry: Option<String>,
+    /// The seat's one retry follows a cut complaint: the next harness run gets half the carrier's budget (`specs/131` S4 item 7).
+    pub(crate) half_budget: bool,
     /// The bundle agent this span runs as (`specs/023` §5B): its host role's manifest applies unchanged, and its `tools`
     /// list only ever removes tools from that role's.
     pub(crate) bundle_agent: Option<crate::bundle_load::LoadedAgent>,
@@ -1054,7 +1056,7 @@ impl Engine {
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
             let seat_readonly = self.readonly_handoffs.lock().unwrap().contains(&readonly_key(&m.id, &handoff.handoff_id));
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), forge_read: self.forge_reads.lock().unwrap().get(&handoff.handoff_id).cloned(), forge: None, readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), json_retry: None, bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, task: handoff.task_text(), read_noted: false, investigate_in: None, investigation: None };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), forge_read: self.forge_reads.lock().unwrap().get(&handoff.handoff_id).cloned(), forge: None, readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), json_retry: None, half_budget: false, bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, task: handoff.task_text(), read_noted: false, investigate_in: None, investigation: None };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -1280,13 +1282,16 @@ impl Engine {
                     // A refused answer was found and judged; another run is not a retry of a crash.
                     // A run that finished with success and no answer or words at all (`AnswerNotFound`) is also tried once more (`specs/128` S2);
                     // `retryable` already means no tool that acts was used.
-                    let retry_kind = (f.cli_error && f.kind != crate::harness_run::FailKind::AnswerRefused) || f.kind == crate::harness_run::FailKind::AnswerNotFound;
+                    // A cut complaint (`specs/131` S4 item 7) takes the same one retry, with half the carrier's budget.
+                    let cut = f.kind == crate::harness_run::FailKind::CutComplaint;
+                    let retry_kind = (f.cli_error && f.kind != crate::harness_run::FailKind::AnswerRefused) || f.kind == crate::harness_run::FailKind::AnswerNotFound || cut;
                     if let (true, true, Some(left)) = (retry_kind, f.retryable, left) {
                         if left >= crate::harness_run::RETRY_MIN_REMAINING {
-                            m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64, "json_retry": f.retry_note.is_some()}))).await?;
+                            m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64, "json_retry": f.retry_note.is_some(), "budget_halved": cut}))).await?;
                             // A JSON-in-text answer that was not found or did not validate is retried with the fixed message (`specs/132`
                             // §6.1); this is the seat's one retry whatever its cause (OD-3), so a second failure is final.
                             sc.json_retry = f.retry_note.clone();
+                            sc.half_budget = cut;
                             first = self.run_harness(&mut sc, &ipr, &hep).await?;
                         }
                     }
@@ -2283,6 +2288,11 @@ impl Engine {
         if granted {
             defs.retain(|d| crate::authorization_grant::tool_allowed(&d.name));
         }
+        // `specs/131` S5: a Council or Panel seat (a span with injected slices) is offered reading tools only: no `write_*`, no
+        // `request_research` (whose writer puts files in the project), no record, card, dispatch, timer or connector.
+        if sc.council_seat {
+            defs.retain(|d| crate::tools::SEAT_READING_TOOLS.contains(&d.name.as_str()));
+        }
         if sc.toolless {
             defs.clear();
         }
@@ -2379,6 +2389,10 @@ impl Engine {
         // The refusal does not rely on the model only calling what it was offered.
         if sc.readonly && !self.span_tool_defs(sc).await?.iter().any(|d| d.name == name) {
             return Ok(tool_result_error("this task was raised by a host agent and runs read-only: it can read and advise, not write, run commands or use connectors"));
+        }
+        // `specs/131` S5, at call time too: a Council or Panel seat may call a reading tool only, whatever it was offered.
+        if sc.council_seat && !crate::tools::SEAT_READING_TOOLS.contains(&name) {
+            return Ok(tool_result_error(format!("denied: `{name}` is not a reading tool, and a Council or Panel seat is offered reading tools only")));
         }
         if name == "run_command" {
             return self.exec_command(sc, call_id, args).await;

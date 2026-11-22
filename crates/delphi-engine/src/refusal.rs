@@ -24,6 +24,52 @@ pub fn declines(deliverable: &str) -> Option<String> {
     Some(format!("the answer declines (it begins \"{}...\"): a refusal, not a lossy answer", start.split_whitespace().collect::<Vec<_>>().join(" ")))
 }
 
+/// Does a short answer say its prompt was cut (`specs/131` §3.4 item 1)? Fixed shapes, beside [`declines`] and skipping the same
+/// answers (long, or carrying code): a carrier's `<truncated N bytes>` marker in a few spellings (the exact one is not captured),
+/// "was truncated" or "cut off" said of the prompt, input or task, and "missing" next to the task, objective or output contract.
+/// A diagnostic that names a cause: it makes a seat not heard, it never changes a budget (§8 item 2c).
+pub fn cut_complaint(answer: &str) -> Option<String> {
+    let t = answer.trim();
+    if t.is_empty() || t.chars().count() > 1200 || t.contains('`') {
+        return None;
+    }
+    const SHAPES: [&str; 4] = [
+        r"(?i)[<\[(]\s*truncated\b[^>\])\n]{0,40}[>\])]|\btruncated\s+(by\s+)?[\d,]+\s+bytes\b",
+        r"(?i)\b(prompt|input|message|request|context|text|instructions?|task|question)\b[^.\n]{0,40}\b(was|were|is|are|been|got|appears\s+to\s+be|seems\s+to\s+be)\s+(truncated|cut\s+off|cut\s+short)\b",
+        r"(?i)\b(task|objective|output\s+contract|contract|instructions?)\b[^.\n]{0,40}\b(is|are|was|were|seems|seem|appears|appear)\b[^.\n]{0,15}\bmissing\b",
+        r"(?i)\bmissing\b[^.\n]{0,40}\b(task|objective|output\s+contract)\b",
+    ];
+    for shape in SHAPES {
+        if regex::Regex::new(shape).ok()?.is_match(t) {
+            return Some("the answer says its prompt was cut (the task or its contract did not arrive): a complaint, not a stance".into());
+        }
+    }
+    None
+}
+
+/// The start of the failure a harness seat ends with when its answer is a cut complaint (`specs/131` §3.4 item 7): fixed words, so a
+/// seat that abstains for this reason is still known as a cut complaint when its stance is recorded.
+pub const CUT_FAILURE: &str = "the seat's answer says its prompt was cut";
+
+/// Why a seat was not heard (`specs/131` §3.4 item 2), or `None` when it was. Round 1: `said` is the stance's text (`None` for an
+/// abstention, whose reason is `why`); heard means non-empty text that neither declines nor complains of a cut. Round 2: `readable`
+/// decides, and the other words only name the cause. Derived from the seat's own words by fixed matchers; it can only lower a count.
+pub fn not_heard(said: Option<&str>, abstained: Option<&str>, readable: Option<bool>) -> Option<&'static str> {
+    if readable == Some(true) {
+        return None;
+    }
+    match said {
+        None if abstained.is_some_and(|w| w.contains(CUT_FAILURE)) => Some("cut_complaint"),
+        None if abstained.is_some_and(|w| w.trim() == "an empty answer") => Some("empty"),
+        None => Some("abstained"),
+        Some(t) if t.trim().is_empty() => Some("empty"),
+        Some(t) if declines(t).is_some() => Some("declined"),
+        Some(t) if cut_complaint(t).is_some() => Some("cut_complaint"),
+        Some(_) if readable == Some(false) => Some("unreadable"),
+        Some(_) => None,
+    }
+}
+
 /// Did a Round 1 reply carry the `OPTION:` line the Council asks for? A diagnostic like [`declines`]: not a score.
 pub fn round1_parsed(text: &str) -> bool {
     text.lines().any(|l| l.trim_start().strip_prefix("OPTION:").is_some_and(|r| !r.trim().is_empty()))
@@ -32,6 +78,48 @@ pub fn round1_parsed(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `specs/131` AC-7 and §10: the three shapes are tagged; a normal stance, a long answer about truncation as a topic and a
+    /// code-heavy answer are not.
+    #[test]
+    fn a_cut_complaint_is_tagged_and_a_stance_about_truncation_is_not() {
+        for yes in [
+            "<truncated 76525 bytes> I cannot see the rest of the request.",
+            "[truncated 69,110 bytes]",
+            "Your prompt was truncated, so I can only see part of the fifth file.",
+            "The input appears to be cut off mid-sentence.",
+            "The task is missing: I see files but no objective or output contract.",
+            "I see context but the objective and output contract are missing.",
+            "Missing the task and the output contract; please resend.",
+        ] {
+            assert!(cut_complaint(yes).is_some(), "not tagged: {yes}");
+        }
+        for no in [
+            "OPTION: ship the budget\nThe budget is right; the risk is a slow carrier.",
+            "",
+            &format!("OPTION: cut at a line boundary\nA prompt that was truncated loses its tail. {}", "Reasoning. ".repeat(150)),
+            "The cut line reads `prompt was truncated` and the matcher tests it.",
+        ] {
+            assert!(cut_complaint(no).is_none(), "wrongly tagged: {no}");
+        }
+    }
+
+    #[test]
+    fn heard_is_text_that_neither_declines_nor_complains_and_in_round_2_a_readable_critique() {
+        assert_eq!(not_heard(Some("OPTION: x\nreasons"), None, None), None);
+        assert_eq!(not_heard(Some("I can't do that."), None, None), Some("declined"));
+        assert_eq!(not_heard(Some("<truncated 76525 bytes>"), None, None), Some("cut_complaint"));
+        assert_eq!(not_heard(Some("The prompt was truncated."), None, None), Some("cut_complaint"));
+        assert_eq!(not_heard(Some("The task is missing."), None, None), Some("cut_complaint"));
+        assert_eq!(not_heard(Some("  "), None, None), Some("empty"));
+        assert_eq!(not_heard(None, Some("an empty answer"), None), Some("empty"));
+        assert_eq!(not_heard(None, Some("no answer within 600s"), None), Some("abstained"));
+        assert_eq!(not_heard(None, Some(&format!("escalated (gemini): {CUT_FAILURE} (prompt 9 bytes)")), None), Some("cut_complaint"));
+        // Round 2: readable decides.
+        assert_eq!(not_heard(Some("I can't do that."), None, Some(true)), None);
+        assert_eq!(not_heard(Some("prose with no critique"), None, Some(false)), Some("unreadable"));
+        assert_eq!(not_heard(None, Some("(no Round 2: timeout)"), Some(false)), Some("abstained"));
+    }
 
     #[test]
     fn a_short_answer_that_begins_by_declining_is_tagged_and_other_answers_are_not() {
