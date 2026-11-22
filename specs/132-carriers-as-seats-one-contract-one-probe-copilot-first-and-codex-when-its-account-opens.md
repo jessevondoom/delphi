@@ -371,7 +371,7 @@ Chosen: A with D. Flagged by the guard: none.
 
 No Council has read this text. It was written by an architect agent from the operator-approved plan, the P0 results and the code at `main` `56fe81ac`, without calling any model. The approval is the operator's advance approval of the plan plus the instruction to put Copilot first. Slices C7, C9, A1, X2, X4, X5 and X6 are live runs that need the operator's yes; none of them is a Council of this text. A Council on this spec, if the operator wants one, should keep its context under spec 131's interim limit (about 150 KB) while a Gemini seat sits through agy.
 
-## 17. Amendment (operator, 2026-11-21): Copilot ACP seats are confined (slice C9)
+## 17. Amendment (operator, 2026-11-21): Copilot ACP seats are confined (slice C10)
 
 Approved by the operator in a host session ("6. make the copilot fixes"), on a recommendation drawn from a live probe of Copilot's ACP permissions on 2026-11-21 (about 2.6 premium requests; the evidence is summarised in `missions/2026-11-20-forge/F4-REPORT.md`'s follow-ups and below). Written afterwards by an architect agent; the operator has not read it line by line.
 
