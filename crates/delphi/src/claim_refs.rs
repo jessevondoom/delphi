@@ -60,6 +60,13 @@ pub struct Seen {
     pub claim: Option<RefClaim>,
 }
 
+impl Seen {
+    /// An unreadable ref counts as expired, so it never stands in anyone's way.
+    pub fn live(&self, now: i64) -> bool {
+        self.claim.as_ref().is_some_and(|c| c.live(now))
+    }
+}
+
 /// What a compare-and-swap push did.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Push {
@@ -345,6 +352,94 @@ pub fn release(repo: &Path, home: &Path, spec: &str, slice: &str, by: Option<&st
         }
     }
     o
+}
+
+/// The branches merged into `origin/main` by a merge commit (`Merge pull request #N from <owner>/<branch>`), and the spec numbers
+/// with a file in `specs/` there. Read after a fetch with `main`.
+fn main_facts(remote: &Remote) -> Result<(std::collections::HashSet<String>, std::collections::HashSet<u32>), String> {
+    let log = remote.git(&["log", "--merges", "--format=%s", "-n", "5000", MAIN], None)?;
+    let merged = log.lines().filter_map(|s| s.rfind(" from ").and_then(|i| s[i + 6..].trim().split_once('/')).map(|(_, b)| b.to_string())).collect();
+    let specs = remote.git(&["ls-tree", "--name-only", MAIN, "specs/"], None)?;
+    Ok((merged, spec_numbers(specs.lines().map(|l| l.trim_start_matches("specs/").to_string())).into_iter().collect()))
+}
+
+/// The numbers of spec files (`NNN-<slug>.md`) among `names`.
+fn spec_numbers(names: impl Iterator<Item = String>) -> Vec<u32> {
+    names.filter(|n| n.ends_with(".md")).filter_map(|n| n.split_once('-').and_then(|(d, _)| (d.len() >= 3 && d.chars().all(|c| c.is_ascii_digit())).then(|| d.parse().ok()).flatten())).collect()
+}
+
+/// Delete, each with the lease on the value read, the claims that are done (§14.11 item 7). Returns the refs kept and one line
+/// per ref swept or left.
+fn sweep(remote: &Remote, seen: Vec<Seen>, now: i64) -> (Vec<Seen>, String) {
+    let (merged, on_main) = match main_facts(remote) {
+        Ok(f) => f,
+        Err(e) => return (seen, offline(&e, "nothing swept")),
+    };
+    let (mut kept, mut lines) = (Vec::new(), String::new());
+    for s in seen {
+        let number = s.path.strip_prefix(&format!("{}/", SPEC_NUMBER)).and_then(|n| n.parse::<u32>().ok());
+        let why = if !s.live(now) {
+            Some("expired")
+        } else if number.is_some_and(|n| on_main.contains(&n)) {
+            Some("its spec is on origin/main")
+        } else if s.claim.as_ref().and_then(|c| c.branch.as_ref()).is_some_and(|b| merged.contains(b)) {
+            Some("its branch merged into origin/main")
+        } else {
+            None
+        };
+        let Some(why) = why else {
+            kept.push(s);
+            continue;
+        };
+        match remote.push(&s.path, Some(&s.oid), None) {
+            Push::Done => lines.push_str(&format!("swept {}/{} ({})\n", NS, s.path, why)),
+            Push::Lost => {
+                lines.push_str(&format!("left {}/{}: it changed on the remote meanwhile\n", NS, s.path));
+                kept.push(s);
+            }
+            Push::Failed(e) => {
+                lines.push_str(&offline(&e, &format!("{}/{} not swept", NS, s.path)));
+                kept.push(s);
+            }
+        }
+    }
+    (kept, lines)
+}
+
+/// `forge list`: the local claims, then the remote ones (§14.11 item 7); with `sweep`, the remote ones that are done go first.
+pub fn list(repo: &Path, home: &Path, all: bool, json: bool, sweep_first: bool, local_only: bool, now: i64) -> Out {
+    let local = slice_claims::list(repo, home, all, json, now);
+    let remote = if local_only { None } else { Remote::of(repo) };
+    let Some(remote) = remote.filter(|_| local.code == 0) else { return local };
+    let (mut notes, mut swept) = (String::new(), String::new());
+    let seen = match remote.fetch(sweep_first) {
+        Ok(s) if sweep_first => {
+            let (kept, lines) = sweep(&remote, s, now);
+            swept = lines;
+            Some(kept)
+        }
+        Ok(s) => Some(s),
+        Err(e) => {
+            notes = offline(&e, "only this machine's claims are shown");
+            None
+        }
+    };
+    let shown: Option<Vec<&Seen>> = seen.as_ref().map(|s| s.iter().filter(|x| all || x.live(now)).collect());
+    if json {
+        let local: serde_json::Value = serde_json::from_str(&local.out).unwrap_or(serde_json::Value::Null);
+        let remote = shown.map(|v| v.iter().map(|s| serde_json::json!({"ref": format!("{}/{}", NS, s.path), "claim": s.claim, "live": s.live(now)})).collect::<Vec<_>>());
+        let v = serde_json::json!({"local": local, "remote": remote, "swept": swept.lines().collect::<Vec<_>>()});
+        return Out { code: 0, out: format!("{}\n", serde_json::to_string_pretty(&v).unwrap_or_default()), err: notes };
+    }
+    let mut out = format!("{}{}", local.out, swept);
+    if let Some(v) = shown {
+        out.push_str(&match v.is_empty() {
+            true if all => "no claims on the remote\n".to_string(),
+            true => "no live claims on the remote\n".to_string(),
+            false => format!("on the remote:\n{}", v.iter().map(|s| format!("  {}\n", s.claim.as_ref().map(|c| describe(c, now)).unwrap_or_else(|| format!("{}/{} (unreadable, counts as expired)", NS, s.path)))).collect::<String>()),
+        });
+    }
+    Out { code: 0, out, err: format!("{}{}", local.err, notes) }
 }
 
 #[cfg(test)]

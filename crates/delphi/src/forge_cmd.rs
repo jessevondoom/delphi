@@ -56,7 +56,7 @@ pub fn exec(args: &[String]) -> Out {
             let [spec, slice] = &pos[..] else { return usage_err("release takes a spec and a slice") };
             crate::claim_refs::release(&repo, &home, spec, slice, by.as_deref(), has(rest, "--local"), now())
         }
-        Some("list") if pos.is_empty() => slice_claims::list(&repo, &home, has(rest, "--all"), has(rest, "--json"), now()),
+        Some("list") if pos.is_empty() => crate::claim_refs::list(&repo, &home, has(rest, "--all"), has(rest, "--json"), has(rest, "--sweep"), has(rest, "--local"), now()),
         Some("finish") if pos.is_empty() => {
             let (spec, slice) = (crate::flag(rest, "--spec"), crate::flag(rest, "--slice"));
             crate::finisher::finish(&crate::finisher::FinishReq { repo: &repo, home: &home, check: has(rest, "--check"), spec: spec.as_deref(), slice: slice.as_deref(), body: has(rest, "--body"), gates: has(rest, "--gates"), now: now() })
