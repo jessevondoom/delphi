@@ -167,7 +167,7 @@ pub struct Opts {
 }
 
 /// A tool call the CLI wants to make.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Permission {
     pub request_id: String,
     pub tool_name: String,
@@ -175,6 +175,9 @@ pub struct Permission {
     pub tool_use_id: Option<String>,
     pub blocked_path: Option<String>,
     pub description: Option<String>,
+    /// The answers a Copilot ACP request offers, as `(optionId, kind)` (`allow_once`, `allow_always`, `reject_once`, ...): the reply
+    /// names one of them by its id (`specs/132` §17). Empty for every other CLI.
+    pub acp_options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -308,6 +311,7 @@ pub fn parse_line(line: &str) -> Vec<Event> {
                 tool_use_id: r["tool_use_id"].as_str().map(String::from),
                 blocked_path: r["blocked_path"].as_str().map(String::from),
                 description: r["description"].as_str().map(String::from),
+                acp_options: vec![],
             }));
         }
         Some("result") => out.push(Event::Result {
@@ -516,6 +520,7 @@ impl CodexAppServer {
                     tool_use_id: p["itemId"].as_str().map(String::from),
                     blocked_path: None,
                     description: p["reason"].as_str().map(String::from),
+                    acp_options: vec![],
                 })),
                 "item/fileChange/requestApproval" => ev.push(Event::Permission(Permission {
                     request_id: id.to_string(),
@@ -524,6 +529,7 @@ impl CodexAppServer {
                     tool_use_id: p["itemId"].as_str().map(String::from),
                     blocked_path: p["grantRoot"].as_str().map(String::from),
                     description: p["reason"].as_str().map(String::from),
+                    acp_options: vec![],
                 })),
                 // Permissions, questions to the user, elicitations, tool calls and the older approval forms: not granted.
                 _ => send.push(json!({"id": id, "error": {"code": -32601, "message": "not supported by Delphi"}}).to_string()),
@@ -742,6 +748,7 @@ impl CopilotAcp {
                 if let Some(id) = &tool_use_id {
                     self.asked.insert(id.clone());
                 }
+                let acp_options: Vec<(String, String)> = p["options"].as_array().into_iter().flatten().filter_map(|o| Some((o["optionId"].as_str()?.to_string(), o["kind"].as_str().unwrap_or("").to_string()))).collect();
                 let description = tc["title"].as_str().map(String::from);
                 match kind {
                     "edit" | "write" => {
@@ -760,6 +767,7 @@ impl CopilotAcp {
                             tool_use_id,
                             blocked_path: path.map(String::from),
                             description,
+                            acp_options: acp_options.clone(),
                         }));
                     }
                     "execute" | "bash" | "shell" => {
@@ -773,6 +781,7 @@ impl CopilotAcp {
                             tool_use_id,
                             blocked_path: None,
                             description,
+                            acp_options: acp_options.clone(),
                         }));
                     }
                     "read" => {
@@ -786,6 +795,7 @@ impl CopilotAcp {
                             tool_use_id,
                             blocked_path: path.map(String::from),
                             description,
+                            acp_options: acp_options.clone(),
                         }));
                     }
                     _ => {
@@ -797,6 +807,7 @@ impl CopilotAcp {
                             tool_use_id,
                             blocked_path: None,
                             description,
+                            acp_options: acp_options.clone(),
                         }));
                     }
                 }
@@ -882,18 +893,19 @@ impl CopilotAcp {
     }
 }
 
-/// The answer to an approval request in Copilot ACP: `allow_once` or `reject` and nothing else,
-/// because `allow_always` persists permissions and bypasses future cards (`specs/051` §6.4 i).
+/// The answer to an approval request in Copilot ACP, in the protocol's own shape: the request's `allow_once` option for an allow, its
+/// `reject_once` option for a denial, and `cancelled` when the request offers no such option. Never `allow_always`, which persists the
+/// permission and would bypass future cards (`specs/051` §6.4 i). (Before `specs/132` C10 the reply was `{"decision": ...}`, which the
+/// protocol does not define: probed 2026-11-21, a reject in it failed the call; an allow in it was never shown to apply. In this shape, probed
+/// the same day, an allowed `create` wrote its file and a rejected one did not.)
 pub fn copilot_approval_reply(p: &Permission, d: &Decision) -> String {
     let id: Value = serde_json::from_str(&p.request_id).unwrap_or_else(|_| json!(p.request_id));
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": {
-            "decision": if *d == Decision::Allow { "allow_once" } else { "reject" }
-        }
-    })
-    .to_string()
+    let want = if *d == Decision::Allow { "allow_once" } else { "reject_once" };
+    let outcome = match p.acp_options.iter().find(|(_, kind)| kind == want) {
+        Some((option, _)) => json!({"outcome": "selected", "optionId": option}),
+        None => json!({"outcome": "cancelled"}),
+    };
+    json!({"jsonrpc": "2.0", "id": id, "result": {"outcome": outcome}}).to_string()
 }
 
 /// A tool name that matches nothing: `--available-tools` with it offers the model zero tools. An empty value would mean "no
@@ -2607,6 +2619,23 @@ read never
         assert_eq!(ev, vec![Event::ToolResult { id: "x".into(), is_error: true }]);
     }
 
+    /// specs/132 C10: the reply selects the request's own option by id (`allow_once` for an allow, `reject_once` for a denial), never
+    /// `allow_always`; a request without the needed option is cancelled.
+    #[test]
+    fn a_copilot_acp_reply_selects_the_requests_own_option() {
+        let mut p = CopilotAcp::new("hi", std::path::Path::new("/scratch"));
+        let (ev, _) = p.line(r#"{"jsonrpc":"2.0","id":4,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"t","kind":"edit","rawInput":{"path":"/scratch/a"}},"options":[{"optionId":"opt-a1","kind":"allow_once","name":"Allow once"},{"optionId":"opt-aa","kind":"allow_always","name":"Always allow"},{"optionId":"opt-r1","kind":"reject_once","name":"Deny"}]}}"#);
+        let Event::Permission(perm) = &ev[0] else { panic!("{ev:?}") };
+        assert_eq!(perm.acp_options.len(), 3);
+        assert_eq!(copilot_approval_reply(perm, &Decision::Allow), r#"{"id":4,"jsonrpc":"2.0","result":{"outcome":{"optionId":"opt-a1","outcome":"selected"}}}"#);
+        assert_eq!(copilot_approval_reply(perm, &Decision::Deny("no".into())), r#"{"id":4,"jsonrpc":"2.0","result":{"outcome":{"optionId":"opt-r1","outcome":"selected"}}}"#);
+        // Only `allow_always` on offer: an allow is not widened into it.
+        let only_always = Permission { request_id: "5".into(), acp_options: vec![("opt-aa".into(), "allow_always".into()), ("opt-r1".into(), "reject_once".into())], ..Default::default() };
+        assert_eq!(copilot_approval_reply(&only_always, &Decision::Allow), r#"{"id":5,"jsonrpc":"2.0","result":{"outcome":{"outcome":"cancelled"}}}"#);
+        let no_reject = Permission { request_id: "6".into(), acp_options: vec![("opt-a1".into(), "allow_once".into())], ..Default::default() };
+        assert_eq!(copilot_approval_reply(&no_reject, &Decision::Deny("no".into())), r#"{"id":6,"jsonrpc":"2.0","result":{"outcome":{"outcome":"cancelled"}}}"#);
+    }
+
     /// specs/132 §17.2 item 5: the ACP server's own version is passed on.
     #[test]
     fn the_acp_servers_version_is_reported() {
@@ -2633,8 +2662,8 @@ read never
         assert_eq!(perm.tool_name, "Edit");
         assert_eq!(perm.request_id, "0");
         assert_eq!(perm.blocked_path.as_deref(), Some("/scratch/a.txt"));
-        assert_eq!(copilot_approval_reply(perm, &Decision::Allow), r#"{"id":0,"jsonrpc":"2.0","result":{"decision":"allow_once"}}"#);
-        assert_eq!(copilot_approval_reply(perm, &Decision::Deny("no".into())), r#"{"id":0,"jsonrpc":"2.0","result":{"decision":"reject"}}"#);
+        // No options offered: nothing to select, so the request is cancelled whatever Delphi decided.
+        assert_eq!(copilot_approval_reply(perm, &Decision::Allow), r#"{"id":0,"jsonrpc":"2.0","result":{"outcome":{"outcome":"cancelled"}}}"#);
         // Permission request for Bash
         let (ev, _) = p.line(r#"{"jsonrpc":"2.0","id":10,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"tc2","title":"Run cmd","kind":"execute","rawInput":{"command":"ls"}}}}"#);
         let Event::Permission(perm2) = &ev[0] else { panic!("{:?}", ev) };
@@ -2673,7 +2702,7 @@ echo '{"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"name":"Copilot"}}}'
 read new_session
 echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-test"}}'
 read prompt
-echo '{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"tc1","kind":"edit","title":"write a.txt","rawInput":{"fileName":"a.txt","diff":"+a"}}}}'
+echo '{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"tc1","kind":"edit","title":"write a.txt","rawInput":{"fileName":"a.txt","diff":"+a"}},"options":[{"optionId":"allow_once","kind":"allow_once","name":"Allow once"},{"optionId":"allow_always","kind":"allow_always","name":"Always allow"},{"optionId":"reject_once","kind":"reject_once","name":"Deny"}]}}'
 read answer
 echo "$answer" > answer.txt
 echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}}}'
@@ -2701,7 +2730,7 @@ read never
             }
         }
         let answer = std::fs::read_to_string(d.path().join("answer.txt")).unwrap();
-        assert_eq!(answer.trim(), r#"{"id":0,"jsonrpc":"2.0","result":{"decision":"allow_once"}}"#);
+        assert_eq!(answer.trim(), r#"{"id":0,"jsonrpc":"2.0","result":{"outcome":{"optionId":"allow_once","outcome":"selected"}}}"#);
         let args = std::fs::read_to_string(d.path().join("args.txt")).unwrap();
         assert!(args.contains("--acp") && args.contains("--model\nm"));
         assert!(seen.iter().any(|e| matches!(e, Event::Result { text, .. } if text == "ok")));

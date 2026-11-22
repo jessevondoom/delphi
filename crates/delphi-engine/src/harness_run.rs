@@ -552,7 +552,7 @@ impl Engine {
         if names_gate {
             return deny("the `.agents` directory is the gate's own and is off limits");
         }
-        let p = Permission { request_id: String::new(), tool_name: name.into(), input, tool_use_id: None, blocked_path: None, description: None };
+        let p = Permission { request_id: String::new(), tool_name: name.into(), input, tool_use_id: None, blocked_path: None, description: None, acp_options: vec![] };
         Ok(match self.harness_decide(sc, wt, &p, ctl).await? {
             Decision::Allow => (true, String::new()),
             Decision::Deny(why) => (false, format!("denied by Delphi: {}", why)),
@@ -2500,7 +2500,7 @@ echo '{{"jsonrpc":"2.0","id":1,"result":{{"agentInfo":{{"name":"Copilot","versio
 read new_session
 echo '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"s"}}}}'
 read prompt
-echo '{{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{{"toolCall":{{"toolCallId":"r1","kind":"read","title":"view","rawInput":{{"path":"/etc/hosts"}},"locations":[{{"path":"/etc/hosts"}}]}}}}}}'
+echo '{{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{{"toolCall":{{"toolCallId":"r1","kind":"read","title":"view","rawInput":{{"path":"/etc/hosts"}},"locations":[{{"path":"/etc/hosts"}}]}},"options":[{{"optionId":"a1","kind":"allow_once"}},{{"optionId":"r1","kind":"reject_once"}}]}}}}'
 read answer
 echo "$answer" > '{d}/answer'
 echo '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"tool_call","toolCallId":"r2","kind":"read","rawInput":{{"path":"/etc/passwd"}}}}}}}}'
@@ -2521,7 +2521,7 @@ read never"#
         let wt = f.root.join("workspaces/w/worktrees").join(&out.task_id);
         let home = read(scripts.path(), "home");
         assert!(home.ends_with(crate::harness::COPILOT_HOME_DIR) && !std::path::Path::new(&home).starts_with(&wt), "the config home is in the scratch, not the worktree: {home}");
-        assert!(read(scripts.path(), "answer").contains("reject"), "the outside read is refused");
+        assert!(read(scripts.path(), "answer").contains(r#""outcome":{"optionId":"r1","outcome":"selected"}"#), "the outside read is refused: {}", read(scripts.path(), "answer"));
         assert!(f.engine.broker.pending().is_empty() && events_of(&f, "approval.requested").is_empty(), "refused without a card");
         assert_eq!(events_of(&f, "harness.read_refused").len(), 1);
         let stop = events_of(&f, "harness.read_watchdog");

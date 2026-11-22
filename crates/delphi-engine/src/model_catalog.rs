@@ -112,7 +112,7 @@ pub struct Catalog {
     pub read_unix: i64,
     pub models: Vec<CatalogModel>,
     /// The version the ACP server itself reported (`initialize` → `agentInfo.version`), which can differ from `--version`
-    /// (`specs/132` §17.1, §17.2 item 5). `None` when it gave none, or for a cache written before C9.
+    /// (`specs/132` §17.1, §17.2 item 5). `None` when it gave none, or for a cache written before C10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acp_version: Option<String>,
 }
@@ -314,7 +314,7 @@ mod tests {
         assert!(line.contains("1.0.114") && line.contains("1.0.107"), "{line}");
         assert_eq!(version_mismatch("GitHub Copilot CLI 1.0.114.", Some("1.0.114")), None);
         assert_eq!(version_mismatch("GitHub Copilot CLI 1.0.114.", None), None);
-        // A cache written before C9 has no field and still loads.
+        // A cache written before C10 has no field and still loads.
         let old: Catalog = serde_json::from_str(r#"{"cli_version":"v","read_unix":0,"models":[]}"#).unwrap();
         assert_eq!(old.acp_version, None);
     }
