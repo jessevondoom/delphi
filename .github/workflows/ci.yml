@@ -205,7 +205,14 @@ jobs:
           key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: |
             cargo-target-${{ runner.os }}-test-
+      - name: Install cargo-nextest (pinned, checksum checked)
+        env:
+          NEXTEST_VERSION: "0.9.150"
+          NEXTEST_TARGET: universal-apple-darwin
+          NEXTEST_SHA256: 82a759b4d218d38359424196ab244c470e8f7c7d149c814fbbeef4d67c3c301a
+        run: .github/scripts/install-nextest.sh
       # Spec 093-A1: as in the Linux integration job (which also checks that the name matches exactly one test).
+      # Spec 125-A1: nextest's `ci` profile (one retry, flaky recorded) for every test but the doc tests, which follow.
       - name: Test
         env:
           EVENT: ${{ github.event_name }}
@@ -213,10 +220,24 @@ jobs:
         run: |
           skip=()
           if [ "$EVENT" = "pull_request" ] && changed=$(git diff --name-only HEAD^1 HEAD) && ! grep -qx deny.toml <<<"$changed"; then
-            skip=(--exact --skip "$DATE_TEST")
+            skip=(-E "not test(=$DATE_TEST)")
             echo "deny.toml unchanged: skipping $DATE_TEST (checked on push to main and daily)"
           fi
-          cargo test --workspace --locked -- "${skip[@]}"
+          cargo nextest run --workspace --locked --profile ci "${skip[@]}"
+      - name: Flaky tests (job summary)
+        if: always()
+        run: python3 -I .github/scripts/nextest_summary.py target/nextest/ci/junit.xml "macOS, all tests but doc tests"
+      - name: Keep the JUnit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junit-macos
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 30
+      # Not retried: nextest does not run doc tests (spec 125-A1 rule 4).
+      - name: Test (doc tests)
+        run: cargo test --workspace --locked --doc
       - name: Clippy
         if: success() || failure()
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
