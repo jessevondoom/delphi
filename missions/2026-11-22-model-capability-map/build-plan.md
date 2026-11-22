@@ -93,13 +93,14 @@ Stage gates: each stage ends with a review the operator can read, and no stage s
 - Provider contrast: same model through several carriers, with a **canonical model id** table (assumes `haiku` and `claude-haiku-5.5` are the same model; verify). Measurable for Claude (Claude CLI, Copilot, agy) and Gemini (agy, Copilot); not for OpenAI (Copilot only until Codex returns), kimi, mai, gpt-oss.
 - Per-carrier budgets and quota awareness (agy quota has run out before), and the cost-verification step: confirm what a multi-turn tool task costs in premium requests (the estimates assume one request per call; unverified).
 - Pilot design (6 to 8 models, INS first then RSN) and its stop rule; how the pilot's numbers set level cutoffs and the number of repeats by pre-stated rules; what ships (levels plus latency, tokens per task, first-pass rate, each with anchor version, carrier, CLI version, date, noise band); where raw records are stored (open question 3).
+- The **human-readable report** (slice V10 below): its sections and the fields in each are pre-registered here, so the numbers a reader sees are the numbers the protocol fixed.
 - Review: a cross-family Council or red-team pass (keep the Council context small, section 6).
 
 **1b. Spec amendments** (one or two PRs; the operator approves specs). Recommended: a new spec for the performance baseline and degradation canary, and an amendment to spec 056 for the capability vector, selection rule, inferred rows, staging and tier-pin fallback; plus explicit amendments to spec 078 (a shipped model-level table measured offline is not a seat scorecard, with the mechanical guard) and spec 056 section 10.9 rule 7 (results were local; the shipped central table is new). After editing any spec run `delphi specs compile` and commit `compiled/`.
 
 **1c. Cross-family review, then the operator approves, then this document becomes plan v2** with acceptance criteria filled in from the protocol. Do not start Stage 2 before the spec is approved (No Spec, No Build).
 
-### Stage 2: build (about 4 to 6 working days at 2 to 3 builders; about 10 to 12 PRs)
+### Stage 2: build (about 4 to 6 working days at 2 to 3 builders; about 11 to 13 PRs)
 
 One Opus builder per slice, using the brief template in section 6. Same-spec bundling is allowed up to about 3 slices and 800 lines per PR while the trial lasts (check CONTRIBUTING.md; the trial was reviewed 2026-11-25).
 
@@ -114,15 +115,30 @@ One Opus builder per slice, using the brief template in section 6. Same-spec bun
 | V7 | Central measurement runner: extend M5 (#875). **Gap found in audit:** M5 keeps one result per case and replaces older ones, with no repeat index and no latency, and its noise band is across cases, not across repeats. Needed: append-only history, repeat index, spaced scheduling, wall-clock latency, quota awareness, records carrier, CLI version, anchor and scorer version, proposes a table diff, typed-yes consent as M5 | V5, V6, #875 merged |
 | V8 | Pre-registered gate for the new assignment vs static, fresh seeds, reusing M7's runner (`delphi train run --bench`, `delphi train gate`) | V2 |
 | V9 | Baseline store, the degradation rule, an optional `delphi models canary`, passive comparison against the retrospective first-pass rows (M4b) which costs nothing, doctor lines | V1, V7 |
+| V10 | The human-readable benchmark report (next subsection): `delphi models report`, generated from the campaign records, the baseline store and the table | V1, V7, V9 |
 
-Order: V1, V4, V5, V6 in parallel first; then V2, V3, V7; then V8, V9. The new code must not widen authority: the table is read only by routing code, never rendered into any prompt, context slice, tool result or readable path a seat can reach; calibration and baseline results feed routing and monitoring only, never prompts (spec 078).
+Order: V1, V4, V5, V6 in parallel first; then V2, V3, V7; then V8, V9; then V10. The new code must not widen authority: the table is read only by routing code, never rendered into any prompt, context slice, tool result or readable path a seat can reach; calibration and baseline results feed routing and monitoring only, never prompts (spec 078).
+
+### The human-readable benchmark report (V10)
+
+Every benchmark or campaign run ends in a report an operator can read and review before anything ships: `delphi models report --campaign <dir> [--html]`, written as Markdown (HTML optional, charts via the existing docs and dataviz support) with no model call and no spend. It is generated, never hand-edited, and reproducible from the records. Contents, fixed in the protocol (Stage 1a):
+
+1. **Header:** protocol and anchor versions, the dates covered, carriers and CLI versions, seeds and case hashes, total spend (tokens and premium requests) against the cap, and the plain caveats (sample sizes, what the noise band can and cannot detect).
+2. **All scores:** per dimension, per model, effort and carrier: the level, the raw per-case pass counts, mean with standard error over the repeats, latency, tokens per task and first-pass rate. Nothing is summarised away; the leaderboard links to the full rows. Unmeasured cells are shown as unmeasured, not blank.
+3. **Provider contrast:** the same model through several carriers, side by side, with the difference and whether it exceeds the noise band; a served-model mismatch is flagged.
+4. **Where each model came from (provenance):** vendor and family, lineage and predecessor, release date when known, open weights or not, which carriers offer it and under which ids (the canonical id table), how we found it (the catalog read and its date), how each row was derived (measured, inferred, advisory) and the advisory public rank statements paraphrased with source and date and labelled external_untrusted. No copied score tables (licences forbid them).
+5. **How to add it to your Delphi mix:** per model, generated from the table and the carrier's catalog, never applied automatically: the carrier and login it needs; the `[[endpoints]]` block to stage (family, harness, tier models) in the style of the examples in the live config; the `[access]` `allowed_endpoints` and `[access.order]` lines; that `/ratify` approves it; the cost class and multiplier (display only); which roles it can serve under the role minimums and why; its limits (prompt budget, output cap, effort variants and which effort was measured); caveats such as a conformance gap or an inferred row; and the commands to verify it (`delphi doctor`, `delphi models`, `delphi endpoints test --probe`, with the cost each prints).
+6. **Insights:** where each model is strongest and weakest by dimension, cost per passing task, surprises against the prior, anomalies (throttling, a served model that differs from the requested one, a cell that moved between repeats by more than the band), and the list of gaps and what would fill them.
+7. **Reproducibility appendix:** record hashes, scorer and anchor versions, how to rerun a case.
+
+Guard: the report holds the table's content, so it is written under the operator's Delphi home or published as a release asset, never into a path a seat can read, and the fitness check from V1 covers the output paths. Acceptance: a reviewer who has never seen the run can answer "how good is model X, compared with Y, through which provider, at what cost, and how do I add it" from the report alone. It is the artifact the operator reviews at the end of Stage 3 before the measured-rows PR.
 
 ### Stage 3: measure (operator-run, paid; about 1 week wall clock because repeats are spaced)
 
 1. **Cost check** (small): one multi-turn tool task per carrier to learn the true premium-request cost per call. Fix the campaign budget from it.
 2. **Pilot:** 6 to 8 models, INS then RSN, about 200 to 300 premium requests plus subscription tokens. Apply the stop rule.
 3. **Full baseline campaign** if the pilot passes: all Copilot 1x models, native CLIs and agy effort rows, repeats spaced across days; the 14x and 15x models (claude-opus-5.5, claude-fable-5.1 and gemini-3.8-flash on Copilot) as a separate, last step with its own yes (reduced case set first).
-4. **Measured-rows PR:** the results become a reviewed table change with the raw records hash-committed or archived.
+4. **Report, then measured-rows PR:** generate the human-readable report (V10) and let the operator review it first; then the results become a reviewed table change with the raw records hash-committed or archived. The pilot gets its own short report in the same format.
 
 Cost envelope (estimates, built on unverified assumptions; the pilot checks them): all 14 Copilot 1x models, 3 repeats, about 40 calls per row: about 1,700 premium requests; the three premium models: about 1,600 (reduced set) to about 5,000 (full set); agy and Claude effort rows: about 24 to 70 million subscription tokens over days. In total roughly 3,500 to 7,000 premium requests. The operator has not approved this; see section 7.
 
@@ -135,6 +151,48 @@ Install the measured defaults, release (section 5), docs and migration notes (ex
 - Pilot shows fewer than two separating levels: ship tiers plus INS and COD flags and the degradation monitor; do not run the campaign.
 - A measurement run exceeds its pre-stated cap: stop it, record what was measured, ask the operator.
 - Two failures of the same gate for the same reason: stop and report; do not widen a threshold to pass.
+
+## 4a. Level of effort (programmer hours)
+
+Method: focused hours for a skilled engineer who knows the codebase, including tests, docs, the three gates, review rounds and conflict resolution. It excludes CI waits, quota waits and paid-run wall clock. Accuracy about plus or minus 35 percent. Calibrated against slices already merged: ratification-adjacent code of about 440 lines (056 M4) is about 10 to 14 hours; a 1,150-line runner with its pre-registration (056 M7) is about 25 to 30 hours. Agent builders finished comparable slices in 1 to 3 hours of wall clock; that is not human effort and should not be used to plan operator time.
+
+| Item | Hours | Confidence |
+| :-- | --: | :-- |
+| **Stage 1** protocol (1a) | 10 to 14 | medium |
+| Spec amendments (1b) | 8 to 12 | medium |
+| Review, approval and plan v2 (1c) | 4 to 6 | medium |
+| **Stage 2** V1 table, loader, guard, fitness check, canonical ids | 14 to 20 | medium |
+| V2 role requirements, selection rule, override and fallback, ratchet redefinition (routing and ratified rules) | 18 to 26 | low to medium |
+| V3 inferred rows, version demotion, effort rules, doctor | 10 to 14 | medium |
+| V4 limits discovery for three carriers, shutdown hooks | 14 to 20 | medium |
+| V5 INS case set and scorer (case design is the work) | 12 to 18 | low |
+| V6 COD cases with hidden tests, harness, harder RSN cases | 20 to 30 | low |
+| V7 central runner: history, repeats, scheduling, latency, quota awareness, table-diff proposal | 20 to 28 | medium |
+| V8 pre-registered gate for the new assignment (reuses M7) | 8 to 12 | high |
+| V9 baseline store, degradation rule, canary, passive comparison, doctor | 16 to 22 | medium |
+| V10 human-readable report and the provenance and add-to-mix sections | 12 to 18 | medium to high |
+| **Stage 2 subtotal** | **144 to 208** | |
+| **Stage 3** (operator attention; most is waiting): cost check | 2 to 3 | high |
+| Pilot | 6 to 10 | medium |
+| Campaign (monitoring, quota juggling, reruns, spread over about a week) | 12 to 20 | low |
+| Report review and the measured-rows PR | 8 to 12 | medium |
+| **Stage 3 subtotal** | **28 to 45** | |
+| **Stage 4** release prep, docs, migration notes, memory | 8 to 12 | medium |
+| PR review and merge overhead (about 15 PRs at about half an hour) | about 8 | medium |
+| **Total for the capability plan** | **about 210 to 305** | |
+
+Other remaining work (section 5), same method:
+
+| Item | Hours | Confidence |
+| :-- | --: | :-- |
+| 094 S12 guide | 3 to 5 | high |
+| 132 leftovers (C4 conformance row, L1 Claude tool check, `--rows`, C8) | 14 to 22 | medium |
+| Spec 051 stale line | about 1 | high |
+| Stage kimi, mai and fable endpoints (after a release; verify the catalog) | 3 to 4 | high |
+| Release preparation (the tag is the operator's) | 4 to 6 | medium |
+| **Subtotal, buildable or preparable now** | **about 25 to 38** | |
+| Spec 129 S4a, S4, S5 (a Council and red-team pass first) | about 40 to 60 | low |
+| Codex X1 to X6 (deferred) | about 30 to 45 | low |
 
 ## 5. Other remaining work from the same thread
 
