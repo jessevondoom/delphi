@@ -179,6 +179,21 @@ Dependency and lockfile changes are Red on purpose: an install runs the new code
 - **Costs:** a new crate passes the dependency gate (`cargo deny`, licences MIT or Apache) and adds a few MB to the Linux tarball.
 - macOS keeps `CFUserNotification` (no helper).
 
+### 4.7 After the final-candidate Council (t_0005, RD-003)
+
+**Lock and sleep (operator, 2026-11-22: "your recommendation on the lock/sleep question is correct"):** the OQ-2 rule stands; within the 8 hours the session stays armed. Every Red card still needs its own daemon dialog (OQ-1), and an unanswered dialog is denied on timeout.
+
+**Default Red, scoped (recommendation, replaces the pattern list of 4.3 as the rule):**
+- *Actions:* every shipped action is a listed row; "default Red" catches only an unclassified action kind, and a gate-file test fails the build when one exists. Agent tool calls are not in this table; they stay under the existing gate and sandbox.
+- *Merges:* a merge is one click only when **every** changed file is inert, otherwise Red. A file is inert when all hold:
+  1. its type is on the allowlist: source in recognised languages (`.rs .ts .tsx .js .jsx .py .go .java .kt .swift .rb .c .h .cpp .cs .php .scala .sql .sh`), tests, prose (`.md .mdx .txt .rst .adoc`), data and assets (`.json .yaml .yml .toml .csv`, images, fonts, media);
+  2. its name, at any depth, is not on the auto-run list: `build.rs`, `conftest.py`, `setup.py`, `noxfile.py`, `*.config.js`/`*.config.ts`/`.eslintrc.js`, `Makefile`, `justfile`, `Dockerfile*`, `docker-compose*`, and every manifest and lockfile (`package.json`, `Cargo.toml`, `pyproject.toml`, `requirements*`, `Gemfile`, `pom.xml`, `build.gradle*`, `*.lock`, `package-lock.json`, `pnpm-lock.yaml`);
+  3. no path segment starts with a dot, except `.gitignore`, `.editorconfig`, `.prettierrc*`;
+  4. it is not an agent-instruction file: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `copilot-instructions.md`, `SKILL.md`, anything under `skills/`, `agents/` or `.claude/` (hosts load these into agents' prompts; `.claude/settings.json` can define hooks);
+  5. its shape is plain: no new executable bit, symbolic link, binary outside the asset types, or submodule change;
+  6. no CI `run:` line references it (a `.sh` file is inert only then, and without an executable bit); sources of a crate with `proc-macro = true` are Red (rust-analyzer runs them on open).
+- A ratified per-project `inert_extra` list may add inert paths; removing a built-in exclusion is Red. E7 measures the Red share of merges; expected about one in ten to one in five.
+
 ### 4.6 Spec shape (proposal for OQ-9)
 
 1. **Spec 137, isolation and a clean start**: Phase 1 and slice 10 (cleared environment, starter, sandbox denies, UI-control self-report). It only tightens, needs no charter change, and can ship first.
