@@ -15,7 +15,8 @@
 use super::check::QUEUE_LABEL;
 use super::errors::classify_refusal;
 use super::record::Attestation;
-use super::{merge_one, Ctx, Outcome};
+use super::base::{check_and_note, BaseCheck, BaseState};
+use super::{base_of, merge_one, Ctx, Outcome};
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -114,8 +115,25 @@ fn session_id(now: u64) -> String {
     format!("a{now}-{}", std::process::id())
 }
 
-/// Run a session. `stop` is true when the operator asked to stop (Ctrl-C or the STOP file); `say` receives one line at a time.
+/// Run a session with no check of the base (tests of the session itself). `stop` is true when the operator asked to stop (Ctrl-C
+/// or the STOP file); `say` receives one line at a time.
+#[cfg(test)]
 pub fn run(ctx: &mut Ctx, caps: &Caps, att: &Attestation, clock: &dyn Clock, stop: &dyn Fn() -> bool, say: &mut dyn FnMut(&str)) -> Summary {
+    run_checked(ctx, caps, att, clock, stop, say, None)
+}
+
+/// Check the base `n` lands on (§11.3.4). A drift is an error and ends the session; a check that could not run is said.
+fn base_drifted(ctx: &Ctx, check: &dyn BaseCheck, n: u64, say: &mut dyn FnMut(&str)) -> bool {
+    let (state, line) = check_and_note(ctx.errors, check, &base_of(ctx.forge, n), &(ctx.now)());
+    if !matches!(state, BaseState::Current { .. }) {
+        say(&line);
+    }
+    matches!(state, BaseState::Drift { .. })
+}
+
+/// `run`, with the check of the base at each poll (before anything merges) and after each merge (§11.3.4): a drift ends the session.
+pub fn run_checked(ctx: &mut Ctx, caps: &Caps, att: &Attestation, clock: &dyn Clock, stop: &dyn Fn() -> bool, say: &mut dyn FnMut(&str), base: Option<&dyn BaseCheck>) -> Summary {
+    let drift_reason = "the base drifted (its compiled spec views are stale): nothing more is merged until it is repaired; run `delphi merge repair-base`, merge its pull request, then start a new session";
     let start = clock.now_secs();
     let deadline = start + caps.run_for.as_secs();
     let id = session_id(start);
@@ -155,6 +173,12 @@ pub fn run(ctx: &mut Ctx, caps: &Caps, att: &Attestation, clock: &dyn Clock, sto
                 Vec::new()
             }
         };
+        if let (Some(check), Some(first)) = (base, queue.first()) {
+            if base_drifted(ctx, check, *first, say) {
+                errors += 1;
+                break 'session drift_reason.into();
+            }
+        }
         for n in queue {
             if stop() {
                 break 'session "stopped by the operator (Ctrl-C or the STOP file)".into();
@@ -179,6 +203,10 @@ pub fn run(ctx: &mut Ctx, caps: &Caps, att: &Attestation, clock: &dyn Clock, sto
                     consecutive = 0;
                     last_activity = clock.now_secs();
                     parked.remove(&n);
+                    if base.is_some_and(|check| base_drifted(ctx, check, n, say)) {
+                        errors += 1;
+                        break 'session drift_reason.into();
+                    }
                 }
                 Outcome::NeedsHuman { .. } => {
                     human.push(n);

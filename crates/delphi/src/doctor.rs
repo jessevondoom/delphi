@@ -912,7 +912,9 @@ fn check_conformance(ws: &Path, cfg_text: &str, run: &dyn Fn(&str, &[&str]) -> C
         let id = e.get("id").and_then(|i| i.as_str()).unwrap_or("?");
         let Some(program) = e.get("harness").and_then(|h| h.as_str()).and_then(delphi_engine::harness::Cli::from_harness).map(|c| c.program()) else { continue };
         let version = versions.entry(program.into()).or_insert_with(|| run(program, &["--version"]).filter(|(code, _)| *code == 0).and_then(|(_, out)| out.lines().next().map(|l| l.trim().to_string())).filter(|l| !l.is_empty()));
-        let line = delphi_engine::conformance::doctor_line(&records, id, version.as_deref(), now);
+        // The operator's `[harness.<cli>] max_prompt_bytes`, which a measured ceiling can only lower (`specs/131` S6).
+        let configured = v.get("harness").and_then(|h| h.get(program)).and_then(|p| p.get("max_prompt_bytes")).and_then(|n| n.as_integer()).and_then(|n| u64::try_from(n).ok());
+        let line = delphi_engine::conformance::doctor_line(&records, id, version.as_deref(), now, configured);
         r.push(Level::Ok, "10 harness", format!("{id} conformance"), line);
     }
 }
@@ -2440,7 +2442,11 @@ mod tests {
         use delphi_engine::conformance as cf;
         let ws = tempfile::tempdir().unwrap();
         let cfg = "[[endpoints]]\nid=\"cp\"\nfamily=\"claude\"\npath=\"harness\"\nharness=\"copilot\"\ncredential=\"harness-login\"\n[[endpoints]]\nid=\"ag\"\nfamily=\"gemini\"\npath=\"harness\"\nharness=\"agy\"\ncredential=\"harness-login\"\n";
-        let rec = cf::Record { endpoint_id: "cp".into(), harness: "copilot".into(), model: "claude-haiku-4.5".into(), cli_version: "GitHub Copilot CLI 1.0.112.".into(), at: 1_000, tool_level: "L0".into(), rows: vec![cf::Row { row: "C2".into(), status: cf::Status::Met, note: String::new(), count: None }, cf::Row { row: "C5".into(), status: cf::Status::NotMet, note: String::new(), count: None }] };
+        let rec = cf::Record { endpoint_id: "cp".into(), harness: "copilot".into(), model: "claude-haiku-4.5".into(), cli_version: "GitHub Copilot CLI 1.0.112.".into(), at: 1_000, tool_level: "L0".into(), rows: vec![cf::Row { row: "C2".into(), status: cf::Status::Met, note: String::new(), count: None }, cf::Row { row: "C5".into(), status: cf::Status::NotMet, note: String::new(), count: None }], ladder_at: None };
+        // specs/131 S6: agy's ladder answered 150,000 bytes on 1.4.7, so its budget is 80% of that, below the operator's 140,000.
+        let agy = cf::Record { endpoint_id: "ag".into(), harness: "agy".into(), model: "gemini-3.8-flash".into(), cli_version: "1.4.7".into(), at: 1_000, tool_level: "L1".into(), rows: vec![cf::ladder_row(&[(150_000, true), (200_000, false)])], ladder_at: Some(1_000) };
+        cf::save(&ws.path().join(cf::FILE), &agy).unwrap();
+        let cfg = &format!("{cfg}[harness.agy]\nmax_prompt_bytes = 140000\n");
         cf::save(&ws.path().join(cf::FILE), &rec).unwrap();
         let say = |copilot: &'static str| {
             let run = move |p: &str, a: &[&str]| -> CliRun { (a == ["--version"]).then(|| (0, if p == "copilot" { copilot.to_string() } else { "1.4.7\n".to_string() })) };
@@ -2450,8 +2456,9 @@ mod tests {
         };
         let r = say("GitHub Copilot CLI 1.0.112.\nRun 'copilot update'\n");
         let cp = r.findings.iter().find(|f| f.location == "cp conformance").unwrap();
-        assert!(cp.message.contains("met C2, NOT met C5") && cp.message.contains("tool level L0") && cp.message.contains("spec 131 S2 not built"), "{}", cp.message);
-        assert!(r.findings.iter().find(|f| f.location == "ag conformance").unwrap().message.contains("not probed"));
+        assert!(cp.message.contains("met C2, NOT met C5") && cp.message.contains("tool level L0") && cp.message.contains("input budget 150000 bytes (default, unmeasured)"), "{}", cp.message);
+        let ag = &r.findings.iter().find(|f| f.location == "ag conformance").unwrap().message;
+        assert!(ag.contains("met C3") && ag.contains("input budget 120000 bytes (measured on 1.4.7: 80% of 150000 bytes answered, below the config 140000)"), "{ag}");
         let moved = say("GitHub Copilot CLI 1.0.120.\n");
         assert!(moved.findings.iter().find(|f| f.location == "cp conformance").unwrap().message.contains("unprobed version"), "{:?}", moved.findings);
     }

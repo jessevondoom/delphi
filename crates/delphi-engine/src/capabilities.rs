@@ -535,6 +535,75 @@ pub async fn probe_harness_full(cfg: &Config, ep: &Endpoint, program: &str, now:
     (cap, seat, gate_record)
 }
 
+/// The input ladder (`specs/131` S6): one call per step of [`crate::conformance::LADDER_BYTES`], in order, each a no-tool prompt of filler
+/// with a fresh code word on its last line, stopping at the first step not answered. Only the assistant's reply is read, never the stream
+/// as a whole (a CLI that echoes the prompt in its events proves nothing). Returns (size, answered) per step run; empty when nothing could
+/// start. Spends the operator's tokens: the caller asks first. An `agy` call runs behind a gate that allows nothing, as every agy span does.
+pub async fn probe_ladder(cfg: &Config, ep: &Endpoint, program: &str, nonce: u64, idle: Duration) -> Vec<(u64, bool)> {
+    use crate::conformance::{ladder_answered, ladder_code, ladder_prompt, LADDER_BYTES, LADDER_SYSTEM};
+    let Some(cli) = ep.harness.as_deref().and_then(Cli::from_harness) else { return vec![] };
+    let model = ["fast", "workhorse", "frontier"].iter().find_map(|t| cfg.resolve_model(ep, t)).unwrap_or_default();
+    let profile = cfg.harness.get(cli.program()).cloned().unwrap_or_default();
+    static LADDERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut steps = Vec::new();
+    for (i, size) in LADDER_BYTES.into_iter().enumerate() {
+        let dir = std::env::temp_dir().join(format!("delphi-ladder-{}-{}", std::process::id(), LADDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        if std::fs::create_dir_all(&dir).is_err() {
+            break;
+        }
+        let code = ladder_code(nonce, i);
+        let mut lp = crate::harness::LaunchProfile::default();
+        let mut _gate = None;
+        if cli == Cli::Agy {
+            let started = match std::env::current_exe() {
+                Ok(exe) => crate::bridge::Bridge::start_gated(vec![], String::new(), &exe, Some(crate::bridge::HookPolicy::new(vec![], vec![]))).await,
+                Err(e) => Err(e),
+            };
+            match started.and_then(|(b, rx, notes)| b.write_agy_workspace(&dir).map(|()| (b, rx, notes))) {
+                Ok((b, rx, notes)) => {
+                    lp.mcp_config = Some(b.config_path().to_path_buf());
+                    _gate = Some((b, rx, notes));
+                }
+                Err(_) => {
+                    let _ = std::fs::remove_dir_all(&dir);
+                    break;
+                }
+            }
+        }
+        let l = Launch { cli, program: program.into(), model: model.clone(), system_prompt: LADDER_SYSTEM.into(), user_prompt: ladder_prompt(size, &code), cwd: dir.clone(), tools: Tools::None, env: crate::harness::cli_env_with(&profile.env_allow), profile: lp, opts: Default::default() };
+        // A call that started and ended without a reply (an error, a refusal of the size, silence) is a step not answered; one that
+        // could not start at all is no measurement.
+        let mut reply: Option<String> = None;
+        let started = Session::start(&l).await;
+        let ran = started.is_ok();
+        if let Ok(mut s) = started {
+            let mut texts = String::new();
+            while let Some(ev) = s.next(idle).await {
+                match ev {
+                    Event::Text(t) => texts.push_str(&t),
+                    Event::Result { text, is_error, .. } => {
+                        reply = (!is_error).then(|| if text.trim().is_empty() { std::mem::take(&mut texts) } else { text });
+                        s.close_input();
+                    }
+                    Event::Exit { .. } => break,
+                    _ => {}
+                }
+            }
+            s.kill().await;
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        if !ran {
+            break;
+        }
+        let answered = reply.is_some_and(|r| ladder_answered(&r, &code));
+        steps.push((size, answered));
+        if !answered {
+            break;
+        }
+    }
+    steps
+}
+
 pub fn load(path: &Path) -> Vec<Capability> {
     std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
@@ -848,5 +917,38 @@ if {call_tool}:
         let all = load(&p);
         assert_eq!(all.iter().map(|c| (c.endpoint_id.as_str(), c.probed_at)).collect::<Vec<_>>(), [("a", 500), ("b", 0)]);
         assert!(all[0].is_fresh(500 + TTL_SECS - 1) && !all[0].is_fresh(500 + TTL_SECS));
+    }
+
+    /// A stand-in CLI that sees only the first `cut` bytes of its input line: under it, it replies with the code word on the prompt's
+    /// last line; over it, the code word is gone and it says so. `echo` makes it repeat the whole prompt in a user event first.
+    fn ladder_cli(dir: &std::path::Path, cut: usize, echo: bool) -> String {
+        let echo = if echo { "printf '{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"%s\"}]}}\\n' \"$(printf '%s' \"$first\" | tail -c 200 | tr -d '\"\\\\')\"\n" } else { "" };
+        crate::harness::tests::fake_cli(
+            dir,
+            &format!(
+                "{echo}if [ ${{#first}} -le {cut} ]; then code=$(printf '%s' \"$first\" | sed -n 's/.*The code word is \\(ZQ[0-9A-F]*\\)\\..*/\\1/p'); else code='I see only filler lines.'; fi\n{}\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"'\"$code\"'\",\"usage\":{{\"input_tokens\":5,\"output_tokens\":3}}}}'",
+                if echo.is_empty() { "" } else { "code='wrong'" }
+            ),
+        )
+    }
+
+    // specs/131 AC-14: with a CLI that cuts at a known size, the ladder records that size within one step.
+    #[tokio::test]
+    async fn the_input_ladder_finds_a_known_cut_within_one_step_from_the_reply_only() {
+        let cfg = Config::parse(HARNESS_CFG).unwrap();
+        let ep = cfg.endpoint("sub").unwrap().clone();
+        let d = tempfile::tempdir().unwrap();
+        let steps = probe_ladder(&cfg, &ep, &ladder_cli(d.path(), 180_000, false), 7, Duration::from_secs(30)).await;
+        assert_eq!(steps, [(100_000, true), (150_000, true), (200_000, false)], "it stops at the first step not answered");
+        let row = crate::conformance::ladder_row(&steps);
+        assert_eq!(row.count, Some(150_000));
+        // Every step answered: the ceiling is at least the largest step.
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(probe_ladder(&cfg, &ep, &ladder_cli(d.path(), 10_000_000, false), 7, Duration::from_secs(30)).await.len(), 4);
+        // A CLI that echoes the prompt (code word included) in its events and replies wrongly answered nothing.
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(probe_ladder(&cfg, &ep, &ladder_cli(d.path(), 10_000_000, true), 7, Duration::from_secs(30)).await, [(100_000, false)]);
+        // A CLI that cannot start is no measurement at all.
+        assert!(probe_ladder(&cfg, &ep, "/nonexistent/claude", 7, Duration::from_secs(5)).await.is_empty());
     }
 }

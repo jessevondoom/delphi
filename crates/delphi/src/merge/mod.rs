@@ -8,6 +8,7 @@
 
 pub mod approve;
 pub mod auto;
+pub mod base;
 pub mod check;
 pub mod cleanup;
 pub mod errors;
@@ -20,6 +21,8 @@ pub mod wait;
 
 #[cfg(test)]
 mod auto_tests;
+#[cfg(test)]
+mod base_tests;
 #[cfg(test)]
 mod cleanup_tests;
 #[cfg(test)]
@@ -245,6 +248,53 @@ pub fn merge_many(ctx: &mut Ctx, numbers: &[u64], batch: Option<&Attestation>) -
     numbers.iter().map(|n| merge_one(ctx, *n, batch)).collect()
 }
 
+/// What `merge_checked` did: the outcomes, the lines about the base, and whether a drift stopped the run.
+pub struct Checked {
+    pub outcomes: Vec<Outcome>,
+    pub lines: Vec<String>,
+    pub drifted: bool,
+}
+
+/// The base a pull request lands on (`main` when it cannot be read: the check then says what it could not do).
+pub fn base_of(forge: &dyn Forge, n: u64) -> String {
+    forge.pr(n).map(|p| p.base_ref).unwrap_or_else(|_| "main".into())
+}
+
+/// `merge_many` with the check of the base (§11.3.4) after every merge. With `stops` (`--all`) the base is also checked before the
+/// first pull request, and a drift merges nothing more: the run stops and names what it did not reach. Without (`<PR>`), a drift
+/// is recorded and said, and the pull requests the operator named one by one still go ahead. A dry run checks nothing.
+pub fn merge_checked(ctx: &mut Ctx, numbers: &[u64], batch: Option<&Attestation>, check: &dyn base::BaseCheck, stops: bool) -> Checked {
+    let mut c = Checked { outcomes: Vec::new(), lines: Vec::new(), drifted: false };
+    if ctx.dry_run {
+        c.outcomes = merge_many(ctx, numbers, batch);
+        return c;
+    }
+    let look = |ctx: &Ctx, n: u64, c: &mut Checked| {
+        let (state, line) = base::check_and_note(ctx.errors, check, &base_of(ctx.forge, n), &(ctx.now)());
+        c.lines.push(line);
+        let drift = matches!(state, base::BaseState::Drift { .. });
+        c.drifted |= drift;
+        drift && stops
+    };
+    let not_reached = |rest: &[u64]| format!("stopped because the base drifted; not merged: {}", rest.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "));
+    if stops && !numbers.is_empty() && look(ctx, numbers[0], &mut c) {
+        c.lines.push(not_reached(numbers));
+        return c;
+    }
+    for (i, n) in numbers.iter().enumerate() {
+        let out = merge_one(ctx, *n, batch);
+        let merged = matches!(out, Outcome::Merged { .. });
+        c.outcomes.push(out);
+        if merged && look(ctx, *n, &mut c) {
+            if i + 1 < numbers.len() {
+                c.lines.push(not_reached(&numbers[i + 1..]));
+            }
+            break;
+        }
+    }
+    c
+}
+
 /// Add a ready, ordinary pull request to the queue. A gate-changing one is labelled for a human instead.
 pub fn queue_one(forge: &dyn Forge, n: u64) -> Result<String, String> {
     let v = evaluate(forge, n).map_err(|e| e.to_string())?;
@@ -296,6 +346,7 @@ enum Sub {
     Fix(u64),
     Refresh(u64),
     Cleanup(Vec<u64>),
+    RepairBase,
 }
 
 #[derive(Debug, PartialEq)]
@@ -325,6 +376,8 @@ struct Parsed {
     wait: Option<Duration>,
     /// `--wait` or `--no-wait` was given.
     wait_given: bool,
+    /// `repair-base --base <branch>`: the base to repair (default `main`).
+    base: Option<String>,
 }
 
 fn pr_number(s: &str) -> Option<u64> {
@@ -338,6 +391,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     let mut caps = auto::Caps::default();
     let mut caps_given = false;
     let (mut wait, mut wait_given) = (Some(wait::DEFAULT_WAIT), false);
+    let mut base = None;
     let mut words: Vec<&str> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -380,6 +434,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
                 (wait, wait_given) = (Some(d), true);
             }
             "--no-wait" => (wait, wait_given) = (None, true),
+            "--base" => base = Some(it.next().cloned().ok_or("--base needs a branch name")?),
             "--merged" => merged = true,
             "--yes" => yes = true,
             f if f.starts_with("--") => return Err(format!("unknown option `{f}` (see `delphi help merge`)")),
@@ -388,9 +443,11 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     }
     let sub = match (words.first().copied(), all, auto) {
         (_, true, true) => return Err("--all and --auto are different modes; pick one".into()),
-        (Some(w), false, false) if matches!(w, "queue" | "status" | "log" | "fix" | "refresh" | "cleanup") => match w {
+        (Some(w), false, false) if matches!(w, "queue" | "status" | "log" | "fix" | "refresh" | "cleanup" | "repair-base") => match w {
             "queue" => Sub::Queue(words.get(1).and_then(|n| pr_number(n)).ok_or("usage: delphi merge queue <PR>")?),
             "status" => Sub::Status,
+            "repair-base" if words.len() == 1 => Sub::RepairBase,
+            "repair-base" => return Err("usage: delphi merge repair-base [--base <branch>] [--dry-run] [--operator-said \"<words>\"]".into()),
             "log" => Sub::Log,
             "fix" => Sub::Fix(words.get(1).and_then(|n| pr_number(n)).ok_or("usage: delphi merge fix <PR> [--done | --needs-human \"<why>\"]")?),
             "refresh" => Sub::Refresh(words.get(1).and_then(|n| pr_number(n)).ok_or("usage: delphi merge refresh <PR>")?),
@@ -411,10 +468,13 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     if wait_given && !matches!(sub, Sub::Merge(_) | Sub::All) {
         return Err("--wait and --no-wait belong to `delphi merge <PR>` and `--all` (a session never waits; it comes back at its next poll)".into());
     }
+    if base.is_some() && sub != Sub::RepairBase {
+        return Err("--base belongs to `delphi merge repair-base`".into());
+    }
     if sub == Sub::Auto {
         caps.validate()?;
     }
-    Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human, merged, yes, caps, caps_given, wait, wait_given })
+    Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human, merged, yes, caps, caps_given, wait, wait_given, base })
 }
 
 pub fn cli(args: &[String]) -> i32 {
@@ -440,6 +500,13 @@ pub fn cli(args: &[String]) -> i32 {
         Sub::Status => match status_lines(&forge) {
             Ok(lines) => {
                 lines.iter().for_each(|l| println!("{l}"));
+                // The check of the base (§11.3.4): the base of the oldest queued pull request, or `main`.
+                let home = crate::home::delphi_home(p.home.as_deref());
+                let base_ref = forge.queued(QUEUE_LABEL).ok().and_then(|q| q.first().copied()).map(|n| base_of(&forge, n)).unwrap_or_else(|| "main".into());
+                match std::env::current_dir() {
+                    Ok(repo) => println!("{}", base::check_and_note(&Errors::at(&home), &base::InRepo { git: refresh::Runner::new(&repo), home: &home }, &base_ref, &delphi_core::time::now_rfc3339()).1),
+                    Err(e) => println!("base `{base_ref}`: could not check it ({e})"),
+                }
                 0
             }
             Err(e) => {
@@ -450,6 +517,7 @@ pub fn cli(args: &[String]) -> i32 {
         Sub::Log => log_cmd(&p),
         Sub::Fix(n) => fix_cmd(&p, &forge, n),
         Sub::Refresh(n) => refresh_cmd(&p, &forge, n),
+        Sub::RepairBase => repair_cmd(&p, &forge),
         Sub::Cleanup(ref numbers) => cleanup::run(&forge, numbers, p.merged, p.dry_run, p.yes),
         Sub::Auto => auto_cmd(&p, &forge),
         Sub::Merge(ref numbers) => run_merges(&p, &forge, numbers.clone(), false),
@@ -574,6 +642,32 @@ fn refresh_cmd(p: &Parsed, forge: &Gh, n: u64) -> i32 {
     }
 }
 
+/// `repair-base`: open the pull request that makes the base's compiled spec tree current (§11.3.4). It asks the operator before it
+/// pushes or opens anything, and never merges.
+fn repair_cmd(p: &Parsed, forge: &Gh) -> i32 {
+    let home = crate::home::delphi_home(p.home.as_deref());
+    let repo = match std::env::current_dir() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("delphi merge repair-base: {e}");
+            return 2;
+        }
+    };
+    let (errors, ledger, runner) = (Errors::at(&home), Ledger::at(&home), refresh::Runner::new(&repo));
+    let env = base::RepairEnv { forge, errors: &errors, ledger: &ledger, home: &home, git: &runner, now: delphi_core::time::now_rfc3339() };
+    let base_ref = p.base.clone().unwrap_or_else(|| "main".into());
+    match base::repair_base(&env, &base_ref, p.dry_run, &mut StdTerminal, p.quote.as_deref()) {
+        Ok(base::Repaired::Current { sha }) => println!("`{base_ref}` ({}): the spec compile changes nothing; there is nothing to repair", short(&sha)),
+        Ok(base::Repaired::WouldOpen { sha, paths }) => println!("`{base_ref}` ({}): a repair would recompile {} file(s): {}; nothing was pushed", short(&sha), paths.len(), paths.join(", ")),
+        Ok(base::Repaired::Opened { pr, branch, paths, .. }) => println!("opened #{pr} from `{branch}` ({} file(s)); it merges nothing: merge it once CI is green", paths.len()),
+        Err(e) => {
+            eprintln!("delphi merge repair-base: {e}");
+            return 1;
+        }
+    }
+    0
+}
+
 /// Set by Ctrl-C (SIGINT) or SIGTERM; read by the session loop.
 static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -625,7 +719,8 @@ fn auto_cmd(p: &Parsed, forge: &Gh) -> i32 {
     let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: None, poll: p.caps.poll, made: &made };
     let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: None, dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh) };
     let stop = || INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) || stop_file.exists();
-    let summary = auto::run(&mut ctx, &p.caps, &att, &auto::SystemClock, &stop, &mut |l| println!("{l}"));
+    let check = base::InRepo { git: refresh::Runner::new(&refresher.git.repo), home: &home };
+    let summary = auto::run_checked(&mut ctx, &p.caps, &att, &auto::SystemClock, &stop, &mut |l| println!("{l}"), Some(&check));
     summary.lines().iter().for_each(|l| println!("{l}"));
     if summary.errors > 0 {
         1
@@ -674,8 +769,15 @@ fn run_merges(p: &Parsed, forge: &Gh, numbers: Vec<u64>, batch: bool) -> i32 {
     };
     let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: p.wait, poll: Duration::from_secs(30), made: &made };
     let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh) };
-    let outcomes = if batch { merge_many(&mut ctx, &numbers, batch_att.as_ref()) } else { numbers.iter().map(|n| merge_one(&mut ctx, *n, None)).collect() };
+    // `<PR>` asks for each pull request itself; --all holds one approval for the batch, and a drifted base stops it (§11.3.4).
+    let check = base::InRepo { git: refresh::Runner::new(&refresher.git.repo), home: &home };
+    let checked = merge_checked(&mut ctx, &numbers, batch_att.as_ref(), &check, batch);
+    let outcomes = checked.outcomes;
     outcomes.iter().for_each(|o| println!("{}", o.line()));
+    checked.lines.iter().for_each(|l| println!("{l}"));
+    if checked.drifted {
+        return 1;
+    }
     if outcomes.iter().any(|o| matches!(o, Outcome::Failed { detail, .. } if detail.contains("cannot run `gh`"))) {
         return 4;
     }
@@ -707,6 +809,9 @@ mod parse_tests {
         assert_eq!(parse(&a("merge status")).unwrap().sub, Sub::Status);
         assert_eq!(parse(&a("merge refresh #806")).unwrap().sub, Sub::Refresh(806));
         assert!(parse(&a("merge refresh")).is_err() && parse(&a("merge refresh x")).is_err());
+        let r = parse(&a("merge repair-base --base main --dry-run")).unwrap();
+        assert_eq!((r.sub, r.base.as_deref(), r.dry_run), (Sub::RepairBase, Some("main"), true));
+        assert!(parse(&a("merge repair-base 5")).is_err() && parse(&a("merge 5 --base main")).is_err());
         assert_eq!(parse(&a("--home /x merge 5")).unwrap().home.as_deref(), Some("/x"));
         assert_eq!(parse(&a("merge 5")).unwrap().wait, Some(wait::DEFAULT_WAIT));
         assert_eq!(parse(&a("merge 5 --wait 10m")).unwrap().wait, Some(Duration::from_secs(600)));

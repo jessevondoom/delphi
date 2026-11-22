@@ -49,6 +49,9 @@ pub enum Target {
     /// A bounded `--auto` session: a quote must ask for automatic merging (`auto`, `automatically`, `as they come in`).
     /// Neither a single pull request's number nor "all" authorizes a session that merges pull requests which do not exist yet.
     Auto,
+    /// `repair-base` (§11.3.4): it pushes a new branch and opens a pull request, so the operator confirms it; a quote must ask for a
+    /// repair (`repair`, `recompile`). It merges nothing.
+    Repair,
 }
 
 /// A quote is words from the operator, not a payload: bounded, printable, one paragraph at most.
@@ -72,6 +75,7 @@ pub fn quote_binds(quote: &str, target: Target) -> bool {
         Target::Pr(n) => Regex::new(&format!(r"(^|[^0-9]){n}([^0-9]|$)")).map(|re| re.is_match(quote)).unwrap_or(false),
         Target::Batch => Regex::new(r"(?i)\b(all|every|each)\b").map(|re| re.is_match(quote)).unwrap_or(false),
         Target::Auto => Regex::new(r"(?i)\b(auto|automatic|automatically|as they (come|are queued|arrive|land))\b").map(|re| re.is_match(quote)).unwrap_or(false),
+        Target::Repair => Regex::new(r"(?i)\b(repair|recompile)\b").map(|re| re.is_match(quote)).unwrap_or(false),
     }
 }
 
@@ -81,6 +85,7 @@ pub fn attest(term: &mut dyn Terminal, quote: Option<&str>, target: Target, gate
         Target::Pr(n) => (format!("pull request #{n}"), n.to_string()),
         Target::Batch => ("every queued pull request listed above".to_string(), "all".to_string()),
         Target::Auto => ("a bounded --auto session (it merges queued pull requests as they arrive, within the caps shown above)".to_string(), "auto".to_string()),
+        Target::Repair => ("the repair pull request shown above (it pushes a new branch and opens a pull request; it merges nothing)".to_string(), "repair".to_string()),
     };
     if gate_changing {
         if quote.is_some() {
@@ -98,6 +103,7 @@ pub fn attest(term: &mut dyn Terminal, quote: Option<&str>, target: Target, gate
                 Target::Pr(n) => format!("the quote does not name pull request #{n}; the operator's request must mention it (or run the command in a terminal)"),
                 Target::Batch => "the quote does not say `all`, `every` or `each`; the operator's request must ask for the whole queue (or run the command in a terminal)".to_string(),
                 Target::Auto => "the quote does not ask for automatic merging (`auto`, `automatically`, `as they come in`); a request to merge one pull request or `all` does not authorize a session (or run the command in a terminal)".to_string(),
+                Target::Repair => "the quote does not ask for a repair (`repair`, `recompile`); the operator's request must ask for it (or run the command in a terminal)".to_string(),
             });
         }
         return Ok(Attestation::ChatQuote(q.to_string()));
@@ -109,7 +115,11 @@ pub fn attest(term: &mut dyn Terminal, quote: Option<&str>, target: Target, gate
 }
 
 fn typed(term: &mut dyn Terminal, what: &str, word: &str) -> Result<Attestation, String> {
-    let verb = if word == "auto" { "start" } else { "merge" };
+    let verb = match word {
+        "auto" => "start",
+        "repair" => "open",
+        _ => "merge",
+    };
     match term.ask(&format!("To {verb} {what}, type {word}; anything else cancels: ")) {
         Some(a) if a == word => Ok(Attestation::Tty),
         Some(_) => Err("cancelled: that was not the confirmation word".into()),
@@ -223,5 +233,15 @@ mod tests {
         assert_eq!(attest(&mut ok, None, Target::Batch, false), Ok(Attestation::Tty));
         let mut q = FakeTerminal::new(false, &[]);
         assert!(matches!(attest(&mut q, Some("merge all of them"), Target::Batch, false), Ok(Attestation::ChatQuote(_))));
+    }
+
+    #[test]
+    fn a_repair_needs_words_that_ask_for_it_or_the_word_repair_typed() {
+        let mut q = FakeTerminal::new(false, &[]);
+        assert!(matches!(attest(&mut q, Some("please repair main"), Target::Repair, false), Ok(Attestation::ChatQuote(_))));
+        assert!(attest(&mut q, Some("merge all"), Target::Repair, false).unwrap_err().contains("does not ask for a repair"));
+        assert!(attest(&mut q, None, Target::Repair, false).unwrap_err().contains("no terminal"));
+        let mut tty = FakeTerminal::new(true, &["repair"]);
+        assert_eq!(attest(&mut tty, None, Target::Repair, false), Ok(Attestation::Tty));
     }
 }
