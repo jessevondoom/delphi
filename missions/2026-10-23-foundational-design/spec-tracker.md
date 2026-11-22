@@ -872,6 +872,7 @@ Amendment 093-A1 (spec 093 §11, operator 2026-11-22): outside events (new advis
 | 093 | A1 | amendment 093-A1 (§11): checks that depend on outside events (new advisories, review dates) run daily, on push to `main` and on pull requests that touch dependencies, not on unrelated pull requests | approved by the operator 2026-11-22 (this pull request) |
 | 093 | P1 | 093-A1 §11.4: the `deny` job on a pull request runs `bans licenses sources` always and `advisories` only when `Cargo.lock`, `deny.toml` or a `Cargo.toml` changed; push to `main` runs the full check | built (PR open, gate-changing: the operator merges it at a terminal) |
 | 093 | P2 | 093-A1 §11.4: `.github/workflows/advisories.yml`, daily and on demand: full `cargo deny check` and the `deny_policy` test, read-only token, no issue opened | built (PR open, gate-changing); first scheduled or dispatched run happens only after merge |
+| 093 | P3 | 093-A1 §11.4: the review-date check on pull requests. (a) `deny_policy.rs` splits its exception test into a reason check (every pull request) and a date check; (b) the Linux integration and macOS jobs skip the date check on a pull request that does not change `deny.toml` | (a) built (PR open; a test-only Rust change in a gate-changing PR, its own commit) |
 
 ## Spec 098: where agents run (2026-11-10, approved)
 
