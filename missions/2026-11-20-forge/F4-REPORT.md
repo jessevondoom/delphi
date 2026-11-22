@@ -94,3 +94,101 @@ Rarely, and when it would, the chore is small. From `gh run list` (182 failed `c
 - Three ground-truth defects, chosen for small diffs; not a sample of all defects.
 - The "plausible" findings in section 2 were not checked against `main`.
 - Copilot premium requests and agy quota used were not read back.
+
+## F4b: the rerun (2026-11-21)
+
+Run 2026-11-21 evening, on the operator's approval to spend tokens (spec 135 §14.5 and §14.7), after F2c, F2d, F1b and F2e merged. Same three pull requests, same answer key (fixed before the first run), same four families, same scratch home. The binary was `main` at `0efb6a7b` (after #854).
+
+**Verdict: still no case for F3.** The known defect was caught in 3 of 12 reviews again (plus 2 partial, 1 with no answer). But for the first time a reviewer found the #537 defect, which needs a string outside the diff. kimi-k3 found it after asking for that string in Round 0. Running the tests took 1.5 to 7 minutes per review and caught nothing: none of the three defects has a failing test at its head.
+
+### Arms
+
+- **A** (the first run, above): tool-less, diff and spec only. The test command never started.
+- **B** (F2c + F2d): call sites found by code, a Round 0 in which the seat asks for up to 5 identifiers or strings, and the affected crate's tests run offline in the sandbox. The tests were `cargo test -p delphi-engine --lib` filtered by `research_plan`, `council` or `tools::` (by PR). Families gemini, openai, kimi and mai; 12 reviews.
+- **C** (B + read tools, §14.7): gemini only, 3 reviews. **The tools arm could not be measured.** The daemon's background probe of agy 1.5.14 ran by itself and **failed**: "no read on the list (view_file, read_file, list_dir, find_by_name, grep_search) was seen to pass the gate and return the file". It spent 9,827 tokens and is retried once after a day. So every C seat was bridge-only and tool-less, and **arm C is a second run of gemini under B's conditions**. That makes it a small variance check, not a tools comparison. Copilot stays tool-less by design (§14.7, spec 132 C8).
+
+### 1. Did the reviewer find the known defect?
+
+| PR | gemini (A / B / C) | openai (A / B) | kimi-k3 (A / B) | mai-code-2 (A / B) |
+| :-- | :-- | :-- | :-- | :-- |
+| #448 | caught / **caught** (`localhost:8080`, no scheme) / **caught** (bare `localhost`, `localhost:PORT`) | partial / partial (bare IPv6 again) | caught / partial (names the gate exactly, "no scheme, no dot, IpAddr parse fails, so `is_internal_host` is never consulted", but only for IPv6) | caught / **missed** (relative paths, first-line cut, five-domain cap) |
+| #550 | partial / **no answer** (the agy seat answered Round 0, then the request fell back to `gemini-key`, which timed out at 600 s) / partial (identical repeats falsely refused, as in A) | missed / missed | missed, voted accept / **caught, one of the two mechanisms** ("a block that restates only the recommendation ... is refused as a conflict"), rated low, voted **accept** | missed / missed |
+| #537 | missed / missed / missed | missed / missed | missed / **caught** ("The operator denied this action" at `engine.rs:2312` and the hook text fall through to `tool_error`) | missed / missed |
+
+| | caught | partial | missed | no answer |
+| :-- | :-: | :-: | :-: | :-: |
+| A (12) | 3 | 2 | 7 | 0 |
+| B (12) | 3 | 2 | 6 | 1 |
+| C (3, gemini) | 1 | 1 | 1 | 0 |
+
+What changed:
+
+- **#537 was found for the first time.** kimi's Round 0 asked for the literal strings `"The approval timed out"`, `"[timed out and was killed"`, `"does not authorize"` and `"is not among the tools of"`. The excerpts Delphi returned put the real denial texts in front of it. Its only extra command was a `grep` of `elog.rs`, so the excerpts, not a command, are almost certainly the source; the result keeps only counts of what Round 0 returned, so this is inferred. This is exactly the miss the F4 report attributed to missing context.
+- **#550 got its first exact mechanism** (kimi), but rated low with a vote of accept: the reviewer saw the refusal and judged it a fail-safe, not a defect. The other families again looked only for a conflict that slips through.
+- **Two catches from A were lost on #448** (kimi to partial, mai to missed). With one run per cell this is noise in both directions: the same count, different cells. Gemini was the most stable family: A, B and C agree on #448 and #537.
+- **Verdicts:** "changes" in 10 of 11 answers; the one "accept" (kimi, #550) is on a PR with a known defect, as in A.
+
+### 2. Cost and time
+
+| | reviews | tokens (in + out) | wall time per review |
+| :-- | :-: | --: | :-- |
+| A | 12 | 515k | openai 65-85 s, mai 65-105 s, kimi 125-265 s, gemini 225-325 s |
+| B | 12 | 738k (+43%) | openai 145-165 s, mai 165-225 s, kimi 225-525 s, gemini 545-766 s |
+| C | 3 | 374k | gemini 525-705 s |
+
+- The tokens in arm A are the receipts' totals; the report above wrongly says they were missing. B and C use the new top-level `tokens_in` and `tokens_out` (F2c).
+- Per family in B: gemini 275k for 3 reviews (one unanswered), kimi 195k, mai 135k, openai 133k. Gemini writes very long outputs: 39k to 65k tokens out per review, against 1k to 10k for the others.
+- The test command took 85-440 s per review, a fresh build of `delphi-engine` in each copy's scratch target.
+- Round 0 plus the call sites filled the 12,000-character cap in most reviews: 7.5k to 12.4k characters. #550 found no call sites; #448 found 16 and #537 found 6.
+- Copilot premium requests: 9 in arm B and 2 in setup checks.
+- agy reviews: 3 in B, 3 in C and 1 setup check, plus the 9.8k-token probe.
+
+### 3. Did the tests help?
+
+Not on these defects.
+- #448 (10 tests) and #537 (45) passed at the defect head; none of the defects has a test.
+- #550 failed 2 of 58 tests, both from the sandbox, not the code: a test writes to `/tmp`, and `git` through `xcrun` cannot write its cache. kimi said so correctly. The others did not treat the failures as a finding, but every reviewer of #550 saw red tests that had nothing to do with the change.
+
+A review command is only as useful as the tests at that head, and the sandbox adds failures of its own.
+
+### 4. Shared findings, rechecked
+
+| PR | Finding | Families (B, C) | Checked |
+| :-- | :-- | :-- | :-- |
+| #537 | `arg_keys` dropped by the `elog` allow-list | gemini, openai, kimi; C gemini | **fixed on `main`** since F4 (`elog.rs` lists `arg_keys`) |
+| #537 | `failure_kind` reads words in the echoed `$ <command>` line | openai, mai (the timeout marker) | **true on `main` by reading**: a failed command's output starts `$ <argv>` (`exec.rs` `format!("$ {}`), and `failure_kind` matches `was denied`, ` must be `, `invalid arguments` anywhere in that first line. Not run |
+| #537 | the bridge path classifies a failure but never writes `tool_failed` | openai, mai | not checked |
+| #550 | a conflicting JSON critique over several lines skips conflict detection | openai, mai; C gemini | not checked (also raised in A) |
+| #550 | trailer text kept in the `council.critique` event | openai, mai | not checked (also raised in A) |
+| #448 | Topic planned before Trusted in survey and deep | gemini, openai; C gemini | `main` still plans `[Topic, Trusted, Gap]` and a test pins that order. Spec 066 says trusted first, then the wider web only when trusted coverage is thin. Whether execution follows the plan order is not checked |
+| #448 | only the first five trusted domains are ever queried | kimi, mai | true at that head by reading (`.into_iter().next()`), still so on `main`; whether spec 066 means one trusted query is unclear |
+
+### 5. What the rerun exposed
+
+1. **§14.2 is not enough on macOS, and it must say "ratify".** `[exec]` is a ratified block (`lock::ACCESS_KEYS`): a live edit is ignored until the operator ratifies it, and nothing said so. With `~/.cargo` and `~/.rustup` ratified, cargo still could not run. Inside the sandbox:
+   - it cannot read `/private/etc/ssl/openssl.cnf` (LibreSSL "Auto configuration failed", exit 1, and `OPENSSL_CONF` does not help);
+   - the linker needs `/Applications/Xcode.app` (or the Command Line Tools);
+   - the linker needs `/Library/Preferences/com.apple.dt.Xcode.plist`, or it reports the licence as not agreed.
+
+   The operator ratified those three paths; then the tests ran. §14.2, `config.example.toml` and the doctor check should name them (or the Command Line Tools path) and say the block takes effect only when ratified.
+2. **F2c gap: a startup failure reports `tests_run: true`.** With the SSL file unreadable, cargo exited 1 within 82 ms, so the review got `started: true`, `tests_run: true` and no note. "Ran to an exit status" is not "ran the tests". A command that ends before printing a test result line looks like a failing test to the reviewer.
+3. **The probe failed on the real agy.** The read half was not seen, either because agy named its read tool differently, read with arguments the gate refuses, or never tried. The F2e row already lists agy's argument names as guesses. The fail is retried once after a day; nothing records what agy actually called, so the cause cannot be seen from the store or the `forge.tools_probe` event.
+4. **A gemini review can fall back mid-review.** On #550 the agy seat served Round 0, and the later round went to `gemini-key`, which gave no answer within 600 s. The receipt shows only agy, so the result says served "gemini" with no hint that a second endpoint failed.
+5. **Scripting the scratch config is fragile.** `delphi setup` rewrote the file's layout, and my own script then duplicated the `[exec]` keys and the `[forge]` table. The file stopped parsing, and every MCP call was answered `disabled_by_operator ([mcp] enabled = false)` instead of a parse error. `delphi doctor` gave the real cause (invalid TOML); the MCP message did not.
+
+### What it means for F3
+
+The cheap fix worked once: context asked for before judging found the one defect that needs it. The recall is unchanged, the cost is up 43%, and running the tests bought nothing on these three PRs. F3 (writer seats inside the daemon) still has no evidence that a cross-family reviewer catches enough to trust it unattended. Next steps, cheapest first:
+
+- Fix items 1 and 2 above.
+- Find why the agy probe fails, so the tools arm can be measured.
+- Repeat B and C at least twice per cell before drawing conclusions about families.
+- Add ground-truth defects that a test at the head would catch, so the test command is measured at all.
+
+### Not verified
+
+- One run per cell in B; C repeats gemini once. Variance is visible (two #448 catches lost) but not measured.
+- The tools arm (C with read tools): the probe failed, so no seat had tools.
+- That kimi's #537 catch came from the Round 0 excerpts: the result keeps counts, not text.
+- The rows marked "not checked" in section 4, and the execution order of the #448 queries.
+- The two #550 test failures were judged environmental from their messages, not rerun outside the sandbox.
