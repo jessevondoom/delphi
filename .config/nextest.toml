@@ -1,0 +1,70 @@
+# cargo-nextest configuration (spec 125 amendment 125-A1, section 10).
+#
+# CI runs the Rust tests with `cargo nextest run --profile ci`: each test in its own process, and a failing test run once
+# more. A pass on the retry passes and is recorded as FLAKY (in the log, in the job summary and as <flakyFailure> in the
+# JUnit file); a second failure fails the run. There is no second retry. Doc tests are not run by nextest; they stay on
+# `cargo test --doc`.
+#
+# The default profile (a plain `cargo nextest run` on a developer machine) has no retries, so a local run shows every
+# failure. `delphi forge finish --gates` uses the `ci` profile when nextest is installed.
+
+[profile.default]
+# The same as CI apart from the retry: a run reports every failing test, not only the first.
+fail-fast = false
+
+[profile.ci]
+# One retry, never more (125-A1 rule 1). A pass on the retry counts as a pass (nextest's default `flaky-result`), written
+# here so that a change of that default cannot turn the rule around unnoticed.
+retries = 1
+flaky-result = "pass"
+fail-fast = false
+# Print a failing test's output as it fails and again at the end of the run, where the job log is read first.
+failure-output = "immediate-final"
+success-output = "never"
+# A test is reported slow after 60 s and stopped after 5 minutes (5 periods). The slowest tests of the suite take well
+# under that on a GitHub runner; a test that hangs is then a failure (and its one retry) instead of a job timeout.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+# Test groups (125-A1 §10.6, slice R2). A group with `max-threads = 1` runs its tests one at a time AMONG THEMSELVES; they
+# still run beside every other test. So a group is used only where the tests of one family compete for one scarce thing,
+# and never instead of the retry or of a fix by spec 125 section 4. The overrides sit in the default profile, so a local
+# `cargo nextest run` takes the same turns as CI.
+#
+# Considered and NOT grouped, from the list of flaky tests in 125-A1 §10.1:
+# - `run_granted::tests::the_prompt_leaves_an_ignored_signal_ignored_…` (T4) and `doctor::…::the_real_probe_connects_and_
+#   closes_without_sending_a_byte` (T3): their cause was state shared inside ONE test process (signal dispositions; a copy
+#   of a listener's descriptor held by another test's fork). nextest runs each test in its own process, which removes
+#   that sharing, on top of S3 and S4.
+# - `service::tests::cancelling_a_task_waiting_on_an_approval_…` and `kb::tests::episodes_are_indexed_under_zone_
+#   episodes_…`: single tests whose failures (an event read before it was written; asserts inside one index) involve no
+#   other test, so a group of one would change nothing. The retry covers them until a cause is shown.
+[test-groups]
+granted-claude-cli = { max-threads = 1 }
+authorized-sweeps = { max-threads = 1 }
+investigation-sandbox = { max-threads = 1 }
+
+# Spec 125 L1 and L2: a granted Claude seat starts a stand-in Claude CLI and must read its `--version` within 5 s
+# (`cli_version_bounded`); on a loaded macOS runner the read ran out (runs 44870887030, 44920128159, 45051942853, all
+# `main`, 2026-11-21 and 22). These seven tests each start such a CLI and the seat's daemon; one at a time they no longer
+# spend each other's 5 s.
+[[profile.default.overrides]]
+filter = 'package(delphi-engine) & (test(/^authorization_grant::tests::claude_seat::/) | test(/^harness_run::tests::.*granted/))'
+test-group = 'granted-claude-cli'
+
+# Spec 125 L3 (section 6): the engine's red-team sweeps run under the authorized profile's process limit (the user's
+# process count + 128) and take no turn, so two of them can flood beside each other; the two e2e sweeps through the real
+# binary are the same. Seen: the e2e granted-daemon sweep failed on macOS `main` (run 44991405185). The sandbox crate's
+# own sweeps already take a file-lock turn (S2), across processes too, so they are left out. Six tests.
+[[profile.default.overrides]]
+filter = '(package(delphi-engine) & test(/^authorization_(run|use)::tests::.*sweep/)) | (binary_id(delphi::e2e) & test(/sweep/))'
+test-group = 'authorized-sweeps'
+
+# `investigation_tests::*`: each runs git (a bisect, a push, a fetch) inside the OS sandbox in a throwaway copy; two of
+# them failed together in the same runs (43863826746, 43869774254, 43872132192, 43877704752, 43879125816, 43887413298).
+[[profile.default.overrides]]
+filter = 'package(delphi-engine) & test(/^investigation_tests::/)'
+test-group = 'investigation-sandbox'
+
+[profile.ci.junit]
+# Written to target/nextest/ci/junit.xml; the CI jobs upload it and list its flaky tests in the job summary.
+path = "junit.xml"
