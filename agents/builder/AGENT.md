@@ -15,6 +15,7 @@ authorized_skills:
   - git-pr-packaging
   - git-merge-and-conflict-resolution
   - ci-triage
+  - agentic-ci-cd-strategy
   - spec-driven-build
   - tui-design
   - systems-pattern-catalog

@@ -27,7 +27,7 @@ fn has(args: &[String], f: &str) -> bool {
 }
 
 pub fn usage() -> &'static str {
-    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--repo <dir>] [--home <dir>]\n       delphi forge list [--all] [--json] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]\n       delphi forge tracker [--spec <spec>] [--repo <dir>]"
+    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge claim --spec-number [--by <holder>] [--ttl <dur>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release --spec-number <NNN> [--by <holder>] [--repo <dir>]\n       delphi forge list [--all] [--json] [--sweep] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates [--fast-only]] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]\n       delphi forge tracker [--spec <spec>] [--repo <dir>]"
 }
 
 fn now() -> i64 {
@@ -44,22 +44,34 @@ pub fn exec(args: &[String]) -> Out {
     let usage_err = |why: &str| Out { code: 2, out: String::new(), err: format!("delphi forge: {}\n{}", why, usage()) };
     match args.first().map(String::as_str) {
         Some("claim") => {
-            let [spec, slice] = &pos[..] else { return usage_err("claim takes a spec and a slice") };
+            let numbered = has(rest, "--spec-number");
             let ttl = match crate::flag(rest, "--ttl").map(|t| crate::run::parse_duration(&t)) {
+                None if numbered => crate::claim_refs::SPEC_NUMBER_TTL_SECS,
                 None => slice_claims::DEFAULT_TTL_SECS,
                 Some(Ok(d)) => d.as_secs() as i64,
                 Some(Err(e)) => return usage_err(&e),
             };
-            slice_claims::claim(&slice_claims::ClaimReq { repo: &repo, home: &home, spec, slice, by: by.as_deref(), ttl_secs: ttl, take: has(rest, "--take"), now: now() })
+            if numbered {
+                if !pos.is_empty() {
+                    return usage_err("claim --spec-number takes no spec or slice");
+                }
+                return crate::claim_refs::reserve_spec_number(&repo, &home, by.as_deref(), ttl, has(rest, "--local"), now());
+            }
+            let [spec, slice] = &pos[..] else { return usage_err("claim takes a spec and a slice") };
+            crate::claim_refs::claim(&slice_claims::ClaimReq { repo: &repo, home: &home, spec, slice, by: by.as_deref(), ttl_secs: ttl, take: has(rest, "--take"), now: now() }, has(rest, "--local"))
+        }
+        Some("release") if has(rest, "--spec-number") => {
+            let [number] = &pos[..] else { return usage_err("release --spec-number takes the number") };
+            crate::claim_refs::release_spec_number(&repo, number, by.as_deref(), now())
         }
         Some("release") => {
             let [spec, slice] = &pos[..] else { return usage_err("release takes a spec and a slice") };
-            slice_claims::release(&repo, &home, spec, slice, by.as_deref(), now())
+            crate::claim_refs::release(&repo, &home, spec, slice, by.as_deref(), has(rest, "--local"), now())
         }
-        Some("list") if pos.is_empty() => slice_claims::list(&repo, &home, has(rest, "--all"), has(rest, "--json"), now()),
+        Some("list") if pos.is_empty() => crate::claim_refs::list(&repo, &home, has(rest, "--all"), has(rest, "--json"), has(rest, "--sweep"), has(rest, "--local"), now()),
         Some("finish") if pos.is_empty() => {
             let (spec, slice) = (crate::flag(rest, "--spec"), crate::flag(rest, "--slice"));
-            crate::finisher::finish(&crate::finisher::FinishReq { repo: &repo, home: &home, check: has(rest, "--check"), spec: spec.as_deref(), slice: slice.as_deref(), body: has(rest, "--body"), gates: has(rest, "--gates"), now: now() })
+            crate::finisher::finish(&crate::finisher::FinishReq { repo: &repo, home: &home, check: has(rest, "--check"), spec: spec.as_deref(), slice: slice.as_deref(), body: has(rest, "--body"), gates: has(rest, "--gates") || has(rest, "--fast-only"), fast_only: has(rest, "--fast-only"), now: now() })
         }
         Some("tracker") if pos.is_empty() => tracker_view(&repo, crate::flag(rest, "--spec").as_deref()),
         _ => usage_err("name a subcommand"),
@@ -109,5 +121,7 @@ mod tests {
         assert_eq!(exec(&v(&["nope"])).code, 2);
         assert_eq!(exec(&v(&[])).code, 2);
         assert_eq!(exec(&v(&["claim", "135", "F0", "--ttl", "soon"])).code, 2);
+        assert_eq!(exec(&v(&["claim", "135", "--spec-number"])).code, 2);
+        assert_eq!(exec(&v(&["release", "--spec-number"])).code, 2);
     }
 }
