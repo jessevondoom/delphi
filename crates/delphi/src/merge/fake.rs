@@ -32,6 +32,16 @@ pub struct State {
     pub behind_others_on_merge: bool,
     /// Pull requests opened (`repair-base`): `(base, head, title, body)`; the first gets number 900.
     pub opened: Vec<(String, String, String, String)>,
+    /// A bare origin: an opened pull request's head is read from it, as GitHub reads the pushed branch (rollups, spec 094 §13).
+    pub origin: Option<std::path::PathBuf>,
+    /// The checks an opened pull request reports.
+    pub checks_on_open: Vec<Check>,
+    /// Pull requests GitHub marks merged when the key merges (an indirect merge, spec 094 §13.6).
+    pub indirect: BTreeMap<u64, Vec<u64>>,
+    /// A merge also moves the origin's base branch to the merged head, as GitHub's merge would (needs `origin`).
+    pub land_on_merge: bool,
+    /// Pull requests closed: `(number, comment)`.
+    pub closed: Vec<(u64, String)>,
 }
 
 #[derive(Default)]
@@ -124,8 +134,13 @@ impl Forge for FakeForge {
             return Err(ForgeError::Failed { what: "merge".into(), detail: "Head branch was modified. Review and try the merge again.".into() });
         }
         s.merged.push((n, expect_head.to_string()));
-        if let Some(p) = s.prs.get_mut(&n) {
-            p.state = "MERGED".into();
+        for k in std::iter::once(n).chain(s.indirect.get(&n).cloned().unwrap_or_default()) {
+            if let Some(p) = s.prs.get_mut(&k) {
+                p.state = "MERGED".into();
+            }
+        }
+        if let (true, Some(o), Some(p)) = (s.land_on_merge, &s.origin, s.prs.get(&n)) {
+            super::refresh_tests::git(o, &["update-ref", &format!("refs/heads/{}", p.base_ref), expect_head]);
         }
         if s.conflict_others_on_merge {
             for (k, p) in s.prs.iter_mut() {
@@ -173,6 +188,20 @@ impl Forge for FakeForge {
     fn open_pr(&self, base: &str, head: &str, title: &str, body: &str) -> Result<u64, ForgeError> {
         let mut s = self.st.borrow_mut();
         s.opened.push((base.into(), head.into(), title.into(), body.into()));
-        Ok(899 + s.opened.len() as u64)
+        let n = 899 + s.opened.len() as u64;
+        let head_sha = s.origin.as_ref().map(|o| super::refresh_tests::git(o, &["rev-parse", &format!("refs/heads/{head}")])).unwrap_or_default();
+        let info = PrInfo { number: n, title: title.into(), state: "OPEN".into(), mergeable: "MERGEABLE".into(), head_sha, head_ref: head.into(), base_ref: base.into(), body: body.into(), ..PrInfo::default() };
+        s.prs.insert(n, info);
+        let checks = s.checks_on_open.clone();
+        s.checks.insert(n, checks);
+        Ok(n)
+    }
+    fn close(&self, n: u64, comment: &str) -> Result<(), ForgeError> {
+        let mut s = self.st.borrow_mut();
+        s.closed.push((n, comment.to_string()));
+        if let Some(p) = s.prs.get_mut(&n) {
+            p.state = "CLOSED".into();
+        }
+        Ok(())
     }
 }

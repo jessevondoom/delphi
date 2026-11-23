@@ -18,6 +18,7 @@ pub mod gates;
 pub mod record;
 pub mod refresh;
 pub mod rollup;
+pub mod rollup_pr;
 pub mod wait;
 
 #[cfg(test)]
@@ -32,6 +33,8 @@ mod fake;
 mod flow_tests;
 #[cfg(test)]
 mod refresh_tests;
+#[cfg(test)]
+mod rollup_pr_tests;
 #[cfg(test)]
 mod rollup_tests;
 #[cfg(test)]
@@ -101,6 +104,8 @@ pub struct Ctx<'a> {
     pub refresh: Option<wait::Refreshing<'a>>,
     /// Where slice claims live and which repository this is (spec 135 F0b); `None` leaves them alone.
     pub claims: Option<Claims<'a>>,
+    /// Where a rollup is rebuilt to recognise it (spec 094 §13.3); `None` refuses every rollup.
+    pub rollup: Option<rollup_pr::Env<'a>>,
 }
 
 /// The slice claims a merge reads and releases (spec 135 §4, F0b): `home` holds `forge/claims.json`, `repo` is this
@@ -197,6 +202,10 @@ fn decide_one(ctx: &mut Ctx, n: u64, batch: Option<&Attestation>) -> Outcome {
         Ok(v) => v,
         Err(e) => return Outcome::Failed { pr: n, detail: e.to_string(), head: String::new() },
     };
+    // A rollup is its own kind (§13.3): recognised by a rebuild, or refused as before.
+    if v.pr.head_ref.starts_with(rollup::BRANCH_PREFIX) {
+        return rollup_pr::decide(ctx, v, batch.is_some());
+    }
     // A gate-changing pull request is never queueable, so only an ordinary one must carry the label.
     let reasons = wait::reasons(&v);
     // Behind and otherwise ready: refreshed below, once the approval is in hand. Never on a dry run.
@@ -432,7 +441,7 @@ struct Parsed {
     wait_given: bool,
     /// `repair-base --base <branch>`: the base to repair (default `main`).
     base: Option<String>,
-    /// `--batch[=N]` (spec 094 §13): build a rollup of up to N pull requests. Only with `--dry-run` until S19.
+    /// `--batch[=N]` (spec 094 §13): build a rollup of up to N pull requests and open it (with `--dry-run`, only print it).
     batch: Option<usize>,
 }
 
@@ -545,9 +554,6 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     if batch.is_some() && !matches!(sub, Sub::Merge(_) | Sub::All) {
         return Err("--batch belongs to `delphi merge <PR>...` and `--all` (spec 094 §13.9)".into());
     }
-    if batch.is_some() && !dry_run {
-        return Err("--batch builds and prints a rollup only with --dry-run in this build; opening and merging a rollup are slices S19 and S20 of spec 094 §13".into());
-    }
     if sub == Sub::Auto {
         caps.validate()?;
     }
@@ -597,14 +603,14 @@ pub fn cli(args: &[String]) -> i32 {
         Sub::RepairBase => repair_cmd(&p, &forge),
         Sub::Cleanup(ref numbers) => cleanup::run(&forge, numbers, p.merged, p.dry_run, p.yes),
         Sub::Auto => auto_cmd(&p, &forge),
-        Sub::Merge(ref numbers) if p.batch.is_some() => batch_dry_run(&p, &forge, numbers),
+        Sub::Merge(ref numbers) if p.batch.is_some() => batch_cmd(&p, &forge, numbers, false),
         Sub::Merge(ref numbers) => run_merges(&p, &forge, numbers.clone(), false),
         Sub::All => match forge.queued(QUEUE_LABEL) {
             Ok(list) if list.is_empty() => {
                 println!("nothing is queued");
                 0
             }
-            Ok(list) if p.batch.is_some() => batch_dry_run(&p, &forge, &list),
+            Ok(list) if p.batch.is_some() => batch_cmd(&p, &forge, &list, true),
             Ok(list) => run_merges(&p, &forge, list, true),
             Err(e) => {
                 eprintln!("delphi merge: {e}");
@@ -721,9 +727,13 @@ fn refresh_cmd(p: &Parsed, forge: &Gh, n: u64) -> i32 {
     }
 }
 
-/// `--batch --dry-run` (spec 094 §13, S18): choose the pull requests a rollup would carry, build the candidate in a temporary
-/// worktree, check its invariants and print it. Pushes, opens, writes and merges nothing; needs no approval.
-fn batch_dry_run(p: &Parsed, forge: &Gh, numbers: &[u64]) -> i32 {
+/// `--batch` (spec 094 §13): with `--dry-run` (S18), choose, build the candidate in a temporary worktree, check its invariants and
+/// print it, writing nothing; without, the operator approves the batch, the rollup is opened (S19) and merged once green (S20).
+fn batch_cmd(p: &Parsed, forge: &Gh, numbers: &[u64], from_all: bool) -> i32 {
+    if crate::xenia_terminal::inside_an_agent_seat() && !p.dry_run {
+        eprintln!("delphi merge: refused; merging is the operator's, and this process was started by an agent seat");
+        return 2;
+    }
     let home = crate::home::delphi_home(p.home.as_deref());
     let repo = match std::env::current_dir() {
         Ok(r) => r,
@@ -732,12 +742,34 @@ fn batch_dry_run(p: &Parsed, forge: &Gh, numbers: &[u64]) -> i32 {
             return 2;
         }
     };
-    let choice = rollup::choose(forge, numbers, p.batch.unwrap_or(rollup::DEFAULT_BATCH));
+    let id = delphi_core::time::now_rfc3339().chars().filter(|c| c.is_ascii_digit()).take(14).collect::<String>();
+    let max = p.batch.unwrap_or(rollup::DEFAULT_BATCH);
+    let runner = refresh::Runner::new(&repo);
+    if !p.dry_run {
+        let (ledger, errors, mut term, git) = (Ledger::at(&home), Errors::at(&home), StdTerminal, cleanup::Git::here());
+        let made = std::cell::RefCell::new(std::collections::HashMap::new());
+        let refresher = wait::InRepo { forge, errors: &errors, ledger: &ledger, home: &home, git: refresh::Runner::new(&repo) };
+        // A rollup is never refreshed; `Refreshing` here only carries the wait for its checks (§13.2 step 6).
+        let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: p.wait, poll: Duration::from_secs(30), made: &made };
+        let here = claims_here(&home);
+        let claims = here.as_ref().map(|(h, r)| Claims { home: h, repo: r, now: unix_now });
+        let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: p.quote.clone(), dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh), claims, rollup: Some(rollup_pr::Env { git: &runner, home: &home }) };
+        return match rollup_pr::batch(&mut ctx, numbers, max, from_all, &id) {
+            Ok(out) => {
+                println!("{}", out.line());
+                i32::from(!out.ok())
+            }
+            Err(e) => {
+                eprintln!("delphi merge --batch: no rollup: {e}");
+                1
+            }
+        };
+    }
+    let choice = rollup::choose(forge, numbers, max);
     for (n, why) in &choice.skipped {
         println!("#{n}: not in the batch: {why}");
     }
-    let id = delphi_core::time::now_rfc3339().chars().filter(|c| c.is_ascii_digit()).take(14).collect::<String>();
-    match rollup::build(forge, &refresh::Runner::new(&repo), &home, &choice, &id) {
+    match rollup::build(forge, &runner, &home, &choice, &id) {
         Ok(c) => {
             c.lines().iter().for_each(|l| println!("{l}"));
             println!("dry run: nothing was pushed, opened or merged");
@@ -827,7 +859,7 @@ fn auto_cmd(p: &Parsed, forge: &Gh) -> i32 {
     let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: None, poll: p.caps.poll, made: &made };
     let here = claims_here(&home);
     let claims = here.as_ref().map(|(h, r)| Claims { home: h, repo: r, now: unix_now });
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: None, dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh), claims };
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: None, dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh), claims, rollup: None };
     let stop = || INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) || stop_file.exists();
     let check = base::InRepo { git: refresh::Runner::new(&refresher.git.repo), home: &home };
     let summary = auto::run_checked(&mut ctx, &p.caps, &att, &auto::SystemClock, &stop, &mut |l| println!("{l}"), Some(&check));
@@ -880,7 +912,7 @@ fn run_merges(p: &Parsed, forge: &Gh, numbers: Vec<u64>, batch: bool) -> i32 {
     let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: p.wait, poll: Duration::from_secs(30), made: &made };
     let here = claims_here(&home);
     let claims = here.as_ref().map(|(h, r)| Claims { home: h, repo: r, now: unix_now });
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh), claims };
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: p.quote.clone(), dry_run: p.dry_run, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh), claims, rollup: None };
     // `<PR>` asks for each pull request itself; --all holds one approval for the batch, and a drifted base stops it (§11.3.4).
     let check = base::InRepo { git: refresh::Runner::new(&refresher.git.repo), home: &home };
     let checked = merge_checked(&mut ctx, &numbers, batch_att.as_ref(), &check, batch);
@@ -937,9 +969,8 @@ mod parse_tests {
     }
 
     #[test]
-    fn batch_is_a_dry_run_only_in_this_build_and_its_size_is_bounded() {
-        // §13.13 AC-18 (g): without --dry-run nothing is built, so nothing can be pushed or merged.
-        assert!(parse(&a("merge --all --batch")).unwrap_err().contains("--dry-run"));
+    fn batch_size_is_bounded_and_belongs_to_pr_numbers_and_all() {
+        assert_eq!(parse(&a("merge --all --batch")).unwrap().batch, Some(rollup::DEFAULT_BATCH));
         for bad in ["merge --all --batch=1 --dry-run", "merge --all --batch=9 --dry-run", "merge --all --batch=x --dry-run", "merge --all --batchy --dry-run", "merge --auto --batch --dry-run", "merge status --batch --dry-run"] {
             assert!(parse(&a(bad)).is_err(), "{bad}");
         }

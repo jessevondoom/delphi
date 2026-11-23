@@ -28,7 +28,7 @@ fn world() -> World {
 fn with_ctx<R>(w: &World, term: &mut FakeTerminal, quote: Option<&str>, dry_run: bool, f: impl FnOnce(&mut Ctx) -> R) -> R {
     let ledger = Ledger::at(w.home.path());
     let errors = Errors::at(w.home.path());
-    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, errors: &errors, term, quote: quote.map(String::from), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string(), refresh: None, claims: None };
+    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, errors: &errors, term, quote: quote.map(String::from), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-07T00:00:00Z".to_string(), refresh: None, claims: None, rollup: None };
     f(&mut ctx)
 }
 
@@ -610,7 +610,7 @@ fn merge_with_claims(w: &World, term: &mut FakeTerminal, dry_run: bool) -> Outco
     let ledger = Ledger::at(w.home.path());
     let errors = Errors::at(w.home.path());
     let claims = super::Claims { home: w.home.path(), repo: REPO_ID, now: || NOW };
-    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, errors: &errors, term, quote: Some("merge #7".into()), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-19T00:00:00Z".to_string(), refresh: None, claims: Some(claims) };
+    let mut ctx = Ctx { forge: &w.forge, ledger: &ledger, errors: &errors, term, quote: Some("merge #7".into()), dry_run, session: None, git: None, settle: Duration::ZERO, now: || "2026-11-19T00:00:00Z".to_string(), refresh: None, claims: Some(claims), rollup: None };
     merge_one(&mut ctx, 7, None)
 }
 

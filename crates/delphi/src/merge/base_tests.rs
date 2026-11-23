@@ -149,7 +149,7 @@ fn ready(n: &[u64]) -> FakeForge {
 fn with_ctx<R>(forge: &FakeForge, home: &Path, quote: Option<&str>, f: impl FnOnce(&mut Ctx) -> R) -> R {
     let (ledger, errors) = (Ledger::at(home), Errors::at(home));
     let mut term = FakeTerminal::new(false, &[]);
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: quote.map(String::from), dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-22T00:00:00Z".to_string(), refresh: None, claims: None };
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: quote.map(String::from), dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-22T00:00:00Z".to_string(), refresh: None, claims: None, rollup: None };
     f(&mut ctx)
 }
 
