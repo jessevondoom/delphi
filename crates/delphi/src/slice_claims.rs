@@ -188,13 +188,13 @@ pub fn target(repo: &Path, spec: &str, slice: &str) -> Result<Target, Out> {
         s => return Err(Out::fail(1, format!("{} is {}, not approved: a draft is a proposal, not permission to build (No Spec, No Build)", stem, s.unwrap_or("without a status")))),
     }
     let mut warnings = Vec::new();
-    if let (Some(num), Ok(t)) = (tracker::spec_number(&stem), std::fs::read_to_string(tracker::path(repo))) {
-        let all = tracker::rows(&t);
+    if let Some(num) = tracker::spec_number(&stem) {
+        let all = tracker::load(repo).rows;
         let mine = tracker::rows_for(&all, &num);
         if !mine.is_empty() {
             match mine.iter().find(|r| r.slice.eq_ignore_ascii_case(slice)) {
                 None => warnings.push(format!("the tracker lists no slice {} for spec {}; it lists {}", slice, num, mine.iter().map(|r| r.slice.as_str()).collect::<Vec<_>>().join(", "))),
-                Some(r) if tracker::state_merged(&r.state) => warnings.push(format!("the tracker says {} {} is already merged (line {}): {}", num, r.slice, r.line, r.state)),
+                Some(r) if tracker::state_merged(&r.state) => warnings.push(format!("the tracker says {} {} is already merged ({}): {}", num, r.slice, r.place(), r.state)),
                 Some(_) => {}
             }
         }

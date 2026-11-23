@@ -82,7 +82,7 @@ The case seen in practice on a developer's machine is a copy of these same tests
 ## 6. Not built here, and why
 
 - **L3.** The file lock of T2 could be taken by the two engine sweep tests as well, and would end the overlap with each other and with the sandbox crate. It would not end the rise from the other engine tests, which no turn can cover. It is left until a failure is caught with its output, so that the fix is aimed at what happened.
-- **L1 and L2.** No cause is shown. The first step is a test-only change that prints why the version was not read (deadline, start failure, exit status or empty output), which needs a failure to be caught first. Raising the 5 seconds or retrying the version call would be a guess, and the 5 seconds are product behavior of spec 092.
+- **L1 and L2.** (Cause shown and fixed later, by slice R5, section 10.8.) No cause is shown. The first step is a test-only change that prints why the version was not read (deadline, start failure, exit status or empty output), which needs a failure to be caught first. Raising the 5 seconds or retrying the version call would be a guess, and the 5 seconds are product behavior of spec 092.
 - **A general retry in CI.** `CONTRIBUTING.md` said there is none, and this spec kept that until amendment 125-A1 (section 10, operator, 2026-11-22), which adds exactly one retry per failing test.
 - **The console pty tests.** They were stabilized in #154 and #631 and none failed in this window.
 - **A change to `PROC_HEADROOM`, to the sweep or to the probe.** They belong to spec 092.
@@ -180,6 +180,15 @@ R1 to R3 change `.github/` and are gate-changing: the operator merges them at a 
 - The pull request's own CI: the jobs pass on nextest; the summary page renders (with "no flaky tests" or a list); the JUnit artifact is there; the integration job's log shows the review-date test filtered out and the once-only check passing.
 - `actionlint` on the workflow before the push.
 - After merge: the flaky list of each `main` run, and the share of red `main` runs over the next ten days against the 20.7% above.
+
+### 10.8 Later slices (2026-11-22)
+
+Built under the operator's go of 2026-11-22 ("keep building anything you can") and under rule 3 and section 4 above; no rule changes.
+
+| Slice | Content |
+| :-- | :-- |
+| R5 | L1 and L2's cause, shown, and fixed. `cli_version_bounded` (`crates/delphi-engine/src/capabilities.rs`) wrote the CLI's answer to a temporary file named after the process id and the wall clock in nanoseconds. On macOS that clock moves in whole microseconds, so two version reads in one process started within the same microsecond shared one file and one read lost its answer (truncated, or removed by the other before it was read): "the Claude CLI's version could not be determined". It fits every observation: macOS only (Linux's clock has nanoseconds), under `cargo test` (one process for all a crate's tests; nextest runs each test in its own process), and fast (the failed test of run 45064707348 ended about 0.3 s after its neighbours started, not after the 5 s bound). The file is now named by the process id and a process-wide counter and created exclusively. Product effect: a daemon that reads two CLIs' versions at once (two granted seats, a forge probe beside a span) no longer turns one of them away; nothing else changes. Regression tests: names made back to back are distinct; 16 reads started at one barrier each get their own CLI's answer |
+| R6 | the flaky record across runs: `dev/flaky_record.py` downloads the `junit-*` artifacts of the last N `ci` runs (`gh run download`, read only) and prints, per test that was flaky or failed in any of them, the flaky count, the failed-twice count, the runs it ran in, and the first and last run, then the tests flaky in 2 or more runs under "needs an owner" (rule 3). It files no issue (no new token permission): the operator or a builder does, naming the runs it prints. `self-test` checks it on built-in samples |
 
 ## 11. Amendment 125-A2: the macOS tests are built once and run on two runners (operator, 2026-11-22)
 

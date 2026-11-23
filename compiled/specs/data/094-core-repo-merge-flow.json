@@ -298,61 +298,67 @@
     },
     {
       "level": 3,
-      "line": 473,
+      "line": 474,
       "number": "13.11",
       "title": "Threats"
     },
     {
       "level": 3,
-      "line": 482,
+      "line": 483,
       "number": "13.12",
       "title": "Slices (one per pull request; all gate-changing, merged by the operator at a terminal)"
     },
     {
       "level": 3,
-      "line": 496,
+      "line": 497,
       "number": "13.13",
       "title": "Acceptance criteria and verification"
     },
     {
+      "level": 3,
+      "line": 507,
+      "number": "13.14",
+      "title": "Build notes (recorded while building; the decisions above stand unless a note says otherwise)"
+    },
+    {
       "level": 2,
-      "line": 506,
+      "line": 526,
       "number": "14",
       "title": "Amendment (operator, 2026-11-22): no macOS run for a pull request that changes only documentation"
     },
     {
       "level": 3,
-      "line": 510,
+      "line": 530,
       "number": "14.1",
       "title": "The problem"
     },
     {
       "level": 3,
-      "line": 514,
+      "line": 534,
       "number": "14.2",
       "title": "The additions"
     },
     {
       "level": 3,
-      "line": 540,
+      "line": 560,
       "number": "14.3",
       "title": "Options considered"
     },
     {
       "level": 3,
-      "line": 549,
+      "line": 569,
       "number": "14.4",
       "title": "Authority"
     },
     {
       "level": 3,
-      "line": 553,
+      "line": 573,
       "number": "14.5",
       "title": "Slices (one pull request; gate-changing, merged by the operator at a terminal)"
     },
     {
       "level": 3,
-      "line": 559,
+      "line": 579,
       "number": "14.6",
       "title": "Acceptance criteria and verification"
     }
@@ -360,7 +366,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/094-core-repo-merge-flow.md",
-    "sha256": "af1ca08eedc7c555d8d1cc0e1c59fdabf8437adfa845783e4b59062e54d4eb35"
+    "sha256": "75da586acf6c4740e668ee48ca7378b01b4a61a3bc76ea1823d3177d586ba8d6"
   },
   "source_status_at_hash": {
     "line": {
@@ -373,7 +379,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"approve the outstanding draft specs in this workstream\"); OD-1 to OD-5 take the recommendations, as when the operator approved the plan"
     },
-    "sha256": "af1ca08eedc7c555d8d1cc0e1c59fdabf8437adfa845783e4b59062e54d4eb35",
+    "sha256": "75da586acf6c4740e668ee48ca7378b01b4a61a3bc76ea1823d3177d586ba8d6",
     "word": "approved"
   },
   "spec": {

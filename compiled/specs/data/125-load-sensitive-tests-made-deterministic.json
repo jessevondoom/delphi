@@ -117,44 +117,50 @@
       "title": "Verification plan"
     },
     {
-      "level": 2,
+      "level": 3,
       "line": 184,
+      "number": "10.8",
+      "title": "Later slices (2026-11-22)"
+    },
+    {
+      "level": 2,
+      "line": 193,
       "number": "11",
       "title": "Amendment 125-A2: the macOS tests are built once and run on two runners (operator, 2026-11-22)"
     },
     {
       "level": 3,
-      "line": 188,
+      "line": 197,
       "number": "11.1",
       "title": "Why"
     },
     {
       "level": 3,
-      "line": 192,
+      "line": 201,
       "number": "11.2",
       "title": "The rule"
     },
     {
       "level": 3,
-      "line": 200,
+      "line": 209,
       "number": "11.3",
       "title": "Cost in macOS jobs"
     },
     {
       "level": 3,
-      "line": 204,
+      "line": 213,
       "number": "11.4",
       "title": "Options considered"
     },
     {
       "level": 3,
-      "line": 214,
+      "line": 223,
       "number": "11.5",
       "title": "Slices"
     },
     {
       "level": 3,
-      "line": 222,
+      "line": 231,
       "number": "11.6",
       "title": "Verification plan"
     }
@@ -162,7 +168,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/125-load-sensitive-tests-made-deterministic.md",
-    "sha256": "06d98123ec75d838c54dc245a9d814e7fba626601f083c41eb2a080986f9ceff"
+    "sha256": "e30cf6c17a687226e634ce19500d31eb78bafb41c77882e317e4b1e97deab0f5"
   },
   "source_status_at_hash": {
     "line": {
@@ -175,7 +181,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-18, in a session: \"4: yes stabilize\", in answer to the item \"three timing-sensitive tests keep reddening PRs; stabilize them in a small spec of their own\". The text below was written after that answer, from the code and the CI logs; the operator has not read it. It names two more tests than the three the operator was told about (section 3, T4 and the listed L1 to L3); T4 is built only because its cause is shown from code, and the operator may strike it. It takes effect when the operator merges the pull request that carries it."
     },
-    "sha256": "06d98123ec75d838c54dc245a9d814e7fba626601f083c41eb2a080986f9ceff",
+    "sha256": "e30cf6c17a687226e634ce19500d31eb78bafb41c77882e317e4b1e97deab0f5",
     "word": "approved"
   },
   "spec": {
