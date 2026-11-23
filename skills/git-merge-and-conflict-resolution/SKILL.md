@@ -47,7 +47,7 @@ Conflicts this repository has actually had. Resolve, then run the gates (below) 
 
 | Situation | Do | Never |
 | :-- | :-- | :-- |
-| Two branches both appended to the end of one file, e.g. `missions/2026-10-23-foundational-design/spec-tracker.md` | Keep both additions, in order. A table row stays directly under its own table, with no blank line or text between rows. | Keep one side; leave a row stranded below prose. |
+| Two branches both appended to the end of one file, e.g. `missions/2026-10-23-foundational-design/spec-tracker.md` (new slices use one file each under `tracker/<spec>/`, which do not collide) | Keep both additions, in order. A table row stays directly under its own table, with no blank line or text between rows. | Keep one side; leave a row stranded below prose. |
 | A module or import list, e.g. `crates/delphi-engine/src/lib.rs` | Keep both `mod` / `use` lines (sorted as the file sorts them), then build. | Keep one side, or leave markers in. |
 | A generated file: `docs/reference/*` and anything else AGENTS.md lists as generated | Take either side to clear the markers, then regenerate with the AGENTS.md commands (`docs cli`, `docs man`, `docs catalog`) and commit the regenerated output. | Hand-merge the text. |
 | `Cargo.lock` | Take the base's version (`git checkout --theirs Cargo.lock` during a merge of the base into your branch; `--theirs` is the side being merged in; tested on git 2.40.0: merging `main` into a feature branch, `--theirs` gave `main`'s content and `--ours` the feature's). If a manifest changed on your branch, let cargo re-resolve (`cargo metadata` or a build), then check the lock diff is only what you meant. Build with `--locked`. | Hand-edit the lock, or run `cargo update`. |
@@ -55,6 +55,7 @@ Conflicts this repository has actually had. Resolve, then run the gates (below) 
 | A semantic conflict: both sides changed meaning (same function, same rule, same name, different intent) | Stop. Read both intents (`git log --merge`, the specs). Write the combined behaviour by hand, with a test. If the intents cannot both hold, mark needs-human. | Pick a side by file (`-X ours`, `-X theirs`, `checkout --ours` on code). |
 | Branch is only behind, no conflict | `git merge origin/<base>`, run the gates, push. | Rebase. |
 | A file deleted on one side and edited on the other, or a rename | Decide with the owning commit's message in hand; if unsure, needs-human. | Re-add the file to make the conflict go away. |
+| Your pull request was in a rollup (`delphi merge --batch` or `--auto --batch`) and has a `rollup-red` or `rollup-refused` entry | `delphi merge fix <PR>` hands it to you: reproduce on your own branch with the current base merged in (for "red together, green apart", also with the other pull requests the entry names), fix it there with ordinary commits, run the gates, push, then `delphi merge fix <PR> --done`. The next batch takes it again. | Push to a `delphi-rollup/*` branch, edit or reopen a rollup, or queue one. |
 
 ## Hard stops: mark needs-human and do not push
 - The conflict touches a governed or gate file: `GOVERNANCE.md`, `REVIEW.md`, `AGENTS.md`, `context/heuristics.md`, `.github/**`, `deny.toml`, or an approved spec under `specs/`.

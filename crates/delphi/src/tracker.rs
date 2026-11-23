@@ -22,6 +22,18 @@ pub struct Row {
     pub line: usize,
     /// For a row that starts with its slice: the heading whose section gave it its spec.
     pub section: Option<String>,
+    /// For a per-slice file (§14.10): its path; `line` is then 0.
+    pub file: Option<String>,
+}
+
+impl Row {
+    /// Where the row is: `line N` of the table, or the per-slice file.
+    pub fn place(&self) -> String {
+        match &self.file {
+            Some(f) => f.clone(),
+            None => format!("line {}", self.line),
+        }
+    }
 }
 
 /// The cells of a table line, split on `|` not escaped with `\`. A pipe inside backticks that was not escaped splits a cell too;
@@ -169,7 +181,7 @@ pub fn rows(text: &str) -> Vec<Row> {
             if c.len() < 4 || c[1].is_empty() || c[1].starts_with(':') {
                 continue;
             }
-            out.push(Row { spec: c[0].clone(), slice: bare(&c[1]), content: c[2..c.len() - 1].join(" | "), state: c[c.len() - 1].clone(), line: i + 1, section: None });
+            out.push(Row { spec: c[0].clone(), slice: bare(&c[1]), content: c[2..c.len() - 1].join(" | "), state: c[c.len() - 1].clone(), line: i + 1, section: None, file: None });
             continue;
         }
         let slice = bare(&c[0]);
@@ -178,7 +190,7 @@ pub fn rows(text: &str) -> Vec<Row> {
         }
         let Some(sec) = stack.iter().rev().find(|s| !s.specs.is_empty()) else { continue };
         for n in &sec.specs {
-            out.push(Row { spec: n.clone(), slice: slice.clone(), content: c[1..c.len() - 1].join(" | "), state: c[c.len() - 1].clone(), line: i + 1, section: Some(sec.title.clone()) });
+            out.push(Row { spec: n.clone(), slice: slice.clone(), content: c[1..c.len() - 1].join(" | "), state: c[c.len() - 1].clone(), line: i + 1, section: Some(sec.title.clone()), file: None });
         }
     }
     out
@@ -202,13 +214,175 @@ pub fn spec_number(stem: &str) -> Option<String> {
 /// Does a state say the row was not updated for finished work (spec 135 §5.3)?
 pub fn state_unfinished(state: &str) -> bool {
     let s = state.trim().to_lowercase();
-    ["not built", "not started", "approved in advance"].iter().any(|p| s.starts_with(p))
+    ["not built", "not-built", "not started", "approved in advance"].iter().any(|p| s.starts_with(p))
 }
 
 /// Does a state say the slice is already merged (a warning when it is claimed, §4.1)?
 pub fn state_merged(state: &str) -> bool {
     let s = state.trim().to_lowercase();
     s.starts_with("built and merged") || s.starts_with("merged")
+}
+
+// ── One file per slice (§14.10) ─────────────────────────────────────────────────────────────────────────────────────────
+
+/// Where the per-slice files live: `<DIR>/<spec>/<slice>.md`.
+pub const DIR: &str = "missions/2026-10-23-foundational-design/tracker";
+/// The states a per-slice file may give.
+pub const STATES: [&str; 7] = ["not-built", "approved", "built", "merged", "run", "deferred", "superseded"];
+const KEYS: [&str; 4] = ["state", "date", "pr", "title"];
+
+/// A per-slice file, read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SliceFile {
+    pub spec: String,
+    pub slice: String,
+    pub state: String,
+    pub date: String,
+    pub pr: Option<u64>,
+    pub title: Option<String>,
+    /// The prose after the frontmatter.
+    pub notes: String,
+    /// The path in the checkout, `/`-separated.
+    pub path: String,
+}
+
+impl SliceFile {
+    /// As a tracker row: the title is its content; the state says the date and the pull request.
+    pub fn row(&self) -> Row {
+        let pr = self.pr.map(|n| format!(", #{}", n)).unwrap_or_default();
+        Row { spec: self.spec.clone(), slice: self.slice.clone(), content: self.title.clone().unwrap_or_default(), state: format!("{} ({}{})", self.state, self.date, pr), line: 0, section: None, file: Some(self.path.clone()) }
+    }
+}
+
+fn valid_spec_dir(s: &str) -> bool {
+    let b = s.as_bytes();
+    (b.len() == 3 || (b.len() == 4 && b[3].is_ascii_lowercase())) && b[..3].iter().all(u8::is_ascii_digit)
+}
+
+/// A slice id: letters, digits, `.` and `-`, starting with a letter or digit, at most 32 characters.
+pub fn valid_slice_id(s: &str) -> bool {
+    s.len() <= 32 && s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+}
+
+fn valid_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10 && b[4] == b'-' && b[7] == b'-' && b.iter().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+}
+
+/// Reads a per-slice file from its path in the checkout and its text; every problem is listed.
+pub fn parse_slice_file(path: &str, text: &str) -> Result<SliceFile, Vec<String>> {
+    let mut errs = Vec::new();
+    let rel = path.strip_prefix(DIR).and_then(|r| r.strip_prefix('/')).unwrap_or(path);
+    let (spec, slice) = match rel.split('/').collect::<Vec<_>>()[..] {
+        [spec, file] => (spec.to_string(), file.strip_suffix(".md").unwrap_or("").to_string()),
+        _ => (String::new(), String::new()),
+    };
+    if !valid_spec_dir(&spec) || slice.is_empty() {
+        return Err(vec![format!("a per-slice file lives at {}/<spec number>/<slice>.md (spec 135 §14.10)", DIR)]);
+    }
+    if !valid_slice_id(&slice) {
+        errs.push(format!("`{}` is not a slice id: letters, digits, `.` and `-`, starting with a letter or digit, at most 32 characters", slice));
+    }
+    let doc = match crate::frontmatter::parse(text) {
+        Ok(crate::frontmatter::Doc { frontmatter: Some(m), body }) => (m, body),
+        Ok(_) => return Err(vec!["no frontmatter: start with `---`, then `state:` and `date:`, then `---`".into()]),
+        Err(e) => return Err(vec![e]),
+    };
+    let (m, body) = doc;
+    for k in m.keys() {
+        let k = k.as_str().unwrap_or("?");
+        if !KEYS.contains(&k) {
+            errs.push(format!("unknown key `{}`: a per-slice file takes only {}", k, KEYS.join(", ")));
+        }
+    }
+    let s = |k: &str| crate::frontmatter::get_str(&m, k).map(str::trim).map(String::from);
+    let state = s("state").unwrap_or_default();
+    if !STATES.contains(&state.as_str()) {
+        errs.push(format!("`state` must be one of {} (it is `{}`)", STATES.join(", "), state));
+    }
+    let date = s("date").unwrap_or_default();
+    if !valid_date(&date) {
+        errs.push("`date` must be the day of the last change, YYYY-MM-DD".into());
+    }
+    let pr = match m.get(serde_yaml::Value::String("pr".into())) {
+        None => None,
+        Some(v) => match v.as_u64().filter(|n| *n > 0) {
+            Some(n) => Some(n),
+            None => {
+                errs.push("`pr` must be a pull request number".into());
+                None
+            }
+        },
+    };
+    let title = s("title");
+    if crate::frontmatter::has(&m, "title") && title.as_deref().is_none_or(|t| t.is_empty() || t.contains('\n')) {
+        errs.push("`title` must be one line of text".into());
+    }
+    if !errs.is_empty() {
+        return Err(errs);
+    }
+    Ok(SliceFile { spec, slice, state, date, pr, title, notes: body.trim().to_string(), path: path.to_string() })
+}
+
+/// The per-slice files of a checkout, each read or with its problems, sorted by path.
+pub fn slice_files(repo: &Path) -> Vec<(String, Result<SliceFile, Vec<String>>)> {
+    let mut out = Vec::new();
+    let Ok(specs) = std::fs::read_dir(repo.join(DIR)) else { return out };
+    for d in specs.flatten() {
+        let Ok(files) = std::fs::read_dir(d.path()) else { continue };
+        for f in files.flatten() {
+            let rel = format!("{}/{}/{}", DIR, d.file_name().to_string_lossy(), f.file_name().to_string_lossy());
+            let text = std::fs::read_to_string(f.path()).map_err(|e| vec![format!("cannot read it: {}", e)]);
+            out.push((rel.clone(), text.and_then(|t| parse_slice_file(&rel, &t))));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// The tracker of a checkout, both shapes.
+#[derive(Debug, Default)]
+pub struct Tracker {
+    /// The table's text (empty when it is missing).
+    pub text: String,
+    /// The table's rows and the per-slice files' rows; a file wins over a table row of the same spec and slice.
+    pub rows: Vec<Row>,
+    /// The per-slice files that could not be read, with their problems. Never in `rows`.
+    pub bad: Vec<(String, Vec<String>)>,
+}
+
+/// Reads the table and the per-slice files (§14.10).
+pub fn load(repo: &Path) -> Tracker {
+    let text = std::fs::read_to_string(path(repo)).unwrap_or_default();
+    let mut files = Vec::new();
+    let mut bad = Vec::new();
+    for (p, r) in slice_files(repo) {
+        match r {
+            Ok(f) => files.push(f.row()),
+            Err(e) => bad.push((p, e)),
+        }
+    }
+    let mut rows: Vec<Row> = rows(&text).into_iter().filter(|r| find(&files, &r.spec, &r.slice).is_none()).collect();
+    rows.extend(files);
+    Tracker { text, rows, bad }
+}
+
+/// The view of `delphi forge tracker` (§14.10): one table of the rows given, sorted by spec and slice, long cells cut, then
+/// the per-slice files that could not be read.
+pub fn render(rows: &[&Row], bad: &[(String, Vec<String>)]) -> String {
+    let cut = |s: &str, n: usize| if s.chars().count() > n { format!("{}...", s.chars().take(n).collect::<String>()) } else { s.to_string() };
+    let cell = |s: &str, n: usize| cut(s, n).replace('|', "\\|").replace('\n', " ");
+    let mut sorted = rows.to_vec();
+    sorted.sort_by_key(|a| (a.spec.to_lowercase(), a.slice.to_lowercase()));
+    let mut out = String::from("| Spec | Slice | State | Where | What |\n| :-- | :-- | :-- | :-- | :-- |\n");
+    for r in sorted {
+        let place = r.file.as_deref().map(|f| f.strip_prefix(DIR).map(|p| format!("tracker{}", p)).unwrap_or(f.to_string())).unwrap_or_else(|| format!("spec-tracker.md:{}", r.line));
+        out.push_str(&format!("| {} | {} | {} | {} | {} |\n", r.spec, r.slice, cell(&r.state, 80), place, cell(&r.content, 80)));
+    }
+    for (p, errs) in bad {
+        out.push_str(&format!("not read: {}: {}\n", p, errs.join("; ")));
+    }
+    out
 }
 
 /// The `status:` of a spec's frontmatter, without its comment (`approved`, `draft`, ...).
@@ -346,6 +520,64 @@ mod tests {
         assert_eq!(spec_status("---\nstatus: draft\n---\n").as_deref(), Some("draft"));
         assert_eq!(spec_status("# no frontmatter\nstatus: approved\n"), None);
         assert_eq!(spec_status("---\nid: x\n---\nstatus: approved\n"), None);
+    }
+
+    fn repo_with(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(path(t.path()).parent().unwrap()).unwrap();
+        std::fs::write(path(t.path()), SAMPLE).unwrap();
+        for (p, text) in files {
+            let p = t.path().join(DIR).join(p);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        t
+    }
+
+    /// AC-25: a per-slice file is read, wins over the table's row of the same slice, and a bad one is reported, never used.
+    #[test]
+    fn ac25_a_slice_file_is_read_and_wins_over_the_table() {
+        let t = repo_with(&[("135/F0.md", "---\nstate: merged\ndate: 2026-11-21\npr: 818\ntitle: the claims\n---\nBuilt and used.\n"), ("135/E1.md", "---\nstate: built\ndate: 2026-11-22\n---\n"), ("135/E9.md", "---\nstate: finished\ndate: 2026-11-22\n---\n")]);
+        let tr = load(t.path());
+        let f0 = find(&tr.rows, "135", "f0").unwrap();
+        assert_eq!((f0.state.as_str(), f0.content.as_str(), f0.line), ("merged (2026-11-21, #818)", "the claims", 0));
+        assert_eq!(f0.place(), format!("{}/135/F0.md", DIR));
+        assert_eq!(tr.rows.iter().filter(|r| r.spec == "135" && r.slice.eq_ignore_ascii_case("F0")).count(), 1, "the file replaces the row");
+        assert!(state_merged(&f0.state));
+        assert_eq!(find(&tr.rows, "135", "E1").unwrap().state, "built (2026-11-22)");
+        assert!(find(&tr.rows, "135", "F1").unwrap().file.is_none(), "table rows stay");
+        assert!(find(&tr.rows, "135", "E9").is_none());
+        assert_eq!(tr.bad.len(), 1);
+        assert!(tr.bad[0].0.ends_with("135/E9.md") && tr.bad[0].1[0].contains("`state` must be one of"), "{:?}", tr.bad);
+        assert!(state_unfinished(&parse_slice_file(&format!("{}/135/E2.md", DIR), "---\nstate: not-built\ndate: 2026-11-22\n---\n").unwrap().row().state));
+        // A checkout with neither the table nor any file has no rows, and no error.
+        let empty = tempfile::tempdir().unwrap();
+        assert!(load(empty.path()).rows.is_empty());
+    }
+
+    #[test]
+    fn slice_files_are_parsed_strictly() {
+        let p = |path: &str, text: &str| parse_slice_file(&format!("{}/{}", DIR, path), text);
+        let f = p("005g/S1.2-b.md", "---\nstate: run\ndate: 2026-11-22\npr: 7\n---\n\nNotes.\n").unwrap();
+        assert_eq!((f.spec.as_str(), f.slice.as_str(), f.pr, f.notes.as_str()), ("005g", "S1.2-b", Some(7), "Notes."));
+        assert!(p("135/E1.md", "no frontmatter").is_err());
+        assert!(p("13/E1.md", "---\nstate: built\ndate: 2026-11-22\n---\n").is_err());
+        assert!(p("135/sub/E1.md", "---\nstate: built\ndate: 2026-11-22\n---\n").is_err());
+        assert_eq!(p("135/E1.md", "---\nstate: built\ndate: 22-11-2026\npr: -3\ntitle: \"\"\n---\n").unwrap_err().len(), 3);
+    }
+
+    /// AC-28: the view has both shapes, says where each row came from, and cuts long cells.
+    #[test]
+    fn ac28_the_view_shows_both_shapes() {
+        let t = repo_with(&[("135/E1.md", "---\nstate: built\ndate: 2026-11-22\ntitle: a|b\n---\n"), ("135/E9.md", "---\nstate: x\n---\n")]);
+        let tr = load(t.path());
+        let out = render(&rows_for(&tr.rows, "135"), &tr.bad);
+        assert!(out.starts_with("| Spec | Slice | State | Where | What |\n"), "{}", out);
+        assert!(out.contains("| 135 | E1 | built (2026-11-22) | tracker/135/E1.md | a\\|b |"), "{}", out);
+        assert!(out.contains("| 135 | F0 | approved in advance on the plan; not built | spec-tracker.md:9 |"), "{}", out);
+        assert!(out.find("| 135 | E1 ").unwrap() < out.find("| 135 | F0 ").unwrap(), "sorted by slice");
+        assert!(!out.contains("| 132 |"));
+        assert!(out.contains("not read: ") && out.contains("135/E9.md"), "{}", out);
     }
 
     #[test]

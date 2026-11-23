@@ -108,7 +108,61 @@ pub fn run(tree: &Tree) -> Report {
     check_options_considered(tree, &mut r);
     check_skill_roles(tree, &mut r);
     check_done_when(tree, &mut r);
+    check_tracker_slices(tree, &mut r);
+    check_changelog_fragments(tree, &mut r);
     r
+}
+
+// ── per-slice tracker files (specs/135 §14.10) ─────────────────────────────
+
+/// Is this path a per-slice tracker file of the source repository? Those carry the slice format, not provenance.
+fn is_tracker_slice(tree: &Tree, path: &str) -> bool {
+    tree.mode == Mode::Repo && path.strip_prefix(crate::tracker::DIR).is_some_and(|r| r.starts_with('/'))
+}
+
+/// Every file under the tracker directory is a per-slice file whose path, frontmatter and state are right and whose spec
+/// number names a spec. Source repo only.
+fn check_tracker_slices(tree: &Tree, r: &mut Report) {
+    if tree.mode != Mode::Repo {
+        return;
+    }
+    let numbers: BTreeSet<String> = tree.files.keys().filter_map(|p| p.strip_prefix("specs/").and_then(delphi_core::specdoc::spec_number)).collect();
+    for path in tree.files.keys().filter(|p| is_tracker_slice(tree, p)) {
+        match crate::tracker::parse_slice_file(path, &tree.read(path).unwrap_or_default()) {
+            Err(errs) => errs.into_iter().for_each(|e| r.fail("tracker-slice", path.clone(), e)),
+            Ok(f) if !numbers.contains(&f.spec) => r.fail("tracker-slice", path.clone(), format!("no spec is numbered {}", f.spec)),
+            Ok(_) => {}
+        }
+    }
+}
+
+// ── release-note fragments (specs/036 section 9) ─────────────────────────────
+
+/// Every file under `changelog.d/` but its README is a well-formed fragment: a lowercase slug, a frontmatter block with one
+/// `section:` line naming one of the five sections, a Markdown list item, no heading and no relative link. A malformed fragment
+/// would stop the release pull request's `delphi release changelog --write`, so it fails here, in the pull request that adds it.
+/// Source repo only.
+fn check_changelog_fragments(tree: &Tree, r: &mut Report) {
+    if tree.mode != Mode::Repo {
+        return;
+    }
+    let prefix = format!("{}/", crate::release_notes::DIR);
+    let mut files: Vec<(String, Option<String>)> = Vec::new();
+    for path in tree.files.keys().filter(|p| p.starts_with(&prefix)) {
+        let rest = &path[prefix.len()..];
+        match rest.split_once('/') {
+            // A file in a subdirectory: the directory is reported once, as the command reports it.
+            Some((dir, _)) => {
+                if !files.iter().any(|(n, _)| n == dir) {
+                    files.push((dir.to_string(), None));
+                }
+            }
+            None => files.push((rest.to_string(), tree.read(path))),
+        }
+    }
+    for (name, why) in crate::release_notes::problems(&files) {
+        r.fail("changelog-fragment", format!("{prefix}{name}"), format!("{why} (specs/036 section 9; see changelog.d/README.md)"));
+    }
 }
 
 // ── "Options considered" in a new spec (specs/124 section 7) ───────────────────
@@ -399,7 +453,7 @@ fn theme_names(tree: &Tree, r: &mut Report) -> Vec<String> {
 
 fn check_frontmatter(tree: &Tree, r: &mut Report) {
     for path in tree.with_ext(&[".md"]) {
-        if !GOVERNED.iter().any(|g| if g.ends_with('/') { path.starts_with(g) } else { path == g }) {
+        if !GOVERNED.iter().any(|g| if g.ends_with('/') { path.starts_with(g) } else { path == g }) || is_tracker_slice(tree, path) {
             continue;
         }
         let text = tree.read(path).unwrap_or_default();
@@ -1156,6 +1210,52 @@ mod tests {
         run(tree).findings.into_iter().filter(|f| f.level == Level::Fail && f.check == check).map(|f| format!("{} {}", f.location, f.message)).collect()
     }
 
+    // specs/135 §14.10: a per-slice tracker file is checked for its own format, not for provenance.
+    #[test]
+    fn per_slice_tracker_files_are_checked() {
+        let d = crate::tracker::DIR;
+        let ok = "---\nstate: built\ndate: 2026-11-22\npr: 9\ntitle: the view\n---\nBuilt.\n";
+        let files = [
+            ("specs/135-forge.md".to_string(), "x".to_string()),
+            (format!("{d}/135/E1.md"), ok.to_string()),
+            (format!("{d}/135/E2.md"), "---\nstate: done\ndate: 2026-11-22\nowner: me\n---\n".to_string()),
+            (format!("{d}/135/E3.md"), "---\nstate: built\n---\n".to_string()),
+            (format!("{d}/999/E1.md"), ok.to_string()),
+            (format!("{d}/135/.x.md"), ok.to_string()),
+            (format!("{d}/E1.md"), ok.to_string()),
+        ];
+        let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let (_t, tree) = tree_of(&refs);
+        let f = fails(&tree, "tracker-slice");
+        let of = |p: &str| f.iter().filter(|m| m.starts_with(&format!("{d}/{p} "))).count();
+        assert_eq!(of("135/E1.md"), 0, "{:?}", f);
+        assert_eq!(of("135/E2.md"), 2, "a bad state and an unknown key: {:?}", f);
+        assert_eq!(of("135/E3.md"), 1, "no date: {:?}", f);
+        assert!(f.iter().any(|m| m.contains("999/E1.md") && m.contains("no spec is numbered 999")), "{:?}", f);
+        assert_eq!(of("135/.x.md"), 1, "a slice id starts with a letter or digit: {:?}", f);
+        assert_eq!(of("E1.md"), 1, "the spec directory is missing: {:?}", f);
+        // No provenance finding for them.
+        assert!(fails(&tree, "frontmatter").iter().all(|m| !m.starts_with(d)), "{:?}", fails(&tree, "frontmatter"));
+    }
+
+    // specs/036 section 9: a malformed release-note fragment fails the lint; the README and files elsewhere are not fragments.
+    #[test]
+    fn a_malformed_changelog_fragment_fails_and_the_readme_does_not() {
+        let good = "---\nsection: Fixed\n---\n- **A fix.** What it changes.\n";
+        let (_t, tree) = tree_of(&[
+            ("changelog.d/README.md", "# How to write a fragment\n"),
+            ("changelog.d/good.md", good),
+            ("changelog.d/no-section.md", "---\n---\n- a\n"),
+            ("changelog.d/Bad Name.md", good),
+            ("changelog.d/nested/x.md", good),
+            ("changelog.d/nested/y.md", good),
+            ("docs/changelog.d/elsewhere.md", "not a fragment"),
+        ]);
+        let mut f: Vec<String> = fails(&tree, "changelog-fragment").into_iter().map(|m| m.split_whitespace().next().unwrap_or("").to_string()).collect();
+        f.sort();
+        assert_eq!(f, vec!["changelog.d/Bad", "changelog.d/nested", "changelog.d/no-section.md"]);
+    }
+
     // specs/090: a number names one spec. Letters make distinct numbers (005a, 005b), and files below `specs/` do not count.
     #[test]
     fn two_spec_files_may_not_share_a_number() {
@@ -1296,6 +1396,8 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let tree = Tree::from_repo(&root).unwrap();
         assert!(fails(&tree, "spec-number").is_empty(), "{:?}", fails(&tree, "spec-number"));
+        // specs/135 §14.10: so are the repository's per-slice tracker files.
+        assert!(fails(&tree, "tracker-slice").is_empty(), "{:?}", fails(&tree, "tracker-slice"));
     }
 
     // specs/035 D-14: a manifest says its default tier in a word we know, and no built-in role starts on the top one.

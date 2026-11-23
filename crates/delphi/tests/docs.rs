@@ -828,6 +828,23 @@ fn memory_entry_metadata_satisfies_its_schema() {
     must_fail("memory-entry.schema.json", "bad date", &serde_json::json!({"created": "2026-13-01"}));
 }
 
+// specs/135 §14.10: every per-slice tracker file in the repository, and the shapes the lint refuses.
+#[test]
+fn per_slice_tracker_files_satisfy_their_schema() {
+    let dir = root().join("missions/2026-10-23-foundational-design/tracker");
+    for spec in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        for f in std::fs::read_dir(spec.path()).unwrap().flatten() {
+            must_pass("tracker-slice.schema.json", &f.path().display().to_string(), &frontmatter(&f.path()));
+        }
+    }
+    must_pass("tracker-slice.schema.json", "the least", &json!({"state": "not-built", "date": "2026-11-22"}));
+    must_pass("tracker-slice.schema.json", "the most", &json!({"state": "merged", "date": "2026-11-22", "pr": 892, "title": "the view"}));
+    must_fail("tracker-slice.schema.json", "an unknown state", &json!({"state": "done", "date": "2026-11-22"}));
+    must_fail("tracker-slice.schema.json", "no date", &json!({"state": "built"}));
+    must_fail("tracker-slice.schema.json", "an unknown key", &json!({"state": "built", "date": "2026-11-22", "status": "approved"}));
+    must_fail("tracker-slice.schema.json", "a pr that is not a number", &json!({"state": "built", "date": "2026-11-22", "pr": "#9"}));
+}
+
 #[test]
 fn episode_frontmatter_satisfies_its_schema() {
     let ok = serde_json::json!({

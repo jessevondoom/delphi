@@ -27,7 +27,7 @@ fn has(args: &[String], f: &str) -> bool {
 }
 
 pub fn usage() -> &'static str {
-    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--repo <dir>] [--home <dir>]\n       delphi forge list [--all] [--json] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]"
+    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--repo <dir>] [--home <dir>]\n       delphi forge list [--all] [--json] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]\n       delphi forge tracker [--spec <spec>] [--repo <dir>]"
 }
 
 fn now() -> i64 {
@@ -61,8 +61,21 @@ pub fn exec(args: &[String]) -> Out {
             let (spec, slice) = (crate::flag(rest, "--spec"), crate::flag(rest, "--slice"));
             crate::finisher::finish(&crate::finisher::FinishReq { repo: &repo, home: &home, check: has(rest, "--check"), spec: spec.as_deref(), slice: slice.as_deref(), body: has(rest, "--body"), gates: has(rest, "--gates"), now: now() })
         }
+        Some("tracker") if pos.is_empty() => tracker_view(&repo, crate::flag(rest, "--spec").as_deref()),
         _ => usage_err("name a subcommand"),
     }
+}
+
+/// `forge tracker` (§14.10): the table's rows and the per-slice files as one table, optionally of one spec (`135` or a stem).
+fn tracker_view(repo: &std::path::Path, spec: Option<&str>) -> Out {
+    let t = crate::tracker::load(repo);
+    let num = spec.map(|s| crate::tracker::spec_number(s).unwrap_or_else(|| s.trim().to_string()));
+    let rows: Vec<&crate::tracker::Row> = match &num {
+        None => t.rows.iter().collect(),
+        Some(n) => crate::tracker::rows_for(&t.rows, n),
+    };
+    let bad: Vec<(String, Vec<String>)> = t.bad.into_iter().filter(|(p, _)| num.as_ref().is_none_or(|n| p.contains(&format!("/{}/", n)))).collect();
+    Out { code: 0, out: crate::tracker::render(&rows, &bad), err: String::new() }
 }
 
 /// The entry point from `main`: prints and returns the exit code.

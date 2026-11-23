@@ -112,7 +112,7 @@ GOVERNANCE §5.6 says an invariant is enforced only when a daemon check or CI sc
 
 ## 094-core-repo-merge-flow
 
-**094: The core-repo merge flow: a queue, `delphi merge`, a session-scoped `--auto`, cleanup after merge, a merge error log and a builder that can fix what fails** · approved (per source at `623b681bb7ff`) · tier 0 · [source](../../specs/094-core-repo-merge-flow.md)
+**094: The core-repo merge flow: a queue, `delphi merge`, a session-scoped `--auto`, cleanup after merge, a merge error log and a builder that can fix what fails** · approved (per source at `55ce5c5d5a42`) · tier 0 · [source](../../specs/094-core-repo-merge-flow.md)
 
 _No standard scope section; open the spec._
 
