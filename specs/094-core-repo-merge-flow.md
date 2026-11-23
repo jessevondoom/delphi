@@ -21,6 +21,7 @@ tags: [spec, merge, pull-requests, workflow, approvals, authority, builder, git,
 > **Amendment §12 (operator, 2026-11-22):** one required check, `ci-gate`, that passes only when every CI job did; a `conflict` label on pull requests that cannot merge; a build-and-lint check of each slice commit in a bundled pull request; and S8 marked deferred and unlikely.
 > **Amendment §13 (operator, 2026-11-22):** batched merges inside `delphi merge`: a rollup pull request built from the base and up to eight approved pull requests, tested once by the normal CI and merged as one, with every constituent keeping its own approval, spec and ledger row; bisection on red. No GitHub merge queue and no organization.
 > **Amendment §14 (operator, 2026-11-22):** a pull request that changes only plain documentation (an allow list, failing closed) skips the macOS jobs; `ci-gate` accepts that skip only then.
+> **Amendment §15 (operator, 2026-11-22 and 2026-11-23):** the builder's skill `agentic-ci-cd-strategy` collects the CI and merge rules of §11 to §14 and the specs around them, for this repository and for defining new projects.
 > **Amends, when approved:** `specs/003` §3.1.2 and `specs/006` §3.1 (the hash pin of an approved spec in `ratified.lock` and the daemon's "blocks Builder unless the hash is ratified" govern work run through a Delphi daemon on specs inside a workspace's tree; Delphi's own repository is built from host-agent sessions as well, and there a spec is approved by its frontmatter and the operator's recorded instruction, with no pin) and `GOVERNANCE.md` §1.1 (how a core-repo merge is approved). Both edits are in this pull request. The `GOVERNANCE.md` edit is a constitutional change (§5.7) and is a gate-changing change under §3.4: the operator reviews it line by line.
 
 ---
@@ -580,3 +581,38 @@ Nothing here widens an agent's authority. The `changes` job reads the diff and w
 
 - **AC-24 (S24).** The script, run on a scratch repository, answers `true` for a guide, the readme with the changelog and a mission note, a new fragment and a new nested guide, and `false` for `docs/reference/`, a guide with code, a spec, `AGENTS.md`, a deletion, a rename, a non-Markdown file under `docs/`, `*.md.sh`, a `README.md` under `crates/`, a quoted name, an empty diff, a push and an unreadable base. `ci-gate`'s rule, run on sample results, passes a docs-only pull request with macOS skipped and fails a pull request that is not docs-only with macOS skipped. On this pull request's own run `changes` answers `false` (it changes `.github/`), and macOS runs once it is ready.
 - **V-14.** The workflow passes `actionlint` and parses as YAML before the push; the script runs under `/bin/bash` 3.2. The first docs-only pull request after the merge shows `changes` `true`, the macOS jobs skipped and `ci-gate` green.
+
+## 15. Amendment (operator, 2026-11-22 and 2026-11-23): a CI and merge strategy skill for the builder
+
+**Approval, stated plainly.** The operator's words, in a host session on 2026-11-22: "when we're ready this should all become a agentic development ci/cd strategy skill for the builder", then "we'll want it to be useful in defining new projects going forward". The go, on 2026-11-23: "can we build any of the remaining work", answered with this skill first. The amendment is approved in advance on those words; the operator has not read this text and no Council has reviewed it. It extends §3.7 (the builder's skills) and changes nothing in §1 to §14. A skill is a governed path (`skills/`, `delphi_core::artifact`), so it is built against this spec, which owns the merge flow and the CI rules it collects.
+
+### 15.1 The problem
+
+The rules a builder needs to work at agent pace are spread over §11 to §14 here, spec 125 §10 and §11 (retries, macOS shards), spec 093 §11 (outside events on a schedule), spec 135 §14.10 to §14.12 (per-slice tracker files, claims across machines, a fast local gate), spec 088 §14 (generated views on demand), spec 036 §9 (changelog fragments), `CONTRIBUTING.md`, the merge guide and two measurement notes. No skill brings them together, and none of it is written so that it can be reused when a new project (`specs/external/<project>/`, a new repository) sets up its own CI.
+
+### 15.2 The addition
+
+A builder skill, `skills/agentic-ci-cd-strategy/`, Markdown only, in two parts:
+
+1. **Delphi's own repository:** each rule in one or two lines, why it holds, and the section it comes from: the one required check; draft first; the flaky-test retry and its owner rule; outside events on a schedule; conflicts and generated files; merging, freshness, rollups and stacked pull requests; claims; the local gates and their limits; same-spec bundling.
+2. **A new project:** a portable checklist and short templates (`templates/new-project-ci.md`), written without Delphi's names, each marked as a recommendation or as something Delphi measured, with the numbers.
+
+It complements `git-pr-packaging`, `git-merge-and-conflict-resolution` and `ci-triage` and links to them rather than repeating them. It grants nothing: agents still never merge, and gate paths still need the operator (§3.8, §3.4). It is added to the builder's `authorized_skills`.
+
+### 15.3 Options considered
+
+| Option | Kind | Why |
+| :-- | :-- | :-- |
+| A section in `CONTRIBUTING.md` | conventional | Read by people, not loaded by a role on a task; and it says nothing about new projects. Not adopted. |
+| Extend `git-merge-and-conflict-resolution` | removes a skill | That skill is about one branch's conflicts; CI layout, flaky tests and new-project setup would bury its decision table. Not adopted. |
+| One skill with the Delphi rules in its body and the new-project templates beside it | named method (progressive disclosure: a short body, references loaded on demand) | **Adopted.** |
+
+### 15.4 Slice
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| S25 | this amendment; `skills/agentic-ci-cd-strategy/SKILL.md` and `templates/new-project-ci.md`; the builder's `authorized_skills`, `skills/CATALOG.md`, the generated catalog, the builder's pack golden and trigger cases in `dev/skill-evals/hard.json` | 3 |
+
+### 15.5 Acceptance criteria
+
+- **AC-25 (S25).** The skill validates against `schemas/skill-manifest.schema.json` (description at most 200 characters), is on the builder's list, links each Delphi rule to its source, keeps every template free of Delphi's names, and marks each new-project item as recommended or measured; `delphi lint` passes and `docs/reference/catalog.md` is current.
