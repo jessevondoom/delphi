@@ -149,7 +149,7 @@ fn ready(n: &[u64]) -> FakeForge {
 fn with_ctx<R>(forge: &FakeForge, home: &Path, quote: Option<&str>, f: impl FnOnce(&mut Ctx) -> R) -> R {
     let (ledger, errors) = (Ledger::at(home), Errors::at(home));
     let mut term = FakeTerminal::new(false, &[]);
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: quote.map(String::from), dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-22T00:00:00Z".to_string(), refresh: None, claims: None };
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &errors, term: &mut term, quote: quote.map(String::from), dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-22T00:00:00Z".to_string(), refresh: None, claims: None, rollup: None };
     f(&mut ctx)
 }
 
@@ -193,7 +193,7 @@ fn an_auto_session_ends_on_a_drifted_base_at_a_poll_or_after_its_own_merge() {
             self.0.set(self.0.get() + d.as_secs());
         }
     }
-    let caps = Caps { max_prs: 10, run_for: Duration::from_secs(3600), pause_after_errors: 5, idle: Duration::from_secs(600), poll: Duration::from_secs(60) };
+    let caps = Caps { max_prs: 10, run_for: Duration::from_secs(3600), pause_after_errors: 5, idle: Duration::from_secs(600), poll: Duration::from_secs(60), batch: None };
     let att = Attestation::ChatQuote("auto".into());
     for (after, merged) in [(1, 1), (0, 0)] {
         let (forge, home) = (ready(&[1, 2]), tempfile::tempdir().unwrap());

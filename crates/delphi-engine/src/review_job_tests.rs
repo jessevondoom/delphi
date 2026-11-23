@@ -167,6 +167,24 @@ fn the_branch_is_read_from_a_checkout_or_a_worktree_and_a_detached_head_is_refus
     assert_eq!(project_of(&projects, t.path()), None);
 }
 
+/// AC-29 (spec 135 §14.10): the brief takes a per-slice file's text; a path-like slice or a link names nothing.
+#[test]
+fn ac29_the_slice_file_is_read_for_the_brief() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().join(TRACKER_DIR).join("135");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("E1.md"), "---\nstate: built\ndate: 2026-11-22\n---\nThe view.\n").unwrap();
+    assert!(slice_file(t.path(), "135", "e1").unwrap().contains("The view."));
+    assert_eq!(slice_file(t.path(), "135", "E2"), None);
+    assert_eq!(slice_file(t.path(), "135", "../135/E1"), None);
+    assert_eq!(slice_file(t.path(), "..", "E1"), None);
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(dir.join("E1.md"), dir.join("E3.md")).unwrap();
+        assert_eq!(slice_file(t.path(), "135", "E3"), None);
+    }
+}
+
 #[test]
 fn the_slice_row_is_found_by_spec_number_and_slice() {
     let t = "| Spec | Slice | Content | State |\n| 135 | F2 | the review | built |\n| 135 | F0 | claims | merged |\n";

@@ -43,7 +43,7 @@ A reviewer should be able to understand the change from the commits and the desc
    - `Deviations:` `none`, or each place the build departed from the spec text (`GOVERNANCE.md` §1.4);
    - `Follow-ups:` ideas outside this slice.
 6. Report failures plainly. Do not describe a check as passing unless you ran it and read the output.
-7. Update the spec tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) by finding the spec's rows with a search and changing or appending only those lines. The file is over 1,200 lines: never read it whole.
+7. Record the slice's state in its own file, `missions/2026-10-23-foundational-design/tracker/<spec>/<slice>.md` (`specs/135` §14.10): frontmatter `state` (`not-built`, `approved`, `built`, `merged`, `run`, `deferred` or `superseded`), `date` (`YYYY-MM-DD`), optional `pr` and `title`, then prose on what was built, verified and left. A file wins over a row of the old table; `delphi forge tracker --spec <spec>` shows both. A slice that already has a row in `spec-tracker.md` may keep it: find the spec's rows with a search and change only those lines (the file is over 1,200 lines: never read it whole).
 8. After every push, confirm that checks exist on the new head and that `mergeStateStatus` is not `DIRTY` (`gh pr view <PR> --json statusCheckRollup,mergeStateStatus`). An empty check list means untested, not green: a pull request that conflicts with its base runs no CI at all, and the `conflict` label marks it (`specs/094` §12.2.2). Merge the base in, then check again.
 
 ## Done when

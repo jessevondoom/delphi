@@ -36,7 +36,7 @@ pub const HANDED_OVER: &str = "not refreshed, and nothing was pushed";
 /// More conflicted files than this is not a mechanical update; it goes to `merge fix`.
 pub const MAX_CONFLICTS: usize = 10;
 /// The only directory whose changed paths may differ after a refresh (the compile writes there; the groups file lives there).
-const GENERATED_ROOT: &str = "compiled/";
+pub(super) const GENERATED_ROOT: &str = "compiled/";
 
 /// How one conflicted path is settled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +77,16 @@ pub fn settle_plan(conflicts: &[String], gate_patterns: &[String]) -> Result<Vec
 /// Settle every conflicted hunk of `text` (git's `merge` conflict style, the pull request's side first, the base's second) by
 /// keeping the base's lines, then the pull request's lines that are not among them. Refuses a hunk it cannot read.
 pub fn union_base_first(text: &str) -> Result<String, String> {
+    union(text, true)
+}
+
+/// The same union with the checked-out side ("ours") first: a rollup (spec 094 §13.2) has the base and the earlier constituents
+/// checked out and merges the next constituent in, so the earlier lines come first.
+pub fn union_ours_first(text: &str) -> Result<String, String> {
+    union(text, false)
+}
+
+fn union(text: &str, theirs_first: bool) -> Result<String, String> {
     enum At {
         Outside,
         Ours,
@@ -96,7 +106,8 @@ pub fn union_base_first(text: &str) -> Result<String, String> {
             At::Ours => ours.push(line),
             At::Theirs if line.starts_with(">>>>>>>") => {
                 let mut seen: Vec<String> = Vec::new();
-                for l in theirs.drain(..).chain(ours.drain(..)) {
+                let (first, second) = if theirs_first { (&mut theirs, &mut ours) } else { (&mut ours, &mut theirs) };
+                for l in first.drain(..).chain(second.drain(..)) {
                     if !seen.contains(&key(&l)) {
                         seen.push(key(&l));
                         out.push_str(&l);
@@ -168,7 +179,7 @@ pub fn widened(before: &str, after: &str) -> Vec<String> {
 }
 
 /// The spec compile, in process, then its check. Skipped (`Ok(false)`) in a repository with no groups file.
-fn recompile(wt: &Path) -> Result<bool, String> {
+pub(super) fn recompile(wt: &Path) -> Result<bool, String> {
     let text = match std::fs::read_to_string(wt.join(spec_compile::GROUPS_FILE)) {
         Ok(t) => t,
         Err(_) => return Ok(false),
@@ -430,6 +441,7 @@ mod tests {
         assert!(union_base_first("<<<<<<< HEAD\na\n||||||| base\nb\n=======\nc\n>>>>>>> x\n").is_err(), "diff3 style is not read");
         assert!(union_base_first("<<<<<<< HEAD\na\n=======\nc\n").is_err(), "an unterminated conflict");
         assert!(union_base_first("=======\n").is_err());
+        assert_eq!(union_ours_first(text).unwrap(), "head\nmine\nshared\ntheirs\ntail\n");
     }
 
     #[test]
