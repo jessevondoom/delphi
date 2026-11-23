@@ -4,63 +4,99 @@
   "outline": [
     {
       "level": 1,
-      "line": 15,
+      "line": 16,
       "number": null,
       "title": "Spec 036: Signed releases and the start-time refresh"
     },
     {
       "level": 2,
-      "line": 17,
+      "line": 18,
       "number": "1",
       "title": "What this is"
     },
     {
       "level": 2,
-      "line": 22,
+      "line": 23,
       "number": "2",
       "title": "The rules (who ratifies what)"
     },
     {
       "level": 2,
-      "line": 33,
+      "line": 34,
       "number": "3",
       "title": "What is signed"
     },
     {
       "level": 2,
-      "line": 39,
+      "line": 40,
       "number": "4",
       "title": "The maintainers' procedure (once)"
     },
     {
       "level": 2,
-      "line": 48,
+      "line": 49,
       "number": "5",
       "title": "Admin-side controls"
     },
     {
       "level": 2,
-      "line": 53,
+      "line": 54,
       "number": "6",
       "title": "Built"
     },
     {
       "level": 2,
-      "line": 60,
+      "line": 61,
       "number": "7",
       "title": "The self-updater, and what is not built"
     },
     {
       "level": 2,
-      "line": 70,
+      "line": 71,
       "number": "8",
       "title": "Two questions, decided (operator, 2026-10-26: go with the recommendations)"
+    },
+    {
+      "level": 2,
+      "line": 76,
+      "number": "9",
+      "title": "Release notes from fragments (amendment, 2026-11-22)"
+    },
+    {
+      "level": 3,
+      "line": 80,
+      "number": "9.1",
+      "title": "The problem"
+    },
+    {
+      "level": 3,
+      "line": 84,
+      "number": "9.2",
+      "title": "The rule"
+    },
+    {
+      "level": 3,
+      "line": 91,
+      "number": "9.3",
+      "title": "What it does not do"
+    },
+    {
+      "level": 3,
+      "line": 97,
+      "number": "9.4",
+      "title": "Simpler alternative and options considered"
+    },
+    {
+      "level": 3,
+      "line": 103,
+      "number": "9.5",
+      "title": "Slice"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/036-signed-releases-and-start-time-refresh.md",
-    "sha256": "769812251b74090143b86351934f6b5421b52851af6a00462c64441301d9a551"
+    "sha256": "4b17ff5a437dc0a7b3806fa929d99e1150096fc2de80d24d3ff0fba6bd25666e"
   },
   "source_status_at_hash": {
     "line": {
@@ -73,7 +109,7 @@
       },
       "text": "status: approved   # by the operator 2026-10-26 (merge instruction after review); it changes nothing for anyone until the maintainers make a release key (section 4). Two questions remain, with recommendations (section 8)"
     },
-    "sha256": "769812251b74090143b86351934f6b5421b52851af6a00462c64441301d9a551",
+    "sha256": "4b17ff5a437dc0a7b3806fa929d99e1150096fc2de80d24d3ff0fba6bd25666e",
     "word": "approved"
   },
   "spec": {

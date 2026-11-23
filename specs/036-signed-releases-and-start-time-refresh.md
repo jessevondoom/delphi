@@ -4,6 +4,7 @@ title: "036: Signed releases and the start-time refresh (amends 006 section 3.1 
 author: architect
 timestamp: 2026-10-26T14:00:00Z
 status: approved   # by the operator 2026-10-26 (merge instruction after review); it changes nothing for anyone until the maintainers make a release key (section 4). Two questions remain, with recommendations (section 8)
+amendments: "2026-11-22, approved in advance by the operator's 'keep building optimistically in the order you defined' (the CI velocity plan, item J1): release notes from one fragment file per change, folded in by the release pull request (section 9). The operator has not read the text."
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -71,3 +72,38 @@ Not built:
 **Q2. Should the rolling `dev` channel be signed with the release key?** This spec signs it with the same key, so the maintainers' own installs take the real path. *Decided: one key now, two before anyone but you installs releases.* The split below is the trigger to act on when the first outside operator appears; nothing to build until then. While you are the only operator, a second key buys nothing: the secrets live in one repository, so whoever can run a workflow on `main` and read secrets gets both. The split matters once there are outside users, and then it has to put the release key where a push cannot reach it: a GitHub Environment `release` that requires your approval, used only by the tag-triggered release run, while dev builds use a dev key from the ordinary secrets. A stolen or careless merge can then sign dev builds but cannot forge a release. It costs a `channel` field per key in `release-keys.json` (release builds trust only release keys; dev builds trust both) and a second secret; do it when the first outside operator appears.
 
 **Q3. Should `--require-signed` become the default?** *Decided: not yet, and when it does, only for tagged releases.* Step (1) is built (section 6). Source builders and contributors run unsigned binaries with release-looking versions; a refusal by default would break them for no protection, and it only protects once the pipeline reliably signs. Instead: (1) build the `[update] require_signed` config setting so an organization can turn it on for its installs now; (2) after three consecutive signed releases, with `delphi doctor` showing "signed release" on your installs, refuse an unsigned *tagged release* by default (a version with no `-dev.` part that is not a local build), with an explicit `--allow-unsigned` for source builders; (3) leave development builds and the dev channel permissive, because they are unsigned by design until Q2 is settled.
+
+## 9. Release notes from fragments (amendment, 2026-11-22)
+
+**Approval, stated plainly.** The operator's words, in a host session on 2026-11-22: "keep building optimistically in the order you defined", given for the CI velocity plan, whose item J1 was defined as "changelog entries as separate files under `changelog.d/`, assembled at release". It is approved in advance on that instruction. **The operator has not read this text, and no Council or Panel has reviewed it.** It belongs here because this spec governs the release (every release commit cites it) and `delphi release` is its command. It changes nothing in sections 1 to 8.
+
+### 9.1 The problem
+
+`CHANGELOG.md` was the one file that most pull requests of a busy day edited: 76 non-merge commits touched it between 2026-11-12 and 2026-11-22 (`git log --no-merges -- CHANGELOG.md`). Two pull requests that each add an entry near the top conflict; GitHub runs no CI on a conflicting pull request ("no checks"), so each conflict cost a hand merge or a refresh and a second CI run. The file is also not on the closed list `delphi merge refresh` settles (094 §11.3.2), so every such conflict went to a person.
+
+### 9.2 The rule
+
+- **A pull request that changes user-facing behavior adds one fragment** and does not edit `CHANGELOG.md`. A fragment is `changelog.d/<slug>.md`: the slug is lowercase letters, digits, `-`, `_` and `.`; a frontmatter block holds exactly one line, `section: <Added | Changed | Removed | Fixed | Security>`; the body is one or more Markdown list items (its first line starts with `- `), with no heading and no relative link (the text moves from `changelog.d/` to the root when assembled, so a relative link cannot be right in both places). `changelog.d/README.md` says so and is the one file there that is not a fragment.
+- **The release pull request folds them in.** `delphi release changelog --write <version> [--date <YYYY-MM-DD>]` builds the section (`## <version> — <date>`, then `### Added`, `### Changed`, `### Removed`, `### Fixed`, `### Security` in that order, each only when it has entries, the entries in file-name order), puts it above the newest release in `CHANGELOG.md` and deletes the fragments it used. The release author then writes the release's summary above the first subsection by hand, as today. It refuses a version `CHANGELOG.md` already has, writes nothing when any fragment is malformed, and writes nothing when there are no fragments (the section is then written by hand). `CHANGELOG.md` is written whole and renamed into place before any fragment is deleted.
+- **Reading and checking.** `delphi release changelog` prints the next release's section under `## Unreleased` and changes nothing; `--check` only checks the fragments. `delphi lint --repo` fails a malformed fragment (check `changelog-fragment`), so it fails in the pull request that adds it, not at the release.
+- **Nothing is migrated.** `CHANGELOG.md` has no Unreleased section on 2026-11-22, so no entry moves; its text stays as it is. `CONTRIBUTING.md` ("Build and test", "Pull requests") says where an entry goes and how a release folds them in.
+
+### 9.3 What it does not do
+
+- **The release workflow does not call it.** `release.yml` publishes notes generated by GitHub and never reads `CHANGELOG.md`; it is a gate path, and this amendment does not change it. Running the command is the release author's step in the version-bump pull request (`CONTRIBUTING.md`). A later slice could make the release workflow refuse a tag while fragments remain under `changelog.d/`; it would be a gate-changing change, for the operator.
+- **No section for a pull request is enforced.** Nothing checks that a user-facing change carries a fragment; that stays review's job, as the Unreleased rule was.
+- **Two pull requests can still pick one fragment name**; they then conflict on that one file, which the naming advice in the README (name it after the spec and slice) makes rare.
+
+### 9.4 Simpler alternative and options considered
+
+1. *Conventional: keep one file, and add `CHANGELOG.md` to the closed list `delphi merge refresh` settles by a union.* It needs a change to `merge/**` (a gate path), a union of list items is wrong when two pull requests edit the same entry, and the conflict still stops CI until a refresh runs. Not adopted.
+2. *Removing a named constraint, "the release notes live in the repository": publish only GitHub's generated notes.* It loses the per-spec summaries and the stated limits that the changelog carries and that `spec_refs` checks. Not adopted.
+3. *By a named method, news fragments as `towncrier`, `scriv`, `reno` and GitLab's changelog do it:* one file per entry, assembled at release. **Adopted**, as an extension of `delphi release` rather than a new tool, because the repository's other generated files are made by `delphi` itself. *Tested by:* the unit tests of `release_notes.rs` (parse, problems, section order, fold, write deletes the fragments and refuses a repeat or a bad fragment without writing), the lint test `a_malformed_changelog_fragment_fails_and_the_readme_does_not`, and `the_repos_own_fragments_are_well_formed` on this repository.
+
+### 9.5 Slice
+
+| Slice | Content | Hours (likely) |
+| :-- | :-- | --: |
+| N1 | `changelog.d/` with its README; `delphi release changelog [--check \| --write]` (`crates/delphi/src/release_notes.rs`); the `changelog-fragment` lint; `spec_refs` scans `changelog.d/`; `CONTRIBUTING.md`; the regenerated CLI reference; tracker row | 5 |
+
+**Not verified:** a real release folded from fragments (the first is the next release after this merges); whether contributors and agents write fragments instead of editing `CHANGELOG.md` (`CONTRIBUTING.md` says so; `AGENTS.md`, a gate path, never mentioned the changelog and is not changed).
