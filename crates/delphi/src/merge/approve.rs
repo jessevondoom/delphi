@@ -114,6 +114,26 @@ pub fn attest(term: &mut dyn Terminal, quote: Option<&str>, target: Target, gate
     Err("there is no terminal to ask at and no --operator-said: the operator must run this at a terminal, or an agent must pass the operator's own words".into())
 }
 
+/// The approval of a rollup's constituents (spec 094 §13.2 step 2, OD-16): `all` typed at a terminal, or a quote that names every
+/// constituent's number (for `--all`: that says all, every or each). Never for a gate-changing pull request: none is ever batched.
+pub fn attest_rollup(term: &mut dyn Terminal, quote: Option<&str>, prs: &[u64], from_all: bool) -> Result<Attestation, String> {
+    if from_all {
+        return attest(term, quote, Target::Batch, false);
+    }
+    match quote {
+        Some(q) => {
+            let q = quote_ok(q)?;
+            let missing: Vec<String> = prs.iter().filter(|n| !quote_binds(q, Target::Pr(**n))).map(|n| format!("#{n}")).collect();
+            if !missing.is_empty() {
+                return Err(format!("the quote does not name {}; for a batch the operator's request must name every pull request in it (or run the command in a terminal)", missing.join(", ")));
+            }
+            Ok(Attestation::ChatQuote(q.to_string()))
+        }
+        None if term.is_interactive() => typed(term, "every pull request in the batch listed above", "all"),
+        None => Err("there is no terminal to ask at and no --operator-said: the operator must run this at a terminal, or an agent must pass the operator's own words".into()),
+    }
+}
+
 fn typed(term: &mut dyn Terminal, what: &str, word: &str) -> Result<Attestation, String> {
     let verb = match word {
         "auto" => "start",
@@ -233,6 +253,18 @@ mod tests {
         assert_eq!(attest(&mut ok, None, Target::Batch, false), Ok(Attestation::Tty));
         let mut q = FakeTerminal::new(false, &[]);
         assert!(matches!(attest(&mut q, Some("merge all of them"), Target::Batch, false), Ok(Attestation::ChatQuote(_))));
+    }
+
+    #[test]
+    fn a_batch_of_named_pull_requests_needs_every_number_in_the_quote() {
+        let mut q = FakeTerminal::new(false, &[]);
+        assert!(matches!(attest_rollup(&mut q, Some("batch #5 and #6"), &[5, 6], false), Ok(Attestation::ChatQuote(_))));
+        assert!(attest_rollup(&mut q, Some("batch #5"), &[5, 6], false).unwrap_err().contains("#6"));
+        assert!(attest_rollup(&mut q, Some("merge all of them"), &[5, 6], false).is_err(), "`all` names no number");
+        assert!(matches!(attest_rollup(&mut q, Some("merge all of them"), &[5, 6], true), Ok(Attestation::ChatQuote(_))));
+        let mut tty = FakeTerminal::new(true, &["all"]);
+        assert_eq!(attest_rollup(&mut tty, None, &[5, 6], false), Ok(Attestation::Tty));
+        assert!(attest_rollup(&mut q, None, &[5], false).unwrap_err().contains("no terminal"));
     }
 
     #[test]

@@ -8,10 +8,10 @@ use super::refresh_tests::{add_spec, commit, compile, fixture, git, Fixture};
 use super::rollup::{build, choose, parse_manifest, Candidate, Choice};
 use std::path::Path;
 
-const OTHER_SPEC: &str = "specs/093-other.md";
+pub(super) const OTHER_SPEC: &str = "specs/093-other.md";
 
 /// Branch `name` from `main`, change it with `edit`, commit and push it; back on `main`. Returns the head.
-fn branch(f: &Fixture, name: &str, edit: impl FnOnce(&Path)) -> String {
+pub(super) fn branch(f: &Fixture, name: &str, edit: impl FnOnce(&Path)) -> String {
     git(&f.work, &["switch", "-q", "-c", name, "main"]);
     edit(&f.work);
     commit(&f.work, name);
@@ -29,7 +29,7 @@ fn advance_main(f: &Fixture) {
 }
 
 /// A ready pull request `n` on branch `name` at `head`; `spec` names its trailer (`None`: no trailer).
-fn ready(forge: &FakeForge, n: u64, name: &str, head: &str, paths: &[&str], spec: Option<&str>) {
+pub(super) fn ready(forge: &FakeForge, n: u64, name: &str, head: &str, paths: &[&str], spec: Option<&str>) {
     forge.with_ready_pr(n, head, paths);
     forge.edit(n, |p| {
         p.head_ref = name.into();

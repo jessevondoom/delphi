@@ -298,27 +298,33 @@
     },
     {
       "level": 3,
-      "line": 472,
+      "line": 473,
       "number": "13.11",
       "title": "Threats"
     },
     {
       "level": 3,
-      "line": 481,
+      "line": 482,
       "number": "13.12",
       "title": "Slices (one per pull request; all gate-changing, merged by the operator at a terminal)"
     },
     {
       "level": 3,
-      "line": 495,
+      "line": 496,
       "number": "13.13",
       "title": "Acceptance criteria and verification"
+    },
+    {
+      "level": 3,
+      "line": 506,
+      "number": "13.14",
+      "title": "Build notes (recorded while building; the decisions above stand unless a note says otherwise)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/094-core-repo-merge-flow.md",
-    "sha256": "623b681bb7ff466b4024c04a8784818e2a94367262e811d254d7e0c178b937d3"
+    "sha256": "55ce5c5d5a42d138c7ae85596b9a49076f90c574a0729a68f657dd0de7efbab8"
   },
   "source_status_at_hash": {
     "line": {
@@ -331,7 +337,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"approve the outstanding draft specs in this workstream\"); OD-1 to OD-5 take the recommendations, as when the operator approved the plan"
     },
-    "sha256": "623b681bb7ff466b4024c04a8784818e2a94367262e811d254d7e0c178b937d3",
+    "sha256": "55ce5c5d5a42d138c7ae85596b9a49076f90c574a0729a68f657dd0de7efbab8",
     "word": "approved"
   },
   "spec": {
