@@ -75,7 +75,7 @@ fn every_precondition_is_refused_with_its_reason_and_nothing_is_written_or_merge
         ("a closed pull request", "not open", |f| f.edit(7, |p| p.state = "CLOSED".into())),
         ("an unqueued pull request", "not queued", |f| f.edit(7, |p| p.labels.clear())),
         ("a conflict", "conflicts with `main`", |f| f.edit(7, |p| p.mergeable = "CONFLICTING".into())),
-        ("no checks at all", "no checks are reported", |f| {
+        ("no checks at all", "no checks have reported on head `head7` yet", |f| {
             f.st.borrow_mut().checks.insert(7, vec![]);
         }),
         ("a failed check", "checks failed: ui", |f| {

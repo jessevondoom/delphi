@@ -27,6 +27,11 @@ enum Ci {
     Fails,
     /// Checks pass, but somebody else pushes to every open pull request's branch.
     SomebodyPushes,
+    /// As GitHub on 2026-11-23 (#887, #889, #892): the refreshed head has no checks at all at first; they register at the next
+    /// sleep (pending) and pass at the one after.
+    RegistersLate,
+    /// The refreshed head has no checks, and none ever register.
+    NeverRegisters,
 }
 
 struct World<'a> {
@@ -36,11 +41,13 @@ struct World<'a> {
     /// Pull requests whose refresh is handed over to `merge fix`.
     refuse: RefCell<Vec<u64>>,
     refreshed: RefCell<Vec<u64>>,
+    /// With `RegistersLate`: sleeps that pass before the checks register.
+    quiet: Cell<u32>,
 }
 
 impl<'a> World<'a> {
     fn new(forge: &'a FakeForge) -> World<'a> {
-        World { forge, ci: Cell::new(Ci::Passes), t: Cell::new(1_000_000), refuse: RefCell::new(vec![]), refreshed: RefCell::new(vec![]) }
+        World { forge, ci: Cell::new(Ci::Passes), t: Cell::new(1_000_000), refuse: RefCell::new(vec![]), refreshed: RefCell::new(vec![]), quiet: Cell::new(0) }
     }
 }
 
@@ -56,7 +63,8 @@ impl Refresher for World<'_> {
         let old = p.head_sha.clone();
         let new = format!("{old}-r");
         p.head_sha = new.clone();
-        s.checks.insert(n, vec![Check { name: "test".into(), bucket: "pending".into() }]);
+        let checks = if matches!(self.ci.get(), Ci::RegistersLate | Ci::NeverRegisters) { vec![] } else { vec![Check { name: "test".into(), bucket: "pending".into() }] };
+        s.checks.insert(n, checks);
         s.files.insert((new.clone(), SPEC_PATH.into()), APPROVED_SPEC.into());
         Ok(Done::Refreshed(Report { pr: n, old_head: old, new_head: new, base_sha: "base1".into(), settled: vec![], regenerated: vec![] }))
     }
@@ -70,12 +78,19 @@ impl Clock for World<'_> {
         self.t.set(self.t.get() + d.as_secs());
         let mut s = self.forge.st.borrow_mut();
         let ci = self.ci.get();
-        if ci == Ci::Hangs {
+        if matches!(ci, Ci::Hangs | Ci::NeverRegisters) {
             return;
         }
         for checks in s.checks.values_mut() {
             for c in checks.iter_mut().filter(|c| c.bucket == "pending") {
                 c.bucket = if ci == Ci::Fails { "fail" } else { "pass" }.into();
+            }
+        }
+        if ci == Ci::RegistersLate && self.quiet.get() > 0 {
+            self.quiet.set(self.quiet.get() - 1);
+        } else if ci == Ci::RegistersLate {
+            for checks in s.checks.values_mut().filter(|c| c.is_empty()) {
+                checks.push(Check { name: "test".into(), bucket: "pending".into() });
             }
         }
         if ci == Ci::SomebodyPushes {
@@ -272,6 +287,51 @@ fn an_auto_session_refreshes_and_moves_on_then_merges_the_new_head_at_a_later_po
     assert!(s.reason.starts_with("paused after 2 error(s)"), "{}", s.reason);
     assert_eq!(w.refreshed.borrow().as_slice(), &[7, 8], "each tried once, then parked");
     assert!(run.open_classes().is_empty(), "the fake refresh writes no entry and the merge does not write a second one");
+}
+
+#[test]
+fn no_checks_yet_on_a_refreshed_head_is_waited_for_then_merged_once_green() {
+    // `<PR> --wait`: polls through "no checks yet" and "running", and merges only once green (§16.2).
+    let forge = FakeForge::default();
+    behind_pr(&forge, 7, 1);
+    let w = World::new(&forge);
+    w.ci.set(Ci::RegistersLate);
+    w.quiet.set(2);
+    let start = w.t.get();
+    let (out, _) = with(&w, WAIT, |c| merge_one(c, 7, None));
+    assert_eq!(out, Outcome::Merged { pr: 7, head: "head7-r".into() });
+    assert_eq!(w.t.get() - start, 4 * 60, "three looks with no checks, one running, then green");
+
+    // Never green: a wait that runs out with no checks at all leaves it refreshed and merges nothing.
+    let forge = FakeForge::default();
+    behind_pr(&forge, 7, 1);
+    let w = World::new(&forge);
+    w.ci.set(Ci::NeverRegisters);
+    let (out, _) = with(&w, WAIT, |c| merge_one(c, 7, None));
+    assert!(matches!(out, Outcome::Refreshed { waited: true, .. }), "{out:?}");
+    assert!(forge.st.borrow().merged.is_empty());
+
+    // `--auto`: a refreshed head with no checks yet is neither an error nor parked; a later poll merges it.
+    let forge = FakeForge::default();
+    behind_pr(&forge, 7, 1);
+    let w = World::new(&forge);
+    w.ci.set(Ci::RegistersLate);
+    w.quiet.set(2);
+    let caps = Caps { max_prs: 1, run_for: Duration::from_secs(4 * 3600), pause_after_errors: 1, idle: Duration::from_secs(1800), poll: Duration::from_secs(60), batch: None };
+    let (s, _) = with(&w, None, |c| auto::run(c, &caps, &Attestation::ChatQuote("auto for the evening".into()), &w, &|| false, &mut |_| {}));
+    assert_eq!((s.merged.as_slice(), s.errors), (&[7u64][..], 0), "{}", s.reason);
+}
+
+#[test]
+fn no_checks_at_decision_time_refuses_with_the_new_words_and_merges_nothing() {
+    let forge = FakeForge::default();
+    forge.with_ready_pr(7, "head7", &["a.rs"]);
+    forge.st.borrow_mut().checks.insert(7, vec![]);
+    let w = World::new(&forge);
+    let (out, _) = with(&w, None, |c| merge_one(c, 7, None));
+    let want = "no checks have reported on head `head7` yet: CI may not have started";
+    assert!(matches!(&out, Outcome::Refused { reasons, .. } if reasons.iter().any(|r| r.starts_with(want))), "{out:?}");
+    assert!(forge.st.borrow().merged.is_empty() && w.refreshed.borrow().is_empty());
 }
 
 #[test]

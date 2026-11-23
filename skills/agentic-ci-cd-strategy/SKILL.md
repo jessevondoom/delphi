@@ -64,7 +64,7 @@ Related skills, not repeated here: `git-pr-packaging` (commits, the PR body, che
 ### A5. Conflicts and generated files
 - **Shared append-only files are the main source of conflicts. Use one file per entry:** per-slice tracker files `missions/2026-10-23-foundational-design/tracker/<spec>/<slice>.md` (`specs/135` §14.10), changelog fragments `changelog.d/<slug>.md` instead of `CHANGELOG.md` (`specs/036` §9), and spec group pages built on demand with `delphi specs view`, not committed (`specs/088` §14).
 - **Never hand-edit a generated file.** Take either side to clear the markers, then regenerate with the `AGENTS.md` commands or `delphi specs compile`, and commit the output.
-- `delphi merge refresh <PR>` merges the base into a behind PR and settles only `compiled/`, `compiled/groups.toml` and the tracker table. It refuses drafts, forks, gate-changing PRs and PRs that are already current. Any other conflict goes to `delphi merge fix <PR>` (`specs/094` §11.3.2). Known bug: it fails on a head that has no checks yet. Wait until CI has registered, then run it again.
+- `delphi merge refresh <PR>` merges the base into a behind PR and settles only `compiled/`, `compiled/groups.toml` and the tracker table. It refuses drafts, forks, gate-changing PRs and PRs that are already current. Any other conflict goes to `delphi merge fix <PR>` (`specs/094` §11.3.2). A head with no checks yet counts as pending while `delphi merge` waits and is never green (`specs/094` §16.2).
 - An empty check list means the PR is untested, not green. A PR that conflicts runs no CI at all. The `conflict` label marks such PRs (`specs/094` §12.2.2), but it is only a signal: always read `mergeStateStatus` yourself.
 
 ### A6. Merging (`specs/094`; `docs/guides/merging-core-changes.md`)
@@ -73,7 +73,7 @@ Related skills, not repeated here: `git-pr-packaging` (commits, the PR body, che
 - **Freshness.** A PR must contain the base tip to merge (`specs/094` §11.3.1), so each merge leaves every other open PR behind. Prepare gate-changing PRs one at a time, in merge order, just before the operator merges each: merge `main` in, push, wait for green. Preparing them all at once wastes runs, because each is behind again after the first merge.
 - **Batching.** Non-gate PRs can land together through a rollup PR: `delphi merge --all --batch[=N]`, or `--auto --batch` inside a session the operator started (`specs/094` §13). One green rollup costs one CI run instead of N. Never push to a `delphi-rollup/*` branch.
 - **Stacked PRs.** When a PR's base branch merges, retarget the next PR to `main` (`gh pr edit <PR> --base main`), merge `main` in and let CI run again. Until then, its checks were run against the old base.
-- Run `delphi merge` from a binary built from the current `main`. An older binary can report false base drift after the spec compiler changed (`specs/094` §11.7).
+- Run `delphi merge` from a binary built from the current `main`. A binary whose spec compiler differs from the tree's refuses to refresh or judge `compiled/specs/` and says to rebuild; before that guard (`specs/094` §16.3) an older binary reported false base drift and once wrote old-format files into a branch.
 
 ### A7. Claims (`specs/135`; `AGENTS.md`)
 - Claim a slice before building it: `delphi forge claim <spec> <slice>`. The claim lasts 8 hours and is renewed by claiming again. `--take` takes over another holder's claim and records it. Today a claim binds only sessions on the same machine and home.
@@ -126,6 +126,6 @@ Write the project's version of these into its own spec before building (No Spec,
 
 ## Not verified
 - The ready-too-early miss is an observation from 2026-11-23 (two cases), not a reproduced test.
-- Claims across machines, spec-number reservations (PR #894) and the fast tier (PR #896) were open PRs when this skill was written. Check that they have merged before relying on them.
+- Claims across machines and spec-number reservations (`specs/135` §14.11, #894) and the fast tier (§14.12, #896) merged on 2026-11-23; neither has run against GitHub at scale yet.
 - Rollup throughput, the docs-only skip's savings, and the `commits` job's effect on bundles had not been measured.
-- The `merge refresh` bug on a head with no checks is described from its symptom. Its cause has not been found.
+- The "no checks yet" fix (`specs/094` §16.2) was found from `gh` 2.103.1's answer (exit 1, nothing on stdout); other `gh` versions are not checked.

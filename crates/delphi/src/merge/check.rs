@@ -27,6 +27,15 @@ pub struct Verdict {
     pub behind_by: u64,
 }
 
+/// How every "no checks yet" refusal starts (spec 094 §16.2); `wait::not_yet` and `errors::classify_refusal` find it by this.
+pub const NO_CHECKS_MARK: &str = "no checks have reported";
+
+/// No check has reported on `head`: a distinct state, "no checks yet". While a command waits it is pending; for a merge it is
+/// never green. Worded without "conflicts with", which is the conflict class's mark.
+pub fn no_checks_reason(head: &str) -> String {
+    format!("{NO_CHECKS_MARK} on head `{}` yet: CI may not have started (or the pull request has a conflict with its base, and such a pull request runs no CI)", super::short(head))
+}
+
 /// The words every freshness refusal carries; `errors::classify_refusal` finds the class `behind` by them.
 pub const BEHIND_MARK: &str = "commit(s) behind";
 
@@ -165,7 +174,7 @@ pub fn evaluate(forge: &dyn Forge, n: u64) -> Result<Verdict, ForgeError> {
 
     let checks = forge.checks(n)?;
     if checks.is_empty() {
-        refusals.push("no checks are reported on the head commit (a pull request that conflicts with its base gets none until the base is merged in)".into());
+        refusals.push(no_checks_reason(&pr.head_sha));
     } else {
         let names = |wanted: &dyn Fn(&str) -> bool| checks.iter().filter(|c| wanted(&c.bucket)).map(|c| c.name.clone()).collect::<Vec<_>>().join(", ");
         let failed = names(&|b| b == "fail" || b == "cancel");
