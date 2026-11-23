@@ -865,6 +865,7 @@ From the operator's plan of 2026-11-07, after Council `t_0005` on the `approve` 
 | S21 | §13: red rollups: rerun before group C, bisection in halves (two rounds), serial fallback, `rollup-red` | 10 | not built |
 | S22 | §13: `--auto --batch`, status lines, guide and skill row | 6 | not built |
 | S23 | §13: the operator's rehearsal (V-13.4, the indirect-merge experiment) and measurement (V-13.5) | 4 | not started |
+| S24 | §14 amendment (2026-11-22, approved in advance on the operator's "keep building optimistically in the order you defined"; text not read by the operator, no Council): a `changes` job (`.github/scripts/docs_only.sh`, plain `git diff --name-status`) answers `docs_only=true` only for a pull request whose every changed file is an added or modified `README.md`, `CHANGELOG.md`, `changelog.d/*.md`, `docs/**/*.md` outside `docs/reference/` or `missions/**/*.md`; the macOS jobs skip then (`!cancelled()`, so a failed check runs them); `ci-gate` needs `changes` (must succeed) and accepts the macOS skip only on a draft or a docs-only pull request | 4 | built (PR open, stacked on the spec 125 P1 pull request #895, gate-changing: the operator merges it at a terminal); the script checked on a scratch repository (18 cases) and the gate rule on sample results; the first live docs-only pull request after merge not yet seen |
 
 ## Spec 093: authority invariants as tests (2026-11-07, approved)
 
