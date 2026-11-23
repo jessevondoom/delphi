@@ -67,12 +67,48 @@
       "line": 119,
       "number": "10",
       "title": "Tests that pin this spec"
+    },
+    {
+      "level": 2,
+      "line": 123,
+      "number": "11",
+      "title": "Amendment 093-A1: outside events check on a schedule, not on unrelated PRs (operator, 2026-11-22)"
+    },
+    {
+      "level": 3,
+      "line": 127,
+      "number": "11.1",
+      "title": "Scope"
+    },
+    {
+      "level": 3,
+      "line": 133,
+      "number": "11.2",
+      "title": "Simpler Alternative Considered"
+    },
+    {
+      "level": 3,
+      "line": 141,
+      "number": "11.3",
+      "title": "The trade-off"
+    },
+    {
+      "level": 3,
+      "line": 145,
+      "number": "11.4",
+      "title": "Slices"
+    },
+    {
+      "level": 3,
+      "line": 156,
+      "number": "11.5",
+      "title": "Verification Plan"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/093-authority-invariants-batch1.md",
-    "sha256": "3ec8f144dfd0e6b1274df51126ecb023c568fc7e2db46c72d1cf498358739dc6"
+    "sha256": "d3afd52cf3c2d513a3a2742f6152488385fa546078022c2610c933d0a6bc556d"
   },
   "source_status_at_hash": {
     "line": {
@@ -85,7 +121,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"the spec is approved. start building batch one\"); OD-1 to OD-5 take the recommendations"
     },
-    "sha256": "3ec8f144dfd0e6b1274df51126ecb023c568fc7e2db46c72d1cf498358739dc6",
+    "sha256": "d3afd52cf3c2d513a3a2742f6152488385fa546078022c2610c933d0a6bc556d",
     "word": "approved"
   },
   "spec": {
