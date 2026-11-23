@@ -20,6 +20,7 @@ tags: [spec, merge, pull-requests, workflow, approvals, authority, builder, git,
 > **Amendment §11 (operator, 2026-11-20):** a pull request is merged only when it is current with the base tip, and `delphi merge refresh` updates it mechanically, so a merge no longer lands a result that no CI run has tested.
 > **Amendment §12 (operator, 2026-11-22):** one required check, `ci-gate`, that passes only when every CI job did; a `conflict` label on pull requests that cannot merge; a build-and-lint check of each slice commit in a bundled pull request; and S8 marked deferred and unlikely.
 > **Amendment §13 (operator, 2026-11-22):** batched merges inside `delphi merge`: a rollup pull request built from the base and up to eight approved pull requests, tested once by the normal CI and merged as one, with every constituent keeping its own approval, spec and ledger row; bisection on red. No GitHub merge queue and no organization.
+> **Amendment §14 (operator, 2026-11-22):** a pull request that changes only plain documentation (an allow list, failing closed) skips the macOS jobs; `ci-gate` accepts that skip only then.
 > **Amends, when approved:** `specs/003` §3.1.2 and `specs/006` §3.1 (the hash pin of an approved spec in `ratified.lock` and the daemon's "blocks Builder unless the hash is ratified" govern work run through a Delphi daemon on specs inside a workspace's tree; Delphi's own repository is built from host-agent sessions as well, and there a spec is approved by its frontmatter and the operator's recorded instruction, with no pin) and `GOVERNANCE.md` §1.1 (how a core-repo merge is approved). Both edits are in this pull request. The `GOVERNANCE.md` edit is a constitutional change (§5.7) and is a gate-changing change under §3.4: the operator reviews it line by line.
 
 ---
@@ -522,3 +523,60 @@ Total 52 hours, inside the CI plan's 56.
 - **S22: never waiting.** A session never waits on a rollup's checks: at each poll it reads each rollup it has in flight; still running is left for the next poll (not an error); green merges (S20); red is bisected (S21), its halves opened and read at later polls. Two halves of one parent are decided together, by S21's rule, at the first poll at which both have finished, so "red together, green apart" is still tested; a half whose sibling no longer exists is decided alone. A rollup made stale by a move of the base or a constituent is closed (no error): a half is built again from the tip at its round, a first rollup's pull requests go into the next batch.
 - **S22: one rollup at a time.** A new batch opens only when nothing is in flight; meanwhile a pull request that could join a batch waits for it (so a serial merge does not make the rollup behind), and everything else goes on (labelling gate-changing pull requests, refreshing, merging what bisection sent to the serial path). `--max-prs` counts constituents: a batch takes at most the merges left, and constituents in flight count before they merge. Each `rollup-red` entry is one error toward `--pause-after-errors` (a rollup of four red together and green apart is four). Pull requests a bisection sent to the serial path are not batched again in that session. `--auto --batch --dry-run` is refused: a session has no dry run.
 - **S22: the books.** Each rollup a session opens (a batch or a half) gets a `rollup_session` row with the session id; `session_start` records `batch`, `session_end` the rollups opened and still open. `merge status` adds the session to each open rollup's line and one line for the latest batching session (opened, merged with the pull requests they carried, bisected).
+## 14. Amendment (operator, 2026-11-22): no macOS run for a pull request that changes only documentation
+
+**Approval, stated plainly.** The operator's words, in a host session on 2026-11-22: "keep building optimistically in the order you defined", after "keep building anything you can" earlier the same day. The order named this item I2 of the CI velocity plan: skip the macOS jobs for pull requests that change only Markdown, failing closed, with `ci-gate` still the one required check. The amendment is approved in advance on those words; the operator has not read this text and no Council has reviewed it. It changes `.github/`, so its pull request is gate-changing (§3.4) and the operator merges it at a terminal. It extends §12.2.1 (the skips `ci-gate` accepts) and changes nothing else.
+
+### 14.1 The problem
+
+The macOS jobs are the whole critical path of CI (about 20 minutes at the median on 2026-11-22, against about 5 for the slowest Linux job) and take scarce slots (five at once for the account; three jobs per run since spec 125-A2). A pull request that changes only a guide, a mission note or the changelog waits for them and spends them, although nothing it changes is compiled, embedded or read differently on macOS, and the Linux jobs run every test on it anyway.
+
+### 14.2 The additions
+
+**14.2.1 A `changes` job.** A small Linux job, first in the run, checks out the test merge commit with its first parent and runs `.github/scripts/docs_only.sh`, which reads `git diff --name-status` between the base and the merge commit (plain git, no third-party action) and writes one output, `docs_only`. It is `true` only when all of these hold; otherwise it is `false`:
+
+1. the event is a pull request (a push to `main` always runs everything);
+2. the list of changed files could be read and is not empty;
+3. every entry is an added or modified file: a rename, a copy, a deletion or a change of type is `false`;
+4. every path is on the allow list (14.2.2). A path git has to quote never matches it.
+
+An error of any kind is `false`. The answer and its reason are printed in the job's log.
+
+**14.2.2 The allow list.** Markdown that no program embeds, and that no test reads in a way that could differ between Linux and macOS:
+
+| Path | Why it is safe to skip macOS for it |
+| :-- | :-- |
+| `README.md`, `CHANGELOG.md` (the root files only) | No build script or `include_str!` embeds them; the spec reference check reads the changelog as text, on Linux. |
+| `changelog.d/*.md` | Release-note fragments, read at release time, not by the program. |
+| `docs/**/*.md` except `docs/reference/` | Guides and explanations. The few a test reads (`docs/guides/xenia-operator.md`, `desktop-app.md`, `headless-and-ci.md`, `docs/features.md`) are compared as text, the same on every system, and those tests run on Linux. `docs/reference/` is embedded by `crates/delphi/build.rs` and generated from the program's own output, so it is not on the list. |
+| `missions/**/*.md` | Notes, plans, trackers and Council records. The tests that read some of them (the Xenia conformance documents, the spec reference check) compare text and run on Linux; `delphi lint`, which reads the Council records, runs only on Linux already. |
+
+Not on the list, on purpose: `specs/`, `compiled/`, `skills/`, `agents/`, `themes/` and `schemas/` (read by the program, its lint and its tests; `specs/` is also embedded), `GOVERNANCE.md`, `SPEC.md` and `REVIEW.md` (embedded in the binary), `AGENTS.md` and `CONTRIBUTING.md` (read by tests), every file that is not Markdown (`llms.txt` included), and everything under `crates/`, `ui/`, `app/`, `dev/` and `.github/`. Widening the list is a change to this section.
+
+**14.2.3 The macOS jobs.** `build-macos` needs `changes` and runs unless `changes` said `docs_only=true` (and, as before, unless the pull request is a draft). Its condition starts with `!cancelled()`, so a failed `changes` job does not skip it: when the check could not answer, macOS runs. `test-macos` runs when `build-macos` succeeded (`!cancelled() && needs.build-macos.result == 'success'`, written out because a job's default condition also looks at the jobs before the one it needs, so a failed `changes` would otherwise skip the halves). The Linux jobs, `lint`, `deny`, `ui`, `linux-sandbox` and `commits` are unchanged and run on every pull request.
+
+**14.2.4 `ci-gate`.** It needs `changes` too, and `changes` must succeed (a failed `changes` fails the gate even when macOS then ran and passed: the run is rerun, not judged on a guess). It accepts `build-macos` and `test-macos` skipped in exactly two cases: on a draft pull request (§12.2.1), and on a pull request whose `changes` output is `docs_only == 'true'`. Every other rule of §12.2.1 stands.
+
+### 14.3 Options considered
+
+| Option | Kind | Why |
+| :-- | :-- | :-- |
+| A path filter on the workflow (`paths-ignore: ['**.md']`) | conventional | A workflow skipped by a path filter never reports, so the required `ci-gate` stays "Pending" and the pull request cannot merge. Not adopted. |
+| A third-party "changed files" action | conventional | Does the same diff with more code and a new supplier with access to the run. Not adopted: `git diff` does it in one line. |
+| Skip macOS for every `*.md` change outside `crates/` | removes a constraint | Saves more runs, but `specs/`, `skills/` and `agents/` are Markdown that the program embeds or its tests read. Not adopted. |
+| A `changes` job with a short allow list, failing closed; `ci-gate` judging the skip | named method (a "changes" job feeding job-level `if:`, as in many monorepos with required checks) | **Adopted.** |
+
+### 14.4 Authority
+
+Nothing here widens an agent's authority. The `changes` job reads the diff and writes one output; it has no token beyond the default `contents: read`. The script runs from the pull request's own checkout, so a pull request could change it to answer `true`; it could as well delete the macOS jobs from `ci.yml`, and both are changes under `.github/`, which are gate-changing (§3.4) and merged only by the operator. A pull request that changes only Markdown on the list cannot change the script.
+
+### 14.5 Slices (one pull request; gate-changing, merged by the operator at a terminal)
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| S24 | this amendment; `.github/scripts/docs_only.sh`; the `changes` job; the macOS jobs' condition; `ci-gate`'s needs and its docs-only skip; `CONTRIBUTING.md`'s sentence | 4 |
+
+### 14.6 Acceptance criteria and verification
+
+- **AC-24 (S24).** The script, run on a scratch repository, answers `true` for a guide, the readme with the changelog and a mission note, a new fragment and a new nested guide, and `false` for `docs/reference/`, a guide with code, a spec, `AGENTS.md`, a deletion, a rename, a non-Markdown file under `docs/`, `*.md.sh`, a `README.md` under `crates/`, a quoted name, an empty diff, a push and an unreadable base. `ci-gate`'s rule, run on sample results, passes a docs-only pull request with macOS skipped and fails a pull request that is not docs-only with macOS skipped. On this pull request's own run `changes` answers `false` (it changes `.github/`), and macOS runs once it is ready.
+- **V-14.** The workflow passes `actionlint` and parses as YAML before the push; the script runs under `/bin/bash` 3.2. The first docs-only pull request after the merge shows `changes` `true`, the macOS jobs skipped and `ci-gate` green.
