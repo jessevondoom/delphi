@@ -264,7 +264,8 @@ pub fn run_checked(ctx: &mut Ctx, caps: &Caps, att: &Attestation, clock: &dyn Cl
                         parked.insert(n, p.head_sha);
                     }
                 }
-                Outcome::Refused { ref reasons, ref head, .. } if reasons.iter().any(|r| classify_refusal(r).is_some()) => {
+                // "No checks yet" (§16.2) is waiting, as checks still running are, not an error that parks the head.
+                Outcome::Refused { ref reasons, ref head, .. } if reasons.iter().any(|r| classify_refusal(r).is_some() && !super::wait::not_yet(r)) => {
                     parked.insert(n, head.clone());
                     errors += 1;
                     consecutive += 1;
