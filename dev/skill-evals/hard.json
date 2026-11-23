@@ -47,6 +47,7 @@
 ["builder", "Cargo.lock has conflict markers after I pulled the base branch in.", "git-merge-and-conflict-resolution"],
 ["builder", "My PR says it is behind main and its checks never ran. Bring it up to date without rewriting history.", "git-merge-and-conflict-resolution"],
 ["builder", "The merge was clean but the build is red afterwards, and the other branch changed what the same function means.", "git-merge-and-conflict-resolution"],
+["builder", "Main and my spec PR both added a spec; merging main in was clean, but the generated index now counts one spec too few.", "git-merge-and-conflict-resolution"],
 ["builder", "We are starting a new repository for an outside project that several agents will push to at once. Set up its CI so it stays fast and nothing merges untested.", "agentic-ci-cd-strategy"],
 ["builder", "I marked my pull request ready but the macOS jobs never ran on the last push. What is the right order of steps?", "agentic-ci-cd-strategy"],
 ["builder", "Three gate-changing pull requests are waiting for the operator. How should I prepare them so they can merge one after another?", "agentic-ci-cd-strategy"]

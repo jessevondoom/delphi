@@ -7,7 +7,7 @@ import json
 import pathlib
 import subprocess
 
-from cases import git, gen_out
+from cases import git, gen_out, index_out
 
 
 def _meta(repo):
@@ -167,7 +167,21 @@ def check_semantic(repo):
     return (True, "merged with both intents and a green gate")
 
 
+def check_stalecount(repo):
+    """The identical-line case: both specs present, and index.md is what the generator writes (count 8), not the
+    clean textual merge (count 7)."""
+    def content():
+        for n in ("015", "055"):
+            if _read(repo, "specs/%s.md" % n) != "Spec %s\n" % n:
+                return "specs/%s.md is missing or changed" % n
+        if _read(repo, "index.md") != index_out(repo):
+            return "index.md is not the generator's output (the clean merge left a stale count: rerun ./gen.sh)"
+        return None
+    return _finish(repo, content)
+
+
 CHECKS = {
     "tracker": check_tracker, "modlist": check_modlist, "generated": check_generated,
     "lockfile": check_lockfile, "behind": check_behind, "semantic": check_semantic,
+    "stalecount": check_stalecount,
 }

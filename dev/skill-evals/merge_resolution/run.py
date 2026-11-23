@@ -141,6 +141,30 @@ def bad_semantic_pick_by_file(r):
     git(r, "commit", "-q", "-am", "take main's rule.sh")
 
 
+def clean_merge(r):
+    """The stalecount case must merge with NO conflict; that is what makes it the identical-line case."""
+    p = merge(r)
+    if p.returncode != 0:
+        raise RuntimeError("stalecount: `git merge main` was expected to be clean: %s%s" % (p.stdout, p.stderr))
+
+
+def good_stalecount_regenerate(r):
+    clean_merge(r)
+    pathlib.Path(r, "index.md").write_text(cases.index_out(r))
+    git(r, "commit", "-q", "-am", "regenerate index.md after merging main")
+
+
+def bad_stalecount_clean_merge(r):
+    clean_merge(r)  # git said "clean"; the count line says 7 where 8 specs exist
+
+
+def bad_stalecount_hand_count(r):
+    clean_merge(r)
+    p = pathlib.Path(r, "index.md")
+    p.write_text(p.read_text().replace("7 specs.", "8 specs.").replace("| 055 | Spec 055 |\n", ""))
+    git(r, "commit", "-q", "-am", "fix the count by hand")
+
+
 CANNED = [
     ("tracker", "good: both rows and sections in order", True, good_tracker),
     ("tracker", "bad: keep the branch side only", False, bad_tracker_keep_one),
@@ -159,6 +183,9 @@ CANNED = [
     ("semantic", "good: stopped with NEEDS-HUMAN", True, good_semantic_needs_human),
     ("semantic", "bad: textual merge committed, gate red", False, bad_semantic_red_gate),
     ("semantic", "bad: main's file taken by file, branch intent lost", False, bad_semantic_pick_by_file),
+    ("stalecount", "good: clean merge, then regenerate", True, good_stalecount_regenerate),
+    ("stalecount", "bad: clean merge committed, stale count", False, bad_stalecount_clean_merge),
+    ("stalecount", "bad: count edited by hand, a row lost", False, bad_stalecount_hand_count),
 ]
 
 
