@@ -281,6 +281,48 @@
     {
       "level": 2,
       "line": 493,
+      "number": "14",
+      "title": "Amendment (operator, 2026-11-22): the group pages are built on demand, not committed"
+    },
+    {
+      "level": 3,
+      "line": 497,
+      "number": "14.1",
+      "title": "The problem, measured"
+    },
+    {
+      "level": 3,
+      "line": 501,
+      "number": "14.2",
+      "title": "What changes, and why the index stays"
+    },
+    {
+      "level": 3,
+      "line": 509,
+      "number": "14.3",
+      "title": "Consumers (searched, 2026-11-22)"
+    },
+    {
+      "level": 3,
+      "line": 513,
+      "number": "14.4",
+      "title": "Options considered"
+    },
+    {
+      "level": 3,
+      "line": 520,
+      "number": "14.5",
+      "title": "Honest limits"
+    },
+    {
+      "level": 3,
+      "line": 526,
+      "number": "14.6",
+      "title": "Slice and decisions"
+    },
+    {
+      "level": 2,
+      "line": 536,
       "number": null,
       "title": "Appendix A. Groups (approved by the operator, 2026-11-07, OD-4)"
     }
@@ -288,7 +330,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/088-spec-compile-and-current-set.md",
-    "sha256": "c380dfe9cbc62308edc1651b3b2e9f4e44d81a1225ecfc51f1df6927d2617416"
+    "sha256": "f69de71bba083e777968919cfee42629052d6821c8b30b8bc6b6943c5ebe0b53"
   },
   "source_status_at_hash": {
     "line": {
@@ -301,7 +343,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"confirmed ... approved\"): S0 to S3 only; stage 2 (S4 to S6) is NOT approved and needs a fresh decision after the OD-5 measurement"
     },
-    "sha256": "c380dfe9cbc62308edc1651b3b2e9f4e44d81a1225ecfc51f1df6927d2617416",
+    "sha256": "f69de71bba083e777968919cfee42629052d6821c8b30b8bc6b6943c5ebe0b53",
     "word": "approved"
   },
   "spec": {
