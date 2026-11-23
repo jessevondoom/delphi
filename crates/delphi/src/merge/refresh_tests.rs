@@ -312,3 +312,48 @@ fn a_conflicting_pull_request_with_no_checks_is_refreshed_by_rule_or_handed_over
     assert!(matches!(&out, Err(Stop::HandOver(why)) if why.contains("README.md")), "{out:?}");
     assert_eq!(origin_pr(&f), head);
 }
+
+/// Put this binary's spec compiler sources into `d`, with `views` in place of the views' source when given (a compiler that
+/// differs from this binary's, as `main`'s did from a binary built before #890).
+fn put_compiler(d: &Path, views: Option<&str>) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for p in ["crates/delphi/src/spec_compile.rs", "crates/delphi/src/spec_views.rs", "crates/delphi-core/src/specdoc.rs"] {
+        std::fs::create_dir_all(d.join(p).parent().unwrap()).unwrap();
+        std::fs::copy(root.join(p), d.join(p)).unwrap();
+    }
+    if let Some(text) = views {
+        std::fs::write(d.join("crates/delphi/src/spec_views.rs"), text).unwrap();
+    }
+}
+
+#[test]
+fn a_binary_whose_spec_compiler_is_not_the_trees_refuses_to_refresh_or_judge_the_base_and_writes_nothing() {
+    // The base's compiler moved on (spec 088 §14 on 2026-11-23 stopped committing the group pages); this binary's did not.
+    let f = fixture();
+    let head = diverge(
+        &f,
+        |d| add_spec(d, "002-a2", "a", Some("001-a1"), None),
+        |d| {
+            put_compiler(d, Some("// the base's newer views\n"));
+            add_spec(d, "010-b10", "b", None, None);
+        },
+    );
+    let forge = forge_for(&head, &["specs/002-a2.md"]);
+    let (out, log) = run(&f, &forge, None);
+    assert!(matches!(&out, Err(Stop::Refused(why)) if why.starts_with(super::refresh::STALE_COMPILER) && why.contains("spec_views.rs") && why.contains("Rebuild")), "{out:?}");
+    assert_eq!(origin_pr(&f), head, "nothing was pushed");
+    assert!(!log.iter().any(|l| l.starts_with("push") || l.starts_with("commit")), "{log:?}");
+    assert!(Errors::at(f.home.path()).entries().is_empty(), "the operator rebuilds; nothing for `merge fix`");
+    assert!(!f.home.path().join("merge/refresh/pr-7").exists());
+
+    // The check of the base says it could not judge, and writes no `base-drift` entry.
+    let state = super::base::check_base(&Runner::new(&f.work), f.home.path(), "main");
+    assert!(matches!(&state, super::base::BaseState::Unchecked(why) if why.starts_with(super::refresh::STALE_COMPILER)), "{state:?}");
+
+    // With the base's compiler equal to this binary's, the same refresh goes through.
+    put_compiler(&f.work, None);
+    commit(&f.work, "the base's compiler is this binary's again");
+    git(&f.work, &["push", "-q", "origin", "main"]);
+    refreshed(run(&f, &forge, None).0);
+    assert!(matches!(super::base::check_base(&Runner::new(&f.work), f.home.path(), "main"), super::base::BaseState::Current { .. }));
+}

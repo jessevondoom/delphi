@@ -11,6 +11,7 @@ How a pull request to Delphi's own repository goes from "ready" to "merged and c
 | S7 (this page) | the agent rules, this guide, the vocabulary table |
 | S9 (§11) | freshness: a PR whose head is behind its base is refused, class `behind` |
 | S10 (§11) | `merge refresh <PR>`: a mechanical update of a behind PR, class `refresh-refused` |
+| S26, S27 (§16) | "no checks yet" is pending while waiting and never green; a binary whose spec compiler is not the tree's refuses to compile or judge `compiled/specs/` |
 
 Delphi stays optional. The label, the PR comment and the merge commit are visible in plain GitHub, and a native merge always works.
 
@@ -44,6 +45,12 @@ Run it in the repository on a PR that is behind. It does what an author did by h
 7. It writes a `refreshed` row to the ledger and a comment on the PR, and moves an open `behind` entry to `fixed-pending-ci`.
 
 Any other conflicted file, a gate path, more than 10 conflicted files, a failed compile, a widened change or a rejected push stops it with nothing pushed and an entry of class `refresh-refused`. Run `delphi merge fix <PR>` to hand that to the builder.
+
+**It does not read the checks.** A conflicting PR runs no CI and has no checks; refresh settles its conflict by the rules above or hands it over naming the conflicted files (spec 094 §16.2; before that fix it failed with "checks: EOF while parsing").
+
+**It refuses a stale binary.** Before it compiles, refresh compares the spec compiler's source in the tree it is about to compile (`crates/delphi/src/spec_compile.rs`, `spec_views.rs`, `crates/delphi-core/src/specdoc.rs`) with the copies built into the running `delphi`. If they differ it stops with "this delphi binary's spec compiler is not the one in ...", writes nothing and logs no error entry: rebuild `delphi` from an up-to-date `main` (or run `cargo run -q -p delphi -- merge ...` from one) and run it again. The check of the base after a merge, `repair-base` and a rollup build apply the same rule; for the base check a mismatch reads "could not check it", never drift (spec 094 §16.3). This is what wrote the old group pages into #896's branch and reported a false `base-drift` on 2026-11-23, from a binary built before #890.
+
+**No checks yet.** Right after a refresh pushes a new head, GitHub can take a moment to register its CI run; `gh pr checks` then reports no checks at all. `delphi merge <PR> --wait`, `--all` and a rollup's wait treat that as pending and keep polling until the bound; an `--auto` session waits for its next poll and counts no error. At a merge decision it is never green: the refusal reads "no checks have reported on head `<sha>` yet: CI may not have started (or the PR has a conflict with its base, and such a PR runs no CI)".
 
 **It needs no approval of its own.** It never merges a PR and has no path to one. It pushes one ordinary commit that changes nothing the PR did not already change, apart from generated files and the two append-only files. Anyone who may push to the branch may run it, an agent included, as with `merge fix`. CI then runs on the new head, and the PR merges only through `delphi merge` on your word. Cargo.lock and `docs/reference/` conflicts need a build of the merged code, so they go to `merge fix`.
 

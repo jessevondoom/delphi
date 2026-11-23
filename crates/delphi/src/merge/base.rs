@@ -14,7 +14,7 @@ use super::approve::{attest, Target, Terminal};
 use super::errors::{log_central, Class, Errors};
 use super::forge::Forge;
 use super::record::Ledger;
-use super::refresh::Runner;
+use super::refresh::{same_compiler, Runner};
 use super::short;
 use crate::spec_compile::{self, GROUPS_FILE, TREE_DIR};
 use serde_json::json;
@@ -82,6 +82,10 @@ pub fn check_base(g: &Runner, home: &Path, base_ref: &str) -> BaseState {
         let sha = sha.to_string();
         if !dir.join(GROUPS_FILE).exists() {
             return BaseState::Current { sha };
+        }
+        // A binary whose compiler is not the base's would report drift that is not there (§16.3): unchecked, never drift.
+        if let Err(why) = same_compiler(dir, &format!("`{base_ref}` at {}", short(&sha))) {
+            return BaseState::Unchecked(why);
         }
         match spec_compile::compile_in(dir, true) {
             Ok(_) => BaseState::Current { sha },
@@ -160,6 +164,7 @@ fn repair_in(env: &RepairEnv, base_ref: &str, dir: &Path, sha: &str, dry_run: bo
     if !dir.join(GROUPS_FILE).exists() {
         return Err(format!("`{base_ref}` has no {GROUPS_FILE}, so there is nothing to recompile"));
     }
+    same_compiler(dir, &format!("`{base_ref}` at {}", short(sha)))?;
     spec_compile::compile_in(dir, false).map_err(|(_, l)| format!("the spec compile fails on `{base_ref}`, which a recompile cannot repair; hand it to a builder: {}", l.join("; ")))?;
     g.git(dir, &["add", "-A", "--", TREE_DIR])?;
     let under_tree = |p: &str| p.strip_prefix(TREE_DIR).is_some_and(|rest| rest.starts_with('/'));

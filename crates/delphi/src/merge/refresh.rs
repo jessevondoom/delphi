@@ -178,12 +178,44 @@ pub fn widened(before: &str, after: &str) -> Vec<String> {
     out
 }
 
-/// The spec compile, in process, then its check. Skipped (`Ok(false)`) in a repository with no groups file.
+/// The spec compiler's source files as this binary was built from them (spec 094 §16.3): the compile, its views and the spec
+/// parser. A tree whose copies differ is compiled by other rules than this binary's, and CI judges it by the tree's own.
+const COMPILER_SOURCES: [(&str, &str); 3] = [
+    ("crates/delphi/src/spec_compile.rs", include_str!("../spec_compile.rs")),
+    ("crates/delphi/src/spec_views.rs", include_str!("../spec_views.rs")),
+    ("crates/delphi-core/src/specdoc.rs", include_str!("../../../delphi-core/src/specdoc.rs")),
+];
+/// The words every stale-compiler refusal starts with.
+pub const STALE_COMPILER: &str = "this delphi binary's spec compiler is not the one in";
+
+/// Refuse to compile or judge `tree` (a worktree: a base tip, or a base merged into a pull request) unless its spec compiler is
+/// the one this binary carries, byte for byte. A tree with none of the files (not Delphi's own repository) has no other
+/// compiler, so it passes; a tree with some of them must have all, equal. Never writes anything.
+pub fn same_compiler(tree: &Path, what: &str) -> Result<(), String> {
+    let read: Vec<(&str, Option<String>, &str)> = COMPILER_SOURCES.iter().map(|(p, mine)| (*p, std::fs::read_to_string(tree.join(p)).ok(), *mine)).collect();
+    if read.iter().all(|(_, there, _)| there.is_none()) {
+        return Ok(());
+    }
+    let differ: Vec<&str> = read.iter().filter(|(_, there, mine)| there.as_deref() != Some(*mine)).map(|(p, _, _)| *p).collect();
+    if differ.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{STALE_COMPILER} {what} ({} differ{}), so it would write or judge `{}` by other rules than CI does; nothing was written. Rebuild delphi from an up-to-date `main` (or run it as `cargo run -q -p delphi -- merge ...` from such a checkout) and run this again",
+        differ.join(", "),
+        if differ.len() == 1 { "s" } else { "" },
+        spec_compile::TREE_DIR
+    ))
+}
+
+/// The spec compile, in process, then its check. Skipped (`Ok(false)`) in a repository with no groups file. Refused, before
+/// anything is written, when the tree's spec compiler is not this binary's (`same_compiler`).
 pub(super) fn recompile(wt: &Path) -> Result<bool, String> {
     let text = match std::fs::read_to_string(wt.join(spec_compile::GROUPS_FILE)) {
         Ok(t) => t,
         Err(_) => return Ok(false),
     };
+    same_compiler(wt, "the tree being compiled")?;
     let groups = spec_compile::parse_groups(&text)?;
     let sources = spec_compile::read_sources(wt)?;
     let out = spec_compile::build(&sources, &groups).map_err(|e| e.join("; "))?;
@@ -370,6 +402,11 @@ fn work(env: &Env, v: &super::check::Verdict, dir: &Path) -> Result<Report, Stop
     }
     g.git(dir, &["add", "-A"]).map_err(hand_over)?;
     let before_compile = g.git(dir, &["write-tree"]).map_err(hand_over)?.trim().to_string();
+    // A stale binary is the operator's to fix (rebuild), not the builder's: refused, with no `refresh-refused` entry (§16.3).
+    same_compiler(dir, &format!("`{}` merged into this pull request", pr.base_ref)).map_err(|e| {
+        let _ = g.git(dir, &["merge", "--abort"]);
+        Stop::Refused(e)
+    })?;
     recompile(dir).map_err(|e| hand_over(format!("the spec compile failed: {e}")))?;
     g.git(dir, &["add", "-A"]).map_err(hand_over)?;
     let after_compile = g.git(dir, &["write-tree"]).map_err(hand_over)?.trim().to_string();
@@ -417,6 +454,19 @@ mod tests {
         for other in ["README.md", "Cargo.lock", "specs/094-core-repo-merge-flow.md", "compiled/other.toml", &format!("{}x/index.md", spec_compile::TREE_DIR)] {
             assert_eq!(rule_for(other), None, "{other}");
         }
+    }
+
+    #[test]
+    fn the_compiler_guard_passes_this_repository_and_a_tree_without_a_compiler_and_refuses_a_partial_one() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert_eq!(same_compiler(&root, "this checkout"), Ok(()), "the paths name the files this binary was built from");
+        let t = tempfile::tempdir().unwrap();
+        assert_eq!(same_compiler(t.path(), "an empty tree"), Ok(()));
+        let p = t.path().join(COMPILER_SOURCES[0].0);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, COMPILER_SOURCES[0].1).unwrap();
+        let e = same_compiler(t.path(), "a partial tree").unwrap_err();
+        assert!(e.starts_with(STALE_COMPILER) && e.contains("spec_views.rs") && e.contains("specdoc.rs") && !e.contains("spec_compile.rs"), "{e}");
     }
 
     #[test]
