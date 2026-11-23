@@ -9,6 +9,7 @@
 pub mod approve;
 pub mod auto;
 pub mod base;
+pub mod bisect;
 pub mod check;
 pub mod cleanup;
 pub mod errors;
@@ -25,6 +26,8 @@ pub mod wait;
 mod auto_tests;
 #[cfg(test)]
 mod base_tests;
+#[cfg(test)]
+mod bisect_tests;
 #[cfg(test)]
 mod cleanup_tests;
 #[cfg(test)]
@@ -583,8 +586,10 @@ pub fn cli(args: &[String]) -> i32 {
         Sub::Status => match status_lines(&forge) {
             Ok(lines) => {
                 lines.iter().for_each(|l| println!("{l}"));
-                // The check of the base (§11.3.4): the base of the oldest queued pull request, or `main`.
                 let home = crate::home::delphi_home(p.home.as_deref());
+                // Open rollups, a bisecting half among them (spec 094 §13.5).
+                bisect::status_lines(&forge, &Ledger::at(&home)).iter().for_each(|l| println!("{l}"));
+                // The check of the base (§11.3.4): the base of the oldest queued pull request, or `main`.
                 let base_ref = forge.queued(QUEUE_LABEL).ok().and_then(|q| q.first().copied()).map(|n| base_of(&forge, n)).unwrap_or_else(|| "main".into());
                 match std::env::current_dir() {
                     Ok(repo) => println!("{}", base::check_and_note(&Errors::at(&home), &base::InRepo { git: refresh::Runner::new(&repo), home: &home }, &base_ref, &delphi_core::time::now_rfc3339()).1),

@@ -212,13 +212,14 @@ fn a_constituent_left_open_whose_head_is_not_in_the_base_is_not_closed() {
 fn a_red_or_pending_rollup_or_one_without_ci_gate_is_never_merged() {
     let (f, forge, _, _) = world();
     opened(&f, &forge);
-    for (gate, want) in [("fail", "checks failed: ci-gate"), ("pending", "have not finished")] {
-        checks(&forge, gate);
-        let why = refusal(&f, &forge);
-        assert!(why.iter().any(|r| r.contains(want)), "{gate}: {why:?}");
-    }
+    checks(&forge, "pending");
+    assert!(refusal(&f, &forge).iter().any(|r| r.contains("have not finished")));
     forge.st.borrow_mut().checks.insert(ROLLUP, vec![Check { name: "test".into(), bucket: "pass".into() }]);
     assert!(refusal(&f, &forge).iter().any(|r| r.contains("`ci-gate` has not passed")));
+    assert!(forge.st.borrow().closed.is_empty(), "neither is red, so neither is bisected");
+    // Red: bisected (S21), never merged.
+    checks(&forge, "fail");
+    assert!(refusal(&f, &forge).iter().any(|r| r.contains("bisected")));
     assert!(forge.st.borrow().merged.is_empty());
     assert!(Ledger::at(f.home.path()).read().iter().all(|r| r["kind"] != "approved"), "no record without a merge");
 }

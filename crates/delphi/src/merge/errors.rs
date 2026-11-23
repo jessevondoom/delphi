@@ -46,10 +46,13 @@ pub enum Class {
     /// A rollup's constituent head moved since the approval, or the base moved under the rollup. Nothing is broken: the operator
     /// approves again, or the batch is built again.
     RollupStale,
+    /// A red rollup's bisection isolated this constituent (red on its own), or a whole rollup was red together and green apart
+    /// (spec 094 §13.5). `merge fix` takes it.
+    RollupRed,
 }
 
 /// Every class, in one place (the slug round trip and `from_slug` read it).
-const ALL: [Class; 15] = [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup, Class::Behind, Class::RefreshRefused, Class::BaseDrift, Class::RollupRefused, Class::RollupStale];
+const ALL: [Class; 16] = [Class::Conflict, Class::CiRed, Class::NoChecks, Class::Spec, Class::GateList, Class::StaleRecord, Class::Forge, Class::Ledger, Class::MergeFailed, Class::Cleanup, Class::Behind, Class::RefreshRefused, Class::BaseDrift, Class::RollupRefused, Class::RollupStale, Class::RollupRed];
 
 impl Class {
     pub fn slug(self) -> &'static str {
@@ -69,6 +72,7 @@ impl Class {
             Class::BaseDrift => "base-drift",
             Class::RollupRefused => "rollup-refused",
             Class::RollupStale => "rollup-stale",
+            Class::RollupRed => "rollup-red",
         }
     }
     pub fn from_slug(s: &str) -> Option<Class> {
@@ -76,7 +80,7 @@ impl Class {
     }
     /// Can a builder fix this by changing the branch? (Others are for a person: a missing `gh`, a damaged list.)
     pub fn builder_can_fix(self) -> bool {
-        matches!(self, Class::Conflict | Class::CiRed | Class::NoChecks | Class::Spec | Class::StaleRecord | Class::MergeFailed | Class::Behind | Class::RefreshRefused | Class::RollupRefused)
+        matches!(self, Class::Conflict | Class::CiRed | Class::NoChecks | Class::Spec | Class::StaleRecord | Class::MergeFailed | Class::Behind | Class::RefreshRefused | Class::RollupRefused | Class::RollupRed)
     }
 }
 
@@ -89,6 +93,8 @@ pub fn classify_refusal(reason: &str) -> Option<Class> {
         Some(Class::RollupRefused)
     } else if reason.starts_with(super::rollup_pr::STALE) {
         Some(Class::RollupStale)
+    } else if reason.starts_with(super::rollup_pr::RED) {
+        Some(Class::RollupRed)
     } else if reason.contains(super::check::BEHIND_MARK) {
         Some(Class::Behind)
     } else if reason.contains("conflicts with") {
@@ -273,6 +279,7 @@ mod tests {
             ("#7: not refreshed: it is a draft", None),
             ("rollup refused: the rebuild's tree differs", Some(Class::RollupRefused)),
             ("rollup stale: #5 moved", Some(Class::RollupStale)),
+            ("rollup red: #5 is red on its own", Some(Class::RollupRed)),
         ] {
             assert_eq!(classify_refusal(r), want, "{r}");
         }
@@ -291,6 +298,7 @@ mod tests {
         assert!(Class::RefreshRefused.builder_can_fix() && Class::from_slug("refresh-refused") == Some(Class::RefreshRefused));
         assert!(Class::from_slug("base-drift") == Some(Class::BaseDrift) && !Class::BaseDrift.builder_can_fix(), "`repair-base` takes it, not `merge fix`");
         assert!(Class::RollupRefused.builder_can_fix() && !Class::RollupStale.builder_can_fix(), "a stale rollup needs the operator, not a fix");
+        assert!(Class::from_slug("rollup-red") == Some(Class::RollupRed) && Class::RollupRed.builder_can_fix(), "`merge fix` takes an isolated constituent (§13.5)");
     }
 
     #[test]
