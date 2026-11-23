@@ -86,8 +86,12 @@ fn tracker_check(repo: &Path, stem: &str, slice: &str) -> Result<tracker::Row, S
     let num = tracker::spec_number(stem).ok_or_else(|| format!("{} has no spec number", stem))?;
     let text = std::fs::read_to_string(tracker::path(repo)).map_err(|e| format!("cannot read the tracker ({}): {}", tracker::PATH, e))?;
     let all = tracker::rows(&text);
-    let Some(row) = all.iter().find(|r| r.spec.eq_ignore_ascii_case(&num) && r.slice.eq_ignore_ascii_case(slice)) else {
-        return Err(format!("the tracker ({}) has no row for {} {}: add `| {} | {} | <what it does> | <state> |`", tracker::PATH, num, slice, num, slice));
+    let Some(row) = tracker::find(&all, &num, slice) else {
+        let searched = match tracker::sections_for(&text, &num).as_slice() {
+            [] => format!("no heading names spec {}, so only `| {} | <slice> | ... |` rows were searched", num, num),
+            secs => format!("searched `| {} | <slice> | ... |` rows and the `| <slice> | ... |` rows under {}", num, secs.iter().map(|s| format!("\"{}\" (line {})", s.title, s.line)).collect::<Vec<_>>().join(", ")),
+        };
+        return Err(format!("the tracker ({}) has no row for {} {} ({}): add `| {} | {} | <what it does> | <state> |`, or `| {} | <what it does> | <state> |` in the spec's section", tracker::PATH, num, slice, searched, num, slice, slice));
     };
     if tracker::state_unfinished(&row.state) {
         return Err(format!("the tracker row for {} {} (line {}) still says \"{}\": say what was built and verified", num, row.slice, row.line, row.state));

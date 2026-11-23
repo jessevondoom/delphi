@@ -140,6 +140,8 @@ It prints each file it changed (or, with `--check`, each that would change). The
 
 The slice comes from `--spec`/`--slice`, else from this branch's live claim (section 4). With neither, the check is skipped with a note. Otherwise the tracker must have a row for the spec and slice, and its state must not start with `not built`, `not started` or `approved in advance` (case-insensitive): those say the row was not updated for the work. A finding prints the row and what to change; the finisher never edits the tracker (the state is prose only the builder can write).
 
+**F1c (fix, 2026-11-22, on the operator's go in a host session: "can we start on C and D then the new slice you mentioned above while we wait on 881?").** A row has either shape the tracker uses: `| <spec> | <slice> | ... | <state> |` anywhere, or `| <slice> | ... | <state> |` inside the section of the nearest heading above it that names the spec (a heading that says `spec` or `specs` and the number; an amendment `028-A1` names `028`; a range `104 to 110` names each number in it). A section ends at the next heading of the same or a higher level; a table's header line is not a row; the slice id matches whole (`S1` is not `S16`), without bold or backticks around it. Until this fix only the first shape was read, so the check reported no row for slices such as 094 S16 whose section uses the second. A finding names the headings it searched. The claim warning of section 4.1 reads rows the same way.
+
 ### 5.4 Gates and the body
 
 - The finisher **prints** the three gate commands of `AGENTS.md` and says they were not run by it. Running them is F1b (section 8).
