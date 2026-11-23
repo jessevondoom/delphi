@@ -126,7 +126,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/125-load-sensitive-tests-made-deterministic.md",
-    "sha256": "d01cd1e6759c83a2a00b8e66c8547115eea081153145cfe9c0eba4d040d4df51"
+    "sha256": "83c0481e32b917ab5d11c665327d6a580817e30773fd3a51844c1d583b4b4596"
   },
   "source_status_at_hash": {
     "line": {
@@ -139,7 +139,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-18, in a session: \"4: yes stabilize\", in answer to the item \"three timing-sensitive tests keep reddening PRs; stabilize them in a small spec of their own\". The text below was written after that answer, from the code and the CI logs; the operator has not read it. It names two more tests than the three the operator was told about (section 3, T4 and the listed L1 to L3); T4 is built only because its cause is shown from code, and the operator may strike it. It takes effect when the operator merges the pull request that carries it."
     },
-    "sha256": "d01cd1e6759c83a2a00b8e66c8547115eea081153145cfe9c0eba4d040d4df51",
+    "sha256": "83c0481e32b917ab5d11c665327d6a580817e30773fd3a51844c1d583b4b4596",
     "word": "approved"
   },
   "spec": {
