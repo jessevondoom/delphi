@@ -20,7 +20,7 @@ This specification defines how Delphi is packaged, distributed to multiple opera
 
 ## 036-signed-releases-and-start-time-refresh
 
-**036: Signed releases and the start-time refresh (amends 006 section 3.1 and A6)** · approved (per source at `769812251b74`) · tier 0 · [source](../../specs/036-signed-releases-and-start-time-refresh.md)
+**036: Signed releases and the start-time refresh (amends 006 section 3.1 and A6)** · approved (per source at `4b17ff5a437d`) · tier 0 · [source](../../specs/036-signed-releases-and-start-time-refresh.md)
 
 _No standard scope section; open the spec._
 

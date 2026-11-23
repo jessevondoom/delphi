@@ -480,13 +480,14 @@ Prints Markdown by session, from the mission's log (the latest unless --mission)
 
 ### `delphi release`
 
-Whether this build is a signed release.
+Whether this build is a signed release; assemble the release notes.
 
 ```
   delphi release [status]
+  delphi release changelog [--check | --write <version> [--date <YYYY-MM-DD>]] [--repo <dir>]
 ```
 
-Signed by the maintainers' key, unsigned (a local or development build), or invalid. Needs no terminal.
+status: signed by the maintainers' key, unsigned (a local or development build), or invalid. Needs no terminal. changelog (specs/036 section 9): reads the fragments under changelog.d/ in a checkout (one file per change: a `section:` line, Added, Changed, Removed, Fixed or Security, then a Markdown list item) and prints the next release's section; --check only checks them (exit 1 on a malformed one, as `delphi lint` does); --write <version> puts the section above the newest release in CHANGELOG.md, dated --date or today (UTC), and deletes the fragments it used, refusing a version CHANGELOG.md already has and writing nothing when any fragment is malformed. The release pull request runs it; no other command or workflow does.
 
 ### `delphi council`
 
