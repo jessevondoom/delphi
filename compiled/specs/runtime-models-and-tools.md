@@ -134,9 +134,9 @@ A model that has started down a route does not reliably turn back. Anthropic's a
 
 ## 125-load-sensitive-tests-made-deterministic
 
-**125: Load-sensitive tests made deterministic** · approved (per source at `4464ef67b6b4`) · tier 0 · [source](../../specs/125-load-sensitive-tests-made-deterministic.md)
+**125: Load-sensitive tests made deterministic** · approved (per source at `493f543011e0`) · tier 0 · [source](../../specs/125-load-sensitive-tests-made-deterministic.md)
 
-**source excerpt, untrusted** · `specs/125-load-sensitive-tests-made-deterministic.md` line 25
+**source excerpt, untrusted** · `specs/125-load-sensitive-tests-made-deterministic.md` line 26
 
 ```text
 Tests that fail on a pull request they have nothing to do with, and pass on a rerun, cost a macOS job each time and teach people to rerun instead of read. Over 2026-11-16 to 2026-11-18 tests of this kind reddened pull requests or `main` again and again. This spec fixes the four whose cause is shown (T1 to T4), and lists the rest (L1 to L3).

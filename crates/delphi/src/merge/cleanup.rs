@@ -184,6 +184,26 @@ pub fn cleanup_pr(git: &Git, forge: &dyn Forge, pr: u64, dry: bool) -> Report {
     r
 }
 
+/// Remove the remote branch of a rollup the merge command closed unmerged (spec 094 §13.5, S21): only a pull request that is
+/// `CLOSED`, only a `delphi-rollup/` branch (the rollup path made it, §13.4 invariant 6), and then by the rules of `remote_step`
+/// (its tip must still be the head the command pushed; kept while an open pull request is based on it). Nothing else is touched.
+pub fn cleanup_closed_rollup(git: &Git, forge: &dyn Forge, pr: u64) -> Report {
+    let mut r = Report::default();
+    let info = match forge.pr(pr) {
+        Ok(i) => i,
+        Err(e) => {
+            r.fail(format!("#{pr}: cleanup skipped, cannot read the pull request: {e}"));
+            return r;
+        }
+    };
+    if info.state != "CLOSED" || !info.head_ref.starts_with(super::rollup::BRANCH_PREFIX) || info.head_ref.starts_with('-') {
+        r.say(format!("#{pr}: nothing removed, it is not a closed rollup ({}, `{}`)", info.state, info.head_ref));
+        return r;
+    }
+    remote_step(git, forge, &info.head_sha, &info.head_ref, pr, false, &mut r);
+    r
+}
+
 fn remote_step(git: &Git, forge: &dyn Forge, head: &str, branch: &str, pr: u64, dry: bool, r: &mut Report) {
     let heads = match git.remote_heads() {
         Ok(h) => h,
