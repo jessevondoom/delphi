@@ -27,7 +27,7 @@ fn has(args: &[String], f: &str) -> bool {
 }
 
 pub fn usage() -> &'static str {
-    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge claim --spec-number [--by <holder>] [--ttl <dur>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release --spec-number <NNN> [--by <holder>] [--repo <dir>]\n       delphi forge list [--all] [--json] [--sweep] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]\n       delphi forge tracker [--spec <spec>] [--repo <dir>]"
+    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge claim --spec-number [--by <holder>] [--ttl <dur>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release --spec-number <NNN> [--by <holder>] [--repo <dir>]\n       delphi forge list [--all] [--json] [--sweep] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates [--fast-only]] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]\n       delphi forge tracker [--spec <spec>] [--repo <dir>]"
 }
 
 fn now() -> i64 {
@@ -71,7 +71,7 @@ pub fn exec(args: &[String]) -> Out {
         Some("list") if pos.is_empty() => crate::claim_refs::list(&repo, &home, has(rest, "--all"), has(rest, "--json"), has(rest, "--sweep"), has(rest, "--local"), now()),
         Some("finish") if pos.is_empty() => {
             let (spec, slice) = (crate::flag(rest, "--spec"), crate::flag(rest, "--slice"));
-            crate::finisher::finish(&crate::finisher::FinishReq { repo: &repo, home: &home, check: has(rest, "--check"), spec: spec.as_deref(), slice: slice.as_deref(), body: has(rest, "--body"), gates: has(rest, "--gates"), now: now() })
+            crate::finisher::finish(&crate::finisher::FinishReq { repo: &repo, home: &home, check: has(rest, "--check"), spec: spec.as_deref(), slice: slice.as_deref(), body: has(rest, "--body"), gates: has(rest, "--gates") || has(rest, "--fast-only"), fast_only: has(rest, "--fast-only"), now: now() })
         }
         Some("tracker") if pos.is_empty() => tracker_view(&repo, crate::flag(rest, "--spec").as_deref()),
         _ => usage_err("name a subcommand"),
