@@ -245,9 +245,12 @@ pub fn finish_with(r: &FinishReq, runner: &mut dyn crate::finisher_gates::Runner
             finding = true;
         }
         if let Some(c) = &claim {
-            let renewed = slice_claims::claim(&slice_claims::ClaimReq { repo, home: r.home, spec: &c.spec, slice: &c.slice, by: Some(&c.by), ttl_secs: slice_claims::DEFAULT_TTL_SECS, take: false, now: r.now });
+            // The local claim and its ref on origin, with the same lease as `forge claim` (§14.13 I2a); offline stays quiet.
+            let renewed = crate::claim_refs::claim(&slice_claims::ClaimReq { repo, home: r.home, spec: &c.spec, slice: &c.slice, by: Some(&c.by), ttl_secs: slice_claims::DEFAULT_TTL_SECS, take: false, now: r.now }, false);
             if renewed.code == 0 {
                 err.push_str(&renewed.out);
+            } else {
+                err.push_str(&format!("note: the claim was not renewed: {}\n", renewed.err.trim_end()));
             }
         }
     }
