@@ -4,8 +4,11 @@
 //! and the gate passes with that note, as `delphi-engine` `finalize.rs` does for a Builder. When `cargo nextest` is
 //! installed (spec 125-A1 rule 5) the tests run as CI runs them instead: nextest's `ci` profile, whose own single retry
 //! replaces the rerun here (its FLAKY tests are named the same way), then the doc tests by `cargo test --doc`. The process
-//! start is behind [`Runner`], so the tests use a fake.
+//! start is behind [`Runner`], so the tests use a fake. With a fast tier first (spec 135 §14.12, H1, [`run_tiered`]): the
+//! tests and Clippy of the crates the change reaches (`finisher_fast.rs`), then the lint, and only when those pass the full
+//! gates (not with `--fast-only`).
 
+use crate::finisher_fast::Selection;
 use std::path::{Path, PathBuf};
 
 /// One command to run: a program, its arguments and the variables added to the operator's environment.
@@ -129,8 +132,10 @@ pub fn nextest_flaky(output: &str) -> Vec<String> {
 
 /// The rerun of `cargo test` for the named tests only. The names go to every test binary of the workspace; a binary that
 /// has none of them runs nothing, so this builds once more and runs only those tests.
-fn rerun(names: &[String]) -> GateCmd {
-    let mut args = strs(&["test", "--workspace", "--locked", "--no-fail-fast", "--"]);
+fn rerun(names: &[String], scope: &Scope) -> GateCmd {
+    let mut args = strs(&["test"]);
+    args.extend(scope.args());
+    args.extend(strs(&["--locked", "--no-fail-fast", "--"]));
     args.extend(names.iter().cloned());
     args.push("--exact".into());
     GateCmd { program: "cargo".into(), args, env: LEAN.to_vec() }
@@ -197,10 +202,55 @@ fn tail(output: &str) -> String {
 }
 
 /// Runs the gates in order and stops at the first that fails; the rest are `NotRun`. With nextest installed the tests run
-/// by [`nextest_commands`] and nextest does the one retry; without, by [`commands`] and a failing test is rerun here.
+/// by [`nextest_commands`] and nextest does the one retry; without, by [`commands`] and a failing test is rerun here. The
+/// finisher runs [`run_tiered`]; this is the full gates alone, as its tests drive them.
+#[cfg(test)]
 pub fn run(repo: &Path, exe: &Path, runner: &mut dyn Runner) -> Vec<GateResult> {
     let nextest = runner.has_nextest(repo);
-    let cmds: Vec<GateCmd> = if nextest { nextest_commands(exe, repo).to_vec() } else { commands(exe, repo).to_vec() };
+    run_cmds(repo, runner, full_commands(exe, repo, nextest), nextest, &Scope::Workspace)
+}
+
+fn full_commands(exe: &Path, repo: &Path, nextest: bool) -> Vec<GateCmd> {
+    if nextest {
+        nextest_commands(exe, repo).to_vec()
+    } else {
+        commands(exe, repo).to_vec()
+    }
+}
+
+/// Which crates a tier's tests build: the workspace, or the named packages (the fast tier).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Scope {
+    Workspace,
+    Packages(Vec<String>),
+}
+
+impl Scope {
+    fn args(&self) -> Vec<String> {
+        match self {
+            Scope::Workspace => strs(&["--workspace"]),
+            Scope::Packages(ps) => ps.iter().flat_map(|p| ["-p".to_string(), p.clone()]).collect(),
+        }
+    }
+}
+
+/// The fast tier's gates for `packages`: their tests (with nextest's `ci` profile when it is installed, but no doc tests,
+/// which `cargo test -p <a binary crate> --doc` cannot run; the full gates run them), Clippy on their targets, the lint.
+pub fn fast_commands(exe: &Path, repo: &Path, packages: &[String], nextest: bool) -> Vec<GateCmd> {
+    let scope = Scope::Packages(packages.to_vec()).args();
+    let [_, _, lint] = commands(exe, repo);
+    let mut test = if nextest { strs(&["nextest", "run"]) } else { strs(&["test"]) };
+    test.extend(scope.iter().cloned());
+    test.extend(if nextest { strs(&["--locked", "--profile", "ci"]) } else { strs(&["--locked", "--no-fail-fast"]) });
+    let mut clippy = strs(&["clippy"]);
+    clippy.extend(scope);
+    clippy.extend(strs(&["--all-targets", "--locked", "--", "-D", "warnings"]));
+    vec![GateCmd { program: "cargo".into(), args: test, env: LEAN.to_vec() }, GateCmd { program: "cargo".into(), args: clippy, env: Vec::new() }, lint]
+}
+
+/// `cmds` in order, the first being the tests of `scope` (retried by nextest, or rerun here by name), stopping at the first
+/// that fails.
+fn run_cmds(repo: &Path, runner: &mut dyn Runner, cmds: Vec<GateCmd>, nextest: bool, scope: &Scope) -> Vec<GateResult> {
     let mut out = Vec::new();
     let mut stopped = false;
     for (i, cmd) in cmds.into_iter().enumerate() {
@@ -216,7 +266,7 @@ pub fn run(repo: &Path, exe: &Path, runner: &mut dyn Runner) -> Vec<GateResult> 
         } else if first.started && first.ok {
             (State::Passed, Vec::new())
         } else if i == 0 && first.started {
-            test_rerun(repo, runner, &first)
+            test_rerun(repo, runner, &first, scope)
         } else {
             (State::Failed { tail: tail(&first.output) }, Vec::new())
         };
@@ -226,14 +276,99 @@ pub fn run(repo: &Path, exe: &Path, runner: &mut dyn Runner) -> Vec<GateResult> 
     out
 }
 
+/// The gates run with a fast tier first (§14.12).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tiered {
+    pub selection: Selection,
+    /// The fast tier's results; empty when every crate is selected (the full gates are then the only tier).
+    pub fast: Vec<GateResult>,
+    /// The full gates; `None` when the fast tier failed or `--fast-only` stopped after it.
+    pub full: Option<Vec<GateResult>>,
+    pub fast_only: bool,
+}
+
+impl Tiered {
+    /// Whether every gate that had to run ran and passed (with `--fast-only` the full gates do not have to run here).
+    pub fn passed(&self) -> bool {
+        let ok = |rs: &[GateResult]| rs.iter().all(|g| g.state == State::Passed);
+        ok(&self.fast) && match &self.full {
+            Some(f) => ok(f),
+            None => self.fast_only && !self.fast.is_empty(),
+        }
+    }
+}
+
+/// The fast tier, then (unless `fast_only`) the full gates; a failing fast tier stops there. When the change reaches every
+/// crate there is no fast tier and the full gates run, `--fast-only` or not.
+pub fn run_tiered(repo: &Path, exe: &Path, runner: &mut dyn Runner, fast_only: bool) -> Tiered {
+    let nextest = runner.has_nextest(repo);
+    let selection = crate::finisher_fast::selection(repo, runner);
+    let (fast, run_full) = match &selection {
+        Selection::All { .. } => (Vec::new(), true),
+        Selection::Crates { crates, .. } => {
+            let fast = run_cmds(repo, runner, fast_commands(exe, repo, crates, nextest), nextest, &Scope::Packages(crates.clone()));
+            let ok = fast.iter().all(|g| g.state == State::Passed);
+            (fast, ok && !fast_only)
+        }
+    };
+    let full = run_full.then(|| run_cmds(repo, runner, full_commands(exe, repo, nextest), nextest, &Scope::Workspace));
+    Tiered { selection, fast, full, fast_only }
+}
+
+/// Printed when `--fast-only` skipped the full gates.
+pub const FAST_ONLY_NOTE: &str = "full gates: not run (--fast-only). The fast tier is an early check, not the gate: AGENTS.md still requires the three full gates to pass before you commit or push (`delphi forge finish --gates`).";
+
+/// The finisher's printed report of a tiered run.
+pub fn report_tiered(t: &Tiered) -> String {
+    let mut s = String::new();
+    match &t.selection {
+        Selection::All { why } => s.push_str(&format!("fast tier: skipped, every crate is selected ({}); the full gates run\n", why)),
+        Selection::Crates { crates, why } => {
+            s.push_str(&format!("fast tier: {}\n", crates.join(", ")));
+            for w in why {
+                s.push_str(&format!("  {}\n", w));
+            }
+            s.push_str(&report(&t.fast).replacen("gates:", "fast tier gates:", 1));
+        }
+    }
+    match &t.full {
+        Some(f) => s.push_str(&report(f).replacen("gates:", "full gates:", 1)),
+        None if t.fast_only && t.passed() => {
+            s.push_str(FAST_ONLY_NOTE);
+            s.push('\n');
+        }
+        None => s.push_str("full gates: not run (the fast tier failed)\n"),
+    }
+    s
+}
+
+/// The `Checked` lines of a tiered run: the fast tier's gates, labelled, then the full gates, unticked when not run.
+pub fn checked_lines_tiered(t: &Tiered, exe: &Path, repo: &Path) -> String {
+    let mut s = String::new();
+    for l in checked_lines(&t.fast).lines() {
+        s.push_str(&l.replacen("] `", "] fast tier: `", 1));
+        s.push('\n');
+    }
+    match &t.full {
+        Some(f) => s.push_str(&checked_lines(f)),
+        None => {
+            let why = if t.fast_only { "not run: --fast-only; required before you commit or push" } else { "not run: the fast tier failed" };
+            for c in commands(exe, repo) {
+                s.push_str(&format!("- [ ] `{}` ({})\n", shown(&c), why));
+            }
+        }
+    }
+    s
+}
+
 /// A failing `cargo test`: rerun once for the failing tests; the gate passes only when each of them is seen passing.
-fn test_rerun(repo: &Path, runner: &mut dyn Runner, first: &Ran) -> (State, Vec<String>) {
+fn test_rerun(repo: &Path, runner: &mut dyn Runner, first: &Ran, scope: &Scope) -> (State, Vec<String>) {
     let names = failed_tests(&first.output);
     if names.is_empty() {
         // A build error, a crashed binary: nothing to rerun by name.
         return (State::Failed { tail: tail(&first.output) }, Vec::new());
     }
-    let second = runner.run(repo, &rerun(&names));
+    let second = runner.run(repo, &rerun(&names, scope));
     if !second.started {
         return (State::Failed { tail: tail(&second.output) }, Vec::new());
     }
@@ -407,6 +542,85 @@ mod tests {
         assert!(r[1..].iter().all(|g| g.state == State::NotRun));
         // A run with no FLAKY line names none.
         assert!(nextest_flaky("        PASS [   0.010s] delphi-engine kb::tests::a\n").is_empty());
+    }
+
+    /// The answers of the fast tier's questions: a merge base, `changed` as the diff, no untracked file, two crates a <- b
+    /// and c alone, in `root`.
+    fn asked(root: &Path, changed: &str) -> Vec<(bool, String)> {
+        let pkg = |n: &str, deps: &str| format!("{{\"name\":\"{}\",\"manifest_path\":\"{}/crates/{}/Cargo.toml\",\"dependencies\":[{}]}}", n, root.display(), n, deps);
+        let meta = format!("{{\"packages\":[{},{},{}]}}", pkg("a", ""), pkg("b", "{\"name\":\"a\",\"path\":\"x\"}"), pkg("c", ""));
+        vec![(true, "0123456789abcdef0123456789abcdef01234567\n".into()), (true, changed.into()), (true, String::new()), (true, meta)]
+    }
+
+    fn scripted(mut a: Vec<(bool, String)>, gates: Vec<(bool, &str)>) -> Fake {
+        a.extend(gates.into_iter().map(|(ok, o)| (ok, o.to_string())));
+        Fake { answers: a.into_iter().map(|(ok, output)| Ran { started: true, ok, output }).collect(), ran: Vec::new() }
+    }
+
+    fn root() -> (tempfile::TempDir, PathBuf) {
+        let t = tempfile::tempdir().unwrap();
+        let r = std::fs::canonicalize(t.path()).unwrap();
+        (t, r)
+    }
+
+    #[test]
+    fn h1_the_fast_tier_runs_the_reached_crates_then_the_full_gates() {
+        let (_t, r) = root();
+        let mut f = scripted(asked(&r, "crates/a/src/lib.rs\n"), vec![(true, ""); 6]);
+        let t = run_tiered(&r, Path::new("/bin/delphi"), &mut f, false);
+        assert!(t.passed(), "{:?}", t);
+        assert_eq!(f.ran[4].args, strs(&["test", "-p", "a", "-p", "b", "--locked", "--no-fail-fast"]));
+        assert_eq!(f.ran[4].env, LEAN.to_vec());
+        assert_eq!(f.ran[5].args, strs(&["clippy", "-p", "a", "-p", "b", "--all-targets", "--locked", "--", "-D", "warnings"]));
+        assert_eq!(f.ran[6].program, PathBuf::from("/bin/delphi"));
+        assert_eq!(f.ran[7].args, strs(&["test", "--workspace", "--locked", "--no-fail-fast"]));
+        assert_eq!(f.ran.len(), 10);
+        let p = report_tiered(&t);
+        assert!(p.starts_with("fast tier: a, b\n  crates/a/src/lib.rs -> a\n  and their dependents: b\nfast tier gates:\n  1/3 passed: CARGO_INCREMENTAL=0"), "{}", p);
+        assert!(p.contains("full gates:\n  1/3 passed: CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace"), "{}", p);
+        let c = checked_lines_tiered(&t, Path::new("/bin/delphi"), &r);
+        assert!(c.starts_with("- [x] fast tier: `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test -p a -p b"), "{}", c);
+        assert_eq!(c.lines().count(), 6);
+    }
+
+    #[test]
+    fn h1_a_failing_fast_tier_stops_before_the_full_gates_and_its_rerun_keeps_the_crates() {
+        let (_t, r) = root();
+        let mut f = scripted(asked(&r, "crates/c/src/lib.rs\n"), vec![(false, TWO_BINARIES), (false, "test m::two ... FAILED\nfailures:\n    m::two\n")]);
+        let t = run_tiered(&r, Path::new("/bin/delphi"), &mut f, false);
+        assert!(!t.passed());
+        assert_eq!(f.ran.len(), 6, "no clippy, no lint, no full gates");
+        assert_eq!(f.ran[5].args, strs(&["test", "-p", "c", "--locked", "--no-fail-fast", "--", "m::two", "three", "--exact"]));
+        assert_eq!(t.full, None);
+        assert!(report_tiered(&t).ends_with("full gates: not run (the fast tier failed)\n"), "{}", report_tiered(&t));
+        assert!(checked_lines_tiered(&t, Path::new("/bin/delphi"), &r).contains("(not run: the fast tier failed)"));
+    }
+
+    #[test]
+    fn h1_fast_only_stops_after_a_passing_fast_tier_and_says_the_full_gates_are_still_required() {
+        let (_t, r) = root();
+        let mut f = scripted(asked(&r, "crates/c/src/lib.rs\n"), vec![(true, ""); 3]);
+        let t = run_tiered(&r, Path::new("/bin/delphi"), &mut f, true);
+        assert!(t.passed());
+        assert_eq!(f.ran.len(), 7);
+        assert!(report_tiered(&t).contains(FAST_ONLY_NOTE));
+        let c = checked_lines_tiered(&t, Path::new("/bin/delphi"), &r);
+        assert!(c.contains("- [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings` (not run: --fast-only; required before you commit or push)"), "{}", c);
+    }
+
+    #[test]
+    fn h1_when_every_crate_is_selected_only_the_full_gates_run_even_with_fast_only() {
+        let (_t, r) = root();
+        let mut f = scripted(asked(&r, "crates/a/src/lib.rs\nCargo.lock\n"), vec![(true, ""); 3]);
+        let t = run_tiered(&r, Path::new("/bin/delphi"), &mut f, true);
+        assert!(t.passed() && t.fast.is_empty());
+        assert_eq!(f.ran.len(), 7);
+        assert_eq!(f.ran[4].args, strs(&["test", "--workspace", "--locked", "--no-fail-fast"]));
+        assert!(report_tiered(&t).starts_with("fast tier: skipped, every crate is selected (Cargo.lock changes the whole build); the full gates run\n"), "{}", report_tiered(&t));
+        // nextest's fast tier runs the crates under the ci profile and leaves the doc tests to the full gates.
+        let c = fast_commands(Path::new("/bin/delphi"), &r, &["a".into()], true);
+        assert_eq!(c[0].args, strs(&["nextest", "run", "-p", "a", "--locked", "--profile", "ci"]));
+        assert_eq!(c.len(), 3);
     }
 
     #[test]
