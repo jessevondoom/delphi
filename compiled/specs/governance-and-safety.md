@@ -102,7 +102,7 @@ _No standard scope section; open the spec._
 
 ## 093-authority-invariants-batch1
 
-**093: Authority invariants as tests: spawn-site ratchet, must-run gate, home isolation, dependency gate (batch 1), resume and usage honesty (batch 2)** · approved (per source at `3ec8f144dfd0`) · tier 0 · [source](../../specs/093-authority-invariants-batch1.md)
+**093: Authority invariants as tests: spawn-site ratchet, must-run gate, home isolation, dependency gate (batch 1), resume and usage honesty (batch 2)** · approved (per source at `d3afd52cf3c2`) · tier 0 · [source](../../specs/093-authority-invariants-batch1.md)
 
 **source excerpt, untrusted** · `specs/093-authority-invariants-batch1.md` line 26
 
