@@ -54,7 +54,7 @@ fn home(args: &[String]) -> PathBuf {
 }
 
 pub fn usage() -> &'static str {
-    "usage: delphi specs show <spec> [--section <n>] [--json] [--for <label>] [--repo <path>]\n       delphi specs list [--group <g>] [--status <s>] [--json] [--repo <path>]\n       delphi specs report [--json]\n       delphi specs compile [--check] [--repo <path>]\n<spec> is a file name without .md, a spec number, or a unique prefix. --home <dir> names the Delphi home for the read counter."
+    "usage: delphi specs show <spec> [--section <n>] [--json] [--for <label>] [--repo <path>]\n       delphi specs list [--group <g>] [--status <s>] [--json] [--repo <path>]\n       delphi specs report [--json]\n       delphi specs compile [--check] [--repo <path>]\n       delphi specs view [<group>] [--repo <path>]\n<spec> is a file name without .md, a spec number, or a unique prefix. --home <dir> names the Delphi home for the read counter."
 }
 
 /// Runs `show`, `list` or `report` (the arguments start with the subcommand) and returns what they print.

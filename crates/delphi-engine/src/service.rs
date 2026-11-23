@@ -1631,7 +1631,7 @@ impl EngineService {
             Some(sl) => {
                 let num = spec.as_ref().and_then(|(stem, _)| delphi_core::specdoc::spec_number(&format!("{stem}.md"))).ok_or_else(|| bad("`slice` needs `spec`".into()))?;
                 let tracker = std::fs::read_to_string(project.join(rj::TRACKER)).unwrap_or_default();
-                Some(rj::slice_row(&tracker, &num, sl).unwrap_or_else(|| format!("(the tracker has no row for {num} {})", sl.chars().take(16).collect::<String>())))
+                Some(rj::slice_file(&project, &num, sl).or_else(|| rj::slice_row(&tracker, &num, sl)).unwrap_or_else(|| format!("(the tracker has no row for {num} {})", sl.chars().take(16).collect::<String>())))
             }
         };
         let host_family = crate::council_panel::host_family(p["model"].as_str(), &c.tool);

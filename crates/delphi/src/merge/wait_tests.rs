@@ -110,7 +110,7 @@ fn with<R>(w: &World, wait: Option<Duration>, f: impl FnOnce(&mut Ctx) -> R) -> 
     let made = RefCell::new(HashMap::new());
     let refresh = Refreshing { refresher: w, clock: w, wait, poll: Duration::from_secs(60), made: &made };
     let mut term = FakeTerminal::new(false, &[]);
-    let mut ctx = Ctx { forge: w.forge, ledger: &ledger, errors: &errors, term: &mut term, quote: Some("merge #7".into()), dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-21T00:00:00Z".to_string(), refresh: Some(refresh), claims: None };
+    let mut ctx = Ctx { forge: w.forge, ledger: &ledger, errors: &errors, term: &mut term, quote: Some("merge #7".into()), dry_run: false, git: None, session: None, settle: Duration::ZERO, now: || "2026-11-21T00:00:00Z".to_string(), refresh: Some(refresh), claims: None, rollup: None };
     let out = f(&mut ctx);
     (out, run)
 }
@@ -253,7 +253,7 @@ fn an_auto_session_refreshes_and_moves_on_then_merges_the_new_head_at_a_later_po
     behind_pr(&forge, 7, 1);
     forge.with_ready_pr(8, "head8", &["b.rs"]);
     let w = World::new(&forge);
-    let caps = Caps { max_prs: 10, run_for: Duration::from_secs(4 * 3600), pause_after_errors: 2, idle: Duration::from_secs(1800), poll: Duration::from_secs(60) };
+    let caps = Caps { max_prs: 10, run_for: Duration::from_secs(4 * 3600), pause_after_errors: 2, idle: Duration::from_secs(1800), poll: Duration::from_secs(60), batch: None };
     let (s, run) = with(&w, None, |c| auto::run(c, &caps, &Attestation::ChatQuote("auto for the evening".into()), &w, &|| false, &mut |_| {}));
     // #7 was refreshed, #8 merged in the same pass, and #7's new head merged at a later poll once green.
     assert_eq!(w.refreshed.borrow().as_slice(), &[7]);

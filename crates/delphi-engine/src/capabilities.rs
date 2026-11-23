@@ -146,9 +146,7 @@ pub fn agy_version(program: &str) -> Option<String> {
 /// started). Its output goes to a temporary file, not a pipe, so a grandchild that outlives the kill cannot hold this call open.
 pub fn cli_version_bounded(program: &str, secs: u64) -> Option<String> {
     use std::io::Read as _;
-    let dir = std::env::temp_dir();
-    let path = dir.join(format!("delphi-version-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
-    let out = std::fs::File::create(&path).ok()?;
+    let (path, out) = version_capture_file()?;
     let mut child = std::process::Command::new(program).arg("--version").stdin(std::process::Stdio::null()).stdout(out).stderr(std::process::Stdio::null()).spawn().ok()?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     let status = loop {
@@ -171,6 +169,28 @@ pub fn cli_version_bounded(program: &str, secs: u64) -> Option<String> {
     let _ = std::fs::remove_file(&path);
     let line = text.lines().next()?.trim().to_string();
     (!line.is_empty()).then_some(line)
+}
+
+/// A fresh name for the file a version read captures its answer in: the process id and a counter of this process, never the clock.
+/// (The clock moves in whole microseconds on macOS, so a name from it repeated for reads started close together, and two reads at once
+/// truncated or removed each other's answer: spec 125, L1 and L2, slice R5.)
+fn version_capture_path() -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("delphi-version-{}-{n}", std::process::id()))
+}
+
+/// The capture file, created new: never one already there (a file left by an earlier process with the same id is passed over).
+fn version_capture_file() -> Option<(std::path::PathBuf, std::fs::File)> {
+    for _ in 0..16 {
+        let path = version_capture_path();
+        match std::fs::File::create_new(&path) {
+            Ok(f) => return Some((path, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 fn probe_ipr(contract: &str) -> Ipr {
@@ -653,6 +673,49 @@ credential = "env:K"
             ],
             usage: Usage { input_tokens: 300, cache_read_tokens: 0, cache_write_tokens: 0, output_tokens: 100, thinking_tokens: 0 },
             stop_reason: "tool_use",
+        }
+    }
+
+    /// Spec 125 R5: two version reads in one process never share a capture file. On macOS the wall clock moves in whole
+    /// microseconds, so a name from the clock repeated for calls made close together, and two granted seats reading their CLI's
+    /// version at once read, truncated or removed each other's answer ("the Claude CLI's version could not be determined").
+    #[test]
+    fn version_capture_files_made_back_to_back_are_distinct() {
+        let paths: Vec<std::path::PathBuf> = (0..200).map(|_| version_capture_path()).collect();
+        let distinct: std::collections::HashSet<_> = paths.iter().collect();
+        assert_eq!(distinct.len(), paths.len(), "a capture path repeated");
+    }
+
+    /// Spec 125 R5: many version reads started at the same moment in one process each get their own CLI's answer.
+    #[test]
+    fn concurrent_version_reads_each_get_their_own_answer() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let n = 16;
+        let progs: Vec<String> = (0..n)
+            .map(|i| {
+                let p = d.path().join(format!("cli-{i}"));
+                std::fs::write(&p, format!("#!/bin/sh\necho '2.1.{i} (stand-in)'\n")).unwrap();
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+                p.display().to_string()
+            })
+            .collect();
+        for _round in 0..5 {
+            let gate = std::sync::Arc::new(std::sync::Barrier::new(n));
+            let handles: Vec<_> = progs
+                .iter()
+                .cloned()
+                .map(|p| {
+                    let gate = gate.clone();
+                    std::thread::spawn(move || {
+                        gate.wait();
+                        cli_version_bounded(&p, 30)
+                    })
+                })
+                .collect();
+            for (i, h) in handles.into_iter().enumerate() {
+                assert_eq!(h.join().unwrap().as_deref(), Some(format!("2.1.{i} (stand-in)").as_str()), "read {i}");
+            }
         }
     }
 

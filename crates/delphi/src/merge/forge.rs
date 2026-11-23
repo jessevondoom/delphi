@@ -86,6 +86,9 @@ pub trait Forge {
     fn behind_by(&self, base_ref: &str, head_sha: &str) -> Result<u64, ForgeError>;
     /// Open a pull request from `head` (a branch already pushed) into `base`; its number. Only `repair-base` calls it (§11.3.4).
     fn open_pr(&self, base: &str, head: &str, title: &str, body: &str) -> Result<u64, ForgeError>;
+    /// Close a pull request with a comment. Only a rollup's merge calls it, for a constituent GitHub did not mark merged although
+    /// its approved head is in the base (spec 094 §13.2 step 7, OD-17).
+    fn close(&self, n: u64, comment: &str) -> Result<(), ForgeError>;
 }
 
 /// The pull request number at the end of the URL `gh pr create` prints.
@@ -272,6 +275,10 @@ impl Forge for Gh {
             return Err(ForgeError::Failed { what: "open a pull request".into(), detail: format!("`{head}` into `{base}` has characters that are not allowed in a ref here") });
         }
         parse_created(&self.run("open a pull request", &["pr", "create", "--base", base, "--head", head, "--title", title, "--body", body], &[])?)
+    }
+
+    fn close(&self, n: u64, comment: &str) -> Result<(), ForgeError> {
+        self.run("close a pull request", &["pr", "close", &n.to_string(), "--comment", comment], &[]).map(|_| ())
     }
 }
 
