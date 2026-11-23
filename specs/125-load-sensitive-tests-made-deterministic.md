@@ -17,6 +17,7 @@ tags: [spec, tests, ci, flaky, sandbox, harness, doctor, signals]
 
 > **Status: approved by the operator, 2026-11-18** (see the frontmatter).
 > **Amendment 125-A1 (section 10), approved by the operator 2026-11-22:** CI retries a failing test once and records it as flaky; a second failure fails the run.
+> **Amendment 125-A2 (section 11), approved by the operator 2026-11-22:** the macOS tests are built once (`cargo nextest archive`) and run in two halves on two runners.
 > **Amends, from its approval:** nothing by text. No product behavior changes. The tests keep what they protect in [`specs/092`](092-operator-authorized-tests.md) (the granted seat and the authorized profile) and [`specs/083`](083-learning-signals-and-host-diagnostics.md) (the host chain in `delphi doctor`).
 
 ---
@@ -81,7 +82,7 @@ The case seen in practice on a developer's machine is a copy of these same tests
 ## 6. Not built here, and why
 
 - **L3.** The file lock of T2 could be taken by the two engine sweep tests as well, and would end the overlap with each other and with the sandbox crate. It would not end the rise from the other engine tests, which no turn can cover. It is left until a failure is caught with its output, so that the fix is aimed at what happened.
-- **L1 and L2.** No cause is shown. The first step is a test-only change that prints why the version was not read (deadline, start failure, exit status or empty output), which needs a failure to be caught first. Raising the 5 seconds or retrying the version call would be a guess, and the 5 seconds are product behavior of spec 092.
+- **L1 and L2.** (Cause shown and fixed later, by slice R5, section 10.8.) No cause is shown. The first step is a test-only change that prints why the version was not read (deadline, start failure, exit status or empty output), which needs a failure to be caught first. Raising the 5 seconds or retrying the version call would be a guess, and the 5 seconds are product behavior of spec 092.
 - **A general retry in CI.** `CONTRIBUTING.md` said there is none, and this spec kept that until amendment 125-A1 (section 10, operator, 2026-11-22), which adds exactly one retry per failing test.
 - **The console pty tests.** They were stabilized in #154 and #631 and none failed in this window.
 - **A change to `PROC_HEADROOM`, to the sweep or to the probe.** They belong to spec 092.
@@ -179,3 +180,57 @@ R1 to R3 change `.github/` and are gate-changing: the operator merges them at a 
 - The pull request's own CI: the jobs pass on nextest; the summary page renders (with "no flaky tests" or a list); the JUnit artifact is there; the integration job's log shows the review-date test filtered out and the once-only check passing.
 - `actionlint` on the workflow before the push.
 - After merge: the flaky list of each `main` run, and the share of red `main` runs over the next ten days against the 20.7% above.
+
+### 10.8 Later slices (2026-11-22)
+
+Built under the operator's go of 2026-11-22 ("keep building anything you can") and under rule 3 and section 4 above; no rule changes.
+
+| Slice | Content |
+| :-- | :-- |
+| R5 | L1 and L2's cause, shown, and fixed. `cli_version_bounded` (`crates/delphi-engine/src/capabilities.rs`) wrote the CLI's answer to a temporary file named after the process id and the wall clock in nanoseconds. On macOS that clock moves in whole microseconds, so two version reads in one process started within the same microsecond shared one file and one read lost its answer (truncated, or removed by the other before it was read): "the Claude CLI's version could not be determined". It fits every observation: macOS only (Linux's clock has nanoseconds), under `cargo test` (one process for all a crate's tests; nextest runs each test in its own process), and fast (the failed test of run 45064707348 ended about 0.3 s after its neighbours started, not after the 5 s bound). The file is now named by the process id and a process-wide counter and created exclusively. Product effect: a daemon that reads two CLIs' versions at once (two granted seats, a forge probe beside a span) no longer turns one of them away; nothing else changes. Regression tests: names made back to back are distinct; 16 reads started at one barrier each get their own CLI's answer |
+| R6 | the flaky record across runs: `dev/flaky_record.py` downloads the `junit-*` artifacts of the last N `ci` runs (`gh run download`, read only) and prints, per test that was flaky or failed in any of them, the flaky count, the failed-twice count, the runs it ran in, and the first and last run, then the tests flaky in 2 or more runs under "needs an owner" (rule 3). It files no issue (no new token permission): the operator or a builder does, naming the runs it prints. `self-test` checks it on built-in samples |
+
+## 11. Amendment 125-A2: the macOS tests are built once and run on two runners (operator, 2026-11-22)
+
+**Approved by the operator, 2026-11-22**, in a session: "keep building optimistically in the order you defined", after "keep building anything you can" earlier the same day. The order named this item I1 of the CI velocity plan: build the macOS tests once, split them across two runners from a `cargo nextest archive`, then measure. The text below was written after those answers; the operator has not read it and no Council has reviewed it. It changes `.github/workflows/`, so its pull request is gate-changing (spec 094 §3.4) and the operator merges it at a terminal. It changes nothing in sections 1 to 10: the same tests run under the same `ci` profile (one retry, flaky recorded, 125-A1), with the same review-date skip (spec 093-A1).
+
+### 11.1 Why
+
+Measured on 2026-11-22: the macOS job is the whole critical path of CI. Its median is about 19.9 minutes (the `main` run 45086371128: 21.0 minutes, of which the test step 17.9: 3 m 22 s to build, 14.4 minutes to run 5,858 tests, 28 skipped; Clippy 1.6 minutes). The slowest Linux job takes about 5 minutes. A pull request waits for the macOS job; every minute cut from it is a minute cut from every ready pull request and every `main` run. The test run is the largest part, and a `macos-latest` runner has three cores, so a second runner halves it.
+
+### 11.2 The rule
+
+1. **One build.** A job `build-macos` compiles every test binary of the workspace once and packs them with `cargo nextest archive` (the binaries, and the output directories of build scripts that nextest needs). It hands the archive to the test jobs as a workflow artifact kept one day. The same job runs the doc tests, Clippy (also when the archive fails), the two Python self-tests, and saves the build directory on a push to `main`, as the one job did.
+2. **Two halves.** A job `test-macos`, a matrix of two, downloads the archive into a fresh checkout and runs `cargo nextest run --archive-file … --partition slice:N/2` under the `ci` profile. Each half writes its own JUnit report (`junit-macos-1`, `junit-macos-2`) and its own job summary of flaky tests. A failure in one half does not cancel the other (`fail-fast: false`).
+3. **The same tests.** The two halves together run exactly the tests the one job ran: `slice` partitions the one sorted list of tests that the filter selects, so each test is in exactly one half. The review-date skip of spec 093-A1 is the same filter, applied in each half, and each half checks, over the whole archive, that the name matches exactly one test (the Linux integration job's check; the one macOS job did not have it).
+4. **The checkout stays.** The archive is unpacked into the checkout (`--extract-to .`, `--workspace-remap .`), so the build directory sits at `target/` under the same absolute path it had when it was compiled. Tests read fixtures through `CARGO_MANIFEST_DIR` and binaries through `env!("CARGO_BIN_EXE_delphi")`, both compiled-in paths; nextest reads `.config/nextest.toml` from the checkout.
+5. **Drafts as before.** While a pull request is a draft both macOS jobs are skipped; `ci-gate` (spec 094 §12.2.1) needs both and accepts both skipped only on a draft pull request.
+
+### 11.3 Cost in macOS jobs
+
+A run takes three macOS jobs instead of one; the account may run five at once. The build job and the two halves never overlap, so one run holds at most two macOS slots at any moment, for a shorter time. Measured over the days before, the macOS queue's 90th percentile was about 0.1 minutes: slots were rarely all taken. With two runs in flight at once (two ready pull requests, or a pull request and `main`) four slots are in use; a third run then waits for a slot. The build is no longer done twice for nothing: the one runner used to build and test in series, and the extra minutes are the two halves' setup (a checkout, nextest, the download), about a minute each.
+
+### 11.4 Options considered
+
+| | Option | How it would be tested |
+| :-- | :-- | :-- |
+| A, conventional | Each half builds the tests itself (two full jobs with `--partition`, no archive). | Two runners each spend the ~3.4-minute build (more on a cold cache) and restore the ~GB build directory; the critical path keeps the build plus half the tests. Rejected: it pays the build twice for the same gain, and doubles the cache traffic. |
+| B, removes a constraint | Remove the one-runner constraint fully: three or four halves. | The same measurement with `slice:N/3`. Not now: each extra half costs a macOS slot and a minute of setup for a shrinking gain, and a run of four slots leaves one for every other run. Measure two first (11.6); three is a one-line change if two leaves the macOS path the longest. |
+| C, by a named method (build once, test many: nextest's "reuse build") | One build job archives the test binaries; N test jobs run partitions of the archive. | This pull request's own ready run: both halves pass, the counts add up to the one job's, and the critical path is the build job plus the slower half. **Chosen.** |
+
+Partition: `slice` (every Nth test of the one sorted list of all tests) over `hash` (each test by a hash of its name) and `count` (every Nth test within each binary). `slice` gives halves of equal size and spreads the long families (the `investigation_tests`, the sweeps, the granted seat tests, which sit together in the sorted list) across both; `hash` keeps a test in the same half when others are added but can leave the halves uneven; `count` balances each binary but not the whole run. The halves need only be even, not stable.
+
+### 11.5 Slices
+
+| Slice | Content |
+| :-- | :-- |
+| P1 | this amendment; `build-macos` and the two `test-macos` halves in `ci.yml`; `ci-gate`'s needs and its draft rule; `CONTRIBUTING.md`'s sentence on the jobs |
+
+P1 changes `.github/` and is gate-changing: the operator merges it at a terminal.
+
+### 11.6 Verification plan
+
+- `actionlint` and a YAML parse of the workflow before the push; the shell of the test step run under `/bin/bash` 3.2 with `-eo pipefail`.
+- Locally on macOS before the push: `cargo nextest archive`, then `cargo nextest list --archive-file …` with each partition, from a second copy of the checkout; the two lists are disjoint and their union equals `cargo nextest list --workspace`.
+- On this pull request's own ready run: both halves pass; the tests run in the two halves (plus the skipped and the one review-date test filtered out) add up to the count of the one macOS job on `main` (5,858 run and 28 skipped on run 45086371128; the pull request's own count is the one that counts, since tests are added every day); the review-date check finds exactly one test; the flaky summary and both JUnit artifacts are there. The critical path (the build job's time plus the slower half's, from the job timestamps) is reported against the one job's 19.9-minute median.
+- After merge: the macOS path on `main` and on ready pull requests over the next week, against the median above. If the slower half plus the build is still longer than every Linux job by more than a few minutes, try three halves (option B).

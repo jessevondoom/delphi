@@ -63,7 +63,7 @@ pub struct Refreshing<'a> {
 }
 
 /// While waiting, these refusals mean "not yet": CI has not started or finished on the new head.
-fn not_yet(reason: &str) -> bool {
+pub(super) fn not_yet(reason: &str) -> bool {
     reason.starts_with("checks are still running") || reason.starts_with("no checks are reported") || reason.starts_with("GitHub has not finished")
 }
 

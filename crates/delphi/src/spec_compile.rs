@@ -11,7 +11,8 @@
 //! edited for the compile (a ratified spec's hash would change).
 //!
 //! The human views (an index and one page per group, `spec_views.rs`) are rendered from the compiled JSON and the groups file
-//! alone, never from the sources a second time. `--check` therefore asks two questions: do the committed JSON files equal a fresh
+//! alone, never from the sources a second time. Only the index is written and committed; a group's page is printed on demand by
+//! `delphi specs view <group>` (spec 088 §14), so parallel spec pull requests no longer conflict in it. `--check` therefore asks two questions: do the committed JSON files equal a fresh
 //! compile of the sources, and do the committed views equal a fresh render of the JSON that is on disk beside them.
 //!
 //! A compile is all or nothing: every spec compiles and every view renders in memory first, and only when none fails is
@@ -181,18 +182,74 @@ pub fn compile(sources: &[Source], groups: &Groups) -> Result<BTreeMap<String, S
 pub struct Output {
     /// Stem to the text of `data/<stem>.json`.
     pub data: BTreeMap<String, String>,
-    /// File name to the text of `<name>`: the index and one page per group.
+    /// File name to the text of `<name>`: the committed views (the index; spec 088 §14).
     pub views: BTreeMap<String, String>,
 }
 
-/// The views for a set of compiled files, rendered from those files and the groups alone.
-pub fn render_views(data: &BTreeMap<String, String>, groups: &Groups) -> Result<BTreeMap<String, String>, String> {
+fn parsed(data: &BTreeMap<String, String>) -> Result<BTreeMap<String, Value>, String> {
     let mut docs = BTreeMap::new();
     for (stem, text) in data {
         let v: Value = serde_json::from_str(text).map_err(|e| format!("{}/{}.json is not JSON: {}", DATA_DIR, stem, e))?;
         docs.insert(stem.clone(), v);
     }
-    spec_views::render(&docs, groups)
+    Ok(docs)
+}
+
+/// The committed views for a set of compiled files (the index, spec 088 §14), rendered from those files and the groups alone.
+pub fn render_views(data: &BTreeMap<String, String>, groups: &Groups) -> Result<BTreeMap<String, String>, String> {
+    let mut all = spec_views::render(&parsed(data)?, groups)?;
+    all.retain(|name, _| spec_views::COMMITTED.contains(&name.as_str()));
+    Ok(all)
+}
+
+/// `delphi specs view [<group>]` in `repo` (spec 088 §14): a group's page, rendered from the committed JSON and the groups file by
+/// the renderer the compile uses, or, with no group, the groups' ids and titles. Writes nothing. The page is only as current as the
+/// committed JSON; `delphi specs compile --check` says whether that is current.
+pub fn view_in(repo: &Path, group: Option<&str>) -> Result<String, (i32, Vec<String>)> {
+    let groups = match fs::read_to_string(repo.join(GROUPS_FILE)) {
+        Ok(t) => parse_groups(&t).map_err(|e| (1, vec![format!("delphi specs view: {}", e)]))?,
+        Err(e) => return Err((2, vec![format!("delphi specs view: cannot read {} under {}: {}", GROUPS_FILE, repo.display(), e)])),
+    };
+    let mut ordered = groups.groups.clone();
+    ordered.sort_by(|a, b| (a.order, &a.id).cmp(&(b.order, &b.id)));
+    let Some(id) = group else {
+        return Ok(ordered.iter().map(|g| format!("{}\t{}\n", g.id, g.title)).collect());
+    };
+    if !ordered.iter().any(|g| g.id == id) {
+        let ids: Vec<&str> = ordered.iter().map(|g| g.id.as_str()).collect();
+        return Err((1, vec![format!("delphi specs view: no group `{}`; the groups are {}", id, ids.join(", "))]));
+    }
+    let mut data = BTreeMap::new();
+    for (name, is_dir) in names_in(&repo.join(DATA_DIR)) {
+        if let (false, Some(stem)) = (is_dir, name.strip_suffix(".json")) {
+            let text = fs::read_to_string(repo.join(DATA_DIR).join(&name)).map_err(|e| (2, vec![format!("delphi specs view: cannot read {}/{}: {}", DATA_DIR, name, e)]))?;
+            data.insert(stem.to_string(), text);
+        }
+    }
+    let docs = parsed(&data).map_err(|e| (1, vec![format!("delphi specs view: {}", e)]))?;
+    let pages = spec_views::render(&docs, &groups).map_err(|e| (1, vec![format!("delphi specs view: {}", e)]))?;
+    pages.get(&format!("{}.md", id)).cloned().ok_or_else(|| (1, vec![format!("delphi specs view: no page for `{}`", id)]))
+}
+
+fn view_cmd(args: &[String]) -> i32 {
+    let repo = crate::flag(args, "--repo").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let pos: Vec<&String> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || args[*i - 1] != "--repo")).map(|(_, a)| a).collect();
+    if pos.len() > 1 || args.iter().any(|a| a.starts_with("--") && a != "--repo") {
+        eprintln!("{}", crate::specs_cmd::usage());
+        return 2;
+    }
+    match view_in(&repo, pos.first().map(|s| s.as_str())) {
+        Ok(text) => {
+            print!("{}", text);
+            0
+        }
+        Err((code, lines)) => {
+            for l in &lines {
+                eprintln!("{}", l);
+            }
+            code
+        }
+    }
 }
 
 /// Compiles every source, then renders the views from the result. All or nothing.
@@ -297,6 +354,7 @@ pub fn check(repo: &Path, groups: &Groups, out: &Output) -> Vec<String> {
 pub fn cli(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("compile") => compile_cmd(&args[1..]),
+        Some("view") => view_cmd(&args[1..]),
         Some("show" | "list" | "report") => crate::specs_cmd::run(args),
         _ => {
             eprintln!("{}", crate::specs_cmd::usage());
@@ -625,21 +683,56 @@ mod tests {
         fs::write(t.path().join(GROUPS_FILE), groups).unwrap();
         assert_eq!(run(&t, &[]), 0);
         assert_eq!(listing(&t), vec!["001-first.json"]);
-        // The group that lost its only spec is gone from the list, so its page goes too.
-        assert!(!t.path().join(TREE_DIR).join("b.md").exists() && t.path().join(TREE_DIR).join("a.md").exists());
+        assert!(!fs::read_to_string(t.path().join(TREE_DIR).join("index.md")).unwrap().contains("002-second"));
     }
 
     // ── the views ────────────────────────────────────────────────────────────────────────────────
 
+    // Spec 088 §14: the index and the JSON are written and committed; a group's page is not.
     #[test]
-    fn compile_writes_the_index_and_a_page_per_group_beside_the_data() {
+    fn compile_writes_the_index_and_the_data_and_no_group_page() {
         let t = two();
         assert_eq!(run(&t, &[]), 0);
         let files: Vec<String> = snapshot(&t).into_keys().collect();
-        assert_eq!(files, vec!["a.md", "b.md", "data/001-first.json", "data/002-second.json", "index.md"]);
-        let s = snapshot(&t);
-        assert!(s["a.md"].contains("## 001-first") && s["b.md"].contains("## 002-second"));
-        assert!(s["index.md"].contains("approved (per source at `"));
+        assert_eq!(files, vec!["data/001-first.json", "data/002-second.json", "index.md"]);
+        let index = &snapshot(&t)["index.md"];
+        assert!(index.contains("approved (per source at `"));
+        assert!(!index.contains("](./a.md") && !index.contains("](./b.md"), "the index links no page that is not committed");
+        assert!(index.contains("| [001-first](../../specs/001-first.md) |") && index.contains("| `a` |"));
+    }
+
+    // Spec 088 §14: `delphi specs view <group>` prints the page the renderer makes, from the committed JSON only.
+    #[test]
+    fn view_prints_a_group_page_from_the_committed_json() {
+        let t = two();
+        assert_eq!(run(&t, &[]), 0);
+        let g = parse_groups(GROUPS).unwrap();
+        fs::remove_dir_all(t.path().join("specs")).unwrap();
+        let data: BTreeMap<String, String> = snapshot(&t).into_iter().filter_map(|(k, v)| k.strip_prefix("data/").and_then(|n| n.strip_suffix(".json")).map(|s| (s.to_string(), v))).collect();
+        let all = spec_views::render(&parsed(&data).unwrap(), &g).unwrap();
+        let a = view_in(t.path(), Some("a")).unwrap();
+        assert_eq!(a, all["a.md"]);
+        assert!(a.starts_with(spec_views::BANNER) && a.contains("## 001-first") && !a.contains("002-second"));
+        assert!(view_in(t.path(), Some("b")).unwrap().contains("## 002-second"));
+        assert_eq!(view_in(t.path(), None).unwrap(), "a\tA\nb\tB\n");
+        let (code, e) = view_in(t.path(), Some("nowhere")).unwrap_err();
+        assert!(code == 1 && e[0].contains("no group `nowhere`") && e[0].contains("a, b"), "{:?}", e);
+        assert_eq!(snapshot(&t).len(), 3, "a view writes nothing");
+        assert_eq!(cli(&["view".into(), "a".into(), "b".into()]), 2);
+    }
+
+    // Spec 088 §14: a group page left by a branch made before the change is an orphan; the compile removes it.
+    #[test]
+    fn a_left_over_group_page_is_an_orphan() {
+        let t = two();
+        assert_eq!(run(&t, &[]), 0);
+        let g = parse_groups(GROUPS).unwrap();
+        fs::write(t.path().join(TREE_DIR).join("a.md"), view_in(t.path(), Some("a")).unwrap()).unwrap();
+        assert_eq!(check(t.path(), &g, &built(&t)), vec![format!("{}/a.md is not something the compile writes (an orphan)", TREE_DIR)]);
+        assert_eq!(run(&t, &["--check"]), 1);
+        assert_eq!(run(&t, &[]), 0);
+        assert!(!t.path().join(TREE_DIR).join("a.md").exists());
+        assert_eq!(run(&t, &["--check"]), 0);
     }
 
     #[test]
@@ -647,18 +740,18 @@ mod tests {
         let t = two();
         assert_eq!(run(&t, &[]), 0);
         let g = parse_groups(GROUPS).unwrap();
-        fs::write(t.path().join(TREE_DIR).join("a.md"), "edited by hand\n").unwrap();
-        fs::remove_file(t.path().join(TREE_DIR).join("b.md")).unwrap();
+        fs::write(t.path().join(TREE_DIR).join("index.md"), "edited by hand\n").unwrap();
         fs::write(t.path().join(TREE_DIR).join("c.md"), "a page for a group that does not exist\n").unwrap();
         let d = check(t.path(), &g, &built(&t));
         assert_eq!(
             d,
             vec![
-                format!("{}/a.md differs from a fresh render of the JSON beside it", TREE_DIR),
-                format!("{}/b.md is missing", TREE_DIR),
                 format!("{}/c.md is not something the compile writes (an orphan)", TREE_DIR),
+                format!("{}/index.md differs from a fresh render of the JSON beside it", TREE_DIR),
             ]
         );
+        fs::remove_file(t.path().join(TREE_DIR).join("index.md")).unwrap();
+        assert!(check(t.path(), &g, &built(&t)).contains(&format!("{}/index.md is missing", TREE_DIR)));
         assert_eq!(run(&t, &["--check"]), 1);
         assert_eq!(run(&t, &[]), 0, "a compile repairs all three");
         assert_eq!(run(&t, &["--check"]), 0);
@@ -691,8 +784,8 @@ mod tests {
         let json = val(&s["data/001-first.json"]);
         assert_eq!(json["summary"]["kind"], "quote", "stored as data, marked as a quotation");
         assert_eq!(json["source_status_at_hash"]["word"], "draft", "the instruction did not change the status");
-        // On the group page the instruction appears exactly once, between the fences that follow the label.
-        let page = &s["a.md"];
+        // On the group page (printed on demand) the instruction appears exactly once, between the fences that follow the label.
+        let page = &view_in(t.path(), Some("a")).unwrap();
         let lines: Vec<&str> = page.lines().collect();
         let label = lines.iter().position(|l| l.starts_with("**source excerpt, untrusted**")).expect("a label");
         assert!(lines[label + 2].starts_with("```") && lines[label + 2].ends_with("text"), "{:?}", lines[label + 2]);
@@ -706,8 +799,8 @@ mod tests {
     }
 
     /// Spec 088 §13.7 test 22, the guard on the real corpus: the repository's committed JSON rendered whole, and once without each
-    /// spec. Every page of each smaller rendering is kept line for line in the full one, so no line of a committed view depends on
-    /// the whole set. A count, a total or a "last compiled" date brought back into the renderer fails here.
+    /// spec. Every page of each smaller rendering is kept line for line in the full one, so no line of a view, committed or printed
+    /// on demand (§14), depends on the whole set. A count, a total or a "last compiled" date brought back into the renderer fails here.
     #[test]
     fn the_repos_views_change_no_line_when_any_one_spec_is_removed() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

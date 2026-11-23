@@ -100,145 +100,151 @@
     },
     {
       "level": 3,
-      "line": 143,
+      "line": 145,
       "number": "5.4",
       "title": "Gates and the body"
     },
     {
       "level": 2,
-      "line": 148,
+      "line": 150,
       "number": "6",
       "title": "F2: a cross-family review that runs the tests"
     },
     {
       "level": 3,
-      "line": 150,
+      "line": 152,
       "number": "6.1",
       "title": "The call"
     },
     {
       "level": 3,
-      "line": 165,
+      "line": 167,
       "number": "6.2",
       "title": "What the daemon does"
     },
     {
       "level": 3,
-      "line": 175,
+      "line": 177,
       "number": "6.3",
       "title": "Sizes and the answer"
     },
     {
       "level": 3,
-      "line": 182,
+      "line": 184,
       "number": "6.4",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 186,
+      "line": 188,
       "number": "7",
       "title": "F4: the experiment"
     },
     {
       "level": 2,
-      "line": 196,
+      "line": 198,
       "number": "8",
       "title": "Deferred"
     },
     {
       "level": 2,
-      "line": 203,
+      "line": 205,
       "number": "9",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 211,
+      "line": 213,
       "number": "10",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 218,
+      "line": 220,
       "number": "11",
       "title": "Open decisions (take the recommendation unless the operator says otherwise)"
     },
     {
       "level": 2,
-      "line": 224,
+      "line": 226,
       "number": "12",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 238,
+      "line": 240,
       "number": "13",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 249,
+      "line": 251,
       "number": "14",
       "title": "Amendment (operator, 2026-11-21): after F4"
     },
     {
       "level": 3,
-      "line": 253,
+      "line": 255,
       "number": "14.1",
       "title": "F2c: honest results (report item 2)"
     },
     {
       "level": 3,
-      "line": 260,
+      "line": 262,
       "number": "14.2",
       "title": "Toolchains in the investigation sandbox (report item 3)"
     },
     {
       "level": 3,
-      "line": 264,
+      "line": 266,
       "number": "14.3",
       "title": "F2d: context before judgement (report item 4)"
     },
     {
       "level": 3,
-      "line": 273,
+      "line": 275,
       "number": "14.4",
       "title": "F1b: the finisher runs the gates (report item 5)"
     },
     {
       "level": 3,
-      "line": 279,
+      "line": 281,
       "number": "14.5",
       "title": "F4b: the rerun (report item 6)"
     },
     {
       "level": 3,
-      "line": 283,
+      "line": 285,
       "number": "14.6",
       "title": "Acceptance"
     },
     {
       "level": 3,
-      "line": 291,
+      "line": 293,
       "number": "14.7",
       "title": "Tool access for forge seats (operator, 2026-11-21)"
     },
     {
       "level": 3,
-      "line": 312,
+      "line": 314,
       "number": "14.8",
       "title": "Correction to 14.2: ratify, and the macOS paths (operator, 2026-11-21)"
     },
     {
       "level": 3,
-      "line": 320,
+      "line": 322,
       "number": "14.9",
       "title": "After F4b: what a review reports, probe diagnostics, and F0b now (operator, 2026-11-22)"
     },
     {
       "level": 3,
-      "line": 331,
+      "line": 333,
+      "number": "14.10",
+      "title": "One tracker file per slice (operator, 2026-11-22)"
+    },
+    {
+      "level": 3,
+      "line": 348,
       "number": "14.12",
       "title": "A cheaper local gate (operator, 2026-11-22)"
     }
@@ -246,7 +252,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md",
-    "sha256": "df572dcc3522c6e524afbf0ef1af09240c603accb0021ce100692b2bbf6eecbd"
+    "sha256": "1a7291922970f44a423c754df64e421f688d51d242d8bc714c7e0ed6c6b7c790"
   },
   "source_status_at_hash": {
     "line": {
@@ -259,7 +265,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, IN ADVANCE, in a host session (\"build F0 to F2 then we can try F4?\"), said of a plan shown to them in that session (F0 slice claims, F1 a deterministic finisher, F2 a cross-family reviewer that can run the tests, F3 deferred, F4 a replay experiment). This text was written afterwards by an architect agent from that plan and the code; the operator has not read it line by line. No Council has read it. Open decisions (section 11) take their recommendations unless the operator says otherwise. F4 spends the operator's tokens and runs only on the operator's yes for it."
     },
-    "sha256": "df572dcc3522c6e524afbf0ef1af09240c603accb0021ce100692b2bbf6eecbd",
+    "sha256": "1a7291922970f44a423c754df64e421f688d51d242d8bc714c7e0ed6c6b7c790",
     "word": "approved"
   },
   "spec": {
