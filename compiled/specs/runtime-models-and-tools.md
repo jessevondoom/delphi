@@ -134,7 +134,7 @@ A model that has started down a route does not reliably turn back. Anthropic's a
 
 ## 125-load-sensitive-tests-made-deterministic
 
-**125: Load-sensitive tests made deterministic** · approved (per source at `493f543011e0`) · tier 0 · [source](../../specs/125-load-sensitive-tests-made-deterministic.md)
+**125: Load-sensitive tests made deterministic** · approved (per source at `83c0481e32b9`) · tier 0 · [source](../../specs/125-load-sensitive-tests-made-deterministic.md)
 
 **source excerpt, untrusted** · `specs/125-load-sensitive-tests-made-deterministic.md` line 26
 
