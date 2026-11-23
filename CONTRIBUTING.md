@@ -5,8 +5,8 @@ Delphi is built mostly by its own agents under one operator, and human contribut
 ## The rules that matter most
 
 - **No Spec, No Build.** Build only against a spec whose `status` is `approved`, and name it in the commit: `Implements-Spec: specs/NNN-*.md`. If no spec covers your idea, propose one first (a draft in `specs/`) and get it approved. The rule covers software only; documents, decks, images and media need no spec but are logged by prompt, and Markdown notes and scaffolds are regular operation (`specs/070`).
-- **One slice per pull request is preferred**, and update the spec tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) in the same PR that changes a spec's state.
-  - **Trial, reviewed on 2026-11-25** (against CI p50/p95 and macOS queue time): during busy pushes a pull request MAY carry several slices of the SAME spec, and only the same spec. Conditions: one commit per slice, each with its own `Implements-Spec` trailer and its own tracker update; no gate-changing paths (`.github/`, the charter, the rubric) mixed with code; keep it reviewable (guideline: about 3 slices / 800 changed lines); the merge uses a merge commit, not a squash. Cross-spec bundles are not allowed. CI's `commits` job checks out each slice commit before the head and runs `cargo check` and the repo lint on it, so every slice must build on its own (spec 094 §12.2.4).
+- **One slice per pull request is preferred**, and record the slice's state in the same PR that changes it. A new slice gets its own file, `missions/2026-10-23-foundational-design/tracker/<spec>/<slice>.md`: frontmatter `state` (`not-built`, `approved`, `built`, `merged`, `run`, `deferred` or `superseded`), `date` (`YYYY-MM-DD`), optional `pr` and `title`, then prose (spec 135 §14.10; schema `schemas/tracker-slice.schema.json`). One file per slice means parallel PRs do not collide. Older slices still have rows in the spec tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) until they are migrated; a file wins over a row, and `delphi forge tracker [--spec <spec>]` prints both as one table.
+  - **Trial, reviewed on 2026-11-25** (against CI p50/p95 and macOS queue time): during busy pushes a pull request MAY carry several slices of the SAME spec, and only the same spec. Conditions: one commit per slice, each with its own `Implements-Spec` trailer and its own tracker entry; no gate-changing paths (`.github/`, the charter, the rubric) mixed with code; keep it reviewable (guideline: about 3 slices / 800 changed lines); the merge uses a merge commit, not a squash. Cross-spec bundles are not allowed. CI's `commits` job checks out each slice commit before the head and runs `cargo check` and the repo lint on it, so every slice must build on its own (spec 094 §12.2.4).
   - **Reverse the trial** if a bundled PR needs a partial revert, if a flake blocks more than one slice twice, or if the merge ledger cannot attribute per-slice specs.
   - **Ledger caveat:** the merge ledger currently records only the first spec of a multi-trailer PR. A separate PR is fixing that; the bundling option is effective once that fix merges.
 - **A format is a spec.** If you change a file format, change its schema in [`schemas/`](schemas/) and its spec together.
@@ -43,7 +43,7 @@ How the jobs are laid out (`.github/workflows/ci.yml`): on Ubuntu the workspace 
   ```
   `cargo test -p delphi --test docs` fails with this instruction when they are stale.
 - The same test validates `config.example.toml`, the golden bundle, every `AGENT.md` and every `SKILL.md` against `schemas/`.
-- User-facing behavior changes belong in [`CHANGELOG.md`](CHANGELOG.md) under Unreleased.
+- A user-facing behavior change adds one file under [`changelog.d/`](changelog.d/README.md) (a `section:` line, then a Markdown list item; the README there has the format). Do not edit [`CHANGELOG.md`](CHANGELOG.md): many pull requests editing one file conflicted with each other, and a conflicting pull request runs no CI. The release pull request folds the fragments in with `delphi release changelog --write <version>` (spec 036 §9); `delphi lint` fails a malformed fragment.
 
 ## Working in a scratch setting
 
@@ -53,7 +53,7 @@ Tests that start daemons hold pseudo-terminals until the process ends; if `openp
 
 ## Pull requests
 
-Describe what changed and why, name the spec, and say how you checked it. If a step was skipped or a test is flaky, say so plainly. Releases are cut by the maintainers: bump the version in `crates/delphi/Cargo.toml` in its own PR, then tag `vX.Y.Z` on `main`; the release workflow builds, attests and publishes (running it by hand is a dry run).
+Describe what changed and why, name the spec, and say how you checked it. If a step was skipped or a test is flaky, say so plainly. Releases are cut by the maintainers: bump the version in `crates/delphi/Cargo.toml` in its own PR, in which `cargo run -q -p delphi -- release changelog --write X.Y.Z` moves the fragments under `changelog.d/` into `CHANGELOG.md` (then add the release's summary above them), then tag `vX.Y.Z` on `main`; the release workflow builds, attests and publishes (running it by hand is a dry run).
 
 Words for approvals are fixed: **approve** a spec, **ratify** a proposal (`/ratify`, `/retro`; an end user's workspace), **accept** an update (`delphi update`), **answer** a decision (the decisions pane), **merge** a PR (`delphi merge`). The flow for merging core changes, and what is built so far, is in [Merging core changes](docs/guides/merging-core-changes.md) (spec 094).
 

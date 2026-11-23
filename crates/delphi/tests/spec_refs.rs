@@ -54,7 +54,7 @@ fn walk(dir: &Path, exts: &[&str], skip: &dyn Fn(&Path) -> bool, out: &mut Vec<P
 
 /// The directories searched (beside `crates/` and the changelog) for references. The compiled specs repeat the sources' text and are
 /// a derived view, so they are not searched: a reference inside a quotation of a source is checked once, in the source itself.
-const SCANNED_DIRS: [&str; 5] = ["specs", "docs", "schemas", "ui/src", "missions"];
+const SCANNED_DIRS: [&str; 6] = ["specs", "docs", "schemas", "ui/src", "missions", "changelog.d"];
 
 struct Spec {
     text: String,

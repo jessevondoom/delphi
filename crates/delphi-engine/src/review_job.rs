@@ -397,6 +397,25 @@ pub fn slice_row(tracker: &str, spec_number: &str, slice: &str) -> Option<String
     }).map(|l| l.chars().take(2_000).collect())
 }
 
+/// Where the per-slice tracker files live in a checkout (`specs/135` §14.10): `<TRACKER_DIR>/<spec>/<slice>.md`.
+pub const TRACKER_DIR: &str = "missions/2026-10-23-foundational-design/tracker";
+
+/// The per-slice tracker file of a slice, for the brief; it wins over the table's row (§14.10). The slice id is checked before it
+/// names a path (letters, digits, `.` and `-`, starting with a letter or digit), the name matches ignoring case, and only a
+/// regular file is read, never a link. Read as text, never trusted.
+pub fn slice_file(project: &std::path::Path, spec_number: &str, slice: &str) -> Option<String> {
+    let id_ok = |s: &str| s.len() <= 32 && s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    if !id_ok(spec_number) || !id_ok(slice) {
+        return None;
+    }
+    let want = format!("{}.md", slice).to_lowercase();
+    let entry = std::fs::read_dir(project.join(TRACKER_DIR).join(spec_number)).ok()?.flatten().find(|e| e.file_name().to_string_lossy().to_lowercase() == want)?;
+    if !std::fs::symlink_metadata(entry.path()).ok()?.is_file() {
+        return None;
+    }
+    std::fs::read_to_string(entry.path()).ok().map(|t| t.chars().take(2_000).collect())
+}
+
 /// Where the spec tracker lives in a checkout (`specs/135` §2).
 pub const TRACKER: &str = "missions/2026-10-23-foundational-design/spec-tracker.md";
 
