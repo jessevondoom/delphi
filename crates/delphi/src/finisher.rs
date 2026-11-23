@@ -76,8 +76,10 @@ pub struct FinishReq<'a> {
     pub spec: Option<&'a str>,
     pub slice: Option<&'a str>,
     pub body: bool,
-    /// Run the three gates after regenerating (§14.4).
+    /// Run the three gates after regenerating (§14.4), a fast tier first (§14.12).
     pub gates: bool,
+    /// Stop after the fast tier when it passes (§14.12); implies `gates`.
+    pub fast_only: bool,
     pub now: i64,
 }
 
@@ -213,11 +215,12 @@ pub fn finish_with(r: &FinishReq, runner: &mut dyn crate::finisher_gates::Runner
     if r.gates && failed {
         out.push_str("gates: not run (a generator failed)\n");
     } else if r.gates {
+        // A fast tier first (§14.12): the crates the change reaches, then the full gates unless --fast-only.
         let exe = std::env::current_exe().unwrap_or_else(|_| "delphi".into());
-        let results = crate::finisher_gates::run(repo, &exe, runner);
-        out.push_str(&crate::finisher_gates::report(&results));
-        gate_failed = results.iter().any(|g| !matches!(g.state, crate::finisher_gates::State::Passed));
-        gates = Some(results);
+        let tiered = crate::finisher_gates::run_tiered(repo, &exe, runner, r.fast_only);
+        out.push_str(&crate::finisher_gates::report_tiered(&tiered));
+        gate_failed = !tiered.passed();
+        gates = Some(crate::finisher_gates::checked_lines_tiered(&tiered, &exe, repo));
     } else {
         out.push_str("gates (not run by the finisher; run them before you commit, or pass --gates):\n");
         for g in GATES {
@@ -247,7 +250,8 @@ pub fn finish_with(r: &FinishReq, runner: &mut dyn crate::finisher_gates::Runner
 
 /// A pull request body skeleton (§5.4).
 /// With `gates`, the Checked section holds their results (ticked when passed, flaky tests named); without, the gates unticked.
-pub fn body(repo: &Path, stem: &str, slice: &str, row: Option<&tracker::Row>, regenerated: &[String], gates: Option<&[crate::finisher_gates::GateResult]>) -> String {
+/// `gates` is the Checked lines already written (`finisher_gates::checked_lines_tiered`).
+pub fn body(repo: &Path, stem: &str, slice: &str, row: Option<&tracker::Row>, regenerated: &[String], gates: Option<&str>) -> String {
     let mut b = format!("{} — slice {}\n\n", spec_title(repo, stem), slice);
     if let Some(r) = row {
         b.push_str(&format!("**Slice:** {}\n\n**Tracker:** {}\n\n", r.content, r.state));
@@ -262,7 +266,7 @@ pub fn body(repo: &Path, stem: &str, slice: &str, row: Option<&tracker::Row>, re
     }
     b.push_str("## Checked\n\n");
     match gates {
-        Some(results) => b.push_str(&crate::finisher_gates::checked_lines(results)),
+        Some(lines) => b.push_str(lines),
         None => {
             for g in GATES {
                 b.push_str(&format!("- [ ] `{}`\n", g));
@@ -332,7 +336,7 @@ mod tests {
         let t = tracker_repo("built");
         let g = |shown: &str, state: State, flaky: &[&str]| GateResult { shown: shown.into(), state, flaky: flaky.iter().map(|s| s.to_string()).collect() };
         let results = [g("cargo test", State::Passed, &["a::b"]), g("cargo clippy", State::Failed { tail: "boom".into() }, &[]), g("delphi lint", State::NotRun, &[])];
-        let b = body(t.path(), "135-x", "F1b", None, &[], Some(&results));
+        let b = body(t.path(), "135-x", "F1b", None, &[], Some(&crate::finisher_gates::checked_lines(&results)));
         assert!(b.contains("- [x] `cargo test` (flaky, passed on a rerun: `a::b`)\n- [ ] `cargo clippy` (FAILED)\n- [ ] `delphi lint` (not run: an earlier gate failed)\n"), "{}", b);
         assert!(!b.contains("--locked -- -D warnings"), "the unrun list is not added: {}", b);
     }
