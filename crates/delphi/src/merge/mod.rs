@@ -8,6 +8,7 @@
 
 pub mod approve;
 pub mod auto;
+pub mod auto_batch;
 pub mod base;
 pub mod bisect;
 pub mod check;
@@ -22,6 +23,8 @@ pub mod rollup;
 pub mod rollup_pr;
 pub mod wait;
 
+#[cfg(test)]
+mod auto_batch_tests;
 #[cfg(test)]
 mod auto_tests;
 #[cfg(test)]
@@ -554,10 +557,14 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     if base.is_some() && sub != Sub::RepairBase {
         return Err("--base belongs to `delphi merge repair-base`".into());
     }
-    if batch.is_some() && !matches!(sub, Sub::Merge(_) | Sub::All) {
-        return Err("--batch belongs to `delphi merge <PR>...` and `--all` (spec 094 §13.9)".into());
+    if batch.is_some() && !matches!(sub, Sub::Merge(_) | Sub::All | Sub::Auto) {
+        return Err("--batch belongs to `delphi merge <PR>...`, `--all` and `--auto` (spec 094 §13.9)".into());
+    }
+    if sub == Sub::Auto && batch.is_some() && dry_run {
+        return Err("a session has no dry run; see a batch with `delphi merge --all --batch --dry-run`".into());
     }
     if sub == Sub::Auto {
+        caps.batch = batch;
         caps.validate()?;
     }
     Ok(Parsed { sub, home, quote, dry_run, open, json, pr, done, needs_human, merged, yes, caps, caps_given, wait, wait_given, base, batch })
@@ -589,6 +596,8 @@ pub fn cli(args: &[String]) -> i32 {
                 let home = crate::home::delphi_home(p.home.as_deref());
                 // Open rollups, a bisecting half among them (spec 094 §13.5).
                 bisect::status_lines(&forge, &Ledger::at(&home)).iter().for_each(|l| println!("{l}"));
+                // The batches of the latest `--auto --batch` session (S22).
+                auto_batch::status_lines(&Ledger::at(&home)).iter().for_each(|l| println!("{l}"));
                 // The check of the base (§11.3.4): the base of the oldest queued pull request, or `main`.
                 let base_ref = forge.queued(QUEUE_LABEL).ok().and_then(|q| q.first().copied()).map(|n| base_of(&forge, n)).unwrap_or_else(|| "main".into());
                 match std::env::current_dir() {
@@ -833,10 +842,11 @@ fn auto_cmd(p: &Parsed, forge: &Gh) -> i32 {
     let error_log = Errors::at(&home);
     let mut term = StdTerminal;
     term.show(&format!(
-        "--auto session: up to {} pull request(s), at most {} minute(s), pausing after {} error(s) in a row. It never merges a pull request that changes a gate.",
+        "--auto session: up to {} pull request(s), at most {} minute(s), pausing after {} error(s) in a row{}. It never merges a pull request that changes a gate.",
         p.caps.max_prs,
         p.caps.run_for.as_secs() / 60,
-        p.caps.pause_after_errors
+        p.caps.pause_after_errors,
+        p.caps.batch.map(|n| format!(", through rollups of up to {n} queued pull requests each")).unwrap_or_default()
     ));
     let att = match attest(&mut term, p.quote.as_deref(), Target::Auto, false) {
         Ok(a) => a,
@@ -864,7 +874,10 @@ fn auto_cmd(p: &Parsed, forge: &Gh) -> i32 {
     let refresh = wait::Refreshing { refresher: &refresher, clock: &auto::SystemClock, wait: None, poll: p.caps.poll, made: &made };
     let here = claims_here(&home);
     let claims = here.as_ref().map(|(h, r)| Claims { home: h, repo: r, now: unix_now });
-    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: None, dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh), claims, rollup: None };
+    // `--batch` (S22): rollups are built in this repository, under the same session approval.
+    let runner = refresh::Runner::new(&refresher.git.repo);
+    let rollup = p.caps.batch.map(|_| rollup_pr::Env { git: &runner, home: &home });
+    let mut ctx = Ctx { forge, ledger: &ledger, errors: &error_log, term: &mut term, quote: None, dry_run: false, git: Some(&git), session: None, settle: Duration::from_secs(3), now: delphi_core::time::now_rfc3339, refresh: Some(refresh), claims, rollup };
     let stop = || INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) || stop_file.exists();
     let check = base::InRepo { git: refresh::Runner::new(&refresher.git.repo), home: &home };
     let summary = auto::run_checked(&mut ctx, &p.caps, &att, &auto::SystemClock, &stop, &mut |l| println!("{l}"), Some(&check));
@@ -971,6 +984,8 @@ mod parse_tests {
         let b = parse(&a("merge 5 6 --batch=8 --dry-run")).unwrap();
         assert_eq!((b.sub, b.batch), (Sub::Merge(vec![5, 6]), Some(8)));
         assert_eq!(parse(&a("merge --all")).unwrap().batch, None);
+        assert_eq!(parse(&a("merge --auto --batch=3 --max-prs 6")).unwrap().caps.batch, Some(3));
+        assert_eq!(parse(&a("merge --auto")).unwrap().caps.batch, None);
     }
 
     #[test]

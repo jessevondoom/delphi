@@ -23,7 +23,7 @@ impl Clock for FakeClock {
 }
 
 fn caps() -> Caps {
-    Caps { max_prs: 10, run_for: Duration::from_secs(4 * 3600), pause_after_errors: 2, idle: Duration::from_secs(1800), poll: Duration::from_secs(60) }
+    Caps { max_prs: 10, run_for: Duration::from_secs(4 * 3600), pause_after_errors: 2, idle: Duration::from_secs(1800), poll: Duration::from_secs(60), batch: None }
 }
 
 fn session(forge: &FakeForge, caps: &Caps, stop: &dyn Fn() -> bool) -> (Summary, tempfile::TempDir, Vec<String>) {

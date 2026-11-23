@@ -25,6 +25,8 @@ pub const REFUSED: &str = "rollup refused: ";
 pub const STALE: &str = "rollup stale: ";
 /// An entry for a constituent bisection found red on its own, or red together and green apart (§13.5, S21).
 pub const RED: &str = "rollup red: ";
+/// A rollup whose checks are still running: waiting, never an error (`--auto --batch` looks again at its next poll, S22).
+pub const NOT_FINISHED: &str = "the rollup's checks have not finished";
 
 /// Where a rollup is built and rebuilt: the repository the command runs in and the Delphi home (for the temporary worktree).
 #[derive(Clone, Copy)]
@@ -289,7 +291,7 @@ fn wait_green(ctx: &Ctx, n: u64, head: &str) -> Result<Verdict, Vec<String>> {
         }
         match ctx.refresh {
             Some(r) if r.wait.is_some_and(|w| r.clock.now_secs().saturating_sub(start) < w.as_secs()) => r.clock.sleep(r.poll),
-            _ => return Err(vec![format!("the rollup's checks have not finished; run `delphi merge {n}` once they are green (nothing was merged)")]),
+            _ => return Err(vec![format!("{NOT_FINISHED}; run `delphi merge {n}` once they are green (nothing was merged)")]),
         }
     }
 }

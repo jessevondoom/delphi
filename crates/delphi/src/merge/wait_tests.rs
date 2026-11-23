@@ -253,7 +253,7 @@ fn an_auto_session_refreshes_and_moves_on_then_merges_the_new_head_at_a_later_po
     behind_pr(&forge, 7, 1);
     forge.with_ready_pr(8, "head8", &["b.rs"]);
     let w = World::new(&forge);
-    let caps = Caps { max_prs: 10, run_for: Duration::from_secs(4 * 3600), pause_after_errors: 2, idle: Duration::from_secs(1800), poll: Duration::from_secs(60) };
+    let caps = Caps { max_prs: 10, run_for: Duration::from_secs(4 * 3600), pause_after_errors: 2, idle: Duration::from_secs(1800), poll: Duration::from_secs(60), batch: None };
     let (s, run) = with(&w, None, |c| auto::run(c, &caps, &Attestation::ChatQuote("auto for the evening".into()), &w, &|| false, &mut |_| {}));
     // #7 was refreshed, #8 merged in the same pass, and #7's new head merged at a later poll once green.
     assert_eq!(w.refreshed.borrow().as_slice(), &[7]);

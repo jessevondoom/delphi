@@ -193,7 +193,7 @@ fn an_auto_session_ends_on_a_drifted_base_at_a_poll_or_after_its_own_merge() {
             self.0.set(self.0.get() + d.as_secs());
         }
     }
-    let caps = Caps { max_prs: 10, run_for: Duration::from_secs(3600), pause_after_errors: 5, idle: Duration::from_secs(600), poll: Duration::from_secs(60) };
+    let caps = Caps { max_prs: 10, run_for: Duration::from_secs(3600), pause_after_errors: 5, idle: Duration::from_secs(600), poll: Duration::from_secs(60), batch: None };
     let att = Attestation::ChatQuote("auto".into());
     for (after, merged) in [(1, 1), (0, 0)] {
         let (forge, home) = (ready(&[1, 2]), tempfile::tempdir().unwrap());
