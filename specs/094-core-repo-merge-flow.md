@@ -19,6 +19,7 @@ tags: [spec, merge, pull-requests, workflow, approvals, authority, builder, git,
 > **Origin:** Council `t_0005` (2026-11-07) reviewed the operator's proposal for `delphi approve`, `delphi ratify` and `delphi merge`; its seats agreed that content-bound records, a separate gate-changing class and keeping Delphi optional were needed, and wanted `--auto` cut. The operator chose to keep a session-scoped `--auto` and to defer the hardening (§5).
 > **Amendment §11 (operator, 2026-11-20):** a pull request is merged only when it is current with the base tip, and `delphi merge refresh` updates it mechanically, so a merge no longer lands a result that no CI run has tested.
 > **Amendment §12 (operator, 2026-11-22):** one required check, `ci-gate`, that passes only when every CI job did; a `conflict` label on pull requests that cannot merge; a build-and-lint check of each slice commit in a bundled pull request; and S8 marked deferred and unlikely.
+> **Amendment §13 (operator, 2026-11-22):** batched merges inside `delphi merge`: a rollup pull request built from the base and up to eight approved pull requests, tested once by the normal CI and merged as one, with every constituent keeping its own approval, spec and ledger row; bisection on red. No GitHub merge queue and no organization.
 > **Amends, when approved:** `specs/003` §3.1.2 and `specs/006` §3.1 (the hash pin of an approved spec in `ratified.lock` and the daemon's "blocks Builder unless the hash is ratified" govern work run through a Delphi daemon on specs inside a workspace's tree; Delphi's own repository is built from host-agent sessions as well, and there a spec is approved by its frontmatter and the operator's recorded instruction, with no pin) and `GOVERNANCE.md` §1.1 (how a core-repo merge is approved). Both edits are in this pull request. The `GOVERNANCE.md` edit is a constitutional change (§5.7) and is a gate-changing change under §3.4: the operator reviews it line by line.
 
 ---
@@ -189,7 +190,7 @@ Read from the code on `main` (`725e773c`) and from the CI runs on `main`; each i
 
 ### 11.2 Scope
 
-In scope: a freshness precondition in `delphi merge` (the head must contain the base tip); `delphi merge refresh <PR>`, a mechanical update for the known generated and append-only conflicts; how `<PR>`, `--all` and `--auto` use the two; a check of the base after each merge and a repair pull request when it drifted; the error classes; the guide and the builder skill's decision table; the repository setting the operator can switch on. Out of scope: any change to `.github/`, `merge-gates.toml` or the ruleset (the operator's, §11.8 S12); changing what `delphi specs compile` writes (an amendment to spec 088, §11.9 OD-11); merge trains or speculative batches; Cargo.lock and `docs/reference/` regeneration inside `refresh` (they need a build of the merged code; they go to `merge fix`).
+In scope: a freshness precondition in `delphi merge` (the head must contain the base tip); `delphi merge refresh <PR>`, a mechanical update for the known generated and append-only conflicts; how `<PR>`, `--all` and `--auto` use the two; a check of the base after each merge and a repair pull request when it drifted; the error classes; the guide and the builder skill's decision table; the repository setting the operator can switch on. Out of scope: any change to `.github/`, `merge-gates.toml` or the ruleset (the operator's, §11.8 S12); changing what `delphi specs compile` writes (an amendment to spec 088, §11.9 OD-11); merge trains or speculative batches (taken up by §13, 2026-11-22); Cargo.lock and `docs/reference/` regeneration inside `refresh` (they need a build of the merged code; they go to `merge fix`).
 
 ### 11.3 The additions
 
@@ -362,3 +363,141 @@ Nothing here widens an agent's authority. `ci-gate` and `commits` only read resu
 - **AC-15 (S15).** §5, §6 and OD-10 say S8 is deferred and unlikely; `delphi lint` passes.
 - **AC-16 (S16).** On this pull request (four trailer commits) `commits` checks the three earlier ones and passes; on a pull request with one trailer commit it succeeds without building.
 - **V-12.** The workflows pass `actionlint` and parse as YAML before the push.
+
+## 13. Amendment (operator, 2026-11-22): batched merges through a rollup pull request
+
+**Approval, stated plainly.** The operator's words, in a host session on 2026-11-22: "batching should be included in delphi merge. don't rely on an org." and then "can we start on C and D then the new slice you mentioned above while we wait on 881?". D is this amendment and its slices; the second sentence is the go, and it is recorded here as the approval of this amendment, in advance. The operator has not read this text and no Council has reviewed it. The open decisions (§13.10) take the recommendations unless the operator says otherwise. Unchanged and absolute, in the operator's terms: agents never merge on their own; every pull request in a batch carries the operator's own approval; gate-changing pull requests are never batched; there is no auto-merge. It extends §3.2, §3.6, §11.3.3 and §12, and lifts one line of §11.2 (merge trains and speculative batches were out of scope there). Its code is under `crates/delphi/src/merge/**`, so every slice is gate-changing (§3.4) and the operator merges it at a terminal.
+
+### 13.1 The problem, as measured on 2026-11-22
+
+1. **CI takes about 20 minutes per run**, and the macOS job is the critical path (the account runs at most five macOS jobs at once, `CONTRIBUTING.md`).
+2. **Freshness makes merges serial.** §11.3.1 refuses a head that does not contain the base tip, so each merge makes every other queued pull request behind; each then needs a refresh and a new CI run before it can merge (§11.3.3: "N pull requests take about N CI runs"). That is about three merges an hour.
+3. **Peak days need 47 to 50 merges.** At three an hour that is 16 hours or more of one person's attention at a terminal, and the queue grows faster than it drains.
+4. **The strict ruleset closes the shortcuts.** §12.2.1's rule (`ci-gate` required, strict) blocks a direct push to `main` and requires each pull request to be up to date before it merges. So "fast-forward `main` to a tested candidate" is out, and so is "merge N pull requests one after another with no new CI" (the second is behind once the first lands).
+
+### 13.2 The design: a rollup pull request
+
+The shape is the Rust project's *rollup*: several approved pull requests merged into one branch, tested once, and landed as one.
+
+1. **Choose.** `delphi merge --all --batch` (or `delphi merge <PR>... --batch`) takes, in queue order, up to N pull requests that are each ready except perhaps for freshness: open, not a draft, mergeable, every check green **on its own head**, a spec that is approved (or the Markdown-only or bounded exemption), and **not gate-changing**. Anything else is skipped with its reason and stays on the serial path. Default N is 4, at most 8 (`--batch=N`).
+2. **Approve.** The operator approves the batch as listed: each constituent's number, title, head commit and spec are shown, and the operator types `all` at a terminal, or an agent passes the operator's words, which must name each constituent's number or, for `--all`, say all/every/each (the rule of §3.2 for `--all`, unchanged). The attestation is bound to the list of `(pr, head)` pairs shown, not to the rollup.
+3. **Build.** In a temporary worktree under `$DELPHI_HOME/merge/rollup/`, from the base tip, the tool merges each constituent's approved head in turn with `git merge --no-ff` (one merge commit per constituent, in queue order; never a rebase, never a squash). Conflicts are settled only by the closed list of `refresh` (§11.3.2 step 4), with the earlier side's lines first, and the spec compile runs after each merge. Anything else conflicting removes that constituent from the batch (it goes back to the serial path with an entry of class `rollup-refused`) and the build starts again without it.
+4. **Check the invariant** (§13.4 invariant 1) and the gate list (invariant 3). A failure builds nothing further and pushes nothing.
+5. **Open.** It pushes the candidate with a plain push to a new branch `delphi-rollup/<id>` and opens a pull request into the base whose body carries the manifest (§13.3). CI runs on it through the ordinary `pull_request` trigger, so `ci.yml` does not change and `ci-gate` judges it as any other pull request. The rollup pull request is never queued by label; only the command that made it merges it.
+6. **Wait and merge.** It waits for the rollup's checks (`--wait`, as §11.3.3). On green, and with every invariant re-checked (§13.4), it writes one ledger row per constituent with that constituent's own approval, head and spec, then merges the rollup with `gh pr merge <rollup> --merge --match-head-commit <rollup head>`. GitHub marks each constituent merged once its head is reachable from the base (§13.6).
+7. **Verify and clean up.** It reads each constituent's state. One that GitHub did not mark merged although its approved head is an ancestor of the new base tip is closed with a comment linking the rollup (OD-17). Then cleanup (§3.3) runs for each constituent and for the rollup branch.
+8. **On red: bisect** (§13.5).
+
+### 13.3 The rollup is a recognised kind, not an exception to the rules
+
+A rollup spans specs by design, so the cross-spec refusal (§3.1, PR #654) would refuse it. It is accepted only as a distinct kind, recognised by three things together:
+
+- its head branch starts with `delphi-rollup/`;
+- its body carries exactly one manifest block, fenced as `delphi-rollup`, of this form:
+
+  ```
+  delphi-rollup v1
+  base main <base sha>
+  pr 881 <head sha> specs/093-authority-invariants-batch1.md
+  pr 883 <head sha> specs/094-core-repo-merge-flow.md
+  ```
+
+  one `pr` line per constituent, in merge order, with the approved head and the spec the constituent names (`-` for none);
+- and **a rebuild reproduces it**: at merge time the command builds the candidate again from the manifest's base commit and heads (§13.2 step 3, deterministic: the same merges, the same settlements, the same compile) and requires the resulting tree to equal the rollup head's tree, byte for byte.
+
+The manifest is in the body, not a file on the branch, because a file would itself widen the diff. The body is the caller's text and is trusted for nothing: every fact in it is re-derived (each constituent's state and head from the forge, each spec from the base, the tree by the rebuild). A pull request that looks like a rollup and fails any of these is an ordinary pull request again, and the cross-spec rule refuses it as before.
+
+The cross-spec check accepts the rollup only when, for every constituent, its current head equals the manifest's head, it is still open and still passes §13.2 step 1, and its own approval in this invocation names that head.
+
+### 13.4 Invariants
+
+1. **The rollup changes exactly what its constituents change.** Outside `compiled/`, for every path, the added and removed lines of the rollup against the base (`git diff -U0`, compared as multisets) equal the sum of each constituent's added and removed lines against its own merge base with the base. A path that only the rollup changes, a line counted once where two constituents both made it, or a line a constituent no longer changes, each fails the check. Every file under `compiled/` must be what `delphi specs compile` writes. This is §11.6 invariant 3 extended from one pull request to several.
+2. **Every constituent is bound to its approved head.** The manifest names it; the rebuild uses it; the merge re-reads every constituent's head and refuses the whole rollup if one moved. `--match-head-commit` binds the rollup's own head, so a push to the rollup branch after the record refuses the merge.
+3. **No gate path, ever.** A gate-changing pull request is never a constituent (§3.4), and the rollup's own changed paths are checked against the base branch's gate list before it is opened and again before it merges.
+4. **The operator's approval covers each constituent.** There is no approval of "the rollup" on its own: the record is the set of constituent records. A constituent whose head changed after the approval needs the operator again; a rebuild with a subset of the approved constituents (after a skip or a bisection) carries their approvals, because each `(pr, head)` is unchanged, and the ledger says `carried_into: <rollup>` on each row.
+5. **Nothing merges on its own.** Building, opening and bisecting never call `Forge::merge`; only the step of §13.2.6, inside an invocation the operator started and approved, does. `--auto` does not batch until a later slice (S22), and then only inside its bounded session.
+6. **No force, no rewrite.** Every push is plain, to a branch the tool created (`delphi-rollup/*`); constituent branches are never pushed to by the rollup path.
+7. **Delphi stays optional** (§2). The rollup is an ordinary pull request with merge commits; with the binary gone, the operator can read the manifest, check it by hand and merge it natively, or close it and merge the constituents one by one.
+
+### 13.5 Red: bisection and flaky tests
+
+- **A red rollup means a test failed twice.** Group C (being built beside this amendment) makes `cargo nextest` retry a failing test once, so a single flake does not fail a run. Until that lands, the command reruns the rollup's failed jobs once (`gh run rerun --failed`, as `CONTRIBUTING.md` asks people to) before it treats the rollup as red (OD-19).
+- **Halves.** A red rollup of k constituents is closed (its branch removed) and two candidates are built from the first and the second half, in order, and opened at once; CI runs on both side by side. A green half merges; the other half, now behind, is rebuilt on the new base before it can merge (the strict rule allows nothing else). A red half is split again.
+- **At most two rounds.** With N = 4 two rounds isolate one constituent. Whatever is not isolated after two rounds goes back to the serial path of §11.3.3, each pull request on its own. A single constituent found red on its own is written as an entry of class `rollup-red` and handed to `merge fix` (§3.6). Both halves green while the whole was red (an interaction, or a flake that failed twice) is written as `rollup-red` on every constituent of that rollup with the detail "red together, green apart", and they go to the serial path.
+- **Cost.** A green batch of four costs one CI run where the serial path costs four. A red batch of four costs at most one plus two plus two runs, the last ones in parallel. The CI plan's estimate, not yet measured: about 8 to 12 merges an hour instead of 3 at a constituent failure rate of 10% or less.
+
+### 13.6 GitHub's behaviour the design depends on, and how it was checked
+
+GitHub's documentation, *Pull request merges*, section "Indirect merges" (`docs.github.com/en/pull-requests/reference/pull-request-merges`, read 2026-11-22): "A pull request can be marked as merged if its head branch commits become reachable from the base branch outside that pull request. This can happen when the same commits are merged through another pull request or pushed directly to the default branch." It adds: "Pull requests merged indirectly are marked as `merged` even if branch protection rules on that pull request were not satisfied." This is what rust-lang's rollups rely on.
+
+Two consequences. The rollup must be merged with a merge commit, never squashed or rebased (a squash makes new commits, and the constituent heads never become reachable); `merge_args` already forces `--merge`. And the marking is a documented behaviour, not one tested here: S20 verifies each constituent's state after the merge and closes any that was not marked, with a comment linking the rollup (OD-17). **Not done by any agent:** an experiment on the real repository. The operator's rehearsal (V-13.4) is that experiment: two scratch pull requests and a hand-made rollup, merged natively at a terminal, then `gh pr view <n> --json state,mergedAt,mergeCommit` on both constituents.
+
+### 13.7 Options considered
+
+| Option | Kind | Why |
+| :-- | :-- | :-- |
+| Serial merges with refresh and wait (§11.3.3, today) | status quo | Correct and simple; one CI run per pull request, about 3 merges an hour. Kept as the fallback path for anything a batch skips or isolates. |
+| GitHub Merge Queue | conventional | Tests batches natively, but needs an organization-owned repository and a `merge_group` trigger in `ci.yml`. The operator decided on 2026-11-22 not to move the repository ("don't rely on an org"). Not adopted. |
+| Merge N pull requests in a row after one test, or fast-forward `main` to a tested candidate | removes a constraint | Both are blocked by the strict `ci-gate` rule (§12.2.1): the second pull request is behind, and a direct push to `main` is refused. Not possible. |
+| A rollup pull request (bors/homu "rollup", rust-lang) | named method | One CI run lands several pull requests; uses only `pull_request` CI, merge commits and GitHub's indirect-merge marking; each constituent keeps its own approval and spec. **Adopted.** |
+| Speculative parallel candidates (Zuul-style: base+A, base+A+B, base+A+B+C tested at once, the longest green prefix merged) | named method | Recovers from a red constituent without a second round, but costs N CI runs per batch against a five-job macOS limit shared with every other pull request; each candidate is still a rollup. Not adopted as the default; kept as a possible replacement for bisection if V-13.5 shows rounds are the bottleneck (OD-18). |
+| Fold constituents into one constituent's branch | removes a constraint | Widens an approved pull request with others' changes; breaks §11.6 invariant 3. Rejected. |
+
+### 13.8 Error classes (extends §3.6 and §11.3.5)
+
+- `rollup-refused`: a constituent could not be merged into the candidate by the closed list, or the candidate failed invariant 1 or 3, or a rebuild did not reproduce the rollup's tree. Names the constituent and the paths; the constituent goes to the serial path and `merge fix` can take it.
+- `rollup-red`: bisection isolated the constituent, or a whole rollup was red together and green apart. `merge fix` takes it.
+- `rollup-stale`: a constituent's head moved, or the base moved more than twice while a rollup waited (the bound of OD-9). Nothing is broken; the constituent needs the operator's approval again or the batch is rebuilt.
+
+### 13.9 Command line
+
+```
+delphi merge --all --batch[=N] [--operator-said "<words>"] [--wait 40m] [--dry-run]
+delphi merge <PR>... --batch[=N] [--operator-said "<words>"] [--wait 40m] [--dry-run]
+delphi merge --auto --batch[=N] ...          (S22)
+```
+
+`--batch` alone is N = 4; `--batch=N` takes 2 to 8. `--dry-run` chooses, builds the candidate in a temporary worktree, checks the invariants and prints the manifest, the merge commit of each constituent, the settled and regenerated files and the rollup's changed paths, and pushes nothing. In S18 only the dry run exists; without `--dry-run`, `--batch` is refused with a pointer to this section.
+
+### 13.10 Decisions
+
+- **OD-13. The design.** Recommend the rollup pull request (§13.2). Alternative: speculative parallel candidates (§13.7).
+- **OD-14. Batch size.** Recommend a default of 4 and a ceiling of 8. Four isolates a culprit in two rounds; eight halves the CI runs again on a green day but needs a serial fallback after two rounds.
+- **OD-15. Constituents green on their own head.** Recommend yes: it costs nothing (each pull request already has its own CI) and makes a red rollup rarer and its bisection shorter. A behind constituent is fine; the rollup tests it against the tip.
+- **OD-16. The approval form.** Recommend one batch confirmation over the listed constituents (`all` at a terminal; a chat quote that names every number, or says all/every/each for `--all`), recorded per constituent. Stricter alternative: the operator types each number.
+- **OD-17. A constituent GitHub did not mark merged.** Recommend: close it with a comment that links the rollup and the merge commit, after checking its approved head is an ancestor of the base tip. Alternative: leave it open and report it.
+- **OD-18. Rounds.** Recommend two rounds of halving, then the serial path. Alternative: speculative prefixes (§13.7) for the second round.
+- **OD-19. Flaky tests before group C lands.** Recommend: rerun the rollup's failed jobs once before bisecting, and drop that step once nextest's retry-once is merged.
+
+### 13.11 Threats
+
+- **Approval laundering through the rollup.** Someone (an injected agent included) opens a `delphi-rollup/*` pull request with a manifest naming approved pull requests and adds a change of their own. Caught by the rebuild (§13.3): the tree would differ. A rollup carrying an unapproved pull request is caught by invariant 4: no approval names it in this invocation. The operator's own native merge of a rollup bypasses all of this, as any native merge does (§11.7).
+- **A constituent head moves after approval.** The manifest pins the head; the merge re-reads it and refuses the rollup (`rollup-stale`); the rollup is rebuilt without it, and it needs the operator again.
+- **The rollup touches a gate path.** No constituent may be gate-changing, and the rollup's paths are checked against the base's gate list twice (invariant 3). A settlement cannot add a gate path because the closed list holds only `compiled/` and the tracker.
+- **A push to the rollup branch.** `--match-head-commit` and the rebuild both refuse it.
+- **A body edited after opening.** The manifest is re-read and re-checked at merge; an edit that names other heads fails the head check or the rebuild.
+- **Partial landing.** A rollup is one merge on GitHub: it lands whole or not at all. Each constituent is its own merge commit inside it, so one can be reverted alone (`git revert -m 1 <that merge commit>`).
+
+### 13.12 Slices (one per pull request; all gate-changing, merged by the operator at a terminal)
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| S17 | this amendment, the tracker rows, the compiled spec | 3 |
+| S18 | the candidate builder (`merge/rollup.rs`): choosing constituents, the build in a temporary worktree with `refresh`'s closed list (earlier side first), the compile after each merge, invariants 1 and 3, the manifest's text and parse; `--batch[=N] --dry-run` on `--all` and `<PR>...`; fixture-repository tests | 10 |
+| S19 | opening the rollup: plain push of `delphi-rollup/<id>`, `Forge::open_pr` with the manifest; recognition (§13.3) in `evaluate`, the rebuild-and-compare, the cross-spec acceptance; class `rollup-refused` | 10 |
+| S20 | merging it: the approval form (OD-16), one ledger row per constituent (`carried_into`), the wait, `--match-head-commit`, the check of each constituent's state and the close with comment (OD-17), cleanup of every branch; class `rollup-stale` | 9 |
+| S21 | red: the rerun before group C (OD-19), bisection in halves for two rounds, the serial fallback, class `rollup-red` and the hand-off to `merge fix` | 10 |
+| S22 | `--auto --batch` inside the bounded session; `merge status` lines; the guide and the skill's row | 6 |
+| S23 | the operator's rehearsal (V-13.4) and two weeks of measurement (V-13.5) | 4 |
+
+Total 52 hours, inside the CI plan's 56.
+
+### 13.13 Acceptance criteria and verification
+
+- **AC-17 (S17).** This section, the tracker rows, `compiled/` current; `delphi lint` passes.
+- **AC-18 (S18).** In fixture repositories with a local bare remote: (a) three pull requests of three specs build into one candidate with three merge commits in order and the manifest names each head and spec; (b) two that both append to the tracker and both add a spec settle by rule, earlier first, and the compile is current; (c) a conflict outside the closed list removes that constituent and the build carries on without it, naming the paths; (d) a gate-changing, draft, red or unapproved pull request is skipped before the build with its reason; (e) invariant 1 refuses a candidate that changes a line no constituent changes; (f) nothing is pushed and no forge write happens (the fake forge's log is empty of merges, comments and labels; the git log has no `push`); (g) `--batch` without `--dry-run` is refused.
+- **AC-19 (S19).** A rollup pull request is opened with the manifest; a hand-made `delphi-rollup/*` pull request with an extra change fails the rebuild and is refused as a cross-spec pull request; a manifest naming a moved head is refused.
+- **AC-20 (S20).** With a fake forge: a green rollup merges with `--match-head-commit`; every constituent has an `approved` and a `merged` ledger row with its own spec and `carried_into`; a constituent left open is closed with a comment naming the rollup; cleanup removes each branch.
+- **AC-21 (S21).** A red rollup of four with one bad constituent isolates it in two rounds, merges the other three, and writes one `rollup-red` entry; red together and green apart sends all to the serial path.
+- **V-13.4 (operator, live).** Two scratch pull requests and a rollup of them, merged at a terminal; both constituents read `MERGED` afterwards, or are closed by the tool with a comment. This is the experiment of §13.6.
+- **V-13.5 (measurement).** For two weeks after S21 merges: merges per hour on busy days, CI runs per merged pull request, red rollups and their rounds.

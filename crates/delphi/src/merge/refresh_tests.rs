@@ -8,7 +8,7 @@ use crate::spec_compile::{self, GROUPS_FILE, TREE_DIR};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn git(dir: &Path, args: &[&str]) -> String {
+pub(super) fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git").arg("-C").arg(dir).args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_SYSTEM", "/dev/null").output().unwrap();
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).trim().to_string()
@@ -22,15 +22,15 @@ const GROUPS_HEAD: &str = "[[group]]\nid = \"a\"\ntitle = \"A\"\norder = 1\n\n[[
 const BASE_SPECS: [(&str, &str); 5] = [("001-a1", "a"), ("003-a3", "a"), ("005-a5", "a"), ("007-b7", "b"), ("009-b9", "b")];
 const TRACKER_BASE: &str = "# Tracker\n\n| Spec | Slice | State |\n| :-- | :-- | :-- |\n| 001 | S1 | merged |\n| 094 | S9 | not built |\n";
 
-struct Fixture {
+pub(super) struct Fixture {
     _t: tempfile::TempDir,
-    origin: PathBuf,
-    work: PathBuf,
-    home: tempfile::TempDir,
+    pub(super) origin: PathBuf,
+    pub(super) work: PathBuf,
+    pub(super) home: tempfile::TempDir,
 }
 
 /// A bare origin and a clone with five specs in two groups, compiled, a tracker and a README, pushed as `main`.
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     let t = tempfile::tempdir().unwrap();
     let (origin, work) = (t.path().join("origin.git"), t.path().join("work"));
     std::fs::create_dir_all(&origin).unwrap();
@@ -56,19 +56,19 @@ fn fixture() -> Fixture {
     Fixture { _t: t, origin, work, home: tempfile::tempdir().unwrap() }
 }
 
-fn compile(dir: &Path) {
+pub(super) fn compile(dir: &Path) {
     let groups = spec_compile::parse_groups(&std::fs::read_to_string(dir.join(GROUPS_FILE)).unwrap()).unwrap();
     let out = spec_compile::build(&spec_compile::read_sources(dir).unwrap(), &groups).unwrap();
     spec_compile::write_all(dir, &out).unwrap();
 }
 
-fn commit(dir: &Path, msg: &str) {
+pub(super) fn commit(dir: &Path, msg: &str) {
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-q", "-m", msg]);
 }
 
 /// Add a spec: its file, its group line (after `after`, or at the end), optionally a tracker row; then compile.
-fn add_spec(dir: &Path, stem: &str, group: &str, after: Option<&str>, tracker_row: Option<&str>) {
+pub(super) fn add_spec(dir: &Path, stem: &str, group: &str, after: Option<&str>, tracker_row: Option<&str>) {
     std::fs::write(dir.join("specs").join(format!("{stem}.md")), spec_text(stem)).unwrap();
     let line = format!("\"{stem}\" = \"{group}\"\n");
     let text = std::fs::read_to_string(dir.join(GROUPS_FILE)).unwrap();
