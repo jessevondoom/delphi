@@ -25,12 +25,38 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
+  # Spec 094 §14: does this pull request change only plain documentation? `docs_only=true` only when every changed file
+  # is an added or modified file on the allow list in the script (guides, mission notes, the changelog, the readme); a
+  # push, a rename, a deletion, any other path, or any error is `false`. Only the macOS jobs read the answer; every other
+  # job runs on every pull request. A job-level `if:`, not a path filter on the workflow: a workflow skipped by a path
+  # filter never reports, and the required `ci-gate` would wait forever.
+  changes:
+    name: changes (docs only?)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2 # the test merge commit and its first parent, the base: the pull request's files are one diff
+      - name: Which files changed
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: .github/scripts/docs_only.sh "$EVENT"
+
   # Linux tests, in two jobs that together run exactly what `cargo test --workspace --locked` runs (the AGENTS.md gate):
   # that command runs each package's library unit tests, then its binaries' unit tests, then its integration tests, then
   # its doc tests. Here the first job runs `--lib`; the second runs `--bins --test '*'` (every integration test file) and
   # then `--doc`. `--tests` is not used because it would run the library tests a second time. The union was compared with
   # `cargo test --workspace -- --list` when this was written (same test count); if a new kind of target is ever added
   # (an example with `test = true`, a bench), add it to one of the two.
+  #
+  # Spec 125-A1: the tests run under cargo-nextest's `ci` profile (.config/nextest.toml): each test in its own process, a
+  # failing test retried once, a pass on the retry recorded as FLAKY (job summary, a warning, the JUnit artifact), a second
+  # failure fails the job. nextest does not run doc tests, so they stay on `cargo test --doc`. The selection is unchanged:
+  # counted with `cargo test ... -- --list` before and `cargo nextest list` after (spec 125 tracker, slice R1).
   test-linux-lib:
     name: test linux (unit)
     runs-on: ubuntu-latest
@@ -58,8 +84,25 @@ jobs:
           restore-keys: |
             cargo-target-${{ runner.os }}-unit-
             cargo-target-${{ runner.os }}-test-
+      - name: Install cargo-nextest (pinned, checksum checked)
+        env:
+          NEXTEST_VERSION: "0.9.150"
+          NEXTEST_TARGET: x86_64-unknown-linux-gnu
+          NEXTEST_SHA256: b0959bc64232974224cf9fb22c915845398c0e8668fa7831eb5b43fb1eef781f
+        run: .github/scripts/install-nextest.sh
       - name: Test (library unit tests)
-        run: cargo test --workspace --locked --lib
+        run: cargo nextest run --workspace --locked --profile ci --lib
+      - name: Flaky tests (job summary)
+        if: always()
+        run: python3 -I .github/scripts/nextest_summary.py target/nextest/ci/junit.xml "Linux, library unit tests"
+      - name: Keep the JUnit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junit-linux-unit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 30
       - name: Save the build directory
         if: github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -73,6 +116,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2 # the base is the test merge commit's first parent (the review-date skip below)
       - name: Rust toolchain
         run: rustup show active-toolchain && rustc --version
       - name: Cache the Cargo registry
@@ -94,12 +139,46 @@ jobs:
           restore-keys: |
             cargo-target-${{ runner.os }}-integ-
             cargo-target-${{ runner.os }}-test-
+      - name: Install cargo-nextest (pinned, checksum checked)
+        env:
+          NEXTEST_VERSION: "0.9.150"
+          NEXTEST_TARGET: x86_64-unknown-linux-gnu
+          NEXTEST_SHA256: b0959bc64232974224cf9fb22c915845398c0e8668fa7831eb5b43fb1eef781f
+        run: .github/scripts/install-nextest.sh
       # Cheap static checks first (milliseconds each once built), so a broken spec reference is reported minutes
       # before the long tests finish. They run again in the full step below; that costs nothing.
       - name: Static checks (spec references, compiled specs)
         run: cargo test --locked -p delphi --test spec_refs --test compiled_specs
+      # Spec 093-A1: the deny.toml review-date test depends on today's date, so a pull request that does not change
+      # deny.toml skips it (push runs and advisories.yml keep it); the name must match exactly one test.
       - name: Test (binaries and integration tests)
-        run: cargo test --workspace --locked --bins --test '*'
+        env:
+          EVENT: ${{ github.event_name }}
+          DATE_TEST: every_advisory_exception_review_date_has_not_passed
+        run: |
+          skip=()
+          # No pipe into `grep -q` (an early exit can fail the pipe under pipefail); no list of files means no skip.
+          if [ "$EVENT" = "pull_request" ] && changed=$(git diff --name-only HEAD^1 HEAD) && ! grep -qx deny.toml <<<"$changed"; then
+            # Counted over this step's whole selection, not one file: the filter below is matched in every test binary.
+            listed=$(cargo nextest list --workspace --locked --bins --test '*' -E "test(=$DATE_TEST)" -T oneline)
+            n=$(grep -cE " ${DATE_TEST}\$" <<<"$listed" || true)
+            [ "$n" = 1 ] || { echo "the review-date test $DATE_TEST matches $n tests, not 1"; exit 1; }
+            skip=(-E "not test(=$DATE_TEST)")
+            echo "deny.toml unchanged: skipping $DATE_TEST (checked on push to main and daily)"
+          fi
+          cargo nextest run --workspace --locked --profile ci --bins --test '*' "${skip[@]}"
+      - name: Flaky tests (job summary)
+        if: always()
+        run: python3 -I .github/scripts/nextest_summary.py target/nextest/ci/junit.xml "Linux, binaries and integration tests"
+      - name: Keep the JUnit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junit-linux-integration
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 30
+      # Not retried: nextest does not run doc tests (spec 125-A1 rule 4).
       - name: Test (doc tests)
         run: cargo test --workspace --locked --doc
       - name: Save the build directory
@@ -109,20 +188,34 @@ jobs:
           path: target
           key: cargo-target-${{ runner.os }}-integ-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
 
-  # macOS: one job per run (the account may run only 5 macOS jobs at once). The full workspace tests, then Clippy, so
-  # code behind `cfg(target_os = "macos")` is tested and checked where it compiles. Clippy runs even when the tests fail.
-  # The repo lint and the data checks that do not depend on the system run once, in the Linux `lint` job.
+  # macOS: code behind `cfg(target_os = "macos")` is tested and checked where it compiles. The repo lint and the data
+  # checks that do not depend on the system run once, in the Linux `lint` job.
   #
-  # Once per pull request, on the head that is ready: while a pull request is a DRAFT this job is skipped (every push to a
-  # draft used to take a scarce macOS slot for ~25 minutes). GitHub cannot merge a draft, and marking it ready fires
-  # `ready_for_review`, which runs this job on that head; every later push to a ready pull request runs it again. So no
-  # pull request merges without the full macOS gates on its final head. Pushes to main always run it. The Linux jobs run
-  # on every push, draft or not.
-  test-macos:
-    name: macos (test + clippy)
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+  # Spec 125-A2 (section 11): built once, tested on two runners. `build-macos` compiles every test binary once and packs
+  # them with `cargo nextest archive`, then runs the doc tests and Clippy (Clippy runs even when the archive fails). The two
+  # `test-macos` jobs download that archive and each run half of the tests (`--partition slice:N/2`: every second test of
+  # the whole sorted list, so the long families are spread over both halves) under the same `ci` profile, filter, JUnit
+  # report and summary as before. Together they run exactly the tests the one job ran. This takes 3 macOS jobs per run
+  # instead of 1 (the account may run 5 at once); the build job and the two halves never run at the same time, so a run
+  # holds at most 2 macOS slots at any moment.
+  #
+  # Once per pull request, on the head that is ready: while a pull request is a DRAFT these jobs are skipped (every push
+  # to a draft used to take a scarce macOS slot for ~25 minutes). GitHub cannot merge a draft, and marking it ready fires
+  # `ready_for_review`, which runs them on that head; every later push to a ready pull request runs them again. So no pull
+  # request merges without the full macOS gates on its final head. Pushes to main always run them. The Linux jobs run on
+  # every push, draft or not.
+  #
+  # Spec 094 §14: nor do they run for a pull request that changes only documentation on the allow list (`changes` above).
+  # `!cancelled()` lets them run when `changes` failed: when the check cannot answer, macOS runs.
+  build-macos:
+    name: macos (build + clippy)
+    needs: changes
+    if: >-
+      !cancelled()
+      && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+      && needs.changes.outputs.docs_only != 'true'
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust toolchain
@@ -145,8 +238,27 @@ jobs:
           key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
           restore-keys: |
             cargo-target-${{ runner.os }}-test-
-      - name: Test
-        run: cargo test --workspace --locked
+      - name: Install cargo-nextest (pinned, checksum checked)
+        env:
+          NEXTEST_VERSION: "0.9.150"
+          NEXTEST_TARGET: universal-apple-darwin
+          NEXTEST_SHA256: 82a759b4d218d38359424196ab244c470e8f7c7d149c814fbbeef4d67c3c301a
+        run: .github/scripts/install-nextest.sh
+      # Every test binary of the workspace (the selection of `cargo nextest run --workspace`), with the build scripts'
+      # output directories nextest needs. Doc tests are not in it.
+      - name: Build the tests and pack them
+        run: cargo nextest archive --workspace --locked --archive-file "$RUNNER_TEMP/macos-tests.tar.zst"
+      - name: Hand the archive to the test jobs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-tests
+          path: ${{ runner.temp }}/macos-tests.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0 # already compressed (zstd)
+      # Not retried: nextest does not run doc tests (spec 125-A1 rule 4).
+      - name: Test (doc tests)
+        run: cargo test --workspace --locked --doc
       - name: Clippy
         if: success() || failure()
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -162,6 +274,69 @@ jobs:
         with:
           path: target
           key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+
+  test-macos:
+    name: macos (test ${{ matrix.shard }}/2)
+    needs: build-macos
+    # Explicit, because a job's default condition also looks at the jobs before `build-macos`: without it a failed `changes`
+    # (spec 094 §14) would skip the halves even though the build ran.
+    if: ${{ !cancelled() && needs.build-macos.result == 'success' }}
+    runs-on: macos-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false # a failure in one half still lets the other report all of its own
+      matrix:
+        shard: [1, 2]
+    steps:
+      # The source tree is needed beside the archive: tests read fixtures under their crate (`CARGO_MANIFEST_DIR`, a path
+      # compiled in, the same on every runner), and nextest reads `.config/nextest.toml` from it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2 # the base is the test merge commit's first parent (the review-date skip below)
+      - name: Rust toolchain
+        run: rustup show active-toolchain && rustc --version
+      - name: Install cargo-nextest (pinned, checksum checked)
+        env:
+          NEXTEST_VERSION: "0.9.150"
+          NEXTEST_TARGET: universal-apple-darwin
+          NEXTEST_SHA256: 82a759b4d218d38359424196ab244c470e8f7c7d149c814fbbeef4d67c3c301a
+        run: .github/scripts/install-nextest.sh
+      - name: Fetch the archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-tests
+          path: ${{ runner.temp }}
+      # The archive is unpacked into the checkout, so the build directory lands at `target/`, the same absolute path it had
+      # when the tests were compiled: paths compiled into a test (`env!("CARGO_BIN_EXE_delphi")`) then still point at
+      # the binary. Spec 093-A1: the review-date skip and its once-only check, as in the Linux integration job, counted
+      # over the whole archive (both halves), not one half. Spec 125-A1: nextest's `ci` profile.
+      - name: Test (half ${{ matrix.shard }} of 2)
+        env:
+          EVENT: ${{ github.event_name }}
+          DATE_TEST: every_advisory_exception_review_date_has_not_passed
+          SHARD: ${{ matrix.shard }}
+        run: |
+          archive=(--archive-file "$RUNNER_TEMP/macos-tests.tar.zst" --workspace-remap . --extract-to . --extract-overwrite)
+          skip=()
+          if [ "$EVENT" = "pull_request" ] && changed=$(git diff --name-only HEAD^1 HEAD) && ! grep -qx deny.toml <<<"$changed"; then
+            listed=$(cargo nextest list "${archive[@]}" -E "test(=$DATE_TEST)" -T oneline)
+            n=$(grep -cE " ${DATE_TEST}\$" <<<"$listed" || true)
+            [ "$n" = 1 ] || { echo "the review-date test $DATE_TEST matches $n tests, not 1"; exit 1; }
+            skip=(-E "not test(=$DATE_TEST)")
+            echo "deny.toml unchanged: skipping $DATE_TEST (checked on push to main and daily)"
+          fi
+          cargo nextest run "${archive[@]}" --profile ci --partition "slice:$SHARD/2" "${skip[@]}"
+      - name: Flaky tests (job summary)
+        if: always()
+        run: python3 -I .github/scripts/nextest_summary.py target/nextest/ci/junit.xml "macOS, all tests but doc tests (half ${{ matrix.shard }} of 2)"
+      - name: Keep the JUnit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junit-macos-${{ matrix.shard }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 30
 
   # Clippy, the repo lint and the data checks, on Linux. (Clippy also runs on macOS, in the job above.) The checks that
   # used to follow the tests in the `test` job (training cases, the golden bundle) are here, so they no longer rebuild
@@ -214,12 +389,18 @@ jobs:
   # The Rust dependency policy (spec 093 P, deny.toml): known vulnerabilities, yanked crates, licences, sources. The tool is
   # built at a fixed version from crates.io, not fetched through a third-party action, and it reads the advisory database
   # fresh, so a new advisory turns the next run red. An exception in deny.toml carries a reason and a review date.
+  # Amendment 093-A1: a new advisory is an outside event, so on a pull request the advisory check runs only when the pull
+  # request changes Cargo.lock, deny.toml or a Cargo.toml; bans, licences and sources run on every pull request. A push to
+  # main runs the full check, and `advisories.yml` runs it daily.
   deny:
     name: dependency policy (cargo deny)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The test merge commit and its parents: its first parent is the base, so the pull request's files are one diff.
+          fetch-depth: 2
       - name: Rust toolchain
         run: rustup show active-toolchain && rustc --version
       # The binary is kept between runs (building it took 114 s of the job's 130 s). The key names the version: change the
@@ -247,9 +428,28 @@ jobs:
             sleep 20
           done
       - name: Check
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           cargo deny --version
-          cargo deny --locked check
+          checks=""
+          if [ "$EVENT" = "pull_request" ]; then
+            if changed=$(git diff --name-only HEAD^1 HEAD); then
+              echo "files changed by this pull request: $(grep -c . <<<"$changed" || true)"
+              # A here-string, not a pipe into `grep -q`: an early exit could fail the pipe under pipefail.
+              if grep -qE '(^|/)Cargo\.(toml|lock)$|^deny\.toml$' <<<"$changed"; then
+                echo "dependencies changed: full check, advisories included"
+              else
+                checks="bans licenses sources"
+                echo "no dependency file changed: advisories skipped (checked on push to main and daily, spec 093-A1)"
+              fi
+            else
+              echo "could not list the changed files: full check"
+            fi
+          fi
+          # Word splitting is intended: an empty list is the full check.
+          # shellcheck disable=SC2086
+          cargo deny --locked check $checks
 
   # The full-screen console (D-28): typecheck, unit tests, and the dependency gate. Runners ship Node.
   ui:
@@ -438,3 +638,121 @@ jobs:
         with:
           path: target
           key: cargo-target-${{ runner.os }}-sandbox-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+
+  # Each slice of a bundled pull request builds on its own (spec 094 §12.2.4, S16). The same-spec bundling trial
+  # (CONTRIBUTING.md) lets a pull request carry several slices as separate commits, each with its own `Implements-Spec`
+  # trailer, so that one can be reverted alone; the jobs above test only the head. With two or more trailer commits, this
+  # job checks out each one except the head and runs `cargo check` and the repo lint on it. It does not run the tests at
+  # each commit. Commits that arrived by merging the base in, and merge commits, are left out. With fewer than two it says
+  # so and succeeds without building. It restores the lint job's build directory and saves none.
+  commits:
+    name: commits (each slice builds)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Which commits carry a slice
+        id: slices
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Oldest first; `origin/<base>..head` leaves out every commit the base already has, including ones merged in. A line
+          # that starts `Implements-Spec:` anywhere in the message counts, as `delphi merge` reads it (git's own trailer parser
+          # misses the many commits here whose `Co-Authored-By` paragraph comes after it).
+          git rev-list --reverse --no-merges --grep='^Implements-Spec:' "origin/$BASE_REF..$HEAD_SHA" > "$RUNNER_TEMP/slices.txt"
+          n="$(wc -l < "$RUNNER_TEMP/slices.txt" | tr -d ' ')"
+          echo "$n commit(s) with an Implements-Spec trailer"
+          if [ "$n" -lt 2 ]; then
+            echo "fewer than two: not a bundle, and the other jobs test the head"
+            echo "check=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          grep -v -x "$HEAD_SHA" "$RUNNER_TEMP/slices.txt" > "$RUNNER_TEMP/earlier.txt" || true
+          echo "to check (the head is tested by the other jobs):"
+          while read -r c; do git log -1 --format='  %h %s' "$c"; done < "$RUNNER_TEMP/earlier.txt"
+          echo "check=true" >> "$GITHUB_OUTPUT"
+      - name: Rust toolchain
+        if: steps.slices.outputs.check == 'true'
+        run: rustup show active-toolchain && rustc --version
+      - name: Restore the Cargo registry
+        if: steps.slices.outputs.check == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Restore the build directory
+        if: steps.slices.outputs.check == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-lint-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-lint-
+      - name: Check and lint each earlier slice commit
+        if: steps.slices.outputs.check == 'true'
+        run: |
+          while read -r c; do
+            subject="$(git log -1 --format='%h %s' "$c")"
+            echo "::group::$subject"
+            git checkout -q --detach "$c"
+            if ! cargo check --workspace --all-targets --locked; then
+              echo "::endgroup::"
+              echo "::error::cargo check fails at $subject"
+              exit 1
+            fi
+            if ! cargo run -q --locked -p delphi -- lint --repo .; then
+              echo "::endgroup::"
+              echo "::error::the repo lint fails at $subject"
+              exit 1
+            fi
+            echo "::endgroup::"
+            echo "ok: $subject"
+          done < "$RUNNER_TEMP/earlier.txt"
+
+  # The one check the ruleset on main requires (spec 094 §12.2.1, S13). It needs every other job and passes only when each
+  # passed, so a job added to or renamed in this file is covered by adding it here, and the required name never changes.
+  # `if: always()` matters: GitHub counts a SKIPPED required check as passing, so this job must run (and judge) even when a
+  # job it needs failed or was cancelled. The allowed skips: the macOS jobs (`build-macos`, `test-macos`) on a draft
+  # pull request (skipped there by design; GitHub cannot merge a draft, and marking it ready reruns everything) and on a
+  # pull request whose `changes` job said `docs_only` (spec 094 §14), and `commits` on a push to main (it runs on pull
+  # requests only). `changes` itself must succeed. A pull request that conflicts with main runs no workflow at all, so it has no `ci-gate` and cannot
+  # merge once the rule is on.
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [changes, test-linux-lib, test-linux-integration, build-macos, test-macos, lint, deny, ui, linux-sandbox, commits]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only == 'true' }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          failed="$(echo "$NEEDS" | jq -r --arg event "$EVENT" --arg draft "$DRAFT" --arg docs "$DOCS_ONLY" '
+            to_entries[]
+            | select(.value.result != "success")
+            | select((.value.result == "skipped"
+                      and (((.key == "build-macos" or .key == "test-macos") and $event == "pull_request"
+                             and ($draft == "true" or $docs == "true"))
+                           or (.key == "commits" and $event != "pull_request"))) | not)
+            | "\(.key) (\(.value.result))"')" || { echo "could not read the job results"; exit 1; }
+          if [ -n "$failed" ]; then
+            echo "not every job passed:"
+            echo "$failed"
+            exit 1
+          fi
+          echo "every job passed"

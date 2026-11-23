@@ -84,13 +84,20 @@ pub struct FinishReq<'a> {
 /// The tracker check (§5.3): the row of the slice, or a finding. `None` when no slice is known.
 fn tracker_check(repo: &Path, stem: &str, slice: &str) -> Result<tracker::Row, String> {
     let num = tracker::spec_number(stem).ok_or_else(|| format!("{} has no spec number", stem))?;
-    let text = std::fs::read_to_string(tracker::path(repo)).map_err(|e| format!("cannot read the tracker ({}): {}", tracker::PATH, e))?;
-    let all = tracker::rows(&text);
-    let Some(row) = all.iter().find(|r| r.spec.eq_ignore_ascii_case(&num) && r.slice.eq_ignore_ascii_case(slice)) else {
-        return Err(format!("the tracker ({}) has no row for {} {}: add `| {} | {} | <what it does> | <state> |`", tracker::PATH, num, slice, num, slice));
+    let tr = tracker::load(repo);
+    let file = format!("{}/{}/{}.md", tracker::DIR, num, slice);
+    if let Some((p, errs)) = tr.bad.iter().find(|(p, _)| p.eq_ignore_ascii_case(&file)) {
+        return Err(format!("{} is not a valid per-slice file (spec 135 §14.10): {}", p, errs.join("; ")));
+    }
+    let Some(row) = tracker::find(&tr.rows, &num, slice) else {
+        let searched = match tracker::sections_for(&tr.text, &num).as_slice() {
+            [] => format!("no heading names spec {}, so only `| {} | <slice> | ... |` rows were searched", num, num),
+            secs => format!("searched `| {} | <slice> | ... |` rows and the `| <slice> | ... |` rows under {}", num, secs.iter().map(|s| format!("\"{}\" (line {})", s.title, s.line)).collect::<Vec<_>>().join(", ")),
+        };
+        return Err(format!("the tracker has no entry for {} {} (no file {}; in {}, {}): add the file with `state:` and `date:` frontmatter (spec 135 §14.10), or a row `| {} | {} | <what it does> | <state> |`", num, slice, file, tracker::PATH, searched, num, slice));
     };
     if tracker::state_unfinished(&row.state) {
-        return Err(format!("the tracker row for {} {} (line {}) still says \"{}\": say what was built and verified", num, row.slice, row.line, row.state));
+        return Err(format!("the tracker entry for {} {} ({}) still says \"{}\": say what was built and verified", num, row.slice, row.place(), row.state));
     }
     Ok(row.clone())
 }
@@ -312,7 +319,26 @@ mod tests {
         let t = tracker_repo("built (this PR): finisher.rs");
         assert_eq!(tracker_check(t.path(), "135-the-forge", "f1").unwrap().content, "the finisher");
         let e = tracker_check(t.path(), "135-the-forge", "F9").unwrap_err();
-        assert!(e.contains("has no row for 135 F9"), "{}", e);
+        assert!(e.contains("has no entry for 135 F9"), "{}", e);
+    }
+
+    /// AC-27: a per-slice file passes when built, is flagged when not built or not valid, and wins over the table's row.
+    #[test]
+    fn ac27_the_tracker_check_reads_a_slice_file() {
+        let t = tracker_repo("not built");
+        let f = t.path().join(tracker::DIR).join("135/F1.md");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(&f, "---\nstate: built\ndate: 2026-11-22\ntitle: the finisher, again\n---\n").unwrap();
+        let row = tracker_check(t.path(), "135-the-forge", "F1").unwrap();
+        assert_eq!((row.content.as_str(), row.state.as_str()), ("the finisher, again", "built (2026-11-22)"));
+        fs::write(&f, "---\nstate: not-built\ndate: 2026-11-22\n---\n").unwrap();
+        let e = tracker_check(t.path(), "135-the-forge", "F1").unwrap_err();
+        assert!(e.contains("still says") && e.contains("135/F1.md"), "{}", e);
+        fs::write(&f, "---\nstate: done\n---\n").unwrap();
+        let e = tracker_check(t.path(), "135-the-forge", "f1").unwrap_err();
+        assert!(e.contains("not a valid per-slice file"), "{}", e);
+        let e = tracker_check(t.path(), "135-the-forge", "F7").unwrap_err();
+        assert!(e.contains("no file missions/2026-10-23-foundational-design/tracker/135/F7.md"), "{}", e);
     }
 
     #[test]

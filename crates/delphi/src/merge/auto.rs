@@ -11,7 +11,11 @@
 //! green) is not an error and is retried each poll; a pull request that errored is parked until its head commit changes. A pull
 //! request that is behind and otherwise ready is refreshed and left (§11.3.3): its new head comes back through the queue once CI
 //! is green; only a refresh that fails counts as an error.
+//!
+//! With `--batch[=N]` (§13, S22) it merges through rollups under the same approval and rules (`auto_batch`); a constituent
+//! counts against `--max-prs`, and a `rollup-red` entry counts as an error.
 
+use super::auto_batch::Batching;
 use super::check::QUEUE_LABEL;
 use super::errors::classify_refusal;
 use super::record::Attestation;
@@ -29,12 +33,14 @@ pub struct Caps {
     pub pause_after_errors: u32,
     pub idle: Duration,
     pub poll: Duration,
+    /// `--batch[=N]` (spec 094 §13, S22): merge through rollups of up to N; `None` merges one at a time.
+    pub batch: Option<usize>,
 }
 
 impl Default for Caps {
     /// The defaults of spec 094 OD-2: 10 pull requests, 4 hours, pause after 2 errors in a row, stop after 30 idle minutes.
     fn default() -> Self {
-        Caps { max_prs: 10, run_for: Duration::from_secs(4 * 3600), pause_after_errors: 2, idle: Duration::from_secs(30 * 60), poll: Duration::from_secs(60) }
+        Caps { max_prs: 10, run_for: Duration::from_secs(4 * 3600), pause_after_errors: 2, idle: Duration::from_secs(30 * 60), poll: Duration::from_secs(60), batch: None }
     }
 }
 
@@ -55,6 +61,9 @@ impl Caps {
         }
         if self.poll < Duration::from_secs(5) || self.poll > Duration::from_secs(3600) {
             return Err("--poll must be between 5 seconds and 1 hour".into());
+        }
+        if self.batch.is_some_and(|n| !(2..=super::rollup::MAX_BATCH).contains(&n)) {
+            return Err(format!("--batch takes 2 to {} pull requests", super::rollup::MAX_BATCH));
         }
         Ok(())
     }
@@ -97,17 +106,24 @@ pub struct Summary {
     pub merged: Vec<u64>,
     pub left_for_a_human: Vec<u64>,
     pub errors: u32,
+    /// `--batch`: the rollups the session opened, and those still open when it ended.
+    pub rollups: Vec<u64>,
+    pub rollups_open: Vec<u64>,
 }
 
 impl Summary {
     pub fn lines(&self) -> Vec<String> {
         let list = |v: &[u64]| if v.is_empty() { "none".to_string() } else { v.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", ") };
-        vec![
+        let mut out = vec![
             format!("session {} ended: {}", self.session, self.reason),
             format!("  merged: {}", list(&self.merged)),
             format!("  left for a human (they change a gate): {}", list(&self.left_for_a_human)),
             format!("  errors: {} (see `delphi merge log --open`)", self.errors),
-        ]
+        ];
+        if !self.rollups.is_empty() {
+            out.push(format!("  rollups: opened {}; still open {} (`delphi merge <rollup>` merges one on the operator's approval of its pull requests)", list(&self.rollups), list(&self.rollups_open)));
+        }
+        out
     }
 }
 
@@ -141,15 +157,16 @@ pub fn run_checked(ctx: &mut Ctx, caps: &Caps, att: &Attestation, clock: &dyn Cl
     let grant = json!({
         "kind": "session_start", "time": (ctx.now)(), "session": id,
         "max_prs": caps.max_prs, "run_for_secs": caps.run_for.as_secs(), "pause_after_errors": caps.pause_after_errors,
-        "idle_secs": caps.idle.as_secs(), "poll_secs": caps.poll.as_secs(), "gate_changing": "never merged by a session",
+        "idle_secs": caps.idle.as_secs(), "poll_secs": caps.poll.as_secs(), "batch": caps.batch, "gate_changing": "never merged by a session",
         "attestation": att.label(), "self_attested": matches!(att, Attestation::ChatQuote(_)), "quote": att.quote(),
     });
     let _ = ctx.ledger.append(&grant);
-    say(&format!("session {id}: up to {} pull request(s), for {} minute(s), pausing after {} error(s) in a row, idle limit {} minute(s). Stop it with Ctrl-C or by creating the STOP file.", caps.max_prs, caps.run_for.as_secs() / 60, caps.pause_after_errors, caps.idle.as_secs() / 60));
+    say(&format!("session {id}: up to {} pull request(s), for {} minute(s), pausing after {} error(s) in a row, idle limit {} minute(s){}. Stop it with Ctrl-C or by creating the STOP file.", caps.max_prs, caps.run_for.as_secs() / 60, caps.pause_after_errors, caps.idle.as_secs() / 60, caps.batch.map(|n| format!(", in rollups of up to {n}")).unwrap_or_default()));
 
     let (mut merged, mut human, mut errors, mut consecutive) = (Vec::<u64>::new(), Vec::<u64>::new(), 0u32, 0u32);
     let mut parked: HashMap<u64, String> = HashMap::new();
     let mut last_activity = start;
+    let mut batching = caps.batch.map(|n| Batching::new(n, att));
 
     let reason: String = 'session: loop {
         if stop() {
@@ -179,6 +196,31 @@ pub fn run_checked(ctx: &mut Ctx, caps: &Caps, att: &Attestation, clock: &dyn Cl
                 break 'session drift_reason.into();
             }
         }
+        // `--batch` (S22): follow the rollups in flight and open a new one; the serial path below takes what it holds back.
+        let (mut hold, mut carried) = (std::collections::BTreeSet::new(), 0);
+        if let Some(b) = batching.as_mut() {
+            let p = b.poll(ctx, &queue, &parked, caps.max_prs.saturating_sub(merged.len() as u32), say);
+            if p.active {
+                last_activity = clock.now_secs();
+            }
+            if !p.merged.is_empty() {
+                consecutive = 0;
+            }
+            let landed = p.merged.first().copied();
+            merged.extend(&p.merged);
+            (errors, consecutive) = (errors + p.errors, consecutive + p.errors);
+            parked.extend(p.parked);
+            (hold, carried) = (p.hold, p.carried);
+            if let (Some(check), Some(n)) = (base, landed) {
+                if base_drifted(ctx, check, n, say) {
+                    errors += 1;
+                    break 'session drift_reason.into();
+                }
+            }
+            if consecutive >= caps.pause_after_errors {
+                break 'session format!("paused after {consecutive} error(s) in a row; fix them (`delphi merge log --open`) and start a new session");
+            }
+        }
         for n in queue {
             if stop() {
                 break 'session "stopped by the operator (Ctrl-C or the STOP file)".into();
@@ -188,6 +230,13 @@ pub fn run_checked(ctx: &mut Ctx, caps: &Caps, att: &Attestation, clock: &dyn Cl
             }
             if clock.now_secs() >= deadline {
                 break 'session "reached the time cap".into();
+            }
+            // A constituent in flight counts against the cap before it merges; one that may join the next batch waits for it.
+            if hold.contains(&n) {
+                continue;
+            }
+            if (merged.len() + carried) as u32 >= caps.max_prs {
+                break;
             }
             // A pull request that errored, or that needs a human, is left alone until its head commit changes.
             if let Some(h) = parked.get(&n) {
@@ -247,7 +296,8 @@ pub fn run_checked(ctx: &mut Ctx, caps: &Caps, att: &Attestation, clock: &dyn Cl
         }
     };
 
-    let summary = Summary { session: id.clone(), reason, merged, left_for_a_human: human, errors };
-    let _ = ctx.ledger.append(&json!({"kind": "session_end", "time": (ctx.now)(), "session": id, "reason": summary.reason, "merged": summary.merged, "left_for_a_human": summary.left_for_a_human, "errors": summary.errors}));
+    let (rollups, rollups_open) = batching.map(|b| (b.opened, b.inflight)).unwrap_or_default();
+    let summary = Summary { session: id.clone(), reason, merged, left_for_a_human: human, errors, rollups, rollups_open };
+    let _ = ctx.ledger.append(&json!({"kind": "session_end", "time": (ctx.now)(), "session": id, "reason": summary.reason, "merged": summary.merged, "left_for_a_human": summary.left_for_a_human, "errors": summary.errors, "rollups": summary.rollups, "rollups_open": summary.rollups_open}));
     summary
 }
