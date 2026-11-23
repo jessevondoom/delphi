@@ -27,7 +27,7 @@ fn has(args: &[String], f: &str) -> bool {
 }
 
 pub fn usage() -> &'static str {
-    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--repo <dir>] [--home <dir>]\n       delphi forge list [--all] [--json] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]"
+    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge claim --spec-number [--by <holder>] [--ttl <dur>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release --spec-number <NNN> [--by <holder>] [--repo <dir>]\n       delphi forge list [--all] [--json] [--sweep] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]"
 }
 
 fn now() -> i64 {
@@ -108,5 +108,7 @@ mod tests {
         assert_eq!(exec(&v(&["nope"])).code, 2);
         assert_eq!(exec(&v(&[])).code, 2);
         assert_eq!(exec(&v(&["claim", "135", "F0", "--ttl", "soon"])).code, 2);
+        assert_eq!(exec(&v(&["claim", "135", "--spec-number"])).code, 2);
+        assert_eq!(exec(&v(&["release", "--spec-number"])).code, 2);
     }
 }

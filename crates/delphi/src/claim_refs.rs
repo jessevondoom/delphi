@@ -205,7 +205,10 @@ impl Remote {
             Ok((true, _, _)) => Push::Done,
             Ok((false, out, err)) => {
                 let rejected = out.lines().chain(err.lines()).any(|l| l.starts_with('!') && l.contains("[rejected]") && ["stale info", "fetch first", "non-fast-forward", "already exists"].iter().any(|w| l.contains(w)));
-                if rejected {
+                // A race the server settles shows as `[remote rejected]` (the ref changed under its lock): when the remote can be
+                // read and the ref is no longer what was expected, another session won.
+                let moved = || self.git(&["ls-remote", "origin", &r], None).ok().map(|o| o.split_whitespace().next().unwrap_or("").to_string()).is_some_and(|now| now != expect.unwrap_or(""));
+                if rejected || moved() {
                     Push::Lost
                 } else {
                     Push::Failed(last_line(&err).or_else(|| last_line(&out)).unwrap_or_else(|| "git push failed".into()))
