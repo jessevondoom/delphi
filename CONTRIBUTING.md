@@ -49,7 +49,7 @@ How the jobs are laid out (`.github/workflows/ci.yml`): on Ubuntu the workspace 
 
 Bare `delphi` and `delphi init` create a real workspace. Whenever you run the binary to try something, pass `--home <tmpdir>` (or set `DELPHI_HOME`). `delphi help <command>` and `<command> --help` create nothing.
 
-Tests that start daemons hold pseudo-terminals until the process ends; if `openpty` starts failing, stop strays with `delphi daemon stop --home <home>` and check for left-over `delphi __core` processes. Builds fill disks quickly: `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` helps. Do not symlink `ui/node_modules` into a worktree (removing the worktree can empty the original); copy it instead (`cp -Rc` on macOS).
+Tests that start daemons hold pseudo-terminals until the process ends; if `openpty` starts failing, stop strays with `delphi daemon stop --home <home>` and check for left-over `delphi __core` processes. Builds fill disks quickly: `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` helps. Never point several worktrees at one `CARGO_TARGET_DIR`: `crates/delphi/build.rs` writes absolute paths into `OUT_DIR`, so one worktree's tests can see another's files. Opt-in, if you start many worktrees: a compiler cache shared across them, each keeping its own `target/` (`RUSTC_WRAPPER=sccache`, `SCCACHE_BASEDIRS=<the directory that holds the worktrees>`), cut a second worktree's cold `cargo test --workspace --no-run` by about a fifth in a trial and saves no disk ([the trial](missions/2026-10-23-foundational-design/ci-local-gate-cache-trial-2026-11-22.md), spec 135 §14.12). Do not symlink `ui/node_modules` into a worktree (removing the worktree can empty the original); copy it instead (`cp -Rc` on macOS).
 
 ## Pull requests
 

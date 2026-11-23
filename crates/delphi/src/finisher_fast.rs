@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn h1_build_wide_and_unknown_paths_select_everything() {
-        for p in ["Cargo.lock", "Cargo.toml", "crates/engine/Cargo.toml", "crates/delphi/build.rs", ".cargo/config.toml", "rust-toolchain.toml", ".config/nextest.toml", "schemas/x.schema.json", "specs/135-x.md", "compiled/specs/index.md", "agents/builder/AGENT.md", "ui/src/app.tsx", "GOVERNANCE.md"] {
+        for p in ["Cargo.lock", "Cargo.toml", "crates/engine/Cargo.toml", "crates/delphi/build.rs", ".cargo/config.toml", "rust-toolchain.toml", ".config/nextest.toml", "schemas/x.schema.json", "specs/135-x.md", "compiled/index.md", "agents/builder/AGENT.md", "ui/src/app.tsx", "GOVERNANCE.md"] {
             let s = select(&files(&["crates/delphi/src/main.rs", p]), &ws());
             let Selection::All { why } = s else { panic!("{} did not select everything: {:?}", p, s) };
             assert!(why.starts_with(p), "{}", why);
