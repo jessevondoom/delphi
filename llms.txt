@@ -47,6 +47,7 @@ Start with the README, then the guides. The specs are the design and say, in a `
 - [authorization-request.schema.json](schemas/authorization-request.schema.json): a staged request for the operator to authorize a test (spec 092)
 - [authorization-record.schema.json](schemas/authorization-record.schema.json): `operator/authorizations.json`, the operator's test authorizations (spec 092)
 - [xenia-record.schema.json](schemas/xenia-record.schema.json) and [xenia-sidecar.schema.json](schemas/xenia-sidecar.schema.json): signed org memory records
+- [tracker-slice.schema.json](schemas/tracker-slice.schema.json): a per-slice spec tracker file (spec 135)
 - [agent-manifest.schema.json](schemas/agent-manifest.schema.json) and [skill-manifest.schema.json](schemas/skill-manifest.schema.json): `AGENT.md` and `SKILL.md` frontmatter
 
 ## Design
