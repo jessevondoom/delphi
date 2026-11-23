@@ -101,7 +101,7 @@ pub fn classify_refusal(reason: &str) -> Option<Class> {
         Some(Class::Conflict)
     } else if reason.starts_with("checks failed") {
         Some(Class::CiRed)
-    } else if reason.starts_with("no checks are reported") {
+    } else if reason.starts_with(super::check::NO_CHECKS_MARK) {
         Some(Class::NoChecks)
     } else if reason.contains("gate list") {
         Some(Class::GateList)
@@ -265,7 +265,7 @@ mod tests {
         for (r, want) in [
             ("it conflicts with `main`: merge the base into the branch and resolve", Some(Class::Conflict)),
             ("checks failed: ui, test", Some(Class::CiRed)),
-            ("no checks are reported on the head commit (a pull request that conflicts ...)", Some(Class::NoChecks)),
+            (&super::super::check::no_checks_reason("head7abcdef"), Some(Class::NoChecks)),
             ("the gate list on `main` cannot be used, so nothing can be judged: paths is empty", Some(Class::GateList)),
             ("specs/094.md is not approved on main (it needs `status: approved`)", Some(Class::Spec)),
             ("no `Implements-Spec:` trailer, and the change is neither only Markdown nor inside the bounded exemption", Some(Class::Spec)),

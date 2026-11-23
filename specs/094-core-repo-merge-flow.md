@@ -21,6 +21,7 @@ tags: [spec, merge, pull-requests, workflow, approvals, authority, builder, git,
 > **Amendment §12 (operator, 2026-11-22):** one required check, `ci-gate`, that passes only when every CI job did; a `conflict` label on pull requests that cannot merge; a build-and-lint check of each slice commit in a bundled pull request; and S8 marked deferred and unlikely.
 > **Amendment §13 (operator, 2026-11-22):** batched merges inside `delphi merge`: a rollup pull request built from the base and up to eight approved pull requests, tested once by the normal CI and merged as one, with every constituent keeping its own approval, spec and ledger row; bisection on red. No GitHub merge queue and no organization.
 > **Amendment §14 (operator, 2026-11-22):** a pull request that changes only plain documentation (an allow list, failing closed) skips the macOS jobs; `ci-gate` accepts that skip only then.
+> **Amendment §16 (operator, 2026-11-23):** two fixes to `delphi merge`: "no checks yet" is a state of its own (pending while waiting, never green), and the flow refuses to compile or judge `compiled/specs/` with a spec compiler that is not the tree's own.
 > **Amends, when approved:** `specs/003` §3.1.2 and `specs/006` §3.1 (the hash pin of an approved spec in `ratified.lock` and the daemon's "blocks Builder unless the hash is ratified" govern work run through a Delphi daemon on specs inside a workspace's tree; Delphi's own repository is built from host-agent sessions as well, and there a spec is approved by its frontmatter and the operator's recorded instruction, with no pin) and `GOVERNANCE.md` §1.1 (how a core-repo merge is approved). Both edits are in this pull request. The `GOVERNANCE.md` edit is a constitutional change (§5.7) and is a gate-changing change under §3.4: the operator reviews it line by line.
 
 ---
@@ -463,13 +464,13 @@ delphi merge --auto --batch[=N] ...          (S22)
 ### 13.10 Decisions
 
 - **OD-13. The design. Adopted** by the operator on 2026-11-22 ("agree with both recommendations"): the rollup pull request (§13.2). The alternative, speculative parallel candidates (§13.7), is not adopted.
-- **OD-14. Batch size.** Recommend a default of 4 and a ceiling of 8. Four isolates a culprit in two rounds; eight halves the CI runs again on a green day but needs a serial fallback after two rounds.
+- **OD-14. Batch size. Adopted** by the operator on 2026-11-23 ("i agree with all three"): a default of 4 and a ceiling of 8. Four isolates a culprit in two rounds; eight halves the CI runs again on a green day but needs a serial fallback after two rounds. Revisit after the V-13.5 measurement: if fewer than about 1 in 10 batches fail, raise the default to 6.
 - **OD-15. Constituents green on their own head.** Recommend yes: it costs nothing (each pull request already has its own CI) and makes a red rollup rarer and its bisection shorter. A behind constituent is fine; the rollup tests it against the tip.
 - **OD-16. The approval form.** Recommend one batch confirmation over the listed constituents (`all` at a terminal; a chat quote that names every number, or says all/every/each for `--all`), recorded per constituent. Stricter alternative: the operator types each number.
 - **OD-17. A constituent GitHub did not mark merged.** Recommend: close it with a comment that links the rollup and the merge commit, after checking its approved head is an ancestor of the base tip. Alternative: leave it open and report it.
-- **OD-18. Rounds.** Recommend two rounds of halving, then the serial path. Alternative: speculative prefixes (§13.7) for the second round.
+- **OD-18. Rounds. Adopted** by the operator on 2026-11-23 ("i agree with all three"): two rounds of halving, then the serial path. Speculative prefixes (§13.7) are not adopted for the second round, because macOS slots are the binding limit.
 - **OD-19. Flaky tests. Decided** by the operator on 2026-11-22 ("agree with both recommendations"), changing the earlier recommendation: there is no interim "rerun the failed jobs once before bisecting" step. CI retries each failing test once (spec 125, PR #884), so a red rollup already means a test failed twice and bisection starts directly. S21 depends on #884 and is not merged before it. ~~Recommend: rerun the rollup's failed jobs once before bisecting, and drop that step once nextest's retry-once is merged.~~
-- OD-14 to OD-18 were not answered one by one; their recommendations are the working basis and stay recommendations.
+- OD-15 to OD-17 were not answered one by one; their recommendations are the working basis and stay recommendations. OD-14 and OD-18 were adopted on 2026-11-23 (above).
 
 ### 13.11 Threats
 
@@ -580,3 +581,44 @@ Nothing here widens an agent's authority. The `changes` job reads the diff and w
 
 - **AC-24 (S24).** The script, run on a scratch repository, answers `true` for a guide, the readme with the changelog and a mission note, a new fragment and a new nested guide, and `false` for `docs/reference/`, a guide with code, a spec, `AGENTS.md`, a deletion, a rename, a non-Markdown file under `docs/`, `*.md.sh`, a `README.md` under `crates/`, a quoted name, an empty diff, a push and an unreadable base. `ci-gate`'s rule, run on sample results, passes a docs-only pull request with macOS skipped and fails a pull request that is not docs-only with macOS skipped. On this pull request's own run `changes` answers `false` (it changes `.github/`), and macOS runs once it is ready.
 - **V-14.** The workflow passes `actionlint` and parses as YAML before the push; the script runs under `/bin/bash` 3.2. The first docs-only pull request after the merge shows `changes` `true`, the macOS jobs skipped and `ci-gate` green.
+
+## 16. Amendment (operator, 2026-11-23): "no checks yet", and a spec compiler that is not the tree's
+
+**Approval, stated plainly.** The operator's words, in a host session on 2026-11-23: "can we build any of the remaining work or is it all dependent on unmerged PRs?", answered "yes, starting with these `delphi merge` fixes", after the standing "keep building anything you can". The amendment is approved in advance on those words; the operator has not read this text and no Council has reviewed it. It changes `crates/delphi/src/merge/**`, so its pull request is gate-changing (§3.4) and the operator merges it at a terminal. It corrects §11.3.3 (the wait) and §11.3.4 (the check of the base), and §11.7's "a compiler that changed on the base"; it changes nothing else. (§15 is the amendment of pull request #899.)
+
+### 16.1 The two faults, as seen on 2026-11-23
+
+1. **An empty checks answer was a parse error.** `delphi merge <PR> --operator-said ... --wait 4h` refreshed #887, #889 and #892 (each pushed a new head), then read the new head's checks before GitHub had registered a run, and each failed with "could not read what `gh` returned: checks: EOF while parsing a value at line 1 column 0". The refreshes had worked; only the wait broke. `delphi merge refresh 890` on a conflicting pull request (which runs no CI, so has no checks) failed the same way. The cause, read from `forge.rs`: `gh pr checks <n> --json name,bucket` on a head with no checks prints nothing on standard output, says "no checks reported on the '<branch>' branch" on standard error and exits 1 (verified read-only with `gh` 2.103.1 on pull requests #1 to #3); `Gh::checks` accepted exit 1 as "a check failed, JSON follows", so the branch meant for "no checks reported" never ran and the empty text went to the JSON parser. The flow above it already treated an empty list as "not yet" while waiting and as a refusal at merge; `--auto` did not: it counted that refusal as an error and parked the head, so a session that refreshed a pull request could never merge it.
+2. **The base check used the running binary's compiler.** After #890 (spec 088 §14: the group pages are no longer committed), `delphi merge` from a binary built before it reported "base main has DRIFTED: compiled/specs/console.md is missing ..." and wrote a `base-drift` entry, pausing `--all` and `--auto`. Worse, a stale binary's `refresh` wrote the nine group pages back into #896's branch, which then failed CI's `compiled_specs` test ("only the index is committed"). §11.7 had named the risk ("CI is the judge: the head goes red") but not that the flow itself reports false drift, nor that it writes old-format files into somebody's branch.
+
+### 16.2 "No checks yet" (S26)
+
+- `Gh::checks` reads `gh`'s exit code, standard output and standard error together. Empty output with "no checks reported" (or exit 8 with nothing said) is an empty list; empty output with any other message is the forge error it is, never an empty list; output that is not a JSON list is a parse error.
+- An empty list is the state "no checks yet". At a merge decision it is never green: the refusal reads "no checks have reported on head `<sha>` yet: CI may not have started (or the pull request has a conflict with its base, and such a pull request runs no CI)", class `no-checks` as before. While a command waits (`<PR> --wait`, `--all`, a rollup's wait) it is pending, as checks still running are, until the bound. In an `--auto` session it is waiting, not an error, and the head is not parked.
+- `refresh` does not need checks (§11.3.2 judges the branch, not CI), so it neither reads them as a blocker nor fails on them: a conflicting pull request is settled by the closed list or handed over with the conflicted paths named, as for any other.
+
+### 16.3 A spec compiler that is not the tree's (S27)
+
+**Options considered.**
+
+| Option | Kind | Why |
+| :-- | :-- | :-- |
+| (a) A format constant the compile writes (into `index.md` or each JSON file), compared before judging or writing | conventional | Cheap, but it holds only if every change to the output bumps the constant. #890 changed the output and left `COMPILER` at `delphi-spec-compile/1`: the discipline it depends on already failed once. Bumping it also rewrites every committed JSON file. Not adopted. |
+| (b) Run the tree's own compiler (`cargo run -p delphi -- specs compile` in the temporary worktree) | removes the constraint | Always right, but a full build per refresh and per base check: minutes and gigabytes on a machine whose disk already fills. Not adopted. |
+| (c) Compare the compiler's source: the binary carries its own copies of `crates/delphi/src/spec_compile.rs`, `spec_views.rs` and `crates/delphi-core/src/specdoc.rs` (`include_str!`); before it compiles or judges a tree it compares them with the tree's, byte for byte | named method (a source fingerprint, as a build cache keys on its inputs) | **Adopted.** Nobody has to remember anything: any change to the compiler on the base makes an older binary refuse. Costs about 90 KB in the binary and one read of three files. |
+
+**The rule.** `refresh` (after its merge, before its compile), the rollup build's compile, the check of the base (§11.3.4) and `repair-base` each compare the tree they are about to compile with the binary's copies. A tree with none of the three files (a repository that is not Delphi's own, as in the fixture tests) passes; a tree with any of them must have all three, equal. On a difference nothing is compiled or written: `refresh` and `repair-base` refuse ("this delphi binary's spec compiler is not the one in ...: rebuild delphi from an up-to-date `main`"), with no `refresh-refused` entry, since the fix is the operator's rebuild and not the builder's; the rollup build drops the constituent with that reason; the check of the base is "could not check it", never drift, so it writes no `base-drift` entry. For `refresh` the tree compared is the base merged into the pull request, which is the tree CI compiles: a pull request that changes the compiler itself is refused too, and is updated by hand or with `merge fix`.
+
+**Limits.** A false refusal is possible (a comment edited in one of the three files makes every older binary refuse until rebuilt); that is the safe direction. The guard does not cover the frontmatter reader the compile borrows from `lint.rs` (it changes often, and its part in the output is small); CI remains the judge there, as §11.7 says. A binary built before this amendment has no guard: the fix starts with the first binary that contains it.
+
+### 16.4 Slices (one pull request; gate-changing, merged by the operator at a terminal)
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| S26 | §16.2: `Gh::checks` reads the exit code, output and error together; the "no checks yet" refusal; `--auto` waits on it; tests | 2 |
+| S27 | §16.3: the compiler guard in `refresh`, the rollup build, the base check and `repair-base`; tests; the guide and the skill note | 2 |
+
+### 16.5 Acceptance criteria
+
+- **AC-26 (S26).** `gh`'s no-checks answer (exit 1, empty output, "no checks reported") reads as no checks, and an empty answer with any other message as an error; a refreshed head with no checks is polled through "no checks", then "running", and merged once green; a wait that runs out with no checks merges nothing; an `--auto` session merges such a head at a later poll with no error; at decision time the refusal carries the new words; `refresh` of a conflicting pull request with no checks settles it by rule or hands it over naming the conflicted file.
+- **AC-27 (S27).** In a fixture repository whose base carries a compiler different from the binary's, `refresh` refuses with the rebuild message, pushes and commits nothing and writes no error entry, and the base check is unchecked, not drift; with the compiler equal again, the same refresh goes through and the base is current. The guard passes on this repository's own checkout.

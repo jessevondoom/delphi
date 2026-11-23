@@ -64,7 +64,7 @@ pub struct Refreshing<'a> {
 
 /// While waiting, these refusals mean "not yet": CI has not started or finished on the new head.
 pub(super) fn not_yet(reason: &str) -> bool {
-    reason.starts_with("checks are still running") || reason.starts_with("no checks are reported") || reason.starts_with("GitHub has not finished")
+    reason.starts_with("checks are still running") || reason.starts_with(super::check::NO_CHECKS_MARK) || reason.starts_with("GitHub has not finished")
 }
 
 /// Every reason `v` cannot merge now, the missing queue label included (a gate-changing pull request is never queued).

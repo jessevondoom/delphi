@@ -290,3 +290,25 @@ fn a_gate_changing_a_draft_a_forks_and_a_current_pull_request_are_refused_before
     assert_eq!(out, Ok(Done::Current));
     assert!(log.is_empty() && Errors::at(f.home.path()).entries().is_empty());
 }
+
+#[test]
+fn a_conflicting_pull_request_with_no_checks_is_refreshed_by_rule_or_handed_over_never_failed_on_its_checks() {
+    // #890 on 2026-11-23: a conflicting pull request runs no CI, so it has no checks. Refresh does not need any (§16.2): it
+    // settles a conflict on the closed list, and hands over one outside it, naming the file.
+    let f = fixture();
+    let head = diverge(&f, |d| add_spec(d, "002-a2", "a", None, Some("| 002 | S1 | built |")), |d| add_spec(d, "010-b10", "b", None, Some("| 010 | S1 | merged |")));
+    let forge = forge_for(&head, &["specs/002-a2.md"]);
+    forge.edit(7, |p| p.mergeable = "CONFLICTING".into());
+    forge.st.borrow_mut().checks.insert(7, vec![]);
+    let r = refreshed(run(&f, &forge, None).0);
+    assert!(r.settled.contains(&TRACKER.to_string()), "{r:?}");
+
+    let f = fixture();
+    let head = diverge(&f, |d| std::fs::write(d.join("README.md"), "mine\n").unwrap(), |d| std::fs::write(d.join("README.md"), "theirs\n").unwrap());
+    let forge = forge_for(&head, &["README.md"]);
+    forge.edit(7, |p| p.mergeable = "CONFLICTING".into());
+    forge.st.borrow_mut().checks.insert(7, vec![]);
+    let (out, _) = run(&f, &forge, None);
+    assert!(matches!(&out, Err(Stop::HandOver(why)) if why.contains("README.md")), "{out:?}");
+    assert_eq!(origin_pr(&f), head);
+}

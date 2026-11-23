@@ -134,19 +134,48 @@ fn label_look(label: &str) -> (&'static str, &'static str) {
     }
 }
 
+fn failed(what: &str, code: i32, stderr: &str) -> ForgeError {
+    let detail = stderr.trim().to_string();
+    ForgeError::Failed { what: what.to_string(), detail: if detail.is_empty() { format!("exit code {code}") } else { detail } }
+}
+
+/// Read what `gh pr checks <n> --json name,bucket` answered (spec 094 §16.2). Exit 0, 1 (a check failed) and 8 (checks pending)
+/// carry JSON. A head with no checks at all prints nothing: `gh` 2.103 exits 1 and says "no checks reported on the '<branch>'
+/// branch" on standard error (seen on 2026-11-23, read-only, on pull requests #1 to #3). That is an empty list, "no checks yet",
+/// which no caller takes for green. Empty output with any other message is the error it is, never an empty list.
+fn read_checks(code: i32, stdout: &str, stderr: &str) -> Result<Vec<Check>, ForgeError> {
+    const WHAT: &str = "read the checks";
+    if stdout.trim().is_empty() {
+        if stderr.contains("no checks reported") || (code == 8 && stderr.trim().is_empty()) {
+            return Ok(vec![]);
+        }
+        return Err(failed(WHAT, code, stderr));
+    }
+    if !matches!(code, 0 | 1 | 8) {
+        return Err(failed(WHAT, code, stderr));
+    }
+    let v: Value = serde_json::from_str(stdout).map_err(|e| ForgeError::Parse(format!("checks: {e}")))?;
+    let rows = v.as_array().ok_or_else(|| ForgeError::Parse("checks: not a list".into()))?;
+    Ok(rows.iter().map(|c| Check { name: s(c, "name"), bucket: s(c, "bucket") }).collect())
+}
+
 pub struct Gh;
 
 impl Gh {
     /// Run `gh` with these arguments. `ok_codes` are exit codes that still carry a usable answer (`gh pr checks` exits 8 while
     /// checks are pending and 1 when one failed, and still prints its JSON).
     fn run(&self, what: &str, args: &[&str], ok_codes: &[i32]) -> Result<String, ForgeError> {
-        let out = Command::new("gh").args(args).stdin(std::process::Stdio::null()).output().map_err(|e| ForgeError::Missing(e.to_string()))?;
-        let code = out.status.code().unwrap_or(-1);
+        let (code, stdout, stderr) = self.exec(args)?;
         if code == 0 || ok_codes.contains(&code) {
-            return Ok(String::from_utf8_lossy(&out.stdout).to_string());
+            return Ok(stdout);
         }
-        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(ForgeError::Failed { what: what.to_string(), detail: if detail.is_empty() { format!("exit code {code}") } else { detail } })
+        Err(failed(what, code, &stderr))
+    }
+
+    /// Run `gh` and return its exit code, standard output and standard error, whatever the code.
+    fn exec(&self, args: &[&str]) -> Result<(i32, String, String), ForgeError> {
+        let out = Command::new("gh").args(args).stdin(std::process::Stdio::null()).output().map_err(|e| ForgeError::Missing(e.to_string()))?;
+        Ok((out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string()))
     }
 
     fn json(&self, what: &str, args: &[&str], ok_codes: &[i32]) -> Result<Value, ForgeError> {
@@ -194,15 +223,8 @@ impl Forge for Gh {
     }
 
     fn checks(&self, n: u64) -> Result<Vec<Check>, ForgeError> {
-        let num = n.to_string();
-        // "no checks reported" is an error exit with no JSON; that is an empty list, and the caller says what it means.
-        let out = match self.run("read the checks", &["pr", "checks", &num, "--json", "name,bucket"], &[1, 8]) {
-            Ok(o) => o,
-            Err(ForgeError::Failed { detail, .. }) if detail.contains("no checks reported") => return Ok(vec![]),
-            Err(e) => return Err(e),
-        };
-        let v: Value = serde_json::from_str(&out).map_err(|e| ForgeError::Parse(format!("checks: {e}")))?;
-        Ok(v.as_array().into_iter().flatten().map(|c| Check { name: s(c, "name"), bucket: s(c, "bucket") }).collect())
+        let (code, out, err) = self.exec(&["pr", "checks", &n.to_string(), "--json", "name,bucket"])?;
+        read_checks(code, &out, &err)
     }
 
     fn file_at(&self, git_ref: &str, path: &str) -> Result<Option<String>, ForgeError> {
@@ -328,6 +350,23 @@ mod tests {
         assert_eq!(parse_created("https://github.com/o/r/pull/812\n").unwrap(), 812);
         assert!(parse_created("").is_err() && parse_created("https://github.com/o/r/pull/x").is_err());
         assert!(matches!(Gh.open_pr("main", "-x", "t", "b"), Err(ForgeError::Failed { .. })), "refused before running anything");
+    }
+
+    #[test]
+    fn no_checks_on_a_head_is_an_empty_list_and_any_other_empty_answer_is_an_error() {
+        // What `gh` 2.103 does on a head with no checks (2026-11-23): exit 1, nothing on stdout, this on stderr.
+        assert_eq!(read_checks(1, "", "no checks reported on the 'spec-094-x' branch\n").unwrap(), vec![]);
+        assert_eq!(read_checks(8, "", "").unwrap(), vec![]);
+        assert_eq!(read_checks(0, "[]\n", "").unwrap(), vec![]);
+        let one = read_checks(8, "[{\"name\":\"ci-gate\",\"bucket\":\"pending\"}]", "").unwrap();
+        assert_eq!(one, vec![Check { name: "ci-gate".into(), bucket: "pending".into() }]);
+        assert_eq!(read_checks(1, "[{\"name\":\"t\",\"bucket\":\"fail\"}]", "").unwrap()[0].bucket, "fail");
+        for (code, err) in [(1, "HTTP 401: Bad credentials"), (1, "no pull requests found for branch \"x\""), (1, ""), (4, "auth")] {
+            assert!(matches!(read_checks(code, "", err), Err(ForgeError::Failed { .. })), "{code} {err:?}");
+        }
+        assert!(matches!(read_checks(2, "[]", "boom"), Err(ForgeError::Failed { .. })));
+        assert!(matches!(read_checks(0, "{\"x\":1}", ""), Err(ForgeError::Parse(_))));
+        assert!(matches!(read_checks(0, "[{", ""), Err(ForgeError::Parse(_))));
     }
 
     #[test]
