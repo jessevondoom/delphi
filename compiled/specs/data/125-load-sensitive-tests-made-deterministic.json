@@ -10,123 +10,165 @@
     },
     {
       "level": 2,
-      "line": 24,
+      "line": 25,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 2,
-      "line": 34,
+      "line": 35,
       "number": "2",
       "title": "Terms"
     },
     {
       "level": 2,
-      "line": 40,
+      "line": 41,
       "number": "3",
       "title": "Diagnosis"
     },
     {
       "level": 2,
-      "line": 66,
+      "line": 67,
       "number": "4",
       "title": "The fix for each"
     },
     {
       "level": 2,
-      "line": 75,
+      "line": 76,
       "number": "5",
       "title": "What is not made deterministic"
     },
     {
       "level": 2,
-      "line": 81,
+      "line": 82,
       "number": "6",
       "title": "Not built here, and why"
     },
     {
       "level": 2,
-      "line": 90,
+      "line": 91,
       "number": "7",
       "title": "Options considered"
     },
     {
       "level": 3,
-      "line": 98,
+      "line": 99,
       "number": null,
       "title": "Simpler Alternative Considered"
     },
     {
       "level": 2,
-      "line": 102,
+      "line": 103,
       "number": "8",
       "title": "Authority and trust"
     },
     {
       "level": 2,
-      "line": 109,
+      "line": 110,
       "number": "9",
       "title": "Slices and acceptance"
     },
     {
       "level": 2,
-      "line": 127,
+      "line": 128,
       "number": "10",
       "title": "Amendment 125-A1: a failing test is retried once in CI, and a flaky pass is recorded (operator, 2026-11-22)"
     },
     {
       "level": 3,
-      "line": 133,
+      "line": 134,
       "number": "10.1",
       "title": "Why"
     },
     {
       "level": 3,
-      "line": 137,
+      "line": 138,
       "number": "10.2",
       "title": "The rule"
     },
     {
       "level": 3,
-      "line": 145,
+      "line": 146,
       "number": "10.3",
       "title": "Why this does not hide bugs"
     },
     {
       "level": 3,
-      "line": 151,
+      "line": 152,
       "number": "10.4",
       "title": "Options considered"
     },
     {
       "level": 3,
-      "line": 160,
+      "line": 161,
       "number": "10.5",
       "title": "How it is built"
     },
     {
       "level": 3,
-      "line": 164,
+      "line": 165,
       "number": "10.6",
       "title": "Slices"
     },
     {
       "level": 3,
-      "line": 176,
+      "line": 177,
       "number": "10.7",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 183,
+      "line": 184,
       "number": "10.8",
       "title": "Later slices (2026-11-22)"
+    },
+    {
+      "level": 2,
+      "line": 193,
+      "number": "11",
+      "title": "Amendment 125-A2: the macOS tests are built once and run on two runners (operator, 2026-11-22)"
+    },
+    {
+      "level": 3,
+      "line": 197,
+      "number": "11.1",
+      "title": "Why"
+    },
+    {
+      "level": 3,
+      "line": 201,
+      "number": "11.2",
+      "title": "The rule"
+    },
+    {
+      "level": 3,
+      "line": 209,
+      "number": "11.3",
+      "title": "Cost in macOS jobs"
+    },
+    {
+      "level": 3,
+      "line": 213,
+      "number": "11.4",
+      "title": "Options considered"
+    },
+    {
+      "level": 3,
+      "line": 223,
+      "number": "11.5",
+      "title": "Slices"
+    },
+    {
+      "level": 3,
+      "line": 231,
+      "number": "11.6",
+      "title": "Verification plan"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/125-load-sensitive-tests-made-deterministic.md",
-    "sha256": "83c0481e32b917ab5d11c665327d6a580817e30773fd3a51844c1d583b4b4596"
+    "sha256": "e30cf6c17a687226e634ce19500d31eb78bafb41c77882e317e4b1e97deab0f5"
   },
   "source_status_at_hash": {
     "line": {
@@ -139,7 +181,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-18, in a session: \"4: yes stabilize\", in answer to the item \"three timing-sensitive tests keep reddening PRs; stabilize them in a small spec of their own\". The text below was written after that answer, from the code and the CI logs; the operator has not read it. It names two more tests than the three the operator was told about (section 3, T4 and the listed L1 to L3); T4 is built only because its cause is shown from code, and the operator may strike it. It takes effect when the operator merges the pull request that carries it."
     },
-    "sha256": "83c0481e32b917ab5d11c665327d6a580817e30773fd3a51844c1d583b4b4596",
+    "sha256": "e30cf6c17a687226e634ce19500d31eb78bafb41c77882e317e4b1e97deab0f5",
     "word": "approved"
   },
   "spec": {
@@ -154,10 +196,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2306,
-      "end_line": 26,
-      "line": 26,
-      "start": 1964
+      "end": 2475,
+      "end_line": 27,
+      "line": 27,
+      "start": 2133
     },
     "text": "Tests that fail on a pull request they have nothing to do with, and pass on a rerun, cost a macOS job each time and teach people to rerun instead of read. Over 2026-11-16 to 2026-11-18 tests of this kind reddened pull requests or `main` again and again. This spec fixes the four whose cause is shown (T1 to T4), and lists the rest (L1 to L3)."
   }
