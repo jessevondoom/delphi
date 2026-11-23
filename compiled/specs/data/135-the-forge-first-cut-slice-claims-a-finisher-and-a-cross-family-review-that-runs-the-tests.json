@@ -253,12 +253,18 @@
       "line": 374,
       "number": "14.12",
       "title": "A cheaper local gate (operator, 2026-11-22)"
+    },
+    {
+      "level": 3,
+      "line": 390,
+      "number": "14.13",
+      "title": "I: ready after the push's run, and the G leftovers (operator, 2026-11-23)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md",
-    "sha256": "63bd46b0da9d0c5e4cde5ff75b6ed7378971fdc76333d30b68c8e39b8d304ee5"
+    "sha256": "18d6fce57b80ea19a3e341d075427f599dcd52695c0ef11b650f7cab5d93aaae"
   },
   "source_status_at_hash": {
     "line": {
@@ -271,7 +277,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, IN ADVANCE, in a host session (\"build F0 to F2 then we can try F4?\"), said of a plan shown to them in that session (F0 slice claims, F1 a deterministic finisher, F2 a cross-family reviewer that can run the tests, F3 deferred, F4 a replay experiment). This text was written afterwards by an architect agent from that plan and the code; the operator has not read it line by line. No Council has read it. Open decisions (section 11) take their recommendations unless the operator says otherwise. F4 spends the operator's tokens and runs only on the operator's yes for it."
     },
-    "sha256": "63bd46b0da9d0c5e4cde5ff75b6ed7378971fdc76333d30b68c8e39b8d304ee5",
+    "sha256": "18d6fce57b80ea19a3e341d075427f599dcd52695c0ef11b650f7cab5d93aaae",
     "word": "approved"
   },
   "spec": {
