@@ -363,11 +363,10 @@ pub fn import(src: &Path, out: &Path, o: &ImportOpts, host: &dyn Host) -> Result
 }
 
 fn tempdir_like(out: &Path) -> Result<PathBuf, Vec<String>> {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let base = out.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let d = base.join(format!(".delphi-import-{}-{}", std::process::id(), nanos));
-    fs::create_dir_all(&d).map_err(|e| vec![format!("{}: {}", d.display(), e)])?;
-    Ok(d)
+    fs::create_dir_all(base).map_err(|e| vec![format!("{}: {}", base.display(), e)])?;
+    // A fresh folder, never named by the clock (spec 125, R7): two imports at once each get their own.
+    delphi_core::tempname::create_dir(base, ".delphi-import").map_err(|e| vec![format!("{}: {}", base.display(), e)])
 }
 
 fn top_rows(src: &Path) -> Vec<(String, (Outcome, String))> {
@@ -587,4 +586,35 @@ fn synth_toml(name: &str, org: &str, meta: &PluginMeta, skills: &[String], agent
     t.insert("network".into(), false.into());
     root.insert("touches".into(), Value::Table(t));
     toml::to_string(&root).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod temp_tests {
+    use super::*;
+
+    /// Spec 125 R7: scratch folders made back to back, and from many threads at once, are all distinct and all exist. They
+    /// used to be named by the process id and the clock (whole microseconds on macOS), so two imports started in one
+    /// microsecond shared one, and the first to end removed the other's.
+    #[test]
+    fn scratch_folders_made_back_to_back_or_at_once_are_distinct() {
+        let t = tempfile::tempdir().unwrap();
+        let out = t.path().join("out");
+        let back: Vec<PathBuf> = (0..50).map(|_| tempdir_like(&out).unwrap()).collect();
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let at_once: Vec<PathBuf> = (0..16)
+            .map(|_| {
+                let (gate, out) = (gate.clone(), out.clone());
+                std::thread::spawn(move || {
+                    gate.wait();
+                    tempdir_like(&out).unwrap()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect();
+        let all: std::collections::HashSet<&PathBuf> = back.iter().chain(&at_once).collect();
+        assert_eq!(all.len(), back.len() + at_once.len(), "a scratch folder was shared");
+        assert!(all.iter().all(|p| p.is_dir() && p.parent() == Some(t.path())), "each is a folder beside the output");
+    }
 }

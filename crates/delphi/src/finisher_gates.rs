@@ -46,10 +46,10 @@ impl Runner for SystemRunner {
     fn run(&mut self, repo: &Path, cmd: &GateCmd) -> Ran {
         eprintln!("running: {}", shown(cmd));
         // Standard output and error go to one file, so the last lines keep their order.
-        let log = std::env::temp_dir().join(format!("delphi-forge-gate-{}-{}.log", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
-        let file = match std::fs::File::create(&log) {
-            Ok(f) => f,
-            Err(e) => return Ran { started: false, ok: false, output: format!("cannot create the gate log {}: {}", log.display(), e) },
+        // A fresh name, never the clock's (spec 125, R7), created exclusively.
+        let (log, file) = match delphi_core::tempname::create_file(&std::env::temp_dir(), "delphi-forge-gate", ".log") {
+            Ok(made) => made,
+            Err(e) => return Ran { started: false, ok: false, output: format!("cannot create a gate log in {}: {}", std::env::temp_dir().display(), e) },
         };
         let err_file = match file.try_clone() {
             Ok(f) => f,
@@ -639,5 +639,31 @@ mod tests {
         let ran = SystemRunner.run(t.path(), &missing);
         assert!(!ran.started && !ran.ok, "{:?}", ran);
         assert!(ran.output.contains("was not found") && ran.output.contains("FAILED"), "{}", ran.output);
+    }
+
+    /// Spec 125 R7: gates run at once in one process each read their own output. The log used to be named by the process id
+    /// and the clock, which moves in whole microseconds on macOS: two runs started in one microsecond shared a log, and one
+    /// read the other's output or none.
+    #[test]
+    fn gates_run_at_once_each_read_their_own_output() {
+        let t = tempfile::tempdir().unwrap();
+        let n = 12;
+        for _round in 0..3 {
+            let gate = std::sync::Arc::new(std::sync::Barrier::new(n));
+            let handles: Vec<_> = (0..n)
+                .map(|i| {
+                    let (gate, dir) = (gate.clone(), t.path().to_path_buf());
+                    std::thread::spawn(move || {
+                        gate.wait();
+                        SystemRunner.run(&dir, &GateCmd { program: "/bin/sh".into(), args: vec!["-c".into(), format!("echo gate-{i}")], env: Vec::new() })
+                    })
+                })
+                .collect();
+            for (i, h) in handles.into_iter().enumerate() {
+                let ran = h.join().unwrap();
+                assert!(ran.started && ran.ok, "{ran:?}");
+                assert_eq!(ran.output.trim(), format!("gate-{i}"), "run {i} read another run's log");
+            }
+        }
     }
 }
