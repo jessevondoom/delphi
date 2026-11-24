@@ -421,13 +421,23 @@ impl MissionState {
         }
     }
 
-    /// Wait until every episode harvest started so far has finished (tests only).
+    /// Wait until every episode harvest started so far has finished (tests only). The harvest must finish, so the bound only
+    /// turns a hang into a failure (`specs/125` §4): past it this panics, naming the harvests still running, instead of
+    /// returning as if they had finished and leaving the caller to read a `traces/` folder that is not written yet.
     #[cfg(test)]
     pub(crate) fn harvest_settled(&self) {
-        for _ in 0..1000 {
-            if self.harvest_pending.load(Ordering::SeqCst) == 0 {
+        self.harvest_settled_within(std::time::Duration::from_secs(60));
+    }
+
+    #[cfg(test)]
+    fn harvest_settled_within(&self, bound: std::time::Duration) {
+        let start = std::time::Instant::now();
+        loop {
+            let pending = self.harvest_pending.load(Ordering::SeqCst);
+            if pending == 0 {
                 return;
             }
+            assert!(start.elapsed() < bound, "{pending} episode harvest(s) of {} still running after {bound:?}", self.dir.display());
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
@@ -541,19 +551,30 @@ mod tests {
         ]
     }
 
+    /// The mission folder of a harvest test: one level down in the test's own temporary folder. A resolved episode looks
+    /// for the episodes it supersedes in every sibling of its mission folder (`trace_miner::superseded_by`); with the mission
+    /// at the top of a `tempdir()` the siblings are the whole shared temporary directory, tens of thousands of folders and
+    /// other tests' episodes, which made the harvest slow and could mark another test's episode superseded (`specs/125` R8).
+    fn mission_dir(t: &tempfile::TempDir) -> PathBuf {
+        let dir = t.path().join("m1");
+        std::fs::create_dir(&dir).unwrap();
+        dir
+    }
+
     #[tokio::test]
     async fn a_task_that_ends_leaves_its_episode_and_a_staging_task_leaves_none() {
         for end in ["task.completed", "task.failed", "task.cancelled"] {
             let t = tempfile::tempdir().unwrap();
-            let (m, _, _) = open(t.path());
+            let dir = mission_dir(&t);
+            let (m, _, _) = open(&dir);
             for e in worked_after_failing("t_0001", end) {
                 m.append(e).await.unwrap();
             }
             m.harvest_settled();
-            let traces: Vec<String> = std::fs::read_dir(t.path().join("traces")).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default();
+            let traces: Vec<String> = std::fs::read_dir(dir.join("traces")).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default();
             if end == "task.completed" {
                 assert_eq!(traces, vec!["builder-t_0001.md".to_string()], "{end}");
-                let text = std::fs::read_to_string(t.path().join("traces/builder-t_0001.md")).unwrap();
+                let text = std::fs::read_to_string(dir.join("traces/builder-t_0001.md")).unwrap();
                 let (fm, _) = crate::workspace::split_frontmatter(&text);
                 let fm = fm.unwrap();
                 assert_eq!((fm["kind"].as_str(), fm["source_type"].as_str(), fm["outcome"].as_str(), fm["task_id"].as_str(), fm["mission"].as_str()), (Some("episode"), Some("internal_generated"), Some("resolved_after_failure"), Some("t_0001"), Some("m1")));
@@ -564,7 +585,8 @@ mod tests {
         }
         // A host staging task: events with no span. Nothing is written.
         let t = tempfile::tempdir().unwrap();
-        let (m, _, _) = open(t.path());
+        let dir = mission_dir(&t);
+        let (m, _, _) = open(&dir);
         let mut staged = EventEnvelope::new("m1", "learn.staged", json!({"id": "n1", "trigger": "host_note", "tier": "L0"}));
         staged.task_id = Some("t_0002".into());
         m.append(staged).await.unwrap();
@@ -572,20 +594,46 @@ mod tests {
         done.task_id = Some("t_0002".into());
         m.append(done).await.unwrap();
         m.harvest_settled();
-        assert!(!t.path().join("traces").exists());
+        assert!(!dir.join("traces").exists());
     }
 
     #[tokio::test]
     async fn a_harvest_that_cannot_write_never_fails_the_task() {
         let t = tempfile::tempdir().unwrap();
-        let (m, _, _) = open(t.path());
-        std::fs::write(t.path().join("traces"), "not a directory").unwrap();
+        let dir = mission_dir(&t);
+        let (m, _, _) = open(&dir);
+        std::fs::write(dir.join("traces"), "not a directory").unwrap();
         for e in worked_after_failing("t_0001", "task.completed") {
             m.append(e).await.expect("the task's events are recorded whatever the harvest does");
         }
         m.harvest_settled();
-        assert_eq!(std::fs::read_to_string(t.path().join("traces")).unwrap(), "not a directory");
+        assert_eq!(std::fs::read_to_string(dir.join("traces")).unwrap(), "not a directory");
         assert!(m.replay().unwrap().iter().any(|e| e.kind == "task.completed"));
+    }
+
+    /// `specs/125` R8: a harvest still running when the wait ends is a failure that names it, never a silent return that
+    /// leaves the test reading an empty `traces/` folder.
+    #[tokio::test]
+    async fn waiting_for_a_harvest_that_has_not_finished_fails_and_says_so() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = mission_dir(&t);
+        let (m, _, _) = open(&dir);
+        for e in worked_after_failing("t_0001", "task.completed") {
+            m.append(e).await.unwrap();
+        }
+        m.harvest_settled();
+        std::fs::remove_dir_all(dir.join("traces")).unwrap();
+        // The same task harvested again while the mission's harvest gate is held: it starts and cannot finish.
+        let held = m.harvest_gate.clone();
+        let one = held.lock().unwrap();
+        m.harvest_episode("t_0001".into());
+        let waited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.harvest_settled_within(std::time::Duration::from_millis(50))));
+        let message = waited.expect_err("the harvest is held at its gate, so the wait must fail");
+        let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(message.contains("1 episode harvest(s)") && message.contains("still running"), "{message}");
+        drop(one);
+        m.harvest_settled();
+        assert!(dir.join("traces/builder-t_0001.md").is_file(), "the held harvest finishes once its gate opens");
     }
 
     #[tokio::test]
