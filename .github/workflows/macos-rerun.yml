@@ -1,0 +1,42 @@
+name: macos rerun
+
+# Spec 125-A3 (section 12): when a `ci` run failed only because GitHub never gave one of its macOS jobs a runner (the job
+# ends `cancelled` after about 15 minutes, with no steps and GitHub's "not acquired" note, while the macOS arm64 pool is
+# short of machines), rerun that run's failed jobs once. Every condition is in `.github/scripts/macos_rerun.sh`; anything
+# else (a real failure, a second attempt, a newer run on the branch) is left alone and the log says why.
+#
+# `workflow_run` runs this file and the script as they are on the default branch, never a pull request's copy, and the
+# job checks out only the default branch. It runs no code from the run it looks at; it reads job results through the API.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  rerun:
+    name: rerun macOS jobs that got no runner
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # actions: write is what the rerun call needs (it also reads the run's jobs and the branch's runs); checks: read
+    # reads the cancelled job's annotations; contents: read checks out the default branch. Nothing else.
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Rerun when the only failures are macOS jobs that never got a runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          EVENT: ${{ github.event.workflow_run.event }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: .github/scripts/macos_rerun.sh "$REPO" "$RUN_ID" "$RUN_ATTEMPT" "$EVENT" "$BRANCH"

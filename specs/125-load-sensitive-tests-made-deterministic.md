@@ -18,6 +18,7 @@ tags: [spec, tests, ci, flaky, sandbox, harness, doctor, signals]
 > **Status: approved by the operator, 2026-11-18** (see the frontmatter).
 > **Amendment 125-A1 (section 10), approved by the operator 2026-11-22:** CI retries a failing test once and records it as flaky; a second failure fails the run.
 > **Amendment 125-A2 (section 11), approved by the operator 2026-11-22:** the macOS tests are built once (`cargo nextest archive`) and run in two halves on two runners.
+> **Amendment 125-A3 (section 12), approved by the operator 2026-11-23:** a run whose only failure is a macOS job GitHub never gave a runner is rerun once by itself; the test halves' check name reads well when skipped; Clippy on macOS runs beside the build, off the critical path.
 > **Amends, from its approval:** nothing by text. No product behavior changes. The tests keep what they protect in [`specs/092`](092-operator-authorized-tests.md) (the granted seat and the authorized profile) and [`specs/083`](083-learning-signals-and-host-diagnostics.md) (the host chain in `delphi doctor`).
 
 ---
@@ -242,3 +243,74 @@ P1 changes `.github/` and is gate-changing: the operator merges it at a terminal
 - Locally on macOS before the push: `cargo nextest archive`, then `cargo nextest list --archive-file …` with each partition, from a second copy of the checkout; the two lists are disjoint and their union equals `cargo nextest list --workspace`.
 - On this pull request's own ready run: both halves pass; the tests run in the two halves (plus the skipped and the one review-date test filtered out) add up to the count of the one macOS job on `main` (5,858 run and 28 skipped on run 45086371128; the pull request's own count is the one that counts, since tests are added every day); the review-date check finds exactly one test; the flaky summary and both JUnit artifacts are there. The critical path (the build job's time plus the slower half's, from the job timestamps) is reported against the one job's 19.9-minute median.
 - After merge: the macOS path on `main` and on ready pull requests over the next week, against the median above. If the slower half plus the build is still longer than every Linux job by more than a few minutes, try three halves (option B).
+
+## 12. Amendment 125-A3: macOS jobs that never get a runner, a readable skipped name, and Clippy off the critical path (operator, 2026-11-23)
+
+**Approved by the operator, 2026-11-23**, in a session: "build all the follow ups you just listed in as few PRs as possible", in answer to a list of follow-ups that named these three items. The text below was written after that answer; the operator has not read it and no Council has reviewed it. It changes `.github/`, so its pull request is gate-changing (spec 094 §3.4) and the operator merges it at a terminal. It changes nothing in sections 1 to 10, and in section 11 only the place of Clippy and the self-tests (11.2 rule 1) and the count of macOS jobs (11.3). Everything is in the macOS jobs or beside them; `ci-gate`'s rule (spec 094 §12.2.1, §14.2.4) is unchanged except that its list of macOS jobs gains the new one (12.4).
+
+### 12.1 Item 1: macOS jobs cancelled after 15 minutes with no steps
+
+**What was seen.** On 2026-11-23 a `macos (test N/2)` half of a ready pull request's run ended `cancelled`, with no steps and no runner, exactly 15 minutes after it became eligible, three times reported (run 45201057620 on #899, 15:17:22 to 15:32:32; run 45231625915 on #894, 17:57:48 to 18:12:49; run 45247601471 on #901, 19:28:24 to 19:43:25) and once more found in the day's runs (run 45194332450, both halves, 14:33:36 to 14:48:36). Each time `gh run rerun --failed` passed.
+
+**The cause, from the evidence.** Read with `gh api` (jobs of every `ci` run created that day: 127 macOS jobs; annotations of the cancelled jobs):
+
+1. Each cancelled job carries GitHub's own annotation "The job was not acquired by Runner of type hosted even after multiple attempts", beside three notices "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times". The job's `started_at` equals its `created_at`: it was not held back by the account's concurrency limit (a job over the limit stays queued), it was handed to GitHub's hosted macOS arm64 pool, which had no machine for it.
+2. The account was not at its limit of 5 macOS jobs. While the halves of runs 45231625915 and 45247601471 waited, the other macOS jobs of `ci` runs (no other workflow that uses macOS ran that day) numbered 0 at the start and at most 2 and 3; for 45194332450 at most 2; for 45201057620 2 to 4. A concurrency group would not have helped: nothing of ours held the slots.
+3. The pool's retry shows in the waits of the jobs that did get a runner (rounded to the minute, reruns left out): of 97, 66 started within a minute, 12 after 5 minutes, 8 after 10, 6 between 1 and 3, and one each at 8, 11, 12, 13 and 16 (those few may also have waited for the account's limit, which a job can do before it is handed to the pool); the 5 that got none were cancelled at 15. The number of capacity notices on a job matched its wait in the jobs checked (one, two, three). GitHub tries to acquire a machine about every 5 minutes and gives up after the third failure. GitHub's documentation states no queue limit for hosted runners (only 24 hours for self-hosted ones); the 15 minutes is the pool's, not a setting of the workflow.
+4. All 5 cancelled jobs were test halves, none of 35 build jobs: halves are requested two at a time, at the moment a build ends; the sample is too small to say more.
+
+So the cause is outside the workflow: GitHub's macOS arm64 hosted pool was short of machines. The workflow cannot add machines. What it can do: not hold slots while it waits (it already does not), not ask for more macOS jobs than it needs, and recover by itself, once, from a job that never ran.
+
+**The rule.** A new workflow, `macos-rerun.yml`, runs when a `ci` run completes with the conclusion `failure` on its first attempt. Its script (`.github/scripts/macos_rerun.sh`) reruns that run's failed jobs (`POST …/runs/<id>/rerun-failed-jobs`, which is what `gh run rerun --failed` calls) only when all of these hold, and otherwise says why not in its log and does nothing:
+
+1. it is the run's first attempt (a run is rerun by it at most once);
+2. at least one job whose name starts with `macos` ended `cancelled` with no steps and no runner, and each such job carries GitHub's "not acquired" annotation (a job cancelled by a person does not);
+3. every other job succeeded or was skipped, apart from `ci-gate`, which failed because of 2 (a real failure is left for a person);
+4. the run is still the newest `ci` run of its branch and event (rerunning an older pull request run would join that pull request's concurrency group and cancel the newer run).
+
+It runs as the default branch has it, never a pull request's copy (`workflow_run`), checks out only the default branch's `.github/scripts`, runs no code of the run it judges, and has `actions: write` (the rerun call; it also reads the run's jobs and the branch's runs), `checks: read` (the annotations) and `contents: read` (the checkout), nothing else.
+
+### 12.2 Item 2: the name of a skipped half
+
+A matrix job that is skipped is never expanded, so on a draft or a docs-only pull request the check read `macos (test ${{ matrix.shard }}/2)`. The halves now have a name without the matrix in it, `macos tests`. GitHub adds the matrix value itself to a job that runs (`macos tests (1)`, `macos tests (2)`), and a skipped one shows `macos tests`. The build job becomes `macos build` (it no longer runs Clippy). Only `ci-gate` is required, and it reads job ids, not names, so no required check changes.
+
+### 12.3 Item 3: Clippy off the critical path
+
+A job that needs another waits for all of it, so every step of `build-macos` after the upload was on the critical path: Clippy (1.9 minutes in run 45247601471), the self-tests and the doc tests. Measured over the 22 runs of 2026-11-23 with a build and both halves (time on a runner, no queue): build plus the slower half had a median of 17.0 minutes. Modelled on those runs:
+
+| Option | Critical path (median of the 22) | macOS jobs per run |
+| :-- | --: | :-- |
+| A, as it was: Clippy in the build job, after the upload | 17.0 min | 3 |
+| B, Clippy at the end of half 1 (restores the build directory, about 1 minute, then Clippy) | 17.2 min | 3 |
+| C, Clippy in its own job beside the build, needing only `changes` | 15.1 min | 4, at most 2 at once |
+| (Clippy in the faster half: neither half is faster; the same half took 3.4 to 11.7 minutes by runner) | | |
+
+**Chosen: C.** A job `clippy-macos` (`macos clippy`), with `build-macos`'s condition, runs Clippy and the two Python self-tests beside the build. It has its own build directory key (`cargo-target-macOS-clippy-…`, saved on a push to `main` when new) and falls back to the test build's directory, which holds Clippy's artifacts from when Clippy ran in the build job. The doc tests (about 11 seconds) stay in the build job: they need its build directory. A run still holds at most 2 macOS slots at once (build and Clippy, then the two halves) and makes 4 macOS requests instead of 3: one more request that can find the pool empty, which 12.1's rerun covers. B was rejected because the restore and Clippy lengthen one half more than they shorten the build.
+
+### 12.4 `ci-gate`
+
+`ci-gate` needs `clippy-macos` too, and accepts it skipped in exactly the cases it accepts the other two macOS jobs skipped (a draft, a docs-only pull request; spec 094 §12.2.1, §14.2.4). Its rule is otherwise unchanged.
+
+### 12.5 Options considered for item 1
+
+| | Option | Why |
+| :-- | :-- | :-- |
+| A, conventional | Rerun by hand (`gh run rerun --failed`), as before | Works, but each costs a person's attention and 15 minutes or more before anyone looks. Kept as the fallback. |
+| B | A `concurrency` group serialising macOS work across pull requests | Fixes starvation by our own jobs, which 12.1 item 2 rules out: the account had free slots. It would only add waiting. Not adopted. |
+| C, removes a constraint | Another runner pool (`macos-15-intel`) or fewer macOS jobs per run (back to one job) | Intel changes the architecture tested and the image is the last of its kind; one job gives back the 125-A2 speedup to save one request in three. Not adopted. |
+| D | A step inside `ci` that reruns the run | A run cannot rerun its own jobs while it is still in progress. Not possible. |
+| E, chosen | A `workflow_run` job that reruns the failed jobs once, under the four conditions of 12.1 | Symptom, not cause, because the cause is GitHub's capacity; recovers the run without a person and without rerunning a real failure. |
+
+### 12.6 Slices
+
+| Slice | Content |
+| :-- | :-- |
+| P2 | this amendment; `macos-rerun.yml` and `.github/scripts/macos_rerun.sh`; `test-macos` named `macos tests`, `build-macos` named `macos build`; `clippy-macos`; `ci-gate`'s needs and macOS skip list; `CONTRIBUTING.md` and the merge guide |
+
+P2 changes `.github/` and is gate-changing: the operator merges it at a terminal.
+
+### 12.7 Verification plan
+
+- `actionlint` and a YAML parse of both workflows; the script run under `/bin/bash` 3.2 with `-eo pipefail` and `DRY_RUN=1` against the real runs of 12.1: it would have rerun 45231625915 and 45247601471, refused 45201057620 (a newer run existed on its branch), refused a second attempt and a run with nothing starved. `ci-gate`'s rule run on sample results: draft and docs-only with all three macOS jobs skipped pass; a ready run with them skipped, or with Clippy failed, fails.
+- On this pull request's own runs: as a draft, the skipped halves show as `macos tests`; marked ready, `macos build`, `macos clippy`, `macos tests (1)` and `macos tests (2)` run and pass, and `ci-gate` passes. The critical path (from the build job's start to the slower half's end) is reported against 125-A2's ~16.3 minutes (build ~7.7, slower half ~8.5).
+- `macos-rerun.yml` runs only from the default branch, so it is first exercised after the merge: on the next run with a starved macOS job, its log, and the run's second attempt.

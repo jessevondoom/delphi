@@ -192,12 +192,16 @@ jobs:
   # checks that do not depend on the system run once, in the Linux `lint` job.
   #
   # Spec 125-A2 (section 11): built once, tested on two runners. `build-macos` compiles every test binary once and packs
-  # them with `cargo nextest archive`, then runs the doc tests and Clippy (Clippy runs even when the archive fails). The two
-  # `test-macos` jobs download that archive and each run half of the tests (`--partition slice:N/2`: every second test of
-  # the whole sorted list, so the long families are spread over both halves) under the same `ci` profile, filter, JUnit
-  # report and summary as before. Together they run exactly the tests the one job ran. This takes 3 macOS jobs per run
-  # instead of 1 (the account may run 5 at once); the build job and the two halves never run at the same time, so a run
-  # holds at most 2 macOS slots at any moment.
+  # them with `cargo nextest archive`, then runs the doc tests. The two `test-macos` jobs download that archive and each
+  # run half of the tests (`--partition slice:N/2`: every second test of the whole sorted list, so the long families are
+  # spread over both halves) under the same `ci` profile, filter, JUnit report and summary as before. Together they run
+  # exactly the tests the one job ran.
+  #
+  # Spec 125-A3 (section 12): Clippy and the two Python self-tests are their own job, `clippy-macos`, beside the build
+  # instead of after it: a job that needs `build-macos` waits for all of it, so every step after the upload was on the
+  # critical path (Clippy about 1.9 minutes). This takes 4 macOS jobs per run (the account may run 5 at once); at most 2
+  # at any moment (build and Clippy, then the two halves). A macOS job that GitHub could not give a runner within its
+  # 15 minutes ends `cancelled` with no steps; `macos-rerun.yml` reruns such a run once.
   #
   # Once per pull request, on the head that is ready: while a pull request is a DRAFT these jobs are skipped (every push
   # to a draft used to take a scarce macOS slot for ~25 minutes). GitHub cannot merge a draft, and marking it ready fires
@@ -208,7 +212,7 @@ jobs:
   # Spec 094 §14: nor do they run for a pull request that changes only documentation on the allow list (`changes` above).
   # `!cancelled()` lets them run when `changes` failed: when the check cannot answer, macOS runs.
   build-macos:
-    name: macos (build + clippy)
+    name: macos build
     needs: changes
     if: >-
       !cancelled()
@@ -256,18 +260,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0 # already compressed (zstd)
-      # Not retried: nextest does not run doc tests (spec 125-A1 rule 4).
+      # Not retried: nextest does not run doc tests (spec 125-A1 rule 4). The halves wait for this whole job, so only
+      # what must share this build directory stays after the upload (the doc tests: about 11 seconds).
       - name: Test (doc tests)
         run: cargo test --workspace --locked --doc
-      - name: Clippy
-        if: success() || failure()
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: Benchmark runner self-test
-        if: success() || failure()
-        run: python3 -I dev/bench/bench.py self-test
-      - name: Model availability script self-test
-        if: success() || failure()
-        run: python3 -I dev/train/avail.py self-test
       - name: Save the build directory
         if: success() && github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -275,8 +271,62 @@ jobs:
           path: target
           key: cargo-target-${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
 
+  # Spec 125-A3: the only Clippy on macOS (`cfg(target_os = "macos")` code is linted where it compiles), beside the build,
+  # off the critical path. Same condition as `build-macos`. Its own build directory (`-clippy-`); until one is saved it
+  # falls back to the test build's, which holds Clippy's artifacts from when Clippy ran in `build-macos`.
+  clippy-macos:
+    name: macos clippy
+    needs: changes
+    if: >-
+      !cancelled()
+      && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+      && needs.changes.outputs.docs_only != 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Rust toolchain
+        run: rustup show active-toolchain && rustc --version
+      - name: Cache the Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Restore the build directory
+        id: target
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-clippy-
+            cargo-target-${{ runner.os }}-test-
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Benchmark runner self-test
+        if: success() || failure()
+        run: python3 -I dev/bench/bench.py self-test
+      - name: Model availability script self-test
+        if: success() || failure()
+        run: python3 -I dev/train/avail.py self-test
+      # Saved under its own key on a push to main when the key is new (as the other jobs do), so this job never races
+      # `build-macos` for one key. The first one is restored from the test build's directory and so holds its files too.
+      - name: Save the build directory
+        if: success() && github.event_name == 'push' && steps.target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: target
+          key: cargo-target-${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml') }}
+
   test-macos:
-    name: macos (test ${{ matrix.shard }}/2)
+    # Spec 125-A3: a name without the matrix in it. GitHub adds the matrix value itself on a job that runs ("macos tests
+    # (1)"), and a skipped matrix job (a draft, docs only) is never expanded, so it shows this name as it stands.
+    name: macos tests
     needs: build-macos
     # Explicit, because a job's default condition also looks at the jobs before `build-macos`: without it a failed `changes`
     # (spec 094 §14) would skip the halves even though the build ran.
@@ -338,7 +388,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # Clippy, the repo lint and the data checks, on Linux. (Clippy also runs on macOS, in the job above.) The checks that
+  # Clippy, the repo lint and the data checks, on Linux. (Clippy also runs on macOS, in `clippy-macos`.) The checks that
   # used to follow the tests in the `test` job (training cases, the golden bundle) are here, so they no longer rebuild
   # the program on the long path.
   lint:
@@ -722,7 +772,7 @@ jobs:
   # The one check the ruleset on main requires (spec 094 §12.2.1, S13). It needs every other job and passes only when each
   # passed, so a job added to or renamed in this file is covered by adding it here, and the required name never changes.
   # `if: always()` matters: GitHub counts a SKIPPED required check as passing, so this job must run (and judge) even when a
-  # job it needs failed or was cancelled. The allowed skips: the macOS jobs (`build-macos`, `test-macos`) on a draft
+  # job it needs failed or was cancelled. The allowed skips: the macOS jobs (`build-macos`, `clippy-macos`, `test-macos`) on a draft
   # pull request (skipped there by design; GitHub cannot merge a draft, and marking it ready reruns everything) and on a
   # pull request whose `changes` job said `docs_only` (spec 094 §14), and `commits` on a push to main (it runs on pull
   # requests only). `changes` itself must succeed. A pull request that conflicts with main runs no workflow at all, so it has no `ci-gate` and cannot
@@ -730,7 +780,7 @@ jobs:
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [changes, test-linux-lib, test-linux-integration, build-macos, test-macos, lint, deny, ui, linux-sandbox, commits]
+    needs: [changes, test-linux-lib, test-linux-integration, build-macos, clippy-macos, test-macos, lint, deny, ui, linux-sandbox, commits]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -746,7 +796,7 @@ jobs:
             to_entries[]
             | select(.value.result != "success")
             | select((.value.result == "skipped"
-                      and (((.key == "build-macos" or .key == "test-macos") and $event == "pull_request"
+                      and (((.key == "build-macos" or .key == "clippy-macos" or .key == "test-macos") and $event == "pull_request"
                              and ($draft == "true" or $docs == "true"))
                            or (.key == "commits" and $event != "pull_request"))) | not)
             | "\(.key) (\(.value.result))"')" || { echo "could not read the job results"; exit 1; }
