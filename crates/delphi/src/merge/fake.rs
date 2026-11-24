@@ -19,7 +19,6 @@ pub struct State {
     /// The first N reads of a pull request report `UNKNOWN` mergeability.
     pub unknown_reads: BTreeMap<u64, usize>,
     pub pr_reads: usize,
-    pub diff: String,
     /// After the next read of a pull request, its head moves to this commit (a push lands after the record was derived).
     pub push_after_read: Option<String>,
     /// After any merge, every other open pull request becomes `CONFLICTING` (the base moved under them).
@@ -133,9 +132,6 @@ impl Forge for FakeForge {
         let mut rows: Vec<(String, u64)> = s.prs.values().filter(|p| p.state == "OPEN" && p.labels.iter().any(|l| l == label)).map(|p| (p.created_at.clone(), p.number)).collect();
         rows.sort();
         Ok(rows.into_iter().map(|(_, n)| n).collect())
-    }
-    fn diff(&self, _n: u64) -> Result<String, ForgeError> {
-        Ok(self.st.borrow().diff.clone())
     }
     fn merge(&self, n: u64, expect_head: &str) -> Result<(), ForgeError> {
         let mut s = self.st.borrow_mut();

@@ -70,8 +70,6 @@ pub trait Forge {
     fn file_at(&self, git_ref: &str, path: &str) -> Result<Option<String>, ForgeError>;
     /// Open pull requests carrying `label`, oldest first.
     fn queued(&self, label: &str) -> Result<Vec<u64>, ForgeError>;
-    /// The whole diff, for a human to read before a gate-changing merge.
-    fn diff(&self, n: u64) -> Result<String, ForgeError>;
     /// Merge with a merge commit, and only if the head is still `expect_head` (GitHub refuses otherwise).
     fn merge(&self, n: u64, expect_head: &str) -> Result<(), ForgeError>;
     fn comment(&self, n: u64, body: &str) -> Result<(), ForgeError>;
@@ -244,10 +242,6 @@ impl Forge for Gh {
         let mut rows: Vec<(String, u64)> = v.as_array().into_iter().flatten().filter_map(|p| Some((s(p, "createdAt"), p["number"].as_u64()?))).collect();
         rows.sort();
         Ok(rows.into_iter().map(|(_, n)| n).collect())
-    }
-
-    fn diff(&self, n: u64) -> Result<String, ForgeError> {
-        self.run("read the diff", &["pr", "diff", &n.to_string()], &[])
     }
 
     fn merge(&self, n: u64, expect_head: &str) -> Result<(), ForgeError> {
