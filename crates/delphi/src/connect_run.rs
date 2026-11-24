@@ -309,9 +309,8 @@ impl Run<'_> {
 fn run_dir(delphi_home: &Path) -> Result<PathBuf, String> {
     let op = delphi_home.join("operator");
     private_dir(&op)?;
-    let d = op.join(format!("connect-tmp-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_nanos())));
-    private_dir(&d)?;
-    Ok(d)
+    // A fresh folder, never named by the clock (spec 125, R7), created exclusively and private: never one already there.
+    delphi_core::tempname::create_dir(&op, "connect-tmp").map_err(|e| e.to_string())
 }
 
 fn audit(delphi_home: &Path, t: &Template, action: &str, exe: &HostExe, result: &str) {
@@ -679,6 +678,34 @@ pub fn remove(t: &Template, proof: &ConsentProof, exe: &HostExe, home: &Path, de
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Spec 125 R7: run folders made back to back, and from many threads at once, are all distinct, new and private. They used
+    /// to be named by the process id and the clock (whole microseconds on macOS), so two connect runs started in one
+    /// microsecond shared one folder.
+    #[test]
+    fn run_folders_made_back_to_back_or_at_once_are_distinct() {
+        let home = tempfile::tempdir().unwrap();
+        let back: Vec<PathBuf> = (0..50).map(|_| run_dir(home.path()).unwrap()).collect();
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let at_once: Vec<PathBuf> = (0..16)
+            .map(|_| {
+                let (gate, home) = (gate.clone(), home.path().to_path_buf());
+                std::thread::spawn(move || {
+                    gate.wait();
+                    run_dir(&home).unwrap()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect();
+        let all: std::collections::HashSet<&PathBuf> = back.iter().chain(&at_once).collect();
+        assert_eq!(all.len(), back.len() + at_once.len(), "a run folder was shared");
+        for p in all {
+            assert_eq!(p.parent(), Some(home.path().join("operator").as_path()));
+            assert_eq!(std::fs::metadata(p).unwrap().permissions().mode() & 0o777, 0o700, "{}", p.display());
+        }
+    }
 
     fn root(t: &tempfile::TempDir) -> PathBuf {
         std::fs::canonicalize(t.path()).unwrap().parent().unwrap().to_path_buf()

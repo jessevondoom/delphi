@@ -157,8 +157,12 @@ pub fn reconcile(ws_dir: &Path, home: &Path, dry_run: bool) -> Result<Report, St
     if let Some(bad) = real.unreadable().first() {
         return Err(format!("the handling record {} cannot be read; nothing was changed (move it aside and run again)", bad.display()));
     }
-    let scratch = Scratch(std::env::temp_dir().join(format!("delphi-handling-dry-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0))));
-    let h = if dry_run { scratch_copy(ws_dir, home, &scratch.0)? } else { real };
+    // A dry run's fresh folder, never named by the clock (spec 125, R7): two dry runs at once each copy into their own.
+    let scratch = if dry_run { Some(Scratch(delphi_core::tempname::create_dir(&std::env::temp_dir(), "delphi-handling-dry").map_err(|e| format!("cannot make a scratch folder for the dry run: {e}"))?)) } else { None };
+    let h = match &scratch {
+        Some(s) => scratch_copy(ws_dir, home, &s.0)?,
+        None => real,
+    };
     let before = h.all();
     let cfg = handling::config_of(ws_dir);
     let mut r = Report { dry_run, ..Report::default() };
@@ -373,5 +377,36 @@ mod tests {
         let a = bibliography_arrivals(bib);
         assert_eq!(a.iter().map(|a| (a.kind.as_str(), a.locator.as_str())).collect::<Vec<_>>(), [("email", "https://mail.example.com/1"), ("wiki", "https://wiki.example.com/a")]);
         assert_eq!(page_arrivals(Path::new("/x/p.md"), Vec::new())[0].kind, IMPORT_KIND);
+    }
+
+    /// Spec 125 R7: dry runs at once in one process each copy into their own scratch folder and report the same thing. The
+    /// folder used to be named by the process id and the clock (whole microseconds on macOS), so two dry runs started in one
+    /// microsecond shared it, and the first to end removed the other's copy.
+    #[test]
+    fn dry_runs_at_once_each_get_their_own_scratch_folder() {
+        let (_t, ws, home) = setup();
+        import(&ws, "# Mail digest\n\nThe launch moves to May. Source: https://mail.example.com/thread/1\n");
+        import(&ws, "# Wiki page\n\nThe team structure. Source: https://wiki.example.com/team\n");
+        std::fs::remove_dir_all(handling::dir(&ws)).unwrap();
+        let _ = std::fs::remove_dir_all(handling::library_dir(&home));
+        let alone = reconcile(&ws, &home, true).unwrap();
+        assert!(alone.changed > 0, "{alone:?}");
+        let n = 8;
+        for _round in 0..3 {
+            let gate = std::sync::Arc::new(std::sync::Barrier::new(n));
+            let handles: Vec<_> = (0..n)
+                .map(|_| {
+                    let (gate, ws, home) = (gate.clone(), ws.clone(), home.clone());
+                    std::thread::spawn(move || {
+                        gate.wait();
+                        reconcile(&ws, &home, true)
+                    })
+                })
+                .collect();
+            for (i, h) in handles.into_iter().enumerate() {
+                assert_eq!(h.join().unwrap().as_ref(), Ok(&alone), "dry run {i}");
+            }
+        }
+        assert!(!handling::dir(&ws).exists(), "a dry run writes no record");
     }
 }

@@ -32,6 +32,7 @@ pub mod server;
 pub mod sessions;
 pub mod spawn;
 pub mod specdoc;
+pub mod tempname;
 pub mod theme_names;
 pub mod time;
 pub mod totp;
