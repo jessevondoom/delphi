@@ -68,9 +68,10 @@ impl Drop for Opened {
 
 pub(crate) fn new_incoming(home: &Path) -> Result<PathBuf, String> {
     use std::os::unix::fs::PermissionsExt;
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let dir = home.join("bundles/.incoming").join(format!("{}-{}", std::process::id(), nanos));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
+    let parent = home.join("bundles/.incoming");
+    std::fs::create_dir_all(&parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+    // A fresh folder, never named by the clock (spec 125, R7): two bundle operations at once each stage into their own.
+    let dir = delphi_core::tempname::create_dir(&parent, "in").map_err(|e| format!("{}: {}", parent.display(), e))?;
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -664,6 +665,34 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
+
+    /// Spec 125 R7: staging folders made back to back, and from many threads at once, are all distinct, new and private. They
+    /// used to be named by the process id and the clock (whole microseconds on macOS), so two bundle operations started in one
+    /// microsecond staged into one folder, and the first to end removed the other's tree.
+    #[test]
+    fn staging_folders_made_back_to_back_or_at_once_are_distinct() {
+        let home = tempfile::tempdir().unwrap();
+        let back: Vec<PathBuf> = (0..50).map(|_| new_incoming(home.path()).unwrap()).collect();
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let at_once: Vec<PathBuf> = (0..16)
+            .map(|_| {
+                let (gate, home) = (gate.clone(), home.path().to_path_buf());
+                std::thread::spawn(move || {
+                    gate.wait();
+                    new_incoming(&home).unwrap()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect();
+        let all: std::collections::HashSet<&PathBuf> = back.iter().chain(&at_once).collect();
+        assert_eq!(all.len(), back.len() + at_once.len(), "a staging folder was shared");
+        for p in all {
+            assert_eq!(p.parent(), Some(home.path().join("bundles/.incoming").as_path()));
+            assert_eq!(fs::metadata(p).unwrap().permissions().mode() & 0o777, 0o700, "{}", p.display());
+        }
+    }
 
     fn golden() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dev/bundles/acme-platform")
