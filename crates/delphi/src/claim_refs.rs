@@ -372,9 +372,29 @@ fn spec_numbers(names: impl Iterator<Item = String>) -> Vec<u32> {
     names.filter(|n| n.ends_with(".md")).filter_map(|n| n.split_once('-').and_then(|(d, _)| (d.len() >= 3 && d.chars().all(|c| c.is_ascii_digit())).then(|| d.parse().ok()).flatten())).collect()
 }
 
-/// Delete, each with the lease on the value read, the claims that are done (§14.11 item 7). Returns the refs kept and one line
-/// per ref swept or left.
-fn sweep(remote: &Remote, seen: Vec<Seen>, now: i64) -> (Vec<Seen>, String) {
+/// Whether a branch has a merged pull request (§14.13 I2b): asked once per branch, only of a live claim not already known merged.
+pub type MergedPr<'a> = dyn FnMut(&str) -> bool + 'a;
+
+/// The real [`MergedPr`]: `gh pr list --state merged --head <branch>` (read-only) in the checkout, through the gates' one spawn
+/// site, only when `origin` names `github.com`; anything `gh` cannot answer counts as not merged, so the claim is kept.
+fn gh_merged_pr(remote: &Remote) -> impl FnMut(&str) -> bool + '_ {
+    let github = remote.git(&["remote", "get-url", "origin"], None).is_ok_and(|u| u.contains("github.com"));
+    move |branch: &str| {
+        if !github || branch.is_empty() || branch.starts_with('-') || branch.chars().any(|c| c.is_control()) {
+            return false;
+        }
+        use crate::finisher_gates::Runner;
+        let args = ["pr", "list", "--state", "merged", "--head", branch, "--json", "number", "--limit", "1"].map(String::from).to_vec();
+        let r = crate::finisher_gates::SystemRunner.run(&remote.top, &crate::finisher_gates::GateCmd { program: "gh".into(), args, env: Vec::new() });
+        let json = r.output.find('[').zip(r.output.rfind(']')).filter(|(a, b)| a <= b).map(|(a, b)| &r.output[a..=b]).unwrap_or("");
+        r.started && r.ok && serde_json::from_str::<Vec<serde_json::Value>>(json).is_ok_and(|v| !v.is_empty())
+    }
+}
+
+/// Delete, each with the lease on the value read, the claims that are done (§14.11 item 7, §14.13 I2b). Returns the refs kept
+/// and one line per ref swept or left.
+fn sweep(remote: &Remote, seen: Vec<Seen>, now: i64, merged_pr: &mut MergedPr) -> (Vec<Seen>, String) {
+    let mut asked: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
     let (merged, on_main) = match main_facts(remote) {
         Ok(f) => f,
         Err(e) => return (seen, offline(&e, "nothing swept")),
@@ -388,6 +408,8 @@ fn sweep(remote: &Remote, seen: Vec<Seen>, now: i64) -> (Vec<Seen>, String) {
             Some("its spec is on origin/main")
         } else if s.claim.as_ref().and_then(|c| c.branch.as_ref()).is_some_and(|b| merged.contains(b)) {
             Some("its branch merged into origin/main")
+        } else if s.claim.as_ref().and_then(|c| c.branch.as_ref()).is_some_and(|b| *asked.entry(b.clone()).or_insert_with(|| merged_pr(b))) {
+            Some("its branch has a merged pull request")
         } else {
             None
         };
@@ -412,13 +434,22 @@ fn sweep(remote: &Remote, seen: Vec<Seen>, now: i64) -> (Vec<Seen>, String) {
 
 /// `forge list`: the local claims, then the remote ones (§14.11 item 7); with `sweep`, the remote ones that are done go first.
 pub fn list(repo: &Path, home: &Path, all: bool, json: bool, sweep_first: bool, local_only: bool, now: i64) -> Out {
+    list_with(repo, home, all, json, sweep_first, local_only, now, None)
+}
+
+/// [`list`], with the merged-pull-request lookup given (the tests' fake) or, when `None`, `gh`.
+#[allow(clippy::too_many_arguments)]
+pub fn list_with(repo: &Path, home: &Path, all: bool, json: bool, sweep_first: bool, local_only: bool, now: i64, merged_pr: Option<&mut MergedPr>) -> Out {
     let local = slice_claims::list(repo, home, all, json, now);
     let remote = if local_only { None } else { Remote::of(repo) };
     let Some(remote) = remote.filter(|_| local.code == 0) else { return local };
     let (mut notes, mut swept) = (String::new(), String::new());
     let seen = match remote.fetch(sweep_first) {
         Ok(s) if sweep_first => {
-            let (kept, lines) = sweep(&remote, s, now);
+            let (kept, lines) = match merged_pr {
+                Some(f) => sweep(&remote, s, now, f),
+                None => sweep(&remote, s, now, &mut gh_merged_pr(&remote)),
+            };
             swept = lines;
             Some(kept)
         }
