@@ -273,7 +273,7 @@ fn rewrite(lines: &[&str], gone: &BTreeSet<usize>, all: &[Row], newline: bool) -
         }
         let pointer = format!("Slices: per-slice files (spec 135 §14.10); see {}.", specs.iter().map(|s| format!("`delphi forge tracker --spec {}`", s)).collect::<Vec<_>>().join(", "));
         let left: Vec<usize> = (start + 1..=i).filter(|n| !gone.contains(n)).collect();
-        let rows_left = left.iter().any(|n| tracker::cells(lines[n - 1]).is_some_and(|c| !tracker::is_separator(&c)) && !(n + 1 <= lines.len() && tracker::cells(lines[*n]).as_deref().is_some_and(tracker::is_separator) && left.contains(&(n + 1))));
+        let rows_left = left.iter().any(|n| tracker::cells(lines[n - 1]).is_some_and(|c| !tracker::is_separator(&c)) && !(*n < lines.len() && tracker::cells(lines[*n]).as_deref().is_some_and(tracker::is_separator) && left.contains(&(n + 1))));
         if rows_left {
             out.extend(left.iter().map(|n| lines[n - 1].to_string()));
             out.push(String::new());
