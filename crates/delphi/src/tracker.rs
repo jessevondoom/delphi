@@ -469,39 +469,26 @@ mod tests {
         assert!(h("Merged in #273 (spec)").is_empty());
     }
 
-    /// The real tracker: a sample of slices in both shapes is found on the right line, and slices of one section are not found
-    /// for another spec.
+    /// The real tracker, since the migration of §14.14: a sample of slices that were rows of both shapes is found, each in its
+    /// own file; slices are not found for another spec; and the table holds no row the migration would still move.
     #[test]
-    fn the_real_tracker_rows_are_found_in_both_shapes() {
-        let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(PATH)).unwrap();
-        let r = rows(&text);
-        let line = |n: &str| text.lines().position(|l| l.trim_start().starts_with(n)).map(|i| i + 1);
-        let sections = sections(&text);
-        let section_of = |spec: &str| sections.iter().find(|s| s.specs == vec![spec.to_string()]).map(|s| s.title.clone());
-        // Slice-first, under the spec's own heading.
-        for (spec, slice) in [("094", "S13"), ("094", "S14"), ("094", "S15"), ("094", "S16"), ("094", "S1"), ("093", "B1"), ("093", "B2"), ("031", "L2"), ("041", "S3"), ("092", "S2"), ("089", "P4a")] {
-            let row = find(&r, spec, slice).unwrap_or_else(|| panic!("no row for {} {}", spec, slice));
-            assert_eq!(row.section, section_of(spec), "{} {}", spec, slice);
-            let in_section = sections_for(&text, spec)[0].line;
-            assert!(row.line > in_section, "{} {} at line {}, before its heading (line {})", spec, slice, row.line, in_section);
-            assert_eq!(bare(&cells(text.lines().nth(row.line - 1).unwrap()).unwrap()[0]), slice);
+    fn the_real_tracker_slices_are_found_in_their_files() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let t = load(&repo);
+        assert!(t.bad.is_empty(), "{:?}", t.bad);
+        // Once slice-first rows under the spec's heading, then spec-first rows, then rows a heading gave to several specs.
+        let sample = [("094", "S13"), ("094", "S16"), ("094", "S1"), ("093", "B1"), ("093", "P1"), ("031", "L2"), ("041", "S3"), ("092", "S2"), ("089", "P4a"), ("135", "F0"), ("135", "F2"), ("125", "S1"), ("125", "R5"), ("123", "S0"), ("028", "E2"), ("024", "B3")];
+        for (spec, slice) in sample {
+            let row = find(&t.rows, spec, slice).unwrap_or_else(|| panic!("no slice {} {}", spec, slice));
+            assert!(row.file.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(&format!("{}/{}/{}.md", DIR, spec, slice))), "{} {} is not in its file: {:?}", spec, slice, row);
         }
-        // An amendment's heading (`spec 028-A1`) and a range (`specs 022-027`) name their numbers.
-        assert!(find(&r, "028", "E2").is_some());
-        assert!(find(&r, "024", "B3").is_some());
-        // Spec-first rows, as before.
-        for (spec, slice) in [("135", "F0"), ("135", "F1"), ("135", "F2"), ("125", "S1"), ("123", "S0")] {
-            let row = find(&r, spec, slice).unwrap_or_else(|| panic!("no row for {} {}", spec, slice));
-            assert_eq!((row.section.as_deref(), Some(row.line)), (None, line(&format!("| {} | {} |", spec, slice))), "{} {}", spec, slice);
+        // No false positives across specs: S16 is 094's alone, 093 has no S slices, 094 has no B slices, S1 is not S16.
+        for (spec, slice) in [("093", "S16"), ("093", "S1"), ("094", "B1"), ("094", "S99")] {
+            assert!(find(&t.rows, spec, slice).is_none(), "{} {}", spec, slice);
         }
-        // No false positives across sections: S16 is 094's alone, 093 has no S slices, 094 has no B slices, S1 is not S16.
-        assert!(find(&r, "093", "S16").is_none());
-        assert!(find(&r, "093", "S1").is_none());
-        assert!(find(&r, "094", "B1").is_none());
-        assert_ne!(find(&r, "094", "S1").unwrap().line, find(&r, "094", "S16").unwrap().line);
-        assert!(find(&r, "094", "S99").is_none());
-        // Header lines are never rows.
-        assert!(r.iter().all(|x| !["Slice", "Spec"].contains(&x.slice.as_str())), "a header line was read as a row");
+        assert_ne!(find(&t.rows, "094", "S1").unwrap().file, find(&t.rows, "094", "S16").unwrap().file);
+        let plan = crate::tracker_migrate::plan(&t.text, &Default::default(), &|_| false, &crate::tracker_migrate::spec_numbers(&repo), &|_| None, "2026-11-23");
+        assert!(plan.files.is_empty(), "slice rows are back in {}: {:?}", PATH, plan.files.iter().map(|f| (&f.spec, &f.slice, &f.lines)).collect::<Vec<_>>());
     }
 
     #[test]
