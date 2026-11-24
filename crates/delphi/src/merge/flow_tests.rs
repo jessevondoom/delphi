@@ -131,21 +131,16 @@ fn a_gate_changing_pull_request_needs_a_person_and_is_shown_its_diff() {
     let w = world();
     w.forge.with_ready_pr(7, "head7", &["AGENTS.md", "docs/x.md"]);
     w.forge.edit(7, |p| p.labels.clear());
-    w.forge.st.borrow_mut().diff = "DIFF OF AGENTS.md".into();
-    // A chat quote is refused.
-    let q = with_ctx(&w, &mut FakeTerminal::new(true, &["7"]), Some("merge #7"), false, |c| merge_one(c, 7, None));
+    // A chat quote without a terminal is refused.
+    let q = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
     assert!(matches!(&q, Outcome::Declined { why, .. } if why.contains("not accepted")), "{q:?}");
-    // The wrong word at a terminal is refused.
-    let wrong = with_ctx(&w, &mut FakeTerminal::new(true, &["yes"]), None, false, |c| merge_one(c, 7, None));
-    assert!(matches!(wrong, Outcome::Declined { .. }));
-    assert!(merged(&w).is_empty());
-    // A person at a terminal is shown the files and the whole diff, types the number, and it merges.
+    // At a terminal the diff is built locally (§17); with no repository to build it in, nothing is asked and nothing merges.
+    // The approval, the diff and the merge at a terminal are in `show_diff_tests.rs`, against real git.
     let mut term = FakeTerminal::new(true, &["7"]);
-    let ok = with_ctx(&w, &mut term, None, false, |c| merge_one(c, 7, None));
-    assert!(matches!(ok, Outcome::Merged { .. }), "{ok:?}");
-    let shown = term.shown.join("\n");
-    assert!(shown.contains("AGENTS.md") && shown.contains("DIFF OF AGENTS.md"), "{shown}");
-    assert_eq!(Ledger::at(w.home.path()).read()[0]["gate_changing"], true);
+    let no_repo = with_ctx(&w, &mut term, None, false, |c| merge_one(c, 7, None));
+    assert!(matches!(&no_repo, Outcome::Failed { detail, .. } if detail.contains("could not build the diff")), "{no_repo:?}");
+    assert!(term.shown.join("\n").contains("AGENTS.md"), "the gate paths are named first");
+    assert!(merged(&w).is_empty() && kinds(&w).is_empty());
     // Without a terminal it cannot be merged at all.
     let w2 = world();
     w2.forge.with_ready_pr(7, "head7", &["AGENTS.md"]);

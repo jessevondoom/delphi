@@ -116,7 +116,9 @@ The record (`{pr, head_sha, base_sha, paths_hash, spec_blob, checks, attestation
 
 Paths that decide what may merge need a human. The list lives in `merge-gates.toml` at the repository root, read from the base branch, never from the PR. It starts as: `.github/**`, `deny.toml`, `GOVERNANCE.md`, `REVIEW.md`, `AGENTS.md`, `context/heuristics.md`, the ratchet tests (`crates/delphi/tests/{spawn_sites.*,must_run.rs,home_isolation.rs,deny_policy.rs}`, `crates/delphi-engine/src/service_gates_tests.rs`), the merge command's own source, and `merge-gates.toml` itself.
 
-Such a PR is never queueable and never merged by `--all` or `--auto`. `delphi merge <PR>` requires a terminal, shows the whole diff, and you type the PR number back. A `chat-quote` is refused. Governed content that is not a gate (`specs/`, `agents/`, `skills/`, `themes/`) merges the ordinary way, and the diff summary names it.
+Such a PR is never queueable and never merged by `--all` or `--auto`. `delphi merge <PR>` requires a terminal, shows the whole diff, and you type the PR number back. A `chat-quote` is refused.
+
+The diff is built locally with git, never read from GitHub, which refuses a large one ("diff too large" blocked #906): run `delphi merge` from a checkout whose `origin` is the repository. It fetches the derived head (`pull/<n>/head`) and base commits if they are missing and shows `git diff <base>...<head>`: a `--stat` summary first, then the patch. Over 5,000 lines, the patches under `compiled/` and `missions/2026-10-23-foundational-design/tracker/` are folded, with their count and the `git diff` command that shows them; a gate path is never folded (spec 094 §17). Governed content that is not a gate (`specs/`, `agents/`, `skills/`, `themes/`) merges the ordinary way, and the diff summary names it.
 
 ## `--auto` (S6)
 

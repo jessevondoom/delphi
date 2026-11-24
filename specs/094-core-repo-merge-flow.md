@@ -23,6 +23,7 @@ tags: [spec, merge, pull-requests, workflow, approvals, authority, builder, git,
 > **Amendment §14 (operator, 2026-11-22):** a pull request that changes only plain documentation (an allow list, failing closed) skips the macOS jobs; `ci-gate` accepts that skip only then.
 > **Amendment §15 (operator, 2026-11-22 and 2026-11-23):** the builder's skill `agentic-ci-cd-strategy` collects the CI and merge rules of §11 to §14 and the specs around them, for this repository and for defining new projects.
 > **Amendment §16 (operator, 2026-11-23):** two fixes to `delphi merge`: "no checks yet" is a state of its own (pending while waiting, never green), and the flow refuses to compile or judge `compiled/specs/` with a spec compiler that is not the tree's own.
+> **Amendment §17 (operator, 2026-11-24):** `delphi merge` builds the diff it shows before a gate-changing merge locally with git, from the derived base and head, instead of asking GitHub (which refuses a large one), and folds generated paths in a large diff; the CI skill names the macOS jobs as they are.
 > **Amends, when approved:** `specs/003` §3.1.2 and `specs/006` §3.1 (the hash pin of an approved spec in `ratified.lock` and the daemon's "blocks Builder unless the hash is ratified" govern work run through a Delphi daemon on specs inside a workspace's tree; Delphi's own repository is built from host-agent sessions as well, and there a spec is approved by its frontmatter and the operator's recorded instruction, with no pin) and `GOVERNANCE.md` §1.1 (how a core-repo merge is approved). Both edits are in this pull request. The `GOVERNANCE.md` edit is a constitutional change (§5.7) and is a gate-changing change under §3.4: the operator reviews it line by line.
 
 ---
@@ -658,3 +659,33 @@ It complements `git-pr-packaging`, `git-merge-and-conflict-resolution` and `ci-t
 
 - **AC-26 (S26).** `gh`'s no-checks answer (exit 1, empty output, "no checks reported") reads as no checks, and an empty answer with any other message as an error; a refreshed head with no checks is polled through "no checks", then "running", and merged once green; a wait that runs out with no checks merges nothing; an `--auto` session merges such a head at a later poll with no error; at decision time the refusal carries the new words; `refresh` of a conflicting pull request with no checks settles it by rule or hands it over naming the conflicted file.
 - **AC-27 (S27).** In a fixture repository whose base carries a compiler different from the binary's, `refresh` refuses with the rebuild message, pushes and commits nothing and writes no error entry, and the base check is unchecked, not drift; with the compiler equal again, the same refresh goes through and the base is current. The guard passes on this repository's own checkout.
+
+## 17. Amendment (operator, 2026-11-24): the diff of a gate-changing merge is built locally
+
+**Approval, stated plainly.** The operator's words, in a host session on 2026-11-24: "okay 906 is merged. prep the open fixes please", where the open fixes named this fault. The amendment is approved in advance on those words; the operator has not read this text and no Council has reviewed it. It changes `crates/delphi/src/merge/**`, so its pull request is gate-changing (§3.4) and the operator merges it at a terminal. It corrects how §3.4's "shows the whole diff" is done, and adds one line to the §15 skill; it changes nothing else.
+
+### 17.1 The fault, as seen on 2026-11-24
+
+`delphi merge 906` (843 changed files, +11,538/-984 lines, 822 of the files generated per-slice tracker files from spec 135 E3) failed before it asked for the confirmation: the flow read the diff it must show from GitHub (`gh pr diff`), and GitHub refuses the diff of a large pull request (about 300 files or 20,000 lines) with "diff too large". A gate-changing pull request could not be merged by `delphi merge` at all past that size; the operator merged #906 natively in the GitHub UI, which records no ledger row and no comment.
+
+### 17.2 The rule (S28)
+
+- The diff is never asked of GitHub: the `Forge` trait has no diff call. `delphi merge` builds it with git in the repository it runs in, from the **derived** commits of the record: the head commit (fetched from `origin` as `pull/<n>/head`, GitHub's ref, then as the head branch for a branch of this repository) and the base commit (fetched as the base branch), each fetch bounded by git's low-speed limit and skipped when the commit is already present. What is shown is `git diff <base>...<head>`, the same three-dot range as GitHub's pull request diff, CI and the rollup's union check. A commit that cannot be fetched fails the merge ("could not build the diff to show you"), and nothing is recorded or merged.
+- A `--stat` summary (every file, with line counts) always comes first, then the patch. When the patch is longer than 5,000 lines, the patches of generated or bulk paths (`compiled/` and `missions/2026-10-23-foundational-design/tracker/`) are folded: the view says how many files and lines were folded and prints the `git diff <base>...<head> -- <paths>` command that shows them. A gate path (on the base's list, or on the built-in one) is never folded, and a patch whose header cannot be read is never folded.
+- Unchanged: the confirmation needs the operator at a terminal typing the number back, a `chat-quote` is refused, and the merge is still `--match-head-commit` on the derived head.
+
+### 17.3 The skill (S29)
+
+`skills/agentic-ci-cd-strategy` names the macOS jobs as they are since #903 (spec 125 §12): `macos build`, `macos clippy` beside it, `macos tests (1)` and `(2)`, and `macos-rerun.yml`, which reruns once a macOS job that never got a runner; and it says that `delphi merge` builds the diff locally (§17.2). The builder's pack golden is regenerated.
+
+### 17.4 Slices (one pull request; gate-changing, merged by the operator at a terminal)
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| S28 | §17.2: `merge/show_diff.rs`; the `Forge` diff call removed; tests on a local bare remote; the guide | 2 |
+| S29 | §17.3: the skill lines; the builder pack golden | 0.5 |
+
+### 17.5 Acceptance criteria
+
+- **AC-28 (S28).** In a fixture with a bare `origin` and an operator's clone that has not fetched the pull request: a gate-changing pull request with a few files shows its stat and its whole diff, and merges only after the number is typed; one with hundreds of generated files shows the stat, the gate and ordinary paths in full, and folds only the generated ones with their count and the command; a gate path inside a generated directory is never folded; a head that cannot be fetched fails and merges nothing; no diff is read from the forge.
+- **AC-29 (S29).** The skill names the four macOS jobs and the rerun workflow, and the local diff; the builder pack golden matches; `delphi lint` passes.
