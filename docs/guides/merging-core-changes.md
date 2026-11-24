@@ -140,7 +140,7 @@ The flow cannot stop a merge that does not go through it: the GitHub button, or 
 
 As read on 2026-11-23, the repository has one ruleset, "main branch protection" (active, on the default branch, no bypass actors), with two rules: `deletion` and `non_fast_forward`. No status check is required. Nothing in this slice changes it.
 
-**Require one check: `ci-gate`.** CI has a final job, `ci-gate` (spec 094 §12), that needs every other job and passes only when each passed (macOS may be skipped only on a draft or a docs-only pull request, spec 094 §14). Require it and nothing else. Do not list the individual jobs: their names change (on 2026-11-23 `macos (test + clippy)` became `macos (build + clippy)` and two halves, spec 125 §11), and a required check that never reports blocks every merge. To switch it on (spec 094 §12.2.1):
+**Require one check: `ci-gate`.** CI has a final job, `ci-gate` (spec 094 §12), that needs every other job and passes only when each passed (macOS may be skipped only on a draft or a docs-only pull request, spec 094 §14). Require it and nothing else. Do not list the individual jobs: their names change (on 2026-11-23 `macos (test + clippy)` became `macos (build + clippy)` and two halves, spec 125 §11, and then `macos build`, `macos clippy` and `macos tests`, spec 125 §12), and a required check that never reports blocks every merge. To switch it on (spec 094 §12.2.1):
 
 ```
 gh api -X PUT repos/jessevondoom/delphi/rulesets/25768711 --input - <<'EOF'
