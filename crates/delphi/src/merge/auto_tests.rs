@@ -114,7 +114,7 @@ fn it_stops_at_the_time_cap() {
     let f = FakeForge::default();
     f.with_ready_pr(2, "h2", &["docs/a.md"]);
     // Checks never finish: the pull request waits, and the clock runs out before the idle limit does.
-    f.st.borrow_mut().checks.insert(2, vec![super::forge::Check { name: "test".into(), bucket: "pending".into() }]);
+    f.st.borrow_mut().checks.insert(2, vec![super::forge::Check { name: "test".into(), bucket: "pending".into(), ..Default::default() }]);
     let c = Caps { run_for: Duration::from_secs(600), idle: Duration::from_secs(3600), ..caps() };
     let (s, _, _) = session(&f, &c, &never);
     assert_eq!(s.reason, "reached the time cap");
@@ -125,13 +125,13 @@ fn it_stops_at_the_time_cap() {
 fn waiting_for_checks_is_not_an_error_and_it_merges_once_they_are_green() {
     let f = FakeForge::default();
     f.with_ready_pr(2, "h2", &["docs/a.md"]);
-    f.st.borrow_mut().checks.insert(2, vec![super::forge::Check { name: "test".into(), bucket: "pending".into() }]);
+    f.st.borrow_mut().checks.insert(2, vec![super::forge::Check { name: "test".into(), bucket: "pending".into(), ..Default::default() }]);
     let polls = Cell::new(0);
     // Turn the checks green after a few polls by way of the stop probe, which is asked every second of sleeping.
     let probe = || {
         polls.set(polls.get() + 1);
         if polls.get() == 150 {
-            f.st.borrow_mut().checks.insert(2, vec![super::forge::Check { name: "test".into(), bucket: "pass".into() }]);
+            f.st.borrow_mut().checks.insert(2, vec![super::forge::Check { name: "test".into(), bucket: "pass".into(), ..Default::default() }]);
         }
         false
     };

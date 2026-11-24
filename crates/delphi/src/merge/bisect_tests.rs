@@ -136,12 +136,12 @@ fn red_together_and_green_apart_sends_every_pull_request_to_the_serial_path() {
 /// Open the red rollup of four (CI pending at first, so nothing is bisected yet) and recognise it.
 fn red_rollup(f: &Fixture, forge: &FakeForge) -> super::rollup_pr::Recognised {
     let red_when = std::mem::take(&mut forge.st.borrow_mut().red_when);
-    forge.st.borrow_mut().checks_on_open = vec![Check { name: "ci-gate".into(), bucket: "pending".into() }];
+    forge.st.borrow_mut().checks_on_open = vec![Check { name: "ci-gate".into(), bucket: "pending".into(), ..Default::default() }];
     let out = with_ctx(f, forge, Some(&quote(4)), |ctx| batch(ctx, &[1, 2, 3, 4], 4, false, ID)).unwrap();
     assert!(matches!(&out, Outcome::Refused { reasons, .. } if reasons[0].contains("have not finished")), "{out:?}");
     let mut s = forge.st.borrow_mut();
     s.red_when = red_when;
-    s.checks.insert(ROLLUP, vec![Check { name: "ci-gate".into(), bucket: "fail".into() }]);
+    s.checks.insert(ROLLUP, vec![Check { name: "ci-gate".into(), bucket: "fail".into(), ..Default::default() }]);
     drop(s);
     with_ctx(f, forge, None, |ctx| recognise(ctx.forge, ctx.rollup.unwrap(), &super::check::evaluate(ctx.forge, ROLLUP).unwrap())).unwrap()
 }
@@ -179,10 +179,10 @@ fn the_approval_carries_only_to_halves_of_the_approved_set() {
 #[test]
 fn halves_whose_checks_have_not_finished_stay_open_and_status_shows_them_bisecting() {
     let (f, forge, _) = world(4, vec![]);
-    forge.st.borrow_mut().checks_on_open = vec![Check { name: "ci-gate".into(), bucket: "pending".into() }];
+    forge.st.borrow_mut().checks_on_open = vec![Check { name: "ci-gate".into(), bucket: "pending".into(), ..Default::default() }];
     let first = with_ctx(&f, &forge, Some(&quote(4)), |ctx| batch(ctx, &[1, 2, 3, 4], 4, false, ID)).unwrap();
     assert!(matches!(first, Outcome::Refused { .. }));
-    forge.st.borrow_mut().checks.insert(ROLLUP, vec![Check { name: "ci-gate".into(), bucket: "fail".into() }]);
+    forge.st.borrow_mut().checks.insert(ROLLUP, vec![Check { name: "ci-gate".into(), bucket: "fail".into(), ..Default::default() }]);
     // A later run on the operator's words: red, so bisected; the halves' CI is still running, so both stay open.
     let out = with_ctx(&f, &forge, Some("merge #1, #2, #3 and #4"), |ctx| merge_one(ctx, ROLLUP, None));
     assert!(format!("{out:?}").contains("rollups left open #901, #902"), "{out:?}");

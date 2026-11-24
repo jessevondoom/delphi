@@ -33,10 +33,18 @@ pub struct PrInfo {
 }
 
 /// One check run on the head commit. `bucket` is `gh`'s own classification: `pass`, `fail`, `pending`, `skipping` or `cancel`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `workflow`, `event` and `run` say which workflow run reported it (spec 094 §18): `gh pr checks` lists a job of an older run of
+/// the same workflow beside the newest run's when the two have different names, so the flow keeps only the newest run's.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Check {
     pub name: String,
     pub bucket: String,
+    /// The workflow's name (`ci`); empty for a check that no GitHub Actions workflow reported.
+    pub workflow: String,
+    /// The event that started the run (`pull_request`, `push`).
+    pub event: String,
+    /// The Actions run id, read from the check's link (`/actions/runs/<id>/job/<id>`); `None` for any other kind of check.
+    pub run: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,7 +73,11 @@ pub trait Forge {
     fn pr(&self, n: u64) -> Result<PrInfo, ForgeError>;
     /// Every path the pull request touches, including the old name of a renamed file.
     fn changed_paths(&self, n: u64) -> Result<Vec<String>, ForgeError>;
+    /// Every check `gh pr checks` lists for the pull request, with the workflow run each came from. The list can hold jobs of
+    /// an older run beside the newest run's (spec 094 §18); `check::current_checks` sorts them.
     fn checks(&self, n: u64) -> Result<Vec<Check>, ForgeError>;
+    /// The head commit an Actions run ran on (`head_sha`), so a check from a run on another commit never counts (§18).
+    fn run_head(&self, run: u64) -> Result<String, ForgeError>;
     /// A file's content at a branch or commit; `None` when it does not exist there.
     fn file_at(&self, git_ref: &str, path: &str) -> Result<Option<String>, ForgeError>;
     /// Open pull requests carrying `label`, oldest first.
@@ -137,7 +149,7 @@ fn failed(what: &str, code: i32, stderr: &str) -> ForgeError {
     ForgeError::Failed { what: what.to_string(), detail: if detail.is_empty() { format!("exit code {code}") } else { detail } }
 }
 
-/// Read what `gh pr checks <n> --json name,bucket` answered (spec 094 §16.2). Exit 0, 1 (a check failed) and 8 (checks pending)
+/// Read what `gh pr checks <n> --json name,bucket,workflow,event,link` answered (spec 094 §16.2). Exit 0, 1 (a check failed) and 8 (checks pending)
 /// carry JSON. A head with no checks at all prints nothing: `gh` 2.103 exits 1 and says "no checks reported on the '<branch>'
 /// branch" on standard error (seen on 2026-11-23, read-only, on pull requests #1 to #3). That is an empty list, "no checks yet",
 /// which no caller takes for green. Empty output with any other message is the error it is, never an empty list.
@@ -154,7 +166,25 @@ fn read_checks(code: i32, stdout: &str, stderr: &str) -> Result<Vec<Check>, Forg
     }
     let v: Value = serde_json::from_str(stdout).map_err(|e| ForgeError::Parse(format!("checks: {e}")))?;
     let rows = v.as_array().ok_or_else(|| ForgeError::Parse("checks: not a list".into()))?;
-    Ok(rows.iter().map(|c| Check { name: s(c, "name"), bucket: s(c, "bucket") }).collect())
+    Ok(rows.iter().map(|c| Check { name: s(c, "name"), bucket: s(c, "bucket"), workflow: s(c, "workflow"), event: s(c, "event"), run: run_of(&s(c, "link")) }).collect())
+}
+
+/// The Actions run id in a check's link (`https://github.com/o/r/actions/runs/<id>/job/<id>`); `None` for a link of any other
+/// shape (a status from another service, a check run of another app), which is then judged as it is, never grouped.
+fn run_of(link: &str) -> Option<u64> {
+    let rest = link.split("/actions/runs/").nth(1)?;
+    let id = rest.split('/').next()?;
+    id.parse::<u64>().ok().filter(|n| *n > 0)
+}
+
+/// The head commit out of `gh api .../actions/runs/<id> --jq .head_sha`: forty hexadecimal digits, or a parse error.
+fn parse_head_sha(out: &str) -> Result<String, ForgeError> {
+    let t = out.trim();
+    if t.len() == 40 && t.chars().all(|c| c.is_ascii_hexdigit()) {
+        Ok(t.to_string())
+    } else {
+        Err(ForgeError::Parse(format!("run: `head_sha` is `{t}`, not a commit")))
+    }
 }
 
 pub struct Gh;
@@ -221,8 +251,13 @@ impl Forge for Gh {
     }
 
     fn checks(&self, n: u64) -> Result<Vec<Check>, ForgeError> {
-        let (code, out, err) = self.exec(&["pr", "checks", &n.to_string(), "--json", "name,bucket"])?;
+        let (code, out, err) = self.exec(&["pr", "checks", &n.to_string(), "--json", "name,bucket,workflow,event,link"])?;
         read_checks(code, &out, &err)
+    }
+
+    fn run_head(&self, run: u64) -> Result<String, ForgeError> {
+        let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}");
+        parse_head_sha(&self.run("read a workflow run", &["api", &path, "--jq", ".head_sha"], &[])?)
     }
 
     fn file_at(&self, git_ref: &str, path: &str) -> Result<Option<String>, ForgeError> {
@@ -353,7 +388,7 @@ mod tests {
         assert_eq!(read_checks(8, "", "").unwrap(), vec![]);
         assert_eq!(read_checks(0, "[]\n", "").unwrap(), vec![]);
         let one = read_checks(8, "[{\"name\":\"ci-gate\",\"bucket\":\"pending\"}]", "").unwrap();
-        assert_eq!(one, vec![Check { name: "ci-gate".into(), bucket: "pending".into() }]);
+        assert_eq!(one, vec![Check { name: "ci-gate".into(), bucket: "pending".into(), ..Default::default() }]);
         assert_eq!(read_checks(1, "[{\"name\":\"t\",\"bucket\":\"fail\"}]", "").unwrap()[0].bucket, "fail");
         for (code, err) in [(1, "HTTP 401: Bad credentials"), (1, "no pull requests found for branch \"x\""), (1, ""), (4, "auth")] {
             assert!(matches!(read_checks(code, "", err), Err(ForgeError::Failed { .. })), "{code} {err:?}");
@@ -361,6 +396,24 @@ mod tests {
         assert!(matches!(read_checks(2, "[]", "boom"), Err(ForgeError::Failed { .. })));
         assert!(matches!(read_checks(0, "{\"x\":1}", ""), Err(ForgeError::Parse(_))));
         assert!(matches!(read_checks(0, "[{", ""), Err(ForgeError::Parse(_))));
+    }
+
+    #[test]
+    fn a_check_carries_its_workflow_and_run_and_a_link_that_is_not_an_actions_run_has_none() {
+        // The shape `gh` 2.103 printed for #909 on 2026-11-24 (trimmed).
+        let out = r#"[{"bucket":"pass","event":"pull_request","link":"https://github.com/o/r/actions/runs/45431007078/job/138599297659","name":"ci-gate","state":"SUCCESS","workflow":"ci"},
+                     {"bucket":"cancel","event":"pull_request","link":"https://github.com/o/r/actions/runs/45430975730/job/138576001514","name":"macos tests","state":"CANCELLED","workflow":"ci"},
+                     {"bucket":"pass","event":"","link":"https://example.com/status/1","name":"external","state":"SUCCESS","workflow":""}]"#;
+        let c = read_checks(0, out, "").unwrap();
+        assert_eq!((c[0].workflow.as_str(), c[0].event.as_str(), c[0].run), ("ci", "pull_request", Some(45431007078)));
+        assert_eq!(c[1].run, Some(45430975730));
+        assert_eq!(c[2].run, None);
+        assert_eq!(run_of("https://github.com/o/r/runs/12"), None, "a check run of another app is not an Actions run");
+        assert_eq!(run_of("https://github.com/o/r/actions/runs/x/job/1"), None);
+        assert_eq!(parse_head_sha("80d98f483fafb87bb8cf9e4cea0b7acf76ac3463\n").unwrap(), "80d98f483fafb87bb8cf9e4cea0b7acf76ac3463");
+        for bad in ["", "null", "80d98f48", "zzd98f483fafb87bb8cf9e4cea0b7acf76ac3463"] {
+            assert!(matches!(parse_head_sha(bad), Err(ForgeError::Parse(_))), "{bad:?}");
+        }
     }
 
     #[test]

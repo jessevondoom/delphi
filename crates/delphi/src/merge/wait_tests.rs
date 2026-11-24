@@ -63,7 +63,7 @@ impl Refresher for World<'_> {
         let old = p.head_sha.clone();
         let new = format!("{old}-r");
         p.head_sha = new.clone();
-        let checks = if matches!(self.ci.get(), Ci::RegistersLate | Ci::NeverRegisters) { vec![] } else { vec![Check { name: "test".into(), bucket: "pending".into() }] };
+        let checks = if matches!(self.ci.get(), Ci::RegistersLate | Ci::NeverRegisters) { vec![] } else { vec![Check { name: "test".into(), bucket: "pending".into(), ..Default::default() }] };
         s.checks.insert(n, checks);
         s.files.insert((new.clone(), SPEC_PATH.into()), APPROVED_SPEC.into());
         Ok(Done::Refreshed(Report { pr: n, old_head: old, new_head: new, base_sha: "base1".into(), settled: vec![], regenerated: vec![] }))
@@ -90,7 +90,7 @@ impl Clock for World<'_> {
             self.quiet.set(self.quiet.get() - 1);
         } else if ci == Ci::RegistersLate {
             for checks in s.checks.values_mut().filter(|c| c.is_empty()) {
-                checks.push(Check { name: "test".into(), bucket: "pending".into() });
+                checks.push(Check { name: "test".into(), bucket: "pending".into(), ..Default::default() });
             }
         }
         if ci == Ci::SomebodyPushes {
@@ -202,7 +202,7 @@ fn behind_and_red_or_behind_and_pending_is_refused_as_before_and_not_refreshed()
     for bucket in ["fail", "pending"] {
         let forge = FakeForge::default();
         behind_pr(&forge, 7, 1);
-        forge.st.borrow_mut().checks.insert(7, vec![Check { name: "test".into(), bucket: bucket.into() }]);
+        forge.st.borrow_mut().checks.insert(7, vec![Check { name: "test".into(), bucket: bucket.into(), ..Default::default() }]);
         let w = World::new(&forge);
         let (out, _) = with(&w, WAIT, |c| merge_one(c, 7, None));
         assert!(matches!(&out, Outcome::Refused { reasons, .. } if reasons.iter().any(|r| r.contains("behind"))), "{bucket}: {out:?}");

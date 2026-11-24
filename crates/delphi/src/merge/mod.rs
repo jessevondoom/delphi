@@ -33,6 +33,8 @@ mod base_tests;
 #[cfg(test)]
 mod bisect_tests;
 #[cfg(test)]
+mod checks_tests;
+#[cfg(test)]
 mod cleanup_tests;
 #[cfg(test)]
 mod fake;
@@ -227,6 +229,10 @@ fn decide_one(ctx: &mut Ctx, n: u64, batch: Option<&Attestation>) -> Outcome {
             ctx.term.show(&line);
         }
     }
+    // Check entries left out of the judgement (§18) are said, so the operator sees what was not counted.
+    for note in &v.check_notes {
+        ctx.term.show(&format!("#{n}: {note}"));
+    }
     if v.gate_changing() && batch.is_some() {
         let _ = ctx.forge.set_label(n, REVIEW_LABEL, true);
         return Outcome::NeedsHuman { pr: n, paths: v.gate_hits };
@@ -401,7 +407,7 @@ pub fn status_lines(forge: &dyn Forge) -> Result<Vec<String>, String> {
         } else if v.gate_changing() {
             format!("#{n}: ready, but it changes a gate ({}): needs a human", v.gate_hits.join(", "))
         } else {
-            format!("#{n}: ready (head {})", short(&v.pr.head_sha))
+            format!("#{n}: ready (head {}){}", short(&v.pr.head_sha), v.check_notes.iter().map(|x| format!("; {x}")).collect::<String>())
         });
     }
     if out.is_empty() {

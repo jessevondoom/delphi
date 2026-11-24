@@ -154,7 +154,7 @@ fn a_gate_changing_pull_request_is_never_batched() {
 fn the_session_batches_only_what_it_would_merge_serially() {
     let (f, forge, _) = world(3, vec![]);
     // A rollup of #1 and #2 opened earlier on the operator's words, its CI still running, and then (wrongly) queued.
-    forge.st.borrow_mut().checks_on_open = vec![Check { name: "ci-gate".into(), bucket: "pending".into() }];
+    forge.st.borrow_mut().checks_on_open = vec![Check { name: "ci-gate".into(), bucket: "pending".into(), ..Default::default() }];
     with_ctx(&f, &forge, Some("batch #1 and #2"), |ctx| batch(ctx, &[1, 2], 4, false, ID)).unwrap();
     forge.edit(900, |p| p.labels = vec!["merge-queue".into()]);
     // #3 is ready but not queued.

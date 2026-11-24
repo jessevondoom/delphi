@@ -10,471 +10,513 @@
     },
     {
       "level": 2,
-      "line": 31,
+      "line": 32,
       "number": "1",
       "title": "Why"
     },
     {
       "level": 2,
-      "line": 37,
+      "line": 38,
       "number": "2",
       "title": "What must not change"
     },
     {
       "level": 2,
-      "line": 44,
+      "line": 45,
       "number": "3",
       "title": "The additions"
     },
     {
       "level": 3,
-      "line": 46,
+      "line": 47,
       "number": "3.1",
       "title": "The queue"
     },
     {
       "level": 3,
-      "line": 50,
+      "line": 51,
       "number": "3.2",
       "title": "`delphi merge`"
     },
     {
       "level": 3,
-      "line": 68,
+      "line": 69,
       "number": "3.3",
       "title": "Cleanup after merge"
     },
     {
       "level": 3,
-      "line": 78,
+      "line": 79,
       "number": "3.4",
       "title": "The gate-changing class"
     },
     {
       "level": 3,
-      "line": 86,
+      "line": 87,
       "number": "3.5",
       "title": "`--auto`: a bounded session"
     },
     {
       "level": 3,
-      "line": 92,
+      "line": 93,
       "number": "3.6",
       "title": "Errors, the log and the builder"
     },
     {
       "level": 3,
-      "line": 98,
+      "line": 99,
       "number": "3.7",
       "title": "The builder's git skill"
     },
     {
       "level": 3,
-      "line": 111,
+      "line": 112,
       "number": "3.8",
       "title": "Agent rules"
     },
     {
       "level": 3,
-      "line": 115,
+      "line": 116,
       "number": "3.9",
       "title": "Vocabulary"
     },
     {
       "level": 2,
-      "line": 119,
+      "line": 120,
       "number": "4",
       "title": "Simpler alternative considered"
     },
     {
       "level": 2,
-      "line": 125,
+      "line": 126,
       "number": "5",
       "title": "Threats, and what is deliberately deferred"
     },
     {
       "level": 2,
-      "line": 135,
+      "line": 136,
       "number": "6",
       "title": "Slices (one per pull request; none starts before approval)"
     },
     {
       "level": 2,
-      "line": 151,
+      "line": 152,
       "number": "7",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 163,
+      "line": 164,
       "number": "8",
       "title": "Non-goals"
     },
     {
       "level": 2,
-      "line": 167,
+      "line": 168,
       "number": "9",
       "title": "Decisions"
     },
     {
       "level": 2,
-      "line": 176,
+      "line": 177,
       "number": "10",
       "title": "Known limits"
     },
     {
       "level": 2,
-      "line": 180,
+      "line": 181,
       "number": "11",
       "title": "Amendment (operator, 2026-11-20): merge only what CI has tested against the tip it lands on"
     },
     {
       "level": 3,
-      "line": 184,
+      "line": 185,
       "number": "11.1",
       "title": "The problem, as found on 2026-11-20"
     },
     {
       "level": 3,
-      "line": 195,
+      "line": 196,
       "number": "11.2",
       "title": "Scope"
     },
     {
       "level": 3,
-      "line": 199,
+      "line": 200,
       "number": "11.3",
       "title": "The additions"
     },
     {
       "level": 3,
-      "line": 233,
+      "line": 234,
       "number": "11.4",
       "title": "Simpler alternative considered"
     },
     {
       "level": 3,
-      "line": 237,
+      "line": 238,
       "number": "11.5",
       "title": "Options considered"
     },
     {
       "level": 3,
-      "line": 245,
+      "line": 246,
       "number": "11.6",
       "title": "Authority invariants (unchanged by this amendment, and how each holds)"
     },
     {
       "level": 3,
-      "line": 255,
+      "line": 256,
       "number": "11.7",
       "title": "Failure modes"
     },
     {
       "level": 3,
-      "line": 264,
+      "line": 265,
       "number": "11.8",
       "title": "Slices (one per pull request; S9 to S11 are gate-changing, merged by the operator at a terminal)"
     },
     {
       "level": 3,
-      "line": 277,
+      "line": 278,
       "number": "11.9",
       "title": "Decisions"
     },
     {
       "level": 3,
-      "line": 286,
+      "line": 287,
       "number": "11.10",
       "title": "Acceptance criteria and Verification Plan"
     },
     {
       "level": 2,
-      "line": 302,
+      "line": 303,
       "number": "12",
       "title": "Amendment (operator, 2026-11-22): CI signal at agent pace"
     },
     {
       "level": 3,
-      "line": 306,
+      "line": 307,
       "number": "12.1",
       "title": "The problem, as measured on 2026-11-22"
     },
     {
       "level": 3,
-      "line": 313,
+      "line": 314,
       "number": "12.2",
       "title": "The additions"
     },
     {
       "level": 3,
-      "line": 339,
+      "line": 340,
       "number": "12.3",
       "title": "Options considered"
     },
     {
       "level": 3,
-      "line": 350,
+      "line": 351,
       "number": "12.4",
       "title": "Authority"
     },
     {
       "level": 3,
-      "line": 354,
+      "line": 355,
       "number": "12.5",
       "title": "Slices (S13 to S16 in one pull request, one commit each, by the same-spec trial; gate-changing, merged by the operator at a terminal)"
     },
     {
       "level": 3,
-      "line": 363,
+      "line": 364,
       "number": "12.6",
       "title": "Acceptance criteria and verification"
     },
     {
       "level": 2,
-      "line": 371,
+      "line": 372,
       "number": "13",
       "title": "Amendment (operator, 2026-11-22): batched merges through a rollup pull request"
     },
     {
       "level": 3,
-      "line": 375,
+      "line": 376,
       "number": "13.1",
       "title": "The problem, as measured on 2026-11-22"
     },
     {
       "level": 3,
-      "line": 382,
+      "line": 383,
       "number": "13.2",
       "title": "The design: a rollup pull request"
     },
     {
       "level": 3,
-      "line": 395,
+      "line": 396,
       "number": "13.3",
       "title": "The rollup is a recognised kind, not an exception to the rules"
     },
     {
       "level": 3,
-      "line": 416,
+      "line": 417,
       "number": "13.4",
       "title": "Invariants"
     },
     {
       "level": 3,
-      "line": 426,
+      "line": 427,
       "number": "13.5",
       "title": "Red: bisection and flaky tests"
     },
     {
       "level": 3,
-      "line": 433,
+      "line": 434,
       "number": "13.6",
       "title": "GitHub's behaviour the design depends on, and how it was checked"
     },
     {
       "level": 3,
-      "line": 439,
+      "line": 440,
       "number": "13.7",
       "title": "Options considered"
     },
     {
       "level": 3,
-      "line": 450,
+      "line": 451,
       "number": "13.8",
       "title": "Error classes (extends §3.6 and §11.3.5)"
     },
     {
       "level": 3,
-      "line": 456,
+      "line": 457,
       "number": "13.9",
       "title": "Command line"
     },
     {
       "level": 3,
-      "line": 466,
+      "line": 467,
       "number": "13.10",
       "title": "Decisions"
     },
     {
       "level": 3,
-      "line": 477,
+      "line": 478,
       "number": "13.11",
       "title": "Threats"
     },
     {
       "level": 3,
-      "line": 486,
+      "line": 487,
       "number": "13.12",
       "title": "Slices (one per pull request; all gate-changing, merged by the operator at a terminal)"
     },
     {
       "level": 3,
-      "line": 500,
+      "line": 501,
       "number": "13.13",
       "title": "Acceptance criteria and verification"
     },
     {
       "level": 3,
-      "line": 510,
+      "line": 511,
       "number": "13.14",
       "title": "Build notes (recorded while building; the decisions above stand unless a note says otherwise)"
     },
     {
       "level": 2,
-      "line": 529,
+      "line": 530,
       "number": "14",
       "title": "Amendment (operator, 2026-11-22): no macOS run for a pull request that changes only documentation"
     },
     {
       "level": 3,
-      "line": 533,
+      "line": 534,
       "number": "14.1",
       "title": "The problem"
     },
     {
       "level": 3,
-      "line": 537,
+      "line": 538,
       "number": "14.2",
       "title": "The additions"
     },
     {
       "level": 3,
-      "line": 563,
+      "line": 564,
       "number": "14.3",
       "title": "Options considered"
     },
     {
       "level": 3,
-      "line": 572,
+      "line": 573,
       "number": "14.4",
       "title": "Authority"
     },
     {
       "level": 3,
-      "line": 576,
+      "line": 577,
       "number": "14.5",
       "title": "Slices (one pull request; gate-changing, merged by the operator at a terminal)"
     },
     {
       "level": 3,
-      "line": 582,
+      "line": 583,
       "number": "14.6",
       "title": "Acceptance criteria and verification"
     },
     {
       "level": 2,
-      "line": 587,
+      "line": 588,
       "number": "15",
       "title": "Amendment (operator, 2026-11-22 and 2026-11-23): a CI and merge strategy skill for the builder"
     },
     {
       "level": 3,
-      "line": 591,
+      "line": 592,
       "number": "15.1",
       "title": "The problem"
     },
     {
       "level": 3,
-      "line": 595,
+      "line": 596,
       "number": "15.2",
       "title": "The addition"
     },
     {
       "level": 3,
-      "line": 604,
+      "line": 605,
       "number": "15.3",
       "title": "Options considered"
     },
     {
       "level": 3,
-      "line": 612,
+      "line": 613,
       "number": "15.4",
       "title": "Slice"
     },
     {
       "level": 3,
-      "line": 618,
+      "line": 619,
       "number": "15.5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 622,
+      "line": 623,
       "number": "16",
       "title": "Amendment (operator, 2026-11-23): \"no checks yet\", and a spec compiler that is not the tree's"
     },
     {
       "level": 3,
-      "line": 626,
+      "line": 627,
       "number": "16.1",
       "title": "The two faults, as seen on 2026-11-23"
     },
     {
       "level": 3,
-      "line": 631,
+      "line": 632,
       "number": "16.2",
       "title": "\"No checks yet\" (S26)"
     },
     {
       "level": 3,
-      "line": 637,
+      "line": 638,
       "number": "16.3",
       "title": "A spec compiler that is not the tree's (S27)"
     },
     {
       "level": 3,
-      "line": 651,
+      "line": 652,
       "number": "16.4",
       "title": "Slices (one pull request; gate-changing, merged by the operator at a terminal)"
     },
     {
       "level": 3,
-      "line": 658,
+      "line": 659,
       "number": "16.5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 663,
+      "line": 664,
       "number": "17",
       "title": "Amendment (operator, 2026-11-24): the diff of a gate-changing merge is built locally"
     },
     {
       "level": 3,
-      "line": 667,
+      "line": 668,
       "number": "17.1",
       "title": "The fault, as seen on 2026-11-24"
     },
     {
       "level": 3,
-      "line": 671,
+      "line": 672,
       "number": "17.2",
       "title": "The rule (S28)"
     },
     {
       "level": 3,
-      "line": 677,
+      "line": 678,
       "number": "17.3",
       "title": "The skill (S29)"
     },
     {
       "level": 3,
-      "line": 681,
+      "line": 682,
       "number": "17.4",
       "title": "Slices (one pull request; gate-changing, merged by the operator at a terminal)"
     },
     {
       "level": 3,
-      "line": 688,
+      "line": 689,
       "number": "17.5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 694,
+      "number": "18",
+      "title": "Amendment (operator, 2026-11-24): only the newest run's checks on the head are judged"
+    },
+    {
+      "level": 3,
+      "line": 698,
+      "number": "18.1",
+      "title": "The fault, as seen on 2026-11-24"
+    },
+    {
+      "level": 3,
+      "line": 704,
+      "number": "18.2",
+      "title": "The rule (S30)"
+    },
+    {
+      "level": 3,
+      "line": 713,
+      "number": "18.3",
+      "title": "Options considered"
+    },
+    {
+      "level": 3,
+      "line": 722,
+      "number": "18.4",
+      "title": "Authority and limits"
+    },
+    {
+      "level": 3,
+      "line": 726,
+      "number": "18.5",
+      "title": "Slice (one pull request; gate-changing, merged by the operator at a terminal)"
+    },
+    {
+      "level": 3,
+      "line": 732,
+      "number": "18.6",
       "title": "Acceptance criteria"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/094-core-repo-merge-flow.md",
-    "sha256": "b5bd78f67612e811c70c4d18abbc4d8776c47dfb06122fd7cddf43796e65be41"
+    "sha256": "99f2eac97f4914919716ba6c3aa7c7a302077fbadec5bc33cca62ce92765f923"
   },
   "source_status_at_hash": {
     "line": {
@@ -487,7 +529,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-07 (\"approve the outstanding draft specs in this workstream\"); OD-1 to OD-5 take the recommendations, as when the operator approved the plan"
     },
-    "sha256": "b5bd78f67612e811c70c4d18abbc4d8776c47dfb06122fd7cddf43796e65be41",
+    "sha256": "99f2eac97f4914919716ba6c3aa7c7a302077fbadec5bc33cca62ce92765f923",
     "word": "approved"
   },
   "spec": {
