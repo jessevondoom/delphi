@@ -21,6 +21,7 @@ pub mod record;
 pub mod refresh;
 pub mod rollup;
 pub mod rollup_pr;
+pub mod show_diff;
 pub mod wait;
 
 #[cfg(test)]
@@ -43,6 +44,8 @@ mod refresh_tests;
 mod rollup_pr_tests;
 #[cfg(test)]
 mod rollup_tests;
+#[cfg(test)]
+mod show_diff_tests;
 #[cfg(test)]
 mod wait_tests;
 
@@ -234,9 +237,14 @@ fn decide_one(ctx: &mut Ctx, n: u64, batch: Option<&Attestation>) -> Outcome {
     }
     if v.gate_changing() && ctx.term.is_interactive() {
         ctx.term.show(&format!("#{n} changes a gate:\n  {}\n", v.gate_hits.join("\n  ")));
-        match ctx.forge.diff(n) {
-            Ok(d) => ctx.term.show(&d),
-            Err(e) => return Outcome::Failed { pr: n, detail: format!("could not read the diff to show you: {e}"), head: v.pr.head_sha },
+        // Built locally from the derived commits, never asked of GitHub, which refuses a large diff (§17).
+        let shown = match ctx.git {
+            Some(git) => show_diff::for_operator(git, &v.pr, &v.gate_hits),
+            None => Err("there is no repository here to build it in".into()),
+        };
+        match shown {
+            Ok(d) => ctx.term.show(&d.text),
+            Err(e) => return Outcome::Failed { pr: n, detail: format!("could not build the diff to show you: {e}"), head: v.pr.head_sha },
         }
     }
     let att = match batch {

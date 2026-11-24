@@ -72,6 +72,12 @@ impl Git {
         }
     }
 
+    /// Run a git command that must succeed, for the merge flow's other read-only uses (the diff shown before a gate-changing
+    /// merge, `show_diff`). The same one place `git` is started.
+    pub(super) fn read(&self, args: &[&str]) -> Result<String, String> {
+        self.ok(args)
+    }
+
     fn default_branch(&self) -> Option<String> {
         let o = self.ok(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).ok()?;
         o.trim().strip_prefix("origin/").map(String::from)
