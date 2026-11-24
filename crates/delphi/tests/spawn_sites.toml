@@ -149,6 +149,14 @@ file = "crates/delphi/src/claim_refs.rs"
 count = 1
 class = "git"
 
+# The one-time tracker migration (specs/135 section 14.14, E4): the checkout's own git, read-only (`git log --format` and
+# `git blame --porcelain` of the tracker's fixed path), run by the operator's `delphi forge tracker migrate`; every argument
+# is a constant.
+[[site]]
+file = "crates/delphi/src/tracker_migrate.rs"
+count = 1
+class = "git"
+
 [[site]]
 file = "crates/delphi/src/merge/cleanup.rs"
 count = 1

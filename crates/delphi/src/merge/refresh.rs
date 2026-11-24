@@ -5,8 +5,9 @@
 //! - It works in a temporary worktree of its own under the Delphi home, on the pull request's head commit, and removes it at
 //!   the end whatever happened.
 //! - It merges `origin/<base>` in with `git merge --no-ff --no-commit` (a merge commit; never a rebase).
-//! - It settles only the closed list in `rule_for`: the groups file and the spec tracker by a union (the base's lines first),
-//!   and the compiled spec tree by taking the base's side. Any other conflict, a conflict on a gate path, or more than ten
+//! - It settles only the closed list in `rule_for`: the groups file by a union (the base's lines first), and the compiled spec
+//!   tree by taking the base's side. The spec tracker is not on it since spec 135 E3 (§14.14): its slices are per-slice
+//!   files, so a conflict in what is left of the table is an ordinary conflict for `merge fix`. Any other conflict, a conflict on a gate path, or more than ten
 //!   conflicted files aborts the merge, pushes nothing, writes a `refresh-refused` entry and hands over to `delphi merge fix`.
 //! - It always recompiles the specs in process (the code path of `delphi specs compile`, spec 088) and checks the result, so a
 //!   view that merged with no conflict and is still wrong (the count line of 2026-11-20 was one) is regenerated.
@@ -29,7 +30,8 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// The append-only spec tracker, settled by a union like the groups file.
+/// The spec tracker's table. Not on the closed list since spec 135 E3: a conflict in it is handed to `merge fix`.
+#[cfg(test)]
 pub const TRACKER: &str = "missions/2026-10-23-foundational-design/spec-tracker.md";
 /// The words every hand-over line carries; `errors::classify_refusal` finds the class `refresh-refused` by them.
 pub const HANDED_OVER: &str = "not refreshed, and nothing was pushed";
@@ -49,7 +51,7 @@ pub enum Rule {
 
 /// The closed list (§11.3.2 step 4). Anything not named here is not settled by this command.
 pub fn rule_for(path: &str) -> Option<Rule> {
-    if path == spec_compile::GROUPS_FILE || path == TRACKER {
+    if path == spec_compile::GROUPS_FILE {
         Some(Rule::UnionBaseFirst)
     } else if path.strip_prefix(spec_compile::TREE_DIR).is_some_and(|rest| rest.starts_with('/')) {
         Some(Rule::TakeBase)
@@ -446,9 +448,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_closed_list_names_the_groups_file_the_tracker_and_the_compiled_tree_and_nothing_else() {
+    fn the_closed_list_names_the_groups_file_and_the_compiled_tree_and_nothing_else() {
         assert_eq!(rule_for(spec_compile::GROUPS_FILE), Some(Rule::UnionBaseFirst));
-        assert_eq!(rule_for(TRACKER), Some(Rule::UnionBaseFirst));
+        // Spec 135 E3: the tracker table and the per-slice files are ordinary files.
+        assert_eq!(rule_for(TRACKER), None);
+        assert_eq!(rule_for("missions/2026-10-23-foundational-design/tracker/135/E3.md"), None);
         assert_eq!(rule_for(&format!("{}/index.md", spec_compile::TREE_DIR)), Some(Rule::TakeBase));
         assert_eq!(rule_for(&format!("{}/x.json", spec_compile::DATA_DIR)), Some(Rule::TakeBase));
         for other in ["README.md", "Cargo.lock", "specs/094-core-repo-merge-flow.md", "compiled/other.toml", &format!("{}x/index.md", spec_compile::TREE_DIR)] {
@@ -472,10 +476,12 @@ mod tests {
     #[test]
     fn a_conflict_outside_the_list_on_a_gate_path_or_in_more_than_ten_files_is_refused_with_the_paths() {
         let gates: Vec<String> = gates::DEFAULT_GATES.iter().map(|s| s.to_string()).collect();
-        let ok = settle_plan(&[TRACKER.to_string(), spec_compile::GROUPS_FILE.to_string()], &gates).unwrap();
+        let ok = settle_plan(&[spec_compile::GROUPS_FILE.to_string(), format!("{}/index.md", spec_compile::TREE_DIR)], &gates).unwrap();
         assert_eq!(ok.len(), 2);
-        let e = settle_plan(&[TRACKER.to_string(), "README.md".to_string()], &gates).unwrap_err();
-        assert!(e.contains("README.md") && !e.contains(TRACKER), "{e}");
+        let e = settle_plan(&[spec_compile::GROUPS_FILE.to_string(), "README.md".to_string()], &gates).unwrap_err();
+        assert!(e.contains("README.md") && !e.contains(spec_compile::GROUPS_FILE), "{e}");
+        let e = settle_plan(&[TRACKER.to_string()], &gates).unwrap_err();
+        assert!(e.contains(TRACKER), "{e}");
         let e = settle_plan(&["AGENTS.md".to_string()], &gates).unwrap_err();
         assert!(e.contains("gate path") && e.contains("AGENTS.md"), "{e}");
         let many: Vec<String> = (0..11).map(|i| format!("{}/data/{i}.json", spec_compile::TREE_DIR)).collect();
