@@ -67,8 +67,13 @@ pub(super) fn commit(dir: &Path, msg: &str) {
     git(dir, &["commit", "-q", "-m", msg]);
 }
 
-/// Add a spec: its file, its group line (after `after`, or at the end), optionally a tracker row; then compile.
-pub(super) fn add_spec(dir: &Path, stem: &str, group: &str, after: Option<&str>, tracker_row: Option<&str>) {
+/// Where `add_spec` writes a slice's per-slice tracker file (spec 135 §14.10).
+pub(super) fn slice_file(stem: &str, slice: &str) -> String {
+    format!("{}/{}/{slice}.md", crate::tracker::DIR, &stem[..3])
+}
+
+/// Add a spec: its file, its group line (after `after`, or at the end), optionally a per-slice tracker file; then compile.
+pub(super) fn add_spec(dir: &Path, stem: &str, group: &str, after: Option<&str>, slice: Option<&str>) {
     std::fs::write(dir.join("specs").join(format!("{stem}.md")), spec_text(stem)).unwrap();
     let line = format!("\"{stem}\" = \"{group}\"\n");
     let text = std::fs::read_to_string(dir.join(GROUPS_FILE)).unwrap();
@@ -77,9 +82,10 @@ pub(super) fn add_spec(dir: &Path, stem: &str, group: &str, after: Option<&str>,
         None => text + &line,
     };
     std::fs::write(dir.join(GROUPS_FILE), text).unwrap();
-    if let Some(row) = tracker_row {
-        let t = std::fs::read_to_string(dir.join(TRACKER)).unwrap();
-        std::fs::write(dir.join(TRACKER), t + row + "\n").unwrap();
+    if let Some(slice) = slice {
+        let p = dir.join(slice_file(stem, slice));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "---\nstate: built\ndate: 2026-11-23\n---\n").unwrap();
     }
     compile(dir);
 }
@@ -174,22 +180,22 @@ fn both_sides_added_a_spec_with_no_conflict_and_the_refresh_recompiles_and_check
 }
 
 #[test]
-fn the_groups_file_and_the_tracker_are_settled_by_union_with_the_base_lines_first() {
+fn the_groups_file_is_settled_by_union_with_the_base_lines_first_and_slice_files_do_not_conflict() {
     let f = fixture();
-    let head = diverge(&f, |d| add_spec(d, "002-a2", "a", None, Some("| 002 | S1 | built |")), |d| add_spec(d, "010-b10", "b", None, Some("| 010 | S1 | merged |")));
+    let head = diverge(&f, |d| add_spec(d, "002-a2", "a", None, Some("S1")), |d| add_spec(d, "010-b10", "b", None, Some("S1")));
     let forge = forge_for(&head, &["specs/002-a2.md"]);
     // An open `behind` entry becomes fixed-pending-ci.
     let errors = Errors::at(f.home.path());
     errors.record(7, &head, super::errors::Class::Behind, "it is 1 commit(s) behind `main`", "t0").unwrap();
     let (out, log) = run(&f, &forge, None);
     let r = refreshed(out);
-    assert!(r.settled.contains(&GROUPS_FILE.to_string()) && r.settled.contains(&TRACKER.to_string()), "{r:?}");
+    assert!(r.settled.contains(&GROUPS_FILE.to_string()) && !r.settled.iter().any(|p| p.contains("tracker")), "{r:?}");
     let groups = at_pr(&f, GROUPS_FILE);
     let (b10, a2) = (groups.find("\"010-b10\"").unwrap(), groups.find("\"002-a2\"").unwrap());
     assert!(b10 < a2, "the base's line first: {groups}");
-    let tracker = at_pr(&f, TRACKER);
-    assert!(tracker.ends_with("| 010 | S1 | merged |\n| 002 | S1 | built |"), "{tracker}");
-    assert!(!tracker.contains("<<<<<<<") && !groups.contains("======="));
+    // Spec 135 E3: two slices are two files, which merge with no conflict and no rule.
+    assert!(at_pr(&f, &slice_file("002-a2", "S1")).starts_with("---\nstate: built") && at_pr(&f, &slice_file("010-b10", "S1")).starts_with("---\nstate: built"));
+    assert!(!groups.contains("<<<<<<<") && !groups.contains("======="));
     let index = at_pr(&f, &format!("{TREE_DIR}/index.md"));
     assert!(index.contains("| [002-a2]") && index.contains("| [010-b10]") && !index.contains("<<<<<<<"), "{index}");
     assert_no_force_or_rebase(&log);
@@ -225,8 +231,9 @@ fn a_conflict_in_any_other_file_is_handed_to_merge_fix_and_nothing_is_pushed() {
 }
 
 #[test]
-fn a_union_that_would_change_a_line_the_pull_request_did_not_change_is_refused_by_the_widening_check() {
-    // Both sides edited the same tracker row: the union would keep both versions, so the result widens the change.
+fn a_conflict_in_the_tracker_table_is_an_ordinary_conflict_handed_to_merge_fix() {
+    // Spec 135 E3 (§14.14): the table is no longer settled by a union (which kept both versions of a row two sides edited); a
+    // conflict in it is handed over like any file outside the closed list, and nothing is pushed.
     let f = fixture();
     let edit = |to: &'static str| move |d: &Path| {
         let t = std::fs::read_to_string(d.join(TRACKER)).unwrap();
@@ -235,7 +242,7 @@ fn a_union_that_would_change_a_line_the_pull_request_did_not_change_is_refused_b
     let head = diverge(&f, edit("| 094 | S9 | built (PR open) |"), edit("| 094 | S9 | merged |"));
     let forge = forge_for(&head, &[TRACKER]);
     let (out, _) = run(&f, &forge, None);
-    assert!(matches!(&out, Err(Stop::HandOver(why)) if why.contains("outside the generated files") && why.contains(TRACKER)), "{out:?}");
+    assert!(matches!(&out, Err(Stop::HandOver(why)) if why.contains("outside the files it settles by rule") && why.contains(TRACKER)), "{out:?}");
     assert_eq!(origin_pr(&f), head);
 }
 
@@ -296,12 +303,12 @@ fn a_conflicting_pull_request_with_no_checks_is_refreshed_by_rule_or_handed_over
     // #890 on 2026-11-23: a conflicting pull request runs no CI, so it has no checks. Refresh does not need any (§16.2): it
     // settles a conflict on the closed list, and hands over one outside it, naming the file.
     let f = fixture();
-    let head = diverge(&f, |d| add_spec(d, "002-a2", "a", None, Some("| 002 | S1 | built |")), |d| add_spec(d, "010-b10", "b", None, Some("| 010 | S1 | merged |")));
+    let head = diverge(&f, |d| add_spec(d, "002-a2", "a", None, Some("S1")), |d| add_spec(d, "010-b10", "b", None, Some("S1")));
     let forge = forge_for(&head, &["specs/002-a2.md"]);
     forge.edit(7, |p| p.mergeable = "CONFLICTING".into());
     forge.st.borrow_mut().checks.insert(7, vec![]);
     let r = refreshed(run(&f, &forge, None).0);
-    assert!(r.settled.contains(&TRACKER.to_string()), "{r:?}");
+    assert!(r.settled.contains(&GROUPS_FILE.to_string()), "{r:?}");
 
     let f = fixture();
     let head = diverge(&f, |d| std::fs::write(d.join("README.md"), "mine\n").unwrap(), |d| std::fs::write(d.join("README.md"), "theirs\n").unwrap());

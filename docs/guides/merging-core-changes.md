@@ -43,9 +43,9 @@ Run it in the repository on a PR that is behind. It does what an author did by h
 
 1. It refuses at once a PR that is closed, a draft, from a fork, gate-changing (update that one yourself with `gh pr update-branch <PR>`, or hand it to `merge fix`), or already current.
 2. In a temporary worktree of its own under `$DELPHI_HOME/merge/refresh/`, on the PR's head commit, it merges `origin/<base>` in (`git merge --no-ff`, a merge commit; never a rebase). It removes the worktree at the end whatever happened.
-3. It settles only these conflicts: `compiled/groups.toml` and the spec tracker by keeping both sides' lines, the base's first; the generated views and JSON under `compiled/specs/` by taking the base's side.
+3. It settles only these conflicts: `compiled/groups.toml` by keeping both sides' lines, the base's first; the generated views and JSON under `compiled/specs/` by taking the base's side. The spec tracker is not on the list (spec 135 E3, §14.14): every slice is its own file under `missions/2026-10-23-foundational-design/tracker/<spec>/<slice>.md`, so two PRs that record different slices touch different files, and a conflict in a slice file or in what is left of `spec-tracker.md` (its prose and summary table) is an ordinary conflict for `merge fix`.
 4. It always reruns the spec compile (the code of `delphi specs compile`) and checks the result, conflict or not. A merge with no conflict can still leave a view that is not what the compile writes; the count line of 2026-11-20 was one, before the spec 088 amendment took the counts out of the views.
-5. It checks that it widened nothing: outside `compiled/`, the PR's added and removed lines against the new base are exactly those against the old one. Two edits of the same tracker row fail this check.
+5. It checks that it widened nothing: outside `compiled/`, the PR's added and removed lines against the new base are exactly those against the old one.
 6. It commits `Merge <base> into <branch> (delphi merge refresh)` and pushes with a plain push. A branch that moved meanwhile rejects the push; nothing is overwritten and nothing is retried.
 7. It writes a `refreshed` row to the ledger and a comment on the PR, and moves an open `behind` entry to `fixed-pending-ci`.
 
@@ -57,7 +57,7 @@ Any other conflicted file, a gate path, more than 10 conflicted files, a failed 
 
 **No checks yet.** Right after a refresh pushes a new head, GitHub can take a moment to register its CI run; `gh pr checks` then reports no checks at all. `delphi merge <PR> --wait`, `--all` and a rollup's wait treat that as pending and keep polling until the bound; an `--auto` session waits for its next poll and counts no error. At a merge decision it is never green: the refusal reads "no checks have reported on head `<sha>` yet: CI may not have started (or the PR has a conflict with its base, and such a PR runs no CI)".
 
-**It needs no approval of its own.** It never merges a PR and has no path to one. It pushes one ordinary commit that changes nothing the PR did not already change, apart from generated files and the two append-only files. Anyone who may push to the branch may run it, an agent included, as with `merge fix`. CI then runs on the new head, and the PR merges only through `delphi merge` on your word. Cargo.lock and `docs/reference/` conflicts need a build of the merged code, so they go to `merge fix`.
+**It needs no approval of its own.** It never merges a PR and has no path to one. It pushes one ordinary commit that changes nothing the PR did not already change, apart from generated files and the groups file. Anyone who may push to the branch may run it, an agent included, as with `merge fix`. CI then runs on the new head, and the PR merges only through `delphi merge` on your word. Cargo.lock and `docs/reference/` conflicts need a build of the merged code, so they go to `merge fix`.
 
 ### Refresh and wait inside `delphi merge` (S11)
 

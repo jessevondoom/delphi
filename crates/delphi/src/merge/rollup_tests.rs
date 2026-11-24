@@ -3,8 +3,8 @@
 
 use super::fake::{FakeForge, APPROVED_SPEC, DRAFT_SPEC};
 use super::forge::Check;
-use super::refresh::{Runner, TRACKER};
-use super::refresh_tests::{add_spec, commit, compile, fixture, git, Fixture};
+use super::refresh::Runner;
+use super::refresh_tests::{add_spec, commit, compile, fixture, git, slice_file, Fixture};
 use super::rollup::{build, choose, parse_manifest, Candidate, Choice};
 use std::path::Path;
 
@@ -66,16 +66,16 @@ fn at(f: &Fixture, rev: &str, path: &str) -> String {
 
 #[test]
 fn three_pull_requests_of_three_specs_build_one_candidate_in_order_with_the_shared_files_settled_by_rule() {
-    // AC-18 (a) and (b): two add a spec and a tracker row each (the groups file, the tracker and the compiled tree conflict), one
+    // AC-18 (a) and (b): two add a spec and a per-slice tracker file each (the groups file and the compiled tree conflict), one
     // changes a Markdown file; one merge commit per constituent, in order, the earlier side's lines first, the compile current.
     let f = fixture();
-    let h1 = branch(&f, "b1", |d| add_spec(d, "002-a2", "a", None, Some("| 002 | S1 | built |")));
-    let h2 = branch(&f, "b2", |d| add_spec(d, "010-b10", "b", None, Some("| 010 | S1 | built |")));
+    let h1 = branch(&f, "b1", |d| add_spec(d, "002-a2", "a", None, Some("S1")));
+    let h2 = branch(&f, "b2", |d| add_spec(d, "010-b10", "b", None, Some("S1")));
     let h3 = branch(&f, "b3", |d| std::fs::write(d.join("README.md"), "readme\nmore\n").unwrap());
     advance_main(&f);
     let forge = FakeForge::default();
-    ready(&forge, 1, "b1", &h1, &["specs/002-a2.md", TRACKER], Some(super::fake::SPEC_PATH));
-    ready(&forge, 2, "b2", &h2, &["specs/010-b10.md", TRACKER], Some(OTHER_SPEC));
+    ready(&forge, 1, "b1", &h1, &["specs/002-a2.md", &slice_file("002-a2", "S1")], Some(super::fake::SPEC_PATH));
+    ready(&forge, 2, "b2", &h2, &["specs/010-b10.md", &slice_file("010-b10", "S1")], Some(OTHER_SPEC));
     ready(&forge, 3, "b3", &h3, &["README.md"], None);
 
     let (choice, out) = run(&f, &forge, &[1, 2, 3], 4);
@@ -92,12 +92,11 @@ fn three_pull_requests_of_three_specs_build_one_candidate_in_order_with_the_shar
         prev = m.clone();
     }
     assert_eq!(prev, c.head);
-    let tracker = at(&f, &c.head, TRACKER);
-    let (r2, r10) = (tracker.find("| 002 |").unwrap(), tracker.find("| 010 |").unwrap());
-    assert!(r2 < r10, "the earlier constituent's row first:\n{tracker}");
+    // Spec 135 E3: the two slices are two files, both there, with no rule.
+    assert!(at(&f, &c.head, &slice_file("002-a2", "S1")).contains("state: built") && at(&f, &c.head, &slice_file("010-b10", "S1")).contains("state: built"));
     let groups = at(&f, &c.head, crate::spec_compile::GROUPS_FILE);
     assert!(groups.contains("\"002-a2\" = \"a\"") && groups.contains("\"010-b10\" = \"b\""), "{groups}");
-    assert!(c.settled.contains(&TRACKER.to_string()), "{:?}", c.settled);
+    assert!(c.settled.contains(&crate::spec_compile::GROUPS_FILE.to_string()) && !c.settled.iter().any(|p| p.contains("tracker")), "{:?}", c.settled);
     assert_eq!(at(&f, &c.head, "README.md"), "readme\nmore");
     // The compiled tree at the head is what the compile writes.
     git(&f.work, &["switch", "-q", "--detach", &c.head]);
