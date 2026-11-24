@@ -257,6 +257,12 @@
     {
       "level": 3,
       "line": 390,
+      "number": "14.13",
+      "title": "I: ready after the push's run, and the G leftovers (operator, 2026-11-23)"
+    },
+    {
+      "level": 3,
+      "line": 408,
       "number": "14.14",
       "title": "E4 and E3: the migration, and no tracker rule in `merge refresh` (operator, 2026-11-23)"
     }
@@ -264,7 +270,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md",
-    "sha256": "2218267ad8bdd5ba2c55206d7fee4e334dc5781c04bfaa9522fc6ca1fd54a885"
+    "sha256": "b1ff929c7cbe1ffa6eac543f81e6e79f26794bf5ff123b4e53001efa446d8b4b"
   },
   "source_status_at_hash": {
     "line": {
@@ -277,7 +283,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, IN ADVANCE, in a host session (\"build F0 to F2 then we can try F4?\"), said of a plan shown to them in that session (F0 slice claims, F1 a deterministic finisher, F2 a cross-family reviewer that can run the tests, F3 deferred, F4 a replay experiment). This text was written afterwards by an architect agent from that plan and the code; the operator has not read it line by line. No Council has read it. Open decisions (section 11) take their recommendations unless the operator says otherwise. F4 spends the operator's tokens and runs only on the operator's yes for it."
     },
-    "sha256": "2218267ad8bdd5ba2c55206d7fee4e334dc5781c04bfaa9522fc6ca1fd54a885",
+    "sha256": "b1ff929c7cbe1ffa6eac543f81e6e79f26794bf5ff123b4e53001efa446d8b4b",
     "word": "approved"
   },
   "spec": {

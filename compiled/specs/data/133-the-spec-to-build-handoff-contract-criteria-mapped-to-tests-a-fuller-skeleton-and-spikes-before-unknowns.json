@@ -115,12 +115,18 @@
       "line": 164,
       "number": "9",
       "title": "Review"
+    },
+    {
+      "level": 2,
+      "line": 168,
+      "number": "10",
+      "title": "Amendment 133-A1: a new slice is recorded as its own file (operator, 2026-11-23)"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/133-the-spec-to-build-handoff-contract-criteria-mapped-to-tests-a-fuller-skeleton-and-spikes-before-unknowns.md",
-    "sha256": "24300ab2213145ec28dd22ca9c29a9f0396a3f35d97d032daf4074434863f791"
+    "sha256": "521e198d5e531452563526e60bdf6b90c6a427269de3c2749fff5158a7d48760"
   },
   "source_status_at_hash": {
     "line": {
@@ -133,7 +139,7 @@
       },
       "text": "status: approved   # by the operator, 2026-11-20, in a host session after the plan was shown: \"follow your plan and go. i'll approve specs from this plan and ratify and changes\". It takes effect when the pull request that carries it merges."
     },
-    "sha256": "24300ab2213145ec28dd22ca9c29a9f0396a3f35d97d032daf4074434863f791",
+    "sha256": "521e198d5e531452563526e60bdf6b90c6a427269de3c2749fff5158a7d48760",
     "word": "approved"
   },
   "spec": {

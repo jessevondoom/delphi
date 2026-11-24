@@ -48,7 +48,7 @@ Related skills, not repeated here: `git-pr-packaging` (commits, the PR body, che
 ### A2. Draft first (`CONTRIBUTING.md`; `specs/125` §11; `specs/094` §14)
 - On a draft, only the Linux jobs run. macOS (one `build-macos` job that archives the tests, then two `test-macos` halves) runs only when the PR is ready. The account allows 5 macOS jobs at once, and macOS is the critical path.
 - Keep a PR as a draft while you are still pushing. A new push cancels that PR's older run.
-- **Mark it ready only after the CI run for your latest push has registered** (`gh pr checks <PR>` lists it for the new head). Otherwise only the draft run exists and macOS is skipped. This happened twice on 2026-11-23. After `gh pr ready`, confirm that the macOS jobs appear on the head.
+- **Mark it ready only after the CI run for your latest push has registered** (`gh pr checks <PR>` lists it for the new head). Otherwise only the draft run exists and macOS is skipped. This happened twice on 2026-11-23. `delphi forge ready <PR>` does this for you (`specs/135` §14.13): it waits for the push's run, marks the PR ready, confirms a second run of the head appeared and toggles draft and ready once if not. By hand: after `gh pr ready`, confirm that the macOS jobs appear on the head.
 - A PR that adds or modifies only allow-listed Markdown skips macOS: `README.md`, `CHANGELOG.md`, `changelog.d/*.md`, `docs/**/*.md` outside `docs/reference/`, and `missions/**/*.md`. A rename, a deletion or any other path runs everything (`.github/scripts/docs_only.sh`).
 - When a job is red, run `gh run rerun <run-id> --failed`. Do not push again: a new push reruns every job, the macOS ones included.
 
