@@ -545,7 +545,8 @@ mod tests {
         delphi_bundle::write_manifest(t.path(), true, &Real).unwrap();
         let hash_before = delphi_bundle::validate(t.path(), &Options { claude: true, packaging: true, ..Options::default() }, &Real).bundle_hash;
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let out = t.path().parent().unwrap().join("evalpack.xbundle");
+        let out_dir = tempfile::tempdir().unwrap();
+        let out = out_dir.path().join("evalpack.xbundle");
         let code = run(&args(&["package", t.path().to_str().unwrap(), "--home", home.path().to_str().unwrap(), "-o", out.to_str().unwrap()]));
         assert_eq!(code, 0, "advisory: numbers below the thresholds would not block either");
         let rec = fs::read_to_string(t.path().join(".delphi-bundle/eval.json")).unwrap();
@@ -570,8 +571,8 @@ mod tests {
         let toml = fs::read_to_string(t.path().join("bundle.toml")).unwrap();
         fs::write(t.path().join("bundle.toml"), toml.replacen("[bundle]\n", "[bundle]\ndistribution = \"public\"\n", 1)).unwrap();
         delphi_bundle::write_manifest(t.path(), true, &Real).unwrap();
-        let out = t.path().parent().unwrap().join("pub-licence.xbundle");
-        let _ = fs::remove_file(&out);
+        let out_dir = tempfile::tempdir().unwrap();
+        let out = out_dir.path().join("pub-licence.xbundle");
         // no terminal (or a no): no archive, no report, a non-zero exit
         let no_tty = |_: &Notice| -> Result<bool, String> { Err("a human act".into()) };
         assert_ne!(bundle_pack::package_confirmed(t.path(), Some(&out), &Real, &no_tty), 0);
@@ -595,7 +596,7 @@ mod tests {
         // an internal bundle is not asked on `package`
         let t2 = tempfile::tempdir().unwrap();
         copy(&golden(), t2.path());
-        let out2 = t2.path().parent().unwrap().join("int-licence.xbundle");
+        let out2 = out_dir.path().join("int-licence.xbundle");
         assert_eq!(bundle_pack::package_confirmed(t2.path(), Some(&out2), &Real, &no_tty), 0);
     }
 
@@ -606,7 +607,8 @@ mod tests {
         copy(&golden(), t.path());
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         // no model is installed under a fresh home (and none is embedded in a test build)
-        let code = run(&args(&["package", t.path().to_str().unwrap(), "--vectors", "--home", home.path().to_str().unwrap(), "-o", t.path().parent().unwrap().join("x.xbundle").to_str().unwrap()]));
+        let out_dir = tempfile::tempdir().unwrap();
+        let code = run(&args(&["package", t.path().to_str().unwrap(), "--vectors", "--home", home.path().to_str().unwrap(), "-o", out_dir.path().join("x.xbundle").to_str().unwrap()]));
         assert_eq!(code, 1);
         assert!(!t.path().join("vectors").exists(), "nothing was written");
         fs::write(t.path().join("bundle.toml"), "not toml [").unwrap();
