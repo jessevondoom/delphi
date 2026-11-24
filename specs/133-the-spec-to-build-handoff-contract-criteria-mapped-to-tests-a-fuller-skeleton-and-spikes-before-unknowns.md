@@ -78,7 +78,7 @@ Follow-ups: ideas outside this slice
 
 #### 2.1.2 The tracker
 
-The tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`) is over 1,200 lines. Find the spec's rows with a search and add or change only those lines; never read the whole file into context.
+A new slice is recorded as its own file, `missions/2026-10-23-foundational-design/tracker/<spec>/<slice>.md` (frontmatter `state`, `date`, optional `pr` and `title`, then prose; schema `schemas/tracker-slice.schema.json`), written or changed in the pull request that changes the slice's state ([`specs/135`](135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md) §14.10; [`AGENTS.md`](../AGENTS.md) says the same in its rule on one slice per pull request). Slices recorded before that keep their rows in the single tracker (`missions/2026-10-23-foundational-design/spec-tracker.md`, over 1,200 lines) until they are migrated (135 §14.10 item 6): to change such a row, find the spec's rows with a search and change only those lines; never read the whole file into context. `delphi forge tracker [--spec <spec>]` prints both as one table; when a slice is in both, the file wins. (Amended by 133-A1, section 10.)
 
 The skill's `description` changes to say it covers building a slice (at most 200 characters), and `docs/reference/catalog.md` is regenerated.
 
@@ -164,3 +164,13 @@ The pull request touches no `.github/`, charter or rubric path. Spec 134 edits s
 ## 9. Review
 
 Daemon Council `t_0001` of session `host-de42e7270bcb4edf` (2026-11-21, seats on Claude and Gemini) reviewed this text and spec 134's. The architect and strategist seats recommended approval with named changes; the red-team seat's Round 1 said the same, and its Round 2 could not be read, so the ruling went to the operator. The changes it named for this spec are applied: the tiny-change exemption keeps the Decisions table when an item touches authority, an interface or something irreversible (2.3 rule 2); a duplicate Council id stops a citation (2.3 rule 5); the R4 trigger has an owner, a dated row and a rule without the contradiction it had (2.4). The design it rests on was ruled by an earlier Council of the same id in session `host-390eef8435513f56` (2026-11-20), whose record is not committed, so it is not cited.
+
+## 10. Amendment 133-A1: a new slice is recorded as its own file (operator, 2026-11-23)
+
+**Approved by the operator, 2026-11-23**, in a host session: "build all the follow ups you just listed in as few PRs as possible", said of a list that named this one (spec 135 §14.10 left §2.1.2 here describing only the table). Written afterwards by a builder agent; the operator has not read it line by line. Text only: no code, skill, gate or authority changes.
+
+**Why.** Spec 135 §14.10 (merged in #892) moved a new slice's state out of `spec-tracker.md` into one file per slice, because parallel pull requests collided on the table. `CONTRIBUTING.md`, `AGENTS.md` and `skills/git-pr-packaging/SKILL.md` step 7 already say so; §2.1.2, the build contract's tracker step, still told a builder to add rows to the table.
+
+**The change.** §2.1.2 now says: a new slice is recorded as `missions/2026-10-23-foundational-design/tracker/<spec>/<slice>.md`, in the pull request that changes its state; older slices keep their rows in `spec-tracker.md` until the migration of 135 §14.10 item 6, and such a row is still changed by search, never by reading the whole file; `delphi forge tracker` shows both, and a file wins over a row. Acceptance criterion AC-2 is unchanged: `git-pr-packaging` keeps its step on changing rows by search, which still holds for old rows. Section 2.4's R4 row stays in the table, where it already is.
+
+**Slice.** A1: this amendment, `compiled/`, and the tracker file `missions/2026-10-23-foundational-design/tracker/133/A1.md`.

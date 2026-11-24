@@ -188,3 +188,41 @@ fn ac31_of_two_checkouts_that_claim_at_once_exactly_one_wins() {
     codes.sort();
     assert_eq!(codes, vec![0, 1], "{} {} / {} {}", mine.out, mine.err, theirs.out, theirs.err);
 }
+
+// §14.13 I2: the finisher renews the ref; a sweep sees a merged pull request (a squash merge leaves no merge commit).
+
+#[test]
+fn ac46_finish_body_renews_the_remote_claim_and_is_quiet_offline() {
+    let w = world();
+    assert_eq!(claim(&req(&w.a, &w.ha, "I2", false, T0), false).code, 0);
+    let before = remote_claim(&w.a, "135/I2").unwrap().claim.unwrap();
+    let later = T0 + 600;
+    let finish = |now: i64| crate::finisher::finish_with(&crate::finisher::FinishReq { repo: &w.a, home: &w.ha, check: false, spec: None, slice: None, body: true, gates: false, fast_only: false, now }, &mut crate::finisher_gates::SystemRunner);
+    let o = finish(later);
+    assert!(o.err.contains("on the remote: refs/delphi/claims/135/I2") && o.err.contains("(renewed)"), "{}", o.err);
+    let after = remote_claim(&w.a, "135/I2").unwrap().claim.unwrap();
+    assert_eq!(after.expires, fmt_time(later + slice_claims::DEFAULT_TTL_SECS));
+    assert_ne!(after.expires, before.expires);
+    g(&w.a, &["remote", "set-url", "origin", w.a.join("no-such-remote.git").to_str().unwrap()]);
+    let o = finish(later + 60);
+    assert!(!o.err.contains("could not be reached") && !o.err.contains("not renewed"), "{}", o.err);
+    assert!(slice_claims::claim_of_branch(&w.a, &w.ha, later + 60).is_some_and(|c| c.slice == "I2"), "the local claim stands");
+}
+
+#[test]
+fn ac47_a_sweep_deletes_the_claim_of_a_branch_with_a_merged_pull_request() {
+    let w = world();
+    assert_eq!(claim(&req(&w.a, &w.ha, "I1", false, T0), false).code, 0);
+    assert_eq!(claim(&req(&w.b, &w.hb, "I2", false, T0), false).code, 0);
+    let mut asked = Vec::new();
+    let mut fake = |b: &str| {
+        asked.push(b.to_string());
+        b == "feat-a"
+    };
+    let o = list_with(&w.b, &w.hb, false, false, true, false, T0 + 60, Some(&mut fake));
+    assert!(o.out.contains("swept refs/delphi/claims/135/I1 (its branch has a merged pull request)"), "{} / {}", o.out, o.err);
+    assert!(o.out.contains("135 I2 by feat-b"), "{}", o.out);
+    asked.sort();
+    assert_eq!(asked, vec!["feat-a".to_string(), "feat-b".to_string()], "once per branch");
+    assert!(remote_claim(&w.a, "135/I1").is_none() && remote_claim(&w.a, "135/I2").is_some());
+}

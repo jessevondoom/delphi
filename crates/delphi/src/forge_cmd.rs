@@ -5,7 +5,7 @@ use crate::slice_claims::{self, Out};
 use std::path::PathBuf;
 
 /// Flags that take a value, so a value is never read as a positional word.
-const VALUE_FLAGS: [&str; 6] = ["--repo", "--home", "--by", "--ttl", "--spec", "--slice"];
+const VALUE_FLAGS: [&str; 7] = ["--repo", "--home", "--by", "--ttl", "--spec", "--slice", "--wait"];
 
 fn positionals(args: &[String]) -> Vec<String> {
     let mut out = Vec::new();
@@ -27,7 +27,7 @@ fn has(args: &[String], f: &str) -> bool {
 }
 
 pub fn usage() -> &'static str {
-    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge claim --spec-number [--by <holder>] [--ttl <dur>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release --spec-number <NNN> [--by <holder>] [--repo <dir>]\n       delphi forge list [--all] [--json] [--sweep] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates [--fast-only]] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]\n       delphi forge tracker [--spec <spec>] [--repo <dir>]"
+    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge claim --spec-number [--by <holder>] [--ttl <dur>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release --spec-number <NNN> [--by <holder>] [--repo <dir>]\n       delphi forge list [--all] [--json] [--sweep] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates [--fast-only]] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]\n       delphi forge tracker [--spec <spec>] [--repo <dir>]\n       delphi forge ready <PR> [--wait <dur>] [--repo <dir>]"
 }
 
 fn now() -> i64 {
@@ -74,6 +74,15 @@ pub fn exec(args: &[String]) -> Out {
             crate::finisher::finish(&crate::finisher::FinishReq { repo: &repo, home: &home, check: has(rest, "--check"), spec: spec.as_deref(), slice: slice.as_deref(), body: has(rest, "--body"), gates: has(rest, "--gates") || has(rest, "--fast-only"), fast_only: has(rest, "--fast-only"), now: now() })
         }
         Some("tracker") if pos.is_empty() => tracker_view(&repo, crate::flag(rest, "--spec").as_deref()),
+        Some("ready") => {
+            let [pr] = &pos[..] else { return usage_err("ready takes a pull request number") };
+            let wait = match crate::flag(rest, "--wait").map(|t| crate::run::parse_duration(&t)) {
+                None => crate::forge_ready::DEFAULT_WAIT,
+                Some(Ok(d)) => d,
+                Some(Err(e)) => return usage_err(&e),
+            };
+            crate::forge_ready::ready(&repo, pr, wait, &mut crate::finisher_gates::SystemRunner, &mut std::thread::sleep)
+        }
         _ => usage_err("name a subcommand"),
     }
 }
@@ -123,5 +132,8 @@ mod tests {
         assert_eq!(exec(&v(&["claim", "135", "F0", "--ttl", "soon"])).code, 2);
         assert_eq!(exec(&v(&["claim", "135", "--spec-number"])).code, 2);
         assert_eq!(exec(&v(&["release", "--spec-number"])).code, 2);
+        assert_eq!(exec(&v(&["ready"])).code, 2);
+        assert_eq!(exec(&v(&["ready", "7", "--wait", "soon"])).code, 2);
+        assert_eq!(exec(&v(&["ready", "x7"])).code, 2);
     }
 }
