@@ -38,7 +38,7 @@ impl Row {
 
 /// The cells of a table line, split on `|` not escaped with `\`. A pipe inside backticks that was not escaped splits a cell too;
 /// that only moves text between middle cells, and only the first two and the last are read.
-fn cells(line: &str) -> Option<Vec<String>> {
+pub(crate) fn cells(line: &str) -> Option<Vec<String>> {
     let t = line.trim();
     let inner = t.strip_prefix('|')?.strip_suffix('|')?;
     let mut out = Vec::new();
@@ -77,7 +77,7 @@ pub struct Section {
 }
 
 /// A markdown heading: its level and title.
-fn heading(line: &str) -> Option<(usize, &str)> {
+pub(crate) fn heading(line: &str) -> Option<(usize, &str)> {
     let level = line.bytes().take_while(|&c| c == b'#').count();
     if level == 0 || level > 6 || !line[level..].starts_with(' ') {
         return None;
@@ -142,7 +142,7 @@ pub fn sections_for(text: &str, spec_number: &str) -> Vec<Section> {
 }
 
 /// A table's separator line (`| :-- | --: |`).
-fn is_separator(c: &[String]) -> bool {
+pub(crate) fn is_separator(c: &[String]) -> bool {
     c.iter().all(|x| !x.is_empty() && x.chars().all(|ch| matches!(ch, ':' | '-')))
 }
 

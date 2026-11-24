@@ -5,7 +5,7 @@ use crate::slice_claims::{self, Out};
 use std::path::PathBuf;
 
 /// Flags that take a value, so a value is never read as a positional word.
-const VALUE_FLAGS: [&str; 6] = ["--repo", "--home", "--by", "--ttl", "--spec", "--slice"];
+const VALUE_FLAGS: [&str; 7] = ["--repo", "--home", "--by", "--ttl", "--spec", "--slice", "--section"];
 
 fn positionals(args: &[String]) -> Vec<String> {
     let mut out = Vec::new();
@@ -27,7 +27,7 @@ fn has(args: &[String], f: &str) -> bool {
 }
 
 pub fn usage() -> &'static str {
-    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge claim --spec-number [--by <holder>] [--ttl <dur>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release --spec-number <NNN> [--by <holder>] [--repo <dir>]\n       delphi forge list [--all] [--json] [--sweep] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates [--fast-only]] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]\n       delphi forge tracker [--spec <spec>] [--repo <dir>]"
+    "usage: delphi forge claim <spec> <slice> [--by <holder>] [--ttl <dur>] [--take] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge claim --spec-number [--by <holder>] [--ttl <dur>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release <spec> <slice> [--by <holder>] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge release --spec-number <NNN> [--by <holder>] [--repo <dir>]\n       delphi forge list [--all] [--json] [--sweep] [--local] [--repo <dir>] [--home <dir>]\n       delphi forge finish [--check] [--gates [--fast-only]] [--spec <spec> --slice <slice>] [--body] [--repo <dir>] [--home <dir>]\n       delphi forge tracker [--spec <spec>] [--repo <dir>]\n       delphi forge tracker migrate [--spec <spec> | --section <heading>] [--dry-run] [--repo <dir>]"
 }
 
 fn now() -> i64 {
@@ -72,6 +72,16 @@ pub fn exec(args: &[String]) -> Out {
         Some("finish") if pos.is_empty() => {
             let (spec, slice) = (crate::flag(rest, "--spec"), crate::flag(rest, "--slice"));
             crate::finisher::finish(&crate::finisher::FinishReq { repo: &repo, home: &home, check: has(rest, "--check"), spec: spec.as_deref(), slice: slice.as_deref(), body: has(rest, "--body"), gates: has(rest, "--gates") || has(rest, "--fast-only"), fast_only: has(rest, "--fast-only"), now: now() })
+        }
+        Some("tracker") if pos == ["migrate"] => {
+            let f = crate::tracker_migrate::Filter { spec: crate::flag(rest, "--spec"), section: crate::flag(rest, "--section") };
+            if f.spec.is_some() && f.section.is_some() {
+                return usage_err("tracker migrate takes --spec or --section, not both");
+            }
+            match crate::tracker_migrate::run(&repo, &f, has(rest, "--dry-run"), &delphi_core::bundles::today()) {
+                Ok(out) => Out { code: 0, out, err: String::new() },
+                Err(e) => Out { code: 1, out: String::new(), err: format!("delphi forge tracker migrate: {}", e) },
+            }
         }
         Some("tracker") if pos.is_empty() => tracker_view(&repo, crate::flag(rest, "--spec").as_deref()),
         _ => usage_err("name a subcommand"),
