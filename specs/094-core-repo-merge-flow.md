@@ -24,6 +24,7 @@ tags: [spec, merge, pull-requests, workflow, approvals, authority, builder, git,
 > **Amendment §15 (operator, 2026-11-22 and 2026-11-23):** the builder's skill `agentic-ci-cd-strategy` collects the CI and merge rules of §11 to §14 and the specs around them, for this repository and for defining new projects.
 > **Amendment §16 (operator, 2026-11-23):** two fixes to `delphi merge`: "no checks yet" is a state of its own (pending while waiting, never green), and the flow refuses to compile or judge `compiled/specs/` with a spec compiler that is not the tree's own.
 > **Amendment §17 (operator, 2026-11-24):** `delphi merge` builds the diff it shows before a gate-changing merge locally with git, from the derived base and head, instead of asking GitHub (which refuses a large one), and folds generated paths in a large diff; the CI skill names the macOS jobs as they are.
+> **Amendment §18 (operator, 2026-11-24):** `delphi merge` judges only the checks of the newest run of each workflow on the pull request's current head, as GitHub's required check does; entries from a superseded run or another head are left out and named.
 > **Amends, when approved:** `specs/003` §3.1.2 and `specs/006` §3.1 (the hash pin of an approved spec in `ratified.lock` and the daemon's "blocks Builder unless the hash is ratified" govern work run through a Delphi daemon on specs inside a workspace's tree; Delphi's own repository is built from host-agent sessions as well, and there a spec is approved by its frontmatter and the operator's recorded instruction, with no pin) and `GOVERNANCE.md` §1.1 (how a core-repo merge is approved). Both edits are in this pull request. The `GOVERNANCE.md` edit is a constitutional change (§5.7) and is a gate-changing change under §3.4: the operator reviews it line by line.
 
 ---
@@ -689,3 +690,45 @@ It complements `git-pr-packaging`, `git-merge-and-conflict-resolution` and `ci-t
 
 - **AC-28 (S28).** In a fixture with a bare `origin` and an operator's clone that has not fetched the pull request: a gate-changing pull request with a few files shows its stat and its whole diff, and merges only after the number is typed; one with hundreds of generated files shows the stat, the gate and ordinary paths in full, and folds only the generated ones with their count and the command; a gate path inside a generated directory is never folded; a head that cannot be fetched fails and merges nothing; no diff is read from the forge.
 - **AC-29 (S29).** The skill names the four macOS jobs and the rerun workflow, and the local diff; the builder pack golden matches; `delphi lint` passes.
+
+## 18. Amendment (operator, 2026-11-24): only the newest run's checks on the head are judged
+
+**Approval, stated plainly.** The operator's words, in a host session on 2026-11-24: "yes build it. 909 is merged", answering "Should I build it after #909 lands?" for this fix. The amendment is approved in advance on those words; the operator has not read this text and no Council has reviewed it. It changes `crates/delphi/src/merge/**`, so its pull request is gate-changing (§3.4) and the operator merges it at a terminal. It corrects how §3.2's "all checks pass" is read from GitHub; it changes nothing else.
+
+### 18.1 The fault, as seen on 2026-11-24
+
+`delphi merge 909` refused with "checks failed: macos tests" while GitHub showed the pull request green and `ci-gate` passed. `gh pr checks 909 --json name,state,bucket,link,workflow,event` (read-only, after the merge) returned 14 entries: 13 from run 45431007078, all SUCCESS (`ci-gate`, `macos tests (1)`, `macos tests (2)` among them), and one, `macos tests`, CANCELLED, from run 45430975730. Both runs are of workflow `ci`, event `pull_request`, on the same head (`gh api .../actions/runs/<id> --jq .head_sha` gives `80d98f48` for each). The older one was the pull request's draft-time run; GitHub cancelled it when the ready run started (the workflow's concurrency group), and its matrix job, still unexpanded and so named `macos tests`, was cancelled with it. `gh pr checks` already drops an older run's entry when the newer run has a job of the same name; a job whose name the newer run does not reuse stays. The flow counted every non-success entry as failed. Earlier pull requests showed the same pattern.
+
+`gh pr checks --json` offers `bucket`, `completedAt`, `description`, `event`, `link`, `name`, `startedAt`, `state` and `workflow` (`gh` 2.103). No field gives the run id or the head commit; the run id is in `link` (`/actions/runs/<run>/job/<job>`).
+
+### 18.2 The rule (S30)
+
+- `Gh::checks` asks for `name,bucket,workflow,event,link` and reads the run id out of `link`. A link of another shape (a status from another service, a check run of another app) has no run.
+- Every distinct run the checks name is read once for its `head_sha` (`gh api repos/{owner}/{repo}/actions/runs/<id> --jq .head_sha`, read-only). An entry from a run on any commit other than the pull request's current head is left out. A run that cannot be read, or more than 16 distinct runs, is an error, never a pass.
+- Of the rest, per workflow and event, only the newest run is kept: the highest run id (GitHub numbers runs in the order they are created; a rerun keeps its id). An entry from an older run of the same workflow and event on the same head was superseded, and is left out. An entry with no run, or no workflow name, is always kept and judged as it is.
+- What is kept is judged as before: an entry of the newest run that failed, was cancelled or timed out fails; one still running is pending; nothing at all is "no checks yet" (§16.2), so a head whose only checks came from another commit is never green.
+- What was left out is said: each refusal about checks ends with "(ignored N check entries from superseded run R ...)" or "(... from run R on head X, not the current head Y)"; a ready merge shows the same line before the approval, and `merge status` appends it to "ready". The ledger's `checks` holds the judged entries only.
+- It is applied in `check::evaluate`, which every path that reads checks goes through: `<PR>`, `--all`, `--auto`, `--batch` and the rollup's wait, `merge queue` and `merge status`.
+
+### 18.3 Options considered
+
+| Option | Kind | Why |
+| :-- | :-- | :-- |
+| (a) Ignore any `CANCELLED` entry | removes a constraint | Simple, but a job cancelled in the newest run (a timeout, a person pressing cancel) would read as green. Not adopted. |
+| (b) Judge only `ci-gate` | conventional (what the ruleset requires) | Matches GitHub, but drops every other check from the flow's own judgement, and a repository without `ci-gate` would have nothing to judge. Not adopted. |
+| (c) Keep the newest run per workflow and event on the head, judge every entry of it | named method (GitHub's own rule: the latest check run of a name on the commit counts) | **Adopted.** It drops exactly what a newer run replaced, keeps a red or cancelled job of the newest run red, and binds every judged entry to the head that `--match-head-commit` merges. |
+| (d) Also read the ruleset and require `ci-gate` when it is required | conventional | Not adopted: every judged check must already pass, which is a superset of `ci-gate` whenever `ci-gate` reports (and `ci-gate` itself needs every job); GitHub still enforces the ruleset at `gh pr merge`; and reading rulesets is an extra call that needs more permission than reading checks. The rollup keeps its own `ci-gate` requirement (§13.2). |
+
+### 18.4 Authority and limits
+
+Nothing here widens authority: the flow still merges only the derived head with `--match-head-commit`, and the new calls are read-only. Leaving an entry out can only matter when a newer run of the same workflow and event on the same head exists, and that run's own entries are then judged; an entry from another head is never counted, in either direction. Limits: a workflow that starts two runs on one head for the same event on purpose (not the case in this repository) would have its older run's distinct jobs ignored; run ids are assumed to grow with creation time, which GitHub does but does not document as a guarantee. Checked live only read-only on #909; the flow change is proven by fake-forge tests.
+
+### 18.5 Slice (one pull request; gate-changing, merged by the operator at a terminal)
+
+| Slice | Content | Hours |
+| :-- | :-- | --: |
+| S30 | §18.2: `Check` carries workflow, event and run; `Forge::run_head`; `check::current_checks` in `evaluate`; the notes; tests; the guide and the skill line | 2 |
+
+### 18.6 Acceptance criteria
+
+- **AC-30 (S30).** With a fake forge: #909's checks (a cancelled entry from an older run beside an all-green newest run) merge, and the merge and `merge status` say "ignored 1 check entry from superseded run 45430975730"; a cancelled or failed entry in the newest run refuses; an older red run superseded by a newer green run merges; a newer run still running is pending (a wait keeps polling) even when the older run was green; entries from a run on another head never count, and only such entries is "no checks yet"; a run that cannot be read, or too many runs, is an error. `gh pr checks`'s JSON with these fields is parsed, the run read from the link.

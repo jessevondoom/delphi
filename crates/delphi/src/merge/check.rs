@@ -5,6 +5,7 @@
 use super::forge::{Check, Forge, ForgeError, PrInfo};
 use super::gates::{self, Source, GATES_FILE};
 use super::record::{blake3_hex, paths_hash, spec_approval, spec_links, Attestation, Record, SpecState};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const QUEUE_LABEL: &str = "merge-queue";
 pub const REVIEW_LABEL: &str = "needs-human-review";
@@ -16,7 +17,10 @@ pub struct Verdict {
     /// The changed paths that are in the gate class; empty for an ordinary pull request.
     pub gate_hits: Vec<String>,
     pub gates_source: Source,
+    /// The checks judged: only those of the newest run of each workflow on the head (spec 094 §18).
     pub checks: Vec<Check>,
+    /// What was left out of `checks` and why ("ignored 1 check entry from superseded run 45430975730 ..."); empty when nothing was.
+    pub check_notes: Vec<String>,
     /// The first spec state (kept for callers and ledger readers that expect one).
     pub spec: SpecState,
     /// Every distinct spec the trailers name, each judged on its own; one entry (`Exempt`, `MarkdownOnly` or `Missing`) when none is named.
@@ -172,18 +176,20 @@ pub fn evaluate(forge: &dyn Forge, n: u64) -> Result<Verdict, ForgeError> {
         refusals.push(behind_reason(n, behind_by, &pr.base_ref));
     }
 
-    let checks = forge.checks(n)?;
+    // Only the newest run of each workflow on this head is judged (§18); what was left out is said, never hidden.
+    let (checks, check_notes) = current_checks(forge, &pr.head_sha, forge.checks(n)?)?;
     if checks.is_empty() {
         refusals.push(no_checks_reason(&pr.head_sha));
     } else {
         let names = |wanted: &dyn Fn(&str) -> bool| checks.iter().filter(|c| wanted(&c.bucket)).map(|c| c.name.clone()).collect::<Vec<_>>().join(", ");
         let failed = names(&|b| b == "fail" || b == "cancel");
         let pending = names(&|b| !matches!(b, "pass" | "fail" | "cancel" | "skipping"));
+        let also = if check_notes.is_empty() { String::new() } else { format!(" ({})", check_notes.join("; ")) };
         if !failed.is_empty() {
-            refusals.push(format!("checks failed: {failed}"));
+            refusals.push(format!("checks failed: {failed}{also}"));
         }
         if !pending.is_empty() {
-            refusals.push(format!("checks are still running: {pending}"));
+            refusals.push(format!("checks are still running: {pending}{also}"));
         }
     }
 
@@ -210,5 +216,52 @@ pub fn evaluate(forge: &dyn Forge, n: u64) -> Result<Verdict, ForgeError> {
     // The first Missing if any, else the first state: a single-spec reader still sees a blocked bundle as blocked.
     let spec = specs.iter().find(|s| matches!(s, SpecState::Missing(_))).or(specs.first()).cloned().expect("at least one spec state");
 
-    Ok(Verdict { pr, paths, gate_hits, gates_source, checks, spec, specs, refusals, behind_by })
+    Ok(Verdict { pr, paths, gate_hits, gates_source, checks, check_notes, spec, specs, refusals, behind_by })
+}
+
+/// At most this many distinct workflow runs are read to learn their head commit; more is an error, never a pass.
+const MAX_RUNS: usize = 16;
+
+/// Keep the checks that speak for `head` now, as GitHub's own required check does (spec 094 §18). `gh pr checks` lists, beside
+/// the newest run's jobs, any job of an older run of the same workflow whose name the newest run does not reuse: on #909 a
+/// draft-time run that GitHub cancelled when the ready run started left a `macos tests` entry, CANCELLED, next to a green run.
+///
+/// 1. Every Actions run the checks name is read for its head commit (one read-only call per distinct run, at most `MAX_RUNS`); an
+///    entry from a run on another commit is left out. A run that cannot be read is an error.
+/// 2. Of the rest, per workflow and event, only the newest run (the highest run id: GitHub numbers runs in the order they are
+///    created) is kept. An entry from an older run of the same workflow on the same head was superseded, and is left out.
+/// 3. A check with no Actions run (a status from another service) or no workflow name is always kept and judged as it is.
+///
+/// Whatever is kept is judged as before: a failed, cancelled or timed-out entry of the newest run fails, a running one is pending,
+/// none at all is "no checks yet". Returns the kept checks and one note per run left out.
+pub fn current_checks(forge: &dyn Forge, head: &str, all: Vec<Check>) -> Result<(Vec<Check>, Vec<String>), ForgeError> {
+    let runs: BTreeSet<u64> = all.iter().filter_map(|c| c.run).collect();
+    if runs.len() > MAX_RUNS {
+        return Err(ForgeError::Failed { what: "judge the checks".into(), detail: format!("they come from {} workflow runs, more than the {MAX_RUNS} this command reads", runs.len()) });
+    }
+    let mut heads: BTreeMap<u64, String> = BTreeMap::new();
+    for r in runs {
+        heads.insert(r, forge.run_head(r)?);
+    }
+    let on_head = |c: &Check| c.run.is_none_or(|r| heads.get(&r).is_some_and(|h| h == head));
+    let group = |c: &Check| c.run.filter(|_| !c.workflow.is_empty()).map(|r| ((c.workflow.clone(), c.event.clone()), r));
+    let mut newest: BTreeMap<(String, String), u64> = BTreeMap::new();
+    for (key, r) in all.iter().filter(|c| on_head(c)).filter_map(group) {
+        let n = newest.entry(key).or_insert(r);
+        *n = (*n).max(r);
+    }
+    let (mut kept, mut other_head, mut superseded) = (Vec::new(), BTreeMap::<u64, usize>::new(), BTreeMap::<u64, usize>::new());
+    for c in all {
+        if !on_head(&c) {
+            *other_head.entry(c.run.unwrap_or(0)).or_default() += 1;
+        } else if let Some((_, r)) = group(&c).filter(|(key, r)| newest.get(key) != Some(r)) {
+            *superseded.entry(r).or_default() += 1;
+        } else {
+            kept.push(c);
+        }
+    }
+    let entries = |n: usize| if n == 1 { "1 check entry".to_string() } else { format!("{n} check entries") };
+    let mut notes: Vec<String> = superseded.iter().map(|(r, n)| format!("ignored {} from superseded run {r} (a newer run of the same workflow on this head replaced it)", entries(*n))).collect();
+    notes.extend(other_head.iter().map(|(r, n)| format!("ignored {} from run {r} on head `{}`, not the current head `{}`", entries(*n), super::short(heads.get(r).map(String::as_str).unwrap_or("?")), super::short(head))));
+    Ok((kept, notes))
 }

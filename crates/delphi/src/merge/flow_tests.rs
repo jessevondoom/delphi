@@ -79,10 +79,10 @@ fn every_precondition_is_refused_with_its_reason_and_nothing_is_written_or_merge
             f.st.borrow_mut().checks.insert(7, vec![]);
         }),
         ("a failed check", "checks failed: ui", |f| {
-            f.st.borrow_mut().checks.insert(7, vec![Check { name: "ui".into(), bucket: "fail".into() }]);
+            f.st.borrow_mut().checks.insert(7, vec![Check { name: "ui".into(), bucket: "fail".into(), ..Default::default() }]);
         }),
         ("a running check", "still running: test", |f| {
-            f.st.borrow_mut().checks.insert(7, vec![Check { name: "test".into(), bucket: "pending".into() }]);
+            f.st.borrow_mut().checks.insert(7, vec![Check { name: "test".into(), bucket: "pending".into(), ..Default::default() }]);
         }),
         ("a draft spec on the base", "is not approved on main", |f| {
             f.st.borrow_mut().files.insert(("main".into(), SPEC_PATH.into()), DRAFT_SPEC.into());
@@ -427,7 +427,7 @@ fn a_refusal_that_is_a_problem_is_logged_with_its_class_and_one_that_is_just_wai
     let w = world();
     w.forge.with_ready_pr(7, "head7", &["a.rs"]);
     w.forge.edit(7, |p| p.mergeable = "CONFLICTING".into());
-    w.forge.st.borrow_mut().checks.insert(7, vec![Check { name: "ui".into(), bucket: "fail".into() }]);
+    w.forge.st.borrow_mut().checks.insert(7, vec![Check { name: "ui".into(), bucket: "fail".into(), ..Default::default() }]);
     let out = with_ctx(&w, &mut FakeTerminal::new(false, &[]), Some("merge #7"), false, |c| merge_one(c, 7, None));
     assert!(matches!(out, Outcome::Refused { .. }));
     assert_eq!(error_classes(&w), vec![(7, "conflict".to_string(), "open".to_string(), 1), (7, "ci-red".to_string(), "open".to_string(), 1)]);
@@ -438,7 +438,7 @@ fn a_refusal_that_is_a_problem_is_logged_with_its_class_and_one_that_is_just_wai
         p.is_draft = true;
         p.labels.clear();
     });
-    w2.forge.st.borrow_mut().checks.insert(8, vec![Check { name: "t".into(), bucket: "pending".into() }]);
+    w2.forge.st.borrow_mut().checks.insert(8, vec![Check { name: "t".into(), bucket: "pending".into(), ..Default::default() }]);
     with_ctx(&w2, &mut FakeTerminal::new(false, &[]), Some("merge #8"), false, |c| merge_one(c, 8, None));
     assert!(error_classes(&w2).is_empty(), "{:?}", error_classes(&w2));
 }
@@ -575,7 +575,7 @@ fn a_behind_pull_request_can_still_be_queued_and_status_names_it_as_behind() {
     w.forge.with_ready_pr(2, "h2", &["a.rs"]);
     w.forge.edit(2, |p| p.labels.clear());
     w.forge.st.borrow_mut().behind.insert("h2".into(), 1);
-    w.forge.st.borrow_mut().checks.insert(2, vec![Check { name: "ui".into(), bucket: "fail".into() }]);
+    w.forge.st.borrow_mut().checks.insert(2, vec![Check { name: "ui".into(), bucket: "fail".into(), ..Default::default() }]);
     assert!(queue_one(&w.forge, 2).unwrap_err().contains("checks failed"));
 }
 

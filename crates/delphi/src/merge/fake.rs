@@ -47,6 +47,10 @@ pub struct State {
     /// With `red_when`: an opened rollup's `ci-gate` stays pending until `finish_ci` (CI that takes a poll; spec 094 S22).
     pub ci_later: bool,
     pub ci_running: BTreeMap<u64, Vec<Check>>,
+    /// The head commit of each Actions run (spec 094 §18); a run not listed cannot be read.
+    pub run_heads: BTreeMap<u64, String>,
+    /// How many times a run's head was read.
+    pub run_head_reads: usize,
 }
 
 #[derive(Default)]
@@ -84,7 +88,7 @@ impl FakeForge {
             },
         );
         s.paths.insert(n, paths.iter().map(|p| p.to_string()).collect());
-        s.checks.insert(n, vec![Check { name: "test".into(), bucket: "pass".into() }, Check { name: "ui".into(), bucket: "pass".into() }]);
+        s.checks.insert(n, vec![Check { name: "test".into(), bucket: "pass".into(), ..Default::default() }, Check { name: "ui".into(), bucket: "pass".into(), ..Default::default() }]);
         s.files.insert(("main".into(), SPEC_PATH.into()), APPROVED_SPEC.into());
         s.files.insert((head.into(), SPEC_PATH.into()), APPROVED_SPEC.into());
     }
@@ -123,6 +127,11 @@ impl Forge for FakeForge {
     }
     fn checks(&self, n: u64) -> Result<Vec<Check>, ForgeError> {
         Ok(self.st.borrow().checks.get(&n).cloned().unwrap_or_default())
+    }
+    fn run_head(&self, run: u64) -> Result<String, ForgeError> {
+        let mut s = self.st.borrow_mut();
+        s.run_head_reads += 1;
+        s.run_heads.get(&run).cloned().ok_or(ForgeError::Failed { what: "read a workflow run".into(), detail: format!("HTTP 404: no run {run}") })
     }
     fn file_at(&self, git_ref: &str, path: &str) -> Result<Option<String>, ForgeError> {
         Ok(self.st.borrow().files.get(&(git_ref.to_string(), path.to_string())).cloned())
@@ -204,13 +213,13 @@ impl Forge for FakeForge {
         let checks = match super::rollup::parse_manifest(body) {
             Ok(m) if !s.red_when.is_empty() => {
                 let red = s.red_when.iter().any(|set| set.iter().all(|k| m.prs.iter().any(|p| p.0 == *k)));
-                vec![Check { name: "test".into(), bucket: "pass".into() }, Check { name: "ci-gate".into(), bucket: if red { "fail" } else { "pass" }.into() }]
+                vec![Check { name: "test".into(), bucket: "pass".into(), ..Default::default() }, Check { name: "ci-gate".into(), bucket: if red { "fail" } else { "pass" }.into(), ..Default::default() }]
             }
             _ => s.checks_on_open.clone(),
         };
         let checks = if s.ci_later {
             s.ci_running.insert(n, checks);
-            vec![Check { name: "ci-gate".into(), bucket: "pending".into() }]
+            vec![Check { name: "ci-gate".into(), bucket: "pending".into(), ..Default::default() }]
         } else {
             checks
         };

@@ -140,7 +140,7 @@ fn a_gate_changing_draft_red_or_unapproved_pull_request_is_never_chosen_and_the_
     }
     forge.st.borrow_mut().paths.insert(1, vec!["AGENTS.md".into()]);
     forge.edit(2, |p| p.is_draft = true);
-    forge.st.borrow_mut().checks.insert(3, vec![Check { name: "test".into(), bucket: "fail".into() }]);
+    forge.st.borrow_mut().checks.insert(3, vec![Check { name: "test".into(), bucket: "fail".into(), ..Default::default() }]);
     ready(&forge, 4, "b4", &format!("{:040x}", 4), &["src/x.rs"], Some(OTHER_SPEC));
     forge.st.borrow_mut().files.insert(("main".into(), OTHER_SPEC.into()), DRAFT_SPEC.into());
     forge.edit(5, |p| p.labels.clear());

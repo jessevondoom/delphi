@@ -29,7 +29,7 @@ pub(super) fn world() -> (Fixture, FakeForge, String, String) {
         let mut s = forge.st.borrow_mut();
         s.origin = Some(f.origin.clone());
         // CI has not finished on a rollup just opened; a test makes it green or red.
-        s.checks_on_open = vec![Check { name: "test".into(), bucket: "pass".into() }, Check { name: "ci-gate".into(), bucket: "pending".into() }];
+        s.checks_on_open = vec![Check { name: "test".into(), bucket: "pass".into(), ..Default::default() }, Check { name: "ci-gate".into(), bucket: "pending".into(), ..Default::default() }];
     }
     (f, forge, h1, h2)
 }
@@ -158,7 +158,7 @@ fn a_constituent_whose_head_moved_since_the_approval_makes_the_rollup_stale() {
 // ---- S20: merging (AC-20) ----
 
 fn checks(forge: &FakeForge, gate: &str) {
-    let c = vec![Check { name: "test".into(), bucket: "pass".into() }, Check { name: "ci-gate".into(), bucket: gate.into() }];
+    let c = vec![Check { name: "test".into(), bucket: "pass".into(), ..Default::default() }, Check { name: "ci-gate".into(), bucket: gate.into(), ..Default::default() }];
     let mut s = forge.st.borrow_mut();
     s.checks.insert(ROLLUP, c.clone());
     s.checks_on_open = c;
@@ -214,7 +214,7 @@ fn a_red_or_pending_rollup_or_one_without_ci_gate_is_never_merged() {
     opened(&f, &forge);
     checks(&forge, "pending");
     assert!(refusal(&f, &forge).iter().any(|r| r.contains("have not finished")));
-    forge.st.borrow_mut().checks.insert(ROLLUP, vec![Check { name: "test".into(), bucket: "pass".into() }]);
+    forge.st.borrow_mut().checks.insert(ROLLUP, vec![Check { name: "test".into(), bucket: "pass".into(), ..Default::default() }]);
     assert!(refusal(&f, &forge).iter().any(|r| r.contains("`ci-gate` has not passed")));
     assert!(forge.st.borrow().closed.is_empty(), "neither is red, so neither is bisected");
     // Red: bisected (S21), never merged.
