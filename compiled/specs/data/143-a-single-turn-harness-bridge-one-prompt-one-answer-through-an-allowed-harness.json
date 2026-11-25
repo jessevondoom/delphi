@@ -52,99 +52,111 @@
     },
     {
       "level": 3,
-      "line": 102,
+      "line": 106,
       "number": "2.3",
       "title": "Cost, concurrency and timeouts"
     },
     {
       "level": 3,
-      "line": 116,
+      "line": 124,
       "number": "2.4",
       "title": "Ratification"
     },
     {
       "level": 3,
-      "line": 122,
+      "line": 130,
       "number": "2.5",
       "title": "The alternative: an API-key endpoint"
     },
     {
       "level": 3,
-      "line": 126,
+      "line": 134,
       "number": "2.6",
       "title": "Page drafts: the first draft's proposal stands"
     },
     {
       "level": 3,
-      "line": 130,
+      "line": 138,
       "number": "2.7",
       "title": "Failures the operator can see"
     },
     {
       "level": 3,
-      "line": 139,
+      "line": 147,
       "number": "2.8",
       "title": "Starting a job by hand, and choosing which jobs run by themselves"
     },
     {
       "level": 3,
-      "line": 168,
+      "line": 177,
       "number": "2.9",
       "title": "The token"
     },
     {
       "level": 2,
-      "line": 176,
+      "line": 185,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 190,
+      "line": 199,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 207,
+      "line": 218,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 231,
+      "line": 246,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 272,
+      "line": 295,
       "number": "6.1",
       "title": "Premortem (three months after release): how this most likely fails"
     },
     {
       "level": 2,
-      "line": 285,
+      "line": 308,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 300,
+      "line": 326,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 312,
+      "line": 339,
       "number": "9",
       "title": "Review"
+    },
+    {
+      "level": 3,
+      "line": 357,
+      "number": "9.1",
+      "title": "Panel `t_0004`"
+    },
+    {
+      "level": 3,
+      "line": 377,
+      "number": "9.2",
+      "title": "Council `t_0002`: what was not adopted"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/143-a-single-turn-harness-bridge-one-prompt-one-answer-through-an-allowed-harness.md",
-    "sha256": "194ab6524592b225adbd80564cdc30bee0ec83e03c78e67c018aa73eccdb26b8"
+    "sha256": "96052f0838b97ea73f3dbeddebafe5c8a5bf696d04abca53c9207cfe3790c0c2"
   },
   "source_status_at_hash": {
     "line": {
@@ -157,7 +169,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "194ab6524592b225adbd80564cdc30bee0ec83e03c78e67c018aa73eccdb26b8",
+    "sha256": "96052f0838b97ea73f3dbeddebafe5c8a5bf696d04abca53c9207cfe3790c0c2",
     "word": "draft"
   },
   "spec": {
@@ -172,10 +184,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 5113,
+      "end": 5479,
       "end_line": 34,
       "line": 27,
-      "start": 3094
+      "start": 3460
     },
     "text": "| # | Finding of step 0 (2026-11-25), with the code on origin/main 52bdd3b8 | Where |\n| :-- | :-- | :-- |\n| O1 | **No usable model route.** Every live endpoint on the operator's install is `path = \"harness\"`. The writer and the validator ask for single turns (`turn_by_turn`), and routing rules a harness out for that: \"a harness runs whole spans, not single turns\". So `writer_key()` is `None` and every topic rebuild fails with \"no model is available for the writer right now\". | `page_run.rs:102-109`, `:322`; `route.rs:272-274` |\n| O2 | The same rule blocks every caller that makes one call and reads one answer: the page validator, session summaries, the scout's own calls, the fact judge, the decision brief and library acquisition. Seven files ask for `turn_by_turn`. | `library_page_validate.rs`, `summary.rs`, `research.rs`, `fact_judge.rs`, `decision_run.rs`, `library_acquire_run.rs`, `page_run.rs` |\n| O3 | **The failure is hidden.** An idle rebuild that fails writes `topic_rebuild_failed` at `warn`; the default level is `error`. Nothing reaches the log, the console, the brief or `delphi doctor`. | `service.rs:3116`; `elog.rs:17`, `:111` |\n| O4 | **A rewrite kept the writer's `<!-- page: ... -->` line**, so every second attempt failed the mechanical check and every page ended as the claims alone. Fixed in commit `c1fca8ca` on the local branch `step0/live-proof`, which also makes `delphi doctor` warn when every allowed endpoint is a harness. That commit is not on main. | `library_page_validate.rs`, `doctor.rs` (in `c1fca8ca`) |\n| O5 | With a route supplied by a loopback shim that ran `claude -p`, pages were written end to end. So one prompt and one answer through the CLI is enough for these callers. | step 0 |\n| O6 | A single call already has one entry point, with no tools, no span, no card and no budget reservation; and the harness launcher already runs a CLI with one prompt on standard input and its tools turned off. | `summary.rs:166`; `harness.rs:63`, `:1084-1101`, `:1226`, `:1246` |"
   }
