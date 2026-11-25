@@ -1,0 +1,158 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 141: Labels enforced at the sinks"
+    },
+    {
+      "level": 2,
+      "line": 24,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 44,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 53,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 3,
+      "line": 58,
+      "number": "1.3",
+      "title": "Options considered"
+    },
+    {
+      "level": 2,
+      "line": 68,
+      "number": "2",
+      "title": "Design"
+    },
+    {
+      "level": 3,
+      "line": 70,
+      "number": "2.1",
+      "title": "The label"
+    },
+    {
+      "level": 3,
+      "line": 87,
+      "number": "2.2",
+      "title": "Where the label is kept"
+    },
+    {
+      "level": 3,
+      "line": 98,
+      "number": "2.3",
+      "title": "One check"
+    },
+    {
+      "level": 3,
+      "line": 104,
+      "number": "2.4",
+      "title": "The sinks and their policy"
+    },
+    {
+      "level": 3,
+      "line": 126,
+      "number": "2.5",
+      "title": "Web queries: a notice, never a refusal"
+    },
+    {
+      "level": 3,
+      "line": 133,
+      "number": "2.6",
+      "title": "The lift: private and internal research on local pages"
+    },
+    {
+      "level": 2,
+      "line": 144,
+      "number": "3",
+      "title": "Authority"
+    },
+    {
+      "level": 2,
+      "line": 152,
+      "number": "4",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 167,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 183,
+      "number": "6",
+      "title": "Verification plan"
+    },
+    {
+      "level": 3,
+      "line": 217,
+      "number": "6.1",
+      "title": "Premortem (three months after release): how this most likely fails"
+    },
+    {
+      "level": 2,
+      "line": 230,
+      "number": "7",
+      "title": "What is not verified"
+    },
+    {
+      "level": 2,
+      "line": 239,
+      "number": "8",
+      "title": "Decisions for the operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/141-labels-enforced-at-the-sinks-max-label-inheritance-and-private-research-on-local-pages.md",
+    "sha256": "17442a151cea7ec87a5d62a5e10feb21fa2748182eb1b1094dcc74763df89cb8"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 270,
+        "end_line": 6,
+        "line": 6,
+        "start": 257
+      },
+      "text": "status: draft"
+    },
+    "sha256": "17442a151cea7ec87a5d62a5e10feb21fa2748182eb1b1094dcc74763df89cb8",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "governance-and-safety",
+    "number": "141",
+    "stem": "141-labels-enforced-at-the-sinks-max-label-inheritance-and-private-research-on-local-pages",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "141: Labels enforced at the sinks: max-label inheritance, and private research on local pages"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2881,
+      "end_line": 26,
+      "line": 26,
+      "start": 2746
+    },
+    "text": "**The operator's rulings, 2026-11-25** (as relayed by the coordinating session; they narrow the two P0 findings the Council escalated):"
+  }
+}
