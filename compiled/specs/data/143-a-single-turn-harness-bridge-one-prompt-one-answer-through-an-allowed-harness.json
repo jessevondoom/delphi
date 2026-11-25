@@ -148,7 +148,7 @@
     },
     {
       "level": 3,
-      "line": 377,
+      "line": 378,
       "number": "9.2",
       "title": "Council `t_0002`: what was not adopted"
     }
@@ -156,7 +156,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/143-a-single-turn-harness-bridge-one-prompt-one-answer-through-an-allowed-harness.md",
-    "sha256": "96052f0838b97ea73f3dbeddebafe5c8a5bf696d04abca53c9207cfe3790c0c2"
+    "sha256": "0b66cce787fdfefa7a8ca0b693f54164146512fa6640d32b51905c40a3c1eabe"
   },
   "source_status_at_hash": {
     "line": {
@@ -169,7 +169,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "96052f0838b97ea73f3dbeddebafe5c8a5bf696d04abca53c9207cfe3790c0c2",
+    "sha256": "0b66cce787fdfefa7a8ca0b693f54164146512fa6640d32b51905c40a3c1eabe",
     "word": "draft"
   },
   "spec": {
