@@ -232,6 +232,19 @@ pub enum Outcome {
     Pass,
     PassContested,
     ClaimsOnly,
+    /// A seed page (`specs/139` §2.2 item 2): assembled by code from the research notes; no writer wrote it and the validator did not run.
+    Seed,
+}
+
+impl Outcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Outcome::Pass => "pass",
+            Outcome::PassContested => "pass_contested",
+            Outcome::ClaimsOnly => "claims_only",
+            Outcome::Seed => "seed",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -260,7 +273,7 @@ pub struct PageVerdict {
 impl PageVerdict {
     pub fn to_json(&self) -> Value {
         json!({
-            "result": match self.outcome { Outcome::Pass => "pass", Outcome::PassContested => "pass_contested", Outcome::ClaimsOnly => "claims_only" },
+            "result": self.outcome.as_str(),
             "reason": self.reason, "model": self.model, "family": self.family, "tokens": self.tokens, "rewrites": self.rewrites, "at": self.at,
             "assertions": self.assertions.iter().map(|a| json!({"text": a.text, "judgement": a.judgement.as_str(), "record": a.record, "result": a.result})).collect::<Vec<_>>(),
             "figure_failures": self.figure_failures,

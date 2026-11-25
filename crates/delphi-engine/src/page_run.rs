@@ -300,6 +300,17 @@ impl Engine {
         tokio::task::spawn_blocking(move || crate::topic_gather::gather(&Library::in_home(&home), &home, &ws, &side)).await.unwrap_or_default()
     }
 
+    /// A topic's seed (`specs/139` §2.1): its linked rows and what the retrieval service finds for it, on a blocking thread. Reads only.
+    pub async fn topic_seed(&self, side: &serde_json::Value) -> crate::topic_seed::Seed {
+        let (home, ws, side) = (self.ws.home.clone(), self.ws.dir.clone(), side.clone());
+        tokio::task::spawn_blocking(move || {
+            let ids = crate::query_guard::identifiers(&ws);
+            crate::topic_seed::assemble(&Library::in_home(&home), &home, &ws, &side, &crate::topic_seed::Assemble { identifiers: &ids, search: true })
+        })
+        .await
+        .unwrap_or_default()
+    }
+
     /// Rebuild one topic's page now (`specs/117` §2 item 2): the operator's `delphi pages rebuild`, or the idle rebuild. The writer and the
     /// validator are the search page's; the validator's tokens are journalled against the background share, as a search page's are.
     pub async fn topic_rebuild(self: &Arc<Self>, slug: &str) -> Result<crate::library::topics::TopicEntry, String> {
@@ -317,11 +328,16 @@ impl Engine {
         let side = lib.topic_side(slug).ok_or_else(|| format!("no topic `{}`", slug))?;
         let now = (self.clock_unix)();
         let gathered = self.topic_material(&side).await;
+        let seed = self.topic_seed(&side).await;
         // The page check resolves `[s-kb-...]` and `[f-...]` against these records and nothing else.
         let gaps = lib.topic_gaps(&side, &self.ws.dir);
         let slugs = lib.topic_slugs();
         let lib = lib.with_records(gathered.records.clone()).with_topic_slugs(slugs);
-        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        // No writer can be reached (an install with only harnesses, `specs/139` O7): the page is the seed, which calls no model.
+        let Some(key) = self.writer_key() else {
+            let req = crate::library::topics::SeedRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, seed: &seed, held: &crate::topic_seed::NoHeldText, gaps: &gaps, cancel };
+            return lib.topic_seed_build(req);
+        };
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
         let ledger = self.validator.ledger();
@@ -329,7 +345,7 @@ impl Engine {
         let week = crate::fact_serve::shares_of(&self.ws.dir, "pages").install_week;
         let gate = move || share_allows(&state, week, now);
         let before = ledger.spent();
-        let req = crate::library::topics::TopicRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, gathered, gaps, cancel };
+        let req = crate::library::topics::TopicRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, gathered, gaps, seed, held: &crate::topic_seed::NoHeldText, cancel };
         let built = lib.topic_rebuild(req, &writer, &validator, &ledger, &gate).await;
         // Written whether the rebuild was built, failed or was stopped after its writer was called: the tokens were spent.
         let used = ledger.spent().saturating_sub(before);
@@ -366,21 +382,29 @@ impl Engine {
 mod tests {
     use crate::testkit::*;
 
-    /// `specs/117` §2 item 3: the idle rebuild does nothing with `auto_rebuild = false`, builds a due topic otherwise, and then has
-    /// nothing left to do. A topic with no material is the claims page, so no model is called.
+    /// `specs/117` §2 item 3 with `specs/139` §2.2: the idle rebuild does nothing with `auto_rebuild = false`, builds a due topic
+    /// otherwise, and then has nothing left to do. A topic with nothing gathered gets its seed page, so no model is called (AC-3); a topic
+    /// with no span is waiting for material and gets no page (AC-4).
     #[tokio::test]
     async fn the_idle_rebuild_builds_a_due_topic_only_when_it_is_on() {
+        use crate::research_record::{Asker, Begin, Topic};
         let f = setup(vec![], 5.0, |_| {});
         let lib = crate::library::Library::in_home(&f.engine.ws.home);
         lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        assert!(f.engine.topic_idle_rebuild().await.is_none(), "a topic with no span waits for material");
+        let t = Topic::begin(&f.engine.ws.dir, &Begin { question: "How do zyxquor lamps vromble?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
+        t.finish("r-1", "done", Some(&serde_json::json!({"answer": "Zyxquor lamps vromble on a mercury bath.\n\nThey turn once a minute.", "claims": []})), &[], None, 0).unwrap();
         let off = crate::testkit::CONFIG.replace("[access]", "[library.pages]\nauto_rebuild = false\n[access]");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&off).unwrap());
         assert!(f.engine.topic_idle_rebuild().await.is_none(), "off: nothing is rebuilt");
-        assert!(std::fs::read(lib.root().join("pages/lighthouse-lamps.md")).is_err());
         f.engine.cfg.set(delphi_adapter::config::Config::parse(crate::testkit::CONFIG).unwrap());
         let built = f.engine.topic_idle_rebuild().await.expect("a due topic").expect("built");
-        assert_eq!((built.slug.as_str(), built.version, built.outcome.as_deref()), ("lighthouse-lamps", 1, Some("claims_only")));
+        assert_eq!((built.slug.as_str(), built.version, built.outcome.as_deref()), ("how-do-zyxquor-lamps-vromble", 1, Some("seed")));
+        let md = std::fs::read_to_string(lib.root().join("pages/how-do-zyxquor-lamps-vromble.md")).unwrap();
+        assert!(md.contains(crate::topic_seed::SEED_BANNER) && md.contains("Zyxquor lamps vromble on a mercury bath."), "{md}");
         assert!(f.engine.topic_idle_rebuild().await.is_none(), "nothing is due any more");
+        assert!(std::fs::read(lib.root().join("pages/lighthouse-lamps.md")).is_err(), "no stub");
         assert_eq!(f.model.requests().len(), 0);
+        assert_eq!(lib.pages_today(u64::MAX / 2), 0, "a seed counts against no page budget");
     }
 }

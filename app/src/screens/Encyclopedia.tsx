@@ -428,6 +428,7 @@ function TopicView({ bridge, go, way, topics, marksSaid, slug, version, research
           {page.markdown && <span className="chip line">{version ? `an earlier version${number ? ` (${number})` : ''}` : `version ${page.version}`}</span>}
           {built && <span className="time">built {built}</span>}
           {page.outcome === 'claims_only' && <span className="chip warn">claims only: the draft did not pass its checks</span>}
+          {page.outcome === 'seed' && <span className="chip warn">seed draft: assembled by code from research notes, not written up and not validated</span>}
           {page.outcome === 'pass_contested' && <span className="chip warn">cites a contested claim</span>}
           {!version && page.due && <span className="chip warn">due: {page.due}</span>}
           {page.valid_until_date && <span className="time">looked at again by {page.valid_until_date}</span>}

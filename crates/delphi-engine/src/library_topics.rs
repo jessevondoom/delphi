@@ -8,6 +8,11 @@
 //! and `.json`, so the versions are listed and readable; the new record carries one line, computed by code from the two texts,
 //! that says what changed (`3 statements added, 1 source replaced`). Nothing in the line is a model's.
 //!
+//! **Seeded** (`specs/139` §2.2; slice B). When the writer has nothing gathered, or no writer can be reached, the page is the topic's
+//! seed ([`Library::topic_seed_build`]): the research's own words, assembled and checked by code, with outcome `seed` and its own banner.
+//! It calls no model and counts against no budget. A topic with no span gets no page: it is `waiting for material`. The stub that said
+//! the library held nothing is no longer written.
+//!
 //! **Due.** A page is due when it has never been built, a claim or source it was built from changed or left the library, a
 //! claim of one of its research topics is not yet in it, or its lifetime has passed ([`Library::topic_due`]). The daemon rebuilds
 //! due pages while it is idle, within `[library.pages] per_day`, unless `auto_rebuild = false`; the operator can always ask
@@ -24,7 +29,8 @@
 use super::page_check::{blocks, markers, norm, strip_markers};
 use super::page_meta::{self, Depth, Front};
 use super::page_search::{claim_print, clean_draft, norm_ws, source_print, Gathered};
-use super::page_validate::{CheckedPage, Outcome, PageValidator, PageWriter};
+use super::page_check::Cite;
+use super::page_validate::{CheckedPage, Outcome, PageValidator, PageVerdict, PageWriter};
 use super::pages::{slug, Scope};
 use super::*;
 use crate::fact_judge::TokenLedger;
@@ -104,16 +110,25 @@ pub struct TopicEntry {
     pub cited: Vec<String>,
     /// Why the page is due for a rebuild, or `None`.
     pub due: Option<String>,
+    /// Never built, and its research gives its seed nothing: listed as `waiting for material` (`specs/139` §2.2 item 4).
+    pub waiting: bool,
     /// The record as stored, for the fields later slices add.
     pub side: Value,
 }
 
 impl TopicEntry {
+    /// Set `waiting` from the due check just made: never built, the workspace known, and not due.
+    fn with_waiting(mut self, ctx: Option<&DueCtx<'_>>) -> TopicEntry {
+        self.waiting = self.built.is_none() && self.due.is_none() && ctx.is_some_and(|c| c.ws.is_some());
+        self
+    }
+
     pub fn to_json(&self) -> Value {
         let mut v = json!({
             "slug": self.slug, "title": self.title, "origin": self.origin, "research_topics": self.research_topics, "created": self.created,
             "built": self.built, "version": self.version, "change": self.change, "outcome": self.outcome, "valid_until": self.valid_until,
             "valid_until_date": self.valid_until.map(page_meta::ymd), "cited": self.cited, "due": self.due, "status": "generated",
+            "waiting": self.waiting,
         });
         for k in ["key_terms", "start_here", "see_also", "open_questions", "links", "records"] {
             if !self.side[k].is_null() {
@@ -143,10 +158,31 @@ pub struct TopicRequest<'a> {
     pub gathered: Gathered,
     /// The gaps of the topic's research records: the page's open questions, written by the daemon ([`Library::topic_gaps`]).
     pub gaps: Vec<String>,
+    /// The topic's seed (`specs/139` §2.1), assembled by the caller (`topic_seed::assemble`): the page when nothing is gathered.
+    pub seed: crate::topic_seed::Seed,
+    /// The held-text predicate the seed page is checked with (`specs/142` §2.5 item 4; [`crate::topic_seed::NoHeldText`] until it exists).
+    pub held: &'a dyn crate::topic_seed::HeldText,
     /// A rebuild the desktop app asked for can be stopped by revoking its key (`specs/120` §2 item 8 as amended by `specs/129`
     /// §10.2). The flag is read where the rebuild asks its gate, before the writer's model call, and once more before the page file is
     /// written; past that last check the rebuild runs to its end. `None`: nothing can stop it.
     pub cancel: Option<&'a Cancel>,
+}
+
+/// What a seed page is built from (`specs/139` §2.2): no writer, no validator, no budget.
+pub struct SeedRequest<'a> {
+    pub slug: &'a str,
+    pub now: u64,
+    pub settings: &'a PagesConfig,
+    pub style: bib::Format,
+    pub seed: &'a crate::topic_seed::Seed,
+    pub held: &'a dyn crate::topic_seed::HeldText,
+    pub gaps: &'a [String],
+    pub cancel: Option<&'a Cancel>,
+}
+
+/// What a rebuild says for a topic whose seed has no span (`specs/139` §2.2 item 4). No page is written.
+pub fn waiting_message() -> String {
+    format!("{}: no research answer, finding or note gives this topic's seed anything yet, so no page is written", crate::topic_seed::WAITING)
 }
 
 /// What [`Library::topic_rebuild`] says when its [`Cancel`] stopped it.
@@ -489,8 +525,10 @@ impl Library {
             valid_until: side["valid_until"].as_u64(),
             cited: strs("cited"),
             due: due.and_then(|d| self.topic_due(side, d)),
+            waiting: false,
             side: side.clone(),
         }
+        .with_waiting(due)
     }
 
     /// Every topic, by slug, with why each is due. Reads only.
@@ -528,9 +566,37 @@ impl Library {
     }
 
     /// Why a topic's page is due for a rebuild (§2 item 3), or `None`. Reads only.
+    ///
+    /// A topic never built is due unless, with the workspace known, its research gives its seed nothing: it is then waiting for material
+    /// (`specs/139` §2.2 item 4), and stays so until a research run gives it some. A seed page is due when a span it was built from
+    /// changed or went, or a linked row of its seed now offers more than it did (`specs/139` §4 slice B: the due check reads span hashes).
     pub fn topic_due(&self, side: &Value, ctx: &DueCtx<'_>) -> Option<String> {
         if side["built"].as_u64().is_none() {
+            if let Some(ws) = ctx.ws {
+                if crate::topic_seed::assemble_linked(self, ws, side).is_empty() {
+                    return None;
+                }
+            }
             return Some("not built yet".into());
+        }
+        if let (Some(stored), Some(ws)) = (side["seed"].as_array(), ctx.ws) {
+            use crate::topic_seed::Row;
+            let now = crate::topic_seed::assemble_linked(self, ws, side);
+            let current: BTreeMap<&str, &str> = now.spans.iter().map(|s| (s.label.as_str(), s.hash.as_str())).collect();
+            for s in stored.iter().filter(|s| s["row"].as_u64() != Some(Row::Search.number() as u64)) {
+                let label = s["label"].as_str().unwrap_or("");
+                match current.get(label) {
+                    None => return Some(format!("`{}` is gone from the research its seed was assembled from", label)),
+                    Some(h) if *h != s["hash"].as_str().unwrap_or("") => return Some(format!("`{}` changed", label)),
+                    _ => {}
+                }
+            }
+            for r in Row::ALL.into_iter().filter(|r| *r != Row::Search) {
+                let was = side["seed_offered"][r.number() - 1].as_u64().unwrap_or(0) as usize;
+                if now.offered[r.number() - 1] > was {
+                    return Some(format!("its seed has new material ({})", r.name()));
+                }
+            }
         }
         let mut held: BTreeSet<String> = BTreeSet::new();
         for m in side["material"].as_array().into_iter().flatten() {
@@ -618,10 +684,12 @@ impl Library {
         let side = self.topic_side(r.slug).ok_or_else(|| format!("no topic `{}`", r.slug))?;
         let title = side["title"].as_str().unwrap_or(r.slug).to_string();
         let g = r.gathered;
+        // Nothing for a writer: the page is the seed, or no page at all (`specs/139` §2.2 item 4). No stub is written.
+        if g.is_empty() {
+            return self.topic_seed_build(SeedRequest { slug: r.slug, now: r.now, settings: r.settings, style: r.style, seed: &r.seed, held: r.held, gaps: &r.gaps, cancel: r.cancel });
+        }
         let mut proposal = None;
-        let checked = if g.is_empty() {
-            self.claims_only_page(&title, "the library holds nothing on this topic yet", None, Vec::new(), 0, r.style, SCOPE)?
-        } else {
+        let checked = {
             if self.pages_today(r.now) >= r.settings.per_day {
                 return Err(format!("today's page budget ({} pages) is spent; the topic stays due", r.settings.per_day));
             }
@@ -645,7 +713,60 @@ impl Library {
         if r.cancel.is_some_and(|c| !c.commit()) {
             return Err(CANCELLED.into());
         }
-        self.topic_store(r.slug, side, &g, checked, proposal.as_ref(), r.now, r.settings, &r.gaps)
+        self.topic_store(r.slug, side, &g, checked, proposal.as_ref(), r.now, r.settings, &r.gaps, None)
+    }
+
+    /// Write a topic's seed page (`specs/139` §2.2): rendered and checked by code (`topic_seed::seed_page`), outcome `seed`, its own
+    /// banner, the bibliography the daemon writes. No model is called, no token spent, and it does not count against `per_day`. A seed
+    /// with no span writes no page (`waiting for material`); a seed whose every block fails its check writes none either and says
+    /// `check_failed`. The page it replaces becomes a version, as any rebuild's does.
+    pub fn topic_seed_build(&self, r: SeedRequest<'_>) -> Result<TopicEntry, String> {
+        if !r.settings.enabled {
+            return Err("generated pages are off ([library.pages] enabled = false)".into());
+        }
+        let side = self.topic_side(r.slug).ok_or_else(|| format!("no topic `{}`", r.slug))?;
+        if r.seed.is_empty() {
+            self.log("topic_waiting", json!({"slug": r.slug}));
+            return Err(waiting_message());
+        }
+        let title = side["title"].as_str().unwrap_or(r.slug).to_string();
+        let page = match crate::topic_seed::seed_page(&title, r.seed, r.held) {
+            Ok(p) => p,
+            Err(dropped) => {
+                // `check_failed` (`specs/143` §2.7 names the notice; until it exists the cause is the library's log and this error).
+                self.log("topic_seed_check_failed", json!({"slug": r.slug, "dropped": dropped.iter().map(|(l, why)| json!({"label": l, "reason": why})).collect::<Vec<_>>()}));
+                return Err(format!("check_failed: every block of the seed failed its check ({}); the topic is {}", dropped.first().map(|(l, why)| format!("`{}`: {}", l, why)).unwrap_or_default(), crate::topic_seed::WAITING));
+            }
+        };
+        if r.cancel.is_some_and(|c| c.stopped() || !c.commit()) {
+            return Err(CANCELLED.into());
+        }
+        // The bibliography resolves the seed's spans as records, and names the sources read that gave no span.
+        let lib = Library { root: self.root.clone(), support: self.support.clone(), retractions: self.retractions.clone(), records: r.seed.records(), topic_slugs: None };
+        let mut cited: Vec<Cite> = Vec::new();
+        for c in markers(&page.body).into_iter().chain(r.seed.named_sources.iter().map(|id| Cite { id: id.clone(), source: true, shown: None })) {
+            if !cited.iter().any(|x| x.label() == c.label()) {
+                cited.push(c);
+            }
+        }
+        let markdown = format!("{}\n\n{}\n{}", crate::topic_seed::SEED_BANNER, page.body, lib.bibliography_table(&cited, r.style, SCOPE));
+        let at = delphi_core::time::now_rfc3339().chars().take(10).collect::<String>();
+        let reason = "a seed draft: no writer has expanded it yet".to_string();
+        let verdict = PageVerdict { outcome: Outcome::Seed, reason: Some(reason), model: String::new(), family: String::new(), tokens: 0, rewrites: 0, assertions: Vec::new(), figure_failures: Vec::new(), at };
+        let hash = crate::topic_gather::text_hash(&markdown);
+        let checked = CheckedPage { page: super::pages::Page { topic: title, validated: Vec::new(), noted: Vec::new(), sources: r.seed.named_sources.clone(), withheld: 0, hash, markdown, cached: false, flags: Vec::new(), figure_failures: Vec::new() }, verdict };
+        // The material a due check compares by the index: the search rows' records and the claims, as for a written page.
+        let used: BTreeSet<&str> = page.cited.iter().map(String::as_str).collect();
+        let mut g = Gathered::default();
+        for s in r.seed.spans.iter().filter(|s| used.contains(s.label.as_str())) {
+            match s.row {
+                crate::topic_seed::Row::Search => g.records.extend(s.to_record()),
+                crate::topic_seed::Row::Claim => g.claims.extend(self.claim(&s.label)),
+                _ => {}
+            }
+        }
+        let dropped: Vec<Value> = page.dropped.iter().map(|(l, why)| json!({"label": l, "reason": why})).collect();
+        self.topic_store(r.slug, side, &g, checked, None, r.now, r.settings, r.gaps, Some((r.seed, &dropped)))
     }
 
     /// Every topic's slug: what a topic page's `## See also` may name. The library that checks a topic page is given them
@@ -671,7 +792,7 @@ impl Library {
     /// Put a built page in place: the current page and its record become a version, the new page and record are written, and the
     /// link table is brought up to date.
     #[allow(clippy::too_many_arguments)]
-    fn topic_store(&self, slug: &str, old: Value, g: &Gathered, c: CheckedPage, proposal: Option<&page_meta::Proposal>, now: u64, settings: &PagesConfig, gaps: &[String]) -> Result<TopicEntry, String> {
+    fn topic_store(&self, slug: &str, old: Value, g: &Gathered, c: CheckedPage, proposal: Option<&page_meta::Proposal>, now: u64, settings: &PagesConfig, gaps: &[String], seed: Option<(&crate::topic_seed::Seed, &[Value])>) -> Result<TopicEntry, String> {
         self.ensure().map_err(|e| e.to_string())?;
         let mut md = format!("{}\n", page_meta::extract(&c.page.markdown).0);
         // The open questions are the daemon's, from the research record, put just above the bibliography: the writer's text and the
@@ -695,6 +816,7 @@ impl Library {
             self.prune_versions(slug);
         }
         let claims_only = c.verdict.outcome == Outcome::ClaimsOnly;
+        let unverified = claims_only || c.verdict.outcome == Outcome::Seed;
         let mut meta = page_meta::resolve(proposal, settings.min_ttl_days, settings.max_ttl_days);
         if claims_only {
             meta.days = settings.min_ttl_days.max(1);
@@ -704,7 +826,7 @@ impl Library {
         let title = old["title"].as_str().unwrap_or(slug).to_string();
         let links = page_meta::page_links(&md);
         let created = old["created"].as_u64().unwrap_or(now);
-        let front = page_meta::frontmatter(&Front { key: slug, title: &title, depth: Depth::Summary, meta: &meta, status: if claims_only { "unverified" } else { "active" }, created, confirmed: now, valid_until, links: &links });
+        let front = page_meta::frontmatter(&Front { key: slug, title: &title, depth: Depth::Summary, meta: &meta, status: if unverified { "unverified" } else { "active" }, created, confirmed: now, valid_until, links: &links });
         let change = change_line(old_body.as_deref(), page_meta::strip(&md));
         std::fs::write(self.topic_file(slug), format!("{}{}", front, md)).map_err(|e| e.to_string())?;
         // The mechanical page's own cache file is not a topic's.
@@ -721,11 +843,24 @@ impl Library {
         side["material"] = json!(material);
         side["cited"] = json!(self.cited_labels(&md));
         side["change"] = json!(change);
-        side["outcome"] = json!(match c.verdict.outcome {
-            Outcome::Pass => "pass",
-            Outcome::PassContested => "pass_contested",
-            Outcome::ClaimsOnly => "claims_only",
-        });
+        side["outcome"] = json!(c.verdict.outcome.as_str());
+        // A seed page keeps where each span is and its hash (never its text: the page holds that), what each linked row offered, and what
+        // the check dropped; the records resolve its markers. A written page keeps none of it.
+        match seed {
+            Some((s, dropped)) => {
+                side["records"] = json!(s.records().iter().map(|r| r.to_json()).collect::<Vec<_>>());
+                side["seed"] = json!(s.spans.iter().map(|x| x.to_json()).collect::<Vec<_>>());
+                side["seed_offered"] = json!(s.offered);
+                side["seed_dropped"] = json!(dropped);
+            }
+            None => {
+                if let Some(o) = side.as_object_mut() {
+                    for k in ["seed", "seed_offered", "seed_dropped", "waiting"] {
+                        o.remove(k);
+                    }
+                }
+            }
+        }
         side["reason"] = json!(c.verdict.reason);
         side["validator"] = c.verdict.to_json();
         side["figure_failures"] = json!(c.verdict.figure_failures);
@@ -879,7 +1014,7 @@ mod rebuild_tests {
         let g = l.topic_gather_library(&side, Some(ws));
         let cfg = PagesConfig::default();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+        rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], seed: Default::default(), held: &crate::topic_seed::NoHeldText, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
     }
 
     /// A writer that stops the rebuild while it writes, as a revoke arriving during the model call does.
@@ -917,7 +1052,7 @@ mod rebuild_tests {
         let go = |w: &dyn PageWriter, cancel: &Cancel| {
             let g = l.topic_gather_library(&l.topic_side(&slug).unwrap(), Some(&ws));
             assert!(!g.is_empty(), "the material is there, so a model would be called");
-            rt.block_on(l.topic_rebuild(TopicRequest { slug: &slug, now: 2_000, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], cancel: Some(cancel) }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(())))
+            rt.block_on(l.topic_rebuild(TopicRequest { slug: &slug, now: 2_000, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], seed: Default::default(), held: &crate::topic_seed::NoHeldText, cancel: Some(cancel) }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(())))
         };
 
         let stopped = Cancel::default();
@@ -1091,7 +1226,7 @@ mod section_tests {
             let side = l.topic_side(&e.slug).unwrap();
             let g = l.topic_gather_library(&side, None);
             let lib = Library::in_home(home.path()).with_topic_slugs(l.topic_slugs());
-            rt.block_on(lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+            rt.block_on(lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps, seed: Default::default(), held: &crate::topic_seed::NoHeldText, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
         };
         // A see-also slug that is no topic fails the check twice: the page falls back to the claims alone.
         let wrong = build(&Sections("sun"), vec![]);
@@ -1111,5 +1246,114 @@ mod section_tests {
         let links = l.topic_links("moon").unwrap();
         assert_eq!((links["links_here"].clone(), links["exists"].clone()), (json!(["tides"]), json!(true)));
         assert_eq!(l.topic_links("tides").unwrap()["links_out"], json!(["moon"]));
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+    use crate::research_record::{Asker, Begin, Topic};
+    use crate::topic_seed::{assemble_linked, NoHeldText, SEED_BANNER};
+
+    fn seed_build(l: &Library, slug: &str, ws: &Path, now: u64) -> Result<TopicEntry, String> {
+        let seed = assemble_linked(l, ws, &l.topic_side(slug).unwrap());
+        let cfg = PagesConfig::default();
+        l.topic_seed_build(SeedRequest { slug, now, settings: &cfg, style: bib::Format::Plain, seed: &seed, held: &NoHeldText, gaps: &[], cancel: None })
+    }
+
+    /// AC-3 and the due check: with no model, a research run that ends `done` leaves a page that holds the answer's first paragraph,
+    /// cites it, carries the seed banner and has outcome `seed`; it is not due until its answer changes.
+    #[test]
+    fn a_finished_run_gives_a_seed_page_that_cites_the_answer_and_is_due_when_it_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let l = Library::in_home(home.path());
+        let t = Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
+        t.finish("r-1", "done", Some(&json!({"answer": "Tides lag because the estuary is shallow.\n\n## Measurements\n\nThe lag is an hour at the harbour wall.", "claims": []})), &[], None, 0).unwrap();
+        let slug = l.topics_from_research(&ws, 1).remove(0);
+        // Through the ordinary rebuild: nothing gathered, so no writer is asked.
+        let cfg = PagesConfig::default();
+        let seed = assemble_linked(&l, &ws, &l.topic_side(&slug).unwrap());
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let w = rebuild_tests::EchoWriter(std::sync::atomic::AtomicUsize::new(0));
+        let built = rt.block_on(l.topic_rebuild(TopicRequest { slug: &slug, now: 100, settings: &cfg, style: bib::Format::Plain, gathered: Default::default(), gaps: vec![], seed, held: &NoHeldText, cancel: None }, &w, &rebuild_tests::Pass, &TokenLedger::new(1_000_000), &|| Err("no gate".into()))).unwrap();
+        assert_eq!(w.0.load(std::sync::atomic::Ordering::SeqCst), 0, "no model is called");
+        assert_eq!((built.version, built.outcome.as_deref()), (1, Some("seed")));
+        let md = std::fs::read_to_string(l.pages_dir().join(format!("{slug}.md"))).unwrap();
+        let body = page_meta::strip(&md);
+        assert!(body.starts_with(SEED_BANNER), "{md}");
+        let side = l.topic_side(&slug).unwrap();
+        let first = side["seed"][0]["label"].as_str().unwrap().to_string();
+        assert!(body.contains(&format!("Tides lag because the estuary is shallow. [{first}]")), "{body}");
+        assert!(body.contains("## Measurements") && body.contains(&format!("| {first} | ○ not validated |")), "{body}");
+        assert_eq!(side["validator"]["result"], "seed");
+        assert_eq!(l.pages_today(100), 0, "a seed counts against no page budget");
+        let ctx = DueCtx { ws: Some(&ws), now: 101, index: true };
+        assert_eq!(l.topic_pages(&ctx)[0].due, None, "just seeded: not due");
+        // The answer changes: a span's hash changes and the page is due.
+        t.amend(|_| {}).unwrap();
+        let path = t.answer_path();
+        let changed = std::fs::read_to_string(&path).unwrap().replace("an hour", "two hours");
+        std::fs::write(&path, changed).unwrap();
+        assert!(l.topic_pages(&ctx)[0].due.as_deref().unwrap_or("").contains("changed"), "{:?}", l.topic_pages(&ctx)[0].due);
+        let again = seed_build(&l, &slug, &ws, 200).unwrap();
+        assert_eq!((again.version, again.outcome.as_deref()), (2, Some("seed")));
+        assert_eq!(l.topic_versions(&slug).unwrap().len(), 1, "the page it replaced is a version");
+    }
+
+    /// AC-4: a topic with no span has no page file and is listed as `waiting for material`; no file under `library/pages/` holds the
+    /// stub's words.
+    #[test]
+    fn a_topic_with_no_span_has_no_page_and_waits_for_material() {
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let l = Library::in_home(home.path());
+        let e = l.topic_create("Lighthouse lamps", Origin::Operator, 1).unwrap();
+        let err = seed_build(&l, &e.slug, &ws, 10).unwrap_err();
+        assert!(err.starts_with(crate::topic_seed::WAITING), "{err}");
+        let cfg = PagesConfig::default();
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let w = rebuild_tests::EchoWriter(std::sync::atomic::AtomicUsize::new(0));
+        let r = rt.block_on(l.topic_rebuild(TopicRequest { slug: &e.slug, now: 10, settings: &cfg, style: bib::Format::Plain, gathered: Default::default(), gaps: vec![], seed: Default::default(), held: &NoHeldText, cancel: None }, &w, &rebuild_tests::Pass, &TokenLedger::new(1_000_000), &|| Ok(())));
+        assert!(r.unwrap_err().contains(crate::topic_seed::WAITING));
+        assert!(!l.pages_dir().join(format!("{}.md", e.slug)).exists());
+        let listed = l.topic_pages(&DueCtx { ws: Some(&ws), now: 11, index: false }).remove(0);
+        assert!(listed.waiting && listed.due.is_none() && listed.to_json()["waiting"] == true, "{listed:?}");
+        for f in std::fs::read_dir(l.pages_dir()).unwrap().flatten() {
+            assert!(!std::fs::read_to_string(f.path()).unwrap_or_default().contains("the library holds nothing on this topic yet"));
+        }
+    }
+
+    /// A seed whose every block fails its check writes no page and says `check_failed`.
+    #[test]
+    fn a_seed_with_no_block_left_writes_no_page() {
+        struct Refuses;
+        impl crate::topic_seed::HeldText for Refuses {
+            fn sharing(&self, _o: &str) -> Vec<String> {
+                vec!["x".into()]
+            }
+            fn is_held(&self, _s: &str) -> bool {
+                true
+            }
+            fn body_may_leave(&self, _s: &str, _o: &str) -> bool {
+                false
+            }
+            fn shorten(&self, _s: &str, o: &str) -> String {
+                o.to_string()
+            }
+        }
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let l = Library::in_home(home.path());
+        Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap().finish("r-1", "done", Some(&json!({"answer": "Tides lag.", "claims": []})), &[], None, 0).unwrap();
+        let slug = l.topics_from_research(&ws, 1).remove(0);
+        let seed = assemble_linked(&l, &ws, &l.topic_side(&slug).unwrap());
+        let cfg = PagesConfig::default();
+        let err = l.topic_seed_build(SeedRequest { slug: &slug, now: 1, settings: &cfg, style: bib::Format::Plain, seed: &seed, held: &Refuses, gaps: &[], cancel: None }).unwrap_err();
+        assert!(err.starts_with("check_failed"), "{err}");
+        assert!(!l.pages_dir().join(format!("{slug}.md")).exists());
     }
 }

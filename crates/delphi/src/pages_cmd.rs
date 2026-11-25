@@ -318,7 +318,7 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
                 println!("no topics yet: a research run makes one, or `delphi pages new <title>`");
             }
             for t in &topics {
-                let built = t.built.map(|b| format!("version {}, built {}", t.version, delphi_engine::library::page_meta::ymd(b))).unwrap_or_else(|| "not built".into());
+                let built = t.built.map(|b| format!("version {}, built {}{}", t.version, delphi_engine::library::page_meta::ymd(b), t.outcome.as_deref().filter(|o| *o == "seed").map(|_| ", seed draft").unwrap_or_default())).unwrap_or_else(|| if t.waiting { delphi_engine::topic_seed::WAITING.into() } else { "not built".into() });
                 println!("{}  {}  {}{}", t.slug, built, t.title, t.due.as_ref().map(|d| format!("  (due: {})", d)).unwrap_or_default());
             }
             0

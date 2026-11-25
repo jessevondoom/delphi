@@ -556,7 +556,7 @@ impl Library {
         let v = json!({
             "kind": "search_page", "status": "generated", "query": query, "scope": format!("{:?}", scope).to_lowercase(), "external": scope == Scope::External && r.external,
             "created": r.now, "last_opened": r.now, "pinned": old.as_ref().is_some_and(|o| o["pinned"] == true), "material": material, "cited": cited,
-            "outcome": match c.verdict.outcome { Outcome::Pass => "pass", Outcome::PassContested => "pass_contested", Outcome::ClaimsOnly => "claims_only" },
+            "outcome": c.verdict.outcome.as_str(),
             "reason": c.verdict.reason, "failed_at": if failed { json!(r.now) } else { Value::Null }, "validator": c.verdict.to_json(),
             "title": title, "page_kind": meta.kind.as_str(), "depth": r.depth.as_str(), "valid_until": valid_until, "volatility": meta.volatility.as_str(), "ttl_reason": meta.reason, "ttl_days": meta.days,
             "assets": g.assets.iter().map(|a| a.uri.clone()).collect::<Vec<_>>(),

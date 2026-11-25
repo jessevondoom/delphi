@@ -24,6 +24,13 @@
 //! **Left out** (§2.1 item 4), as today's gather leaves out: a private research record, a hit flagged `internal`, another project's hit,
 //! staged and provisional notes, episodes, and any generated page. Seed text is data from outside: it keeps its document's status and
 //! passes the workspace's identifier mask (`host_research::mask`). Assembling a seed reads only; it calls no model.
+//!
+//! **The seed page** (§2.2; slice B): [`seed_page`] renders the seed by code (a lead, the answer under its own headings, then
+//! `## Sources read`, `## Findings`, `## Related notes` and `## Claims`), each block a span's own words, cleaned by [`clean`], followed
+//! by its marker; then checks it. The check drops a block that is not found letter for letter in its cleaned span, or that comes from a
+//! document a seed leaves out, and passes the whole page through the held-text predicate ([`HeldText`], `specs/142` §2.5 item 4): a
+//! block that quotes a held source past the bound is shortened and marked [`SHORTENED`], or dropped. A seed with no block left gives
+//! no page.
 
 use crate::library::pages::{record_status, KbRecord};
 use crate::library::{is_private, Library};
@@ -144,6 +151,8 @@ pub struct Seed {
     pub named_sources: Vec<String>,
     /// Spans each row would give before the caps.
     pub offered: [usize; 7],
+    /// Every library source the followed topics' records read: the sources the seed page is checked against besides the block index.
+    pub sources_read: Vec<String>,
 }
 
 impl Seed {
@@ -563,7 +572,7 @@ pub fn assemble(lib: &Library, home: &Path, ws: &Path, side: &Value, a: &Assembl
     let mask = move |t: &str| crate::host_research::mask(t, &ids);
     let fs = followed(side, ws);
     let (read_ids, read_urls) = read_by(&fs);
-    let mut seed = Seed::default();
+    let mut seed = Seed { sources_read: read_ids.iter().cloned().collect(), ..Default::default() };
     let mut rows: Vec<Vec<Span>> = Vec::new();
     rows.push(fs.iter().flat_map(|f| row_answers(f, &mask)).collect());
     rows.push(row_sources(lib, &read_ids, &mask, &mut seed.named_sources));
@@ -602,6 +611,213 @@ pub fn count_json(slug: &str, seed: &Seed) -> Value {
     let kept = seed.counts();
     let rows: Vec<Value> = Row::ALL.iter().map(|r| json!({"row": r.number(), "name": r.name(), "link": r.link(), "offered": seed.offered[r.number() - 1], "kept": kept[r.number() - 1]})).collect();
     json!({"slug": slug, "rows": rows, "spans": seed.spans.len(), "bytes": seed.bytes(), "named_sources": seed.named_sources.len(), "answer_chars": seed.spans.iter().filter(|s| s.row == Row::Answer).map(|s| s.text.chars().count()).sum::<usize>()})
+}
+
+/// What a seed page's banner says (§2.2 item 2). It stands where a written page's banner stands.
+pub const SEED_BANNER: &str = "Seed draft: assembled by code from research notes. Not written up and not validated.";
+/// The mark the held-text predicate puts where it cut a block's quotation of a held source back to the bound (§2.2 item 3).
+pub const SHORTENED: &str = "[shortened: quoted source text]";
+
+/// The held-text predicate of `specs/142` §2.5 item 4, as the seed check asks it, and nothing more. `specs/142` slice B owns it: it
+/// supplies the one shared `body_may_leave` and the block index behind [`HeldText::sharing`], and passes that to the seed check in place
+/// of [`NoHeldText`]. Nothing here decides what of a held source may leave.
+pub trait HeldText: Sync {
+    /// The held sources that share a 64-character block with `output` (the block index): a note may quote a source no record names.
+    fn sharing(&self, output: &str) -> Vec<String>;
+    /// Whether `source` is a held source (`text_held`).
+    fn is_held(&self, source: &str) -> bool;
+    /// `body_may_leave(source, output)`: no run of more than 300 characters of the source's text, and no more of it in all than the
+    /// aggregate cap.
+    fn body_may_leave(&self, source: &str, output: &str) -> bool;
+    /// `output` with each run of `source`'s text that is past the bound cut back to it, and [`SHORTENED`] written where it was cut.
+    fn shorten(&self, source: &str, output: &str) -> String;
+}
+
+/// The predicate as it is until `specs/142` slice B: no source is held (every source is a pointer), so nothing is shared and
+/// everything may leave. A seed then carries of a source only its summary and excerpts of at most 300 characters (§2.1 item 3).
+pub struct NoHeldText;
+
+impl HeldText for NoHeldText {
+    fn sharing(&self, _output: &str) -> Vec<String> {
+        Vec::new()
+    }
+    fn is_held(&self, _source: &str) -> bool {
+        false
+    }
+    fn body_may_leave(&self, _source: &str, _output: &str) -> bool {
+        true
+    }
+    fn shorten(&self, _source: &str, output: &str) -> String {
+        output.to_string()
+    }
+}
+
+fn res() -> &'static [regex::Regex; 7] {
+    static R: std::sync::OnceLock<[regex::Regex; 7]> = std::sync::OnceLock::new();
+    R.get_or_init(|| {
+        let r = |p: &str| regex::Regex::new(p).expect("a fixed pattern");
+        [
+            r(r"(?s)<!--.*?-->"),
+            r(r"!\[([^\]\n]*)\]\([^)\n]*\)"),
+            r(r"\[([^\]\n]+)\]\(([^)\n]*)\)"),
+            r(r"</?[A-Za-z][^>\n]*>"),
+            r(r"https?://[^\s)\]>]+"),
+            r(r"\[((?:s|c|f)-[^\]\n]*)\]"),
+            r(r"\n{3,}"),
+        ]
+    })
+}
+
+/// The one cleaning of a span's text (§2.2 item 3), used both to render a block and to compare it with its span: a link other than a
+/// `#section` or `page:` link keeps its words and loses its address; an image becomes its alternative text; raw HTML (comments and
+/// tags) and a bare address are removed; control characters are removed; a bracketed record id loses its brackets, so a span can cite
+/// nothing; a top-level heading is made a third-level one.
+pub fn clean(text: &str) -> String {
+    let [comment, image, link, tag, url, marker, blank] = res();
+    let t: String = text.chars().filter_map(|c| if c == '\n' { Some(c) } else if c == '\t' { Some(' ') } else if c.is_control() { None } else { Some(c) }).collect();
+    let t = comment.replace_all(&t, "");
+    let t = image.replace_all(&t, "$1");
+    let t = link.replace_all(&t, |c: &regex::Captures<'_>| {
+        let to = c[2].trim();
+        if to.starts_with('#') || to.starts_with("page:") { c[0].to_string() } else { c[1].to_string() }
+    });
+    let t = tag.replace_all(&t, "");
+    let t = url.replace_all(&t, "");
+    let t = marker.replace_all(&t, "($1)");
+    let lines: Vec<String> = t.lines().map(|l| if let Some(h) = l.strip_prefix("# ").or_else(|| l.strip_prefix("## ")) { format!("### {}", h) } else { l.to_string() }).map(|l| l.trim_end().to_string()).collect();
+    blank.replace_all(&lines.join("\n"), "\n\n").trim().to_string()
+}
+
+/// A heading or title as one line: cleaned, no `#`, at most 200 characters.
+fn one_line(s: &str) -> String {
+    let t = clean(s).replace('\n', " ");
+    norm_ws(t.trim_start_matches('#')).chars().take(200).collect()
+}
+
+/// One block of a seed page.
+#[derive(Debug, Clone)]
+struct Block {
+    span: usize,
+    /// The section heading the block goes under.
+    group: String,
+    text: String,
+}
+
+/// A seed page's body and what its check dropped.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeedPage {
+    /// `# <title>`, the blocks under their headings, each ending with its marker.
+    pub body: String,
+    /// The labels the body cites, in order.
+    pub cited: Vec<String>,
+    /// `(label, reason)` for each block the check dropped (the sidecar's `seed_dropped`).
+    pub dropped: Vec<(String, String)>,
+}
+
+fn render(title: &str, seed: &Seed, blocks: &[Block]) -> String {
+    let mut s = format!("# {}\n\n", one_line(title));
+    let mut group: Option<&str> = None;
+    for b in blocks {
+        // The lead (the newest answer's first span) has no heading; every other change of group opens one.
+        if group != Some(b.group.as_str()) {
+            if !b.group.is_empty() {
+                s.push_str(&format!("## {}\n\n", b.group));
+            }
+            group = Some(b.group.as_str());
+        }
+        s.push_str(&format!("{} [{}]\n\n", b.text.trim_end(), seed.spans[b.span].label));
+    }
+    s.trim_end().to_string() + "\n"
+}
+
+/// Is the block's text in its cleaned span, letter for letter? A shortened block is compared piece by piece around its marks.
+fn verbatim(block: &str, span: &str) -> bool {
+    let clean_span = clean(span);
+    block.split(SHORTENED).map(str::trim).filter(|p| !p.is_empty()).all(|p| clean_span.contains(p))
+}
+
+/// Does a span come from a document a seed leaves out (§2.1 item 4, item 3)? A generated page, or a library source's own text.
+fn left_out(s: &Span) -> bool {
+    let src = s.rel_path.strip_prefix("library/sources/").is_some_and(|r| !(r.ends_with("/summary.md") || r.ends_with("/excerpts.json")));
+    s.rel_path.starts_with("library/pages/") || src
+}
+
+/// The seed page of §2.2: rendered by code from `seed` and checked (§2.2 item 3). `Err` holds what was dropped when no block is left: no
+/// page is written then.
+pub fn seed_page(title: &str, seed: &Seed, held: &dyn HeldText) -> Result<SeedPage, Vec<(String, String)>> {
+    let mut dropped: Vec<(String, String)> = Vec::new();
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut lead: Option<String> = None;
+    for (i, s) in seed.spans.iter().enumerate() {
+        let group = match s.row {
+            Row::Answer => {
+                // The lead and the rest of its section have no heading; any other section of an answer opens its own.
+                let h = one_line(&s.title);
+                let lead_title = lead.get_or_insert_with(|| h.clone());
+                if *lead_title == h { String::new() } else { h }
+            }
+            Row::SourceRead => "Sources read".into(),
+            Row::Finding => "Findings".into(),
+            Row::SharedSource | Row::IngestFile | Row::Search => "Related notes".into(),
+            Row::Claim => "Claims".into(),
+        };
+        if left_out(s) {
+            dropped.push((s.label.clone(), "a document a seed leaves out".into()));
+            continue;
+        }
+        let text = clean(&s.text);
+        if text.is_empty() {
+            dropped.push((s.label.clone(), "nothing left once cleaned".into()));
+            continue;
+        }
+        blocks.push(Block { span: i, group, text });
+    }
+    // The held-text predicate, for every held source the page shares a block with and every held source the topic read.
+    let mut sources: BTreeSet<String> = held.sharing(&render(title, seed, &blocks)).into_iter().collect();
+    sources.extend(seed.sources_read.iter().filter(|s| held.is_held(s)).cloned());
+    for src in &sources {
+        let mut kept: Vec<Block> = Vec::new();
+        for mut b in std::mem::take(&mut blocks) {
+            if !held.body_may_leave(src, &b.text) {
+                b.text = held.shorten(src, &b.text);
+                if !held.body_may_leave(src, &b.text) {
+                    dropped.push((seed.spans[b.span].label.clone(), format!("quotes the held source `{}` past the bound", src)));
+                    continue;
+                }
+            }
+            kept.push(b);
+        }
+        blocks = kept;
+        // The aggregate cap over the whole page: the last blocks that quote the source go first.
+        while !held.body_may_leave(src, &render(title, seed, &blocks)) {
+            let Some(i) = blocks.iter().rposition(|b| held.sharing(&b.text).iter().any(|s| s == src) || !held.body_may_leave(src, &b.text)) else {
+                dropped.extend(blocks.drain(..).map(|b| (seed.spans[b.span].label.clone(), format!("the page passes the aggregate cap of the held source `{}`", src))));
+                break;
+            };
+            let b = blocks.remove(i);
+            dropped.push((seed.spans[b.span].label.clone(), format!("the page passes the aggregate cap of the held source `{}`", src)));
+        }
+    }
+    // Every block is its span's own words, letter for letter, once both are cleaned.
+    blocks.retain(|b| {
+        let ok = verbatim(&b.text, &seed.spans[b.span].text);
+        if !ok {
+            dropped.push((seed.spans[b.span].label.clone(), "not verbatim in its span".into()));
+        }
+        ok
+    });
+    if blocks.is_empty() {
+        return Err(dropped);
+    }
+    let body = render(title, seed, &blocks);
+    let mut cited: Vec<String> = Vec::new();
+    for b in &blocks {
+        let l = &seed.spans[b.span].label;
+        if !cited.contains(l) {
+            cited.push(l.clone());
+        }
+    }
+    Ok(SeedPage { body, cited, dropped })
 }
 
 #[cfg(test)]
@@ -798,5 +1014,140 @@ mod tests {
         assert!(seed.spans.len() <= MAX_SPANS && seed.bytes() <= MAX_BYTES);
         assert_eq!(seed.offered[1], 50);
         assert!(seed.counts()[1] < 50, "row 2 is cut to the cap");
+    }
+
+    /// A held source for the tests: its text, a run bound of 300 characters, an aggregate cap, and a block index of 64 characters.
+    struct Held(Vec<(String, String)>);
+
+    impl Held {
+        fn text(&self, id: &str) -> Vec<char> {
+            self.0.iter().find(|(i, _)| i == id).map(|(_, t)| t.chars().collect()).unwrap_or_default()
+        }
+        /// Which characters of `out` lie in a common run of at least `n` characters with the source.
+        fn covered(&self, id: &str, out: &str, n: usize) -> Vec<bool> {
+            let src = self.text(id);
+            let o: Vec<char> = out.chars().collect();
+            let wins: std::collections::HashSet<&[char]> = if src.len() >= n { src.windows(n).collect() } else { Default::default() };
+            let mut cov = vec![false; o.len()];
+            if o.len() >= n {
+                for i in 0..=o.len() - n {
+                    if wins.contains(&o[i..i + n]) {
+                        cov[i..i + n].iter_mut().for_each(|c| *c = true);
+                    }
+                }
+            }
+            cov
+        }
+    }
+
+    impl HeldText for Held {
+        fn sharing(&self, output: &str) -> Vec<String> {
+            self.0.iter().filter(|(id, _)| self.covered(id, output, 64).iter().any(|c| *c)).map(|(id, _)| id.clone()).collect()
+        }
+        fn is_held(&self, source: &str) -> bool {
+            self.0.iter().any(|(i, _)| i == source)
+        }
+        fn body_may_leave(&self, source: &str, output: &str) -> bool {
+            let run = !self.covered(source, output, 301).iter().any(|c| *c);
+            let cap = 1200.min(self.text(source).len() / 10);
+            run && self.covered(source, output, 40).iter().filter(|c| **c).count() <= cap
+        }
+        fn shorten(&self, source: &str, output: &str) -> String {
+            let o: Vec<char> = output.chars().collect();
+            let cov = self.covered(source, output, 301);
+            let mut out = String::new();
+            let (mut i, mut run) = (0, 0);
+            while i < o.len() {
+                if cov[i] {
+                    run += 1;
+                    // Cut one short of the bound: the mark's leading space could carry the run one further.
+                    if run == 300 {
+                        out.push_str(&format!(" {} ", SHORTENED));
+                        while i < o.len() && cov[i] {
+                            i += 1;
+                        }
+                        run = 0;
+                        continue;
+                    }
+                } else {
+                    run = 0;
+                }
+                if run < 300 {
+                    out.push(o[i]);
+                }
+                i += 1;
+            }
+            out
+        }
+    }
+
+    fn span(row: Row, label: &str, rel: &str, text: &str) -> Span {
+        Span { row, label: label.into(), kind: "research answer".into(), rel_path: rel.into(), start_line: 1, end_line: 1, title: "T".into(), text: text.into(), hash: text_hash(text), status: "○ not validated".into(), topic: None }
+    }
+
+    /// `topic_seed::tests::a_seed_page_passes_body_may_leave_for_every_source` (AC-18): an answer and a finding that quote a held source
+    /// at length, the finding quoting one no record of the topic names, are shortened and marked where they quote; the page then passes
+    /// the predicate for every held source; a page over the aggregate cap loses the blocks that quote; a span with a link, an image and
+    /// raw HTML renders with none of them and passes the comparison; a block that fails is dropped and counted; a seed with no block
+    /// left gives no page.
+    #[test]
+    fn a_seed_page_passes_body_may_leave_for_every_source() {
+        let src_a: String = (0..400).map(|i| format!("Held sentence {i:03} of source A runs on. ")).collect();
+        let src_b: String = (0..400).map(|i| format!("Held sentence {i:03} of source B runs on. ")).collect();
+        let held = Held(vec![("a".into(), src_a.clone()), ("b".into(), src_b.clone())]);
+        let quote_a: String = src_a.chars().take(400).collect();
+        let quote_b: String = src_b.chars().skip(100).take(400).collect();
+        let messy = "Read [the spec](https://example.org/spec) and [above](#history), see ![a tide chart](lib:x/chart.png) <b>now</b><!-- hidden --> [s-abc].";
+        let seed = Seed {
+            spans: vec![
+                span(Row::Answer, "s-kb-0000000000000001", "research/topics/t/answer.md", &format!("The answer opens here. {quote_a}")),
+                span(Row::Finding, "f-0000000000000002", "missions/m/findings/x.md", &format!("A finding copies: {quote_b}")),
+                span(Row::Search, "s-kb-0000000000000003", "context/n.md", messy),
+                span(Row::Search, "s-kb-0000000000000004", "library/pages/other.md", "A generated page."),
+            ],
+            sources_read: vec!["a".into()],
+            ..Default::default()
+        };
+        let page = seed_page("Tides", &seed, &held).unwrap();
+        for id in ["a", "b"] {
+            assert!(held.body_may_leave(id, &page.body), "{id}: {}", page.body);
+        }
+        assert_eq!(page.body.matches(SHORTENED).count(), 2, "{} {:?}", page.body, page.dropped);
+        assert!(page.body.contains("The answer opens here.") && page.body.contains("[s-kb-0000000000000001]"));
+        assert!(page.body.contains("the spec") && page.body.contains("[above](#history)") && page.body.contains("a tide chart") && page.body.contains("now"));
+        for gone in ["https://", "chart.png", "<b>", "hidden", "[s-abc]"] {
+            assert!(!page.body.contains(gone), "{gone}: {}", page.body);
+        }
+        assert!(page.cited.contains(&"s-kb-0000000000000003".to_string()), "the cleaned span passes the comparison");
+        assert_eq!(page.dropped, vec![("s-kb-0000000000000004".to_string(), "a document a seed leaves out".to_string())]);
+        assert!(page.body.contains("## Findings") && page.body.contains("## Related notes") && !page.body.contains("## T\n"));
+
+        // Over the aggregate cap: many short quotes of A, each under the run bound, together past a tenth of it.
+        let pieces: Vec<Span> = (0..6).map(|k| span(Row::Search, &format!("s-kb-00000000000001{k:02}"), &format!("context/q{k}.md"), &src_a.chars().skip(k * 250).take(250).collect::<String>())).collect();
+        let over = Seed { spans: pieces, ..Default::default() };
+        let p = seed_page("Tides", &over, &held).unwrap();
+        assert!(held.body_may_leave("a", &p.body) && !p.dropped.is_empty(), "{:?}", p.dropped);
+
+        // A predicate that cannot cut: every block that quotes is dropped and counted; with none left there is no page.
+        struct Refuses;
+        impl HeldText for Refuses {
+            fn sharing(&self, _o: &str) -> Vec<String> {
+                vec!["a".into()]
+            }
+            fn is_held(&self, _s: &str) -> bool {
+                true
+            }
+            fn body_may_leave(&self, _s: &str, _o: &str) -> bool {
+                false
+            }
+            fn shorten(&self, _s: &str, o: &str) -> String {
+                o.to_string()
+            }
+        }
+        let dropped = seed_page("Tides", &seed, &Refuses).unwrap_err();
+        assert_eq!(dropped.len(), 4, "{dropped:?}");
+        // Today's predicate holds nothing, and changes nothing.
+        let today = seed_page("Tides", &seed, &NoHeldText).unwrap();
+        assert!(today.body.contains(&quote_a) && !today.body.contains(SHORTENED));
     }
 }
