@@ -58,69 +58,75 @@
     },
     {
       "level": 3,
-      "line": 109,
+      "line": 110,
       "number": "2.4",
       "title": "The sinks and their policy"
     },
     {
       "level": 3,
-      "line": 131,
+      "line": 139,
       "number": "2.5",
       "title": "Web queries: a notice, never a refusal"
     },
     {
       "level": 3,
-      "line": 138,
+      "line": 146,
       "number": "2.6",
       "title": "The lift: private and internal research on local pages"
     },
     {
       "level": 2,
-      "line": 149,
+      "line": 157,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 157,
+      "line": 165,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 172,
+      "line": 180,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 188,
+      "line": 200,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 222,
+      "line": 240,
       "number": "6.1",
       "title": "Premortem (three months after release): how this most likely fails"
     },
     {
       "level": 2,
-      "line": 235,
+      "line": 253,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 244,
+      "line": 263,
       "number": "8",
       "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 276,
+      "number": "9",
+      "title": "Review"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/141-labels-enforced-at-the-sinks-max-label-inheritance-and-private-research-on-local-pages.md",
-    "sha256": "a017ad1ba9a0b3cd7898be202ea8719ba48534740801680f2373ae99317bc5fb"
+    "sha256": "72804cf8af5af2a4d156cdde0cb2d9d000bba713c99d45609d438570b6053b15"
   },
   "source_status_at_hash": {
     "line": {
@@ -133,7 +139,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "a017ad1ba9a0b3cd7898be202ea8719ba48534740801680f2373ae99317bc5fb",
+    "sha256": "72804cf8af5af2a4d156cdde0cb2d9d000bba713c99d45609d438570b6053b15",
     "word": "draft"
   },
   "spec": {
@@ -148,11 +154,11 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 3432,
+      "end": 3918,
       "end_line": 27,
       "line": 27,
-      "start": 3297
+      "start": 3595
     },
-    "text": "**The operator's rulings, 2026-11-25** (as relayed by the coordinating session; they narrow the two P0 findings the Council escalated):"
+    "text": "**The operator's rulings, 2026-11-25.** Rulings 1, 2, 5 and 6 quote the operator's words of that day as typed, with the employer's name replaced by `[employer]` because this repository is public. Rulings 3, 4, 7 and 8 are as relayed by the coordinating session. They narrow the two P0 findings an earlier Council escalated."
   }
 }

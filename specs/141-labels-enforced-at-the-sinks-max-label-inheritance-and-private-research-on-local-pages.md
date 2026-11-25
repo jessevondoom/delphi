@@ -4,7 +4,7 @@ title: "141: Labels enforced at the sinks: max-label inheritance, and private re
 author: architect
 timestamp: 2026-11-25T21:00:00Z
 status: draft
-reviewed_by: []   # no Council or Panel has read this text. A daemon Council of 2026-11-25 ruled on the plan (two seats heard, the strategist seat abstained) and escalated two P0 findings to the operator, who answered them the same day (section 1). That is a review of the plan, not of this spec, and is not cited as one. This spec has an Authority section and should go to a Council or a witnessed Panel with a red-team seat before approval.
+reviewed_by: [council:t_0003]   # daemon Council of session host-e11ba3fe9035ccf9, 2026-11-25, on the earlier draft of this spec and of 142 (commits 80df2642 and 4d581338); record committed under missions/2026-11-25-knowledge-v2/councils/ with one line redacted (section 9). Every seat's context was cut short. Architect and strategist (one model family) ruled PROCEED-WITH-CHANGES; the red-team seat's Round 2 could not be parsed, so NO red-team has read this text as a whole, and the verdict was escalated to the operator with four P0 findings. The changes are applied here; nobody has reviewed the amended text. GOVERNANCE §1.3 is met only by the operator's own waiver in the approval words or by a witnessed Panel with a red-team seat.
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -24,14 +24,14 @@ tags: [spec, labels, handling, private, egress, sinks, pages, export, bundle, au
 
 ## 1. Scope and objectives
 
-**The operator's rulings, 2026-11-25** (as relayed by the coordinating session; they narrow the two P0 findings the Council escalated):
+**The operator's rulings, 2026-11-25.** Rulings 1, 2, 5 and 6 quote the operator's words of that day as typed, with the employer's name replaced by `[employer]` because this repository is public. Rulings 3, 4, 7 and 8 are as relayed by the coordinating session. They narrow the two P0 findings an earlier Council escalated.
 
-1. Every model route configured on this machine is licensed and governed by the operator. Sending private material to any configured model, a Council seat of another family and a writer model included, **is not a leak to guard against**.
-2. Web searches are considered safe, and research gathering is not risky.
+1. "Any model access on a [employer] machine is operating on a [employer] license… assume that any model usage on a corporate machine is governed by the operator who is acting appropriately." So sending private material to any configured model, a Council seat of another family and a writer model included, **is not a leak to guard against**.
+2. "web searches should also be considered safe… no research gathering should be considered risky."
 3. So the guards apply **only to sinks that leave the operator's control**: export or publication of pages and bundles, the app, relay and sharing paths, and anything written to a public repository or sent to an outside person. Model dispatch and web search stay unblocked.
 4. Private and internal research appears on local pages **once the guards pass their tests**. A page's label is the maximum of the labels of what it cites, computed by the daemon and never declared by the writer.
-5. **Model access (decision 1).** Private and internal research may go to every configured model route, and Delphi's agents get the whole knowledge base. On this workspace `private_to_models` is `all`.
-6. **Council seats (decision 2).** That includes seats of other model families; 121 §6 item 8 is lifted. The operator's reasoning, as relayed: third-party models are restricted on company accounts, most of the research was gathered by models in the first place, and withholding it from models is "security theater at best". Labels therefore guard only the sinks that leave the operator's control, and every model-side and seat-side filter is removed from this design.
+5. **Model access.** "yes private research can go to model routes. models should have access to all of the knowledge base when operating as delphi agents." On this workspace `private_to_models` is `all`.
+6. **Council seats.** "third party models are restricted from company accounts, and most of the research was gathered by models in the first place so witholding from models is security theater at best. allow it." That includes seats of other model families; 121 §6 item 8 is lifted. Labels therefore guard only the sinks that leave the operator's control, and every model-side and seat-side filter is removed from this design.
 7. **`personal` items (decision 3)** appear on local topic pages without the ask of 121 §5.
 8. **Web queries (decision 4)** get an advisory `planned_with` notice and are never refused (§2.5).
 
@@ -102,7 +102,8 @@ A page's label is taken from its material and not only from its markers, because
 
 ### 2.3 One check
 
-1. `egress::check_label(label, sink) -> Decision`, beside `egress::check` (`egress.rs:12`), with `Decision` one of `Send`, `SendLabelled` (the output carries the visible line and the operator confirms the send) or `Refuse(reason)`. `egress::check` stays and is implemented by it.
+1. `egress::check_label(label, sink) -> Decision`, beside `egress::check` (`egress.rs:12`), with `Decision` one of `Send`, `Quotations` (the whole text is refused; quotations of at most 300 characters per citation pass), `SendLabelled` (the output carries the visible line and the operator confirms the send) or `Refuse(reason)`. `egress::check` stays and is implemented by it.
+   **A label with several marks takes the strictest decision.** Each mark gives its own decision from the sink's row; the label's decision is the strictest of them, in the order `Refuse` > `SendLabelled` > `Quotations` > `Send`. So a page that is `internal` and `text_held` at the page-export sink is sent labelled, after the operator confirms, **and** under the quotation bound; one that is also `personal` is refused. A stricter decision never drops a weaker one's condition: `SendLabelled` on a label that holds a `Quotations` mark still applies the 300-character bound.
 2. The registry `PATHS` (`egress.rs:84`) becomes the table of §2.4: each sink, the file that sends, and its policy for each mark. The enumeration test (`egress.rs:186`) requires each wired sender to call `check_label` with its own sink.
 3. A refusal names the marks and the items they came from to the operator, and names no text.
 
@@ -114,7 +115,10 @@ Only sinks that leave the operator's control (ruling 3). `R` refuse; `L` send la
 | :-- | :-- | :-: | :-: | :-: | :-: | :-: |
 | a page or document written out or printed: the app's export and print, `delphi pages` output to a file | `service.rs` (`pages_get` gives `label` and `may_export`), `app/src-tauri/src/lib.rs:154`, `:165` | R | R | R | L | Q |
 | a bundle: sources copied in, distill, package, publish, export | `library_export.rs:41`, `delphi-bundle` | R | R | R | L | Q |
-| a bibliography export | `library_bib.rs:67` | R | R | R | L | S (a citation is not the text) |
+| a bibliography export | `library_bib.rs:67` | R | R | R | L | S for the citation only (item 7) |
+| a document or a deck written out (095; 121 §8 is not built) | the document path of 095 | R | R | R | L | Q |
+| the app copying a page or a source to the clipboard ("copy as Markdown" and the like) | the app's commands (`app/src-tauri/src/lib.rs:251`) | R | R | R | L | Q |
+| a reply to an app client that is not on this machine: a paired key used from another device, or any relay of the app's traffic | `service.rs` (the app scope of 120) | R | R | R | R | R |
 | a Xenia publish | `service_xenia.rs:108`, `xenia_cmd.rs:380` | R | R | R | L | Q |
 | vectors written out (`kb seed-export`) | `kb.rs:3390` | R | R | R | R | R |
 | `kb serve` on a non-loopback address | `kbserve.rs:623` | R | R | R | R | R |
@@ -122,17 +126,21 @@ Only sinks that leave the operator's control (ruling 3). `R` refuse; `L` send la
 | mail, relay, connector and other outbound sends | `private_read.rs`, `connector_run.rs:160`, `harness_run.rs:508` | held by the mark, as today | the Red card names the marks (item 5) | the same | the same | Q |
 
 1. **Not sinks under this spec:** a model prompt on any configured route (ruling 1), a web search query (ruling 2; §2.5), the operator's console, and the paired app reading the daemon on this machine (the operator's own view, 115 §11.3). The debug bundle, logs and telemetry carry no entry text and keep their proofs (`egress.rs:89-95`).
-2. **No filter on the way to a model.** `check_for_seat` (`egress.rs:21-29`) no longer refuses: a labelled entry may enter the prompt of any configured route, a foreign-family seat included (rulings 5 and 6). `[library] private_to_models` gains the value **`all`**, which becomes the shipped default (OD-1); `deny` and `allow` are still read, so an operator elsewhere can set the older behaviour, and this spec designs nothing further on that side. On this workspace the value is `all`. Retrieval, start passages, a writer's brief and a seat's evidence are filtered by no mark.
+2. **No filter on the way to a model.** `check_for_seat` (`egress.rs:21-29`) no longer refuses: a labelled entry may enter the prompt of any configured route, a foreign-family seat included (rulings 5 and 6). `[library] private_to_models` gains the value **`all`**. On this workspace the value is `all` (the operator's ruling). **The shipped default is not decided** (OD-1): this text is written so that either answer builds. `deny` and `allow` are still read, and this spec designs nothing further on that side. Retrieval, start passages, a writer's brief and a seat's evidence are filtered by no mark.
 3. `SendLabelled` at a command asks at the terminal; at the app it is a confirmation in the app; with no person to ask it is refused, never sent.
 4. A labelled page handed to a sink is refused or sent **whole**: the daemon never strips the labelled parts and sends the rest, because what is left may still carry their substance.
 5. **Outbound sends.** Every outbound action is already Red and waits for the operator. The card gains one line: the marks of the items the sending task was given (`handling.rs:255`), with counts. Handling traits still never set the 103 mark (121 §2 item 4); the line adds what the operator is told and removes nothing.
 6. **A public repository.** One check, `delphi handling check <path>... | --staged | --range <a>..<b> [--remote <url>]`: it reads each file's label (the page's or document's sidecar and the daemon's record, never the file's own frontmatter alone), scans for a run of more than 300 characters of any `text_held` or `library_private` source (`library_private::shares_run`, `library_private.rs:66`), applies the row above and exits non-zero on a refusal. It runs in two places. **The daemon's own push** (a task finished in `merge = "pr"` mode, `worktree.rs:504-525`, after the operator's card, `finalize.rs:317-321`) runs it on the branch's range before pushing; a refusal stops the push and the card names the files and marks. An agent's own `git push` is refused by the command policy (`exec.rs:536`, and the test at `:1035`). **A host** commits and pushes with its own tools, which Delphi cannot stop (121 §9 item 1): `delphi connect` offers the check as a pre-push hook, and a hook can only refuse (GOVERNANCE §5 item 11).
+7. **A citation is not a way round.** The bibliography row sends a `text_held` source's citation. The fields it sends are the closed citation list (`library_export.rs:12-14`), which has no abstract and no note. Every free-text field that is sent (the title, the container title, the attribution text, and an abstract or a note if the list ever gains one) is scanned with the same 300-character run scan against the source's held text (`library_private::shares_run`), and a field that fails is cut to the bound.
+8. **The inventory comes first.** Slice C starts by listing every sender before it wires any: each file that can reach the network (`NETWORK_FILES`, `egress.rs:312`), each app command that hands text out of the app (`generate_handler!`, `app/src-tauri/src/lib.rs:251`), and each command that writes entry text to a path outside the home. Each is registered as a sink of this table or as carrying no entry text, with the test that proves it. **The registry test fails on any sender that is not listed**, in the daemon and in the app. Whether the app has a clipboard command, or a path that serves a client off this machine, is found by that inventory; the rows above stand either way and are tested with a fixture sender where the real one does not exist.
+9. **The bundle crate is not asked to know labels.** The check runs in the engine before any call into `delphi-bundle` that copies, packages, distils or publishes: the engine computes the label of every file it is about to hand over and refuses there. A test fails when an engine file calls one of those `delphi-bundle` functions outside a function that calls `check_label` first.
+10. **A host's own push is not enforced, and the hook is not hidden.** Delphi cannot stop a host that pushes with its own git (§3). `delphi connect` prints, every time, whether the pre-push hook of item 6 is installed in the project, and the one command that installs it.
 
 ### 2.5 Web queries: a notice, never a refusal
 
 1. **Chosen: an advisory notice.** When a query is planned by a span that was given labelled items, the planned-query reply to a host (119 §13.1), the search log line and the research result carry `planned_with: [marks]`, beside today's `planned_under_mark` (`research_record.rs:548`). `delphi handling status` counts such queries. This builds 121 §9 item 2. Nothing is withheld for it.
 2. **Why a notice.** The alternatives were a refusal, which ruling 2 excludes, and a card for every such query, which stops research for a question the daemon cannot answer: it knows the span was *given* a labelled item, not whether the query *contains* its substance (121 §9 item 2). A person can tell. In a host session the host runs the search with its own tools, so the notice arrives where a person or the host's own policy can act on it.
-3. **An operator-side policy, noted here, not a Delphi block.** The operator's employer has an AI policy that asks a person to confirm a web query that would contain confidential data. Delphi does not enforce that policy and does not claim to satisfy it. The notice gives the person, or a host that carries the policy in its own instructions, the fact they need: this query was planned with private, internal or confidential material in view.
+3. **An organisation's policy, noted here, not a Delphi block.** An organisation's AI policy may require a person to confirm queries containing confidential material. Delphi does not enforce such a policy and does not claim to satisfy one. The notice gives the person, or a host that carries such a policy in its own instructions, the fact they need: this query was planned with private, internal or confidential material in view.
 4. What already limits a query is unchanged: the cleaning of 066, and the identifier guard for the words the operator configured (`query_guard.rs`, 119 §2 item 7), which still withholds a query that names one.
 
 ### 2.6 The lift: private and internal research on local pages
@@ -148,7 +156,7 @@ Built last, in its own slice, after the sink tests of §6 pass on main.
 
 ## 3. Authority
 
-- **What this widens.** (1) A labelled entry, library-private and confidential included, may enter the prompt of any configured model route, a foreign-family seat included. 098 §7.2 forbade that for a foreign family "whatever the setting", and 121 §6 item 8 for confidential. This is the operator's ruling (5 and 6), and with OD-1 it becomes the shipped default. (2) Private research becomes visible on local pages and in the index of the operator's own agents. Neither lets any agent do a new thing; both widen what is read and what is sent to a model provider.
+- **What this widens.** (1) A labelled entry, library-private and confidential included, may enter the prompt of any configured model route, a foreign-family seat included. 098 §7.2 forbade that for a foreign family "whatever the setting", and 121 §6 item 8 for confidential. This is the operator's ruling (5 and 6) for this workspace; whether it is also the shipped default is OD-1, which is open. (2) Private research becomes visible on local pages and in the index of the operator's own agents. Neither lets any agent do a new thing; both widen what is read and what is sent to a model provider.
 - **What this narrows.** The sinks of §2.4 now refuse or ask on five marks where they read one bit; two unregistered exits (vectors, remote serve) are closed to labelled material.
 - **Content cannot lower its own label.** §2.1 item 3; the test of AC-2.
 - **Not enforced, said plainly.** A host that writes or pushes with its own tools (121 §9 item 1); a paraphrase a model writes into an unlabelled reply (121 §9 item 3); software running as the operator (121 §9 item 6). A model on a configured route that misuses what it was sent is the operator's accepted risk under ruling 1.
@@ -159,13 +167,13 @@ Built last, in its own slice, after the sink tests of §6 pass on main.
 | Slice | Content | Criteria | Files | Hours | Depends on |
 | :-- | :-- | :-- | :-- | --: | :-- |
 | S0 | this spec; the operator's answers to §8; a Council or Panel with a red-team seat | (the spec) | this file | 2-3 | none |
-| A | `Label`: the type, the join, of a source, a record, a chunk (`marks` column, the hit) and a page (sidecar, frontmatter view, the visible line) | AC-1, AC-2, AC-3 | `label.rs` (new), `handling.rs`, `kb.rs`, `library_topics.rs` | 8-10 | S0 |
+| A | `Label`: the type, the join, of a source, a record, a chunk (`marks` column, the hit) and a page (sidecar, frontmatter view, the visible line); the decision order for several marks | AC-1, AC-2, AC-3, AC-14 | `label.rs` (new), `handling.rs`, `kb.rs`, `library_topics.rs` | 9-11 | S0 |
 | B | `check_label`, the sink table in the registry; bundle, bibliography and Xenia wired | AC-4, AC-5 | `egress.rs`, `library_export.rs`, `library_bib.rs`, `service_xenia.rs`, `delphi-bundle` | 6-8 | A |
-| C | pages written out: `may_export` in the page reply, the app's export and print, `kb seed-export`, remote `kb serve` | AC-6, AC-7 | `service.rs`, `app/src-tauri/src/lib.rs`, `kb.rs`, `kbserve.rs` | 5-6 | B |
+| C | **the inventory of senders first** (§2.4 item 8), then: `may_export` in the page reply, the app's export, print and copy, a document or deck written out, a reply to a client off this machine, `kb seed-export`, remote `kb serve`; the registry test in the daemon and in the app | AC-6, AC-7, AC-15, AC-16 | `service.rs`, `egress.rs`, `app/src-tauri/src/lib.rs`, `kb.rs`, `kbserve.rs`, the document path | 8-10 | B |
 | D | `delphi handling check` and the hook; the marks line on outbound cards | AC-8, AC-9 | the `handling` command, `worktree.rs`, `finalize.rs`, `private_read.rs`, `harness_run.rs` | 6-7 | B |
 | E | the query notice: `planned_with`, the log line, the status count | AC-10 | `research_run.rs`, `search_log.rs`, `research_record.rs` | 3-4 | A |
-| F | the lift of §2.6; `private_to_models = "all"` and its default; `check_for_seat` no longer refuses; the health line | AC-11, AC-12, AC-13 | `library_topics.rs`, `topic_gather.rs`, `research_index.rs`, `egress.rs`, `config.rs` | 4-5 | B, C, D green on main; 139 A and B |
-| | **Total** | | | **34-43** | |
+| F | the lift of §2.6; `private_to_models = "all"`, with the shipped default as the operator decides (OD-1); `check_for_seat` no longer refuses; the health line | AC-11, AC-12, AC-13 | `library_topics.rs`, `topic_gather.rs`, `research_index.rs`, `egress.rs`, `config.rs` | 4-5 | B, C, D green on main; 139 A and B |
+| | **Total** | | | **38-48** | |
 
 F is refused by its own test (AC-13) while any sink row has no passing test.
 
@@ -181,22 +189,28 @@ F is refused by its own test (AC-13) while any sink row has no passing test.
 8. **AC-8:** `delphi handling check --staged` exits non-zero for a staged file that is a labelled page (and the daemon's push of a branch that holds one is stopped, with the file named on the card), and for an unlabelled file that holds 301 characters of a `text_held` source; it passes an `internal` file only with `--remote` on the configured list.
 9. **AC-9:** the Red card of an outbound send by a task that was given two `personal` items shows `private (2)`; the same task's private-read mark is unchanged by it.
 10. **AC-10:** a query planned by a span that was given a `confidential` item is sent as it would have been, and the reply, the search log and the result carry `planned_with: ["confidential", "internal"]`; no query is withheld for a mark.
-11. **AC-11:** after the lift, a private research record has a topic and a seed page labelled `library_private`; with the default (`all`) a foreign-family writer's prompt and a foreign-family Council seat's evidence hold its text; with `deny` set, the writer's prompt holds none of it and the seed page still does.
+11. **AC-11:** after the lift, a private research record has a topic and a seed page labelled `library_private`; with `all` a foreign-family writer's prompt and a foreign-family Council seat's evidence hold its text; with `deny` set, the writer's prompt holds none of it and the seed page still does.
 12. **AC-12:** a `confidential` item gathered for a page is in the writer's prompt and on the page, the page's headline is `CONFIDENTIAL (internal)`, and every sink of §2.4 refuses the page.
 13. **AC-13:** the lift's guard test fails when any sink of §2.4 lacks its named test or when that test is ignored.
+14. **AC-14:** for every combination of the five marks at every sink, the decision is the strictest of the single-mark decisions, in the order refuse, send labelled, quotations, send; an `internal` and `text_held` page at the export sink is sent labelled and holds no run over 300 characters.
+15. **AC-15:** a sender added to the daemon or a command added to the app that is not in the registry fails the registry test; each of the three added rows (document or deck, clipboard, a client off this machine) follows its row with a fixture sender.
+16. **AC-16:** a bibliography export for a `text_held` source whose title holds 400 characters of the source's text sends at most 300 of them, and sends no abstract and no note.
+17. **AC-17:** a bundle package of a labelled page is refused in the engine before any `delphi-bundle` function runs; `delphi connect` prints whether the pre-push hook is installed and how to install it.
 
 ## 6. Verification plan
 
 | Criterion | How it is verified |
 | :-- | :-- |
 | AC-1 to AC-3 | unit tests in `label.rs`; library tests with a scripted writer that declares a false label |
-| AC-4 | the matrix test below, one named test per sink |
+| AC-4, AC-14 | the matrix test below, one named test per sink, over single marks and over every combination |
 | AC-5 | a bundle test that scans the archive (the scan of 119 AC-4, extended) |
 | AC-6 | daemon tests for `may_export`; the app's own tests for export and print |
 | AC-7 | CLI tests on a fixture index |
 | AC-8 | CLI tests on a temporary repository |
 | AC-9, AC-10 | daemon tests; the separation test of 121 (`handling_tests.rs:245`) unchanged and still passing |
 | AC-11 to AC-13 | engine tests with pools of one and two families |
+| AC-15 | the registry test, with a planted sender and a planted app command |
+| AC-16, AC-17 | export and bundle tests; a CLI golden test for `delphi connect` |
 
 **Fitness functions: one per sink** (owner `red-team`; built by `builder`; all to be written unless said):
 
@@ -217,6 +231,10 @@ F is refused by its own test (AC-13) while any sink row has no passing test.
 | a label is computed, never declared | `label::tests::no_writer_tool_or_frontmatter_lowers_a_label` | to be written |
 | a label decides no trust | `handling_tests::no_trust_decision_reads_handling` (`handling_tests.rs:245`), extended to `label.rs` | exists (read), to be extended |
 | the lift waits for the sinks | `label::tests::the_lift_requires_every_sink_test` (AC-13) | to be written |
+| several marks take the strictest decision | `egress::tests::every_combination_of_marks_takes_the_strictest_decision` (AC-14) | to be written |
+| no sender is unlisted | `egress::tests::every_sender_is_a_registered_sink_or_proved_to_carry_no_entry_text`, and the app's `every_command_that_hands_text_out_is_registered` (AC-15) | to be written |
+| the bundle crate is reached only after the check | `egress::tests::no_engine_file_calls_a_bundle_writer_before_check_label` (AC-17) | to be written |
+| a citation carries no body text | `library_bib::tests::no_exported_field_holds_a_run_of_held_text` (AC-16) | to be written |
 | model dispatch and web search are not blocked by a mark | `label::tests::no_mark_withholds_a_query_or_a_prompt_under_all` | to be written |
 
 ### 6.1 Premortem (three months after release): how this most likely fails
@@ -234,22 +252,43 @@ Not acted on: 4 beyond the hook (enforcing inside a host's tools is outside what
 
 ## 7. What is not verified
 
-- **The operator's rulings are relayed**, not quoted. The operator confirms §1 by approving this spec.
+- **Rulings 3, 4, 7 and 8 are relayed**, not quoted; rulings 1, 2, 5 and 6 quote the operator. The operator confirms §1 by approving this spec.
+- That the app has a clipboard command, or that any path serves an app client off this machine. Slice C's inventory finds out (§2.4 item 8).
 - That every path that can write a page's text outside the home is found. Slice C begins by listing them; the list goes into the registry.
 - That the handling "given" list is fine enough for the outbound card: it is kept per mission and role, not per span (tracker `121/S1-left.md`), so the card may name marks the sending span never saw.
-- That `delphi-bundle`'s package and export paths can be given a label without that crate reading the engine's records. If not, the check runs in the engine before the bundle crate is called.
+- That every engine call into `delphi-bundle` that writes can be found by a text test. The check is committed to the engine side (§2.4 item 9); the test's list of bundle functions is made in slice B.
 - That whole-page refusal leaves enough pages exportable to be useful.
-- Whether the employer's policy is met by a notice. That is the operator's and counsel's to judge (§2.5 item 3).
+- Whether a notice meets an organisation's policy of the kind §2.5 item 3 describes. That is for the organisation and counsel to judge.
 
 ## 8. Decisions for the operator
 
 | OD | Question | Recommendation | Reversible? (operator decides) | Blocks |
 | :-- | :-- | :-- | :-- | :-- |
-| OD-1 | `private_to_models`: this workspace is `all` (**decided, operator, 2026-11-25, as relayed**). Should the **shipped** default also become `all`? | yes: the operator's reasons are not particular to this machine, and a `deny` default hides the knowledge base from an operator's own agents; `deny` and `allow` stay as values another operator can set. The alternative keeps `deny` as shipped and sets `all` here only | proposed: yes | F |
+| OD-1 | `private_to_models`: this workspace is `all` (**the operator's ruling**). The **shipped** default is **undecided**. | **Not chosen here; the Council split.** *Keep `deny` shipped, set `all` on this workspace* (the architect's finding, and the red-team's stance as the Council's verdict records it): the rulings speak of a corporate machine whose model routes its operator governs, and do not cover other installs. *Ship `all`, with setup saying so* (the strategist): the reasons are not particular to one machine, and `deny` hides a knowledge base from an operator's own agents. (The record's verdict paragraph and its structured findings name the seats differently; §9.) | proposed: yes | F |
 | OD-2 | Web queries planned with labelled material in view | **Decided (operator, 2026-11-25, as relayed): an advisory `planned_with` notice, never a refusal**, as §2.5 | decided | none |
 | OD-3 | Does the model-route ruling lift 121 §6 item 8? | **Decided (operator, 2026-11-25, as relayed): yes**, seats of other families included | decided | none |
 | OD-4 | May a `personal` item appear on a local topic page without the ask of 121 §5? | **Decided (operator, 2026-11-25, as relayed): yes** | decided | none |
 | OD-5 | Export of a page with a refusing mark: refuse outright, or let the operator override at a terminal for one page? | refuse outright in the first cut; an override would be a new operator act and its own amendment | proposed: yes | C |
 | OD-6 | Printing from the app: the same rule as export? | yes | proposed: yes | C |
-| OD-7 | After rulings 5 and 6, are 121's unbuilt slices still wanted: the reader grant for confidential (§6 item 1, S3) and the placeholder-and-ask for documents and decks (§5, S2)? "Agents get the whole knowledge base" reads as withdrawing the grant. | withdraw S3 by an amendment to 121; keep S2 for documents and decks, which do leave | proposed: yes | none (121) |
-| OD-8 | Project-history records have their own model-side setting (`[history] to_models`, spec 102, `history_record.rs:745`). Does ruling 5 reach them? | leave it as it is until asked; it is another spec's rule and a different kind of record | proposed: yes | none |
+| OD-7 | After rulings 5 and 6, are 121's unbuilt slices still wanted: the reader grant for confidential (§6 item 1, S3) and the placeholder-and-ask for documents and decks (§5, S2)? | **Withdraw S3, keep S2: the Council's recommendation (`t_0003`), for the operator to confirm.** By an amendment to 121 | proposed: yes | none (121) |
+| OD-8 | Does ruling 5 reach project-history records (`[history] to_models`, spec 102, `history_record.rs:745`)? | **Leave it unchanged: the Council's recommendation, for the operator to confirm.** | proposed: yes | none |
+
+## 9. Review
+
+Council `t_0003` (a daemon Council of 2026-11-25, session `host-e11ba3fe9035ccf9`) read the earlier draft of this spec (commit `80df2642`) together with 142, and ruled **PROCEED-WITH-CHANGES**. Its record is committed at `missions/2026-11-25-knowledge-v2/councils/003-review-draft-specs-141-labels-enforced-a.md`.
+
+**What the record is, said plainly.** Every seat's context was cut short, so no seat read both specs whole. Architect and strategist sat on one model family; both recommended PROCEED-WITH-CHANGES, and the strategist did not concur in Round 2. The red-team seat, on another family, gave a Round 1 stance; its Round 2 could not be parsed. **No red-team has read this text as a whole.** The daemon escalated the verdict to the operator with four P0 findings unresolved. Nobody has reviewed the amended text. Approval therefore needs either the operator's own waiver of GOVERNANCE §1.3, quoted in the status line, or a witnessed Panel with a red-team seat on the amended text. The committed copy has **one line redacted** (the operator's project names, which the daemon prints into every Council's question), because this repository is public.
+
+| Finding (on this spec) | Severity | Response |
+| :-- | :-- | :-- |
+| the sink list lacks the app's clipboard, document and deck export, and relay and pairing paths; enumerate first; the registry test must fail on an unlisted sender | P0 | §2.4: three rows; item 8; slice C; AC-15 |
+| no rule for a label with several marks | P1 | §2.3 item 1; AC-14 |
+| `delphi-bundle` may not see labels | P1 | §2.4 item 9: the check is in the engine, before the bundle crate; AC-17 |
+| the bibliography row passes `text_held` | P2 | §2.4 item 7; AC-16 |
+| a host's own push cannot be enforced | P2 | kept as a stated limit (§3); §2.4 item 10; AC-17 |
+| the shipped default of `private_to_models` | P1 | OD-1, left open with both positions |
+| `reviewed_by` empty; the rulings relayed, not quoted | P0, P1 | `reviewed_by` filled, with its limits; four rulings quoted |
+
+**The Council's recommendations on open decisions, for the operator to confirm:** OD-7, withdraw 121 S3 and keep S2. OD-8, leave `[history] to_models` unchanged. `specs/139` OD-6, do not pull this spec's guard forward. On OD-1 the seats split. The record's structured findings give the architect as keeping `deny` shipped; its verdict paragraph says the architect and the strategist would ship `all` and the red-team would keep `deny`. This text takes the structured findings and the coordinating session's account (architect and red-team for `deny`, strategist for `all`) and does not choose.
+
+**Not adopted:** nothing on this spec was rejected.
