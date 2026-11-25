@@ -16,7 +16,8 @@ tags: [spec, library, pages, topics, research, seed, writer, encyclopedia]
 # Spec 139: Pages seeded from research
 
 > **Status: draft**, revised 2026-11-25 with the operator's decisions of that day and the findings of the live proof (step 0). One of five specs from the knowledge audit of 2026-11-25 (139 to 143).
-> **Proposed build order (not yet confirmed by the operator):** the single-turn harness bridge (`specs/143`), the source text cache (`specs/142`), **this spec**, the golden set (`specs/140`), label enforcement (`specs/141`), then the one knowledge record and the later steps, which have no spec yet. This spec comes after 142 because a validated page needs source text to be checked against (O8), and after 143 because the writer has no route today (O7). Its seed slices (A, B, D, E) need neither and may be built first.
+> **The plan is approved; this text is not yet.** The operator approved the plan on 2026-11-25 ("go"). The status stays `draft` until a witnessed Panel with a red-team seat has read this text; approval is marked after that.
+> **Build order (confirmed by the operator, 2026-11-25):** the single-turn harness bridge (`specs/143`), with **this spec's seed slices (A, B, D, E) built alongside it**; then the source text cache (`specs/142`); then **the remaining slices of this spec (C, F, G, H)**; then the golden set (`specs/140`); then label enforcement (`specs/141`); then the one knowledge record and the later steps, which have no spec yet. The writer slices come after 142 because a validated page needs source text to be checked against (O8), and after 143 because the writer has no route today (O7).
 > **Amends:** [`specs/117`](117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md) §2 items 1 to 4 (how a topic is named, rebuilt and gathered), [`specs/097`](097-encyclopedia-search-pages.md) §4.5 (a third depth beside `summary` and `expanded`), [`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §2 item 1 (one optional input). **Builds on:** [`specs/112`](112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md) §2 (the record and `answer.md`), [`specs/116`](116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md) §5 (findings), [`specs/118`](118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md) §5 (figures).
 
 ---
@@ -121,6 +122,25 @@ Chosen: **B**, with the writer's expansion on top. A loses the research when the
 3. `[library.pages] build_after_research` (default `true`) turns the trigger off. `auto_rebuild = false` still leaves the writer's rebuilds to the operator; the seed is written regardless, because it costs nothing.
 4. The reply to `record_research` and the research result name the page's slug and its outcome (`seed`, until the writer's page lands).
 
+### 2.6 The writer role, used properly
+
+1. **What is there today, and stays.** The writer's call is built with the role's own text: `role_call::load` for the step `WritePage` (`page_run.rs:36-60`, `role_call.rs:46`) loads, from the ratified store only, the writer's charter excerpt, its page skill `encyclopedia-synthesis`, and its ratified heuristics and lessons, under the call's own governance line.
+2. **The long depth carries the whole skill.** For a page at `long`, the `encyclopedia-synthesis` skill is carried in full. If the role text would not fit the call, lessons and heuristics are shortened first and are listed as left out (`RoleText::dropped`, `role_call.rs:16`); a long page is never written with the skill cut or missing, and a build that cannot carry it fails with a notice (143 §2.7).
+3. **Each page says what it was built with.** The sidecar gains `built_with`: the writer's `pack_hash` and the validator's (`mcp_packs.rs:286`), and the model each ran on. A seed page records none, since no role wrote it.
+4. **When the writer changes, its pages are due.** A page whose `built_with.writer_pack` is not the writer's current `pack_hash` is due, with the reason `the writer role changed`. The pack is made from the ratified store, so only a change the operator ratified (to the writer's instructions, its skill, the heuristics or its lessons) can cause this; nothing an agent writes can.
+5. **A few at a time.** Pages due for this reason are rebuilt oldest first, at most `[library.pages] stale_writer_per_day` a day (default 3), inside `per_day` and the page budget of §2.3 item 8, and always from the seed and the spans (§2.3 item 6), never from the page they replace. `delphi pages rebuild --stale-writer` rebuilds them all now, as the operator's own job (143 §2.8).
+6. A change of the validator's pack is recorded and does not make a page due: the page's words are the writer's.
+
+### 2.7 Learning from validation
+
+1. **A history of outcomes, for each writer pack.** Every writer build appends one line to `local/pages/history.jsonl`: when, the topic's slug, the depth, the outcome (`pass`, `pass_contested`, `claims_only`, `seed`), the number of rewrites, **the validator's findings by kind**, the page's words and citations, the tokens, and `built_with`. The kinds are a closed list taken from the page check and the validator: `not verbatim`, `unsupported`, `fabricated citation`, `unresolved marker`, `figure failed`, `over length`, `other`. A line holds numbers and names from that list, never a sentence of a page, a claim or a source.
+2. The file follows the rules of the retrieval history (140 §2.6 items 1 to 3): written only by the daemon, append-only, versioned, never pruned, and carried unchanged by any later change of stores.
+3. **Visible.** `delphi pages history [--pack <hash>] [--json]` shows, for each writer pack in time order, the pass rate, the findings by kind, and the median words and citations. `delphi kb health` gains one line (the current pack's pass rate against the pack before it). The app shows it beside the retrieval-quality panel of 140. A view document is regenerated beside 140's (`local/knowledge/writer-quality.md`), so an agent, and whoever coaches the writer, can find it by search.
+4. **Repeated findings become a note for the writer, not a lesson.** When one kind of finding appears in three or more of the last ten builds under the same writer pack, the daemon writes one provisional note for the role `writer` (116 §2), kind `pitfall`, in words made by code from the counts (`In 4 of the last 10 pages the validator found quotations that were not verbatim from the record cited.`). One note for a kind and a pack, until the rate falls below the threshold.
+5. **Never automatic.** The note is a candidate. It reaches the writer's lessons only by the ordinary path: the digest, the retro, and the operator's ratification (GOVERNANCE §7, channel 4). No code path writes a lesson, and nothing in a page or a source can cause one: the note is made from counts, not from text.
+6. **The loop this closes.** A ratified lesson changes the writer's pack; pages built under the old pack become due (§2.6 item 4) and are rebuilt a few at a time; the history then shows the new pack's pass rate beside the old one's. Whether the lesson helped is read off the numbers.
+
+
 ## 3. Authority
 
 - **Nothing new may act.** The seed is assembled from files the daemon already reads for a page. No tool, no network path and no agent write path is added.
@@ -141,9 +161,11 @@ One pull request each. Hours are estimates.
 | D | titles: `subject`, the writer's `title=`, the derived title, `pages rename`, `pages retitle` | AC-8, AC-9 | `library_topics.rs`, `host_research.rs`, `mcp_host.rs`, `pages_cmd.rs` | 4-5 | A |
 | E | build now: the trigger at both ends of research, the reply fields, `build_after_research` | AC-10 | `service.rs`, `page_run.rs`, `research_jobs.rs` | 3-4 | B |
 | F | the page budget: `week_tokens`, the reserve by depth, pages no longer charged to the validator's share, the health line | AC-11 | `page_run.rs`, `fact_audit.rs`, `config.rs`, `knowledge_health.rs` | 2-3 | C |
-| | **Total** | | | **23-30** | |
+| G | the writer role: the whole skill at `long`, `built_with` on every page, due when the writer's pack changes, the daily trickle, `pages rebuild --stale-writer` | AC-13, AC-14 | `page_run.rs`, `role_call.rs`, `library_topics.rs`, `pages_cmd.rs`, `config.rs` | 4-5 | C |
+| H | learning from validation: the outcome history, `pages history`, the health line, the view, the note on repeated findings; the app's panel with 140 slice H | AC-15, AC-16 | `page_history.rs` (new), `library_page_validate.rs`, `provisional_notes.rs`, `knowledge_health.rs`, `main.rs` | 5-6 | C |
+| | **Total** | | | **32-41** | |
 
-A, B, D and E are useful with no model and may be built before 143 and 142. C and F need the writer route of 143; a page that passes validation also needs the source text and summaries of 142.
+A, B, D and E are useful with no model and are built alongside 143. C, F, G and H need the writer route of 143; a page that passes validation also needs the source text and summaries of 142.
 
 ## 5. Acceptance criteria
 
@@ -159,6 +181,10 @@ A, B, D and E are useful with no model and may be built before 143 and 142. C an
 10. **AC-10:** `record_research` returns the page's slug with outcome `seed`; a queued expansion then runs ahead of an older due topic; with `build_after_research = false` neither happens.
 11. **AC-11:** with `week_tokens` spent, a due topic is not written, keeps its seed and is reported by `delphi kb health`; a page's tokens are not counted against the validator's share; the reserve for a long page is four times a summary page's.
 12. **AC-12:** a topic whose research record has `claims: []` and an `answer.md` gets a seed page from the answer; the seed holds no claim row and the build does not fail for it.
+13. **AC-13:** a long page's call carries the whole `encyclopedia-synthesis` skill, the writer's charter excerpt and its ratified lessons; with a role text too large for the call, lessons are shortened and listed, and the skill is still whole; a build that cannot carry the skill writes no page and raises a notice. The page's sidecar holds the writer's and the validator's `pack_hash` and models.
+14. **AC-14:** after the operator ratifies a new writer lesson, every page built under the old pack is due with `the writer role changed`; at idle at most three are rebuilt in a day, oldest first, each from its seed; `delphi pages rebuild --stale-writer` rebuilds the rest; an unratified edit to the writer's files makes nothing due; a new validator pack makes nothing due.
+15. **AC-15:** each writer build appends one history line with the fields of §2.7 item 1 and no text of a page, a claim or a source; `delphi pages history` shows the pass rate and the findings by kind for two packs in order; the file is never rewritten.
+16. **AC-16:** four builds out of ten with a `not verbatim` finding under one pack leave exactly one provisional note for the writer, made of counts; two out of ten leave none; nothing is written to any lessons file, and the note appears in the next digest for the operator to ratify or drop.
 
 ## 6. Verification plan
 
@@ -173,6 +199,8 @@ A, B, D and E are useful with no model and may be built before 143 and 142. C an
 | AC-10 | a daemon test with a scripted host and two due topics |
 | AC-11 | engine tests with a fixed clock and a journal fixture |
 | AC-12 | a seed test on a record with no claims (the shape step 0 found) |
+| AC-13, AC-14 | engine tests with a scripted writer and a ratified-store fixture; a test that an unratified edit changes no hash |
+| AC-15, AC-16 | history tests on a fixture with a fixed clock; a scan of the history and the note for fixture page text; a test that no lessons file changes |
 
 **Fitness functions** (checks that fail when an invariant erodes; owner `builder` unless said):
 
@@ -183,6 +211,10 @@ A, B, D and E are useful with no model and may be built before 143 and 142. C an
 | the seed is deterministic | the property test of AC-2 | Rust test | to be written |
 | no private record is a span | `topic_seed::tests::a_private_record_is_never_a_span`; replaced, not deleted, by the label test of `specs/141` | Rust test, owner `red-team` | to be written |
 | a seed block is verbatim from its span | the seed check of §2.2 item 3, run in `topic_store` | daemon check | to be written |
+| a long page is never written without the writer's skill | `page_run::tests::a_long_page_call_always_carries_the_whole_page_skill` (AC-13) | Rust test | to be written |
+| only a ratified change to the writer makes pages due | `library_topics::tests::an_unratified_writer_edit_makes_no_page_due` (AC-14) | Rust test, owner `red-team` | to be written |
+| validation findings never become a lesson by themselves | `page_history::tests::a_repeated_finding_writes_a_note_and_no_lesson` (AC-16) | Rust test, owner `red-team` | to be written |
+| the outcome history holds no page text and is never rewritten | the scan of AC-15, and an append-only test as in 140 | Rust test | to be written |
 
 ### 6.1 Premortem (three months after release): how this most likely fails
 
@@ -202,6 +234,8 @@ Not acted on: 5 beyond the banner (a reader who ignores a banner is outside what
 - **Step 0 is reported, not re-run here.** Its findings (O7 to O9) are written as relayed. The route failure is fixed by `specs/143`; the rewrite bug is fixed in commit `c1fca8ca` on the local branch `step0/live-proof`, which is not on main.
 - **That a seed-fed writer passes validation.** Step 0's pages failed because the validator had only pointers. Seed spans give it text for rows 1 to 6; whether that is enough before 142 lands is not observed.
 - **The size of the page budget.** 600,000 tokens a week is a guess from step 0's one figure (about 6,000 tokens for a short page) and an assumed fourfold cost for a long one.
+- That a role's `pack_hash` (`mcp_packs.rs:286`) changes exactly when the text `role_call` loads for the writer changes, and not otherwise. If the two can differ, slice G records a hash of the loaded role text and uses that for §2.6 item 4.
+- That the page check and the validator report their findings in kinds that map onto the closed list of §2.7 item 1. Slice H reads them; what does not map is counted as `other`.
 - Whether the page check and `finish_page` accept a block longer than 1 KiB when it is a seed block and not a quotation. The seed has its own check (§2.2 item 3) so that this does not matter; slice B confirms.
 - Whether a summary page's bibliography names its sources in a form code can match to a research record's sources (row 4 of §2.1). If not, row 4 is dropped in slice A and said so in the tracker.
 - Whether one writer call produces a good 2,000-word page. Not measured; the outline-first method is step 7.
@@ -211,9 +245,11 @@ Not acted on: 5 beyond the banner (a reader who ignores a banner is outside what
 
 | OD | Question | Recommendation | Reversible? (operator decides) | Blocks |
 | :-- | :-- | :-- | :-- | :-- |
-| OD-1 | Is a seed page shown as a page (with its banner), or held back until the writer's page exists? | **Decided (operator, 2026-11-25, as relayed): shown.** | decided | none |
+| OD-1 | Is a seed page shown as a page (with its banner)? | **Decided (operator, 2026-11-25): shown.** | decided | none |
 | OD-2 | The cap for a long page: 8,000 tokens? | 8,000, and `per_day` stays 20 | proposed: yes | C |
-| OD-3 | May `record_research` take `subject` from the host as the page title? | yes, under the rules of §2.4 item 3 | proposed: yes (a title can be renamed) | D |
-| OD-4 | Re-slug the nine unbuilt topics on the operator's workspace? | **Decided (operator, 2026-11-25, as relayed): yes**, to concept titles, by `pages retitle --apply` after the dry run | decided | none |
-| OD-5 | The weekly page budget: 600,000 tokens, apart from the validator's share? | yes; revisit after the first week of long pages | proposed: yes | F |
-| OD-6 | The proposed order builds this spec before 141, so private research (which holds the only claims today, O8) reaches pages last. Pull 141's page-export guard and its lift forward, or accept the wait? | accept the wait: seeds come from public answers meanwhile, and the guard should not be rushed | proposed: yes | none |
+| OD-3 | May `record_research` take `subject` from the host as the page title? | **Decided (operator, 2026-11-25, "use your defaults"): yes**, under the rules of §2.4 item 3 | decided | none |
+| OD-4 | Re-slug the nine unbuilt topics on the operator's workspace? | **Decided (operator, 2026-11-25): yes**, to concept titles, by `pages retitle --apply` after the dry run | decided | none |
+| OD-5 | The weekly page budget: 600,000 tokens, apart from the validator's share? | **Decided (operator, 2026-11-25): yes, 600,000 a week**; revisit after the first week of long pages | decided | none |
+| OD-6 | Pull 141's page-export guard and its lift forward, so private research reaches pages sooner? | **Decided (operator, 2026-11-25): no, do not pull 141 forward.** Seeds come from public answers meanwhile | decided | none |
+| OD-7 | The trickle for pages due because the writer changed: three a day? And should a new validator pack also make pages due? | three a day; no for the validator (§2.6 item 6) | proposed: yes | G |
+| OD-8 | The threshold for a note to the writer: one kind of finding in three of the last ten builds? | as written, revised when the history has a month in it | proposed: yes | H |

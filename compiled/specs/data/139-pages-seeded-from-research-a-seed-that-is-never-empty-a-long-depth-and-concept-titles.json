@@ -10,103 +10,115 @@
     },
     {
       "level": 2,
-      "line": 24,
+      "line": 25,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 42,
+      "line": 43,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 49,
+      "line": 50,
       "number": "1.2",
       "title": "Simpler alternative considered"
     },
     {
       "level": 3,
-      "line": 54,
+      "line": 55,
       "number": "1.3",
       "title": "Options considered"
     },
     {
       "level": 2,
-      "line": 64,
+      "line": 65,
       "number": "2",
       "title": "Design"
     },
     {
       "level": 3,
-      "line": 66,
+      "line": 67,
       "number": "2.1",
       "title": "The seed"
     },
     {
       "level": 3,
-      "line": 85,
+      "line": 86,
       "number": "2.2",
       "title": "The seed page"
     },
     {
       "level": 3,
-      "line": 93,
+      "line": 94,
       "number": "2.3",
       "title": "The writer expands the seed; a failure keeps it"
     },
     {
       "level": 3,
-      "line": 104,
+      "line": 105,
       "number": "2.4",
       "title": "Titles that are concepts"
     },
     {
       "level": 3,
-      "line": 117,
+      "line": 118,
       "number": "2.5",
       "title": "Build now"
     },
     {
+      "level": 3,
+      "line": 125,
+      "number": "2.6",
+      "title": "The writer role, used properly"
+    },
+    {
+      "level": 3,
+      "line": 134,
+      "number": "2.7",
+      "title": "Learning from validation"
+    },
+    {
       "level": 2,
-      "line": 124,
+      "line": 144,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 131,
+      "line": 151,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 148,
+      "line": 170,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 163,
+      "line": 189,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 187,
+      "line": 219,
       "number": "6.1",
       "title": "Premortem (three months after release): how this most likely fails"
     },
     {
       "level": 2,
-      "line": 200,
+      "line": 232,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 210,
+      "line": 244,
       "number": "8",
       "title": "Decisions for the operator"
     }
@@ -114,7 +126,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/139-pages-seeded-from-research-a-seed-that-is-never-empty-a-long-depth-and-concept-titles.md",
-    "sha256": "fc257896914f792488afebd5b7f25d20b2d83403ad6e800c4baa71448fcb2aa5"
+    "sha256": "565009cef693e5e11a6a453b319298b1e367cf8b0d5340fd8a2b2e4fc7fc1b4c"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +139,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "fc257896914f792488afebd5b7f25d20b2d83403ad6e800c4baa71448fcb2aa5",
+    "sha256": "565009cef693e5e11a6a453b319298b1e367cf8b0d5340fd8a2b2e4fc7fc1b4c",
     "word": "draft"
   },
   "spec": {
@@ -142,10 +154,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2757,
-      "end_line": 26,
-      "line": 26,
-      "start": 2597
+      "end": 3040,
+      "end_line": 27,
+      "line": 27,
+      "start": 2880
     },
     "text": "The operator's workspace holds nine topic pages and none has ever been built. Reading the code explains why a built page would be poor even when the build runs:"
   }
