@@ -87,7 +87,7 @@ Chosen: **A**. B is ruled out by the operator. C is A's table turned on its side
 
 2. **Maximum means union.** The marks are not a ladder (121 §2 item 3), so the least label that is at least as strict as each input is the union of the inputs. `Label::join` is that union. An empty label is unlabelled.
 3. **Computed, never declared.** `Label` values are made only by the daemon, from its own records: the handling record (`handling.rs:316`), the source's `meta.json`, the research record. A label written in a file's frontmatter, a tool argument, a writer's draft or a host's report is a view or a note and is never read as the label. An agent or a host may still **add** a handling trait (121 §3 item 4); nothing lowers a label but the operator (121 §3 item 3) or, for `library_private` and `text_held`, the operator's own source commands.
-4. **Unreadable, missing and stale are strictest.** A record that cannot be read has every mark, at every sink (as `egress.rs:13-15` does for the one bit). So does a thing with **no label at all**: a page whose sidecar has no `label`, and an index row whose `marks` is empty because it was written before this spec. They were made before labels existed, and reading them as unlabelled would let them leave freely. And so does a thing whose label is **older than a handling record or a source record it was computed from**. Each stays at every mark until it is rebuilt, reindexed, or relabelled by `delphi handling relabel` (which recomputes the label of every page from its recorded material, and of every index row, without calling a model).
+4. **Unreadable, missing and stale are strictest.** A record that cannot be read has every mark, at every sink (as `egress.rs:13-15` does for the one bit). So does a thing with **no label at all**: a page whose sidecar has no `label`, and an index row whose `marks` is empty because it was written before this spec. They were made before labels existed, and reading them as unlabelled would let them leave freely. And so does a thing whose label is **stale: computed from label-bearing facts that have since changed**. Staleness is not judged by dates, because a source's record is rewritten on every revisit. With each label the daemon stores a fingerprint of exactly the facts that decide it, for each item of the material: the item's handling traits, a source's `private` flag, its licence when that is `private`, its `rights`, and a research record's `private` flag. A label is stale when, and only when, that fingerprint no longer matches; a revisit, a new `last_checked`, a new version of the text or a changed citation changes none of those facts and makes nothing stale. Each stays at every mark until it is rebuilt, reindexed, or relabelled by `delphi handling relabel` (which recomputes the label of every page from its recorded material, and of every index row, without calling a model).
 5. **What a label covers.** The item's text and everything derived from it by code: title, slug, anchors, excerpts, vectors, chunk headers. A sink that refuses an item sends none of them.
 
 ### 2.2 Where the label is kept
@@ -170,7 +170,7 @@ Built last, in its own slice, after the sink tests of §6 pass on main.
 | Slice | Content | Criteria | Files | Hours | Depends on |
 | :-- | :-- | :-- | :-- | --: | :-- |
 | S0 | this spec; the operator's answers to §8; a Council or Panel with a red-team seat | (the spec) | this file | 2-3 | none |
-| A | `Label`: the type, the join, of a source, a record, a chunk (`marks` column, the hit) and a page (sidecar, frontmatter view, the visible line); the decision order for several marks; missing and stale labels read as every mark; `delphi handling relabel` | AC-1, AC-2, AC-3, AC-14, AC-19 | `label.rs` (new), `handling.rs`, `kb.rs`, `library_topics.rs`, the `handling` command | 10-12 | S0 |
+| A | `Label`: the type, the join, of a source, a record, a chunk (`marks` column, the hit) and a page (sidecar, frontmatter view, the visible line); the decision order for several marks; missing and stale labels read as every mark; `delphi handling relabel` | AC-1, AC-2, AC-3, AC-14, AC-19, AC-21 | `label.rs` (new), `handling.rs`, `kb.rs`, `library_topics.rs`, the `handling` command | 10-12 | S0 |
 | B | `check_label`, the sink table in the registry; bundle, bibliography and Xenia wired | AC-4, AC-5 | `egress.rs`, `library_export.rs`, `library_bib.rs`, `service_xenia.rs`, `delphi-bundle` | 6-8 | A |
 | C | **the inventory of senders first** (§2.4 item 8), then: `may_export` in the page reply, the app's export, print and copy, a document or deck written out, a reply to a client off this machine, `kb seed-export`, remote `kb serve`; the registry test in the daemon and in the app | AC-6, AC-7, AC-15, AC-16 | `service.rs`, `egress.rs`, `app/src-tauri/src/lib.rs`, `kb.rs`, `kbserve.rs`, the document path | 8-10 | B |
 | D | `delphi handling check` and the hook; the marks line on outbound cards | AC-8, AC-9 | the `handling` command, `worktree.rs`, `finalize.rs`, `private_read.rs`, `harness_run.rs` | 6-7 | B |
@@ -204,6 +204,7 @@ F is refused by its own test (AC-13) while any sink row has no passing test.
 18. **AC-18:** a fresh install with no `[library]` table behaves as `private_to_models = "all"`; `delphi init`, `delphi research setup` and `delphi handling status` each print the line that says so and names `deny`; with `deny` set, no library-private entry enters any model prompt and the status line says `deny`.
 19. **AC-19:** a page built before this spec (no `label` in its sidecar) and an index row with no `marks` are refused by every sink as if they carried every mark; a page labelled `internal` whose material gained a `personal` trait afterwards is refused at the export sink although its stored label says `internal`; after `delphi handling relabel` each has its true label and is sent or refused by its row. The sink's decision is computed from the daemon's records at the time of the send, never read from the page alone.
 20. **AC-20:** wherever a row says `Q`, the decision is `body_may_leave`'s: an output with ten quotations of 290 characters from one held source is refused, as 142 AC-27 has it.
+21. **AC-21:** revisiting a source, capturing a new version of its text and editing its citation leave every page that used it with its label and not stale; adding a handling trait to it, flagging it private or changing its `rights` makes those pages stale at once.
 
 ## 6. Verification plan
 
@@ -222,6 +223,7 @@ F is refused by its own test (AC-13) while any sink row has no passing test.
 | AC-18 | a config test for the default; CLI golden tests for the three commands |
 | AC-19 | sink tests with a fixture page from before labels and a page with a stale label; a CLI test for `relabel` |
 | AC-20 | the sink matrix, with the fixture of 142 AC-27 |
+| AC-21 | label tests over a revisit, a new version, a citation edit and each label-bearing change |
 
 **Fitness functions: one per sink** (owner `red-team`; built by `builder`; all to be written unless said):
 
@@ -320,6 +322,7 @@ Panel `t_0004` (a witnessed host Panel of 2026-11-25, session `host-e11ba3fe9035
 | the sink trusts a stored page label that can be stale-low | P1 | §2.2: the label is recomputed at the sink from the daemon's records; AC-19 |
 | the 300-character bound in the `Q` column is per run | P1 | the `Q` column is `body_may_leave` of 142, with its aggregate cap; AC-20 |
 | run the sender inventory at the start of 142 slice B | P1 | §2.4 item 8 |
+| "older than a source record" made a page every-mark on every revisit | P2, `t_0004` red-team recheck | §2.1 item 4: staleness is a fingerprint of the label-bearing facts only; AC-21 |
 | live and manual criteria need dated tracker entries | P2 | §4 |
 
 **Not adopted:** nothing on this spec was rejected.

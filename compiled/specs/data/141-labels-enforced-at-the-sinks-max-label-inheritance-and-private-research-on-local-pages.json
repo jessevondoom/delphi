@@ -94,37 +94,37 @@
     },
     {
       "level": 2,
-      "line": 208,
+      "line": 209,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 255,
+      "line": 257,
       "number": "6.1",
       "title": "Premortem (three months after release): how this most likely fails"
     },
     {
       "level": 2,
-      "line": 268,
+      "line": 270,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 278,
+      "line": 280,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 291,
+      "line": 293,
       "number": "9",
       "title": "Review"
     },
     {
       "level": 3,
-      "line": 311,
+      "line": 313,
       "number": "9.1",
       "title": "Panel `t_0004`"
     }
@@ -132,7 +132,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/141-labels-enforced-at-the-sinks-max-label-inheritance-and-private-research-on-local-pages.md",
-    "sha256": "1dee9db5f25242dc832d46af6a28dafc1079e27b36f74932d453829e4d0faa13"
+    "sha256": "a3d8f4b17b61c63ab6038482c5ff0be9cb6e8bdeb7c332f32052b449dc47d69f"
   },
   "source_status_at_hash": {
     "line": {
@@ -145,7 +145,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "1dee9db5f25242dc832d46af6a28dafc1079e27b36f74932d453829e4d0faa13",
+    "sha256": "a3d8f4b17b61c63ab6038482c5ff0be9cb6e8bdeb7c332f32052b449dc47d69f",
     "word": "draft"
   },
   "spec": {
