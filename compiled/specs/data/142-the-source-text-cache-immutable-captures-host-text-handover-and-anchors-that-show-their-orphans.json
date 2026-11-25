@@ -4,7 +4,7 @@
   "outline": [
     {
       "level": 1,
-      "line": 16,
+      "line": 17,
       "number": null,
       "title": "Spec 142: The source text cache"
     },
@@ -138,21 +138,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/142-the-source-text-cache-immutable-captures-host-text-handover-and-anchors-that-show-their-orphans.md",
-    "sha256": "90b820083b0763e5b5ab8ffd5dfe84257767d3426ef3c108c6c11b96d41f6689"
+    "sha256": "4140028344fd38a791d6897add1a83f6a0b636d6d58b8cb0987ae56a32f5eeca"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 289,
+        "end": 1221,
         "end_line": 6,
         "line": 6,
         "start": 276
       },
-      "text": "status: draft"
+      "text": "status: approved   # by the operator, 2026-11-25: \"approve 139–143 as recommended, waive §1.3\". The words are the operator's, as relayed by the coordinating session to the architect agent that wrote this line; the approval takes effect when the operator merges the pull request that carries it. \"As recommended\" settles every open decision of section 8 at its recommended value. \"waive §1.3\" is the operator's own waiver of the review GOVERNANCE §1.3 asks for, and it is needed: no independent review of this text exists. Council t_0003 read an earlier draft with its context cut, and its red-team seat (the one seat of a second family) gave no readable final critique; Panel t_0004 read the text whole, with a red-team seat, on one model family only, the family that wrote the spec, so it does not count as an independent review and cannot be cited in reviewed_by. The findings of both, and of the Panel's recheck, are applied (section 9)."
     },
-    "sha256": "90b820083b0763e5b5ab8ffd5dfe84257767d3426ef3c108c6c11b96d41f6689",
-    "word": "draft"
+    "sha256": "4140028344fd38a791d6897add1a83f6a0b636d6d58b8cb0987ae56a32f5eeca",
+    "word": "approved"
   },
   "spec": {
     "group": "knowledge-and-memory",
@@ -166,10 +166,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 4628,
+      "end": 5400,
       "end_line": 28,
       "line": 28,
-      "start": 4441
+      "start": 5213
     },
     "text": "**The operator's decisions, 2026-11-25**, on the four rules the audit named. They are as relayed by the coordinating session, except where the operator's own words of that day are quoted:"
   }

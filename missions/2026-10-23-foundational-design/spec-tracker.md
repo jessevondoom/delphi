@@ -541,3 +541,9 @@ Slices: per-slice files (spec 135 §14.10); see `delphi forge tracker --spec 135
 ## Release notes from fragments (spec 036 §9, approved in advance 2026-11-22)
 
 Slices: per-slice files (spec 135 §14.10); see `delphi forge tracker --spec 036`, `delphi forge tracker --spec 135`.
+
+## Knowledge, second pass: specs 139 to 143 (approved 2026-11-25)
+
+Five specs from the knowledge audit of 2026-11-25 and the live proof (step 0): 143 (a single-turn harness bridge), 142 (the source text cache), 139 (pages seeded from research), 140 (a golden set for retrieval) and 141 (labels enforced at the sinks). Approved by the operator on 2026-11-25, as relayed by the coordinating session: "approve 139–143 as recommended, waive §1.3". Every open decision takes its recommended value, and GOVERNANCE §1.3 is waived by the operator: the reviews on record (Councils `t_0002` and `t_0003`, Panel `t_0004`) include no independent one. Build order: 143 with 139's seed slices (A, B, D, E); 140's baseline (A, B, D); 142 (A, E, D1, B, C, G); the pointer backfill; 139 C and F; the rest of 140; 141; and, kept late, 139 G and H, 140 H, 142 D2 and F.
+
+Slices: per-slice files (spec 135 §14.10); see `delphi forge tracker --spec 139`, `delphi forge tracker --spec 140`, `delphi forge tracker --spec 141`, `delphi forge tracker --spec 142`, `delphi forge tracker --spec 143`.

@@ -4,7 +4,7 @@
   "outline": [
     {
       "level": 1,
-      "line": 16,
+      "line": 17,
       "number": null,
       "title": "Spec 140: A golden set for retrieval"
     },
@@ -126,21 +126,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/140-a-golden-set-for-retrieval-recall-ndcg-a-baseline-and-a-gate-on-every-retrieval-change.md",
-    "sha256": "8bb090eccb0f077ff9ddf1a9942df64885404b7d20ed1b700cb276bb8c01f51d"
+    "sha256": "f0b23f5675f749f5a11f55052d3d5056696ace348b63dd399b71e7e702176cd3"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 272,
+        "end": 1028,
         "end_line": 6,
         "line": 6,
         "start": 259
       },
-      "text": "status: draft"
+      "text": "status: approved   # by the operator, 2026-11-25: \"approve 139–143 as recommended, waive §1.3\". The words are the operator's, as relayed by the coordinating session to the architect agent that wrote this line; the approval takes effect when the operator merges the pull request that carries it. \"As recommended\" settles every open decision of section 8 at its recommended value. \"waive §1.3\" is the operator's own waiver of the review GOVERNANCE §1.3 asks for, and it is needed: no independent review of this text exists. Panel t_0004 read it, with a red-team seat, and its findings are applied (section 9); every seat was on one model family, the family that wrote the spec, so the Panel does not count as an independent review and cannot be cited in reviewed_by."
     },
-    "sha256": "8bb090eccb0f077ff9ddf1a9942df64885404b7d20ed1b700cb276bb8c01f51d",
-    "word": "draft"
+    "sha256": "f0b23f5675f749f5a11f55052d3d5056696ace348b63dd399b71e7e702176cd3",
+    "word": "approved"
   },
   "spec": {
     "group": "learning-and-evals",
@@ -154,10 +154,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 4790,
+      "end": 5596,
       "end_line": 34,
       "line": 27,
-      "start": 3119
+      "start": 3925
     },
     "text": "| # | Observation (origin/main 52bdd3b8, and the operator's workspace on 2026-11-25) | Where |\n| :-- | :-- | :-- |\n| O1 | A harness exists. `delphi kb eval` indexes a **documents folder** (the repository's own files by default) into a fresh index and prints recall at 1, 3, 5 and 10 and MRR, for each of lexical, vector, hybrid and reranked search, over 48 questions and a 44-question holdout. | `kb.rs:2714-2800`, `:3341`; `dev/kb-eval.json`, `dev/kb-eval-holdout.json` |\n| O2 | It does not measure the operator's corpus, has no graded relevance (so no nDCG), stops at ten results (`kb.rs:2151` caps every search at 10), and calls `Kb::search` directly, so it never passes through the service that agents and hosts use and never meets its deadline. | `kb.rs:2741-2760`, `:2151`; `retrieval.rs:68` |\n| O3 | The service gives the hybrid search 800 ms and then answers with keywords alone, labelled `lexical-deadline`. One sampled `search_kb` call on the operator's workspace did exactly that. Nobody knows how often. | `retrieval.rs:14`, `:101-110` |\n| O4 | The operator's index holds 5,423 chunks, among them 82 project research files. The corpus is not empty: a set can be built from it today. | the audit of 2026-11-25 |\n| O5 | Real questions are already on disk: every research record's `question` (`research_record.rs:266`), every finding's question (`finding_record.rs:109`), and every search that found nothing (`local/kb-misses.jsonl`, `kb.rs:2532`). | as named |\n| O6 | Steps 6 and 7 of the plan (chunk headers, reranking, pre-filtering, usage boosts) each change ranking. Without a fixed set, \"better\" cannot be told from \"different\". | the audit of 2026-11-25 |"
   }

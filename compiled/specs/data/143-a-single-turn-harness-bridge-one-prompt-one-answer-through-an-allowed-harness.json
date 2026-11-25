@@ -4,7 +4,7 @@
   "outline": [
     {
       "level": 1,
-      "line": 16,
+      "line": 17,
       "number": null,
       "title": "Spec 143: A single-turn harness bridge"
     },
@@ -156,21 +156,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/143-a-single-turn-harness-bridge-one-prompt-one-answer-through-an-allowed-harness.md",
-    "sha256": "0b66cce787fdfefa7a8ca0b693f54164146512fa6640d32b51905c40a3c1eabe"
+    "sha256": "1be8357bd829604b1ceba1a58694cf76c14e2dfa800e50d7b1e79fbcef1bf7e8"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 253,
+        "end": 1163,
         "end_line": 6,
         "line": 6,
         "start": 240
       },
-      "text": "status: draft"
+      "text": "status: approved   # by the operator, 2026-11-25: \"approve 139–143 as recommended, waive §1.3\". The words are the operator's, as relayed by the coordinating session to the architect agent that wrote this line; the approval takes effect when the operator merges the pull request that carries it. \"As recommended\" settles every open decision of section 8 at its recommended value. \"waive §1.3\" is the operator's own waiver of the review GOVERNANCE §1.3 asks for, and it is needed: no independent review of this text exists. Council t_0002 read the first draft, and its red-team seat (the one seat of a second family) gave no readable final critique; Panel t_0004 read the text whole, with a red-team seat, on one model family only, the family that wrote the spec, so it does not count as an independent review and cannot be cited in reviewed_by. The findings of both, and of the Panel's recheck, are applied (section 9)."
     },
-    "sha256": "0b66cce787fdfefa7a8ca0b693f54164146512fa6640d32b51905c40a3c1eabe",
-    "word": "draft"
+    "sha256": "1be8357bd829604b1ceba1a58694cf76c14e2dfa800e50d7b1e79fbcef1bf7e8",
+    "word": "approved"
   },
   "spec": {
     "group": "runtime-models-and-tools",
@@ -184,10 +184,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 5479,
+      "end": 6244,
       "end_line": 34,
       "line": 27,
-      "start": 3460
+      "start": 4225
     },
     "text": "| # | Finding of step 0 (2026-11-25), with the code on origin/main 52bdd3b8 | Where |\n| :-- | :-- | :-- |\n| O1 | **No usable model route.** Every live endpoint on the operator's install is `path = \"harness\"`. The writer and the validator ask for single turns (`turn_by_turn`), and routing rules a harness out for that: \"a harness runs whole spans, not single turns\". So `writer_key()` is `None` and every topic rebuild fails with \"no model is available for the writer right now\". | `page_run.rs:102-109`, `:322`; `route.rs:272-274` |\n| O2 | The same rule blocks every caller that makes one call and reads one answer: the page validator, session summaries, the scout's own calls, the fact judge, the decision brief and library acquisition. Seven files ask for `turn_by_turn`. | `library_page_validate.rs`, `summary.rs`, `research.rs`, `fact_judge.rs`, `decision_run.rs`, `library_acquire_run.rs`, `page_run.rs` |\n| O3 | **The failure is hidden.** An idle rebuild that fails writes `topic_rebuild_failed` at `warn`; the default level is `error`. Nothing reaches the log, the console, the brief or `delphi doctor`. | `service.rs:3116`; `elog.rs:17`, `:111` |\n| O4 | **A rewrite kept the writer's `<!-- page: ... -->` line**, so every second attempt failed the mechanical check and every page ended as the claims alone. Fixed in commit `c1fca8ca` on the local branch `step0/live-proof`, which also makes `delphi doctor` warn when every allowed endpoint is a harness. That commit is not on main. | `library_page_validate.rs`, `doctor.rs` (in `c1fca8ca`) |\n| O5 | With a route supplied by a loopback shim that ran `claude -p`, pages were written end to end. So one prompt and one answer through the CLI is enough for these callers. | step 0 |\n| O6 | A single call already has one entry point, with no tools, no span, no card and no budget reservation; and the harness launcher already runs a CLI with one prompt on standard input and its tools turned off. | `summary.rs:166`; `harness.rs:63`, `:1084-1101`, `:1226`, `:1246` |"
   }

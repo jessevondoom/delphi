@@ -3,8 +3,9 @@ id: spec-140-a-golden-set-for-retrieval-recall-ndcg-a-baseline-and-a-gate-on-eve
 title: "140: A golden set for retrieval: recall, nDCG, a baseline, and a gate on every retrieval change"
 author: architect
 timestamp: 2026-11-25T20:30:00Z
-status: draft
-reviewed_by: []   # no Council or Panel has read this text. The plan it comes from was put to a daemon Council on 2026-11-25; that is a review of the plan, not of this spec, and is not cited as one.
+status: approved   # by the operator, 2026-11-25: "approve 139–143 as recommended, waive §1.3". The words are the operator's, as relayed by the coordinating session to the architect agent that wrote this line; the approval takes effect when the operator merges the pull request that carries it. "As recommended" settles every open decision of section 8 at its recommended value. "waive §1.3" is the operator's own waiver of the review GOVERNANCE §1.3 asks for, and it is needed: no independent review of this text exists. Panel t_0004 read it, with a red-team seat, and its findings are applied (section 9); every seat was on one model family, the family that wrote the spec, so the Panel does not count as an independent review and cannot be cited in reviewed_by.
+approved_by: operator (2026-11-25)
+reviewed_by: []   # the operator waived GOVERNANCE §1.3 in the approval words (see `status`). Panel t_0004 read this text and its record is committed under missions/2026-11-25-knowledge-v2/councils/, but it ran on one model family and says of itself that it does not count as an independent review, so the lint would refuse it here and it is not cited.
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -15,9 +16,8 @@ tags: [spec, retrieval, evaluation, golden-set, recall, ndcg, kb, vectors, gate]
 
 # Spec 140: A golden set for retrieval
 
-> **Status: draft**, revised 2026-11-25 with the operator's decisions of that day. One of five specs from the knowledge audit of 2026-11-25 (139 to 143). It lands before any change to retrieval ranking.
-> **The plan is approved; this text is not yet.** The operator approved the plan on 2026-11-25 ("go"). The status stays `draft` until a witnessed Panel with a red-team seat has read this text; approval is marked after that.
-> **Build order (confirmed by the operator, 2026-11-25; steps 2 and 4 and the late group were added after Panel `t_0004`, for the operator to confirm with the approval):** (1) the single-turn harness bridge (`specs/143`), with the seed slices of `specs/139` (A, B, D, E) alongside; (2) the retrieval baseline, slices A, B and D of `specs/140`, run before the index changes; (3) the source text cache (`specs/142`: A, E, the cache cap, B, C, G); (4) a bounded backfill of the existing pointer sources, started by the operator (142 §2.7); (5) the writer slices of 139 (C, F); (6) the rest of 140; (7) label enforcement (`specs/141`); (8) kept late, and not before half of the last ten written pages pass validation: 139 G and H, 140 H, the rest of 142's cache slice and 142 F; then the one knowledge record and the later steps, which have no spec yet. **This spec's slices A, B and D are step 2**: the spike, the real-case set and the baseline run come before 142 slice B changes the index, so that there is a number to compare with. The set is rebuilt as a new version once 142 has added source text, and the rest of this spec (C, E, F, G) is step 6.
+> **Status: approved by the operator, 2026-11-25:** "approve 139–143 as recommended, waive §1.3" (see the frontmatter for what those words settle and for the limits of the reviews behind them). One of five specs from the knowledge audit of 2026-11-25 (139 to 143). Nothing is built yet.
+> **Build order (confirmed by the operator, 2026-11-25; steps 2 and 4 and the late group were added after Panel `t_0004` and confirmed with the approval of that day):** (1) the single-turn harness bridge (`specs/143`), with the seed slices of `specs/139` (A, B, D, E) alongside; (2) the retrieval baseline, slices A, B and D of `specs/140`, run before the index changes; (3) the source text cache (`specs/142`: A, E, the cache cap, B, C, G); (4) a bounded backfill of the existing pointer sources, started by the operator (142 §2.7); (5) the writer slices of 139 (C, F); (6) the rest of 140; (7) label enforcement (`specs/141`); (8) kept late, and not before half of the last ten written pages pass validation: 139 G and H, 140 H, the rest of 142's cache slice and 142 F; then the one knowledge record and the later steps, which have no spec yet. **This spec's slices A, B and D are step 2**: the spike, the real-case set and the baseline run come before 142 slice B changes the index, so that there is a number to compare with. The set is rebuilt as a new version once 142 has added source text, and the rest of this spec (C, E, F, G) is step 6.
 > **Extends:** [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) §3 (the one retrieval service and its deadline), [`specs/027`](027-bundle-authoring-distribution-and-evaluation.md) §7.1 (the retrieval gate of a bundle, whose harness this reuses), [`specs/109`](109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md) §9 (ten questions, before and after: the practice this makes a rule), [`specs/135`](135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md) §5 (the finisher, which gains one check).
 
 ---
@@ -262,10 +262,10 @@ Not acted on: 4 beyond the warning (holding the corpus still would need a snapsh
 
 | OD | Question | Recommendation | Reversible? (operator decides) | Blocks |
 | :-- | :-- | :-- | :-- | :-- |
-| OD-1 | May synthetic questions be written by the `fast` model from private and internal chunks? | yes, under the ruling of 2026-11-25; the cost is shown first | proposed: yes | C |
-| OD-2 | Who accepts the set: the operator alone, or may an agent pre-screen the 20 samples? | the operator alone; it takes about twenty minutes | proposed: yes | B |
+| OD-1 | May synthetic questions be written by the `fast` model from private and internal chunks? | **Decided (operator, 2026-11-25, "as recommended"):** yes, under the ruling of 2026-11-25; the cost is shown first | decided | none |
+| OD-2 | Who accepts the set: the operator alone, or may an agent pre-screen the 20 samples? | **Decided (operator, 2026-11-25, "as recommended"):** the operator alone; it takes about twenty minutes | decided | none |
 | OD-3 | Should the finisher's check become a merge gate? | **Decided (operator, 2026-11-25): no, advisory for now.** | decided | none |
-| OD-4 | If the spike shows warm queries miss the deadline, which remedy? | decide on the numbers; no default | proposed: yes | E |
+| OD-4 | If the spike shows warm queries miss the deadline, which remedy? | **Decided (operator, 2026-11-25, "as recommended"):** decide on the numbers; no default | decided | none |
 | OD-5 | The thresholds for a noticeable change (0.03 on recall@10 or nDCG@10, ten points on the vector leg, 1.5 times on p95)? | **Decided (operator, 2026-11-25, "use your defaults"): as written**, revised once the run-to-run spread is known | decided | none |
 | OD-6 | A scheduled run every seven days while idle? | **Decided (operator, 2026-11-25, "use your defaults"): yes.** It also has a command the operator can run at any time (`delphi kb eval run`; 143 §2.8) | decided | none |
 
