@@ -10,103 +10,109 @@
     },
     {
       "level": 2,
-      "line": 24,
+      "line": 25,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 45,
+      "line": 48,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 54,
+      "line": 57,
       "number": "1.2",
       "title": "Simpler alternative considered"
     },
     {
       "level": 3,
-      "line": 59,
+      "line": 62,
       "number": "1.3",
       "title": "Options considered"
     },
     {
       "level": 2,
-      "line": 69,
+      "line": 72,
       "number": "2",
       "title": "Design"
     },
     {
       "level": 3,
-      "line": 71,
+      "line": 74,
       "number": "2.1",
       "title": "A capture"
     },
     {
       "level": 3,
-      "line": 91,
+      "line": 94,
       "number": "2.2",
       "title": "Host text handover"
     },
     {
       "level": 3,
-      "line": 107,
+      "line": 122,
       "number": "2.3",
       "title": "Anchors"
     },
     {
       "level": 3,
-      "line": 118,
+      "line": 133,
       "number": "2.4",
       "title": "The cache"
     },
     {
       "level": 3,
-      "line": 126,
+      "line": 141,
       "number": "2.5",
       "title": "Rule (a): the whole text of an unknown-licence source, kept for local reading"
     },
     {
+      "level": 3,
+      "line": 151,
+      "number": "2.6",
+      "title": "A summary of every source, on every install"
+    },
+    {
       "level": 2,
-      "line": 136,
+      "line": 166,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 144,
+      "line": 175,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 159,
+      "line": 191,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 177,
+      "line": 215,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 201,
+      "line": 241,
       "number": "6.1",
       "title": "Premortem (three months after release): how this most likely fails"
     },
     {
       "level": 2,
-      "line": 215,
+      "line": 257,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 224,
+      "line": 269,
       "number": "8",
       "title": "Decisions for the operator"
     }
@@ -114,7 +120,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/142-the-source-text-cache-immutable-captures-host-text-handover-and-anchors-that-show-their-orphans.md",
-    "sha256": "56c32a5b842dfe0abe7538c86d2f33193b7eb19998ad7b673808cd6d2fdd84c5"
+    "sha256": "76efb7e6e5441b14ebf58c4b5a86f3499261b866670b5ea86ca0d0233797cd97"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +133,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "56c32a5b842dfe0abe7538c86d2f33193b7eb19998ad7b673808cd6d2fdd84c5",
+    "sha256": "76efb7e6e5441b14ebf58c4b5a86f3499261b866670b5ea86ca0d0233797cd97",
     "word": "draft"
   },
   "spec": {
@@ -142,10 +148,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 2613,
-      "end_line": 26,
-      "line": 26,
-      "start": 2496
+      "end": 3254,
+      "end_line": 27,
+      "line": 27,
+      "start": 3137
     },
     "text": "**The operator's decisions, 2026-11-25** (as relayed by the coordinating session), on the four rules the audit named:"
   }
