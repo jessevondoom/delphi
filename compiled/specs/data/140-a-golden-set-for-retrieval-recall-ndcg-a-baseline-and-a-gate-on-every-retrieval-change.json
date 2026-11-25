@@ -88,39 +88,45 @@
     },
     {
       "level": 2,
-      "line": 187,
+      "line": 189,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 204,
+      "line": 206,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 234,
+      "line": 236,
       "number": "6.1",
       "title": "Premortem (three months after release): how this most likely fails"
     },
     {
       "level": 2,
-      "line": 248,
+      "line": 250,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 259,
+      "line": 261,
       "number": "8",
       "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 272,
+      "number": "9",
+      "title": "Review"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/140-a-golden-set-for-retrieval-recall-ndcg-a-baseline-and-a-gate-on-every-retrieval-change.md",
-    "sha256": "103cf5cca3e279ae30cb5d0feb075678420f6f338eb4e9355c001a842975bd5f"
+    "sha256": "8bb090eccb0f077ff9ddf1a9942df64885404b7d20ed1b700cb276bb8c01f51d"
   },
   "source_status_at_hash": {
     "line": {
@@ -133,7 +139,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "103cf5cca3e279ae30cb5d0feb075678420f6f338eb4e9355c001a842975bd5f",
+    "sha256": "8bb090eccb0f077ff9ddf1a9942df64885404b7d20ed1b700cb276bb8c01f51d",
     "word": "draft"
   },
   "spec": {
@@ -148,10 +154,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 4243,
+      "end": 4790,
       "end_line": 34,
       "line": 27,
-      "start": 2572
+      "start": 3119
     },
     "text": "| # | Observation (origin/main 52bdd3b8, and the operator's workspace on 2026-11-25) | Where |\n| :-- | :-- | :-- |\n| O1 | A harness exists. `delphi kb eval` indexes a **documents folder** (the repository's own files by default) into a fresh index and prints recall at 1, 3, 5 and 10 and MRR, for each of lexical, vector, hybrid and reranked search, over 48 questions and a 44-question holdout. | `kb.rs:2714-2800`, `:3341`; `dev/kb-eval.json`, `dev/kb-eval-holdout.json` |\n| O2 | It does not measure the operator's corpus, has no graded relevance (so no nDCG), stops at ten results (`kb.rs:2151` caps every search at 10), and calls `Kb::search` directly, so it never passes through the service that agents and hosts use and never meets its deadline. | `kb.rs:2741-2760`, `:2151`; `retrieval.rs:68` |\n| O3 | The service gives the hybrid search 800 ms and then answers with keywords alone, labelled `lexical-deadline`. One sampled `search_kb` call on the operator's workspace did exactly that. Nobody knows how often. | `retrieval.rs:14`, `:101-110` |\n| O4 | The operator's index holds 5,423 chunks, among them 82 project research files. The corpus is not empty: a set can be built from it today. | the audit of 2026-11-25 |\n| O5 | Real questions are already on disk: every research record's `question` (`research_record.rs:266`), every finding's question (`finding_record.rs:109`), and every search that found nothing (`local/kb-misses.jsonl`, `kb.rs:2532`). | as named |\n| O6 | Steps 6 and 7 of the plan (chunk headers, reranking, pre-filtering, usage boosts) each change ranking. Without a fixed set, \"better\" cannot be told from \"different\". | the audit of 2026-11-25 |"
   }

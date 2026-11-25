@@ -17,7 +17,7 @@ tags: [spec, retrieval, evaluation, golden-set, recall, ndcg, kb, vectors, gate]
 
 > **Status: draft**, revised 2026-11-25 with the operator's decisions of that day. One of five specs from the knowledge audit of 2026-11-25 (139 to 143). It lands before any change to retrieval ranking.
 > **The plan is approved; this text is not yet.** The operator approved the plan on 2026-11-25 ("go"). The status stays `draft` until a witnessed Panel with a red-team seat has read this text; approval is marked after that.
-> **Build order (confirmed by the operator, 2026-11-25):** the single-turn harness bridge (`specs/143`), with the seed slices of `specs/139` (A, B, D, E) built alongside it; then the source text cache (`specs/142`); then the remaining slices of 139; then the golden set (`specs/140`); then label enforcement (`specs/141`); then the one knowledge record and the later steps, which have no spec yet. **This spec is fourth.** The spike of slice A and the real-case set (slice B) need nothing from the others and may be built at any point; the set is rebuilt as a new version once 142 has added source text.
+> **Build order (confirmed by the operator, 2026-11-25; steps 2 and 4 and the late group were added after Panel `t_0004`, for the operator to confirm with the approval):** (1) the single-turn harness bridge (`specs/143`), with the seed slices of `specs/139` (A, B, D, E) alongside; (2) the retrieval baseline, slices A, B and D of `specs/140`, run before the index changes; (3) the source text cache (`specs/142`: A, E, the cache cap, B, C, G); (4) a bounded backfill of the existing pointer sources, started by the operator (142 §2.7); (5) the writer slices of 139 (C, F); (6) the rest of 140; (7) label enforcement (`specs/141`); (8) kept late, and not before half of the last ten written pages pass validation: 139 G and H, 140 H, the rest of 142's cache slice and 142 F; then the one knowledge record and the later steps, which have no spec yet. **This spec's slices A, B and D are step 2**: the spike, the real-case set and the baseline run come before 142 slice B changes the index, so that there is a number to compare with. The set is rebuilt as a new version once 142 has added source text, and the rest of this spec (C, E, F, G) is step 6.
 > **Extends:** [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) §3 (the one retrieval service and its deadline), [`specs/027`](027-bundle-authoring-distribution-and-evaluation.md) §7.1 (the retrieval gate of a bundle, whose harness this reuses), [`specs/109`](109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md) §9 (ten questions, before and after: the practice this makes a rule), [`specs/135`](135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md) §5 (the finisher, which gains one check).
 
 ---
@@ -174,15 +174,17 @@ The operator's requirement of 2026-11-25, as relayed: keep historic retrieval pe
 | S0 | this spec | (the spec) | this file | 1-2 | none |
 | A | the spike of §2.5: stage timings and mode counts in the service path; 200 queries cold and warm on the operator's workspace; the result written into §7 | AC-1 | `retrieval.rs`, `kb.rs` | 3-4 | S0 |
 | B | the set: the case shape, real cases from records, findings, ingested files and misses; the header and hash; `build --real-only`, `accept` | AC-2, AC-3 | `kb_eval.rs` (new), `kb.rs`, `main.rs` | 5-6 | S0 |
-| C | synthetic cases: sampling, the model call, the two filters, the cost line | AC-4 | `kb_eval.rs`, `page_run.rs` (the model call) | 3-4 | B |
+| C | synthetic cases: sampling, the model call (a `single_call` caller of 143: it states the tier of its inputs and joins 143's per-caller test), the two filters, the cost line | AC-4 | `kb_eval.rs`, `page_run.rs` (the model call) | 3-4 | B; `specs/143` A |
 | D | the run: three paths, recall@10, recall@20, nDCG@10, `cap`, the run file, `compare`, `runs`; the baseline run recorded | AC-5, AC-6, AC-7 | `kb_eval.rs`, `kb.rs`, `retrieval.rs` | 5-6 | A, B |
 | E | the deadline fix the spike supports (the warm-up, or nothing but the operator's decision); the health and doctor lines | AC-8 | `retrieval.rs`, `service.rs`, `knowledge_health.rs` | 3-4 | A, D |
 | F | the rule: `RETRIEVAL_PATHS`, the finisher's check, the tracker fields, the repository baseline file and its test | AC-9, AC-10 | `finisher.rs`, `tracker.rs`, `dev/kb-eval-baseline.json`, `kb.rs` | 3-4 | D |
 | G | the history: the ledger line, the scheduled run, `kb eval history`, the health line, the knowledge view, the note on a noticeable change | AC-11, AC-12, AC-13 | `kb_eval.rs`, `service.rs`, `knowledge_health.rs`, `provisional_notes.rs`, `main.rs` | 5-6 | D |
-| H | the app's "Retrieval quality" panel and its read-only method | AC-14 | `service.rs`, the app; `crates/delphi/tests/app_grants.toml` if the method needs a grant (a gate-changing path, so that pull request is the operator's at a terminal) | 2-3 | G |
+| H | the app's "Retrieval quality" panel and its read-only method | AC-14 | `service.rs`, the app; `crates/delphi/tests/app_grants.toml` if the method needs a grant (a gate-changing path, so that pull request is the operator's at a terminal) | 2-3 | G; **kept late**: not before half of the last ten written pages pass validation (139 OD-9) |
 | | **Total** | | | **30-39** | |
 
-E is itself a retrieval change: it is the first slice to carry a before-and-after run.
+E is itself a retrieval change: it is the first slice to carry a before-and-after run. **A, B and D are built early** (step 2 of the build order), before 142 changes the corpus; B is built with real cases only at that point, since the synthetic cases of C need the bridge.
+
+**Live and manual steps are dated.** A criterion that is proved by a run on the operator's workspace, or by a person reading something, counts as met only when the slice's tracker file holds a dated entry that says what was run and what was seen. Here that is the spike (AC-1), the baseline (slice D) and AC-8.
 
 ## 5. Acceptance criteria
 
@@ -266,3 +268,19 @@ Not acted on: 4 beyond the warning (holding the corpus still would need a snapsh
 | OD-4 | If the spike shows warm queries miss the deadline, which remedy? | decide on the numbers; no default | proposed: yes | E |
 | OD-5 | The thresholds for a noticeable change (0.03 on recall@10 or nDCG@10, ten points on the vector leg, 1.5 times on p95)? | **Decided (operator, 2026-11-25, "use your defaults"): as written**, revised once the run-to-run spread is known | decided | none |
 | OD-6 | A scheduled run every seven days while idle? | **Decided (operator, 2026-11-25, "use your defaults"): yes.** It also has a command the operator can run at any time (`delphi kb eval run`; 143 §2.8) | decided | none |
+
+## 9. Review
+
+Panel `t_0004` (a witnessed host Panel of 2026-11-25, session `host-e11ba3fe9035ccf9`; architect, red-team and strategist seats, a blind Round 1, all three parsed in both rounds) read specs 139 to 143 and ruled **B: apply the fixes, then approve**. Its record is committed at `missions/2026-11-25-knowledge-v2/councils/004-witnessed-red-team-review-of-draft-specs.md`, with one line redacted (the operator's project names), because this repository is public.
+
+**It is not cited in `reviewed_by`, and it does not count as an independent review.** The record says so itself (`counts_as_independent_review: false`, `not_independent_because: single family`): every seat ran on one model family, which is also the family that wrote these specs, and `delphi lint` refuses a citation of such a Panel. The red-team seat did read the texts whole this time, and every P0 and P1 it and the other seats raised is applied below. What GOVERNANCE §1.3 still needs is a review by a second model family, or the operator's own waiver in the approval words. Nobody has re-read the amended text.
+
+| Finding (on this spec) | Severity | Response |
+| :-- | :-- | :-- |
+| no baseline before 142 slice B and G change the index | P1, P2 | the build order and §4: slices A, B and D are step 2, before 142 B |
+| slice C is a single-call caller missing from 143's tested list | P2 | slice C |
+| live and manual criteria (AC-8 among them) need dated tracker entries | P2 | §4 |
+| keep slice H late | P2 | slice H |
+| the note entry point and ledger rules that 139 H leaned on | P2 | 139 §2.7 item 2 now owns its own; slice G here uses the same entry point |
+
+**Not adopted:** nothing on this spec was rejected.
