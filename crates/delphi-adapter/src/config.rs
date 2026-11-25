@@ -633,6 +633,41 @@ impl Grades {
     }
 }
 
+/// `[routing] single_call_harness` (`specs/143` §2.1 item 4): whether a harness endpoint may serve a single call (one prompt, one
+/// answer, no tools) through the single-turn bridge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SingleCallHarness {
+    /// A harness serves a single call only when no other allowed endpoint is eligible for it.
+    #[default]
+    Auto,
+    /// A harness competes like any endpoint.
+    On,
+    /// A harness never serves a single call.
+    Off,
+}
+
+impl SingleCallHarness {
+    /// The key, as a notice and the doctor name it.
+    pub const KEY: &'static str = "[routing] single_call_harness";
+
+    pub fn parse(s: &str) -> Option<SingleCallHarness> {
+        match s {
+            "auto" => Some(SingleCallHarness::Auto),
+            "on" => Some(SingleCallHarness::On),
+            "off" => Some(SingleCallHarness::Off),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SingleCallHarness::Auto => "auto",
+            SingleCallHarness::On => "on",
+            SingleCallHarness::Off => "off",
+        }
+    }
+}
+
 /// `[routing]`: the model pool and per-role targets (`specs/002` §4.1, D-26). Other keys in the table
 /// (`enable_dynamic_scaling`, …) are not read here.
 #[derive(Debug, Clone, PartialEq)]
@@ -655,11 +690,26 @@ pub struct Routing {
     pub emergency: Option<(String, String)>,
     /// `[routing] max_cost_class` (`specs/056` §10.5), ratified; `standard` for every role when absent.
     pub max_cost_class: CostCap,
+    /// `[routing] single_call_harness` (`specs/143` §2.1 item 4); `auto` when absent.
+    pub single_call_harness: SingleCallHarness,
+}
+
+/// `[bridge]` (`specs/143`): the single-turn harness bridge.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BridgeConfig {
+    /// `[bridge.claude] credential`: a credential reference (never the token) for the subscription token the bridge signs the
+    /// `claude` CLI in with (`specs/143` §2.2 item 1, §2.9). Absent: that CLI is not eligible for a single call (§2.9 item 4).
+    pub claude_credential: Option<String>,
+}
+
+impl BridgeConfig {
+    /// The key, as a notice and the doctor name it.
+    pub const CLAUDE_CREDENTIAL_KEY: &'static str = "[bridge.claude] credential";
 }
 
 impl Default for Routing {
     fn default() -> Routing {
-        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None, max_cost_class: CostCap::default() }
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None, max_cost_class: CostCap::default(), single_call_harness: SingleCallHarness::Auto }
     }
 }
 
@@ -693,6 +743,8 @@ pub struct Config {
     pub connectors: BTreeMap<String, Connector>,
     /// `[harness.<cli>]` (`claude`, `agy`): how Delphi runs and equips each subscription CLI.
     pub harness: BTreeMap<String, HarnessProfile>,
+    /// `[bridge]`: the single-turn harness bridge (`specs/143`).
+    pub bridge: BridgeConfig,
     /// `[search]`: the engines the archives pane's research job asks, in order (`specs/028` §10).
     pub search: crate::research::SearchConfig,
     /// `[validator]`: the fact validator's mode and the operator's additions to the source list (`specs/040` §15.1, §6.1).
@@ -1561,6 +1613,14 @@ impl Config {
                 }
             }
         }
+        if let Some(c) = root.get("bridge").and_then(|b| b.get("claude")).and_then(|c| c.get("credential")) {
+            // A reference, never a secret: the same kinds an endpoint's credential takes. The value is not shown when it is refused.
+            match c.as_str().map(crate::credential::CredentialRef::parse) {
+                Some(Ok(_)) => cfg.bridge.claude_credential = c.as_str().map(String::from),
+                Some(Err(e)) => errs.push(format!("[bridge.claude] credential: {e}")),
+                None => errs.push("[bridge.claude] credential must be a credential reference, such as \"keychain:bridge-claude\"".into()),
+            }
+        }
         if let Some(r) = root.get("routing").and_then(|r| r.as_table()) {
             if let Some(p) = r.get("pool") {
                 match p.clone().try_into::<PoolRaw>() {
@@ -1594,6 +1654,12 @@ impl Config {
                 match CostCap::parse(v) {
                     Ok(cap) => cfg.routing.max_cost_class = cap,
                     Err(e) => errs.push(e),
+                }
+            }
+            if let Some(a) = r.get("single_call_harness") {
+                match a.as_str().and_then(SingleCallHarness::parse) {
+                    Some(v) => cfg.routing.single_call_harness = v,
+                    None => errs.push("[routing] single_call_harness must be \"auto\", \"on\" or \"off\"".into()),
                 }
             }
             if let Some(a) = r.get("registry") {
@@ -2429,6 +2495,16 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
 
     #[test]
     fn the_agent_registry_is_flat_unless_asked_for() {
+        assert_eq!(with_routing("").unwrap().routing.single_call_harness, SingleCallHarness::Auto, "specs/143 §2.4 item 2: the shipped default");
+        for (word, mode) in [("auto", SingleCallHarness::Auto), ("on", SingleCallHarness::On), ("off", SingleCallHarness::Off)] {
+            assert_eq!(with_routing(&format!("[routing]\nsingle_call_harness = \"{word}\"")).unwrap().routing.single_call_harness, mode);
+            assert_eq!(mode.as_str(), word);
+        }
+        assert_eq!(with_routing("").unwrap().bridge.claude_credential, None);
+        assert_eq!(with_routing("[bridge.claude]\ncredential = \"keychain:bridge-claude\"").unwrap().bridge.claude_credential.as_deref(), Some("keychain:bridge-claude"));
+        let pasted = with_routing("[bridge.claude]\ncredential = \"sk-ant-oat01-pasted-secret\"").unwrap_err().join("; ");
+        assert!(pasted.contains("[bridge.claude] credential") && !pasted.contains("pasted-secret"), "a pasted token is refused and not shown: {pasted}");
+        assert!(with_routing("[routing]\nsingle_call_harness = \"maybe\"").is_err_and(|e| e.join("; ").contains("must be \"auto\", \"on\" or \"off\"")));
         assert_eq!(with_routing("").unwrap().routing.registry, RegistryMode::Flat);
         assert_eq!(with_routing("[routing]\nregistry = \"auto\"").unwrap().routing.registry, RegistryMode::Auto);
         assert!(with_routing("[routing]\nregistry = \"on\"").is_err());

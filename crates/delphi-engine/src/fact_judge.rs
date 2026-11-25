@@ -104,7 +104,7 @@ impl crate::engine::Engine {
     /// The model that serves the judge: the validator's fast tier, away from the author's family. `None` when none is usable now.
     pub(crate) fn judge_key(&self, author_family: Option<&str>) -> Option<delphi_adapter::config::PoolKey> {
         let cfg = self.cfg.get();
-        let req = crate::route::RouteRequest { role: "validator".into(), tier: "fast".into(), avoid_families: author_family.iter().map(|f| f.to_string()).collect(), turn_by_turn: true, ..Default::default() };
+        let req = crate::route::RouteRequest { role: "validator".into(), tier: "fast".into(), avoid_families: author_family.iter().map(|f| f.to_string()).collect(), turn_by_turn: true, single_call: true, ..Default::default() };
         match crate::route::resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &req) {
             crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => Some(key),
             _ => None,
@@ -120,7 +120,7 @@ impl FactJudge for EngineJudge {
             if self.author_model.as_deref() == Some(key.model_id.as_str()) {
                 return Err("the only model available is the claim author's; the judge must be a second model".into());
             }
-            let raw = e.one_shot_raw(&key, &ipr(contract(q)), JUDGE_MAX_OUTPUT).await.ok_or_else(|| "the judge's call failed".to_string())?;
+            let raw = e.one_shot_raw(&key, &ipr(contract(q)), JUDGE_MAX_OUTPUT, None).await.map_err(|e| format!("the judge's call failed: {e}"))?;
             let verdict = parse_verdict(&raw.text).ok_or_else(|| "the judge's answer was not entails, neutral or contradicts".to_string())?;
             Ok(JudgeReply { verdict, model: format!("{}/{}", raw.endpoint_id, raw.model_id), family: key.family, tokens: raw.tokens })
         })

@@ -117,12 +117,13 @@ impl Writer for ModelWriter<'_> {
     fn complete<'a>(&'a self, prompt: &'a str) -> WriteFuture<'a> {
         Box::pin(async move {
             let prompt = self.engine.secrets.redact(prompt);
-            let out = match self.engine.one_shot_raw(&self.key, &ipr(&prompt), SUMMARY_TOKENS).await {
-                Some(w) => {
+            let out = match self.engine.one_shot_raw(&self.key, &ipr(&prompt), SUMMARY_TOKENS, None).await {
+                Ok(w) => {
                     let text = self.engine.secrets.redact(&crate::summary::clean_to(&w.text, emergency::MAX_SUMMARY));
                     if text.trim().is_empty() { Err("the model returned nothing".to_string()) } else { Ok(text) }
                 }
-                None => Err(format!("the call to {}/{} failed", self.key.endpoint_id, self.key.model_id)),
+                Err(crate::summary::CallError::Empty) => Err("the model returned nothing".to_string()),
+                Err(e) => Err(format!("the call to {}/{} failed: {e}", self.key.endpoint_id, self.key.model_id)),
             };
             match out {
                 Err(_) if self.soft => {

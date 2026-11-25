@@ -2995,7 +2995,7 @@ impl EngineService {
         }
         let e = self.engine.clone();
         tokio::spawn(async move {
-            e.consolidate_pass(mem.consolidate, mem.consolidate_tokens).await;
+            crate::daemon_notice::in_job(crate::daemon_notice::Job::Consolidation, e.consolidate_pass(mem.consolidate, mem.consolidate_tokens)).await;
             RUNNING.store(false, SeqCst);
         });
     }
@@ -3036,7 +3036,7 @@ impl EngineService {
         };
         let (svc, tasks) = (self.clone(), self.running.lock().unwrap().len());
         tokio::spawn(async move {
-            let _ = svc.engine.background_validate_tick(&m, svc.last_operator.load(SeqCst), tasks).await;
+            let _ = crate::daemon_notice::in_job(crate::daemon_notice::Job::Validation, svc.engine.background_validate_tick(&m, svc.last_operator.load(SeqCst), tasks)).await;
             svc.background_running.store(false, SeqCst);
         });
     }
@@ -3123,7 +3123,14 @@ impl EngineService {
     /// notice nor the error log ever holds.
     async fn topic_idle_rebuild_noticed(&self) {
         use crate::daemon_notice::Job;
-        let Some(r) = self.engine.topic_idle_rebuild_report().await else { return };
+        // A writer's or a validator's call that failed inside the rebuild has left its own cause (`one_shot_raw`); the page is then
+        // the claims alone for that reason, and it is not counted a second time as a failed check.
+        let (report, call_failed) = crate::daemon_notice::in_job(Job::Pages, self.engine.topic_idle_rebuild_report()).await;
+        let Some(r) = report else { return };
+        if call_failed {
+            self.notices_tick().await;
+            return;
+        }
         match (&r.built, r.cause) {
             (_, Some(cause)) => self.engine.job_failed(Job::Pages, cause),
             (Ok(_), None) => crate::daemon_notice::cleared(&self.engine.ws.dir, Job::Pages),
@@ -5039,7 +5046,8 @@ impl EngineService {
                 if mode != crate::summary::SummaryMode::Off && !d.tainted && d.turns >= 2 {
                     let (engine, mission, record, sid) = (self.engine.clone(), m.clone(), crate::summary::record_of(session), id.clone());
                     tokio::spawn(async move {
-                        let Some(w) = engine.summarize_session(mode, &record).await else { return };
+                        let (written, _) = crate::daemon_notice::in_job(crate::daemon_notice::Job::SessionSummaries, engine.summarize_session(mode, &record)).await;
+                        let Some(w) = written else { return };
                         let model = format!("{}/{}", w.endpoint_id, w.model_id);
                         let secrets = engine.secrets.clone();
                         if crate::session::append_summary(&engine.ws.home, &mission.id, &sid, &w.text, &model, &|s| secrets.redact(s)).is_ok() {
@@ -5583,8 +5591,9 @@ mod tests {
     use crate::model::Step;
     use crate::testkit::{events_of, setup, Fx};
 
+    /// An install whose only endpoint is a harness that cannot serve a single call (`agy`: its tools cannot be turned off).
     fn harness_only(f: &Fx) -> Arc<EngineService> {
-        f.engine.cfg.set(delphi_adapter::config::Config::parse(&crate::testkit::harness_only_config()).unwrap());
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&crate::testkit::harness_only_config().replace("harness = \"claude\"", "harness = \"agy\"")).unwrap());
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         svc
@@ -5635,6 +5644,20 @@ mod tests {
             let low = told.to_lowercase();
             assert!(!low.contains("zanzibar") && !low.contains("lighthouse") && !low.contains("lamps"), "{told}");
         }
+    }
+
+    // `specs/143` AC-18: with the bridge `off` on a harness-only config the cause is `no_route` and the notice names the key.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_the_bridge_off_the_no_route_notice_names_the_key() {
+        let f = setup(vec![], 5.0, |_| {});
+        let svc = harness_only(&f);
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}[routing]\nsingle_call_harness = \"off\"\n[bridge.claude]\ncredential = \"keychain:bridge-claude\"\n", crate::testkit::harness_only_config())).unwrap());
+        crate::library::Library::in_home(&f.engine.ws.home).topic_create("Tide tables", crate::library::topics::Origin::Operator, 1).unwrap();
+        svc.topic_idle_rebuild_noticed().await;
+        let notices = events_of(&f, "daemon.notice");
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].payload, json!({"cause": "no_route", "job": "pages", "key": "[routing] single_call_harness"}));
+        assert!(svc.notices_json()[0].contains("`[routing] single_call_harness` decides it"));
     }
 
     // `specs/143` §6, the fitness function "a background failure is never silent": every idle job, enumerated from the closed list,

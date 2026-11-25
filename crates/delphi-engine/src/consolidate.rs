@@ -509,7 +509,7 @@ impl crate::engine::Engine {
                     let room = cap.saturating_sub(tokens);
                     let chars = ((room / 2) * 4).min(40_000) as usize;
                     let ipr = crate::research::scout_call(LINE, &crate::role_call::RoleText::bare(crate::role_call::Step::Plan), prompt(&i, chars));
-                    let Some(raw) = self.one_shot_raw(&key, &ipr, (room / 2).clamp(200, 1500)).await else { continue };
+                    let Ok(raw) = self.one_shot_raw(&key, &ipr, (room / 2).clamp(200, 1500), None).await else { continue };
                     tokens += raw.tokens.max((chars / 4) as u64);
                     let notes = pn::list(&ws);
                     let secrets = self.secrets.clone();

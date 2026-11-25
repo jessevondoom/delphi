@@ -1945,10 +1945,10 @@ impl Engine {
         if let (Some(key), true) = (key, self.settings.checkpoint_model && !tainted) {
             let wait = self.settings.checkpoint_wait;
             let work = crate::checkpoint::work_contract(&facts.prompt, &crate::checkpoint::work_lines(history));
-            parts.work = tokio::time::timeout(wait, self.one_shot(key, &work, 500)).await.ok().flatten().map(|w| crate::summary::clean_to(&w.text, 900));
+            parts.work = tokio::time::timeout(wait, self.one_shot(key, &work, 500, None)).await.ok().and_then(Result::ok).map(|w| crate::summary::clean_to(&w.text, 900));
             let record = crate::summary::record_of(session);
             if !record.is_empty() {
-                parts.chat = tokio::time::timeout(wait, self.one_shot(key, &crate::summary::session_contract(&record), 400)).await.ok().flatten().map(|w| w.text);
+                parts.chat = tokio::time::timeout(wait, self.one_shot(key, &crate::summary::session_contract(&record), 400, None)).await.ok().and_then(Result::ok).map(|w| w.text);
             }
         }
         let text = self.secrets.redact(&crate::checkpoint::note(&facts, history, &events, session, &parts));
@@ -2100,6 +2100,9 @@ impl Engine {
             needs_json: false,
             target: self.cfg.get().routing.targets.get(&sc.role).cloned(),
             turn_by_turn,
+            // A span runs turns with tools between them: never a single call (`specs/143` §1.1).
+            single_call: false,
+            harness_room: Vec::new(),
             assign: self.assign_for(sc),
         }
     }

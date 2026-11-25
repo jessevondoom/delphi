@@ -30,10 +30,16 @@ pub enum Cause {
     CheckFailed,
     /// The harness asked for a tool in a single call.
     HarnessTool,
+    /// The bridge could not start the CLI: its home, its token or its sandbox could not be made (`specs/143` §2.2 item 4).
+    Launch,
+    /// The model answered nothing.
+    Empty,
+    /// The provider refused or failed the call.
+    Provider,
 }
 
 impl Cause {
-    pub const ALL: [Cause; 6] = [Cause::NoRoute, Cause::Budget, Cause::Quota, Cause::Timeout, Cause::CheckFailed, Cause::HarnessTool];
+    pub const ALL: [Cause; 9] = [Cause::NoRoute, Cause::Budget, Cause::Quota, Cause::Timeout, Cause::CheckFailed, Cause::HarnessTool, Cause::Launch, Cause::Empty, Cause::Provider];
 
     /// The fixed code, as the event, the log and the record carry it.
     pub fn code(self) -> &'static str {
@@ -44,6 +50,9 @@ impl Cause {
             Cause::Timeout => "timeout",
             Cause::CheckFailed => "check_failed",
             Cause::HarnessTool => "harness_tool",
+            Cause::Launch => "launch",
+            Cause::Empty => "empty",
+            Cause::Provider => "provider",
         }
     }
 
@@ -60,6 +69,9 @@ impl Cause {
             Cause::Timeout => "the call timed out",
             Cause::CheckFailed => "the page did not pass its check",
             Cause::HarnessTool => "the harness asked for a tool in a single call",
+            Cause::Launch => "the harness could not be launched",
+            Cause::Empty => "the model answered nothing",
+            Cause::Provider => "the provider refused or failed the call",
         }
     }
 }
@@ -116,6 +128,37 @@ impl Sink {
     pub fn drain(&self) -> Vec<Failure> {
         std::mem::take(&mut *self.0.lock().unwrap())
     }
+}
+
+tokio::task_local! {
+    /// The background job the current task runs as ([`in_job`]).
+    static JOB: Scope;
+}
+
+struct Scope {
+    job: Job,
+    failed: std::sync::atomic::AtomicBool,
+}
+
+/// Run `f` as the background job `job` (`specs/143` §2.2 item 4): a single call that fails inside it is carried to that job's
+/// notice by `Engine::one_shot_raw`, with its cause, wherever in the engine the call is made. Work the operator started runs
+/// outside any job and raises no notice: its failure is shown where it was asked for. Returns `f`'s answer and whether a call failed.
+pub async fn in_job<F: std::future::Future>(job: Job, f: F) -> (F::Output, bool) {
+    use std::sync::atomic::Ordering::SeqCst;
+    JOB.scope(Scope { job, failed: false.into() }, async {
+        let out = f.await;
+        (out, JOB.with(|s| s.failed.load(SeqCst)))
+    })
+    .await
+}
+
+/// The job the current task runs as, marked as having had a call fail; `None` outside a job.
+pub fn failing_job() -> Option<Job> {
+    JOB.try_with(|s| {
+        s.failed.store(true, std::sync::atomic::Ordering::SeqCst);
+        s.job
+    })
+    .ok()
 }
 
 /// What [`record`] did.
@@ -321,7 +364,7 @@ mod tests {
     #[test]
     fn the_codes_are_fixed_and_distinct() {
         let codes: Vec<&str> = Cause::ALL.iter().map(|c| c.code()).collect();
-        assert_eq!(codes, ["no_route", "budget", "quota", "timeout", "check_failed", "harness_tool"]);
+        assert_eq!(codes, ["no_route", "budget", "quota", "timeout", "check_failed", "harness_tool", "launch", "empty", "provider"]);
         assert!(Cause::ALL.iter().all(|c| Cause::parse(c.code()) == Some(*c)));
         assert_eq!(Job::ALL.iter().map(|j| j.code()).collect::<Vec<_>>(), ["pages", "summaries", "validation", "session_summaries", "consolidation"]);
     }

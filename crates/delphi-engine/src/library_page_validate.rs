@@ -197,7 +197,7 @@ impl PageValidator for EnginePageValidator {
         Box::pin(async move {
             let e = &self.engine;
             let cfg = e.cfg.get();
-            let req = crate::route::RouteRequest { role: "validator".into(), tier: "fast".into(), avoid_families: self.writer_family.iter().cloned().collect(), turn_by_turn: true, ..Default::default() };
+            let req = crate::route::RouteRequest { role: "validator".into(), tier: "fast".into(), avoid_families: self.writer_family.iter().cloned().collect(), turn_by_turn: true, single_call: true, ..Default::default() };
             let key = match crate::route::resolve_route(&cfg, &e.pool.snapshot(), (e.clock_unix)(), &req) {
                 crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => key,
                 _ => return Err("no model is available for the validator right now".into()),
@@ -205,7 +205,7 @@ impl PageValidator for EnginePageValidator {
             if self.writer_model.as_deref() == Some(key.model_id.as_str()) {
                 return Err("the only model available is the writer's; the validator must be a second model".into());
             }
-            let raw = e.one_shot_raw(&key, &ipr(contract(q)), VALIDATOR_MAX_OUTPUT).await.ok_or_else(|| "the validator's call failed".to_string())?;
+            let raw = e.one_shot_raw(&key, &ipr(contract(q)), VALIDATOR_MAX_OUTPUT, None).await.map_err(|e| format!("the validator's call failed: {e}"))?;
             let assertions = parse_reply(&raw.text).ok_or_else(|| "the validator's reply was not a list of assertions".to_string())?;
             Ok(ValidatorReply { assertions, model: format!("{}/{}", raw.endpoint_id, raw.model_id), family: key.family, tokens: raw.tokens })
         })

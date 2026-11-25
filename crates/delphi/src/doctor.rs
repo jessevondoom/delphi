@@ -371,7 +371,7 @@ const REMOVED_SETTINGS: [(&str, &str); 5] = [("hosts", "route_adopt"), ("hosts",
 /// when no endpoint does. The doctor asks the router, so it says what the daemon will do and not what a rule here guesses.
 fn single_call_server(cfg: &delphi_adapter::config::Config) -> Option<String> {
     use delphi_engine::route::{resolve_route, Route, RouteRequest};
-    let req = RouteRequest { role: "writer".into(), tier: "workhorse".into(), prefer_family: Some(cfg.primary_family().to_string()), turn_by_turn: true, ..Default::default() };
+    let req = RouteRequest { role: "writer".into(), tier: "workhorse".into(), prefer_family: Some(cfg.primary_family().to_string()), turn_by_turn: true, single_call: true, ..Default::default() };
     match resolve_route(cfg, &[], 0, &req) {
         Route::Target { key, .. } | Route::Similar { key, .. } => Some(key.endpoint_id),
         _ => None,
@@ -390,7 +390,7 @@ fn check_single_calls(cfg_text: &str, r: &mut Report) {
     }
     match single_call_server(&cfg) {
         Some(endpoint) => r.push(Level::Ok, "7 model-access", "config.toml", format!("single model calls (topic and search pages, their validator, summaries, the scout's calls) are served by the harness `{endpoint}`, one prompt and one answer with its tools off; they spend that subscription's own quota")),
-        None => r.warn("7 model-access", "config.toml", "every allowed endpoint is a harness and none serves a single model call, so topic and search pages, their validator, summaries and the scout's calls cannot run. Either add an endpoint with path = \"api\" (or a cloud or gateway one) to [[endpoints]] and allowed_endpoints, or let a harness serve single calls: [routing] single_call_harness = \"auto\" (the default) or \"on\", with a CLI that can run one prompt with its tools off (claude; not agy)"),
+        None => r.warn("7 model-access", "config.toml", "every allowed endpoint is a harness and none serves a single model call, so topic and search pages, their validator, summaries and the scout's calls cannot run. Either add an endpoint with path = \"api\" (or a cloud or gateway one) to [[endpoints]] and allowed_endpoints, or let a harness serve single calls: [routing] single_call_harness = \"auto\" (the default) or \"on\", with a CLI that can run one prompt with its tools off (claude; not agy) and its subscription token named in [bridge.claude] credential"),
     }
 }
 
@@ -1848,6 +1848,20 @@ mod tests {
         assert!(found(&format!("{agy}{gateway}[access]\nallowed_endpoints = [\"agy-sub\", \"local\"]\n")).is_empty());
         assert_eq!(found(&format!("{agy}{gateway}[access]\nallowed_endpoints = [\"agy-sub\"]\n")).len(), 1);
         assert!(found("").is_empty());
+
+        // AC-8: with the bridge serving, an ordinary line that names the harness; with the bridge off, the warning again.
+        let claude = agy.replace("agy-sub", "claude-sub").replace("harness = \"agy\"", "harness = \"claude\"");
+        let bare = found(&format!("{claude}[access]\nallowed_endpoints = [\"claude-sub\"]\n"));
+        assert_eq!((bare.len(), bare[0].0), (1, Level::Warn), "no token named: {bare:?}");
+        assert!(bare[0].1.contains("[bridge.claude] credential"), "{bare:?}");
+        let claude = format!("{claude}[bridge.claude]\ncredential = \"keychain:bridge-claude\"\n");
+        let got = found(&format!("{claude}[access]\nallowed_endpoints = [\"claude-sub\"]\n"));
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].0, Level::Ok);
+        assert!(got[0].1.contains("served by the harness `claude-sub`") && got[0].1.contains("quota"), "{got:?}");
+        let got = found(&format!("{claude}[routing]\nsingle_call_harness = \"off\"\n[access]\nallowed_endpoints = [\"claude-sub\"]\n"));
+        assert_eq!((got.len(), got[0].0), (1, Level::Warn), "{got:?}");
+        assert!(got[0].1.contains("path = \"api\"") && got[0].1.contains("[routing] single_call_harness"), "{got:?}");
     }
 
     const HARNESS_MODELS: &str = "[models.claude]\nfast = \"haiku\"\nworkhorse = \"sonnet\"\nfrontier = \"opus\"\n";

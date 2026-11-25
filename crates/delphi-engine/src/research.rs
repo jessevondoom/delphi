@@ -224,7 +224,7 @@ impl crate::engine::Engine {
 /// The scout's model calls are single turns (`Engine::one_shot_raw`), so only an endpoint that serves one turn at a time can serve
 /// them: never a harness (`route.rs`: "a harness runs whole spans, not single turns").
 fn scout_route(cfg: &delphi_adapter::config::Config, state: &[crate::pool::Entry], now: i64) -> Option<delphi_adapter::config::PoolKey> {
-    let req = crate::route::RouteRequest { role: "scout".into(), tier: "fast".into(), prefer_family: Some(cfg.primary_family().to_string()), turn_by_turn: true, ..Default::default() };
+    let req = crate::route::RouteRequest { role: "scout".into(), tier: "fast".into(), prefer_family: Some(cfg.primary_family().to_string()), turn_by_turn: true, single_call: true, ..Default::default() };
     match crate::route::resolve_route(cfg, state, now, &req) {
         crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => Some(key),
         _ => None,
@@ -246,7 +246,7 @@ impl Judge for EngineJudge {
         Box::pin(async move {
             let key = e.scout_key().ok_or_else(|| "no model is available for the scout right now".to_string())?;
             let role = crate::role_call::load(&e, crate::role_call::Step::JudgePage).await?;
-            let raw = e.one_shot_raw(&key, &scout_ipr(&role, contract(&input)), SCOUT_MAX_OUTPUT).await.ok_or_else(|| "the scout's call failed".to_string())?;
+            let raw = e.one_shot_raw(&key, &scout_ipr(&role, contract(&input)), SCOUT_MAX_OUTPUT, None).await.map_err(|e| format!("the scout's call failed: {e}"))?;
             let mut j = parse_judged(&e.secrets.redact(&raw.text), &input.full_text)?;
             j.tokens = raw.tokens;
             Ok(j)

@@ -31,7 +31,7 @@ impl Engine {
     /// the operator for it, the decision simply keeps its plain brief.
     pub(crate) fn decision_key(&self) -> Option<delphi_adapter::config::PoolKey> {
         let cfg = self.cfg.get();
-        let req = crate::route::RouteRequest { role: "orchestrator".into(), tier: "fast".into(), prefer_family: Some(cfg.primary_family().to_string()), turn_by_turn: true, ..Default::default() };
+        let req = crate::route::RouteRequest { role: "orchestrator".into(), tier: "fast".into(), prefer_family: Some(cfg.primary_family().to_string()), turn_by_turn: true, single_call: true, ..Default::default() };
         match crate::route::resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &req) {
             crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => Some(key),
             _ => None,
@@ -48,7 +48,7 @@ impl Engine {
             return Ok(r);
         }
         let model = self.decision_key().ok_or("no model is available for briefs right now")?;
-        let raw = self.one_shot_raw(&model, &ipr(brief_prompt(d)), BRIEF_TOKENS).await.ok_or("the model call failed")?;
+        let raw = self.one_shot_raw(&model, &ipr(brief_prompt(d)), BRIEF_TOKENS, None).await.map_err(|e| format!("the model call failed: {e}"))?;
         let (summary, changes, recommendation) = parse_brief(&self.secrets.redact(&raw.text), d).ok_or("the answer was not a brief")?;
         let rec = BriefRecord { key: k, id: id.to_string(), payload_blake3: payload.to_string(), version: BRIEF_VERSION, summary, changes, recommendation, tokens: raw.tokens, model: format!("{}/{}", raw.endpoint_id, raw.model_id), at: self.now() };
         write_brief(&dir, &rec).map_err(|e| e.to_string())?;
@@ -59,7 +59,7 @@ impl Engine {
     /// took and the model that wrote it. Nothing is stored here: the caller appends it to the thread.
     pub(crate) async fn make_reply(&self, d: &Value, thread: &[Entry], typed: &str) -> Result<(Reply, u64, String), String> {
         let model = self.decision_key().ok_or("no model is available to answer right now")?;
-        let raw = self.one_shot_raw(&model, &ipr(reply_prompt(d, thread, typed)), REPLY_TOKENS).await.ok_or("the model call failed")?;
+        let raw = self.one_shot_raw(&model, &ipr(reply_prompt(d, thread, typed)), REPLY_TOKENS, None).await.map_err(|e| format!("the model call failed: {e}"))?;
         Ok((parse_reply(&self.secrets.redact(&raw.text), d), raw.tokens, format!("{}/{}", raw.endpoint_id, raw.model_id)))
     }
 }

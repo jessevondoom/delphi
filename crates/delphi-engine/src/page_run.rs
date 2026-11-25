@@ -57,7 +57,7 @@ pub(crate) fn ipr(role: &crate::role_call::RoleText, contract: String) -> Ipr {
 impl EnginePageWriter {
     async fn call(&self, contract: String) -> Result<String, String> {
         let role = crate::role_call::load(&self.engine, crate::role_call::Step::WritePage).await?;
-        let raw = self.engine.one_shot_raw(&self.key, &ipr(&role, contract), self.max_tokens + 400).await.ok_or_else(|| "the writer's call failed".to_string())?;
+        let raw = self.engine.one_shot_raw(&self.key, &ipr(&role, contract), self.max_tokens + 400, None).await.map_err(|e| format!("the writer's call failed: {e}"))?;
         let text = self.engine.secrets.redact(&raw.text);
         if text.trim().is_empty() { Err("the writer returned nothing".into()) } else { Ok(text) }
     }
@@ -111,9 +111,9 @@ pub struct PageRun {
 }
 
 impl Engine {
-    fn writer_key(&self) -> Option<PoolKey> {
+    pub(crate) fn writer_key(&self) -> Option<PoolKey> {
         let cfg = self.cfg.get();
-        let req = crate::route::RouteRequest { role: "writer".into(), tier: "workhorse".into(), prefer_family: Some(cfg.primary_family().to_string()), target: cfg.routing.targets.get("writer").cloned(), turn_by_turn: true, ..Default::default() };
+        let req = crate::route::RouteRequest { role: "writer".into(), tier: "workhorse".into(), prefer_family: Some(cfg.primary_family().to_string()), target: cfg.routing.targets.get("writer").cloned(), turn_by_turn: true, single_call: true, ..Default::default() };
         match crate::route::resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &req) {
             crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => Some(key),
             _ => None,

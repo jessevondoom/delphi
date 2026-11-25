@@ -333,7 +333,7 @@ impl Scout for LiveScout {
             let key = e.scout_key().ok_or_else(|| crate::research_empty::NO_SCOUT_MODEL.to_string())?;
             let role = crate::role_call::load(e, crate::role_call::Step::Plan).await?;
             let ipr = crate::research::scout_call(crate::research::PLAN_LINE, &role, crate::research_method::plan_contract(question, known));
-            let raw = e.one_shot_raw(&key, &ipr, PLAN_OUTPUT).await.ok_or_else(|| "the scout's plan call failed".to_string())?;
+            let raw = e.one_shot_raw(&key, &ipr, PLAN_OUTPUT, None).await.map_err(|e| format!("the scout's plan call failed: {e}"))?;
             crate::research_method::parse_plan(&e.secrets.redact(&raw.text), known)
         })
     }
@@ -343,7 +343,7 @@ impl Scout for LiveScout {
             let e = &self.0;
             let key = e.scout_key().ok_or_else(|| crate::research_empty::NO_SCOUT_MODEL.to_string())?;
             let role = crate::role_call::load(e, crate::role_call::Step::JudgePage).await?;
-            let raw = e.one_shot_raw(&key, &scout_ipr(&role, claim_contract(question, page, e.settings.research_limits.page_chars, subs)), CLAIM_OUTPUT).await.ok_or_else(|| "the scout's call failed".to_string())?;
+            let raw = e.one_shot_raw(&key, &scout_ipr(&role, claim_contract(question, page, e.settings.research_limits.page_chars, subs)), CLAIM_OUTPUT, None).await.map_err(|e| format!("the scout's call failed: {e}"))?;
             claims_from_reply(&e.secrets.redact(&raw.text), &page.text, &page.url)
         })
     }
@@ -358,7 +358,7 @@ impl Scout for LiveScout {
             let key = e.scout_key().ok_or_else(|| crate::research_empty::NO_SCOUT_MODEL.to_string())?;
             let role = crate::role_call::load(e, crate::role_call::Step::WriteAnswer).await?;
             let ipr = crate::research::scout_call(crate::research::WRITE_LINE, &role, crate::research_method::answer_contract(ask));
-            let raw = e.one_shot_raw(&key, &ipr, ANSWER_OUTPUT).await.ok_or_else(|| "the scout's answer call failed".to_string())?;
+            let raw = e.one_shot_raw(&key, &ipr, ANSWER_OUTPUT, None).await.map_err(|e| format!("the scout's answer call failed: {e}"))?;
             Ok(e.secrets.redact(&raw.text))
         })
     }

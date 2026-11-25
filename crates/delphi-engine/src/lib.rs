@@ -107,6 +107,8 @@ pub mod connectors;
 pub mod connectors_cli;
 pub mod consolidate;
 pub mod daemon_notice;
+#[cfg(test)]
+mod single_call_tests;
 pub mod endpoints_cli;
 pub mod engine;
 pub mod exec;
