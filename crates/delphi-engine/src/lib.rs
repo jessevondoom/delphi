@@ -106,6 +106,7 @@ pub mod connector_run;
 pub mod connectors;
 pub mod connectors_cli;
 pub mod consolidate;
+pub mod daemon_notice;
 pub mod endpoints_cli;
 pub mod engine;
 pub mod exec;

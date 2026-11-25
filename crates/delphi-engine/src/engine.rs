@@ -370,6 +370,8 @@ pub struct Engine {
     pub broker: Arc<Broker>,
     pub model: Arc<dyn ModelClient>,
     pub secrets: Arc<SecretRegistry>,
+    /// Background jobs that could not run, left here for the daemon to raise as notices (`specs/143` §2.7).
+    pub job_failures: crate::daemon_notice::Sink,
     pub ledger: Arc<Mutex<Ledger>>,
     pub settings: Settings,
     pub probe: Arc<dyn ProjectProbe>,

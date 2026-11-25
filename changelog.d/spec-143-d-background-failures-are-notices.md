@@ -1,0 +1,4 @@
+---
+section: Added
+---
+- **A background job that cannot run now tells you** (spec 143, slice D): an idle topic rebuild, background validation, a session summary or consolidation that has no model to serve it raises a notice with a fixed cause (`no_route`, `budget`, `quota`, `timeout`, `check_failed`, `harness_tool`), once for each cause in a day with a count: a `daemon.notice` event, a line in the error log at its default level, a line among the console's notices, one line in the next session-start brief, and `pages: N due, last idle rebuild failed: ...` in `delphi kb health`. None of them holds text of a page or a claim. `delphi doctor` warns when every allowed endpoint is a harness and none serves a single model call, and names both remedies. Not verified: the app's own display of the notice.

@@ -2920,6 +2920,7 @@ impl EngineService {
                 svc.merge_ledger_tick().await;
                 svc.health_tick().await;
                 svc.consolidate_tick().await;
+                svc.notices_tick().await;
             }
         });
     }
@@ -3111,12 +3112,51 @@ impl EngineService {
         }
         let svc = self.clone();
         tokio::spawn(async move {
-            // Fixed words only: a reason can carry a page's or a claim's text, which the error log never holds.
-            if let Some(Err(_)) = svc.engine.topic_idle_rebuild().await {
-                delphi_core::elog::warn("daemon", "topic_rebuild_failed", "an idle rebuild of a topic page did not finish", json!({}));
-            }
+            svc.topic_idle_rebuild_noticed().await;
             svc.topics_running.store(false, SeqCst);
         });
+    }
+
+    /// One idle rebuild, and what the operator is told when it could not run (`specs/143` §2.7): a failure with a cause becomes a
+    /// notice; a page that was built clears the failure `delphi kb health` shows; a failure with no cause in the closed list is one
+    /// line in the error log at its default level. Fixed words only: a reason can carry a page's or a claim's text, which neither the
+    /// notice nor the error log ever holds.
+    async fn topic_idle_rebuild_noticed(&self) {
+        use crate::daemon_notice::Job;
+        let Some(r) = self.engine.topic_idle_rebuild_report().await else { return };
+        match (&r.built, r.cause) {
+            (_, Some(cause)) => self.engine.job_failed(Job::Pages, cause),
+            (Ok(_), None) => crate::daemon_notice::cleared(&self.engine.ws.dir, Job::Pages),
+            (Err(_), None) => delphi_core::elog::error("daemon", "topic_rebuild_failed", "an idle rebuild of a topic page did not finish", json!({})),
+        }
+        self.notices_tick().await;
+    }
+
+    /// Raise what the engine left in its sink (`specs/143` §2.7): each failure is counted in the workspace's record, and the first
+    /// of a cause in a day is one `daemon.notice` event and one line in the error log, with the cause code and nothing of the work.
+    /// The console's line for it is read from the record (`status`), so it carries the day's count.
+    pub(crate) async fn notices_tick(&self) {
+        let failures = self.engine.job_failures.drain();
+        if failures.is_empty() {
+            return;
+        }
+        let now = (self.engine.clock_unix)();
+        for f in failures {
+            if !crate::daemon_notice::record(&self.engine.ws.dir, f, now).first {
+                continue;
+            }
+            delphi_core::elog::error("daemon", crate::daemon_notice::LOG_SLUG, crate::daemon_notice::LOG_WORDS, json!({"reason": f.cause.code()}));
+            if let Ok(m) = self.mission(None).await {
+                let _ = m.append(EventEnvelope::new(&m.id, "daemon.notice", json!({"cause": f.cause.code(), "job": f.job.code(), "key": f.key}))).await;
+            }
+        }
+    }
+
+    /// The console's notices: the daemon's own, then today's background failures, one line a cause with its count.
+    fn notices_json(&self) -> Vec<String> {
+        let mut out = self.notices.lock().unwrap().clone();
+        out.extend(crate::daemon_notice::lines(&self.engine.ws.dir, (self.engine.clock_unix)()));
+        out
     }
 
     fn timers_json(&self) -> Value {
@@ -5199,7 +5239,7 @@ impl EngineService {
             "pending_approvals": self.pending_json(),
             "recovery": self.recovery_json(&m.id),
             "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len(),
-            "notices": self.notices.lock().unwrap().clone(),
+            "notices": self.notices_json(),
             "running_tasks": running,
             "timers": self.timers_json()["timers"].as_array().cloned().unwrap_or_default().into_iter().filter(|t| t["state"] == "pending").collect::<Vec<_>>(),
             "enabled_agents": self.engine.settings.enabled_agents,
@@ -5542,6 +5582,104 @@ mod tests {
     use super::*;
     use crate::model::Step;
     use crate::testkit::{events_of, setup, Fx};
+
+    fn harness_only(f: &Fx) -> Arc<EngineService> {
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&crate::testkit::harness_only_config()).unwrap());
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        svc
+    }
+
+    // `specs/143` AC-7 and §2.7 item 6: an idle rebuild that fails for want of a route writes one `daemon.notice` with cause
+    // `no_route`, one line in the log at the default level and one line in `delphi kb health`; the same failure an hour later
+    // writes no second notice that day; the topic stays due and no stub is written; none of it holds text of a page or a claim.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_idle_rebuild_with_no_route_is_one_notice_a_day_and_holds_no_entry_text() {
+        use crate::daemon_notice as dn;
+        let f = setup(vec![], 5.0, |_| {});
+        let svc = harness_only(&f);
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        lib.topic_create("Zanzibar lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        svc.topic_idle_rebuild_noticed().await;
+        let notices = events_of(&f, "daemon.notice");
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].payload, json!({"cause": "no_route", "job": "pages", "key": null}));
+        assert!(fs::read(lib.root().join("pages/zanzibar-lighthouse-lamps.md")).is_err(), "no stub takes the page's place");
+        let now = (f.engine.clock_unix)();
+        let due = |now: i64| lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(&f.engine.ws.dir), now: now as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
+        assert_eq!(due(now), 1, "the topic stays due");
+
+        // An hour later: counted, not said again.
+        f.now.fetch_add(3600, std::sync::atomic::Ordering::SeqCst);
+        svc.topic_idle_rebuild_noticed().await;
+        assert_eq!(events_of(&f, "daemon.notice").len(), 1, "one notice for a cause in a day");
+        let console = svc.notices_json();
+        assert_eq!(console, vec![dn::line(dn::Cause::NoRoute, 2, None)]);
+
+        // One line of `delphi kb health`, with the day the cause was first seen.
+        let health = crate::knowledge_health::gather(&f.engine.ws.home, &f.engine.ws.dir, now + 3600);
+        let day: String = delphi_core::time::format_unix_millis(now, 0).chars().take(10).collect();
+        let lines: Vec<String> = health.lines(now + 3600).into_iter().filter(|l| l.text.starts_with("pages:")).map(|l| l.text).collect();
+        assert_eq!(lines, vec![format!("pages: 1 due, last idle rebuild failed: no model route, since {day}. See delphi doctor.")]);
+
+        // The log line is written at `error`, the level a fresh install logs at, with the fixed words and the cause code only.
+        let logger = delphi_core::elog::Logger::new(&f.engine.ws.home, "daemon", "test", delphi_core::elog::settings_for(&f.engine.ws.home));
+        assert!(logger.enabled(delphi_core::elog::Level::Error) && !logger.enabled(delphi_core::elog::Level::Warn));
+        let logged = logger.render(delphi_core::elog::Level::Error, "daemon", dn::LOG_SLUG, dn::LOG_WORDS, &json!({"reason": "no_route"}), &[], None);
+        assert!(logged.contains("a background job could not run") && logged.contains("no_route"), "{logged}");
+
+        // No text of the topic anywhere the operator is told.
+        let record = fs::read_to_string(f.engine.ws.dir.join(dn::FILE)).unwrap();
+        let brief = dn::take_brief_line(&f.engine.ws.dir).expect("the brief's line");
+        for told in [notices[0].payload.to_string(), console.join("\n"), lines.join("\n"), logged, record, brief] {
+            let low = told.to_lowercase();
+            assert!(!low.contains("zanzibar") && !low.contains("lighthouse") && !low.contains("lamps"), "{told}");
+        }
+    }
+
+    // `specs/143` §6, the fitness function "a background failure is never silent": every idle job, enumerated from the closed list,
+    // raises a notice when no model can serve it. `match` is exhaustive, so a job added to the list fails to compile until it has a
+    // row here. AC-18: failures of different jobs with one cause in a day are one notice with their count.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_idle_job_failure_writes_a_notice() {
+        use crate::daemon_notice::{Cause, Job};
+        let f = setup(vec![], 5.0, |_| {});
+        let svc = harness_only(&f);
+        let mut built = 0;
+        for job in Job::ALL {
+            let exists = match job {
+                Job::Pages => {
+                    crate::library::Library::in_home(&f.engine.ws.home).topic_create("Tide tables", crate::library::topics::Origin::Operator, 1).unwrap();
+                    svc.topic_idle_rebuild_noticed().await;
+                    true
+                }
+                Job::Validation => {
+                    assert!(!f.engine.background_judge_or_notice(), "no judge, so the check is not started");
+                    true
+                }
+                Job::SessionSummaries => {
+                    assert!(f.engine.summarize_session(crate::summary::SummaryMode::Fast, "Operator: pick a queue").await.is_none());
+                    true
+                }
+                Job::Consolidation => {
+                    f.engine.consolidate_pass(delphi_adapter::config::Consolidate::Model, 1000).await;
+                    true
+                }
+                // Source summaries are `specs/142` §2.6 and are not built: the job joins this test when it is.
+                Job::Summaries => false,
+            };
+            svc.notices_tick().await;
+            let record: Value = serde_json::from_slice(&fs::read(f.engine.ws.dir.join(crate::daemon_notice::FILE)).unwrap()).unwrap();
+            let named = record["causes"]["no_route"]["jobs"].as_array().unwrap().iter().any(|j| j == job.code());
+            assert_eq!(named, exists, "{job:?}");
+            built += exists as u64;
+            assert_eq!(record["causes"]["no_route"]["count"], json!(built), "{job:?}");
+        }
+        assert_eq!(built, 4);
+        assert_eq!(events_of(&f, "daemon.notice").len(), 1, "one notice for the cause, whatever the job");
+        assert_eq!(svc.notices_json(), vec![crate::daemon_notice::line(Cause::NoRoute, 4, None)]);
+        assert_eq!(f.model.requests().len(), 0, "no model was called");
+    }
     use delphi_core::client::{Client, ClientError};
     use delphi_core::server::{Daemon, DaemonConfig, TtyPolicy};
     use std::fs;

@@ -129,6 +129,12 @@ pub struct Written {
 }
 
 impl Engine {
+    /// A background job could not run (`specs/143` §2.7): left for the daemon, which raises it as a notice on its next tick. Only
+    /// the closed job and cause travel; no text of what the job was working on.
+    pub fn job_failed(&self, job: crate::daemon_notice::Job, cause: crate::daemon_notice::Cause) {
+        self.job_failures.push(crate::daemon_notice::Failure { job, cause, key: None });
+    }
+
     /// Ask a model for a summary of a finished session. `None` when summaries are off, when no suitable model is usable right now
     /// (no card is ever raised for this: it simply does not happen), or when the call fails.
     pub async fn summarize_session(&self, mode: SummaryMode, record: &str) -> Option<Written> {
@@ -142,9 +148,13 @@ impl Engine {
         // A stand-in that needs the operator's yes is not worth a question; only a model that would have served the request anyway.
         let key = match &route {
             crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => key.clone(),
-            _ => return None,
+            _ => {
+                self.job_failed(crate::daemon_notice::Job::SessionSummaries, crate::daemon_notice::Cause::NoRoute);
+                return None;
+            }
         };
         if mode == SummaryMode::Local && key.family != "local" {
+            self.job_failed(crate::daemon_notice::Job::SessionSummaries, crate::daemon_notice::Cause::NoRoute);
             return None;
         }
         self.one_shot(&key, &session_contract(record), MAX_TOKENS).await

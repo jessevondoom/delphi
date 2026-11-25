@@ -519,6 +519,9 @@ impl crate::engine::Engine {
                         Err(e) => delphi_core::elog::warn("engine", "consolidate_store", &e, json!({"role": i.role})),
                     }
                 }
+            } else {
+                // No model can serve the pass: the mechanical merge above stands, and the operator is told (`specs/143` §2.7).
+                self.job_failed(crate::daemon_notice::Job::Consolidation, crate::daemon_notice::Cause::NoRoute);
             }
         }
         if let Err(e) = record_run(&ws, &date, merged, proposed, tokens) {

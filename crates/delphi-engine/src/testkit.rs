@@ -60,6 +60,12 @@ order = { claude = ["direct", "backup"] }
 allowed_endpoints = ["direct", "backup"]
 "#;
 
+/// [`CONFIG`] with one endpoint, a `claude` harness, and nothing else allowed: the install of `specs/143` §1 (O1).
+pub(crate) fn harness_only_config() -> String {
+    let models = CONFIG.split("[[endpoints]]").next().unwrap();
+    format!("{models}[[endpoints]]\nid = \"claude-sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n\n[access]\nallowed_endpoints = [\"claude-sub\"]\n")
+}
+
 pub(crate) struct Fx {
     pub _t: tempfile::TempDir,
     pub engine: Arc<Engine>,
@@ -155,6 +161,7 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
         broker: Broker::new_unique(),
         model: model.clone(),
         secrets,
+        job_failures: Default::default(),
         ledger,
         settings,
         probe: Arc::new(AssumeClean),

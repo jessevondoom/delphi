@@ -155,6 +155,7 @@ pub fn run(home: &Path, ws: &Workspace, opts: &Options) -> Report {
     }
     // 18. Settings that were removed because their features are always on (specs/098 §13.2): one line per key an old config still carries.
     check_removed_settings(&cfg, &mut r);
+    check_single_calls(&cfg, &mut r);
     let endpoints = toml::from_str::<toml::Value>(&cfg).ok().and_then(|v| v.get("endpoints").and_then(|e| e.as_array()).map(|a| a.len())).unwrap_or(0);
     if endpoints == 0 && opts.require_providers {
         r.fail("7 model-access", "", "no endpoints configured and --require-providers was given (specs/009)");
@@ -365,6 +366,33 @@ fn check_app(p: &AppProbes, r: &mut Report) {
 /// The five settings `specs/098` §13.2 removed when it pulled their flags. An old config that still has one is read without error and the
 /// key does nothing; this names each, once, so the operator can delete it. Nothing is changed.
 const REMOVED_SETTINGS: [(&str, &str); 5] = [("hosts", "route_adopt"), ("hosts", "source_ladder"), ("seats", "red_team_kind"), ("research", "ladder"), ("research", "search_log")];
+
+/// The harness that serves a single model call on this config, as routing answers for the page writer (`specs/143` §2.1), or `None`
+/// when no endpoint does. The doctor asks the router, so it says what the daemon will do and not what a rule here guesses.
+fn single_call_server(cfg: &delphi_adapter::config::Config) -> Option<String> {
+    use delphi_engine::route::{resolve_route, Route, RouteRequest};
+    let req = RouteRequest { role: "writer".into(), tier: "workhorse".into(), prefer_family: Some(cfg.primary_family().to_string()), turn_by_turn: true, ..Default::default() };
+    match resolve_route(cfg, &[], 0, &req) {
+        Route::Target { key, .. } | Route::Similar { key, .. } => Some(key.endpoint_id),
+        _ => None,
+    }
+}
+
+/// `7 model-access`, single calls (`specs/143` §2.7 item 5). Topic and search pages, their validator, summaries and the scout's calls
+/// each send one prompt and read one answer. When every allowed endpoint is a harness, either a harness serves them through the
+/// single-turn bridge (an ordinary line that names it), or nothing does (a warning that names both remedies: an API-key endpoint,
+/// §2.5, and the bridge's key). With any other allowed endpoint there is nothing to say.
+fn check_single_calls(cfg_text: &str, r: &mut Report) {
+    use delphi_adapter::config::{AccessPath, Config};
+    let Ok(cfg) = Config::parse(cfg_text) else { return };
+    if cfg.endpoints.is_empty() || cfg.endpoints.iter().any(|e| e.path != AccessPath::Harness && cfg.is_allowed(&e.id)) {
+        return;
+    }
+    match single_call_server(&cfg) {
+        Some(endpoint) => r.push(Level::Ok, "7 model-access", "config.toml", format!("single model calls (topic and search pages, their validator, summaries, the scout's calls) are served by the harness `{endpoint}`, one prompt and one answer with its tools off; they spend that subscription's own quota")),
+        None => r.warn("7 model-access", "config.toml", "every allowed endpoint is a harness and none serves a single model call, so topic and search pages, their validator, summaries and the scout's calls cannot run. Either add an endpoint with path = \"api\" (or a cloud or gateway one) to [[endpoints]] and allowed_endpoints, or let a harness serve single calls: [routing] single_call_harness = \"auto\" (the default) or \"on\", with a CLI that can run one prompt with its tools off (claude; not agy)"),
+    }
+}
 
 fn check_removed_settings(cfg_text: &str, r: &mut Report) {
     let Ok(root) = toml::from_str::<toml::Value>(cfg_text) else { return };
@@ -1800,6 +1828,29 @@ mod tests {
         assert_eq!(warned("[exec]\ntest_command = [\"mytool\"]\n").len(), 1);
         assert!(warned("").is_empty() && warned("[forge]\nreview_commands = []\n[exec]\ntest_command = [\"mytool\"]\n").is_empty());
     }
+
+    // `specs/143` §2.7 item 5: a config whose every allowed endpoint is a harness, where none serves a single call, gets one warning
+    // that names both remedies. An allowed loopback gateway clears it; a non-harness endpoint left out of allowed_endpoints does
+    // not; no endpoints at all is reported elsewhere.
+    #[test]
+    fn doctor_warns_when_only_harness_endpoints_are_allowed_and_none_serves_a_single_call() {
+        let found = |cfg: &str| {
+            let mut r = Report::default();
+            check_single_calls(cfg, &mut r);
+            r.findings.into_iter().filter(|f| f.check == "7 model-access").map(|f| (f.level, f.message)).collect::<Vec<_>>()
+        };
+        let agy = format!("{HARNESS_MODELS}[[endpoints]]\nid = \"agy-sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"agy\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n");
+        let gateway = "[[endpoints]]\nid = \"local\"\nfamily = \"claude\"\npath = \"gateway-compat\"\nbase_url = \"http://127.0.0.1:8080\"\ncredential = \"none\"\ncost_model = \"local\"\n";
+        let got = found(&format!("{agy}[access]\nallowed_endpoints = [\"agy-sub\"]\n"));
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].0, Level::Warn);
+        assert!(got[0].1.contains("topic and search pages") && got[0].1.contains("path = \"api\"") && got[0].1.contains("[routing] single_call_harness"), "both remedies: {got:?}");
+        assert!(found(&format!("{agy}{gateway}[access]\nallowed_endpoints = [\"agy-sub\", \"local\"]\n")).is_empty());
+        assert_eq!(found(&format!("{agy}{gateway}[access]\nallowed_endpoints = [\"agy-sub\"]\n")).len(), 1);
+        assert!(found("").is_empty());
+    }
+
+    const HARNESS_MODELS: &str = "[models.claude]\nfast = \"haiku\"\nworkhorse = \"sonnet\"\nfrontier = \"opus\"\n";
 
     // `specs/098` §13.2: one line per removed key an old config still carries, none for a clean config, and nothing else changes.
     #[test]

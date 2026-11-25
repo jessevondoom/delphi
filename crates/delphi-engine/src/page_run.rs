@@ -89,7 +89,19 @@ impl PageWriter for EnginePageWriter {
 pub fn share_allows(state: &std::path::Path, install_week: u64, now: i64) -> Result<(), String> {
     let spent: u64 = Journal::new(state).all().iter().filter(|e| e["kind"] == "span" && e["mission"] == BACKGROUND && e["page"] == true && e["at"].as_i64().unwrap_or(0) >= now - WEEK_SECS).map(|e| e["tokens"].as_u64().unwrap_or(0)).sum();
     let cap = FLOOR_TOKENS.max((BACKGROUND_SHARE * install_week as f64) as u64);
-    if spent + PAGE_RESERVE <= cap { Ok(()) } else { Err(format!("the validator's share of this week's tokens is spent ({} of {}); cached pages still open", spent, cap)) }
+    if spent + PAGE_RESERVE <= cap { Ok(()) } else { Err(format!("{} ({} of {}); cached pages still open", SHARE_SPENT, spent, cap)) }
+}
+
+/// What a page build says when routing has no model for the writer.
+pub const NO_WRITER: &str = "no model is available for the writer right now";
+/// How the refusal of the validator's weekly share begins ([`share_allows`]).
+const SHARE_SPENT: &str = "the validator's share of this week's tokens is spent";
+
+/// What an idle rebuild did (`specs/143` §2.7): the page, or the reason, and the cause of the notice when the job could not run.
+/// A rebuild that wrote the claims alone although the library had material is a failed check: its page stands and it has a cause.
+pub struct IdleRebuild {
+    pub built: Result<crate::library::topics::TopicEntry, String>,
+    pub cause: Option<crate::daemon_notice::Cause>,
 }
 
 /// What a page search tells the caller besides the page.
@@ -208,7 +220,7 @@ impl Engine {
         let mut notes = Vec::new();
         let now = (self.clock_unix)();
         let extra = if external { self.capture_external(&lib, query, &mut notes).await? } else { Vec::new() };
-        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        let key = self.writer_key().ok_or_else(|| NO_WRITER.to_string())?;
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
         let ledger = self.validator.ledger();
@@ -241,7 +253,7 @@ impl Engine {
         let mut notes = Vec::new();
         let now = (self.clock_unix)();
         let extra = self.capture_external_reputable(&lib, query, &mut notes).await?;
-        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        let key = self.writer_key().ok_or_else(|| NO_WRITER.to_string())?;
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
         let ledger = self.validator.ledger();
@@ -274,7 +286,7 @@ impl Engine {
         let mut notes = Vec::new();
         let now = (self.clock_unix)();
         let extra = if external { self.capture_external(&lib, query, &mut notes).await? } else { Vec::new() };
-        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        let key = self.writer_key().ok_or_else(|| NO_WRITER.to_string())?;
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
         let ledger = self.validator.ledger();
@@ -309,6 +321,11 @@ impl Engine {
     /// [`Engine::topic_rebuild`] that `cancel` can stop before its writer's model call or before the page is written (a rebuild the
     /// desktop app asked for, stopped by revoking its key: `specs/129` §10.2). The tokens it spent are journalled however it ends.
     pub async fn topic_rebuild_cancellable(self: &Arc<Self>, slug: &str, cancel: Option<&crate::library::topics::Cancel>) -> Result<crate::library::topics::TopicEntry, String> {
+        self.topic_rebuild_with(slug, cancel, &mut false).await
+    }
+
+    /// The rebuild; `material` is set when the library had something for the page, so the writer was to be asked.
+    async fn topic_rebuild_with(self: &Arc<Self>, slug: &str, cancel: Option<&crate::library::topics::Cancel>, material: &mut bool) -> Result<crate::library::topics::TopicEntry, String> {
         let settings = self.cfg.get().library.pages.clone();
         if !settings.enabled {
             return Err("generated pages are off ([library.pages] enabled = false)".into());
@@ -317,11 +334,12 @@ impl Engine {
         let side = lib.topic_side(slug).ok_or_else(|| format!("no topic `{}`", slug))?;
         let now = (self.clock_unix)();
         let gathered = self.topic_material(&side).await;
+        *material = !gathered.is_empty();
         // The page check resolves `[s-kb-...]` and `[f-...]` against these records and nothing else.
         let gaps = lib.topic_gaps(&side, &self.ws.dir);
         let slugs = lib.topic_slugs();
         let lib = lib.with_records(gathered.records.clone()).with_topic_slugs(slugs);
-        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        let key = self.writer_key().ok_or_else(|| NO_WRITER.to_string())?;
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
         let ledger = self.validator.ledger();
@@ -343,6 +361,13 @@ impl Engine {
     /// waited longest (never built first, then the oldest build). `None` when nothing is due, pages are off, `auto_rebuild` is off or
     /// today's `per_day` is spent. The caller decides that the daemon is idle.
     pub async fn topic_idle_rebuild(self: &Arc<Self>) -> Option<Result<crate::library::topics::TopicEntry, String>> {
+        self.topic_idle_rebuild_report().await.map(|r| r.built)
+    }
+
+    /// [`Engine::topic_idle_rebuild`], with the cause of the notice when the job could not run (`specs/143` §2.7 items 1 and 6). With
+    /// no route for the writer nothing is written: the topic stays due, no stub takes its page's place, and the cause is `no_route`.
+    pub async fn topic_idle_rebuild_report(self: &Arc<Self>) -> Option<IdleRebuild> {
+        use crate::daemon_notice::Cause;
         let settings = self.cfg.get().library.pages.clone();
         if !settings.enabled || !settings.auto_rebuild {
             return None;
@@ -357,7 +382,15 @@ impl Engine {
         let mut due: Vec<_> = lib.topic_pages(&ctx).into_iter().filter(|t| t.due.is_some()).collect();
         due.sort_by_key(|t| (t.built.is_some(), t.built.unwrap_or(0)));
         let slug = due.first()?.slug.clone();
-        Some(self.topic_rebuild(&slug).await)
+        let mut material = false;
+        let built = self.topic_rebuild_with(&slug, None, &mut material).await;
+        let cause = match &built {
+            Err(e) if e == NO_WRITER => Some(Cause::NoRoute),
+            Err(e) if e.starts_with(SHARE_SPENT) => Some(Cause::Budget),
+            Ok(t) if material && t.outcome.as_deref() == Some("claims_only") => Some(Cause::CheckFailed),
+            _ => None,
+        };
+        Some(IdleRebuild { built, cause })
     }
 }
 
