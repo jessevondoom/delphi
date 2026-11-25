@@ -77,6 +77,7 @@ max_parallel_agents = 4
 # A `claude` harness serves them only once its subscription token is named in [bridge.claude] credential (below).
 # A bridged call spends that subscription's own quota; for heavy or unattended use add an endpoint with path = "api".
 # single_call_harness = "auto"
+# single_call_harness_timeout_secs = 180   # a bridged call past this is stopped (SIGTERM, then SIGKILL five seconds later)
 
 # Bundle agents (specs/041). "flat" (default): the orchestrator is shown one line per bundle agent, up to 20, and told how many
 # are not listed. "auto": past 20 agents it is shown a short index of domains and gets the `search_agent_registry` tool instead.

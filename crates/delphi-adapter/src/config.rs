@@ -692,7 +692,12 @@ pub struct Routing {
     pub max_cost_class: CostCap,
     /// `[routing] single_call_harness` (`specs/143` §2.1 item 4); `auto` when absent.
     pub single_call_harness: SingleCallHarness,
+    /// `[routing] single_call_harness_timeout_secs` (`specs/143` §2.3 item 4): how long a bridged call may run. 180 when absent.
+    pub single_call_harness_timeout_secs: u64,
 }
+
+/// The longest a bridged call runs when the config does not say.
+pub const DEFAULT_SINGLE_CALL_TIMEOUT_SECS: u64 = 180;
 
 /// `[bridge]` (`specs/143`): the single-turn harness bridge.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -709,7 +714,7 @@ impl BridgeConfig {
 
 impl Default for Routing {
     fn default() -> Routing {
-        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None, max_cost_class: CostCap::default(), single_call_harness: SingleCallHarness::Auto }
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None, max_cost_class: CostCap::default(), single_call_harness: SingleCallHarness::Auto, single_call_harness_timeout_secs: DEFAULT_SINGLE_CALL_TIMEOUT_SECS }
     }
 }
 
@@ -1662,6 +1667,12 @@ impl Config {
                     None => errs.push("[routing] single_call_harness must be \"auto\", \"on\" or \"off\"".into()),
                 }
             }
+            if let Some(n) = r.get("single_call_harness_timeout_secs") {
+                match n.as_integer().filter(|n| (1..=3600).contains(n)) {
+                    Some(n) => cfg.routing.single_call_harness_timeout_secs = n as u64,
+                    None => errs.push("[routing] single_call_harness_timeout_secs must be a whole number of seconds from 1 to 3600".into()),
+                }
+            }
             if let Some(a) = r.get("registry") {
                 match a.as_str().and_then(RegistryMode::parse) {
                     Some(v) => cfg.routing.registry = v,
@@ -2500,6 +2511,9 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
             assert_eq!(with_routing(&format!("[routing]\nsingle_call_harness = \"{word}\"")).unwrap().routing.single_call_harness, mode);
             assert_eq!(mode.as_str(), word);
         }
+        assert_eq!(with_routing("").unwrap().routing.single_call_harness_timeout_secs, 180);
+        assert_eq!(with_routing("[routing]\nsingle_call_harness_timeout_secs = 30").unwrap().routing.single_call_harness_timeout_secs, 30);
+        assert!(with_routing("[routing]\nsingle_call_harness_timeout_secs = 0").is_err());
         assert_eq!(with_routing("").unwrap().bridge.claude_credential, None);
         assert_eq!(with_routing("[bridge.claude]\ncredential = \"keychain:bridge-claude\"").unwrap().bridge.claude_credential.as_deref(), Some("keychain:bridge-claude"));
         let pasted = with_routing("[bridge.claude]\ncredential = \"sk-ant-oat01-pasted-secret\"").unwrap_err().join("; ");

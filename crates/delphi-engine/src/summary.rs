@@ -276,12 +276,58 @@ impl Engine {
         e
     }
 
+    /// The subscription token of the bridge, read now from the reference `[bridge.claude] credential` names (`specs/143` §2.9).
+    /// The resolver registers it with the redactor, so it is masked wherever text is written. `None` when there is no reference
+    /// or it does not resolve. Delphi never reads the operator's own CLI login for this.
+    fn bridge_token(&self, cfg: &delphi_adapter::config::Config) -> Option<delphi_adapter::credential::Secret> {
+        use delphi_adapter::credential::{CredentialRef, Resolved, Resolver};
+        let reference = CredentialRef::parse(cfg.bridge.claude_credential.as_deref()?).ok()?;
+        let registry = self.secrets.clone();
+        match Resolver::system(std::sync::Arc::new(move |s| registry.register(s))).resolve(&reference) {
+            Ok(Resolved::Token(t)) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// A single call through a harness endpoint (`specs/143` §2.2): the CLI is run once, in a home built empty for this call,
+    /// with its tools off, for one prompt and one answer. The answer is cut at `max_tokens` after the CLI has produced it (the
+    /// whole answer counts against the subscription, so the prompt states the length wanted) and **always redacted** before it
+    /// is returned: a token or a key that a CLI echoes never reaches a caller, a page or a log.
+    async fn bridged_call(&self, ep: &delphi_adapter::config::Endpoint, key: &delphi_adapter::config::PoolKey, ipr: &Ipr, max_tokens: u64, inputs: Option<Tier>) -> Result<Written, CallError> {
+        use crate::harness_single as bridge;
+        let cfg = self.cfg.get();
+        // Routing decides who serves; a key that routing would not have given is not launched.
+        if cfg.routing.single_call_harness == delphi_adapter::config::SingleCallHarness::Off || crate::route::single_call_cli(ep.harness.as_deref().unwrap_or("claude")).is_err() {
+            return Err(CallError::NoRoute);
+        }
+        let token = self.bridge_token(&cfg).ok_or(CallError::Launch)?;
+        let outside: Vec<std::path::PathBuf> = self.projects.iter().map(|(_, dir)| dir.clone()).chain([self.ws.dir.clone()]).collect();
+        let home = match bridge::CallHome::make(&bridge::roots(&self.ws.home), &outside) {
+            Ok(h) => h,
+            Err(why) => {
+                // The error names the file; the notice carries the cause only.
+                delphi_core::elog::error("harness", "single_call_launch", &why, serde_json::json!({"harness": "claude"}));
+                return Err(CallError::Launch);
+            }
+        };
+        let prompt = format!("{}\n\n{}\n\nAnswer in at most about {} tokens.", ipr.system_sections().join("\n\n"), ipr.first_user_text(), max_tokens);
+        let launch = bridge::launch(&self.settings.harness_program, &key.model_id, prompt, &home, Some(token));
+        // `home` is removed when it goes out of scope: after an answer, an error, a timeout, a tool request, and when this call
+        // is dropped because its job was cancelled.
+        let answer = bridge::run(&launch, std::time::Duration::from_secs(cfg.routing.single_call_harness_timeout_secs)).await?;
+        let cut: String = answer.text.chars().take((max_tokens as usize).saturating_mul(4)).collect();
+        let text = self.secrets.redact(&cut);
+        if text.trim().is_empty() {
+            return Err(CallError::Empty);
+        }
+        Ok(Written { text, endpoint_id: ep.id.clone(), model_id: key.model_id.clone(), tokens: answer.tokens, tier: single_call_tier(inputs) })
+    }
+
     async fn single_call(&self, key: &delphi_adapter::config::PoolKey, ipr: &Ipr, max_tokens: u64, inputs: Option<Tier>) -> Result<Written, CallError> {
         let cfg = self.cfg.get();
         let ep = cfg.endpoint(&key.endpoint_id).ok_or(CallError::NoRoute)?;
         if ep.path == delphi_adapter::config::AccessPath::Harness {
-            // The bridge runs the CLI once here (`specs/143` §2.2, slice B). Until it is built there is nothing to launch.
-            return Err(CallError::Launch);
+            return self.bridged_call(ep, key, ipr, max_tokens, inputs).await;
         }
         let target = Target { provider: delphi_adapter::provider_for(ep).into(), endpoint_id: ep.id.clone(), model_id: key.model_id.clone() };
         let opts = CompileOptions { max_tokens, thinking_budget: None, temperature: None, tools: vec![], betas: ep.betas.clone() };
@@ -378,7 +424,7 @@ mod tests {
         let left = f.engine.job_failures.drain();
         assert_eq!(left, seen.iter().map(|e| Failure { job: Job::Consolidation, cause: e.cause(), key: None }).collect::<Vec<_>>());
 
-        // No endpoint behind the key, and a harness key before the bridge is built.
+        // No endpoint behind the key.
         let mut gone = key.clone();
         gone.endpoint_id = "nowhere".into();
         assert_eq!(f.engine.one_shot_raw(&gone, &ipr("contract"), 100, None).await.unwrap_err(), CallError::NoRoute);
@@ -412,5 +458,83 @@ mod tests {
         found.sort();
         let listed: Vec<(String, usize)> = CALL_SITES.iter().map(|(f, n)| (f.to_string(), *n)).collect();
         assert_eq!(found, listed, "a call site of one_shot or one_shot_raw was added or removed: list it in summary::CALL_SITES and carry its error");
+    }
+
+    /// An engine whose only endpoint is a `claude` harness, whose CLI is the stand-in at `program`, with the bridge's token
+    /// behind a `command:` reference (a fixture value; no keychain is read in a test).
+    fn bridged(program: &str, token_resolves: bool) -> crate::testkit::Fx {
+        let program = program.to_string();
+        let f = crate::testkit::setup(vec![], 5.0, move |s| s.harness_program = program);
+        // A helper prints `{"token": ...}`; `false` prints nothing, so the reference does not resolve.
+        let token = if token_resolves { r#"[bridge.claude]
+credential = 'command:["/bin/echo","{\"token\":\"sk-fixture-bridge-token-0001\"}"]'
+"# } else { "[bridge.claude]\ncredential = 'command:[\"/usr/bin/false\"]'\n" };
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}{token}", crate::testkit::harness_only_config())).unwrap());
+        f
+    }
+
+    // AC-3: through a scripted CLI, `one_shot_raw` on a harness key returns the CLI's final text, cut at `max_tokens`; the prompt
+    // (the system text and the contract) is on standard input and in no argument; the working directory was empty and is removed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_single_call_on_a_harness_key_runs_the_cli_once_and_returns_its_final_text_cut() {
+        use crate::harness_single::tests::{answers, recording_cli};
+        let d = tempfile::tempdir().unwrap();
+        let rec = d.path().join("rec");
+        let long = "word ".repeat(100);
+        let f = bridged(&recording_cli(d.path(), &rec, &answers(long.trim())), true);
+        let key = f.engine.scout_key().expect("routing gives the harness for a single call");
+        assert_eq!(key.endpoint_id, "claude-sub");
+        let w = f.engine.one_shot_raw(&key, &ipr("the contract of this call"), 20, Some(Tier::L5)).await.unwrap();
+        assert_eq!(w.text.chars().count(), 80, "cut at four characters a token, after the CLI produced it");
+        assert!(long.starts_with(&w.text));
+        assert_eq!((w.endpoint_id.as_str(), w.tokens, w.tier), ("claude-sub", 42, Tier::L3));
+        let read = |n: &str| std::fs::read_to_string(rec.join(n)).unwrap();
+        let (stdin, args) = (read("stdin.txt"), read("args.txt"));
+        assert!(stdin.contains("the contract of this call") && stdin.contains("You write short, factual summaries") && stdin.contains("at most about 20 tokens"), "{stdin}");
+        assert!(!args.contains("contract") && !args.contains("summaries") && !args.contains("sk-fixture"), "{args}");
+        assert_eq!(read("work.txt"), "", "the working directory was empty");
+        let cwd = std::path::PathBuf::from(read("cwd.txt").trim());
+        assert!(!cwd.exists() && !cwd.parent().unwrap().exists(), "the call's directories are removed");
+        assert!(!cwd.starts_with(std::fs::canonicalize(&f.engine.ws.dir).unwrap()), "outside the workspace");
+        assert_eq!(f.model.requests().len(), 0, "no API request was made");
+    }
+
+    // AC-25: a bridged answer that holds a registered secret (the bridge's own token, a fixture key) comes back with it masked,
+    // through `one_shot_raw` and through `one_shot`. AC-21: the token is in no error either.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_bridged_answer_is_always_redacted() {
+        use crate::harness_single::tests::{answers, recording_cli};
+        let d = tempfile::tempdir().unwrap();
+        let rec = d.path().join("rec");
+        let f = bridged(&recording_cli(d.path(), &rec, &answers("my token is sk-fixture-bridge-token-0001 and the key is sk-fixture-other-key-0002")), true);
+        f.engine.secrets.register("sk-fixture-other-key-0002");
+        let key = f.engine.scout_key().unwrap();
+        let raw = f.engine.one_shot_raw(&key, &ipr("contract"), 200, None).await.unwrap();
+        assert!(!raw.text.contains("sk-fixture") && raw.text.starts_with("my token is "), "{}", raw.text);
+        let cleaned = f.engine.one_shot(&key, "contract", 200, None).await.unwrap();
+        assert!(!cleaned.text.contains("sk-fixture"), "{}", cleaned.text);
+        assert_eq!(raw.tier, Tier::L0);
+    }
+
+    // AC-24: with a token reference that does not resolve nothing is started; a launch that cannot be made is `Launch`, and the
+    // job's notice says so. A CLI that asks for a tool is `HarnessTool` through the entry point (AC-4).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_bridged_call_with_no_token_or_a_tool_request_fails_with_its_cause() {
+        use crate::daemon_notice::{in_job, Cause, Failure, Job};
+        use crate::harness_single::tests::{recording_cli, INIT};
+        let d = tempfile::tempdir().unwrap();
+        let rec = d.path().join("rec");
+        let prog = recording_cli(d.path(), &rec, "echo never");
+        let f = bridged(&prog, false);
+        let key = f.engine.scout_key().unwrap();
+        let (out, _) = in_job(Job::Pages, f.engine.one_shot_raw(&key, &ipr("contract"), 100, None)).await;
+        assert_eq!(out.unwrap_err(), CallError::Launch);
+        assert!(!rec.join("args.txt").exists(), "nothing was started");
+        assert_eq!(f.engine.job_failures.drain(), vec![Failure { job: Job::Pages, cause: Cause::Launch, key: None }]);
+
+        let body = format!("{INIT}\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Read\",\"input\":{{}}}}]}}}}'\nsleep 30");
+        let f = bridged(&recording_cli(d.path(), &rec, &body), true);
+        let err = f.engine.one_shot_raw(&key, &ipr("contract"), 100, None).await.unwrap_err();
+        assert_eq!((err, err.to_string().as_str()), (CallError::HarnessTool, "the harness asked for a tool in a single call (harness_tool)"));
     }
 }

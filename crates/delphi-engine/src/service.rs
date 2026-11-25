@@ -2906,6 +2906,8 @@ impl EngineService {
 
     /// Start the once-a-second timer loop on the current runtime.
     pub fn start_timers(self: &Arc<Self>) {
+        // `specs/143` §2.3 item 4: the directories of bridged calls that a crash left behind are removed before any new call.
+        crate::harness_single::sweep(&crate::harness_single::roots(&self.engine.ws.home));
         let svc = self.clone();
         tokio::spawn(async move {
             let mut every = tokio::time::interval(Duration::from_secs(1));

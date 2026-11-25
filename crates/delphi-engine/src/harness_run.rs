@@ -857,7 +857,7 @@ impl Engine {
         // Spec 092 TA-5: in a run that holds a grant a seat starts only if its own tools can be proven off for this launch. The Claude
         // seat's native list and account connectors are cleared; a Builder, agy and codex are refused (`seat_native_tools_off`).
         let connectors = connectors && !granted;
-        let mut lp = LaunchProfile { native_tools: if granted || builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers, lock_down: granted && cli == Cli::Claude };
+        let mut lp = LaunchProfile { native_tools: if granted || builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers, lock_down: granted && cli == Cli::Claude, single_call: false };
         // A forge reader on the Claude CLI: exactly its read list with `--tools`. Its working directory stays empty, so every read of
         // the copy is outside it and comes to `harness_decide` as a permission request first.
         if let (Some(f), Cli::Claude) = (&sc.forge, cli) {

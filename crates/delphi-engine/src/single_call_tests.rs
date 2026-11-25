@@ -92,7 +92,8 @@ fn source(file: &str) -> String {
 fn the_marked_callers_are_the_listed_and_the_tested_callers() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let files: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.ends_with(".rs") && !n.ends_with("_tests.rs")).collect();
-    let marked: BTreeSet<String> = files.iter().filter(|n| source(n).contains("single_call: true")).cloned().collect();
+    // A route request that is marked (a launch profile of the bridge has a field of the same name and is not one).
+    let marked: BTreeSet<String> = files.iter().filter(|n| source(n).contains("turn_by_turn: true, single_call: true")).cloned().collect();
     let listed: BTreeSet<String> = crate::route::SINGLE_CALLERS.iter().map(|s| s.to_string()).collect();
     assert_eq!(marked, listed, "a file sets `single_call` and is not in route::SINGLE_CALLERS, or the reverse");
     let here = std::fs::read_to_string(dir.join("single_call_tests.rs")).unwrap();
