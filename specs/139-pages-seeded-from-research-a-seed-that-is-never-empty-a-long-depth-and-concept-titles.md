@@ -17,7 +17,7 @@ tags: [spec, library, pages, topics, research, seed, writer, encyclopedia]
 
 > **Status: draft**, revised 2026-11-25 with the operator's decisions of that day and the findings of the live proof (step 0). One of five specs from the knowledge audit of 2026-11-25 (139 to 143).
 > **The plan is approved; this text is not yet.** The operator approved the plan on 2026-11-25 ("go"). The status stays `draft` until a witnessed Panel with a red-team seat has read this text; approval is marked after that.
-> **Build order (confirmed by the operator, 2026-11-25):** the single-turn harness bridge (`specs/143`), with **this spec's seed slices (A, B, D, E) built alongside it**; then the source text cache (`specs/142`); then **the remaining slices of this spec (C, F, G, H)**; then the golden set (`specs/140`); then label enforcement (`specs/141`); then the one knowledge record and the later steps, which have no spec yet. The writer slices come after 142 because a validated page needs source text to be checked against (O8), and after 143 because the writer has no route today (O7).
+> **Build order (confirmed by the operator, 2026-11-25; steps 2 and 4 and the late group were added after Panel `t_0004`, for the operator to confirm with the approval):** (1) the single-turn harness bridge (`specs/143`), with the seed slices of `specs/139` (A, B, D, E) alongside; (2) the retrieval baseline, slices A, B and D of `specs/140`, run before the index changes; (3) the source text cache (`specs/142`: A, E, the cache cap, B, C, G); (4) a bounded backfill of the existing pointer sources, started by the operator (142 §2.7); (5) the writer slices of 139 (C, F); (6) the rest of 140; (7) label enforcement (`specs/141`); (8) kept late, and not before half of the last ten written pages pass validation: 139 G and H, 140 H, the rest of 142's cache slice and 142 F; then the one knowledge record and the later steps, which have no spec yet. This spec's writer slices come after 142 because a validated page needs source text to be checked against (O8), and after 143 because the writer has no route today (O7).
 > **Amends:** [`specs/117`](117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md) §2 items 1 to 4 (how a topic is named, rebuilt and gathered), [`specs/097`](097-encyclopedia-search-pages.md) §4.5 (a third depth beside `summary` and `expanded`), [`specs/113`](113-host-led-research-ingest-a-record-tool-and-workers-that-can-capture.md) §2 item 1 (one optional input). **Builds on:** [`specs/112`](112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md) §2 (the record and `answer.md`), [`specs/116`](116-memory-that-grows-a-provisional-tier-findings-consolidation-and-a-larger-start-context.md) §5 (findings), [`specs/118`](118-pictures-and-figures-stored-licence-capture-in-research-full-size-and-agent-made-figures.md) §5 (figures).
 
 ---
@@ -80,6 +80,7 @@ Chosen: **B**, with the writer's expansion on top. A loses the research when the
 | 7 | the live claims of the followed topics, **when there are any** (`library_topics.rs:576`). A seed never depends on claims: step 0 found the public records have none (O8). | `research_topic` |
 
 3. Caps: at most 40 spans and 64 KiB of text in a seed; a span is at most 8 KiB and is cut at a paragraph. Row 1 is never dropped to make room for the others. The order inside a row is by path, then line, so the same inputs give the same seed (byte for byte).
+   **A source's own text is never a span.** A library source enters a seed only as its summary (142 §2.6) and its kept excerpts, each at most 300 characters; where a source has neither, it is named in the bibliography and gives no span. This holds for every source, held, open or private, so that a seed never depends on what a licence allows. What a note quotes is bounded by §2.2 item 3.
 4. What is left out is what today's gather leaves out (`topic_gather.rs:13-18`): a private record, a hit flagged `internal`, another project's hit, staged and provisional notes, episodes, and any generated page.
 5. Seed text is data from outside. It keeps the tier of the document it came from, is cleaned as record text is (`record_text`, `library_page_search.rs:600`), and passes the workspace's identifier mask (`host_research::mask`, `host_research.rs:263`).
 
@@ -87,7 +88,11 @@ Chosen: **B**, with the writer's expansion on top. A loses the research when the
 
 1. The seed is rendered by code into a page: `# <title>`; a lead that is the first span of the newest answer; the rest of the answer under its own headings; `## Sources read` for row 2, `## Findings` and `## Related notes` for rows 3 to 5; the open questions and the bibliography as the daemon writes them today (`library_topics.rs:679`). Each block is a span's own words followed by its marker.
 2. A seed page has the outcome **`seed`**, a fourth value beside `pass`, `pass_contested` and `claims_only` (`library_page_validate.rs:231`). Its banner reads: `Seed draft: assembled by code from research notes. Not written up and not validated.` The validator is not run on it.
-3. A seed page is checked by code before it is stored: every block is found, letter for letter, in the span its marker names; it holds no link other than section and `page:` links; and no span comes from a document §2.1 item 4 leaves out.
+3. **The seed check.** A seed page is checked by code before it is stored, and what the check does on a failure is stated:
+   - **Cleaning first, by one function.** A span's text is cleaned before it is rendered: a link other than a section link or a `page:` link loses its address and keeps its words; an image is replaced by its alternative text; raw HTML is removed; control characters are removed (`record_text`). The same function cleans the span for the comparison, so "the block is in the span" means: the block is found, letter for letter, in the **cleaned** span its marker names. No link, image or HTML survives to conflict with that.
+   - **The held-text predicate.** The whole page is passed through the one shared predicate of 142 §2.5 item 4, `body_may_leave(source, output)`, for every source the topic's records read: no run of more than 300 characters of a held source's text, and no more of it in all than the aggregate cap. A note that quotes a source at length is therefore cut where it quotes: the block is shortened to the bound and marked `[shortened: quoted source text]`. Until 142 slice B exists there is no held source and the predicate passes everything.
+   - **No span from a document §2.1 item 4 leaves out.**
+   - **On a failure.** A block that fails is dropped and counted in the sidecar (`seed_dropped`, with the reason). If no block is left, no page is written: the topic is `waiting for material`, and the cause is a notice (`check_failed`, 143 §2.7). A seed page that has not passed the check is never stored.
 4. **Never empty.** A topic with at least one span gets a seed page. A topic with no span (one the operator made by hand before any research) gets **no page**: it is listed as `waiting for material`, and `delphi pages rebuild` says so. The stub of O2 is no longer written for a topic.
 5. Writing a seed page calls no model, spends no tokens and does not count against `[library.pages] per_day`.
 
@@ -100,7 +105,7 @@ Chosen: **B**, with the writer's expansion on top. A loses the research when the
 5. **A failure keeps the seed.** When the writer errors, when its page fails the check after the rewrites the validator allows, or when the budget or share gate refuses the call, the seed page is stored (or stays) with outcome `seed` and the reason. `claims_only_page` is no longer called from `topic_rebuild` (`library_topics.rs:623`, `:641`).
 6. **A rebuild starts from the seed and the spans, never from the previous page.** Each rebuild assembles the seed again from the stored documents. The previous page and its versions are read only to compute the change line (`library_topics.rs:341`) and to keep the version. No text of a previous page enters a brief.
 7. **The writer's closing comment is read from its first draft only.** A rewrite's `<!-- page: ... -->` line is removed and ignored, as the fix of step 0 does (commit `c1fca8ca`; `specs/143` §2.6). So a `title=` or a lifetime is proposed once per build.
-8. **A page budget of its own.** Topic pages stop drawing on the validator's share (O9). A new key, `[library.pages] week_tokens` (default 600,000), bounds what writing and validating pages may spend in seven days; the journal already marks a page's spans (`page_run.rs:90`). The reserve asked before a build is in proportion to the depth: a long page reserves four times what a summary page does. When the budget is spent the topic stays due, the seed stands, and `delphi kb health` says so. Tokens spent through a subscription harness count the same as any others.
+8. **A page budget of its own, in the one ledger.** Topic pages stop drawing on the validator's share (O9). `[library.pages] week_tokens` (default 600,000) bounds what writing and validating pages may spend in seven days. It is not a meter of its own: it is one row of the admission table of 143 §2.3, counted from that spec's one persisted ledger, and the one function `job_may_run` decides whether a page build starts, reading `enabled`, `auto_rebuild`, `per_day`, `build_after_research`, `stale_writer_per_day` and `[bridge.jobs] pages` in one place. The reserve asked before a build is in proportion to the depth: a long page reserves four times what a summary page does. When the budget is spent the topic stays due, the seed stands, and `delphi kb health` says so.
 
 ### 2.4 Titles that are concepts
 
@@ -117,7 +122,7 @@ Chosen: **B**, with the writer's expansion on top. A loses the research when the
 
 ### 2.5 Build now
 
-1. When a research run ends `done` or `partial` (`Topic::finish`, `research_record.rs:509`) and when `record_research` returns (`host_research.rs:330`), the daemon, for that research topic: makes the topic if there is none (`topics_from_research`), writes the seed page at once, and queues the writer's expansion ahead of the idle queue.
+1. **Seed now, expand at idle.** When a research run ends `done` or `partial` (`Topic::finish`, `research_record.rs:509`) and when `record_research` returns (`host_research.rs:330`), the daemon, for that research topic: makes the topic if there is none (`topics_from_research`) and writes the seed page **at once**; that costs no model call and is never paused. The writer's expansion is **queued for the next idle time**, ahead of older due topics. It is an idle job: it waits while the operator is in a session and is admitted by `job_may_run` (143 §2.3), so in a busy host session the seed is what the operator sees until the session ends.
 2. The expansion runs within `per_day` and the background share as every rebuild does (`library_topics.rs:625`, `page_run.rs:89`). When either refuses, the topic stays due and the seed stands.
 3. `[library.pages] build_after_research` (default `true`) turns the trigger off. `auto_rebuild = false` still leaves the writer's rebuilds to the operator; the seed is written regardless, because it costs nothing.
 4. The reply to `record_research` and the research result name the page's slug and its outcome (`seed`, until the writer's page lands).
@@ -134,7 +139,7 @@ Chosen: **B**, with the writer's expansion on top. A loses the research when the
 ### 2.7 Learning from validation
 
 1. **A history of outcomes, for each writer pack.** Every writer build appends one line to `local/pages/history.jsonl`: when, the topic's slug, the depth, the outcome (`pass`, `pass_contested`, `claims_only`, `seed`), the number of rewrites, **the validator's findings by kind**, the page's words and citations, the tokens, and `built_with`. The kinds are a closed list taken from the page check and the validator: `not verbatim`, `unsupported`, `fabricated citation`, `unresolved marker`, `figure failed`, `over length`, `other`. A line holds numbers and names from that list, never a sentence of a page, a claim or a source.
-2. The file follows the rules of the retrieval history (140 §2.6 items 1 to 3): written only by the daemon, append-only, versioned, never pruned, and carried unchanged by any later change of stores.
+2. **Its rules, owned here** (slice H does not wait for 140): the file is written only by the daemon; it is append-only and never rewritten or pruned; every line carries a format version and a reader accepts every older one; a last line that does not parse is skipped and reported; `kb reindex` does not touch it; and any later change of stores carries it unchanged. Slice H also builds the entry point by which the daemon itself keeps a provisional note with no agent's event behind it; 140 slice G uses the same one.
 3. **Visible.** `delphi pages history [--pack <hash>] [--json]` shows, for each writer pack in time order, the pass rate, the findings by kind, and the median words and citations. `delphi kb health` gains one line (the current pack's pass rate against the pack before it). The app shows it beside the retrieval-quality panel of 140. A view document is regenerated beside 140's (`local/knowledge/writer-quality.md`), so an agent, and whoever coaches the writer, can find it by search.
 4. **Repeated findings become a note for the writer, not a lesson.** When one kind of finding appears in three or more of the last ten builds under the same writer pack, the daemon writes one provisional note for the role `writer` (116 §2), kind `pitfall`, in words made by code from the counts (`In 4 of the last 10 pages the validator found quotations that were not verbatim from the record cited.`). One note for a kind and a pack, until the rate falls below the threshold.
 5. **Never automatic.** The note is a candidate. It reaches the writer's lessons only by the ordinary path: the digest, the retro, and the operator's ratification (GOVERNANCE §7, channel 4). No code path writes a lesson, and nothing in a page or a source can cause one: the note is made from counts, not from text.
@@ -155,29 +160,31 @@ One pull request each. Hours are estimates.
 | Slice | Content | Criteria | Files | Hours | Depends on |
 | :-- | :-- | :-- | :-- | --: | :-- |
 | S0 | this spec; the findings of the live proof (step 0) are in §1 and §7 | (the spec) | this file | 1-2 | none |
-| A | the seed: spans, the link rules of §2.1, caps, determinism | AC-1, AC-2 | `topic_seed.rs` (new), `topic_gather.rs` | 5-6 | S0 |
-| B | the seed page: render, the seed check, outcome `seed`, the banner, no stub; due check reads span hashes | AC-3, AC-4 | `library_topics.rs`, `library_page_validate.rs`, the app's outcome label | 4-5 | A |
-| C | `Depth::Long`: the brief, `long_max_tokens`, the seed as the draft, failure keeps the seed | AC-5, AC-6, AC-7 | `library_page_meta.rs`, `library_page_search.rs`, `library_topics.rs`, `config.rs` and the config reference | 4-5 | B; `specs/143` (a writer route); `specs/142` A to C and G for a page that validates |
+| A | **first, a read-only count on the operator's workspace** (`delphi pages seeds --count`: for each topic, the spans it would get by row; nothing is written; the result is a dated tracker entry); then the seed: spans, the link rules of §2.1, caps, determinism | AC-1, AC-2, AC-17 | `topic_seed.rs` (new), `topic_gather.rs`, `pages_cmd.rs` | 6-7 | S0 |
+| B | the seed page: render, the cleaning, the seed check with the held-text predicate and its failure path, outcome `seed`, the banner, no stub; due check reads span hashes | AC-3, AC-4, AC-18 | `library_topics.rs`, `library_page_validate.rs`, the app's outcome label | 5-7 | A |
+| C | `Depth::Long`: the brief, `long_max_tokens`, the seed as the draft, failure keeps the seed | AC-5, AC-6, AC-7 | `library_page_meta.rs`, `library_page_search.rs`, `library_topics.rs`, `config.rs` and the config reference | 4-5 | B; `specs/143` A and B (a writer route); for a page that validates, `specs/142` A (captures), E (anchors), B (held text in the index and its predicate), C (host captures) and G (summaries) |
 | D | titles: `subject`, the writer's `title=`, the derived title, `pages rename`, `pages retitle` | AC-8, AC-9 | `library_topics.rs`, `host_research.rs`, `mcp_host.rs`, `pages_cmd.rs` | 4-5 | A |
 | E | build now: the trigger at both ends of research, the reply fields, `build_after_research` | AC-10 | `service.rs`, `page_run.rs`, `research_jobs.rs` | 3-4 | B |
 | F | the page budget: `week_tokens`, the reserve by depth, pages no longer charged to the validator's share, the health line | AC-11 | `page_run.rs`, `fact_audit.rs`, `config.rs`, `knowledge_health.rs` | 2-3 | C |
 | G | the writer role: the whole skill at `long`, `built_with` on every page, due when the writer's pack changes, the daily trickle, `pages rebuild --stale-writer` | AC-13, AC-14 | `page_run.rs`, `role_call.rs`, `library_topics.rs`, `pages_cmd.rs`, `config.rs` | 4-5 | C |
 | H | learning from validation: the outcome history, `pages history`, the health line, the view, the note on repeated findings; the app's panel with 140 slice H | AC-15, AC-16 | `page_history.rs` (new), `library_page_validate.rs`, `provisional_notes.rs`, `knowledge_health.rs`, `main.rs` | 5-6 | C |
-| | **Total** | | | **32-41** | |
+| | **Total** | | | **35-45** | |
 
-A, B, D and E are useful with no model and are built alongside 143. C, F, G and H need the writer route of 143; a page that passes validation also needs the source text and summaries of 142.
+A, B, D and E are useful with no model and are built alongside 143. C and F need the writer route of 143 and the slices of 142 that C names. **G and H are kept late** (the Panel's strategist): they are not started before half of the last ten written pages pass validation, since there is nothing to learn from until pages pass at some rate.
+
+**Live and manual steps are dated.** A criterion that is proved by a run on the operator's workspace, or by a person reading something, counts as met only when the slice's tracker file holds a dated entry that says what was run and what was seen.
 
 ## 5. Acceptance criteria
 
 1. **AC-1:** for a topic that follows a research topic with an `answer.md` of 6,000 characters, the seed holds the whole answer as spans in file order, before any span found by search.
-2. **AC-2:** assembling a seed twice from the same files gives the same bytes; a private record, an `internal` hit and a generated page are never spans.
+2. **AC-2:** assembling a seed twice from the same files gives the same bytes; a private record, an `internal` hit and a generated page are never spans; **no span is a library source's own text**: a source gives its summary and excerpts of at most 300 characters, or nothing.
 3. **AC-3:** with no model configured, a research run that ends `done` leaves a page whose text contains the answer's first paragraph, cites it, carries the seed banner and has outcome `seed`.
 4. **AC-4:** a topic with no span has no page file and is listed as `waiting for material`; no file under `library/pages/` holds the words "the library holds nothing on this topic yet" for a topic.
 5. **AC-5:** a topic rebuild's brief asks for the long size, holds the seed under `DRAFT TO EXPAND`, and is cut at `long_max_tokens`; a search page's brief is unchanged.
 6. **AC-6:** a writer that errors, a page that fails the check, and a refused budget each leave the seed page in place with outcome `seed` and the reason; the topic stays due.
 7. **AC-7:** a sentence planted in the stored page and in each of its versions appears in no brief of the next rebuild.
 8. **AC-8:** `record_research` with `subject: "Web Bot Auth"` makes the topic `web-bot-auth` with that title and the question as `query`; a subject that ends in a question mark or shares no word with the question is refused and the derived title is used.
-9. **AC-9:** `delphi pages retitle` prints the nine renames and writes nothing; with `--apply` an unbuilt topic takes its new slug and a built one keeps its slug and takes the title; a second run changes nothing.
+9. **AC-9:** on a fixture with three unbuilt topics and one built, `delphi pages retitle` prints the renames and writes nothing; with `--apply` each unbuilt topic takes its new slug and the built one keeps its slug and takes the title; a second run changes nothing; two topics that would take the same slug are printed as a collision and `--apply` refuses them.
 10. **AC-10:** `record_research` returns the page's slug with outcome `seed`; a queued expansion then runs ahead of an older due topic; with `build_after_research = false` neither happens.
 11. **AC-11:** with `week_tokens` spent, a due topic is not written, keeps its seed and is reported by `delphi kb health`; a page's tokens are not counted against the validator's share; the reserve for a long page is four times a summary page's.
 12. **AC-12:** a topic whose research record has `claims: []` and an `answer.md` gets a seed page from the answer; the seed holds no claim row and the build does not fail for it.
@@ -185,6 +192,8 @@ A, B, D and E are useful with no model and are built alongside 143. C, F, G and 
 14. **AC-14:** after the operator ratifies a new writer lesson, every page built under the old pack is due with `the writer role changed`; at idle at most three are rebuilt in a day, oldest first, each from its seed; `delphi pages rebuild --stale-writer` rebuilds the rest; an unratified edit to the writer's files makes nothing due; a new validator pack makes nothing due.
 15. **AC-15:** each writer build appends one history line with the fields of §2.7 item 1 and no text of a page, a claim or a source; `delphi pages history` shows the pass rate and the findings by kind for two packs in order; the file is never rewritten.
 16. **AC-16:** four builds out of ten with a `not verbatim` finding under one pack leave exactly one provisional note for the writer, made of counts; two out of ten leave none; nothing is written to any lessons file, and the note appears in the next digest for the operator to ratify or drop.
+17. **AC-17:** `delphi pages seeds --count` prints, for each topic, how many spans each row of §2.1 would give, and writes nothing; its run on the operator's workspace is a dated tracker entry before slice A's seed code is merged.
+18. **AC-18 (the seed page and held text):** a seed page holds no run of more than 300 characters of any held source's text and no more of one source than the aggregate cap of 142 §2.5 item 4, including where an answer or a finding quotes the source at length (the block is shortened and marked); a span with a link, an image and raw HTML renders with none of them and passes the comparison; a block that fails is dropped and counted; a seed with no block left writes no page and raises `check_failed`. This is the same test 142 AC-9 names for a seed page.
 
 ## 6. Verification plan
 
@@ -201,6 +210,8 @@ A, B, D and E are useful with no model and are built alongside 143. C, F, G and 
 | AC-12 | a seed test on a record with no claims (the shape step 0 found) |
 | AC-13, AC-14 | engine tests with a scripted writer and a ratified-store fixture; a test that an unratified edit changes no hash |
 | AC-15, AC-16 | history tests on a fixture with a fixed clock; a scan of the history and the note for fixture page text; a test that no lessons file changes |
+| AC-17 | a CLI test on a fixture; the live run, dated in the tracker |
+| AC-18 | seed tests with a held-source fixture, shared with the test of 142 AC-9 |
 
 **Fitness functions** (checks that fail when an invariant erodes; owner `builder` unless said):
 
@@ -215,6 +226,8 @@ A, B, D and E are useful with no model and are built alongside 143. C, F, G and 
 | only a ratified change to the writer makes pages due | `library_topics::tests::an_unratified_writer_edit_makes_no_page_due` (AC-14) | Rust test, owner `red-team` | to be written |
 | validation findings never become a lesson by themselves | `page_history::tests::a_repeated_finding_writes_a_note_and_no_lesson` (AC-16) | Rust test, owner `red-team` | to be written |
 | the outcome history holds no page text and is never rewritten | the scan of AC-15, and an append-only test as in 140 | Rust test | to be written |
+| a seed page is bound by the held-text predicate like every other output | `topic_seed::tests::a_seed_page_passes_body_may_leave_for_every_source` (AC-18), and 142 AC-9's scan, which names the seed page | Rust test, owner `red-team` | to be written |
+| a source's own text is never a seed span | `topic_seed::tests::no_span_is_a_source_body` (AC-2) | Rust test, owner `red-team` | to be written |
 
 ### 6.1 Premortem (three months after release): how this most likely fails
 
@@ -246,10 +259,32 @@ Not acted on: 5 beyond the banner (a reader who ignores a banner is outside what
 | OD | Question | Recommendation | Reversible? (operator decides) | Blocks |
 | :-- | :-- | :-- | :-- | :-- |
 | OD-1 | Is a seed page shown as a page (with its banner)? | **Decided (operator, 2026-11-25): shown.** | decided | none |
-| OD-2 | The cap for a long page: 8,000 tokens? | 8,000, and `per_day` stays 20 | proposed: yes | C |
+| OD-2 | The cap for a long page: 8,000 tokens? | **Decided (operator, 2026-11-25, "use your defaults"): 8,000**, and `per_day` stays 20 | decided | none |
 | OD-3 | May `record_research` take `subject` from the host as the page title? | **Decided (operator, 2026-11-25, "use your defaults"): yes**, under the rules of §2.4 item 3 | decided | none |
 | OD-4 | Re-slug the nine unbuilt topics on the operator's workspace? | **Decided (operator, 2026-11-25): yes**, to concept titles, by `pages retitle --apply` after the dry run | decided | none |
 | OD-5 | The weekly page budget: 600,000 tokens, apart from the validator's share? | **Decided (operator, 2026-11-25): yes, 600,000 a week**; revisit after the first week of long pages | decided | none |
 | OD-6 | Pull 141's page-export guard and its lift forward, so private research reaches pages sooner? | **Decided (operator, 2026-11-25): no, do not pull 141 forward.** Seeds come from public answers meanwhile | decided | none |
-| OD-7 | The trickle for pages due because the writer changed: three a day? And should a new validator pack also make pages due? | three a day; no for the validator (§2.6 item 6) | proposed: yes | G |
-| OD-8 | The threshold for a note to the writer: one kind of finding in three of the last ten builds? | as written, revised when the history has a month in it | proposed: yes | H |
+| OD-7 | The trickle for pages due because the writer changed, and whether a new validator pack makes pages due | **Decided (operator, 2026-11-25, "use your defaults"): three a day; a validator change makes nothing due.** | decided | none |
+| OD-8 | The threshold for a note to the writer | **Decided (operator, 2026-11-25, "use your defaults"): one kind of finding in three of the last ten builds**, revised when the history has a month in it | decided | none |
+| OD-9 | The rate that releases the late slices (G and H here, 140 H, 142 F): half of the last ten written pages passing validation? | as written; the operator may release them sooner by saying so | proposed: yes | G, H |
+
+## 9. Review
+
+Panel `t_0004` (a witnessed host Panel of 2026-11-25, session `host-e11ba3fe9035ccf9`; architect, red-team and strategist seats, a blind Round 1, all three parsed in both rounds) read specs 139 to 143 and ruled **B: apply the fixes, then approve**. Its record is committed at `missions/2026-11-25-knowledge-v2/councils/004-witnessed-red-team-review-of-draft-specs.md`, with one line redacted (the operator's project names), because this repository is public.
+
+**It is not cited in `reviewed_by`, and it does not count as an independent review.** The record says so itself (`counts_as_independent_review: false`, `not_independent_because: single family`): every seat ran on one model family, which is also the family that wrote these specs, and `delphi lint` refuses a citation of such a Panel. The red-team seat did read the texts whole this time, and every P0 and P1 it and the other seats raised is applied below. What GOVERNANCE §1.3 still needs is a review by a second model family, or the operator's own waiver in the approval words. Nobody has re-read the amended text.
+
+| Finding (on this spec) | Severity | Response |
+| :-- | :-- | :-- |
+| seed pages copy held text verbatim (up to 8 KiB) and skip the page check that 142 §2.5 item 4 and AC-9 rely on | P0 | §2.1 item 3: a source's own text is never a span; §2.2 item 3: the seed page passes the shared predicate `body_may_leave`; AC-2, AC-18; 142 AC-9 names the seed page |
+| §2.2 item 3: "letter for letter" against "no link"; images and HTML unnamed; no stated result when the seed check fails | P1 | §2.2 item 3: one cleaning function, used for the render and the comparison; the failure path |
+| seed value unmeasured | P1 | slice A opens with a read-only count on the operator's workspace; AC-17 |
+| 139 C waits on 142 slices it does not name | P1, P2 | slice C names 142 A, E, B, C and G |
+| the page budget is one of several meters and switches | P2 | §2.3 item 8: a row of 143's admission table, one ledger, one function |
+| "build now" is paused in host sessions | P2 | §2.5 item 1: seed now, expand at idle |
+| AC-9 tied to the live workspace | P2 | AC-9 on a fixture |
+| slice H leans on 140's ledger rules and on a note entry point nobody owns | P2 | §2.7 item 2: owned here |
+| keep G and H late | P2 | §4; OD-9 |
+| live and manual criteria need dated tracker entries | P2 | §4 |
+
+**Not adopted:** nothing on this spec was rejected. One reading was narrowed: the Panel asked that held spans be cut to 300 characters **or** replaced by the source's summary; this text does both and goes further (no source body is ever a span), which makes the rule independent of what is held.
