@@ -10,109 +10,109 @@
     },
     {
       "level": 2,
-      "line": 24,
+      "line": 25,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 39,
+      "line": 40,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 46,
+      "line": 47,
       "number": "1.2",
       "title": "Simpler alternative considered"
     },
     {
       "level": 3,
-      "line": 51,
+      "line": 52,
       "number": "1.3",
       "title": "Options considered"
     },
     {
       "level": 2,
-      "line": 61,
+      "line": 62,
       "number": "2",
       "title": "Design"
     },
     {
       "level": 3,
-      "line": 63,
+      "line": 64,
       "number": "2.1",
       "title": "The set"
     },
     {
       "level": 3,
-      "line": 81,
+      "line": 82,
       "number": "2.2",
       "title": "The run"
     },
     {
       "level": 3,
-      "line": 98,
+      "line": 99,
       "number": "2.3",
       "title": "The command"
     },
     {
       "level": 3,
-      "line": 111,
+      "line": 112,
       "number": "2.4",
       "title": "The baseline and the rule"
     },
     {
       "level": 3,
-      "line": 119,
+      "line": 120,
       "number": "2.5",
       "title": "The vector deadline: measure, then fix what the numbers show"
     },
     {
       "level": 3,
-      "line": 131,
+      "line": 132,
       "number": "2.6",
       "title": "The history: retrieval quality kept in memory"
     },
     {
       "level": 2,
-      "line": 162,
+      "line": 163,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 169,
+      "line": 170,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 186,
+      "line": 187,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 203,
+      "line": 204,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 233,
+      "line": 234,
       "number": "6.1",
       "title": "Premortem (three months after release): how this most likely fails"
     },
     {
       "level": 2,
-      "line": 247,
+      "line": 248,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 258,
+      "line": 259,
       "number": "8",
       "title": "Decisions for the operator"
     }
@@ -120,7 +120,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/140-a-golden-set-for-retrieval-recall-ndcg-a-baseline-and-a-gate-on-every-retrieval-change.md",
-    "sha256": "86a827dae3056cf1366c1e2b4fa0e8ef6af015324e568db932879cae5b47b55f"
+    "sha256": "103cf5cca3e279ae30cb5d0feb075678420f6f338eb4e9355c001a842975bd5f"
   },
   "source_status_at_hash": {
     "line": {
@@ -133,7 +133,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "86a827dae3056cf1366c1e2b4fa0e8ef6af015324e568db932879cae5b47b55f",
+    "sha256": "103cf5cca3e279ae30cb5d0feb075678420f6f338eb4e9355c001a842975bd5f",
     "word": "draft"
   },
   "spec": {
@@ -148,10 +148,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 3870,
-      "end_line": 33,
-      "line": 26,
-      "start": 2199
+      "end": 4243,
+      "end_line": 34,
+      "line": 27,
+      "start": 2572
     },
     "text": "| # | Observation (origin/main 52bdd3b8, and the operator's workspace on 2026-11-25) | Where |\n| :-- | :-- | :-- |\n| O1 | A harness exists. `delphi kb eval` indexes a **documents folder** (the repository's own files by default) into a fresh index and prints recall at 1, 3, 5 and 10 and MRR, for each of lexical, vector, hybrid and reranked search, over 48 questions and a 44-question holdout. | `kb.rs:2714-2800`, `:3341`; `dev/kb-eval.json`, `dev/kb-eval-holdout.json` |\n| O2 | It does not measure the operator's corpus, has no graded relevance (so no nDCG), stops at ten results (`kb.rs:2151` caps every search at 10), and calls `Kb::search` directly, so it never passes through the service that agents and hosts use and never meets its deadline. | `kb.rs:2741-2760`, `:2151`; `retrieval.rs:68` |\n| O3 | The service gives the hybrid search 800 ms and then answers with keywords alone, labelled `lexical-deadline`. One sampled `search_kb` call on the operator's workspace did exactly that. Nobody knows how often. | `retrieval.rs:14`, `:101-110` |\n| O4 | The operator's index holds 5,423 chunks, among them 82 project research files. The corpus is not empty: a set can be built from it today. | the audit of 2026-11-25 |\n| O5 | Real questions are already on disk: every research record's `question` (`research_record.rs:266`), every finding's question (`finding_record.rs:109`), and every search that found nothing (`local/kb-misses.jsonl`, `kb.rs:2532`). | as named |\n| O6 | Steps 6 and 7 of the plan (chunk headers, reranking, pre-filtering, usage boosts) each change ranking. Without a fixed set, \"better\" cannot be told from \"different\". | the audit of 2026-11-25 |"
   }
