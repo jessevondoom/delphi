@@ -52,85 +52,85 @@
     },
     {
       "level": 3,
-      "line": 125,
+      "line": 126,
       "number": "2.3",
       "title": "Anchors"
     },
     {
       "level": 3,
-      "line": 139,
+      "line": 140,
       "number": "2.4",
       "title": "The cache"
     },
     {
       "level": 3,
-      "line": 148,
+      "line": 149,
       "number": "2.5",
       "title": "Rule (a): the whole text of an unknown-licence source, kept for local reading"
     },
     {
       "level": 3,
-      "line": 162,
+      "line": 164,
       "number": "2.6",
       "title": "A summary of every source, on every install"
     },
     {
       "level": 3,
-      "line": 178,
+      "line": 180,
       "number": "2.7",
       "title": "The backfill of what is already there"
     },
     {
       "level": 2,
-      "line": 188,
+      "line": 190,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 198,
+      "line": 200,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 217,
+      "line": 219,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 249,
+      "line": 254,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 291,
+      "line": 299,
       "number": "6.1",
       "title": "Premortem (three months after release): how this most likely fails"
     },
     {
       "level": 2,
-      "line": 307,
+      "line": 315,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 319,
+      "line": 327,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 335,
+      "line": 343,
       "number": "9",
       "title": "Review"
     },
     {
       "level": 3,
-      "line": 362,
+      "line": 370,
       "number": "9.1",
       "title": "Panel `t_0004`"
     }
@@ -138,7 +138,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/142-the-source-text-cache-immutable-captures-host-text-handover-and-anchors-that-show-their-orphans.md",
-    "sha256": "533f2992cc3d6a323f488f3f13bbebf65684aeaeb4b586e736dcf876893ecb58"
+    "sha256": "90b820083b0763e5b5ab8ffd5dfe84257767d3426ef3c108c6c11b96d41f6689"
   },
   "source_status_at_hash": {
     "line": {
@@ -151,7 +151,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "533f2992cc3d6a323f488f3f13bbebf65684aeaeb4b586e736dcf876893ecb58",
+    "sha256": "90b820083b0763e5b5ab8ffd5dfe84257767d3426ef3c108c6c11b96d41f6689",
     "word": "draft"
   },
   "spec": {
