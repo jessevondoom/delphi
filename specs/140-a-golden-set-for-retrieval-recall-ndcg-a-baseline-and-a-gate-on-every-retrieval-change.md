@@ -15,7 +15,8 @@ tags: [spec, retrieval, evaluation, golden-set, recall, ndcg, kb, vectors, gate]
 
 # Spec 140: A golden set for retrieval
 
-> **Status: draft.** Second of four specs from the knowledge audit of 2026-11-25 (139 to 142); step 3 of the build order the operator settled that day. It lands before any change to retrieval.
+> **Status: draft**, revised 2026-11-25 with the operator's decisions of that day. One of five specs from the knowledge audit of 2026-11-25 (139 to 143). It lands before any change to retrieval ranking.
+> **Proposed build order (not yet confirmed by the operator):** the single-turn harness bridge (`specs/143`), the source text cache (`specs/142`), seeded pages (`specs/139`), **this spec**, label enforcement (`specs/141`), then the one knowledge record and the later steps. The spike of slice A and the real-case set (slice B) need nothing from the others and may be built at any point; the set is rebuilt as a new version once 142 has added source text.
 > **Extends:** [`specs/064`](064-knowledge-retrieval-for-agents-and-mcp.md) §3 (the one retrieval service and its deadline), [`specs/027`](027-bundle-authoring-distribution-and-evaluation.md) §7.1 (the retrieval gate of a bundle, whose harness this reuses), [`specs/109`](109-one-retrieval-path-for-host-search-a-fresh-index-and-passages-at-adoption.md) §9 (ten questions, before and after: the practice this makes a rule), [`specs/135`](135-the-forge-first-cut-slice-claims-a-finisher-and-a-cross-family-review-that-runs-the-tests.md) §5 (the finisher, which gains one check).
 
 ---
@@ -113,7 +114,7 @@ delphi kb eval --docs <dir> [--file <cases.json>] ...   # unchanged: the reposit
 2. **The rule: no retrieval change without a before-and-after run.** A pull request is a retrieval change when it touches a file on the list `RETRIEVAL_PATHS`, kept in code beside the finisher: `crates/delphi-engine/src/kb.rs`, `retrieval.rs`, `kb_docs.rs`, `embed.rs`, `embed/**`, `research_index.rs`, `use_signals.rs`, and the `[retrieval]` keys of `config.rs`.
 3. The check is in the finisher (135 §5, `finisher.rs:112`): `delphi forge finish` on a branch that touches `RETRIEVAL_PATHS` requires the slice's tracker file to carry `eval_before` and `eval_after` (two run stamps on the same set version) and puts the comparison in the pull request body. Without them it fails with the command to run. A change that cannot move ranking (a comment, a rename) says so with `eval_waived: <reason>` in the tracker file, which the body shows.
 4. The repository set still runs as today and gains recall@20 and nDCG@10, so a contributor without the operator's workspace has numbers too. A committed file, `dev/kb-eval-baseline.json`, holds its last numbers; a test fails when recall@10 or nDCG@10 on the repository set falls by more than 0.02 without that file changing in the same commit.
-5. Making the finisher's check a merge gate is a change to a gate-changing path and is the operator's (OD-3).
+5. **Advisory, not a gate (operator, 2026-11-25, as relayed).** The finisher's check stays advice for now: it is not added to `merge-gates.toml` or to CI. Making it a merge gate later is a change to a gate-changing path and is the operator's.
 
 ### 2.5 The vector deadline: measure, then fix what the numbers show
 
@@ -126,6 +127,37 @@ What the code suggests, **not measured**:
 1. **Slice A is a spike.** It adds timing to the service path (open, model load, query embedding, vector search, keyword search, fusion) and the mode counts, and runs 200 synthetic queries on the operator's workspace, cold and warm. Its result is written into §7 before slice E starts.
 2. **Kill criterion, written now:** if at least 95% of warm queries answer `hybrid` inside 800 ms, the fault is the cold open, and slice E is the warm-up alone: the daemon opens the reader at start and after each sync, outside any search; the reranker is not loaded by the service's reader; a search that arrives while the reader is opening answers lexical and is counted `lexical-warming`, not `lexical-deadline`. If fewer than 95% do, slice E does **not** proceed as written: the timings go to the operator with the choices (a larger deadline as a `[retrieval] deadline_ms` key, a cache of query embeddings, a smaller candidate count than `VEC_CANDIDATES`, `kb.rs:46`), each of which is then a retrieval change under §2.4.
 3. Either way the share of `lexical-deadline` answers in the last 24 hours becomes a line of `delphi kb health` and a warning in `delphi doctor` above 5%.
+
+### 2.6 The history: retrieval quality kept in memory
+
+The operator's requirement of 2026-11-25, as relayed: keep historic retrieval performance in memory, so that quality can be followed over time.
+
+1. **The ledger.** Every eval run appends one line to `local/eval/history.jsonl` in the workspace. Only the daemon and the operator's own command write it (`local/` is closed to agents). A line holds numbers and identifiers only, never a question or a passage:
+
+| Field | What it is |
+| :-- | :-- |
+| `v`, `at`, `run`, `trigger` | the line's format version; when; the run's stamp; `manual`, `scheduled`, `before` or `after` |
+| `set` | the golden set's version, SHA-256 and case counts by kind |
+| `corpus` | documents, chunks, vectors and the index generation |
+| `config_sha256` | a hash of the search options and the `[retrieval]` keys in effect |
+| `models` | the embedder's and the reranker's ids and file hashes |
+| `build` | the binary's version and commit |
+| `path` | `service`, `hybrid` or `lexical` |
+| `recall10`, `recall20`, `ndcg10`, `mrr` | the metrics of §2.2 |
+| `p50_ms`, `p95_ms` | latency, warm |
+| `vector_leg` | the share of `service` queries answered with the vector leg (not `lexical-deadline`, not `lexical-warming`) |
+
+2. **Versioned.** A **series** is one set version on one path. A new set version starts a new series; the old ones stay and are never compared across. A reader accepts every older `v`.
+3. **Durable: what it survives.**
+   - *An index rebuild.* The ledger is a file of its own, not a table of `local/state.db`; `kb reindex` does not touch it.
+   - *A new golden set.* A new series (item 2).
+   - *Pruned run files.* `local/eval/runs/` may be pruned after 90 days; the ledger is never pruned.
+   - *A torn write.* The file is append-only and never rewritten; a last line that does not parse is skipped and reported.
+   - *A change of stores.* The one knowledge record of step 6, and any later migration of the workspace, must carry this file unchanged. That is a requirement this spec places on those specs.
+4. **A trend without a code change.** Every `[retrieval] eval_every_days` (default 7, `0` is off) the daemon runs the `service` path on the accepted set while idle. It calls no model and spends no tokens.
+5. **Visible to agents.** After each run the daemon regenerates, from the ledger, the document `local/knowledge/retrieval-quality.md` (zone `knowledge`, `kb.rs:491`): one sentence per series (`set v1, service path: nDCG@10 0.62, steady over six runs`) and a table of its last 20 runs. A search of the knowledge base about retrieval quality finds it. It is a view: it is rebuilt from the ledger and is never read back as the record.
+6. **Visible to the operator.** `delphi kb eval history [--set <n>] [--path <p>] [--json]` prints each series as a table with the change from run to run and a one-line trend. `delphi kb health` gains one line: the newest run against the median of the five before it. The app's knowledge view gains a "Retrieval quality" panel that reads the same lines through a read-only daemon method.
+7. **A noticeable change leaves a note.** After a run, code compares it with the median of the previous five runs of its series. A change of 0.03 or more in recall@10 or nDCG@10, of ten points or more in `vector_leg`, or a p95 of one and a half times the median, is **noticeable**. The daemon then writes one provisional note (116 §2, `provisional_notes.rs`), kind `fact`, in words made by code from the numbers: what moved, between which runs, and what differed between them (the build, the models, the config hash, the corpus size). It is a lesson candidate: the operator reviews it as any provisional note (116 §3) and nothing promotes it. One note per series and direction, until a run is back inside the thresholds.
 
 ## 3. Authority
 
@@ -145,7 +177,9 @@ What the code suggests, **not measured**:
 | D | the run: three paths, recall@10, recall@20, nDCG@10, `cap`, the run file, `compare`, `runs`; the baseline run recorded | AC-5, AC-6, AC-7 | `kb_eval.rs`, `kb.rs`, `retrieval.rs` | 5-6 | A, B |
 | E | the deadline fix the spike supports (the warm-up, or nothing but the operator's decision); the health and doctor lines | AC-8 | `retrieval.rs`, `service.rs`, `knowledge_health.rs` | 3-4 | A, D |
 | F | the rule: `RETRIEVAL_PATHS`, the finisher's check, the tracker fields, the repository baseline file and its test | AC-9, AC-10 | `finisher.rs`, `tracker.rs`, `dev/kb-eval-baseline.json`, `kb.rs` | 3-4 | D |
-| | **Total** | | | **23-30** | |
+| G | the history: the ledger line, the scheduled run, `kb eval history`, the health line, the knowledge view, the note on a noticeable change | AC-11, AC-12, AC-13 | `kb_eval.rs`, `service.rs`, `knowledge_health.rs`, `provisional_notes.rs`, `main.rs` | 5-6 | D |
+| H | the app's "Retrieval quality" panel and its read-only method | AC-14 | `service.rs`, the app; `crates/delphi/tests/app_grants.toml` if the method needs a grant (a gate-changing path, so that pull request is the operator's at a terminal) | 2-3 | G |
+| | **Total** | | | **30-39** | |
 
 E is itself a retrieval change: it is the first slice to carry a before-and-after run.
 
@@ -161,6 +195,10 @@ E is itself a retrieval change: it is the first slice to carry a before-and-afte
 8. **AC-8:** after slice E, on the operator's workspace, at most 5% of warm service queries answer `lexical-deadline`, or the operator's decision of §2.5 item 2 is recorded instead.
 9. **AC-9:** `delphi forge finish` on a branch that changes `retrieval.rs` fails without `eval_before` and `eval_after`, passes with them and prints the comparison, and passes with `eval_waived`; on a branch that touches no listed path it does not ask.
 10. **AC-10:** lowering a ranking weight so that the repository set's nDCG@10 falls by 0.05 fails the baseline test until `dev/kb-eval-baseline.json` is updated in the same commit.
+11. **AC-11:** every run appends one ledger line with the fields of §2.6 item 1; after `kb reindex`, after a new set version and after the run files are pruned, every earlier line is still there, byte for byte; no code path truncates or rewrites the file.
+12. **AC-12:** after a run, `local/knowledge/retrieval-quality.md` holds the series' sentence and table and no question text, and an inside agent's search for `retrieval quality` returns it.
+13. **AC-13:** a run whose nDCG@10 is 0.05 below the median of the five before it leaves exactly one provisional note that names both runs and what differed; a fall of 0.01 leaves none; a second low run leaves no second note.
+14. **AC-14:** `delphi kb eval history` and the app's panel show the same series and numbers as the ledger; with `eval_every_days = 0` no scheduled run is made.
 
 ## 6. Verification plan
 
@@ -174,6 +212,10 @@ E is itself a retrieval change: it is the first slice to carry a before-and-afte
 | AC-7 | a CLI test that scans the output for any case's question |
 | AC-8 | the run recorded in the tracker (manual, on the operator's workspace) |
 | AC-9, AC-10 | finisher tests on a temporary repository; the baseline test in `cargo test` |
+| AC-11 | a ledger test: lines before and after a reindex, a new set and a prune are compared byte for byte |
+| AC-12 | a daemon test with a scripted agent's search; a scan of the view for any case's question |
+| AC-13 | tests on a ledger fixture with a fixed clock |
+| AC-14 | a CLI golden test; the app's test for the panel |
 
 **Fitness functions** (owner `builder` unless said):
 
@@ -185,6 +227,8 @@ E is itself a retrieval change: it is the first slice to carry a before-and-afte
 | a run's printed summary holds no query text | the scan of AC-7 | Rust test, owner `red-team` | to be written |
 | the repository set does not regress unseen | the baseline test of AC-10 | Rust test | to be written |
 | the metric code is right | AC-5 | Rust test | to be written |
+| the history is never rewritten or pruned | `kb_eval::tests::the_ledger_is_append_only` (reads the crate's production text for any open of `history.jsonl` that is not an append) | Rust test | to be written |
+| the history and its view hold no query text | the scan of AC-12, over the ledger and the view | Rust test, owner `red-team` | to be written |
 
 ### 6.1 Premortem (three months after release): how this most likely fails
 
@@ -192,7 +236,8 @@ E is itself a retrieval change: it is the first slice to carry a before-and-afte
 | :-- | :-- | :-- | :-- | :-- | :-- |
 | 1 | The set flattered keyword search: synthetic questions reused their chunk's words, lexical scored 0.95, and every later change looked like a loss. | high | high (wrong decisions on steps 6 and 7) | lexical recall@10 above hybrid on synthetic cases only | the two filters of §2.1 item 4; real and synthetic reported apart; the operator's spot-check |
 | 2 | The set was never accepted: the operator did not have an hour for it, and the rule waited on it. | medium | high | no `golden-v1.json` hash a week after slice B | the sample is 20 cases, not 200; `--real-only` gives a usable set with no model |
-| 3 | The rule was waived by habit: every pull request wrote `eval_waived`. | medium | medium | waivers in the tracker outnumber runs | the waiver's reason is printed in the pull request body for the reviewer; OD-3 |
+| 3 | The rule was waived by habit: the check is advisory, and every pull request wrote `eval_waived`. | medium | medium | waivers in the tracker outnumber runs | the waiver's reason is printed in the pull request body for the reviewer; the scheduled run and the history (§2.6) show a fall whether or not a pull request measured it |
+| 7 | The history was noise: every weekly run moved a little as the corpus grew, a note was written each week, and the operator stopped reading them. | medium | medium | more than one note a month on an unchanged build | the thresholds of §2.6 item 7; one note per series and direction; the note names the corpus size so growth can be told from a code change; OD-5 |
 | 4 | Numbers moved because the corpus grew, not because the code changed, and a good change was blamed. | medium | medium | before and after runs carry different index generations | a run records the generation; `compare` prints a warning when they differ |
 | 5 | The spike blamed the cold open, the warm-up shipped, and the deadline was still missed under load because the lock, not the model, was the cause. | medium | medium | `lexical-deadline` share in `kb health` does not fall | AC-8 is measured after E on the live workspace, not assumed; the kill criterion sends the other case to the operator |
 | 6 | A private question appeared in a pull request body. | low | medium | a quoted question in a body | summaries carry ids and numbers only (§2.2 item 5); the scan test |
@@ -206,6 +251,9 @@ Not acted on: 4 beyond the warning (holding the corpus still would need a snapsh
 - That a model writes questions that are neither trivial nor unanswerable at a useful rate. The filters are guesses until slice C's first build is sampled.
 - That nDCG on about 200 cases is stable enough to see a change of the size steps 6 and 7 promise. If the run-to-run spread on an unchanged build is wider than the change, the set is too small; slice D reports the spread from three runs.
 - The evidence for sizes and for reranking gains was read by the scout from abstracts only.
+- That a default search by an agent returns the view in zone `knowledge`. If that zone's tier keeps it out of a default search, slice G files the view where a default search reaches it.
+- That the daemon can keep a provisional note that no agent's event raised (`provisional_notes::keep` takes an event, `provisional_notes.rs:398`). If not, slice G adds a daemon-authored entry point and its test.
+- The thresholds of §2.6 item 7. They are guesses until three runs on an unchanged build show the spread.
 
 ## 8. Decisions for the operator
 
@@ -213,5 +261,7 @@ Not acted on: 4 beyond the warning (holding the corpus still would need a snapsh
 | :-- | :-- | :-- | :-- | :-- |
 | OD-1 | May synthetic questions be written by the `fast` model from private and internal chunks? | yes, under the ruling of 2026-11-25; the cost is shown first | proposed: yes | C |
 | OD-2 | Who accepts the set: the operator alone, or may an agent pre-screen the 20 samples? | the operator alone; it takes about twenty minutes | proposed: yes | B |
-| OD-3 | Should the finisher's check become a merge gate (a line in `merge-gates.toml` or CI)? | not yet: run it as advice for the first five retrieval changes, then decide | proposed: yes | none |
+| OD-3 | Should the finisher's check become a merge gate? | **Decided (operator, 2026-11-25, as relayed): no, advisory for now.** | decided | none |
 | OD-4 | If the spike shows warm queries miss the deadline, which remedy? | decide on the numbers; no default | proposed: yes | E |
+| OD-5 | The thresholds for a noticeable change (0.03 on recall@10 or nDCG@10, ten points on the vector leg, 1.5 times on p95)? | as written, revised once the run-to-run spread is known | proposed: yes | G |
+| OD-6 | A scheduled run every seven days while idle? | yes; it costs no tokens | proposed: yes | G |
