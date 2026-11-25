@@ -52,81 +52,93 @@
     },
     {
       "level": 3,
-      "line": 124,
+      "line": 125,
       "number": "2.3",
       "title": "Anchors"
     },
     {
       "level": 3,
-      "line": 138,
+      "line": 139,
       "number": "2.4",
       "title": "The cache"
     },
     {
       "level": 3,
-      "line": 146,
+      "line": 148,
       "number": "2.5",
       "title": "Rule (a): the whole text of an unknown-licence source, kept for local reading"
     },
     {
       "level": 3,
-      "line": 156,
+      "line": 162,
       "number": "2.6",
       "title": "A summary of every source, on every install"
     },
     {
+      "level": 3,
+      "line": 178,
+      "number": "2.7",
+      "title": "The backfill of what is already there"
+    },
+    {
       "level": 2,
-      "line": 172,
+      "line": 188,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 182,
+      "line": 198,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 198,
+      "line": 217,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 225,
+      "line": 249,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 259,
+      "line": 291,
       "number": "6.1",
       "title": "Premortem (three months after release): how this most likely fails"
     },
     {
       "level": 2,
-      "line": 275,
+      "line": 307,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 287,
+      "line": 319,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 301,
+      "line": 335,
       "number": "9",
       "title": "Review"
+    },
+    {
+      "level": 3,
+      "line": 362,
+      "number": "9.1",
+      "title": "Panel `t_0004`"
     }
   ],
   "schema_version": 1,
   "source": {
     "path": "specs/142-the-source-text-cache-immutable-captures-host-text-handover-and-anchors-that-show-their-orphans.md",
-    "sha256": "a3563be32be2ba828aa6d23e236602a4b8b3d859335ddfc82e5272f4466b0192"
+    "sha256": "533f2992cc3d6a323f488f3f13bbebf65684aeaeb4b586e736dcf876893ecb58"
   },
   "source_status_at_hash": {
     "line": {
@@ -139,7 +151,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "a3563be32be2ba828aa6d23e236602a4b8b3d859335ddfc82e5272f4466b0192",
+    "sha256": "533f2992cc3d6a323f488f3f13bbebf65684aeaeb4b586e736dcf876893ecb58",
     "word": "draft"
   },
   "spec": {
@@ -154,10 +166,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 4180,
+      "end": 4628,
       "end_line": 28,
       "line": 28,
-      "start": 3993
+      "start": 4441
     },
     "text": "**The operator's decisions, 2026-11-25**, on the four rules the audit named. They are as relayed by the coordinating session, except where the operator's own words of that day are quoted:"
   }
