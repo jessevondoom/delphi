@@ -16,7 +16,8 @@ tags: [spec, routing, harness, single-turn, writer, validator, pages, doctor, lo
 # Spec 143: A single-turn harness bridge
 
 > **Status: draft**, amended 2026-11-25 after Council `t_0002` ruled PROCEED-WITH-CHANGES on the first draft (§9). Fifth of five specs from the knowledge audit of 2026-11-25 (139 to 143), written from the findings of the live proof (step 0).
-> **Proposed build order (not yet confirmed by the operator):** **this spec first**, then the source text cache (`specs/142`), seeded pages (`specs/139`), the golden set (`specs/140`), label enforcement (`specs/141`), then the one knowledge record and the later steps. It is first because nothing that needs a single model call works on the operator's install until it lands: the page writer, the page validator, source summaries (142 §2.6), the scout's plan and answer calls, and session summaries.
+> **The plan is approved; this text is not yet.** The operator approved the plan on 2026-11-25 ("go"). The status stays `draft` until a witnessed Panel with a red-team seat has read this text; approval is marked after that.
+> **Build order (confirmed by the operator, 2026-11-25):** **this spec**, with the seed slices of `specs/139` (A, B, D, E) built alongside it; then the source text cache (`specs/142`); then the remaining slices of 139; then the golden set (`specs/140`); then label enforcement (`specs/141`); then the one knowledge record and the later steps, which have no spec yet. It is first because nothing that needs a single model call works on the operator's install until it lands: the page writer, the page validator, source summaries (142 §2.6), the scout's plan and answer calls, and session summaries.
 > **Amends:** [`specs/117`](117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md) §2 item 3 (what an idle rebuild does when no model can write), [`specs/097`](097-encyclopedia-search-pages.md) §4.4 (which draft's lifetime proposal counts). **Builds on:** the harness launcher and its tool-less mode ([`specs/128`](128-round-2-without-tools-one-retry-for-an-empty-finish-and-a-guard-that-knows-delphis-own-writes.md)), seat receipts, and [`specs/132`](132-carriers-as-seats-one-contract-one-probe-copilot-first-and-codex-when-its-account-opens.md) (carriers).
 
 ---
@@ -79,20 +80,24 @@ Chosen: **B**. A is kept as the documented alternative. C adds a process, a port
 ### 2.2 The call
 
 1. `Engine::one_shot_raw` (`summary.rs:166`) is the one entry point. When the key it is given is a harness endpoint, it runs the CLI once instead of compiling an API request. **The tools are off by construction, not by detection.** The launch is built in one function and always has all of:
-   - `Tools::None` and the CLI's own deny-all: for `claude`, `--tools ""` (the guard), the native tools named again in `--disallowedTools`, `--disable-slash-commands`, a one-turn cap, and `--strict-mcp-config` with an empty connector configuration, so the signed-in account's connectors do not load either (`harness.rs:79`, `:87-94`, `:1240-1247`). Another CLI is eligible only when it has the equivalent of each (slice C);
-   - **an isolated configuration home**: a directory the daemon keeps for the bridge (`<home>/harness-single/<cli>/`) that holds the CLI's login and nothing else: no user settings, hooks, connectors, plugins, skills or instruction files. The CLI is pointed at it (`CLAUDE_CONFIG_DIR` for `claude`, which the launcher already passes through, `harness.rs:1601`);
-   - **a scrubbed environment**: the launcher's short keep-list (`cli_env_with`, `harness.rs:1599-1601`) and nothing added. No API key, token or cloud credential of the operator's is in it; the only credential the process can reach is the CLI's own login;
+   - `Tools::None` and the CLI's own deny-all. For `claude` the launch is, as far as the vendor's documentation says (item 6): `claude -p --safe-mode --tools "" --disallowedTools "mcp__*" --strict-mcp-config --disable-slash-commands --no-session-persistence --max-turns 1 --permission-prompts none`, with an empty connector configuration, so the signed-in account's connectors do not load either (`harness.rs:79`, `:87-94`, `:1240-1247`). **`--bare` is not used**: it does not use the subscription login. Another CLI is eligible only when it has the equivalent of each (slice C);
+   - **an isolated configuration home**: a directory the daemon keeps for the bridge (`<home>/harness-single/<cli>/`) that holds no user settings, hooks, connectors, plugins, skills or instruction files. The CLI is pointed at it with `CLAUDE_CONFIG_DIR`, which gives it a configuration and credential home of its own (the launcher already passes that variable through, `harness.rs:1601`);
+   - **the login, by a token from Delphi's secret store**: the subscription token that `claude setup-token` produces for scripts, kept under a credential reference of the kind Delphi already uses for a search key (`keychain:<name>`), read by the daemon at launch and set as `CLAUDE_CODE_OAUTH_TOKEN` in the child's environment only. It is never written to a file, a log, an event or a prompt, and the redactor knows it (§2.9);
+   - **a scrubbed environment**: the launcher's short keep-list (`cli_env_with`, `harness.rs:1599-1601`), the token above, and nothing else. **`ANTHROPIC_API_KEY` is removed**, always: left in, it silently switches `-p` to API billing, and an operator who wants API billing adds an API endpoint (§2.5) instead. No other key, token or cloud credential of the operator's is in it;
    - a fresh session, the request's system text and the contract as the one user prompt, on standard input and never in the argument list;
    - an empty scratch directory as the working directory; no approval bridge (there is nothing to approve);
    - the answer is the final text block. The daemon cuts it at the caller's `max_tokens` **after** the CLI has produced it: the whole answer is generated and counted against the subscription, so the prompt also states the length wanted.
 
-   **The login must survive the isolation** (the red-team seat's point). Where a CLI keeps its login in the system keychain the isolated home needs nothing copied; where it keeps a credential file, that one file is linked into the isolated home and nothing else is. Slice B begins with a spike on `claude`, with its kill criterion written here: if the CLI cannot stay signed in under an isolated home, the bridge runs it in the operator's own configuration home **only if** flags turn off its hooks, connectors and plugins and the canary of AC-12 passes; if neither holds, that CLI is not eligible and the doctor says why.
+   **The login must survive the isolation** (the red-team seat's point). Slice B begins with a spike on `claude` that checks the recipe above against the installed CLI, flag by flag (the repository already tracks which CLI flags it uses, `coverage.rs`). Its kill criterion, written here: if the CLI does not answer when signed in by the token under an isolated home, the spike tries a sign-in made once by the operator inside the isolated home; if that fails too, the bridge runs the CLI in the operator's own configuration home **only if** flags turn off its hooks, connectors and plugins and the canary of AC-12 passes; if none holds, that CLI is not eligible and the doctor says why.
 
    **An OS sandbox, where it fits.** Decided: the bridge uses the existing sandbox crate (`delphi-sandbox`, `sandbox-exec` or `bwrap`) with a **file profile only**: reads limited to the CLI's own program files, the isolated home and the scratch directory, writes to the last two. It is **not** network-restricted: the CLI must reach its provider, and a new network policy was argued against in review as scope this spec does not need. The same spike decides it: if the CLI signs in and answers under that profile, the profile is on wherever a sandbox exists; if the profile breaks the login (the keychain is the likely cause on macOS), the bridge ships without it, and that is written in §7 as a stated limit. No new sandbox code is written for this spec either way.
 2. **A tool request still ends the call**, as a second line behind item 1. If the CLI asks for a permission or reports a tool use, the process is stopped and the call fails with `the harness asked for a tool in a single call`. Nothing is granted.
 3. The call writes a seat receipt that says it was tool-less (`seat.rs:454`) and which model the CLI reported it served.
 4. What the caller gets back is what it gets from an API call: text or nothing. The callers do not change.
 5. **Taint is inherited.** What a single call returns is model text made from its inputs, and it feeds pages and summaries. Its tier is the **lowest tier of anything placed in the prompt**, and never higher than `internal_generated`. `one_shot_raw` takes that tier from its caller, who already knows what it put in the prompt (a caller that does not say gets `external_untrusted`), and returns it with the text; whatever is stored from the answer is stored at that tier. Nothing made from a bridged answer is promoted past it without the deterministic verification or the ratification GOVERNANCE §4 item 3 asks for. This holds for an API call through the same entry point as well.
+
+6. **Where the recipe comes from.** The flags and the facts in item 1 are from the vendor's documentation for its CLI (the headless, CLI reference, authentication, environment variable and legal pages), as fetched on 2026-11-25 by the coordinating session and relayed. They were not re-read for this text and none was run. The spike of slice B is what verifies them.
+7. **A stated limit.** Hooks set by managed settings (an organisation's policy file) still run under `--safe-mode`. The bridge cannot turn them off and does not try to.
 
 ### 2.3 Cost, concurrency and timeouts
 
@@ -131,6 +136,43 @@ Step 0's fix is adopted as the rule (it amends 097 §4.4): the writer's closing 
 5. **`delphi doctor`.** The check of commit `c1fca8ca` is adopted: a warning when every allowed endpoint is a harness. With this spec it reads according to the state: with the bridge serving single calls, an ordinary line that names the harness that serves them; with the bridge `off`, or with only CLIs that cannot serve (item 3 of §2.1), a warning that names both remedies (§2.5 and this key).
 6. **117 §2 item 3, amended.** That item says a due page is rebuilt when the daemon is idle. It says nothing of an install where no model can write. Added: when no route can serve the writer, the topic stays due, no stub is written, the cause is a notice (item 1), and the seed page of `specs/139` stands where there is one.
 
+### 2.8 Starting a job by hand, and choosing which jobs run by themselves
+
+1. **Every job the bridge can serve has a command the operator can run**, whether or not it also runs by itself:
+
+| Job | Command | Where the job is specified |
+| :-- | :-- | :-- |
+| pages | `delphi pages rebuild <slug> | --due | --all | --stale-writer` | 117 §2; `--stale-writer` is 139 §2.6 |
+| source summaries | `delphi kb summarize [--pending | <source>]` | 142 §2.6 |
+| retrieval evaluation | `delphi kb eval run` (it calls no model; listed so that every scheduled job has its command) | 140 §2.2 |
+| consolidation | `delphi memory consolidate` | 116 §6 |
+| session summaries | `delphi sessions summarize <session> | --pending` | 030 §4.3 (`summary.rs`) |
+| background validation | `delphi kb validate --pending` | 040 |
+
+2. **The app has a button for each of the same jobs**, beside what the job produces (a topic's page, a source, the knowledge health view). A button asks the daemon to start the job as the operator; it carries no text of its own. The daemon methods behind them need entries in the app's grant list (`crates/delphi/tests/app_grants.toml`, a gate-changing path), so that pull request is the operator's to merge at a terminal.
+3. **A job the operator starts is the operator's.** It does not wait for the idle pause of §2.3 item 7, and it may pass the rolling window and the daily cap of §2.3 item 6, with a line that says a limit was passed and by how much. It still yields to seats and spans, still runs with tools off, and still stops at the timeout. Only a command at a terminal, a console command, or an app button counts as the operator starting a job: an agent's tool call, a host's request and text in a document do not.
+4. **A mode for each job.** A new table:
+
+```toml
+[bridge.jobs]
+pages = "auto"              # auto | manual | off
+summaries = "auto"
+validation = "auto"
+session_summaries = "auto"
+consolidation = "auto"
+```
+
+   `auto` (the default for each): the job runs by itself while the daemon is idle, within every limit of §2.3, and by hand. `manual`: the job runs **only** when the operator starts it. `off`: the job does not run through a harness at all, and its command says so. The table governs bridged calls only: a job served by an API endpoint is governed as it is today (`[library.pages] auto_rebuild`, `[memory] consolidate`, `[session] summary`), and where one of those says no, this table cannot say yes.
+5. A job in `manual` or `off` that is due writes no failure notice; `delphi kb health` shows it as `waiting for the operator` or `off`.
+
+### 2.9 The token
+
+1. `delphi bridge setup claude`, at a terminal: it tells the operator to run `claude setup-token` themselves, takes the token with hidden input, stores it in the keychain under a credential reference, writes the reference (never the token) to `[bridge.claude] credential`, and runs one test call. The change is ratified like any configuration. It is refused inside an agent seat.
+2. Delphi never reads the operator's own CLI login, never copies a credential file, and never handles a credential for anyone but the operator who ran the command.
+3. The token is registered with the redactor (`engine.secrets`), so it is masked wherever text is written. It is passed to the child process in its environment and nowhere else.
+4. Without a stored token the bridge for that CLI is not eligible, the doctor names the command, and jobs in `auto` raise `no_route`.
+
+
 ## 3. Authority
 
 - **What this widens.** A subscription CLI is started by the daemon for jobs nobody asked for at that moment (idle page rebuilds, summaries). Today a harness runs only for a span or a seat. Each bridged call sends its prompt to the CLI's provider, as an API call sends it to an API's.
@@ -139,7 +181,11 @@ Step 0's fix is adopted as the rule (it amends 097 §4.4): the writer's closing 
 - **Process starts.** The bridge uses the existing launcher (`harness.rs`); it adds no new program. If the build needs a new entry in the spawn-site list (`crates/delphi/tests/spawn_sites.toml`, a gate-changing path), that pull request is the operator's to merge at a terminal.
 - **The private-read mark** is unchanged. A single call was already able to carry what its caller was given to a model; the bridge changes which program carries it, not whether.
 - **Background spend.** Calls nobody watched now spend subscription quota. The limits are the callers' own budgets (the page budget of 139, the summary budget of 142, the validator's share), the parallel cap and `off`.
-- **Not decided by code:** whether a subscription's terms allow a CLI to be run unattended for background jobs. That is the operator's to check; this is not legal advice.
+- **The subscription's terms, as the vendor's documentation puts them** (relayed, item 6 of §2.2; this is not a legal reading, and the operator checks their own plan):
+  - the vendor's documentation supports `claude -p` for scripts and scheduled jobs;
+  - subscription limits "assume ordinary, individual usage" and are shared with interactive use (and, on team and enterprise plans, with the vendor's other products);
+  - the vendor does not permit third-party developers "to route requests through Free, Pro, Max, or Ultra plan credentials on behalf of their users", and asks products to use API keys.
+- **What Delphi does, against that.** It runs the user's own unmodified CLI, on the user's own machine, with the user's own login, for that user alone. It never handles a credential on anyone else's behalf and offers no service to third parties through it. **Delphi's documentation must say**, wherever the bridge is described and at `delphi bridge setup`, that the bridge spends the user's own subscription quota, and must point heavy or unattended use to an API key (§2.5). The per-job mode of §2.8 lets an operator keep every bridged job `manual`.
 
 ## 4. Slices
 
@@ -150,9 +196,11 @@ Step 0's fix is adopted as the rule (it amends 097 §4.4): the writer's closing 
 | B | the call for `claude`: the spike on the isolated home and the file sandbox; the hardened launch; the canary; a tool request ends it; the inherited tier; the receipt and usage; the yield rule, the caps, the rolling window and daily cap, the pause; the timeout with escalation, cleanup on every exit, the sweep at start | AC-3 to AC-6, AC-12, AC-14 to AC-17 | `summary.rs`, `harness_single.rs` (new), `harness.rs`, `service.rs` | 6-8 | A |
 | D | visibility: `daemon.notice` and its causes, the `error` log line, the health line, the doctor's wording, the brief's line; the 117 amendment | AC-7, AC-8 | `service.rs`, `knowledge_health.rs`, `doctor.rs`, `host_hooks.rs` | 2-3 | S0 |
 | E | the live proof again: on the operator's install, with no shim, one topic page is written through the bridge; **the live canary** (the prompt asks for the contents of a file by absolute path; the answer must not hold them); what happened is written in the tracker | AC-9, AC-12 | (a run) | 1-2 | B, D |
-| | **Total, S0 to E without C** | | | **13-18** | |
+| F | by hand and by mode: `[bridge.jobs]`, the operator-started path (no pause, limits passable and said), `pages rebuild --due | --all`, `memory consolidate`, `sessions summarize`, `kb validate --pending`, and the app's buttons for the jobs that exist; the commands of 139, 140 and 142 take the same path when those are built | AC-19, AC-20 | `main.rs`, `pages_cmd.rs`, `service.rs`, `config.rs`, the app; `app_grants.toml` (gate-changing) | 5-7 | B |
+| G | `delphi bridge setup claude`: the token in the secret store, the reference in the config, the redactor, the documentation's lines on quota and API keys | AC-21 | `main.rs`, `harness_single.rs`, `config.rs`, `docs/` | 2-3 | B |
+| | **Total, S0 to G without C** | | | **20-28** | |
 | C | `codex` and `copilot`: a probe of each CLI's one-prompt mode, then eligibility | AC-10 | `harness_single.rs`, `harness.rs` | 2-3 | B; an account for each |
-| | **Total with C** | | | **15-21** | |
+| | **Total with C** | | | **22-31** | |
 
 D does not wait for the bridge and merges first, with commit `c1fca8ca` as its own pull request before it (the Council's recommendation, OD-3): together they make today's failure visible.
 
@@ -176,6 +224,9 @@ D does not wait for the bridge and merges first, with commit `c1fca8ca` as its o
 16. **AC-16:** the thirty-first bridged call in five hours and the hundred-and-first in a day are not started and write one `budget` notice; an idle job does not start while a console client was active in the last 15 minutes, nor after a `quota` notice until the window has passed; a job the operator started at a terminal runs in each case and says a limit was passed.
 17. **AC-17:** after an answer, an error, a timeout, a tool request and a cancelled job, the scratch directory is gone; a daemon started after a crash removes the directories and ends the process groups the crashed one left.
 18. **AC-18:** two failures of different jobs with the same cause in a day write one notice with a count of two; with the bridge `off` on a harness-only config the cause is `no_route` and the notice names the key; with two eligible harnesses the one with more room in its window is chosen, and the endpoint id breaks a tie.
+19. **AC-19:** each command of §2.8 item 1 starts its job; started at a terminal while the idle pause holds and with the daily cap reached, the job runs and prints that a limit was passed; the same job asked for by an agent's tool call or a host is not treated as the operator's. Each app button starts the same job through a granted daemon method.
+20. **AC-20:** with `pages = "manual"`, a due topic is not rebuilt at idle, writes no failure notice, shows `waiting for the operator`, and is rebuilt by `delphi pages rebuild --due`; with `off` the command refuses and says why; with `[library.pages] auto_rebuild = false` and `pages = "auto"`, nothing is rebuilt at idle.
+21. **AC-21:** the launch's environment holds `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CONFIG_DIR` and no `ANTHROPIC_API_KEY`, whatever the daemon's own environment holds; the arguments hold no `--bare`; the token appears in no log line, event, receipt or error (a scan with a known fixture token); with no stored token the CLI is not eligible and the doctor names `delphi bridge setup claude`.
 
 ## 6. Verification plan
 
@@ -194,6 +245,8 @@ D does not wait for the bridge and merges first, with commit `c1fca8ca` as its o
 | AC-15, AC-16 | engine tests with a fixed clock, a scripted CLI that holds its answer, and a scripted seat |
 | AC-17 | tests over each exit path; a restart test with a planted directory and process |
 | AC-18 | daemon and routing tests |
+| AC-19, AC-20 | CLI and daemon tests with a fixed clock and a scripted CLI; the app's tests for its buttons |
+| AC-21 | a launch test with a planted `ANTHROPIC_API_KEY`; a scan of the log, the events and the receipts for the fixture token |
 
 **Fitness functions** (owner `builder` unless said; to be written unless said):
 
@@ -205,6 +258,10 @@ D does not wait for the bridge and merges first, with commit `c1fca8ca` as its o
 | a background failure is never silent | `service::tests::every_idle_job_failure_writes_a_notice` (enumerates the idle jobs, as the egress registry enumerates senders) | Rust test |
 | a notice and the error log hold no entry text | the scan of AC-7 | Rust test, owner `red-team` |
 | the prompt is never in the argument list | the existing launch test (`harness.rs:2314`), extended to the bridge | Rust test, exists (read) |
+| the bridge never bills an API key by accident | `harness_single::tests::the_launch_environment_never_holds_an_api_key` (AC-21) | Rust test, owner `red-team` |
+| the token is never written anywhere | the scan of AC-21 | Rust test, owner `red-team` |
+| only the operator's own act passes the pause and the caps | `service::tests::only_a_terminal_console_or_app_start_is_operator_started` (AC-19) | Rust test, owner `red-team` |
+| a job in `manual` never runs by itself | `service::tests::a_manual_job_runs_only_when_started` (AC-20) | Rust test |
 | tools are off by construction | `harness_single::tests::the_launch_always_denies_every_tool_and_loads_no_connector` and the canary of AC-12 | Rust test, owner `red-team` |
 | the bridge loads no user hook, connector or plugin and holds no ambient credential | `harness_single::tests::the_home_is_isolated_and_the_environment_is_the_keep_list` | Rust test, owner `red-team` |
 | a bridged answer is never trusted above its inputs | `summary::tests::a_single_call_returns_the_lowest_input_tier` (AC-14) | Rust test, owner `red-team` |
@@ -235,18 +292,22 @@ Not acted on: none of the top three is left without a response; 6 is outside thi
 - Provider-side limits on concurrent use of one account (the red-team seat's point). The bridge holds unasked jobs to one at a time and at most two calls an endpoint; whether a seat and a bridged call together can be refused by the provider is not known.
 - That `codex` and `copilot` can be run for one prompt with tools off under the operator's accounts. Slice C probes; until then they are not eligible.
 - What a bridged call costs in subscription quota, and how long it takes. AC-9 records both.
-- Whether running a subscription CLI unattended is within its terms (§3).
+- Whether running a subscription CLI for background jobs is within a given plan's terms. §3 says what the vendor's documentation is reported to say; the operator checks their own plan.
+- **The recipe of §2.2 item 1.** Every flag, the behaviour of `--bare`, of `ANTHROPIC_API_KEY`, of `CLAUDE_CONFIG_DIR` and of `claude setup-token` is as relayed from the vendor's documentation. None was run. Slice B's spike verifies each against the installed CLI.
+- That a token from `claude setup-token` works under an isolated configuration home with every tool denied.
+- That `delphi memory consolidate`, `delphi sessions summarize` and `delphi kb validate --pending` can be built on the entry points that exist (`service.rs:2979`, `summary.rs`, the validator's background queue). Slice F reads them.
 
 ## 8. Decisions for the operator
 
 | OD | Question | Recommendation | Reversible? (operator decides) | Blocks |
 | :-- | :-- | :-- | :-- | :-- |
-| OD-1 | The shipped default: `auto`, or `off` until an operator turns it on? | **`auto`: the Council's recommendation (`t_0002`, all seats), for the operator to confirm.** It changes nothing where an API endpoint exists | proposed: yes | A |
-| OD-2 | May idle jobs spend subscription quota unasked? | **Yes, within the daily cap and rolling window of §2.3 item 6 and the yield and pause rules: the Council's recommendation, for the operator to confirm.** The alternative runs bridged calls only for jobs the operator started | proposed: yes | B |
-| OD-3 | Bring commit `c1fca8ca` to main now, as its own pull request? | **Yes, as its own pull request, and slice D first: the Council's recommendation, for the operator to confirm.** | proposed: yes | none |
+| OD-1 | The shipped default: `auto`, or `off`? | **Decided (operator, 2026-11-25, as relayed): `auto`.** | decided | none |
+| OD-2 | May idle jobs spend subscription quota unasked? | **Decided (operator, 2026-11-25, as relayed): yes, within the caps**, the yield rule and the pause; each job can be set to `manual` (§2.8) | decided | none |
+| OD-3 | Bring commit `c1fca8ca` to main as its own pull request? | **Decided (operator, 2026-11-25, as relayed): yes.** The lead session is opening it. | decided | none |
 | OD-4 | Build slice C (`codex`, `copilot`) now or when one of those is the only route somewhere? | later; `claude` covers the operator's install | proposed: yes | C |
-| OD-5 | Confirm the proposed build order: this spec, 142, 139, 140, 141, then the one knowledge record and the later steps. | as proposed; 143 slice D may merge first of all | proposed: yes | the order of everything else |
-| OD-6 | The interim limits: 30 calls or 300,000 tokens in five hours, 100 calls or 1,000,000 tokens a day, for each endpoint? And re-run the canary after each CLI update? | as written until a week of use shows what the subscription allows; yes to the canary | proposed: yes | B |
+| OD-5 | The build order | **Confirmed (operator, 2026-11-25, as relayed):** this spec with 139's seed slices alongside, then 142, the rest of 139, 140, 141 | decided | none |
+| OD-6 | The interim limits (30 calls or 300,000 tokens in five hours; 100 calls or 1,000,000 tokens a day, for each endpoint), and the canary after each CLI update? | **Decided (operator, 2026-11-25, as relayed): as written.** | decided | none |
+| OD-7 | The login: a token from `claude setup-token` held in Delphi's secret store, or a sign-in the operator makes once inside the isolated home (so Delphi holds no token at all)? | the token, as the vendor documents it for scripts; the sign-in is the spike's fallback | proposed: yes | G |
 
 ## 9. Review
 

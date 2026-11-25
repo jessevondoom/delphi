@@ -10,121 +10,133 @@
     },
     {
       "level": 2,
-      "line": 24,
+      "line": 25,
       "number": "1",
       "title": "Scope and objectives"
     },
     {
       "level": 3,
-      "line": 37,
+      "line": 38,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 45,
+      "line": 46,
       "number": "1.2",
       "title": "Simpler alternative considered"
     },
     {
       "level": 3,
-      "line": 50,
+      "line": 51,
       "number": "1.3",
       "title": "Options considered"
     },
     {
       "level": 2,
-      "line": 60,
+      "line": 61,
       "number": "2",
       "title": "Design"
     },
     {
       "level": 3,
-      "line": 62,
+      "line": 63,
       "number": "2.1",
       "title": "Routing"
     },
     {
       "level": 3,
-      "line": 79,
+      "line": 80,
       "number": "2.2",
       "title": "The call"
     },
     {
       "level": 3,
-      "line": 97,
+      "line": 102,
       "number": "2.3",
       "title": "Cost, concurrency and timeouts"
     },
     {
       "level": 3,
-      "line": 111,
+      "line": 116,
       "number": "2.4",
       "title": "Ratification"
     },
     {
       "level": 3,
-      "line": 117,
+      "line": 122,
       "number": "2.5",
       "title": "The alternative: an API-key endpoint"
     },
     {
       "level": 3,
-      "line": 121,
+      "line": 126,
       "number": "2.6",
       "title": "Page drafts: the first draft's proposal stands"
     },
     {
       "level": 3,
-      "line": 125,
+      "line": 130,
       "number": "2.7",
       "title": "Failures the operator can see"
     },
     {
+      "level": 3,
+      "line": 139,
+      "number": "2.8",
+      "title": "Starting a job by hand, and choosing which jobs run by themselves"
+    },
+    {
+      "level": 3,
+      "line": 168,
+      "number": "2.9",
+      "title": "The token"
+    },
+    {
       "level": 2,
-      "line": 134,
+      "line": 176,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 144,
+      "line": 190,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 159,
+      "line": 207,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 180,
+      "line": 231,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 3,
-      "line": 215,
+      "line": 272,
       "number": "6.1",
       "title": "Premortem (three months after release): how this most likely fails"
     },
     {
       "level": 2,
-      "line": 228,
+      "line": 285,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 240,
+      "line": 300,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 251,
+      "line": 312,
       "number": "9",
       "title": "Review"
     }
@@ -132,7 +144,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/143-a-single-turn-harness-bridge-one-prompt-one-answer-through-an-allowed-harness.md",
-    "sha256": "7eca83868103512c0150c72574c9a07cad482cbea7e6b5671cd5d6ee278e1bd3"
+    "sha256": "194ab6524592b225adbd80564cdc30bee0ec83e03c78e67c018aa73eccdb26b8"
   },
   "source_status_at_hash": {
     "line": {
@@ -145,7 +157,7 @@
       },
       "text": "status: draft"
     },
-    "sha256": "7eca83868103512c0150c72574c9a07cad482cbea7e6b5671cd5d6ee278e1bd3",
+    "sha256": "194ab6524592b225adbd80564cdc30bee0ec83e03c78e67c018aa73eccdb26b8",
     "word": "draft"
   },
   "spec": {
@@ -160,10 +172,10 @@
   "summary": {
     "kind": "quote",
     "span": {
-      "end": 4791,
-      "end_line": 33,
-      "line": 26,
-      "start": 2772
+      "end": 5113,
+      "end_line": 34,
+      "line": 27,
+      "start": 3094
     },
     "text": "| # | Finding of step 0 (2026-11-25), with the code on origin/main 52bdd3b8 | Where |\n| :-- | :-- | :-- |\n| O1 | **No usable model route.** Every live endpoint on the operator's install is `path = \"harness\"`. The writer and the validator ask for single turns (`turn_by_turn`), and routing rules a harness out for that: \"a harness runs whole spans, not single turns\". So `writer_key()` is `None` and every topic rebuild fails with \"no model is available for the writer right now\". | `page_run.rs:102-109`, `:322`; `route.rs:272-274` |\n| O2 | The same rule blocks every caller that makes one call and reads one answer: the page validator, session summaries, the scout's own calls, the fact judge, the decision brief and library acquisition. Seven files ask for `turn_by_turn`. | `library_page_validate.rs`, `summary.rs`, `research.rs`, `fact_judge.rs`, `decision_run.rs`, `library_acquire_run.rs`, `page_run.rs` |\n| O3 | **The failure is hidden.** An idle rebuild that fails writes `topic_rebuild_failed` at `warn`; the default level is `error`. Nothing reaches the log, the console, the brief or `delphi doctor`. | `service.rs:3116`; `elog.rs:17`, `:111` |\n| O4 | **A rewrite kept the writer's `<!-- page: ... -->` line**, so every second attempt failed the mechanical check and every page ended as the claims alone. Fixed in commit `c1fca8ca` on the local branch `step0/live-proof`, which also makes `delphi doctor` warn when every allowed endpoint is a harness. That commit is not on main. | `library_page_validate.rs`, `doctor.rs` (in `c1fca8ca`) |\n| O5 | With a route supplied by a loopback shim that ran `claude -p`, pages were written end to end. So one prompt and one answer through the CLI is enough for these callers. | step 0 |\n| O6 | A single call already has one entry point, with no tools, no span, no card and no budget reservation; and the harness launcher already runs a CLI with one prompt on standard input and its tools turned off. | `summary.rs:166`; `harness.rs:63`, `:1084-1101`, `:1226`, `:1246` |"
   }
