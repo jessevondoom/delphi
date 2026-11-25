@@ -1,0 +1,152 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 16,
+      "number": null,
+      "title": "Spec 139: Pages seeded from research"
+    },
+    {
+      "level": 2,
+      "line": 23,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 38,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 45,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 3,
+      "line": 50,
+      "number": "1.3",
+      "title": "Options considered"
+    },
+    {
+      "level": 2,
+      "line": 60,
+      "number": "2",
+      "title": "Design"
+    },
+    {
+      "level": 3,
+      "line": 62,
+      "number": "2.1",
+      "title": "The seed"
+    },
+    {
+      "level": 3,
+      "line": 80,
+      "number": "2.2",
+      "title": "The seed page"
+    },
+    {
+      "level": 3,
+      "line": 88,
+      "number": "2.3",
+      "title": "The writer expands the seed; a failure keeps it"
+    },
+    {
+      "level": 3,
+      "line": 97,
+      "number": "2.4",
+      "title": "Titles that are concepts"
+    },
+    {
+      "level": 3,
+      "line": 110,
+      "number": "2.5",
+      "title": "Build now"
+    },
+    {
+      "level": 2,
+      "line": 117,
+      "number": "3",
+      "title": "Authority"
+    },
+    {
+      "level": 2,
+      "line": 124,
+      "number": "4",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 140,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 153,
+      "number": "6",
+      "title": "Verification plan"
+    },
+    {
+      "level": 3,
+      "line": 175,
+      "number": "6.1",
+      "title": "Premortem (three months after release): how this most likely fails"
+    },
+    {
+      "level": 2,
+      "line": 188,
+      "number": "7",
+      "title": "What is not verified"
+    },
+    {
+      "level": 2,
+      "line": 196,
+      "number": "8",
+      "title": "Decisions for the operator"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/139-pages-seeded-from-research-a-seed-that-is-never-empty-a-long-depth-and-concept-titles.md",
+    "sha256": "a6d131ebe9d2f561358c1454e65d18928cb4feac384e43ff8a8c8b1510e5db6b"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 269,
+        "end_line": 6,
+        "line": 6,
+        "start": 256
+      },
+      "text": "status: draft"
+    },
+    "sha256": "a6d131ebe9d2f561358c1454e65d18928cb4feac384e43ff8a8c8b1510e5db6b",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "139",
+    "stem": "139-pages-seeded-from-research-a-seed-that-is-never-empty-a-long-depth-and-concept-titles",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "139: Pages seeded from research: a seed that is never empty, a long depth, and concept titles"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 2334,
+      "end_line": 25,
+      "line": 25,
+      "start": 2174
+    },
+    "text": "The operator's workspace holds nine topic pages and none has ever been built. Reading the code explains why a built page would be poor even when the build runs:"
+  }
+}
