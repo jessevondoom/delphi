@@ -17,7 +17,7 @@ tags: [spec, labels, handling, private, egress, sinks, pages, export, bundle, au
 
 > **Status: draft**, revised 2026-11-25 with the operator's decisions of that day: the design now holds **no model-side and no seat-side filter**. One of five specs from the knowledge audit of 2026-11-25 (139 to 143). `specs/139` leaves private records off pages until this spec's guards pass; `specs/142` defines the `text_held` mark's source and carries a first guard for it.
 > **The plan is approved; this text is not yet.** The operator approved the plan on 2026-11-25 ("go"). The status stays `draft` until a witnessed Panel with a red-team seat has read this text; approval is marked after that.
-> **Build order (confirmed by the operator, 2026-11-25):** the single-turn harness bridge (`specs/143`), with the seed slices of `specs/139` (A, B, D, E) built alongside it; then the source text cache (`specs/142`); then the remaining slices of 139; then the golden set (`specs/140`); then label enforcement (`specs/141`); then the one knowledge record and the later steps, which have no spec yet. **This spec is last of the five.** Because the only claims on the operator's workspace are on private records (step 0), private research reaches pages last; the operator decided not to pull this spec forward (`specs/139` OD-6).
+> **Build order (confirmed by the operator, 2026-11-25; steps 2 and 4 and the late group were added after Panel `t_0004`, for the operator to confirm with the approval):** (1) the single-turn harness bridge (`specs/143`), with the seed slices of `specs/139` (A, B, D, E) alongside; (2) the retrieval baseline, slices A, B and D of `specs/140`, run before the index changes; (3) the source text cache (`specs/142`: A, E, the cache cap, B, C, G); (4) a bounded backfill of the existing pointer sources, started by the operator (142 §2.7); (5) the writer slices of 139 (C, F); (6) the rest of 140; (7) label enforcement (`specs/141`); (8) kept late, and not before half of the last ten written pages pass validation: 139 G and H, 140 H, the rest of 142's cache slice and 142 F; then the one knowledge record and the later steps, which have no spec yet. This spec is seventh. Because the only claims on the operator's workspace are on private records (step 0), private research reaches pages late; the operator decided not to pull this spec forward (`specs/139` OD-6).
 > **Designs** the deferred slice S4 of [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) §10 (exit channels) and builds the page part of its §8. **Amends:** [`specs/098`](098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) §7.2 (the foreign-family clause), [`specs/117`](117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md) §2 (what a topic page may carry), [`specs/112`](112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md) §3 (private research in the index), 121 §5 item 1, §6 item 8, §9 item 2 and §16 question 3. **Builds on:** [`specs/055`](055-the-central-library-sources-claims-and-pages.md) §10.1 and 098 §12 item 16 (the one egress check), [`specs/103`](103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md) §4 (the private-read mark, unchanged), [`specs/119`](119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md) §15 (queries under the mark).
 > **Not legal advice.** Where an employer's policy or a licence bears on what may leave, that is a question for counsel. This spec states a mechanism and the operator's rulings.
 
@@ -87,7 +87,7 @@ Chosen: **A**. B is ruled out by the operator. C is A's table turned on its side
 
 2. **Maximum means union.** The marks are not a ladder (121 §2 item 3), so the least label that is at least as strict as each input is the union of the inputs. `Label::join` is that union. An empty label is unlabelled.
 3. **Computed, never declared.** `Label` values are made only by the daemon, from its own records: the handling record (`handling.rs:316`), the source's `meta.json`, the research record. A label written in a file's frontmatter, a tool argument, a writer's draft or a host's report is a view or a note and is never read as the label. An agent or a host may still **add** a handling trait (121 §3 item 4); nothing lowers a label but the operator (121 §3 item 3) or, for `library_private` and `text_held`, the operator's own source commands.
-4. **Unreadable is strictest.** A record that cannot be read has every mark, at every sink (as `egress.rs:13-15` does for the one bit).
+4. **Unreadable, missing and stale are strictest.** A record that cannot be read has every mark, at every sink (as `egress.rs:13-15` does for the one bit). So does a thing with **no label at all**: a page whose sidecar has no `label`, and an index row whose `marks` is empty because it was written before this spec. They were made before labels existed, and reading them as unlabelled would let them leave freely. And so does a thing whose label is **older than a handling record or a source record it was computed from**. Each stays at every mark until it is rebuilt, reindexed, or relabelled by `delphi handling relabel` (which recomputes the label of every page from its recorded material, and of every index row, without calling a model).
 5. **What a label covers.** The item's text and everything derived from it by code: title, slug, anchors, excerpts, vectors, chunk headers. A sink that refuses an item sends none of them.
 
 ### 2.2 Where the label is kept
@@ -101,6 +101,8 @@ Chosen: **A**. B is ruled out by the operator. C is A's table turned on its side
 
 A page's label is taken from its material and not only from its markers, because a writer can restate an uncited record (121 §9 item 3). Material contains everything cited: a marker that names something outside it already fails the page check. The label is recomputed at each build (121 §8 item 6) and when a trait of a material item changes (the page is then due).
 
+**Read at the sink, not from the page.** A sink never trusts the label stored with a page. It recomputes the label from the material the sidecar lists, against the daemon's records as they are at that moment, and uses the stricter of the two. A page whose sidecar lists no material is unreadable (§2.1 item 4).
+
 ### 2.3 One check
 
 1. `egress::check_label(label, sink) -> Decision`, beside `egress::check` (`egress.rs:12`), with `Decision` one of `Send`, `Quotations` (the whole text is refused; quotations of at most 300 characters per citation pass), `SendLabelled` (the output carries the visible line and the operator confirms the send) or `Refuse(reason)`. `egress::check` stays and is implemented by it.
@@ -110,7 +112,7 @@ A page's label is taken from its material and not only from its markers, because
 
 ### 2.4 The sinks and their policy
 
-Only sinks that leave the operator's control (ruling 3). `R` refuse; `L` send labelled, after the operator confirms; `S` send; `Q` whole text refused, quotations of at most 300 characters per citation pass (119 §3 item 2, `library_private.rs:20`).
+Only sinks that leave the operator's control (ruling 3). `R` refuse; `L` send labelled, after the operator confirms; `S` send; `Q` what the one held-text predicate of 142 §2.5 item 4 allows, `body_may_leave(source, output)`: no run of more than 300 characters of the source, and no more of it in all than the aggregate cap for one output. The `Q` column is that function and nothing else.
 
 | Sink | Sender | `library_private` | `personal` | `confidential` | `internal` | `text_held` |
 | :-- | :-- | :-: | :-: | :-: | :-: | :-: |
@@ -133,7 +135,7 @@ Only sinks that leave the operator's control (ruling 3). `R` refuse; `L` send la
 5. **Outbound sends.** Every outbound action is already Red and waits for the operator. The card gains one line: the marks of the items the sending task was given (`handling.rs:255`), with counts. Handling traits still never set the 103 mark (121 §2 item 4); the line adds what the operator is told and removes nothing.
 6. **A public repository.** One check, `delphi handling check <path>... | --staged | --range <a>..<b> [--remote <url>]`: it reads each file's label (the page's or document's sidecar and the daemon's record, never the file's own frontmatter alone), scans for a run of more than 300 characters of any `text_held` or `library_private` source (`library_private::shares_run`, `library_private.rs:66`), applies the row above and exits non-zero on a refusal. It runs in two places. **The daemon's own push** (a task finished in `merge = "pr"` mode, `worktree.rs:504-525`, after the operator's card, `finalize.rs:317-321`) runs it on the branch's range before pushing; a refusal stops the push and the card names the files and marks. An agent's own `git push` is refused by the command policy (`exec.rs:536`, and the test at `:1035`). **A host** commits and pushes with its own tools, which Delphi cannot stop (121 §9 item 1): `delphi connect` offers the check as a pre-push hook, and a hook can only refuse (GOVERNANCE §5 item 11).
 7. **A citation is not a way round.** The bibliography row sends a `text_held` source's citation. The fields it sends are the closed citation list (`library_export.rs:12-14`), which has no abstract and no note. Every free-text field that is sent (the title, the container title, the attribution text, and an abstract or a note if the list ever gains one) is scanned with the same 300-character run scan against the source's held text (`library_private::shares_run`), and a field that fails is cut to the bound.
-8. **The inventory comes first.** Slice C starts by listing every sender before it wires any: each file that can reach the network (`NETWORK_FILES`, `egress.rs:312`), each app command that hands text out of the app (`generate_handler!`, `app/src-tauri/src/lib.rs:251`), and each command that writes entry text to a path outside the home. Each is registered as a sink of this table or as carrying no entry text, with the test that proves it. **The registry test fails on any sender that is not listed**, in the daemon and in the app. Whether the app has a clipboard command, or a path that serves a client off this machine, is found by that inventory; the rows above stand either way and are tested with a fixture sender where the real one does not exist.
+8. **The inventory comes first, and it is first done in 142.** 142 slice B, which is built before this spec, begins with this inventory, because it has to close every exit for held text; slice C here starts from that list and brings it up to date before it wires any sink: each file that can reach the network (`NETWORK_FILES`, `egress.rs:312`), each app command that hands text out of the app (`generate_handler!`, `app/src-tauri/src/lib.rs:251`), and each command that writes entry text to a path outside the home. Each is registered as a sink of this table or as carrying no entry text, with the test that proves it. **The registry test fails on any sender that is not listed**, in the daemon and in the app. Whether the app has a clipboard command, or a path that serves a client off this machine, is found by that inventory; the rows above stand either way and are tested with a fixture sender where the real one does not exist.
 9. **The bundle crate is not asked to know labels.** The check runs in the engine before any call into `delphi-bundle` that copies, packages, distils or publishes: the engine computes the label of every file it is about to hand over and refuses there. A test fails when an engine file calls one of those `delphi-bundle` functions outside a function that calls `check_label` first.
 10. **A host's own push is not enforced, and the hook is not hidden.** Delphi cannot stop a host that pushes with its own git (§3). `delphi connect` prints, every time, whether the pre-push hook of item 6 is installed in the project, and the one command that installs it.
 
@@ -168,15 +170,17 @@ Built last, in its own slice, after the sink tests of §6 pass on main.
 | Slice | Content | Criteria | Files | Hours | Depends on |
 | :-- | :-- | :-- | :-- | --: | :-- |
 | S0 | this spec; the operator's answers to §8; a Council or Panel with a red-team seat | (the spec) | this file | 2-3 | none |
-| A | `Label`: the type, the join, of a source, a record, a chunk (`marks` column, the hit) and a page (sidecar, frontmatter view, the visible line); the decision order for several marks | AC-1, AC-2, AC-3, AC-14 | `label.rs` (new), `handling.rs`, `kb.rs`, `library_topics.rs` | 9-11 | S0 |
+| A | `Label`: the type, the join, of a source, a record, a chunk (`marks` column, the hit) and a page (sidecar, frontmatter view, the visible line); the decision order for several marks; missing and stale labels read as every mark; `delphi handling relabel` | AC-1, AC-2, AC-3, AC-14, AC-19 | `label.rs` (new), `handling.rs`, `kb.rs`, `library_topics.rs`, the `handling` command | 10-12 | S0 |
 | B | `check_label`, the sink table in the registry; bundle, bibliography and Xenia wired | AC-4, AC-5 | `egress.rs`, `library_export.rs`, `library_bib.rs`, `service_xenia.rs`, `delphi-bundle` | 6-8 | A |
 | C | **the inventory of senders first** (§2.4 item 8), then: `may_export` in the page reply, the app's export, print and copy, a document or deck written out, a reply to a client off this machine, `kb seed-export`, remote `kb serve`; the registry test in the daemon and in the app | AC-6, AC-7, AC-15, AC-16 | `service.rs`, `egress.rs`, `app/src-tauri/src/lib.rs`, `kb.rs`, `kbserve.rs`, the document path | 8-10 | B |
 | D | `delphi handling check` and the hook; the marks line on outbound cards | AC-8, AC-9 | the `handling` command, `worktree.rs`, `finalize.rs`, `private_read.rs`, `harness_run.rs` | 6-7 | B |
 | E | the query notice: `planned_with`, the log line, the status count | AC-10 | `research_run.rs`, `search_log.rs`, `research_record.rs` | 3-4 | A |
 | F | the lift of §2.6; `private_to_models = "all"`, which is the shipped default; the lines in setup and in `handling status`; `check_for_seat` no longer refuses; the health line | AC-11, AC-12, AC-13 | `library_topics.rs`, `topic_gather.rs`, `research_index.rs`, `egress.rs`, `config.rs` | 4-5 | B, C, D green on main; 139 A and B |
-| | **Total** | | | **38-48** | |
+| | **Total** | | | **39-49** | |
 
 F is refused by its own test (AC-13) while any sink row has no passing test.
+
+**Live and manual steps are dated.** A criterion that is proved by a run on the operator's workspace, or by a person reading something, counts as met only when the slice's tracker file holds a dated entry that says what was run and what was seen.
 
 ## 5. Acceptance criteria
 
@@ -198,6 +202,8 @@ F is refused by its own test (AC-13) while any sink row has no passing test.
 16. **AC-16:** a bibliography export for a `text_held` source whose title holds 400 characters of the source's text sends at most 300 of them, and sends no abstract and no note.
 17. **AC-17:** a bundle package of a labelled page is refused in the engine before any `delphi-bundle` function runs; `delphi connect` prints whether the pre-push hook is installed and how to install it.
 18. **AC-18:** a fresh install with no `[library]` table behaves as `private_to_models = "all"`; `delphi init`, `delphi research setup` and `delphi handling status` each print the line that says so and names `deny`; with `deny` set, no library-private entry enters any model prompt and the status line says `deny`.
+19. **AC-19:** a page built before this spec (no `label` in its sidecar) and an index row with no `marks` are refused by every sink as if they carried every mark; a page labelled `internal` whose material gained a `personal` trait afterwards is refused at the export sink although its stored label says `internal`; after `delphi handling relabel` each has its true label and is sent or refused by its row. The sink's decision is computed from the daemon's records at the time of the send, never read from the page alone.
+20. **AC-20:** wherever a row says `Q`, the decision is `body_may_leave`'s: an output with ten quotations of 290 characters from one held source is refused, as 142 AC-27 has it.
 
 ## 6. Verification plan
 
@@ -214,6 +220,8 @@ F is refused by its own test (AC-13) while any sink row has no passing test.
 | AC-15 | the registry test, with a planted sender and a planted app command |
 | AC-16, AC-17 | export and bundle tests; a CLI golden test for `delphi connect` |
 | AC-18 | a config test for the default; CLI golden tests for the three commands |
+| AC-19 | sink tests with a fixture page from before labels and a page with a stale label; a CLI test for `relabel` |
+| AC-20 | the sink matrix, with the fixture of 142 AC-27 |
 
 **Fitness functions: one per sink** (owner `red-team`; built by `builder`; all to be written unless said):
 
@@ -237,6 +245,9 @@ F is refused by its own test (AC-13) while any sink row has no passing test.
 | several marks take the strictest decision | `egress::tests::every_combination_of_marks_takes_the_strictest_decision` (AC-14) | to be written |
 | no sender is unlisted | `egress::tests::every_sender_is_a_registered_sink_or_proved_to_carry_no_entry_text`, and the app's `every_command_that_hands_text_out_is_registered` (AC-15) | to be written |
 | the default that sends private research to models is never silent | `handling_cmd::tests::setup_and_status_say_what_private_to_models_is` (AC-18) | to be written |
+| a missing or stale label is never read as unlabelled | `label::tests::no_label_and_a_stale_label_are_every_mark` (AC-19) | to be written |
+| a sink computes the label, it does not trust the stored one | `egress::tests::every_sink_recomputes_the_label_from_the_records` (AC-19) | to be written |
+| the `Q` column is the one predicate | `egress::tests::q_is_body_may_leave` (AC-20) | to be written |
 | the bundle crate is reached only after the check | `egress::tests::no_engine_file_calls_a_bundle_writer_before_check_label` (AC-17) | to be written |
 | a citation carries no body text | `library_bib::tests::no_exported_field_holds_a_run_of_held_text` (AC-16) | to be written |
 | model dispatch and web search are not blocked by a mark | `label::tests::no_mark_withholds_a_query_or_a_prompt_under_all` | to be written |
@@ -294,5 +305,21 @@ Council `t_0003` (a daemon Council of 2026-11-25, session `host-e11ba3fe9035ccf9
 | `reviewed_by` empty; the rulings relayed, not quoted | P0, P1 | `reviewed_by` filled, with its limits; four rulings quoted |
 
 **The Council's recommendations on open decisions, for the operator to confirm:** OD-7, withdraw 121 S3 and keep S2. OD-8, leave `[history] to_models` unchanged. `specs/139` OD-6, do not pull this spec's guard forward. On OD-1 the seats split. The record's structured findings give the architect as keeping `deny` shipped; its verdict paragraph says the architect and the strategist would ship `all` and the red-team would keep `deny`. This text takes the structured findings and the coordinating session's account (architect and red-team for `deny`, strategist for `all`) and does not choose.
+
+**Not adopted:** nothing on this spec was rejected.
+
+### 9.1 Panel `t_0004`
+
+Panel `t_0004` (a witnessed host Panel of 2026-11-25, session `host-e11ba3fe9035ccf9`; architect, red-team and strategist seats, a blind Round 1, all three parsed in both rounds) read specs 139 to 143 and ruled **B: apply the fixes, then approve**. Its record is committed at `missions/2026-11-25-knowledge-v2/councils/004-witnessed-red-team-review-of-draft-specs.md`, with one line redacted (the operator's project names), because this repository is public.
+
+**It is not cited in `reviewed_by`, and it does not count as an independent review.** The record says so itself (`counts_as_independent_review: false`, `not_independent_because: single family`): every seat ran on one model family, which is also the family that wrote these specs, and `delphi lint` refuses a citation of such a Panel. The red-team seat did read the texts whole this time, and every P0 and P1 it and the other seats raised is applied below. What GOVERNANCE §1.3 still needs is a review by a second model family, or the operator's own waiver in the approval words. Nobody has re-read the amended text.
+
+| Finding (on this spec) | Severity | Response |
+| :-- | :-- | :-- |
+| pages and index rows made before labels exist read as unlabelled and export freely | P1 | §2.1 item 4: no label is every mark until rebuilt or relabelled; `delphi handling relabel`; AC-19 |
+| the sink trusts a stored page label that can be stale-low | P1 | §2.2: the label is recomputed at the sink from the daemon's records; AC-19 |
+| the 300-character bound in the `Q` column is per run | P1 | the `Q` column is `body_may_leave` of 142, with its aggregate cap; AC-20 |
+| run the sender inventory at the start of 142 slice B | P1 | §2.4 item 8 |
+| live and manual criteria need dated tracker entries | P2 | §4 |
 
 **Not adopted:** nothing on this spec was rejected.
