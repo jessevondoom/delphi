@@ -23,7 +23,8 @@ const USAGE: &str = "usage:
   delphi pages topics [--json] [--home <dir>]
   delphi pages topic <slug> [--version <stamp>] [--json] [--home <dir>]
   delphi pages versions <slug> [--json] [--home <dir>]
-  delphi pages rebuild <slug> [--home <dir>]";
+  delphi pages rebuild <slug> [--home <dir>]
+  delphi pages seeds --count [--json] [--home <dir>] [--workspace <name>]";
 
 fn value_of(args: &[String], name: &str) -> Result<Option<String>, String> {
     match args.iter().position(|a| a == name) {
@@ -145,6 +146,38 @@ fn rebuild(home: &Path, ws_dir: &Path, slug: &str) -> i32 {
             1
         }
     }
+}
+
+/// `delphi pages seeds --count` (`specs/139` §4 slice A, AC-17): for each topic, how many spans each row of §2.1 would give its seed, and
+/// what the caps keep. Reads only: no page, record or index is written, and no model is called.
+fn seeds_count(lib: &Library, home: &Path, ws: &Path, as_json: bool) -> i32 {
+    use delphi_engine::topic_seed::{assemble, count_json, Assemble, Row};
+    let ids = delphi_engine::query_guard::identifiers(ws);
+    let ctx = delphi_engine::library::topics::DueCtx { ws: Some(ws), now: now_unix(), index: false };
+    let topics = lib.topic_pages(&ctx);
+    let lines: Vec<serde_json::Value> = topics.iter().map(|t| count_json(&t.slug, &assemble(lib, home, ws, &t.side, &Assemble { identifiers: &ids, search: true }))).collect();
+    if as_json {
+        println!("{}", json!({"topics": lines}));
+        return 0;
+    }
+    if lines.is_empty() {
+        println!("no topics yet: a research run makes one, or `delphi pages new <title>`");
+        return 0;
+    }
+    for l in &lines {
+        let rows: Vec<String> = Row::ALL
+            .iter()
+            .map(|r| {
+                let row = &l["rows"][r.number() - 1];
+                let (o, k) = (row["offered"].as_u64().unwrap_or(0), row["kept"].as_u64().unwrap_or(0));
+                if o == k { format!("{} {}", r.name(), k) } else { format!("{} {} of {}", r.name(), k, o) }
+            })
+            .collect();
+        let named = l["named_sources"].as_u64().unwrap_or(0);
+        let waiting = if l["spans"] == 0 { "  (waiting for material)" } else { "" };
+        println!("{}\n  {}{}\n  = {} spans, {} bytes, answer {} characters{}", l["slug"].as_str().unwrap_or(""), rows.join(" · "), if named > 0 { format!(" · {} source(s) named only", named) } else { String::new() }, l["spans"], l["bytes"], l["answer_chars"], waiting);
+    }
+    0
 }
 
 fn now_unix() -> u64 {
@@ -335,6 +368,10 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
             }
             0
         }
+        Some("seeds") if pos.is_empty() && rest.iter().any(|a| a == "--count") => {
+            let Some(ws) = ws_dir else { return 4 };
+            seeds_count(&lib, home, ws, rest.iter().any(|a| a == "--json"))
+        }
         Some("rebuild") if pos.len() == 1 => {
             let Some(ws) = ws_dir else { return 4 };
             rebuild(home, ws, pos[0])
@@ -365,6 +402,42 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(tree(&p));
+            } else {
+                out.push((p.display().to_string(), std::fs::read(&p).unwrap_or_default()));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// `specs/139` AC-17: `delphi pages seeds --count` counts each topic's spans by row and writes nothing.
+    #[test]
+    fn pages_seeds_count_counts_by_row_and_writes_nothing() {
+        use delphi_engine::research_record::{Asker, Begin, Topic};
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        let t = Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
+        t.finish("r-1", "done", Some(&json!({"answer": "Tides lag.\n\n## Why\n\nThe estuary is shallow.", "claims": []})), &[], None, 0).unwrap();
+        let lib = Library::in_home(home.path());
+        lib.topics_from_research(&ws, 1);
+        lib.topic_create("Lighthouses", delphi_engine::library::topics::Origin::Operator, 1).unwrap();
+        let before = tree(home.path());
+        assert_eq!(cli(&["seeds".into(), "--count".into(), "--json".into()], home.path(), Some(&ws)), 0);
+        assert_eq!(cli(&["seeds".into(), "--count".into()], home.path(), Some(&ws)), 0);
+        assert_eq!(tree(home.path()), before, "the count writes nothing");
+        assert_eq!(cli(&["seeds".into()], home.path(), Some(&ws)), 2, "only the count exists");
+        let seed = delphi_engine::topic_seed::assemble(&lib, home.path(), &ws, &lib.topic_side("why-do-tides-lag").unwrap(), &delphi_engine::topic_seed::Assemble { identifiers: &[], search: true });
+        let line = delphi_engine::topic_seed::count_json("why-do-tides-lag", &seed);
+        assert_eq!((line["rows"][0]["kept"].clone(), line["spans"].clone()), (json!(2), json!(2)));
+    }
 
     #[test]
     fn pages_expand_usage_on_missing_args() {

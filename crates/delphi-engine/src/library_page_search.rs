@@ -123,7 +123,7 @@ fn print(parts: &[&str]) -> String {
 }
 
 /// What a claim looks like to a page: its status, text and whether it is still live.
-pub(super) fn claim_print(c: &Value) -> String {
+pub fn claim_print(c: &Value) -> String {
     print(&["claim", c["id"].as_str().unwrap_or(""), status(c).as_str(), c["text"].as_str().unwrap_or(""), &c["superseded_by"].to_string()])
 }
 
