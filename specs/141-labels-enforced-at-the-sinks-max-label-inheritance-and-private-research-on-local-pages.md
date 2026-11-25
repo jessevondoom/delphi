@@ -15,7 +15,8 @@ tags: [spec, labels, handling, private, egress, sinks, pages, export, bundle, au
 
 # Spec 141: Labels enforced at the sinks
 
-> **Status: draft.** Third of four specs from the knowledge audit of 2026-11-25 (139 to 142); step 4 of the build order the operator settled that day. `specs/139` leaves private records off pages until this spec's guards pass; `specs/142` relies on the `text_held` mark defined here.
+> **Status: draft**, revised 2026-11-25 with the operator's decisions of that day: the design now holds **no model-side and no seat-side filter**. One of five specs from the knowledge audit of 2026-11-25 (139 to 143). `specs/139` leaves private records off pages until this spec's guards pass; `specs/142` defines the `text_held` mark's source and carries a first guard for it.
+> **Proposed build order (not yet confirmed by the operator):** the single-turn harness bridge (`specs/143`), the source text cache (`specs/142`), seeded pages (`specs/139`), the golden set (`specs/140`), **this spec**, then the one knowledge record and the later steps. Because the only claims on the operator's workspace are on private records (step 0), this order puts private research on pages last; `specs/139` OD-6 asks whether that wait is accepted.
 > **Designs** the deferred slice S4 of [`specs/121`](121-data-sensitivity-private-internal-and-confidential.md) §10 (exit channels) and builds the page part of its §8. **Amends:** [`specs/098`](098-where-agents-run-host-first-locus-and-the-inside-exceptions.md) §7.2 (the foreign-family clause), [`specs/117`](117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md) §2 (what a topic page may carry), [`specs/112`](112-one-research-record-a-single-runner-topics-that-persist-and-claims-that-reach-the-library.md) §3 (private research in the index), 121 §5 item 1, §6 item 8, §9 item 2 and §16 question 3. **Builds on:** [`specs/055`](055-the-central-library-sources-claims-and-pages.md) §10.1 and 098 §12 item 16 (the one egress check), [`specs/103`](103-the-private-read-mark-closing-the-four-unaudited-egress-channels.md) §4 (the private-read mark, unchanged), [`specs/119`](119-research-readiness-setup-private-text-for-retrieval-health-checks-and-a-live-proof.md) §15 (queries under the mark).
 > **Not legal advice.** Where an employer's policy or a licence bears on what may leave, that is a question for counsel. This spec states a mechanism and the operator's rulings.
 
@@ -29,6 +30,10 @@ tags: [spec, labels, handling, private, egress, sinks, pages, export, bundle, au
 2. Web searches are considered safe, and research gathering is not risky.
 3. So the guards apply **only to sinks that leave the operator's control**: export or publication of pages and bundles, the app, relay and sharing paths, and anything written to a public repository or sent to an outside person. Model dispatch and web search stay unblocked.
 4. Private and internal research appears on local pages **once the guards pass their tests**. A page's label is the maximum of the labels of what it cites, computed by the daemon and never declared by the writer.
+5. **Model access (decision 1).** Private and internal research may go to every configured model route, and Delphi's agents get the whole knowledge base. On this workspace `private_to_models` is `all`.
+6. **Council seats (decision 2).** That includes seats of other model families; 121 §6 item 8 is lifted. The operator's reasoning, as relayed: third-party models are restricted on company accounts, most of the research was gathered by models in the first place, and withholding it from models is "security theater at best". Labels therefore guard only the sinks that leave the operator's control, and every model-side and seat-side filter is removed from this design.
+7. **`personal` items (decision 3)** appear on local topic pages without the ask of 121 §5.
+8. **Web queries (decision 4)** get an advisory `planned_with` notice and are never refused (§2.5).
 
 | # | Observation (origin/main 52bdd3b8) | Where |
 | :-- | :-- | :-- |
@@ -46,7 +51,7 @@ Objective: every source, chunk, record and page carries a label the daemon compu
 - **No block on model dispatch or on web search** (rulings 1 and 2). §2.5 adds a notice, never a refusal.
 - **No change to the private-read mark** of 103: what sets it, what it holds. Rule (b) of the audit is kept.
 - **No change to taint.** A label is not a `source_type`, counts for no promotion and unlocks no tool (121 §2 item 4, `handling_tests.rs:245`).
-- **No reader grant for confidential** (121 §6, slice S3) and no placeholder-and-ask (121 §5, slice S2). Confidential material stays out of pages until 121 S3 is built.
+- **No model-side or seat-side filter.** This spec adds none and removes the one that exists (§2.4 item 2). It builds neither the reader grant for confidential (121 §6, slice S3) nor the placeholder-and-ask (121 §5, slice S2); whether those are still wanted after rulings 5 and 6 is OD-7.
 - **No enforcement inside a host's own tools** (121 §9 item 1). §2.4 item 6 gives the host a check it can run.
 - **No access control between people.**
 
@@ -117,7 +122,7 @@ Only sinks that leave the operator's control (ruling 3). `R` refuse; `L` send la
 | mail, relay, connector and other outbound sends | `private_read.rs`, `connector_run.rs:160`, `harness_run.rs:508` | held by the mark, as today | the Red card names the marks (item 5) | the same | the same | Q |
 
 1. **Not sinks under this spec:** a model prompt on any configured route (ruling 1), a web search query (ruling 2; §2.5), the operator's console, and the paired app reading the daemon on this machine (the operator's own view, 115 §11.3). The debug bundle, logs and telemetry carry no entry text and keep their proofs (`egress.rs:89-95`).
-2. **The foreign-family clause is lifted where the operator says so.** `[library] private_to_models` gains a third value: `deny`, `allow` (the operator's own family, as today) and **`all`** (every configured route). With `all`, `check_for_seat` (`egress.rs:21`) passes a labelled entry to a foreign-family seat. The value is ratified configuration (GOVERNANCE §5 item 7). The default is OD-1.
+2. **No filter on the way to a model.** `check_for_seat` (`egress.rs:21-29`) no longer refuses: a labelled entry may enter the prompt of any configured route, a foreign-family seat included (rulings 5 and 6). `[library] private_to_models` gains the value **`all`**, which becomes the shipped default (OD-1); `deny` and `allow` are still read, so an operator elsewhere can set the older behaviour, and this spec designs nothing further on that side. On this workspace the value is `all`. Retrieval, start passages, a writer's brief and a seat's evidence are filtered by no mark.
 3. `SendLabelled` at a command asks at the terminal; at the app it is a confirmation in the app; with no person to ask it is refused, never sent.
 4. A labelled page handed to a sink is refused or sent **whole**: the daemon never strips the labelled parts and sends the rest, because what is left may still carry their substance.
 5. **Outbound sends.** Every outbound action is already Red and waits for the operator. The card gains one line: the marks of the items the sending task was given (`handling.rs:255`), with counts. Handling traits still never set the 103 mark (121 §2 item 4); the line adds what the operator is told and removes nothing.
@@ -135,15 +140,15 @@ Only sinks that leave the operator's control (ruling 3). `R` refuse; `L` send la
 Built last, in its own slice, after the sink tests of §6 pass on main.
 
 1. A private research record makes a topic (`library_topics.rs:449`) and its claims join the page's material (`:580-584`).
-2. Topic pages are built at the internal scope (`SCOPE`, `library_topics.rs:44`). A seed (139 §2.1 item 4) takes spans from private records, from hits flagged `internal`, and from ingested project research files; the writer's prompt receives them when `private_to_models` allows the writer's route.
+2. Topic pages are built at the internal scope (`SCOPE`, `library_topics.rs:44`). A seed (139 §2.1 item 4) takes spans from private records, from hits flagged `internal`, and from ingested project research files, and the writer's prompt receives them, whatever family the writer's model is.
 3. A private research record and its answer are listed in the index with their marks (`research_index.rs:64-66`), filed apart as claims on private sources are today (`research_index.rs:105-109`), so a session that is handed one is marked as today (115 §11.1).
-4. **Still left out:** anything `confidential` (121 §6 item 1), until 121 S3 gives a reader a grant. A page whose material would be confidential is built without those items and says how many were left out.
-5. **`personal` on a local page.** 121 §5 item 1 counts a page as work output and asks for a placeholder and an ask. Under ruling 4 a topic page in the library is the operator's local view: a `personal` item may appear on it, labelled. The page can never leave (§2.4), so there is nothing to ask about. Documents, decks and exports stay under 121 §5 (OD-4).
-6. With `private_to_models = "deny"` the lift changes nothing a model sees: private material stays off the writer's page, the seed page (which no model writes) still carries it, and `delphi kb health` says in one line that private research is being left out of written pages and which key changes that.
+4. **Nothing is left out for a mark.** A `confidential` item may be in a page's material like any other; the page then carries `CONFIDENTIAL` and no sink sends it. (121 §6 item 1 is not built, so no reader is filtered today either; OD-7.)
+5. **`personal` on a local page (ruling 7).** 121 §5 item 1 counts a page as work output and asks for a placeholder and an ask. A topic page in the library is the operator's local view: a `personal` item appears on it, labelled, with no ask. The page can never leave (§2.4). Documents, decks and exports stay under 121 §5.
+6. An operator who sets `private_to_models = "deny"` or `"allow"` gets the older behaviour for written pages on the routes that value excludes: the seed page, which no model writes, still carries private material, and `delphi kb health` says in one line that written pages are leaving it out and which key changes that.
 
 ## 3. Authority
 
-- **What this widens.** (1) Under `private_to_models = "all"`, a library-private entry may enter the prompt of a foreign-family seat, which 098 §7.2 forbade "whatever the setting". This is the operator's ruling 1; it is a ratified setting and off unless set (subject to OD-1). (2) Private research becomes visible on local pages and in the index of the operator's own agents. Neither lets any agent do a new thing; both widen what is read.
+- **What this widens.** (1) A labelled entry, library-private and confidential included, may enter the prompt of any configured model route, a foreign-family seat included. 098 §7.2 forbade that for a foreign family "whatever the setting", and 121 §6 item 8 for confidential. This is the operator's ruling (5 and 6), and with OD-1 it becomes the shipped default. (2) Private research becomes visible on local pages and in the index of the operator's own agents. Neither lets any agent do a new thing; both widen what is read and what is sent to a model provider.
 - **What this narrows.** The sinks of §2.4 now refuse or ask on five marks where they read one bit; two unregistered exits (vectors, remote serve) are closed to labelled material.
 - **Content cannot lower its own label.** §2.1 item 3; the test of AC-2.
 - **Not enforced, said plainly.** A host that writes or pushes with its own tools (121 §9 item 1); a paraphrase a model writes into an unlabelled reply (121 §9 item 3); software running as the operator (121 §9 item 6). A model on a configured route that misuses what it was sent is the operator's accepted risk under ruling 1.
@@ -159,8 +164,8 @@ Built last, in its own slice, after the sink tests of §6 pass on main.
 | C | pages written out: `may_export` in the page reply, the app's export and print, `kb seed-export`, remote `kb serve` | AC-6, AC-7 | `service.rs`, `app/src-tauri/src/lib.rs`, `kb.rs`, `kbserve.rs` | 5-6 | B |
 | D | `delphi handling check` and the hook; the marks line on outbound cards | AC-8, AC-9 | the `handling` command, `worktree.rs`, `finalize.rs`, `private_read.rs`, `harness_run.rs` | 6-7 | B |
 | E | the query notice: `planned_with`, the log line, the status count | AC-10 | `research_run.rs`, `search_log.rs`, `research_record.rs` | 3-4 | A |
-| F | the lift of §2.6; `private_to_models = "all"`; the health line | AC-11, AC-12, AC-13 | `library_topics.rs`, `topic_gather.rs`, `research_index.rs`, `egress.rs`, `config.rs` | 6-8 | B, C, D green on main; 139 A and B |
-| | **Total** | | | **36-46** | |
+| F | the lift of §2.6; `private_to_models = "all"` and its default; `check_for_seat` no longer refuses; the health line | AC-11, AC-12, AC-13 | `library_topics.rs`, `topic_gather.rs`, `research_index.rs`, `egress.rs`, `config.rs` | 4-5 | B, C, D green on main; 139 A and B |
+| | **Total** | | | **34-43** | |
 
 F is refused by its own test (AC-13) while any sink row has no passing test.
 
@@ -176,8 +181,8 @@ F is refused by its own test (AC-13) while any sink row has no passing test.
 8. **AC-8:** `delphi handling check --staged` exits non-zero for a staged file that is a labelled page (and the daemon's push of a branch that holds one is stopped, with the file named on the card), and for an unlabelled file that holds 301 characters of a `text_held` source; it passes an `internal` file only with `--remote` on the configured list.
 9. **AC-9:** the Red card of an outbound send by a task that was given two `personal` items shows `private (2)`; the same task's private-read mark is unchanged by it.
 10. **AC-10:** a query planned by a span that was given a `confidential` item is sent as it would have been, and the reply, the search log and the result carry `planned_with: ["confidential", "internal"]`; no query is withheld for a mark.
-11. **AC-11:** after the lift, a private research record has a topic and a seed page labelled `library_private`; with `private_to_models = "deny"` the writer's prompt holds none of its text; with `all` a foreign-family writer's prompt does.
-12. **AC-12:** a `confidential` item is on no page and in no writer's prompt, and the page says one item was left out.
+11. **AC-11:** after the lift, a private research record has a topic and a seed page labelled `library_private`; with the default (`all`) a foreign-family writer's prompt and a foreign-family Council seat's evidence hold its text; with `deny` set, the writer's prompt holds none of it and the seed page still does.
+12. **AC-12:** a `confidential` item gathered for a page is in the writer's prompt and on the page, the page's headline is `CONFIDENTIAL (internal)`, and every sink of §2.4 refuses the page.
 13. **AC-13:** the lift's guard test fails when any sink of §2.4 lacks its named test or when that test is ignored.
 
 ## 6. Verification plan
@@ -220,7 +225,7 @@ F is refused by its own test (AC-13) while any sink row has no passing test.
 | :-- | :-- | :-- | :-- | :-- | :-- |
 | 1 | A sink nobody listed carried a labelled page out: a new export command, or a document tool that embedded a page. The registry only knows the senders it was told about. | medium | high | a file outside the home that holds a page's visible line | the registry test fails for a network sender that is not listed (`egress.rs:312`); writing a page's text to a path outside the home goes through `may_export` (slice C); AC-13 |
 | 2 | Everything became labelled: one private record in a broad topic made the whole page private, so no page could be exported and the operator stopped trusting labels. | high | medium | the share of pages with a refusing mark in `delphi kb health` | the sidecar says which items gave each mark, so the operator can clear or remove one; whole-page refusal is kept on purpose (§2.4 item 4); OD-5 |
-| 3 | The lift shipped with `deny` as the default and the operator saw no private research on written pages, as before. | medium | medium | the health line of §2.6 item 6 | the line names the key; OD-1 decides the default before F |
+| 3 | With no filter before a model, a confidential document the operator had forgotten was in the workspace went into a foreign-family seat's prompt during a Council on something else. | medium | medium to high, by what the document was | a seat receipt for a foreign family in a mission whose given list holds a `confidential` item | accepted by rulings 5 and 6, and said in §3; `delphi handling status` counts labelled items by mark so the operator can see what the knowledge base holds; OD-7 keeps the question of a confidential grant open |
 | 4 | A host pushed a labelled file to a public repository with its own git. | medium | high | a commit that holds a visible line | stated limit (§3); the hook is offered at `delphi connect`; the visible line makes it findable afterwards |
 | 5 | The notice was noise: every query in a workspace full of internal notes carried `planned_with`, and nobody read it. | high | low | the count in `handling status` equals the count of all queries | accepted: the notice is cheap; if it proves useless it is removed by amendment |
 | 6 | The label was computed from stale records: a trait cleared by the operator still refused an export a day later. | medium | low | an export refused for a mark `handling status` no longer shows | the label is recomputed at the sink from the daemon's records, not read from the sidecar, when the sidecar is older than the handling record |
@@ -240,9 +245,11 @@ Not acted on: 4 beyond the hook (enforcing inside a host's tools is outside what
 
 | OD | Question | Recommendation | Reversible? (operator decides) | Blocks |
 | :-- | :-- | :-- | :-- | :-- |
-| OD-1 | The default of `private_to_models`: `deny` (code today), `allow` (098 §7.2's text), or `all`? | keep `deny` in the release and set `all` on this workspace, because ruling 1 is about this machine; the alternative is `all` for every install | proposed: yes | F |
-| OD-2 | Should a daemon-run query planned with `confidential` material in view wait for a card, as an opt-in key? | no key now: a notice only, as ruling 2 says; add the key later if the employer's policy needs it | proposed: yes | none |
-| OD-3 | Does ruling 1 also lift 121 §6 item 8 (a confidential item never goes to a foreign-family seat)? | yes for the route, and keep the reader grant of 121 §6 item 1: confidential stays gated by role, not by family | proposed: yes | none (121 S3) |
-| OD-4 | May a `personal` item appear on a local topic page without the ask of 121 §5? | yes, labelled, because the page cannot leave; documents and decks keep the ask | proposed: yes | F |
+| OD-1 | `private_to_models`: this workspace is `all` (**decided, operator, 2026-11-25, as relayed**). Should the **shipped** default also become `all`? | yes: the operator's reasons are not particular to this machine, and a `deny` default hides the knowledge base from an operator's own agents; `deny` and `allow` stay as values another operator can set. The alternative keeps `deny` as shipped and sets `all` here only | proposed: yes | F |
+| OD-2 | Web queries planned with labelled material in view | **Decided (operator, 2026-11-25, as relayed): an advisory `planned_with` notice, never a refusal**, as §2.5 | decided | none |
+| OD-3 | Does the model-route ruling lift 121 §6 item 8? | **Decided (operator, 2026-11-25, as relayed): yes**, seats of other families included | decided | none |
+| OD-4 | May a `personal` item appear on a local topic page without the ask of 121 §5? | **Decided (operator, 2026-11-25, as relayed): yes** | decided | none |
 | OD-5 | Export of a page with a refusing mark: refuse outright, or let the operator override at a terminal for one page? | refuse outright in the first cut; an override would be a new operator act and its own amendment | proposed: yes | C |
 | OD-6 | Printing from the app: the same rule as export? | yes | proposed: yes | C |
+| OD-7 | After rulings 5 and 6, are 121's unbuilt slices still wanted: the reader grant for confidential (§6 item 1, S3) and the placeholder-and-ask for documents and decks (§5, S2)? "Agents get the whole knowledge base" reads as withdrawing the grant. | withdraw S3 by an amendment to 121; keep S2 for documents and decks, which do leave | proposed: yes | none (121) |
+| OD-8 | Project-history records have their own model-side setting (`[history] to_models`, spec 102, `history_record.rs:745`). Does ruling 5 reach them? | leave it as it is until asked; it is another spec's rule and a different kind of record | proposed: yes | none |
