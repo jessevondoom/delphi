@@ -197,3 +197,4 @@ order = 9
 "140-a-golden-set-for-retrieval-recall-ndcg-a-baseline-and-a-gate-on-every-retrieval-change" = "learning-and-evals"
 "141-labels-enforced-at-the-sinks-max-label-inheritance-and-private-research-on-local-pages" = "governance-and-safety"
 "142-the-source-text-cache-immutable-captures-host-text-handover-and-anchors-that-show-their-orphans" = "knowledge-and-memory"
+"143-a-single-turn-harness-bridge-one-prompt-one-answer-through-an-allowed-harness" = "runtime-models-and-tools"
