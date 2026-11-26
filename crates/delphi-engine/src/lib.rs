@@ -124,6 +124,7 @@ pub mod emergency;
 pub mod emergency_run;
 pub mod handling;
 pub mod handling_reconcile;
+pub mod label;
 pub mod handoff;
 pub mod hooks;
 pub mod hooks_run;

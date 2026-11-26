@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS kb_documents (
     web_corroborated INTEGER NOT NULL DEFAULT 0,
     kind            TEXT,
     valid_until     TEXT,
-    confirmed       TEXT
+    confirmed       TEXT,
+    marks           TEXT
 );
 CREATE TABLE IF NOT EXISTS kb_chunks (
     chunk_id        INTEGER PRIMARY KEY,
@@ -609,7 +610,7 @@ impl Kb {
         xenia::ensure(&conn)?;
         // An index made before files were compared by modification time gains the columns; 0 means "read it once".
         let columns: Vec<String> = conn.prepare("PRAGMA table_info(kb_documents)")?.query_map([], |r| r.get::<_, String>(1))?.flatten().collect();
-        for (name, ddl) in [("mtime_ns", "ALTER TABLE kb_documents ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0"), ("size", "ALTER TABLE kb_documents ADD COLUMN size INTEGER NOT NULL DEFAULT 0"), ("web_corroborated", "ALTER TABLE kb_documents ADD COLUMN web_corroborated INTEGER NOT NULL DEFAULT 0"), ("kind", "ALTER TABLE kb_documents ADD COLUMN kind TEXT"), ("valid_until", "ALTER TABLE kb_documents ADD COLUMN valid_until TEXT"), ("confirmed", "ALTER TABLE kb_documents ADD COLUMN confirmed TEXT")] {
+        for (name, ddl) in [("mtime_ns", "ALTER TABLE kb_documents ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0"), ("size", "ALTER TABLE kb_documents ADD COLUMN size INTEGER NOT NULL DEFAULT 0"), ("web_corroborated", "ALTER TABLE kb_documents ADD COLUMN web_corroborated INTEGER NOT NULL DEFAULT 0"), ("kind", "ALTER TABLE kb_documents ADD COLUMN kind TEXT"), ("valid_until", "ALTER TABLE kb_documents ADD COLUMN valid_until TEXT"), ("confirmed", "ALTER TABLE kb_documents ADD COLUMN confirmed TEXT"), ("marks", "ALTER TABLE kb_documents ADD COLUMN marks TEXT")] {
             if !columns.iter().any(|c| c == name) {
                 conn.execute(ddl, [])?;
                 // Documents indexed before the column existed are read once more, so it is filled in.
@@ -811,6 +812,8 @@ impl Kb {
         // A provisional note past its `valid_until` moves to `expired/`, which is not indexed (`specs/116` §2 item 6).
         crate::provisional_notes::sweep(ws, &delphi_core::bundles::today());
         let rep = self.sync_lexical(&sources(ws), now)?;
+        // `specs/141` §2.2: each row's label, from the daemon's records, as they are now.
+        crate::label::relabel_index(self, ws)?;
         // `specs/116` §7: the disputes and ended-well counts every search reads, from the daemon's ledgers.
         if let Err(e) = crate::use_signals::publish(ws, self) {
             delphi_core::elog::warn("engine", "use_signals_publish", &e, serde_json::json!({}));
@@ -915,6 +918,34 @@ impl Kb {
             self.conn.execute("INSERT INTO kb_meta(key, value) VALUES ('index_generation', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1", [])?;
         }
         Ok(rep)
+    }
+
+    /// The label of the document at `rel_path` as the index holds it (`specs/141` §2.1 item 4): a row written before labels existed,
+    /// and a document the index does not hold, read as every mark.
+    pub fn marks_of(&self, rel_path: &str) -> crate::label::Label {
+        let v: Option<Option<String>> = self.conn.query_row("SELECT marks FROM kb_documents WHERE rel_path = ?1", [rel_path], |r| r.get(0)).ok();
+        crate::label::Label::from_column(v.flatten().as_deref())
+    }
+
+    /// Write every row's `marks` column with `label_of(zone, rel_path)`, the daemon's own computation (`label::relabel_rows`). Only rows
+    /// whose label changed are written. Returns the rows read and the rows changed.
+    pub fn relabel_rows(&mut self, label_of: &mut dyn FnMut(&str, &str) -> crate::label::Label) -> Result<(usize, usize), KbError> {
+        let rows: Vec<(String, String, Option<String>)> = {
+            let mut st = self.conn.prepare("SELECT rel_path, zone, marks FROM kb_documents")?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.flatten().collect()
+        };
+        let mut changed = 0;
+        let tx = self.conn.transaction()?;
+        for (rel_path, zone, marks) in &rows {
+            let now = label_of(zone, rel_path).column();
+            if marks.as_deref() != Some(now.as_str()) {
+                tx.execute("UPDATE kb_documents SET marks = ?2 WHERE rel_path = ?1", params![rel_path, now])?;
+                changed += 1;
+            }
+        }
+        tx.commit()?;
+        Ok((rows.len(), changed))
     }
 
     /// Drop everything and index again from the files.
@@ -1944,6 +1975,10 @@ pub struct Hit {
     /// Who disputed the item since the operator last reviewed it (`specs/116` §7 item 2): role ids, `host`, `operator`. Empty for
     /// most. Shown with the label; it never hides the item from an explicit search.
     pub disputed: Vec<String>,
+    /// The label of the hit's document (`specs/141` §2.2), as the daemon wrote it into the index from its own records at the last sync,
+    /// never from the document's frontmatter. A row written before labels existed reads as every mark. Nothing in retrieval reads it:
+    /// it is for the sinks that leave the machine.
+    pub marks: crate::label::Label,
 }
 
 impl Hit {
@@ -2230,8 +2265,8 @@ impl Kb {
                     }
                 }
             }
-            let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated, d.author FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0, r.get::<_, Option<String>>(10)?)));
-            let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated, doc_author)) = row else { continue };
+            let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated, d.author, d.marks FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0, (r.get::<_, Option<String>>(10)?, r.get::<_, Option<String>>(11)?))));
+            let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated, (doc_author, marks))) = row else { continue };
             // A finding of another project is not this search's to return (`specs/116` §5.3); a home finding is everyone's.
             // `specs/115` §3 item 1: unless the operator shares research and that project is in the caller's list.
             let theirs = project_of(&zone, &rel_path);
@@ -2365,7 +2400,7 @@ impl Kb {
                 ks.label()
             };
             let disputed = disputes.get(&rel_path).map(|d| d.by.clone()).unwrap_or_default();
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author, shared: shared_from.is_some(), project: shared_from, internal, confirmed_by, disputed });
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author, shared: shared_from.is_some(), project: shared_from, internal, confirmed_by, disputed, marks: crate::label::Label::from_column(marks.as_deref()) });
         }
         Ok(Found { hits, best_rerank, withheld })
     }
@@ -2680,7 +2715,9 @@ pub fn sync_workspace(ws: &Path) -> Result<IndexReport, KbError> {
     let mut kb = Kb::open(&db_path(ws))?;
     crate::learn::project_staged(ws);
     crate::provisional_notes::sweep(ws, &delphi_core::bundles::today());
-    kb.sync_lexical(&sources(ws), &now())
+    let rep = kb.sync_lexical(&sources(ws), &now())?;
+    crate::label::relabel_index(&mut kb, ws)?;
+    Ok(rep)
 }
 
 fn db_path(ws: &Path) -> PathBuf {

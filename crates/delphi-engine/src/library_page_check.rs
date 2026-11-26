@@ -839,7 +839,9 @@ impl Library {
     /// check` runs.
     pub fn check_page_text(&self, text: &str, scope: Scope) -> Checked {
         // A cached encyclopedia page starts with YAML frontmatter (`specs/097`); the banner is the first line after it.
-        let text = super::page_meta::strip(text);
+        // The visible handling line the daemon puts at the top of a labelled page (`specs/141` §2.2) is its label shown, not the page's text.
+        let text = crate::label::without_line(super::page_meta::strip(text));
+        let text = text.as_str();
         let mut found = Vec::new();
         let mut lines = text.lines().skip_while(|l| l.trim().is_empty());
         let first = lines.next().unwrap_or("");

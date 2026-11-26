@@ -56,7 +56,7 @@ pub(super) fn content_words(s: &str) -> BTreeSet<String> {
 }
 
 impl Library {
-    pub(super) fn pages_dir(&self) -> PathBuf {
+    pub(crate) fn pages_dir(&self) -> PathBuf {
         self.root().join("pages")
     }
 

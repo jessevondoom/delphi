@@ -886,6 +886,12 @@ impl Library {
                 }
             }
         }
+        // A label-bearing fact of its material changed (`specs/141` §2.1 item 4, AC-3): the label is recomputed at the next build.
+        if let Some(ws) = ctx.ws {
+            if crate::label::stale(self, Some(ws), side) {
+                return Some("a label of its material changed".into());
+            }
+        }
         if side["valid_until"].as_u64().is_some_and(|u| ctx.now > u) {
             return Some(format!("its lifetime ended on {}", page_meta::ymd(side["valid_until"].as_u64().unwrap_or(0))));
         }
@@ -1011,7 +1017,7 @@ impl Library {
             return Err(CANCELLED.into());
         }
         // The bibliography resolves the seed's spans as records, and names the sources read that gave no span.
-        let lib = Library { root: self.root.clone(), support: self.support.clone(), retractions: self.retractions.clone(), records: r.seed.records(), topic_slugs: None, text_cache: self.text_cache };
+        let lib = Library { root: self.root.clone(), support: self.support.clone(), retractions: self.retractions.clone(), records: r.seed.records(), topic_slugs: None, text_cache: self.text_cache, workspace: self.workspace.clone() };
         let mut cited: Vec<Cite> = Vec::new();
         for c in markers(&page.body).into_iter().chain(r.seed.named_sources.iter().map(|id| Cite { id: id.clone(), source: true, shown: None })) {
             if !cited.iter().any(|x| x.label() == c.label()) {
@@ -1100,8 +1106,10 @@ impl Library {
         // refused here if it still carries one, and nothing is written.
         let named: Vec<String> = g.sources.iter().map(|(id, _, _)| id.clone()).chain(seed.map(|(s, _)| s.named_sources.clone()).unwrap_or_default()).collect();
         let md = if matches!(c.verdict.outcome, Outcome::ClaimsOnly | Outcome::Seed) { self.held().fit(&md, &named)? } else { self.held().check(&md, &named).map(|_| md)? };
+        // A visible handling line the writer wrote is not the label: it goes, and the daemon's own is put at the top when the page is written.
+        let md = crate::label::without_line(&md);
         let old_md = std::fs::read_to_string(self.topic_file(slug)).ok();
-        let old_body = old_md.as_deref().map(|m| page_meta::strip(m).to_string());
+        let old_body = old_md.as_deref().map(|m| crate::label::without_line(page_meta::strip(m)));
         if let (Some(prev), Some(built)) = (old_md.as_ref(), old["built"].as_u64()) {
             let dir = self.topic_versions_dir(slug);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -1137,7 +1145,6 @@ impl Library {
         let created = old["created"].as_u64().unwrap_or(now);
         let front = page_meta::frontmatter(&Front { key: slug, title: &title, depth: Depth::Summary, meta: &meta, status: if unverified { "unverified" } else { "active" }, created, confirmed: now, valid_until, links: &links });
         let change = change_line(old_body.as_deref(), page_meta::strip(&md));
-        std::fs::write(self.topic_file(slug), format!("{}{}", front, md)).map_err(|e| e.to_string())?;
         // The mechanical page's own cache file is not a topic's.
         let temp = format!("{}-{}", super::pages::slug(&c.page.topic), c.page.hash);
         let _ = std::fs::remove_file(self.pages_dir().join(format!("{}.md", temp)));
@@ -1189,6 +1196,12 @@ impl Library {
             side[k] = parts[k].clone();
         }
         side["open_questions"] = json!(gaps.iter().take(MAX_OPEN_QUESTIONS).collect::<Vec<_>>());
+        // The page's label (`specs/141` §2.2): computed by the daemon from everything in its material, cited or not, never from what the
+        // writer's draft or frontmatter declares. Shown as the `handling:` view and the visible line; kept, with the fingerprint of the
+        // facts it came from, in the sidecar.
+        let (label, fingerprint) = crate::label::Labeller::new(Some(self), self.workspace()).page(&side);
+        side["label"] = label.to_stored(&fingerprint);
+        std::fs::write(self.topic_file(slug), crate::label::show_on_page(&front, &md, &label)).map_err(|e| e.to_string())?;
         self.write_topic_side(slug, &side)?;
         self.update_links(slug, &side);
         self.log("topic_built", json!({"slug": slug, "version": side["version"], "outcome": side["outcome"], "change": change}));
@@ -1389,7 +1402,7 @@ mod rebuild_tests {
         let home = tempfile::tempdir().unwrap();
         let ws = home.path().join("workspaces/w");
         std::fs::create_dir_all(&ws).unwrap();
-        let l = Library::in_home(home.path());
+        let l = Library::in_home(home.path()).with_workspace(&ws);
         let doc = home.path().join("t.md");
         std::fs::write(&doc, "# Tides\n\nThe tide comes in twice a day.\n").unwrap();
         let s = l.add_file(&doc, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
@@ -1435,7 +1448,7 @@ mod rebuild_tests {
         let home = tempfile::tempdir().unwrap();
         let ws = home.path().join("workspaces/w");
         std::fs::create_dir_all(&ws).unwrap();
-        let l = Library::in_home(home.path());
+        let l = Library::in_home(home.path()).with_workspace(&ws);
         let doc = home.path().join("t.md");
         std::fs::write(&doc, "# Tides\n\nThe tide comes in twice a day. Spring tides follow the full moon.\n").unwrap();
         let s = l.add_file(&doc, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
@@ -1510,7 +1523,7 @@ mod rebuild_tests {
         let home = tempfile::tempdir().unwrap();
         let ws = home.path().join("workspaces/w");
         std::fs::create_dir_all(&ws).unwrap();
-        let l = Library::in_home(home.path());
+        let l = Library::in_home(home.path()).with_workspace(&ws);
         let doc = home.path().join("t.md");
         std::fs::write(&doc, "# Tides\n\nThe tide comes in twice a day.\n").unwrap();
         let s = l.add_file(&doc, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
@@ -1700,7 +1713,7 @@ mod seed_tests {
         let home = tempfile::tempdir().unwrap();
         let ws = home.path().join("workspaces/w");
         std::fs::create_dir_all(&ws).unwrap();
-        let l = Library::in_home(home.path());
+        let l = Library::in_home(home.path()).with_workspace(&ws);
         let t = Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
         t.finish("r-1", "done", Some(&json!({"answer": "Tides lag because the estuary is shallow.\n\n## Measurements\n\nThe lag is an hour at the harbour wall.", "claims": []})), &[], None, 0).unwrap();
         let slug = l.topics_from_research(&ws, 1).remove(0);
@@ -1750,7 +1763,7 @@ mod seed_tests {
         let home = tempfile::tempdir().unwrap();
         let ws = home.path().join("workspaces/w");
         std::fs::create_dir_all(&ws).unwrap();
-        let l = Library::in_home(home.path());
+        let l = Library::in_home(home.path()).with_workspace(&ws);
         let doc = home.path().join("tides.md");
         std::fs::write(&doc, "# Tides\n\nTides lag in a shallow estuary.\n").unwrap();
         let s = l.add_file(&doc, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
@@ -1785,7 +1798,7 @@ mod seed_tests {
         let home = tempfile::tempdir().unwrap();
         let ws = home.path().join("workspaces/w");
         std::fs::create_dir_all(&ws).unwrap();
-        let l = Library::in_home(home.path());
+        let l = Library::in_home(home.path()).with_workspace(&ws);
         let e = l.topic_create("Lighthouse lamps", Origin::Operator, 1).unwrap();
         let err = seed_build(&l, &e.slug, &ws, 10).unwrap_err();
         assert!(err.starts_with(crate::topic_seed::WAITING), "{err}");
@@ -1823,7 +1836,7 @@ mod seed_tests {
         let home = tempfile::tempdir().unwrap();
         let ws = home.path().join("workspaces/w");
         std::fs::create_dir_all(&ws).unwrap();
-        let l = Library::in_home(home.path());
+        let l = Library::in_home(home.path()).with_workspace(&ws);
         Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap().finish("r-1", "done", Some(&json!({"answer": "Tides lag.", "claims": []})), &[], None, 0).unwrap();
         let slug = l.topics_from_research(&ws, 1).remove(0);
         let seed = assemble_linked(&l, &ws, &l.topic_side(&slug).unwrap());
