@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(passage.status, "○ not validated", "untrusted is gathered, shown with its status");
         assert_eq!(label_of(false, "context/estuary.md", passage.start_line), passage.label, "the label is the passage's place");
 
-        let topic_lib = Library::in_home(home.path()).with_records(g.records.clone());
+        let topic_lib = Library::in_home(home.path()).with_workspace(&ws).with_records(g.records.clone());
         let cfg = delphi_adapter::config::PagesConfig::default();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         let built = rt.block_on(topic_lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: crate::library::bib::Format::Plain, gathered: g, gaps: vec![], seed: Default::default(), held: &crate::topic_seed::NoHeldText, cancel: None }, &CiteAll, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap();

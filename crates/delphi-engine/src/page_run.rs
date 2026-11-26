@@ -351,7 +351,7 @@ impl Engine {
         .await
         .ok()??;
         let (topic, due) = topic;
-        let lib = Library::in_home(&self.ws.home);
+        let lib = Library::in_home(&self.ws.home).with_workspace(&self.ws.dir);
         let seeded = topic.outcome.as_deref() == Some(crate::library::page_validate::Outcome::Seed.as_str());
         let outcome = match topic.outcome.clone() {
             // A page the writer wrote stands; the new research makes it due by its own check.
@@ -400,7 +400,7 @@ impl Engine {
         if !settings.enabled {
             return Err("generated pages are off ([library.pages] enabled = false)".into());
         }
-        let lib = Library::in_home(&self.ws.home);
+        let lib = Library::in_home(&self.ws.home).with_workspace(&self.ws.dir);
         let side = lib.topic_side(slug).ok_or_else(|| format!("no topic `{}`", slug))?;
         let now = (self.clock_unix)();
         let gathered = self.topic_material(&side).await;

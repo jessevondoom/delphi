@@ -40,7 +40,7 @@ pub mod retraction;
 mod export;
 pub use export::Exported;
 #[path = "library_page_check.rs"]
-mod page_check;
+pub(crate) mod page_check;
 #[path = "library_pages.rs"]
 pub mod pages;
 #[path = "library_page_meta.rs"]
@@ -270,6 +270,9 @@ pub struct Library {
     preview: Option<std::sync::Arc<std::sync::Mutex<Option<Value>>>>,
     /// The time a capture is stamped with, for a dry run and the call after it to write the same record; `None` is now.
     fixed_now: Option<String>,
+    /// The workspace whose handling records and research records a page's label reads (`specs/141` §2.2). `None`: an item of a
+    /// workspace reads as every mark ([`Library::with_workspace`]).
+    workspace: Option<PathBuf>,
 }
 
 /// The id of a private pointer (`Library::add_private_pointer`): a hash of the kind and the locator, each as one cleaned line, so the
@@ -409,7 +412,7 @@ struct Prepared {
 
 impl Library {
     pub fn in_home(home: &Path) -> Library {
-        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new(), topic_slugs: None, text_cache: None, preview: None, fixed_now: None }
+        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new(), topic_slugs: None, text_cache: None, preview: None, fixed_now: None, workspace: None }
     }
 
     /// The same library holding its text cache to `max_bytes` after every capture it stores (`specs/142` §2.4 item 3).
@@ -440,6 +443,17 @@ impl Library {
     pub fn with_topic_slugs(mut self, slugs: std::collections::BTreeSet<String>) -> Library {
         self.topic_slugs = Some(slugs);
         self
+    }
+
+    /// The same library, whose pages are labelled with the handling and research records of the workspace `ws` (`specs/141` §2.2).
+    pub fn with_workspace(mut self, ws: &Path) -> Library {
+        self.workspace = Some(ws.to_path_buf());
+        self
+    }
+
+    /// The workspace a page's label reads, if one was given.
+    pub fn workspace(&self) -> Option<&Path> {
+        self.workspace.as_deref()
     }
 
     /// The same library counting corroboration with the operator's numbers.
