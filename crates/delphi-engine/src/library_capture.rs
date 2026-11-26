@@ -196,6 +196,195 @@ impl Library {
     }
 }
 
+// ---- a capture a host handed over (`specs/142` §2.2; slice C) ----
+
+/// The extractor named on text a host handed over as text (`specs/142` §2.1 item 4).
+pub const HOST_EXTRACTOR: &str = "host";
+/// Why a host capture can never be confirmed (§2.2 item 5): read under the private-read mark, or of a kind the daemon never fetches.
+pub const CANNOT_CONFIRM: &str = "cannot be confirmed";
+/// A host capture the daemon may still confirm by reading the address itself.
+pub const NOT_CONFIRMED: &str = "not confirmed by the daemon";
+
+/// Is this capture record a host's that the daemon has not confirmed?
+pub fn unconfirmed_host(rec: &Value) -> bool {
+    rec["captured_by"].as_str().is_some_and(|b| b.starts_with("host:")) && rec["confirmed_by_daemon"].is_null()
+}
+
+/// What a source's record says of a host capture (`specs/142` §2.2 items 3 and 5): `None` when its current version is not a host's or
+/// the daemon confirmed it; else [`NOT_CONFIRMED`] or, for one the daemon will never read, [`CANNOT_CONFIRM`].
+pub fn host_word(meta: &Value) -> Option<&'static str> {
+    if !meta["host_capture"].is_object() || !meta["confirmed_by_daemon"].is_null() {
+        return None;
+    }
+    Some(if meta["host_capture"]["confirmable"] == false { CANNOT_CONFIRM } else { NOT_CONFIRMED })
+}
+
+/// What a host handed over for one source, checked and normalised (`host_capture`), on its way into [`Library::add_handed`].
+#[derive(Debug, Clone, Default)]
+pub struct Handed {
+    pub id: String,
+    /// The canonical web address, when the locator is one.
+    pub url: Option<String>,
+    pub locator: String,
+    /// The kind of 113 §2 item 1: `web`, `internal`, `file` or `person`.
+    pub kind: String,
+    pub title: String,
+    /// RFC 3339.
+    pub retrieved: String,
+    /// The bytes as handed over: the file's, or the text's.
+    pub raw: Vec<u8>,
+    pub media_type: String,
+    /// `file`: the text is made from `raw` by the library's extractor. Else `raw` is the text.
+    pub from_file: bool,
+    /// `host:<tool>/<model>`, or `operator` for `delphi sources capture`.
+    pub captured_by: String,
+    /// Library-private: read under the private-read mark, of a kind other than `web`, or carrying a private identifier.
+    pub private: bool,
+    /// The daemon will never read this address itself (§2.2 item 5).
+    pub unconfirmable: bool,
+    pub csl: Map<String, Value>,
+    /// What the host said the licence is: recorded, shown, never acted on (§2.2 item 8).
+    pub licence_claimed: Option<String>,
+    pub note: Option<String>,
+    pub topics: Vec<String>,
+    /// A research topic or run the host names.
+    pub research: Option<String>,
+    /// `[library] unknown_licence`, as a word: what is kept of text no licence lets the library copy.
+    pub keep: String,
+    /// The bytes show a rights notice the code detects (`specs/142` §2.5 item 6): no text of it is kept unless a licence allows it.
+    pub rights_notice: bool,
+    /// Handling traits the host adds (`specs/142` §2.2 item 8); the caller writes them.
+    pub labels: Vec<String>,
+}
+
+impl Handed {
+    /// The text as the library stores it, and the title it found: the file's text by the library's own extractor, or the host's text.
+    /// A title heads the text as it heads a page the daemon reads (`Library::capture_text`), so the daemon reading the same page and
+    /// getting the same words gets the same `text_sha256`.
+    pub fn text(&self) -> (String, String) {
+        let (found, body) = if self.from_file { crate::fact_fetch::extract_text(&self.raw, &self.media_type) } else { (String::new(), String::from_utf8_lossy(&self.raw).trim().to_string()) };
+        let title = if self.title.is_empty() { found } else { self.title.clone() };
+        (normalise(&format!("{}{}\n", if title.is_empty() { String::new() } else { format!("# {}\n\n", title) }, body)), title)
+    }
+}
+
+/// Did someone other than a host make this capture?
+fn not_a_host(rec: &Value) -> bool {
+    !rec["captured_by"].as_str().is_some_and(|b| b.starts_with("host:"))
+}
+
+impl Library {
+    /// Keep what a host handed over (`specs/142` §2.2 items 2, 3, 5 and 8) as a capture: `captured_by` the host, its bytes as `raw`, the
+    /// text it handed (or the text the library's extractor made of its file), and a record that says it is the host's word.
+    ///
+    /// * `rights` is the daemon's: a licence the daemon finds in an HTML file it read; else the text is held (`text_held`) or, under
+    ///   the private-read mark or of a kind other than `web`, library-private. `licence_claimed` is recorded and never raises it.
+    /// * Under `[library] unknown_licence = "pointer"` or `"excerpts"` no text of an unlicensed host capture is kept, as for a page the
+    ///   daemon reads: the record keeps both digests.
+    /// * A source the daemon already holds its own whole text of is not replaced: the host's text is refused unless it is that text
+    ///   (a revisit). A daemon record's origin and class carry over, so the daemon's own anchors still count.
+    ///
+    /// With [`Library::previewing`] nothing is written and the record is left in the preview.
+    pub fn add_handed(&self, h: &Handed, b: &Budgets) -> Result<Stored, String> {
+        let (text, title) = h.text();
+        let old = self.read_meta(&h.id);
+        let old_rec = self.capture_record(&h.id);
+        let text_sha = sha256_hex(text.as_bytes());
+        if let (Some(o), Some(r)) = (&old, &old_rec) {
+            let whole = o["capture_level"] == "full" && o["purged"].is_null() && r["evicted"]["text"].is_null();
+            if not_a_host(r) && whole && r["text_sha256"] != text_sha.as_str() {
+                return Err("the library holds Delphi's own copy of this address, and the text handed over differs from it; nothing was changed".into());
+            }
+        }
+        let mut meta = Map::new();
+        let kind = if h.kind.is_empty() { "web" } else { h.kind.as_str() };
+        meta.insert("type".into(), json!(h.csl.get("type").and_then(Value::as_str).unwrap_or(if h.url.is_some() { "webpage" } else if kind == "file" { "document" } else { kind })));
+        meta.insert("title".into(), json!(if title.is_empty() { "untitled".to_string() } else { title.clone() }));
+        for (k, v) in &h.csl {
+            if k != "type" && k != "title" {
+                meta.insert(k.clone(), v.clone());
+            }
+        }
+        // The licence is what the daemon reads in the bytes, never what the host says (§2.2 item 8).
+        let found = if h.from_file && h.media_type == "text/html" { meta::read(h.url.as_deref().unwrap_or(""), &[], &String::from_utf8_lossy(&h.raw), &text, None).fields.get("licence").and_then(Value::as_str).map(String::from) } else { None };
+        let licence = found.unwrap_or_else(|| "unknown".into());
+        meta.insert("licence".into(), json!(licence));
+        meta.insert("share_alike".into(), json!(matches!(classify(&licence), Licence::Open { share_alike: true, .. })));
+        if let Some(c) = &h.licence_claimed {
+            meta.insert("licence_claimed".into(), json!(c));
+        }
+        match &h.url {
+            Some(u) => {
+                meta.insert("URL".into(), json!(u));
+                meta.insert("canonical_url".into(), json!(u));
+            }
+            None => {
+                meta.insert("locator".into(), json!(h.locator));
+            }
+        }
+        meta.insert("source_kind".into(), json!(kind));
+        meta.insert("fetch_mode".into(), json!("host_handed"));
+        meta.insert("retrieved".into(), json!(h.retrieved));
+        meta.insert("content_hash".into(), json!(format!("sha256:{}", sha256_hex(&h.raw))));
+        meta.insert("host_capture".into(), json!({"by": h.captured_by, "confirmable": !h.unconfirmable}));
+        meta.insert("tags".into(), json!([]));
+        if !h.topics.is_empty() {
+            meta.insert("topics".into(), json!(h.topics));
+        }
+        if let Some(r) = &h.research {
+            meta.insert("handed_for".into(), json!(r));
+        }
+        if let Some(n) = &h.note {
+            meta.insert("host_note".into(), json!(n));
+        }
+        // What the daemon's own capture of this address knew carries over, so its anchors still count.
+        if let Some(o) = old.as_ref().filter(|_| old_rec.as_ref().is_some_and(not_a_host)) {
+            for k in ["origin", "source_class", "source_unfamiliar", "trusted_entry"] {
+                if let Some(v) = o.get(k).filter(|v| !v.is_null()) {
+                    meta.insert(k.into(), v.clone());
+                }
+            }
+        }
+        let open = matches!(classify(&licence), Licence::Open { .. } | Licence::Internal);
+        let requested = if h.private {
+            meta.insert("private".into(), json!(true));
+            Some(Level::Full)
+        } else if open {
+            Some(Level::Full)
+        } else if matches!(h.keep.as_str(), "pointer" | "excerpts") || h.rights_notice {
+            Some(Level::Pointer)
+        } else if h.keep == "private_text" {
+            meta.insert("private".into(), json!(true));
+            meta.insert("kept_privately".into(), json!("unknown_licence"));
+            Some(Level::Full)
+        } else {
+            meta.insert("text_held".into(), json!(true));
+            Some(Level::Full)
+        };
+        let capture = Capture { raw: h.raw.clone(), media_type: h.media_type.clone(), captured_by: h.captured_by.clone(), fetched: None, extractor: if h.from_file { (crate::fact_fetch::EXTRACTOR_NAME, Some(crate::fact_fetch::EXTRACTOR_VERSION)) } else { (HOST_EXTRACTOR, None) } };
+        self.store(Prepared { id: h.id.clone(), meta, text: Some(text), assets: None, requested, excerpts: None, imported: false, capture: Some(capture) }, b)
+    }
+
+    /// The daemon read an address a host handed over and found the same text (`specs/142` §2.2 item 3): the capture gains
+    /// `confirmed_by_daemon` with the date, and the record what the daemon's fetch knows of the page, so from now on it counts as any
+    /// daemon capture does. `m` is the source's record about to be written.
+    pub(super) fn confirm_host_capture(&self, id: &str, daemons: &Map<String, Value>, now: &str, m: &mut Value) -> Result<(), String> {
+        let path = self.source_dir(id).join(RECORD);
+        if let Some(mut rec) = self.capture_record(id) {
+            rec["confirmed_by_daemon"] = json!(now);
+            self.write_json(&path, &rec)?;
+        }
+        m["confirmed_by_daemon"] = json!(now);
+        for k in ["origin", "source_class", "source_unfamiliar", "trusted_entry"] {
+            if let Some(v) = daemons.get(k) {
+                m[k] = v.clone();
+            }
+        }
+        self.log("host_capture_confirmed", json!({"id": id}));
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -265,6 +265,19 @@ pub struct Library {
     /// `[library] text_cache_max_mib`, in bytes (`specs/142` §2.4): set, every capture this library stores is followed by the cap on
     /// what is kept with no open licence ([`Library::cap_text_cache`]). `None` (the default): this library evicts nothing.
     text_cache: Option<u64>,
+    /// A dry run (`specs/142` §2.2 item 10): set, [`Library::store`] writes nothing and leaves here the record it would have written
+    /// (`meta.json` and `capture.json`), so the dry run and the call it previews run one function.
+    preview: Option<std::sync::Arc<std::sync::Mutex<Option<Value>>>>,
+    /// The time a capture is stamped with, for a dry run and the call after it to write the same record; `None` is now.
+    fixed_now: Option<String>,
+}
+
+/// The id of a private pointer (`Library::add_private_pointer`): a hash of the kind and the locator, each as one cleaned line, so the
+/// locator is not spelled in it. A host's capture of the same source (`specs/142` §2.2) is kept under the same id, so `record_research`
+/// finds it by its locator.
+pub fn private_pointer_id(kind: &str, locator: &str) -> String {
+    let one = |s: &str, n: usize| -> String { s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+    format!("private-{}", &sha256_hex(format!("{}\0{}", one(kind, 20), one(locator, 500)).as_bytes())[..16])
 }
 
 /// A short stable id from the canonical URL or identifier, not from content (`specs/055` §3.2).
@@ -396,12 +409,24 @@ struct Prepared {
 
 impl Library {
     pub fn in_home(home: &Path) -> Library {
-        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new(), topic_slugs: None, text_cache: None }
+        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new(), topic_slugs: None, text_cache: None, preview: None, fixed_now: None }
     }
 
     /// The same library holding its text cache to `max_bytes` after every capture it stores (`specs/142` §2.4 item 3).
     pub fn with_text_cache(mut self, max_bytes: Option<u64>) -> Library {
         self.text_cache = max_bytes;
+        self
+    }
+
+    /// The same library, writing nothing: [`Library::store`] leaves in `slot` the record it would have written (a dry run).
+    pub(crate) fn previewing(mut self, slot: std::sync::Arc<std::sync::Mutex<Option<Value>>>) -> Library {
+        self.preview = Some(slot);
+        self
+    }
+
+    /// The same library, stamping what it stores with `now` (RFC 3339) instead of the clock.
+    pub(crate) fn stamped(mut self, now: &str) -> Library {
+        self.fixed_now = Some(now.to_string());
         self
     }
 
@@ -566,7 +591,9 @@ impl Library {
             p.text = None;
             p.assets = None;
         }
-        self.ensure().map_err(|e| e.to_string())?;
+        if self.preview.is_none() {
+            self.ensure().map_err(|e| e.to_string())?;
+        }
         let old = self.read_meta(&p.id);
         let old_level = old.as_ref().and_then(|m| m["capture_level"].as_str()).and_then(Level::parse);
         // Passages a research run kept (`specs/119` §3 item 6) make a pointer an excerpts source; capturing the page again as a pointer
@@ -575,7 +602,10 @@ impl Library {
             level = Level::Excerpts;
         }
         let old_text = std::fs::read_to_string(self.source_dir(&p.id).join("source.md")).ok();
-        let now = delphi_core::time::now_rfc3339();
+        let now = self.fixed_now.clone().unwrap_or_else(delphi_core::time::now_rfc3339);
+        // `specs/142` §2.2 item 3: the daemon reading an address a host handed over. The same text confirms the host's capture; other
+        // text is the daemon's own new version, whatever level each is kept at.
+        let confirming = p.capture.as_ref().is_some_and(|c| c.captured_by == "daemon") && self.capture_record(&p.id).is_some_and(|r| capture::unconfirmed_host(&r));
         if let Some(o) = &old {
             let purged = !o["purged"].is_null();
             // A pointer with no hash is the same capture when its citation and licence are.
@@ -584,25 +614,45 @@ impl Library {
             if same && !purged {
                 let mut m = o.clone();
                 m["last_checked"] = json!(now);
+                if let Some(slot) = &self.preview {
+                    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(json!({"meta": m, "capture": self.capture_record(&p.id), "revisit": true}));
+                    return Ok(Stored { id: p.id, level, outcome: Outcome::Unchanged, notes });
+                }
+                if confirming {
+                    self.confirm_host_capture(&p.id, &p.meta, &now, &mut m)?;
+                }
                 self.write_json(&self.source_dir(&p.id).join("meta.json"), &m)?;
                 // The same bytes again: a revisit on the capture's record, not a second copy (`specs/142` §2.1 item 3).
                 self.revisit(&p.id, &now, p.capture.as_ref(), text_sha.as_deref(), false)?;
                 // a revisit is a use (`specs/142` §2.4 item 2)
                 self.note_use(&[p.id.as_str()], delphi_core::time::parse_rfc3339(&now).unwrap_or(0));
+                if confirming {
+                    self.refresh_citing(&p.id);
+                }
                 return Ok(Stored { id: p.id, level, outcome: Outcome::Unchanged, notes });
             }
             // Other bytes and the same text (the markup or a timestamp changed, the words did not): a revisit marked `raw_changed`,
             // no new version and no re-anchoring. Only against a capture whose record states its text and whose text was not removed.
             let same_text = text_sha.as_deref().is_some_and(|t| self.capture_record(&p.id).is_some_and(|r| r["text_sha256"] == t && r["evicted"]["text"].is_null() && r["purged"].is_null()));
-            if same_text && !purged && old_level == Some(level) && p.capture.is_some() {
+            if same_text && !purged && (old_level == Some(level) || confirming) && p.capture.is_some() {
                 let mut m = o.clone();
                 m["last_checked"] = json!(now);
+                if let Some(slot) = &self.preview {
+                    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(json!({"meta": m, "capture": self.capture_record(&p.id), "revisit": true}));
+                    return Ok(Stored { id: p.id, level, outcome: Outcome::Unchanged, notes });
+                }
+                if confirming {
+                    self.confirm_host_capture(&p.id, &p.meta, &now, &mut m)?;
+                }
                 self.write_json(&self.source_dir(&p.id).join("meta.json"), &m)?;
                 self.revisit(&p.id, &now, p.capture.as_ref(), text_sha.as_deref(), true)?;
                 self.note_use(&[p.id.as_str()], delphi_core::time::parse_rfc3339(&now).unwrap_or(0));
+                if confirming {
+                    self.refresh_citing(&p.id);
+                }
                 return Ok(Stored { id: p.id, level, outcome: Outcome::Unchanged, notes });
             }
-            if !purged && old_level.is_some_and(|ol| ol > level) && old_text.is_some() {
+            if !purged && !confirming && old_level.is_some_and(|ol| ol > level) && old_text.is_some() {
                 let mut notes = notes;
                 notes.push(format!("the stored capture is {} and this one would be {}; nothing was changed (`delphi sources purge {}` first to replace it)", old_level.unwrap().as_str(), level.as_str(), p.id));
                 return Ok(Stored { id: p.id, level, outcome: Outcome::KeptRicher, notes });
@@ -648,6 +698,13 @@ impl Library {
             p.meta.insert("retraction".into(), r.clone());
         }
 
+        // A dry run stops here, with the record exactly as it would be written.
+        if let Some(slot) = &self.preview {
+            let capture = p.capture.as_ref().map(|c| capture::record(c, text_sha.as_deref(), &p.meta["retrieved"], capture::rights_of(&p.meta, p.imported), version));
+            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(json!({"meta": Value::Object(p.meta.clone()), "capture": capture, "revisit": false}));
+            let outcome = if old.is_some() { Outcome::NewVersion(version) } else { Outcome::Added };
+            return Ok(Stored { id: p.id, level, outcome, notes });
+        }
         let stage = self.root.join(".staging").join(format!("{}-{}", p.id, std::process::id()));
         let _ = std::fs::remove_dir_all(&stage);
         let built = (|| -> Result<(), String> {
@@ -937,7 +994,7 @@ impl Library {
             return Err("a private source names where it is (its locator)".into());
         }
         let kind = one(kind, 20);
-        let id = format!("private-{}", &sha256_hex(format!("{kind}\0{locator}").as_bytes())[..16]);
+        let id = private_pointer_id(&kind, &locator);
         let opts = AddOpts { private: true, ..Default::default() };
         let mut meta = Self::base_meta(&opts, if kind == "file" { "document" } else { kind.as_str() }, if title.is_empty() { "untitled" } else { title.as_str() });
         meta.insert("source_kind".into(), json!(kind));

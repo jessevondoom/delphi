@@ -1288,6 +1288,12 @@ pub struct LibraryConfig {
     /// of every held capture and of every host capture. Past it the least recently used is evicted, its `raw` first. Default 1024,
     /// at least 16. With this key absent and `private_text_max_mib` set, that value is the cap.
     pub text_cache_max_mib: u64,
+    /// The most bytes one host session may hand over with `capture_source` in an hour, in MiB (`specs/142` §2.2 item 7). Default 16,
+    /// at least 1. One session may also hand over at most 120 sources an hour.
+    pub handover_session_mib: u64,
+    /// The most bytes all host sessions together may hand over in an hour, in MiB (`specs/142` §2.2 item 7), so several sessions cannot
+    /// do together what one may not. Default 64, at least 1. All sessions together may also hand over at most 300 sources an hour.
+    pub handover_hour_mib: u64,
     /// `deny` (the default) or `allow` (`specs/098` §7.2). Read by the doctor and the seat check from the file itself; named here so
     /// that `[library]` with it parses.
     #[serde(deserialize_with = "de_private_to_models")]
@@ -1296,7 +1302,7 @@ pub struct LibraryConfig {
 
 impl Default for LibraryConfig {
     fn default() -> Self {
-        LibraryConfig { pages: PagesConfig::default(), acquire: AcquireConfig::default(), unknown_licence: UnknownLicence::default(), private_text_max_mib: 500, text_cache_max_mib: 1024, private_to_models: "deny".into() }
+        LibraryConfig { pages: PagesConfig::default(), acquire: AcquireConfig::default(), unknown_licence: UnknownLicence::default(), private_text_max_mib: 500, text_cache_max_mib: 1024, handover_session_mib: 16, handover_hour_mib: 64, private_to_models: "deny".into() }
     }
 }
 
@@ -1646,6 +1652,7 @@ impl Config {
             match table.clone().try_into::<LibraryConfig>() {
                 Ok(v) if v.private_text_max_mib == 0 => errs.push("[library]: private_text_max_mib is at least 1".into()),
                 Ok(v) if v.text_cache_max_mib < 16 => errs.push("[library]: text_cache_max_mib is at least 16".into()),
+                Ok(v) if v.handover_session_mib == 0 || v.handover_hour_mib == 0 => errs.push("[library]: handover_session_mib and handover_hour_mib are at least 1".into()),
                 Ok(mut v) => match v.acquire.check() {
                     Ok(()) => {
                         // `specs/142` §2.4 item 1: the old key is read as the new one's name when the new key is absent.

@@ -34,6 +34,7 @@ Maps unfamiliar repositories, surveys literature, audits dependency trees, and s
    - Search what Delphi holds first (`search_kb`).
    - Do the research with the host's own tools.
    - Hand it over with `record_research` before answering: the question, your answer, the sources (private ones marked private), the claims with their quotes, and what you searched.
+   - For a page Delphi cannot read itself (off its trusted lists, behind your sign-in, internal, or read in a private session), hand over the text you read with `capture_source`, or save the page to the session's handover folder and pass `file`; then the quotes of your claims anchor in it (`specs/142` §2.2). It stays your word: not validated, and no corroboration until Delphi reads the same text itself.
 
 ## 3. Blind Spots & Counterweights
 - **Context overflow (`FM-1.4`, lost in the middle):** ingesting huge raw dumps collapses attention, for the scout and for everyone downstream.

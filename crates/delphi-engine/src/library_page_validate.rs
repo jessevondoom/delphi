@@ -66,7 +66,16 @@ pub struct Material {
     /// A claim whose only anchors lost their text to eviction or purge with no verified excerpt kept (`specs/142` §2.3 item 4): it
     /// reads `unverifiable, text evicted`, and a page statement resting on it is not counted as supported.
     pub unverifiable: bool,
+    /// Its only support is text a host handed over that the daemon has not confirmed (`specs/142` §2.2 item 3): what the source's
+    /// record says (`not confirmed by the daemon`, or `cannot be confirmed` for one read privately). A statement resting on it is the
+    /// host's word, and the page ends no higher than `pass_contested`.
+    pub host_word: Option<&'static str>,
 }
+
+/// The line under the banner of a page that rests in part on text a host handed over (`specs/142` §2.2 items 3 and 5).
+pub const HOST_LINE: &str = "rests in part on text a host handed over, which Delphi has not confirmed";
+/// The same, when the text was read privately and can never be confirmed.
+pub const HOST_LINE_PRIVATE: &str = "rests in part on text a host handed over, which Delphi cannot confirm (read privately)";
 
 #[derive(Debug, Clone)]
 pub struct PageQuery {
@@ -295,11 +304,26 @@ struct Classified {
     hard: Vec<String>,
     contested: Vec<(String, Material)>,
     unchecked: Vec<String>,
+    /// Statements supported only by an unconfirmed host capture, and what its record says.
+    host: Vec<(String, &'static str)>,
     records: Vec<AssertionRecord>,
 }
 
+impl Classified {
+    /// The line under the banner, when a statement rests on a host's word alone.
+    fn host_line(&self) -> Option<&'static str> {
+        if self.host.is_empty() {
+            None
+        } else if self.host.iter().any(|(_, w)| *w == super::capture::CANNOT_CONFIRM) {
+            Some(HOST_LINE_PRIVATE)
+        } else {
+            Some(HOST_LINE)
+        }
+    }
+}
+
 fn classify(assertions: &[Assertion], material: &[Material]) -> Classified {
-    let mut c = Classified { hard: Vec::new(), contested: Vec::new(), unchecked: Vec::new(), records: Vec::new() };
+    let mut c = Classified { hard: Vec::new(), contested: Vec::new(), unchecked: Vec::new(), host: Vec::new(), records: Vec::new() };
     for a in assertions {
         let named = a.record.as_ref().and_then(|r| material.iter().find(|m| m.id == *r));
         let result = match (a.judgement, named) {
@@ -307,6 +331,11 @@ fn classify(assertions: &[Assertion], material: &[Material]) -> Classified {
             (Judgement::Supported, Some(m)) if m.unverifiable => {
                 c.unchecked.push(a.text.clone());
                 "unverifiable"
+            }
+            // `specs/142` §2.2 item 3: a page cannot pass on a host's word alone.
+            (Judgement::Supported, Some(m)) if m.host_word.is_some() => {
+                c.host.push((a.text.clone(), m.host_word.unwrap_or(super::capture::NOT_CONFIRMED)));
+                "host-reported"
             }
             (Judgement::Supported, _) => "supported",
             (Judgement::UncitedConsistent, _) => {
@@ -379,12 +408,13 @@ impl Library {
                 Ok(Rec::Claim(cl)) => {
                     let unverifiable = self.unverifiable(&cl);
                     let standing = if unverifiable { format!("{} · {}", shown_status(super::claims::status(&cl)), super::claims::UNVERIFIABLE) } else { shown_status(super::claims::status(&cl)) };
-                    add(Material { id: c.label(), standing, validated: super::claims::status(&cl) == Status::Validated, cited: true, text: cl["text"].as_str().unwrap_or("").into(), unverifiable }, &mut out)
+                    let host_word = self.host_word_of(&cl);
+                    add(Material { id: c.label(), standing, validated: super::claims::status(&cl) == Status::Validated, cited: true, text: cl["text"].as_str().unwrap_or("").into(), unverifiable, host_word }, &mut out)
                 }
-                Ok(Rec::Record(r)) => add(Material { id: c.label(), standing: r.status.clone(), validated: r.status == "● validated", cited: true, text: r.text.chars().take(EXCERPT_MAX).collect(), unverifiable: false }, &mut out),
+                Ok(Rec::Record(r)) => add(Material { id: c.label(), standing: r.status.clone(), validated: r.status == "● validated", cited: true, text: r.text.chars().take(EXCERPT_MAX).collect(), unverifiable: false, host_word: None }, &mut out),
                 Ok(Rec::Source(id, m)) => {
                     let text: String = self.stored_text(&id).unwrap_or_default().chars().take(EXCERPT_MAX).collect();
-                    add(Material { id: c.label(), standing: format!("○ {}", m["status"].as_str().unwrap_or("not validated")), validated: m["status"] == "validated", cited: true, text, unverifiable: false }, &mut out)
+                    add(Material { id: c.label(), standing: format!("○ {}", m["status"].as_str().unwrap_or("not validated")), validated: m["status"] == "validated", cited: true, text, unverifiable: false, host_word: super::capture::host_word(&m) }, &mut out)
                 }
                 Err(_) => {}
             }
@@ -393,7 +423,8 @@ impl Library {
             let id = cl["id"].as_str().unwrap_or("").to_string();
             let st = super::claims::status(&cl);
             let unverifiable = self.unverifiable(&cl);
-            add(Material { id, standing: shown_status(st), validated: st == Status::Validated, cited: false, text: cl["text"].as_str().unwrap_or("").into(), unverifiable }, &mut out);
+            let host_word = self.host_word_of(&cl);
+            add(Material { id, standing: shown_status(st), validated: st == Status::Validated, cited: false, text: cl["text"].as_str().unwrap_or("").into(), unverifiable, host_word }, &mut out);
         }
         out
     }
@@ -448,15 +479,23 @@ impl Library {
             match self.attempt(&topic, &draft, scope, writer.role(), validator, ledger).await {
                 Attempt::Pass { body, checked, classified, reply, figure_failures } => {
                     figure_failures_now = figure_failures;
-                    let outcome = if classified.contested.is_empty() { Outcome::Pass } else { Outcome::PassContested };
+                    // A statement on a host's word alone holds the page at `pass_contested` (`specs/142` §2.2 item 3).
+                    let outcome = if classified.contested.is_empty() && classified.host.is_empty() { Outcome::Pass } else { Outcome::PassContested };
                     let at = delphi_core::time::now_rfc3339().chars().take(10).collect::<String>();
                     let mut result = if outcome == Outcome::Pass { "passed".to_string() } else { format!("passed with {} contested", classified.contested.len()) };
                     if !classified.unchecked.is_empty() {
                         result.push_str(&format!("; {} unchecked", classified.unchecked.len()));
                     }
+                    if !classified.host.is_empty() {
+                        result.push_str(&format!("; {} host-reported", classified.host.len()));
+                    }
+                    let host_line = classified.host_line();
                     let verdict = PageVerdict { outcome, reason: None, model: reply.model, family: reply.family, tokens: reply.tokens, rewrites, assertions: classified.records, figure_failures: figure_failures_now.clone(), at };
                     let withheld = self.topic_claims(&topic).1;
-                    let extra = json!({"validator": verdict.to_json()});
+                    let mut extra = json!({"validator": verdict.to_json()});
+                    if let Some(l) = host_line {
+                        extra["host_line"] = json!(l);
+                    }
                     let page = self.finish_page(PageParts { topic, body: body.clone(), lines: None, checked, hash_claims: None, hash_draft: Some(body), style, scope, withheld, stamp: Stamp::Validator { result }, extra, use_cache: false, figure_failures: figure_failures_now });
                     return Ok(CheckedPage { page, verdict });
                 }
@@ -552,6 +591,23 @@ impl Library {
     }
 }
 
+impl Library {
+    /// Does this claim rest only on text a host handed over that the daemon has not confirmed (`specs/142` §2.2 item 3)? It does when
+    /// it has an anchor that counts `in: host_capture` into such a source and no other anchor that counts: what that source's record
+    /// says, `cannot be confirmed` winning. A claim with other support is not the host's word alone.
+    pub fn host_word_of(&self, claim: &Value) -> Option<&'static str> {
+        let mut word: Option<&'static str> = None;
+        for a in claim["anchors"].as_array().into_iter().flatten().filter(|a| self.counts(a)) {
+            let host = if a["in"] == super::claims::HOST_CAPTURE { a["source_id"].as_str().and_then(|s| self.read_meta(s)).and_then(|m| super::capture::host_word(&m)) } else { None };
+            let w = host?;
+            if word != Some(super::capture::CANNOT_CONFIRM) {
+                word = Some(w);
+            }
+        }
+        word
+    }
+}
+
 #[allow(dead_code)]
 fn _cite_is_used(_: &Cite) {}
 
@@ -563,7 +619,7 @@ mod unverifiable_tests {
     /// kept does not pass as supported, whatever the validator judged; the same statement on a claim that still counts does.
     #[test]
     fn a_statement_resting_on_an_unverifiable_claim_is_not_supported() {
-        let material = |unverifiable: bool| vec![Material { id: "c-1".into(), standing: "○ not validated".into(), validated: false, cited: true, text: "The tide turns twice a day.".into(), unverifiable }];
+        let material = |unverifiable: bool| vec![Material { id: "c-1".into(), standing: "○ not validated".into(), validated: false, cited: true, text: "The tide turns twice a day.".into(), unverifiable, host_word: None }];
         let said = vec![Assertion { text: "The tide turns twice a day.".into(), judgement: Judgement::Supported, record: Some("c-1".into()) }];
         let barred = classify(&said, &material(true));
         assert_eq!(barred.records[0].result, "unverifiable");

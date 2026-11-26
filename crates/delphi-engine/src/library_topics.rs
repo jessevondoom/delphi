@@ -1011,7 +1011,7 @@ impl Library {
             return Err(CANCELLED.into());
         }
         // The bibliography resolves the seed's spans as records, and names the sources read that gave no span.
-        let lib = Library { root: self.root.clone(), support: self.support.clone(), retractions: self.retractions.clone(), records: r.seed.records(), topic_slugs: None, text_cache: self.text_cache };
+        let lib = Library { root: self.root.clone(), support: self.support.clone(), retractions: self.retractions.clone(), records: r.seed.records(), topic_slugs: None, text_cache: self.text_cache, preview: None, fixed_now: None };
         let mut cited: Vec<Cite> = Vec::new();
         for c in markers(&page.body).into_iter().chain(r.seed.named_sources.iter().map(|id| Cite { id: id.clone(), source: true, shown: None })) {
             if !cited.iter().any(|x| x.label() == c.label()) {

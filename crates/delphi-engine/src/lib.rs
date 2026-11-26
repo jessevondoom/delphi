@@ -181,6 +181,8 @@ pub mod decision_raised;
 pub mod egress;
 pub mod host_noted;
 pub mod host_research;
+pub mod host_capture;
+pub mod source_normalise;
 pub mod host_labels;
 pub mod host_shown;
 pub mod private_read;
