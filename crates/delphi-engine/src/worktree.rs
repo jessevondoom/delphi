@@ -504,7 +504,11 @@ impl Worktree {
     /// Push the task branch to `origin` and open a pull request with `gh` (PR mode). Only ever called after the
     /// operator approved `approved_sha`. These two calls need the operator's own credentials (git's helper, the
     /// SSH agent, `gh`'s login), so they run with the operator's environment; hooks and external protocols stay off.
-    pub fn open_pr(&self, approved_sha: &str, title: &str, body: &str, gh: &str) -> Result<PrOutcome, GitError> {
+    ///
+    /// With `home`, the files of the range about to be pushed are read as one output first (`specs/142` §2.5 item 4 (g)): when they carry
+    /// more of a held source of that home's library than may leave this machine, nothing is pushed and the refusal names the source and
+    /// the files.
+    pub fn open_pr(&self, approved_sha: &str, title: &str, body: &str, gh: &str, home: Option<&Path>) -> Result<PrOutcome, GitError> {
         let project = |args: &[&str], label: &str| {
             let mut c = git_command(None, None, &self.scratch_home);
             c.arg("-C").arg(&self.project).args(args);
@@ -521,6 +525,11 @@ impl Worktree {
         if project(&["remote", "get-url", "origin"], "remote get-url").is_err() {
             return Ok(PrOutcome::Refused("the project has no `origin` remote to push to".into()));
         }
+        if let Some(home) = home {
+            if let Err(e) = crate::held_text::check_files(home, &self.range_files()?) {
+                return Ok(PrOutcome::Refused(format!("the branch {e}; nothing was pushed")));
+            }
+        }
         let mut push = Command::new("git");
         push.args(["-c", "core.hooksPath=/dev/null", "-c", "protocol.ext.allow=never", "-C"]).arg(&self.project).args(["push", "--no-verify", "origin", &format!("{}:refs/heads/{}", self.branch, self.branch)]).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
         if let Err(e) = run(push, "push") {
@@ -535,6 +544,23 @@ impl Worktree {
             },
             Err(e) => Ok(PrOutcome::Refused(format!("the branch was pushed, but opening the pull request failed: {}", e))),
         }
+    }
+
+    /// The files the branch changed since its base, as they are at its tip (deleted files are not read): what a push would send.
+    pub fn range_files(&self) -> Result<Vec<(String, Vec<u8>)>, GitError> {
+        let project = |args: &[&str], label: &str| {
+            let mut c = git_command(None, None, &self.scratch_home);
+            c.arg("-C").arg(&self.project).args(args);
+            run(c, label)
+        };
+        let range = format!("{}..{}", self.base_sha, self.branch);
+        let names = project(&["diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", &range], "diff range")?;
+        let mut out = Vec::new();
+        for name in names.split('\0').filter(|n| !n.is_empty()) {
+            let text = project(&["show", &format!("{}:{}", self.branch, name)], "show")?;
+            out.push((name.to_string(), text.into_bytes()));
+        }
+        Ok(out)
     }
 
     /// Remove the worktree and its branch. The project's `.git/worktrees/` entry goes with it.
@@ -944,6 +970,42 @@ pub(crate) mod tests {
         for bad in ["", "/etc/passwd", "../x", "src/../../x", ".git/config", "src/.GIT/x", "a//b", "./x"] {
             assert!(wt.restore_to_base(bad).is_err(), "{:?}", bad);
         }
+    }
+
+    /// `specs/142` AC-9, the daemon's push: a branch that adds a file quoting 400 characters of a held source is refused before the
+    /// push and the remote gains no branch; with no held source in the home the same branch is pushed (the pull request then fails, as
+    /// there is no `gh`, which is after the push).
+    #[test]
+    fn a_push_whose_range_quotes_a_held_source_is_refused_and_nothing_is_pushed() {
+        let (d, p, w) = fx();
+        let remote = d.path().join("remote.git");
+        let mut c = git_command(None, None, &w.scratch_home);
+        c.args(["init", "--quiet", "--bare"]).arg(&remote);
+        run(c, "init bare").unwrap();
+        let mut c = git_command(None, None, &w.scratch_home);
+        c.arg("-C").arg(&p).args(["remote", "add", "origin"]).arg(&remote);
+        run(c, "remote add").unwrap();
+        let text: String = (0..300).map(|i| format!("Held sentence {i:03} runs on and on. ")).collect();
+        let home = d.path().join("home");
+        let held = home.join("library/sources/held-a");
+        fs::create_dir_all(&held).unwrap();
+        fs::write(held.join("meta.json"), serde_json::json!({"type": "webpage", "title": "Held", "licence": "unknown", "capture_level": "full", "text_held": true}).to_string()).unwrap();
+        fs::write(held.join("source.md"), &text).unwrap();
+        let quote: String = text.chars().skip(20).take(400).collect();
+        let (wt, sha) = built(&w, &p, "t_push", "notes.md", &format!("# Notes\n\n{quote}\n"));
+        let branches = || {
+            let mut c = git_command(None, None, &w.scratch_home);
+            c.arg("--git-dir").arg(&remote).args(["branch", "--list"]);
+            run(c, "branch list").unwrap()
+        };
+        match wt.open_pr(&sha, "t", "b", "/nonexistent-gh", Some(&home)).unwrap() {
+            PrOutcome::Refused(why) => assert!(why.contains("s-held-a") && why.contains("notes.md") && why.contains("nothing was pushed"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(branches().trim().is_empty(), "nothing reached the remote: {}", branches());
+        let empty = d.path().join("empty-home");
+        let _ = wt.open_pr(&sha, "t", "b", "/nonexistent-gh", Some(&empty)).unwrap();
+        assert!(branches().contains("delphi/t_push"), "with nothing held the branch is pushed");
     }
 
     #[test]

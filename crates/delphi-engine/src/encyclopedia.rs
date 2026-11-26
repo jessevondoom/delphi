@@ -48,6 +48,13 @@ pub fn pages_get(home: &Path, ws: &Path, now: u64, p: &Value) -> Result<Value, S
     let version = p["version"].as_str();
     let (e, md) = lib.topic_get(slug, version, &ctx(ws, now)).ok_or_else(|| format!("no topic `{}`{}", slug, version.map(|v| format!(" with a version `{}`", v)).unwrap_or_default()))?;
     let mut v = e.to_json();
+    // What the app may export or print of this page (`specs/142` §2.5 item 4 (h)): nothing, when it carries more of a held source than
+    // may leave this machine. The window is shown the page; its export and print are refused.
+    let refused = lib.held().refused(&md, &[]);
+    v["may_export"] = json!(refused.is_empty());
+    if !refused.is_empty() {
+        v["export_refused"] = json!(crate::held_text::refusal(&refused));
+    }
     v["markdown"] = json!(md);
     v["version_shown"] = json!(version);
     v["built"] = json!(!md.is_empty());
@@ -98,7 +105,13 @@ pub fn topics_get(home: &Path, ws: &Path, p: &Value) -> Result<Value, String> {
 pub fn library_source(home: &Path, p: &Value) -> Result<Value, String> {
     let id = arg(p, "id")?;
     let id = id.strip_prefix("s-").unwrap_or(id);
-    Library::in_home(home).source_view(id, SOURCE_TEXT_MAX).ok_or_else(|| format!("no source `{}`", id))
+    let lib = Library::in_home(home);
+    let mut v = lib.source_view(id, SOURCE_TEXT_MAX).ok_or_else(|| format!("no source `{}`", id))?;
+    // A held source (`specs/142` §2.5 item 4 (h)): the paired app on this machine shows its text, the operator's own view, and is told
+    // it may not export, copy or print more of it than the bound. These methods answer only the console and the app, on sockets of
+    // this machine (`need_reader`): no client off this machine is sent any of it.
+    crate::held_text::mark_view(&mut v, lib.read_meta(id).is_some_and(|m| crate::library::is_held(&m)));
+    Ok(v)
 }
 
 /// `library.claim {id}`: a claim, its derived status, and the title of each source it is anchored to.

@@ -10285,9 +10285,9 @@ mod tests {
             assert_eq!(run["state"], "done", "{who}: {rec}");
             let id = run["run_id"].as_str().unwrap();
             assert!(rec["queries"].as_array().unwrap().iter().any(|q| q["run"] == id), "{who}: the run's queries are in its record: {rec}");
-            // A page of unknown licence is captured as a pointer and gains the quoted passage (`specs/119` §3 item 6): a later run
-            // finds it held as excerpts.
-            assert!(rec["pages"].as_array().unwrap().iter().any(|p| p["run"] == id && p["url"] == page && matches!(p["kept"].as_str(), Some("pointer" | "excerpts"))), "{who}: the page it read is in its record: {rec}");
+            // A page of unknown licence is kept whole for local reading (`specs/142` §2.5, `local_text`, the default); under `excerpts`
+            // it would be a pointer that gains the quoted passage (`specs/119` §3 item 6).
+            assert!(rec["pages"].as_array().unwrap().iter().any(|p| p["run"] == id && p["url"] == page && matches!(p["kept"].as_str(), Some("full" | "pointer" | "excerpts"))), "{who}: the page it read is in its record: {rec}");
             assert_eq!(rec["claims"].as_array().unwrap().len(), 1, "{who}: the claim it kept is listed once: {rec}");
             assert!(topic.search_log().is_some_and(|l| l["lines"].as_array().is_some_and(|a| !a.is_empty())), "{who}: the run has a search log");
             assert!(topic.answer().contains("aspirin lowers fever"), "{who}: {}", topic.answer());
@@ -10553,13 +10553,17 @@ mod tests {
         assert_eq!((entry(wiki)["form"].as_str(), entry(wiki)["dest"].as_str(), entry(wiki)["licence"].as_str()), (Some("full"), Some("shared"), Some("CC-BY-SA-4.0")), "{st}");
         assert!(entry(wiki)["path"].as_str().unwrap().starts_with("library/sources/") && entry(wiki)["path"].as_str().unwrap().ends_with("/source.md"));
         assert_eq!((entry(weak)["form"].as_str(), entry(weak)["dest"].as_str()), (Some("pointer"), Some("pending")), "a weak source is held: a pointer, never text: {st}");
-        assert_eq!((entry(other)["form"].as_str(), entry(other)["dest"].as_str()), (Some("pointer"), Some("shared")), "{st}");
+        // `specs/142` §2.5: a page of unknown licence is kept whole for local reading under `local_text`, the default.
+        assert_eq!((entry(other)["form"].as_str(), entry(other)["dest"].as_str()), (Some("full"), Some("shared")), "{st}");
         let lines = st["sources"].as_array().unwrap();
         assert_eq!(lines.iter().filter(|l| l["status"] == "done").count(), 3, "one line per page, as the console draws them: {st}");
         let told = crate::research_report::finished_payload("does aspirin lower fever", Some("architect"), &st);
         assert_eq!((told["new"].as_u64(), told["held"].as_u64(), told["project"].as_u64()), (Some(3), Some(1), Some(0)), "{told}");
         let lib = crate::library::Library::in_home(&home);
-        assert_eq!(lib.indexable().len(), 1, "only the page whose licence allows it has its text where the index reads it");
+        // The open page, and the page of unknown licence held whole for local reading (`specs/142` §2.5 item 3), which the index reads
+        // at `external_untrusted`; never the weak source.
+        assert_eq!(lib.indexable().len(), 2, "the open page and the held one have their text where the index reads it");
+        assert_eq!(lib.indexable().iter().filter(|(id, _)| lib.read_meta(id).is_some_and(|m| crate::library::is_held(&m))).count(), 1);
         assert!(!ws.join("local/knowledge/web").exists() && !ws.join("local/pending/web").exists());
         // Another workspace, and the question asked from inside a registered project: its own record, in its own folder, and
         // claims scoped to it.
@@ -10629,7 +10633,9 @@ mod tests {
         assert!(rec["queries"].as_array().unwrap().iter().any(|q| q["run"] == second_run && q["query"].as_str().unwrap().contains("in winter")), "the continued run searched, with its note: {rec}");
         let pages = rec["pages"].as_array().unwrap();
         assert_eq!((pages.len(), pages[0]["run"].as_str()), (1, Some(first_run.as_str())), "the page is still the first run's: it was not read again: {rec}");
-        assert_eq!(crate::research_host::canned::served(page), fetched_before + 1, "the continued run fetched the page once, to see that it had not changed");
+        // `specs/142` §2.5: under `local_text` (the default) the page of unknown licence is kept whole, so the library's fresh copy stands
+        // in for the fetch (`specs/114` §3 item 4) and the continued run makes no request for it.
+        assert_eq!(crate::research_host::canned::served(page), fetched_before, "the continued run read the page from the library, not the web");
         assert_eq!(rec["claims"].as_array().unwrap().len(), 1, "{rec}");
         assert_eq!(topic.answer(), answer, "a run that read nothing new leaves the topic's answer as it was");
         let schema: Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/research-record.schema.json")).unwrap()).unwrap();

@@ -18,7 +18,7 @@ export type Topic = {
   cited?: string[]; due: string | null;
   key_terms?: KeyTerm[]; start_here?: { cites: string[]; why: string }[]; see_also?: string[]; open_questions?: string[]; links?: string[]; records?: KbRecord[];
 };
-export type TopicPage = Topic & { markdown: string; version_shown: string | null };
+export type TopicPage = Topic & { markdown: string; version_shown: string | null; may_export?: boolean; export_refused?: string };
 export type Version = { version: string; built: number | null; number: number | null; change: string | null; outcome: string | null };
 export type Links = { slug: string; links_here: string[]; links_out: string[]; exists: boolean };
 /** One research topic as `topics.list` has it. */
@@ -31,7 +31,23 @@ export type Claim = { id: string; text: string; kind?: string; scope?: string; c
 export type ClaimView = { claim: Claim; status: string; shown: string; sources: { id: string; title: string | null; private: boolean }[] };
 /** An anchor into a source that no longer resolves (spec 142 §2.3 item 3): its own quote, the version and date it last resolved in, and why. */
 export type Orphan = { claim: string; quote: string; version: string; date: string; why: string };
-export type SourceView = { id: string; label: string; meta: Record<string, unknown>; private: boolean; capture_level?: string | null; status?: string | null; text: string; truncated: boolean; assets: string[]; passage_only?: boolean; orphans?: Orphan[] };
+export type SourceView = { id: string; label: string; meta: Record<string, unknown>; private: boolean; capture_level?: string | null; status?: string | null; text: string; truncated: boolean; assets: string[]; passage_only?: boolean; orphans?: Orphan[]; text_held?: boolean; may_export?: boolean };
+
+/** The longest run of a held source's text the window lets out by a copy (spec 142 §2.5 item 4: the daemon's `RUN_MAX`). */
+export const HELD_RUN_MAX = 300;
+
+/** May the window export or print this page (spec 142 §2.5 item 4 (h))? Not when the daemon says it carries more of a held source than
+ * may leave this machine. A reply with no answer is an older daemon's, from before held text existed: it may. */
+export function exportAllowed(v: { may_export?: boolean }): boolean {
+  return v.may_export !== false;
+}
+
+/** May this selection of a source's text be copied (spec 142 §2.5 item 4 (h))? Any of a source that is not held; of a held source, at
+ * most `HELD_RUN_MAX` characters, whitespace counted collapsed as the daemon counts it. */
+export function copyAllowed(v: Pick<SourceView, 'text_held' | 'may_export'>, selected: string): boolean {
+  if (!v.text_held && v.may_export !== false) return true;
+  return selected.replace(/\s+/g, ' ').trim().length <= HELD_RUN_MAX;
+}
 export type Changes = { since: number; pages: { slug: string; title: string; built: number | null; version: number; change: string | null }[]; research: { id: string; question: string; updated: string; state: string }[]; findings: FindingRow[]; notes: Note[] };
 export type RoleCount = { role: string; lesson_files: number; notes: number; findings: number };
 export type Note = { id: string; role: string; mission?: string; project?: string | null; kind: string; created: string; valid_until?: string | null; uses: number; tier: string; source?: string; text: string; label: string };
@@ -228,7 +244,7 @@ export function keptWords(v: Pick<SourceView, 'capture_level' | 'private' | 'met
   const level = v.capture_level ?? '';
   const how = level === 'full' ? 'its whole text is kept' : level === 'excerpts' ? 'the passages quoted from it are kept, not the whole text' : level === 'pointer' || level === 'metadata' ? 'only a pointer to it is kept, no text' : level ? `kept as ${level}` : 'not said';
   const purged = v.meta.purged ? '; its text was purged' : '';
-  const privately = typeof v.meta.kept_privately === 'string' ? '; kept privately for retrieval, so only the cited passage is shown here' : v.private ? '; private: shown to you, never given to another session or agent' : '';
+  const privately = typeof v.meta.kept_privately === 'string' ? '; kept privately for retrieval, so only the cited passage is shown here' : v.private ? '; private: shown to you, never given to another session or agent' : v.meta.text_held === true ? '; kept for reading on this machine only: no licence allows copying it, so it is not exported, printed or copied past 300 characters' : '';
   return `${how}${purged}${privately}`;
 }
 

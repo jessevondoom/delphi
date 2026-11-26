@@ -160,6 +160,8 @@ impl Library {
             meta[mark] = json!(now);
             self.write_json(&self.source_dir(id).join("meta.json"), &meta)?;
             self.text_removed(id, why, &now);
+            // Its blocks leave the held-text index with the text (`specs/142` AC-31).
+            crate::held_text::index_source(self, id);
         }
         if removed > 0 {
             self.log("bodies_removed", json!({"id": id, "why": why, "text": text_went, "bytes": removed}));

@@ -70,6 +70,9 @@ pub enum Finding {
     TableUncited,
     /// The page carries more than 300 characters in one run of the text of a source kept privately (`specs/119` §3 item 2).
     PrivateRun(String),
+    /// The page carries more of a held source's text than may leave (`specs/142` §2.5 item 4): a run past 300 characters, or past the
+    /// aggregate cap in all. The source is one the page cites or one the block index finds in it.
+    HeldText(String),
     /// A topic page's `## Key terms` (`specs/117` §2 item 5): more than twelve, or a line that is not a term with a cited definition.
     KeyTerm(String),
     /// A topic page's `## Start here`: not three to five items, or an item that names no record.
@@ -105,6 +108,7 @@ impl std::fmt::Display for Finding {
             Finding::UnknownAnchor(a) => write!(f, "the link `#{}` names no heading on the page", short(a)),
             Finding::BadPageLink(l) => write!(f, "a `page:` link must name a slug of lowercase letters, digits and hyphens: {}", short(l)),
             Finding::TableUncited => write!(f, "a table has no citation in or beside it"),
+            Finding::HeldText(id) => write!(f, "the page carries more of `s-{}` than may leave this machine (text kept for local reading): at most {} characters in one run and at most {} or a tenth of the source in all; quote less of it", id, crate::held_text::RUN_MAX, crate::held_text::AGGREGATE_MAX),
             Finding::PrivateRun(id) => write!(f, "the page carries more than {} characters in one run of `s-{}`, a source kept privately; quote at most {} at a time", super::private::RUN_MAX, id, super::private::RUN_MAX),
             Finding::KeyTerm(why) => write!(f, "key terms: {}", short(why)),
             Finding::StartHere(why) => write!(f, "start here: {}", short(why)),
@@ -709,9 +713,15 @@ impl Library {
         // A source kept privately is quoted at most 300 characters at a time (`specs/119` §3 item 2): checked over the whole body, so
         // neither a long quotation nor a paraphrase that copies a stretch of it passes.
         for (id, t) in &texts {
-            if self.read_meta(id).is_some_and(|m| m["kept_privately"].is_string()) && super::private::shares_run(t, body, super::private::RUN_MAX) {
+            if self.read_meta(id).is_some_and(|m| m["kept_privately"].is_string()) && crate::held_text::carries_run(t, body) {
                 push(Finding::PrivateRun(id.clone()), &mut out.findings);
             }
+        }
+        // Held text (`specs/142` §2.5 item 4 (d)): every held source the page cites, and every one the block index finds in it, whatever
+        // the page's records name. A draft that fails is refused here, so the writer's page falls back as for any failed check.
+        let named: Vec<String> = cited_sources.iter().cloned().collect();
+        for id in self.held().refused(body, &named) {
+            push(Finding::HeldText(id), &mut out.findings);
         }
 
         let all = blocks(body);

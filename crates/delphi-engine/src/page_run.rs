@@ -357,7 +357,8 @@ impl Engine {
         // No writer can be reached (an install with only harnesses, `specs/139` O7): the page is the seed, which calls no model. The
         // idle rebuild still raises its `no_route` notice for it (`specs/143` §2.7 item 6: the seed page stands, the cause is shown).
         let Some(key) = self.writer_key() else {
-            let req = crate::library::topics::SeedRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, seed: &seed, held: &crate::topic_seed::NoHeldText, gaps: &gaps, cancel };
+            let held = lib.held();
+            let req = crate::library::topics::SeedRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, seed: &seed, held: &held, gaps: &gaps, cancel };
             return lib.topic_seed_build(req);
         };
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
@@ -367,7 +368,8 @@ impl Engine {
         let week = crate::fact_serve::shares_of(&self.ws.dir, "pages").install_week;
         let gate = move || share_allows(&state, week, now);
         let before = ledger.spent();
-        let req = crate::library::topics::TopicRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, gathered, gaps, seed, held: &crate::topic_seed::NoHeldText, cancel };
+        let held = lib.held();
+        let req = crate::library::topics::TopicRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, gathered, gaps, seed, held: &held, cancel };
         let built = lib.topic_rebuild(req, &writer, &validator, &ledger, &gate).await;
         // Written whether the rebuild was built, failed or was stopped after its writer was called: the tokens were spent.
         let used = ledger.spent().saturating_sub(before);

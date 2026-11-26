@@ -822,6 +822,11 @@ impl Library {
                 None => md.push_str(&format!("\n{}", q)),
             }
         }
+        // The last check before a page of any outcome is written (`specs/142` §2.5 item 4 (d)). A page code made (a seed, the claims
+        // alone) is cut to fit, its last blocks that carry a held source going first; a written page has passed its check already and is
+        // refused here if it still carries one, and nothing is written.
+        let named: Vec<String> = g.sources.iter().map(|(id, _, _)| id.clone()).chain(seed.map(|(s, _)| s.named_sources.clone()).unwrap_or_default()).collect();
+        let md = if matches!(c.verdict.outcome, Outcome::ClaimsOnly | Outcome::Seed) { self.held().fit(&md, &named)? } else { self.held().check(&md, &named).map(|_| md)? };
         let old_md = std::fs::read_to_string(self.topic_file(slug)).ok();
         let old_body = old_md.as_deref().map(|m| page_meta::strip(m).to_string());
         if let (Some(prev), Some(built)) = (old_md.as_ref(), old["built"].as_u64()) {

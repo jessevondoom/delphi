@@ -534,6 +534,10 @@ impl Library {
         }
         // A directive the writer left in a rewrite is not part of the page.
         let md = format!("{}\n", page_meta::extract(&c.page.markdown).0);
+        // The last check before a page is written (`specs/142` §2.5 item 4 (d)): no page leaves this function carrying more of a held
+        // source than may leave. The blocks that carry it go, the last first; a page that cannot be cut says why and carries none.
+        let named: Vec<String> = g.sources.iter().map(|(id, _, _)| id.clone()).collect();
+        let md = self.held().fit(&md, &named).unwrap_or_else(|why| format!("# {}\n\n{}\n", query, why));
         let claims_only = c.verdict.outcome == Outcome::ClaimsOnly;
         let mut meta: PageMeta = page_meta::resolve(proposal, r.settings.min_ttl_days, r.settings.max_ttl_days);
         if claims_only {

@@ -66,7 +66,25 @@ pub fn export(lib: &Library, ids: &[String], format: Format) -> Result<Export, S
     // The shared egress check (`specs/098` §12 item 16): a private source, and a record that cannot be read, never leave through an export.
     let leaves = |m: &Value| crate::egress::check(m, Channel::Export).is_ok();
     let withheld = chosen.iter().filter(|(_, m)| !leaves(m)).count();
-    let mut shown: Vec<&(String, Value)> = chosen.into_iter().filter(|(_, m)| leaves(m)).collect();
+    // A held source's citation is sent; its text is not (`specs/141` §2.4 item 7, the interim guard of `specs/142` §2.5 item 4): every
+    // free-text field of its record that is sent is cut to the bound if it carries a run of the text.
+    let held = lib.held();
+    let cut: Vec<(String, Value)> = chosen
+        .into_iter()
+        .filter(|(_, m)| leaves(m))
+        .map(|(id, m)| {
+            let mut m = m.clone();
+            if crate::library::is_held(&m) {
+                for k in ["title", "container-title", "attribution_text", "abstract", "note"] {
+                    if let Some(t) = m[k].as_str().map(String::from) {
+                        m[k] = json!(held.cut_field(id, &t));
+                    }
+                }
+            }
+            (id.clone(), m)
+        })
+        .collect();
+    let mut shown: Vec<&(String, Value)> = cut.iter().collect();
     shown.sort_by_key(|(id, m)| (sort_key(m), id.clone()));
     let text = match format {
         Format::CslJson => serde_json::to_string_pretty(&shown.iter().map(|(id, m)| csl_item(id, m)).collect::<Vec<_>>()).unwrap_or_default() + "\n",

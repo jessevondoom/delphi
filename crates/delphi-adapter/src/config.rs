@@ -1276,7 +1276,8 @@ impl McpConfig {
 pub struct LibraryConfig {
     pub pages: PagesConfig,
     pub acquire: AcquireConfig,
-    /// How much of a web page whose licence is unknown (or closed) a research run keeps (`specs/119` §3). The default is `excerpts`.
+    /// How much of a web page whose licence is unknown (or closed) a research run keeps (`specs/119` §3, `specs/142` §2.5). The default
+    /// is `local_text`.
     #[serde(deserialize_with = "de_unknown_licence")]
     pub unknown_licence: UnknownLicence,
     /// The old name of [`LibraryConfig::text_cache_max_mib`] (`specs/119` §3 item 5), read as it when the new key is absent.
@@ -1297,16 +1298,20 @@ impl Default for LibraryConfig {
     }
 }
 
-/// `[library] unknown_licence` (`specs/119` §3 item 1; the operator chose `excerpts` as the default on 2026-11-14).
+/// `[library] unknown_licence` (`specs/119` §3 item 1; `specs/142` §2.5 item 1 made `local_text` the default, the operator's decision
+/// of 2026-11-25).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UnknownLicence {
     /// The behaviour before spec 119: an address, a title and a hash; no text. A claim's anchor keeps its quote alone.
     Pointer,
     /// The passages a run quoted, each at most 300 characters with up to 200 on either side, as kept excerpts.
-    #[default]
     Excerpts,
     /// The whole text, kept as a private source: indexed for nothing that leaves the install, quoted at most 300 characters at a time.
     PrivateText,
+    /// The whole text, kept for local reading (`specs/142` §2.5): `rights: held` and the `text_held` mark, not private, indexed for the
+    /// operator and the operator's agents at `external_untrusted`; what of it may leave in any output is `body_may_leave`.
+    #[default]
+    LocalText,
 }
 
 impl UnknownLicence {
@@ -1315,6 +1320,7 @@ impl UnknownLicence {
             UnknownLicence::Pointer => "pointer",
             UnknownLicence::Excerpts => "excerpts",
             UnknownLicence::PrivateText => "private_text",
+            UnknownLicence::LocalText => "local_text",
         }
     }
 
@@ -1323,6 +1329,7 @@ impl UnknownLicence {
             "pointer" => Some(UnknownLicence::Pointer),
             "excerpts" => Some(UnknownLicence::Excerpts),
             "private_text" => Some(UnknownLicence::PrivateText),
+            "local_text" => Some(UnknownLicence::LocalText),
             _ => None,
         }
     }
@@ -1336,7 +1343,7 @@ impl UnknownLicence {
 
 fn de_unknown_licence<'de, D: serde::Deserializer<'de>>(d: D) -> Result<UnknownLicence, D::Error> {
     let s = <String as serde::Deserialize>::deserialize(d)?;
-    UnknownLicence::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("unknown_licence `{}` is not one of pointer, excerpts, private_text", s)))
+    UnknownLicence::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("unknown_licence `{}` is not one of pointer, excerpts, private_text, local_text", s)))
 }
 
 fn de_private_to_models<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
@@ -2882,13 +2889,14 @@ tools = { search = "read", note = "draft", send = "write" }
         }
     }
 
-    /// `specs/119` §3 item 1: excerpts by default; `pointer` and `private_text` only when set; any other word is a problem the doctor
+    /// `specs/119` §3 item 1 and `specs/142` §2.5 item 1: `local_text` by default; `pointer`, `excerpts` and `private_text` only when set;
+    /// any other word is a problem the doctor
     /// names. `private_to_models` parses beside it (it was refused as an unknown field of `[library]` before).
     #[test]
-    fn unknown_licence_defaults_to_excerpts_and_its_neighbours_parse() {
+    fn unknown_licence_defaults_to_local_text_and_its_neighbours_parse() {
         let def = Config::parse(SAMPLE).unwrap().library;
-        assert_eq!((def.unknown_licence, def.private_text_max_mib, def.private_to_models.as_str()), (UnknownLicence::Excerpts, 500, "deny"));
-        for (word, want) in [("pointer", UnknownLicence::Pointer), ("excerpts", UnknownLicence::Excerpts), ("private_text", UnknownLicence::PrivateText)] {
+        assert_eq!((def.unknown_licence, def.private_text_max_mib, def.private_to_models.as_str()), (UnknownLicence::LocalText, 500, "deny"));
+        for (word, want) in [("pointer", UnknownLicence::Pointer), ("excerpts", UnknownLicence::Excerpts), ("private_text", UnknownLicence::PrivateText), ("local_text", UnknownLicence::LocalText)] {
             let c = Config::parse(&format!("{}\n[library]\nunknown_licence = \"{}\"\nprivate_to_models = \"allow\"\nprivate_text_max_mib = 20\n", SAMPLE, word)).unwrap().library;
             assert_eq!((c.unknown_licence, c.private_text_max_mib, c.private_to_models.as_str()), (want, 20, "allow"));
             assert_eq!(UnknownLicence::read(&format!("[library]\nunknown_licence = \"{}\"\n", word)), want);
@@ -2897,7 +2905,7 @@ tools = { search = "read", note = "draft", send = "write" }
             let errs = Config::parse(&format!("{}\n[library]\n{}\n", SAMPLE, bad)).unwrap_err().join("\n");
             assert!(errs.contains(why), "{}: {}", bad, errs);
         }
-        assert_eq!(UnknownLicence::read("[library]\nunknown_licence = \"full\"\n"), UnknownLicence::Excerpts, "a wrong word keeps the default");
+        assert_eq!(UnknownLicence::read("[library]\nunknown_licence = \"full\"\n"), UnknownLicence::LocalText, "a wrong word keeps the default");
     }
 
     /// `specs/142` §2.4 item 1 and AC-12: the cache cap is 1 GiB by default and at least 16 MiB; with no new key set and
@@ -2913,7 +2921,7 @@ tools = { search = "read", note = "draft", send = "write" }
         assert_eq!(lib("text_cache_max_mib = 16").unwrap().text_cache_max_mib, 16);
         let err = lib("text_cache_max_mib = 15").unwrap_err();
         assert!(format!("{err:?}").contains("text_cache_max_mib is at least 16"), "{err:?}");
-        assert_eq!(UnknownLicence::read("not toml ["), UnknownLicence::Excerpts);
+        assert_eq!(UnknownLicence::read("not toml ["), UnknownLicence::LocalText);
     }
 
     #[test]

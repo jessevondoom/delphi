@@ -18,6 +18,7 @@ pub mod fact_fetch;
 pub mod finding_record;
 pub mod findings;
 pub mod library;
+pub mod held_text;
 pub mod library_acquire_run;
 pub mod fact_intake;
 pub mod fact_judge;

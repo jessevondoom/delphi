@@ -504,7 +504,26 @@ impl Library {
     fn claims_only_page_with_figures(&self, topic: &str, reason: &str, last_reply: Option<&ValidatorReply>, records: Vec<AssertionRecord>, rewrites: u32, style: bib::Format, scope: Scope, figure_failures: Vec<FigureFailure>) -> Result<CheckedPage, String> {
         let topic = norm_ws(topic);
         let (claims, withheld) = self.topic_claims(&topic);
-        let (validated, noted) = claim_lines(&claims);
+        let (mut validated, mut noted) = claim_lines(&claims);
+        // Held text (`specs/142` §2.5 item 4): code makes this page, so it is cut to fit: the last claim lines that carry a held source
+        // past what may leave go, until the page passes.
+        let held = self.held();
+        loop {
+            // The page as it will be laid out: the body and its bibliography, whose rows repeat each claim's opening words.
+            let body = render_body(&topic, &validated, &noted);
+            let laid_out = format!("{}\n\n{}", body, self.bibliography_table(&super::page_check::markers(&body), style, scope));
+            let refused = held.refused(&laid_out, &[]);
+            if refused.is_empty() {
+                break;
+            }
+            if let Some(i) = noted.iter().rposition(|l| held.carries(&l.text, &refused)) {
+                noted.remove(i);
+            } else if let Some(i) = validated.iter().rposition(|l| held.carries(&l.text, &refused)) {
+                validated.remove(i);
+            } else {
+                break;
+            }
+        }
         let body = render_body(&topic, &validated, &noted);
         let checked = self.check_body(&body, scope);
         if !checked.findings.is_empty() {

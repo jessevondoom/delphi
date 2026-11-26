@@ -133,6 +133,11 @@ pub struct AddOpts {
     /// whose text was read whole, is kept in full as a private source (`kept_privately`), never as a pointer. Set by the research
     /// run's keep step from the operator's setting, and only when the page shows no rights notice (§3 item 3).
     pub keep_closed_privately: bool,
+    /// `[library] unknown_licence = "local_text"` (`specs/142` §2.5 item 2): a fetched page whose licence is unknown or closed, and whose
+    /// text was read whole, is kept in full for local reading with `rights: held` and the `text_held` mark. It is not private: it is
+    /// indexed at `external_untrusted`, and what of it may leave in any output is decided by [`crate::held_text`]. Set by the research
+    /// run's keep step, and only when the page shows no rights notice and its trusted-list entry allows more than a summary (§2.5 item 6).
+    pub keep_closed_held: bool,
     /// The operator added this by hand (`delphi sources add`): the capture says `captured_by: operator` (`specs/142` §2.1). Unset, a
     /// page the daemon fetched says `daemon`.
     pub by_operator: bool,
@@ -209,13 +214,35 @@ pub fn is_private(meta: &Value) -> bool {
     meta["private"].as_bool() == Some(true) || meta["licence"].as_str().is_some_and(|l| l.trim().eq_ignore_ascii_case("private"))
 }
 
-/// May the body of this source go out through `channel`? Only a private source is refused, on every channel. A licence
-/// is information, not a gate (`specs/055` §7, §11.1): it yields warnings, and publishing outside the org needs the
-/// operator's confirmation where the bundle is validated, packaged and published (`specs/023` §2.1). The citation is a
-/// separate question and is not decided here.
+/// Is this source's whole text kept for local reading though no licence lets the library copy it (`specs/142` §2.5, the `text_held`
+/// mark of `specs/141` §2.1)? The mark the capture wrote, or, deny by default, any public source held whole under a licence that is
+/// neither open nor the operator's own and that was not adopted from a bundle.
+pub fn is_held(meta: &Value) -> bool {
+    if meta["text_held"] == true {
+        return true;
+    }
+    let licence = meta["licence"].as_str().unwrap_or("unknown");
+    meta.is_object() && !is_private(meta) && meta["capture_level"] == "full" && meta["imported_from"].is_null() && !matches!(classify(licence), Licence::Open { .. } | Licence::Internal)
+}
+
+/// Does `channel` carry a source's body? The three lookups send a public address or a DOI and nothing of the text (`specs/101`
+/// §5, §6); the bibliography export (`Channel::Export`) sends the citation fields only, each scanned by `held_text` (`specs/141`
+/// §2.4 item 7); a web search sends a source's tags. Every other channel can carry text.
+fn carries_body(channel: Channel) -> bool {
+    !matches!(channel, Channel::ArchiveLookup | Channel::CitationLookup | Channel::DoiResolve | Channel::Export | Channel::WebSearch)
+}
+
+/// May the body of this source go out through `channel`? A private source is refused on every channel. A held source
+/// (`specs/142` §2.5 item 4 (a), the interim guard) is refused on every channel that carries a body, as a private one is: its text was
+/// kept for local reading and leaves by none of them. A licence is otherwise information, not a gate (`specs/055` §7, §11.1): it
+/// yields warnings, and publishing outside the org needs the operator's confirmation where the bundle is validated, packaged and
+/// published (`specs/023` §2.1). The citation is a separate question and is not decided here.
 pub fn may_leave(meta: &Value, channel: Channel) -> Result<(), String> {
     if is_private(meta) {
         return Err(format!("a private source never leaves the install ({:?})", channel));
+    }
+    if is_held(meta) && carries_body(channel) {
+        return Err(format!("the text of this source is kept for local reading only (text_held) and never leaves the install ({:?}); quote at most 300 characters of it in a page", channel));
     }
     Ok(())
 }
@@ -490,7 +517,8 @@ impl Library {
         let licence = meta.get("licence").and_then(Value::as_str).unwrap_or("unknown");
         let private = is_private(&Value::Object(meta.clone()));
         let unknown = licence.trim().eq_ignore_ascii_case("unknown");
-        let ceiling = if private || imported || matches!(classify(licence), Licence::Open { .. } | Licence::Internal) { Level::Full } else { Level::Excerpts };
+        let held = meta.get("text_held").is_some_and(|v| v == true);
+        let ceiling = if private || held || imported || matches!(classify(licence), Licence::Open { .. } | Licence::Internal) { Level::Full } else { Level::Excerpts };
         let default = if unknown { Level::Pointer } else { ceiling };
         let mut level = requested.unwrap_or(default);
         if level > ceiling {
@@ -684,6 +712,8 @@ impl Library {
         if old.is_some() {
             self.reanchor_claims(&p.id, p.text.as_deref(), version);
         }
+        // The block index of held text (`specs/142` §2.5 item 4): a held capture's blocks are written as it is kept.
+        crate::held_text::index_source(self, &p.id);
         self.log("capture", json!({"id": p.id, "level": level.as_str(), "version": version, "content_hash": p.meta.get("content_hash")}));
         // Checked against the local snapshot after the capture is in place, so it adds no step before a source is kept (`specs/101` §4 item 3).
         self.check_retraction(&p.id);
@@ -869,6 +899,12 @@ impl Library {
             notes.push("no licence lets the library keep this page whole; kept in full as a private source (`[library] unknown_licence = \"private_text\"`)".into());
             requested = Some(Level::Full);
         }
+        // `specs/142` §2.5 item 2: under `local_text` such a page is kept whole for local reading, `rights: held`, marked `text_held`.
+        if opts.keep_closed_held && !opts.keep_closed_privately && closed && requested.is_none() && text.is_some() && !is_private(&Value::Object(meta.clone())) {
+            meta.insert("text_held".into(), json!(true));
+            notes.push("no licence lets the library copy this page; its whole text is kept for local reading only (`text_held`): searched here, quoted at most 300 characters at a time in anything that leaves".into());
+            requested = Some(Level::Full);
+        }
         let by = if opts.by_operator { "operator" } else { "daemon" };
         let capture = capture::Capture { raw: snap.body_for_daemon().to_vec(), media_type: snap.content_type.clone(), captured_by: by.into(), fetched: Some((snap.final_url.for_daemon().clone(), snap.status)), extractor: (crate::fact_fetch::EXTRACTOR_NAME, Some(crate::fact_fetch::EXTRACTOR_VERSION)) };
         let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None, imported: false, capture: Some(capture) }, b)?;
@@ -965,6 +1001,7 @@ impl Library {
         }
         self.write_json(&dir.join("meta.json"), &meta)?;
         let removed = before.saturating_sub(dir_bytes(&dir));
+        crate::held_text::index_source(self, id);
         self.source_purged(id);
         self.log("purge", json!({"id": id, "content_hash": meta["content_hash"], "bytes_removed": removed}));
         Ok(Some(removed))

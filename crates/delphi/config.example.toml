@@ -309,12 +309,16 @@ sandbox = "off"
 # reputable = []
 # weak = []
 
-# What a research run keeps of a web page whose licence is unknown or closed (specs/119 section 3). "excerpts" (the default): the
-# passages it quoted, at most 300 characters each with up to 200 either side, searched and anchored. "pointer": no text. "private_text":
-# the whole text as a private source that never leaves this install and is quoted at most 300 characters at a time; `delphi sources
-# private list|purge` shows and removes it. private_to_models: "allow" lets a model of the host's own family read private entries.
+# What a research run keeps of a web page whose licence is unknown or closed (specs/119 section 3, specs/142 section 2.5).
+# "local_text" (the default): the whole text, kept for reading on this machine (marked text_held): searched by you and, where untrusted
+# text is asked for, your agents; anything that leaves this machine (a page printed or exported, a bundle, a push, a document) carries at
+# most 300 characters of it in one run and at most 1,200 characters or a tenth of it in all. A page showing a rights notice is kept as
+# excerpts. "excerpts": the passages it quoted, at most 300 characters each with up to 200 either side, searched and anchored.
+# "pointer": no text. "private_text": the whole text as a private source that never leaves this install and is quoted at most 300
+# characters at a time; `delphi sources private list|purge` shows and removes it. private_to_models: "allow" lets a model of the host's
+# own family read private entries.
 # [library]
-# unknown_licence = "excerpts"     # pointer | excerpts | private_text
+# unknown_licence = "local_text"   # local_text | excerpts | pointer | private_text
 # text_cache_max_mib = 1024        # the most text kept with no open licence, in MiB (at least 16); past it the least recently used
 #                                  # is evicted, its raw bytes first, then its text. private_text_max_mib is its old name and is
 #                                  # read when this key is absent.

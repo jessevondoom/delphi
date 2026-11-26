@@ -349,11 +349,11 @@ impl Engine {
         e.task_id = Some(task_id.to_string());
         m.append(e).await?;
         let (ok, detail, result) = if pr_mode {
-            let (w, s2, gh) = (wt.clone(), sha.clone(), self.settings.gh_program.clone());
+            let (w, s2, gh, home) = (wt.clone(), sha.clone(), self.settings.gh_program.clone(), self.ws.home.clone());
             let spec = events_for(m, task_id, "worktree.created")?.last().and_then(|e| e.payload["implements_spec"].as_str().map(String::from));
             let title = format!("Delphi build {}{}", task_id, spec_title(spec.as_deref()));
             let body = pr_body(&report, &diff, &wt.branch);
-            let run = tokio::task::spawn_blocking(move || w.open_pr(&s2, &title, &body, &gh)).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string()));
+            let run = tokio::task::spawn_blocking(move || w.open_pr(&s2, &title, &body, &gh, Some(&home))).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string()));
             let outcome = match run {
                 Ok(o) => o,
                 Err(why) => return Err(record_failure(m, task_id, &action, why).await),

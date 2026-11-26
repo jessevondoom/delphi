@@ -106,6 +106,8 @@ impl EngineService {
                     if let Some(t) = target.as_deref() {
                         let record = crate::egress::xenia_file_record(&guard_home, Some(&guard_ws), std::path::Path::new(t));
                         crate::egress::check(&record, crate::library::Channel::Xenia).map_err(|e| format!("{e}; `publish` takes a file of your own, not one from the library or the host-noted store"))?;
+                        // A file of the operator's own that quotes a held source past the bound (`specs/142` §2.5 item 4).
+                        crate::held_text::check_path(&guard_home, std::path::Path::new(t)).map_err(|e| format!("{e}; `publish` sends the file off this machine"))?;
                     }
                 }
                 Action::build(word, target.as_deref(), &opts, &ctx_scope)

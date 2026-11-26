@@ -347,6 +347,8 @@ fn clean_tags(raw: &[String]) -> Vec<String> {
 /// exact bytes shown, one decision, sign, push). Returns the record id and revision.
 #[allow(clippy::too_many_arguments)]
 pub fn publish(home: &Path, store: &Store, cfg: &VerifyConfig, who: &Identity, args: &PublishArgs, verify_tree: Option<&dyn Fetcher>, host: &dyn Host, approver: &mut dyn Approver) -> Result<(String, u64, Published), String> {
+    // Held text (`specs/142` §2.5 item 4 (e)): the bundle's files, read as one, before the bundle crate is called.
+    delphi_engine::held_text::check_path(home, &args.dir).map_err(|e| format!("the bundle {e}; nothing was published"))?;
     let i = delphi_bundle::inspect(&args.dir, &Options::default(), host);
     let (Some(m), Some(hash)) = (i.manifest.clone(), i.hash.clone()) else { return Err("the bundle does not validate; nothing was published".into()) };
     if !i.report.passed() {

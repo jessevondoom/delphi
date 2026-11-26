@@ -399,6 +399,9 @@ pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args
         args
     };
     let path = str_arg(args, "path").map_err(|e| ToolResult::err(e.0))?;
+    // A document or a deck (`specs/142` §2.5 item 4 (f)): everything the tool was given to write, read as one output, may carry no more
+    // of a held source than may leave. A model made it, so it is refused, not cut.
+    held_check(guard, &[("the tool's arguments".to_string(), string_leaves(args).into_bytes())])?;
     let base = default_dir(guard, mission_id);
     let resolved = resolve_path(base.as_deref(), path, tool).map_err(ToolResult::err)?;
     let sidecar = sidecar_path(base.as_deref(), &resolved);
@@ -429,11 +432,34 @@ pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args
     Ok(Target { path: resolved, sidecar })
 }
 
+/// Every string in `v`, one after another: what a tool was given to write, as text.
+fn string_leaves(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Array(a) => a.iter().map(string_leaves).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n"),
+        Value::Object(o) => o.values().map(string_leaves).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n"),
+        _ => String::new(),
+    }
+}
+
+/// The held-text exit of the document path (`specs/142` §2.5 item 4 (f)): `files`, read as one output, against the library of the
+/// workspace's home. A workspace with no home above it has no library and nothing held.
+fn held_check(guard: &Guard, files: &[(String, Vec<u8>)]) -> Result<(), ToolResult> {
+    match crate::hostmap::home_of_local(&guard.zones.local) {
+        Some(home) => crate::held_text::check_files(home, files).map_err(|e| ToolResult::err(format!("the document is {e}; quote less of it"))),
+        None => Ok(()),
+    }
+}
+
 /// Write `bytes` as the artifact, with its provenance record, and stamp both.
 pub fn write_artifact(ctx: &mut ToolCtx, target: &Target, bytes: &[u8], tool: &str, inputs: &[String]) -> ToolResult {
     let resolved = target.path.as_str();
     if bytes.len() > MAX_ARTIFACT_BYTES {
         return ToolResult::err(format!("the artifact is {} bytes; the limit is {} (4 MB)", bytes.len(), MAX_ARTIFACT_BYTES));
+    }
+    // What is about to be written, as written (a page, a deck, a chart's SVG), passes the same check as the arguments did.
+    if let Err(e) = held_check(ctx.guard, &[(resolved.to_string(), bytes.to_vec())]) {
+        return e;
     }
     let created = match ctx.guard.write_atomic(resolved, bytes) {
         Ok(c) => c,
@@ -499,6 +525,16 @@ fn write_archive(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
     };
     let mut zip = delphi_docs::ZipWriter::new();
     let (mut total, mut inputs) = (0usize, vec![]);
+    // The archive compresses its members, so they are checked as read, all together (`specs/142` §2.5 item 4 (f)).
+    let mut read: Vec<(String, Vec<u8>)> = Vec::new();
+    for m in &members {
+        if let Ok((bytes, _)) = ctx.guard.read_file(m, MAX_ARTIFACT_BYTES) {
+            read.push((m.clone(), bytes));
+        }
+    }
+    if let Err(e) = held_check(ctx.guard, &read) {
+        return e;
+    }
     for m in &members {
         let (bytes, truncated) = match ctx.guard.read_file(m, MAX_ARTIFACT_BYTES - total + 1) {
             Ok(r) => r,
@@ -851,7 +887,8 @@ mod tests {
 
     fn fx(write_globs: &[&str]) -> Fx {
         let t = tempfile::tempdir().unwrap();
-        let r = t.path();
+        // A workspace as an install lays it out (`<home>/workspaces/<name>`), so the held-text check finds the home's library.
+        let r = &t.path().join("home/workspaces/w");
         for d in ["local/missions/m1", "team/specs", "ratified", "base", "proj/src", "proj/vendor/lib", "wt/out"] {
             fs::create_dir_all(r.join(d)).unwrap();
         }
@@ -1340,6 +1377,35 @@ mod tests {
 
     fn deck_args(from: Option<&str>) -> Value {
         json!({"path": "roadmap", "title": "Roadmap", "slides": [{"title": "Where we are", "body_md": "- fast", "notes": "Say hello."}, {"title": "Latency", "chart": chart_block(from)}]})
+    }
+
+    /// `specs/142` AC-9 and AC-31, a document and a deck: a deck whose slide quotes 400 characters of a held source no record names, a
+    /// report that carries ten quotations of 290 characters of it, and an archive of a file that quotes it are each refused, and
+    /// nothing is written; the same deck with a short quotation is written.
+    #[test]
+    fn a_document_or_deck_that_quotes_a_held_source_is_refused() {
+        let mut f = fx(&["missions/**"]);
+        let home = f.root.parent().unwrap().parent().unwrap().to_path_buf();
+        let text: String = (0..300).map(|i| format!("Held sentence {i:03} runs on and on. ")).collect();
+        let held = home.join("library/sources/held-a");
+        fs::create_dir_all(&held).unwrap();
+        fs::write(held.join("meta.json"), json!({"type": "webpage", "title": "Held", "licence": "unknown", "capture_level": "full", "text_held": true}).to_string()).unwrap();
+        fs::write(held.join("source.md"), &text).unwrap();
+        let quote = |skip: usize, n: usize| text.chars().skip(skip).take(n).collect::<String>();
+        let deck = |body: String| json!({"path": "held", "title": "Held", "slides": [{"title": "One", "body_md": body}]});
+        let (r, _) = run_tool(&mut f, "write_deck", deck(quote(30, 400)));
+        assert!(r.is_error && r.content.contains("s-held-a"), "{}", r.content);
+        let sections: Vec<Value> = (0..10).map(|k| json!({"heading": format!("Part {k}"), "blocks": [{"type": "markdown", "text": quote(k * 600, 290)}]})).collect();
+        let (r, _) = run_tool(&mut f, "write_report", json!({"path": "held-report", "title": "Held", "sections": sections}));
+        assert!(r.is_error && r.content.contains("s-held-a"), "the aggregate cap: {}", r.content);
+        fs::write(f.root.join("local/missions/m1/copied.md"), quote(0, 400)).unwrap();
+        let (r, _) = run(&mut f, json!({"path": "held-zip", "members": ["missions/m1/copied.md"]}));
+        assert!(r.is_error && r.content.contains("s-held-a"), "{}", r.content);
+        for name in ["held.html", "held-report.html", "held-zip.zip"] {
+            assert!(!f.root.join("local/missions/m1/artifacts").join(name).exists(), "{name} was written");
+        }
+        let (r, _) = run_tool(&mut f, "write_deck", deck(quote(30, 200)));
+        assert!(!r.is_error, "{}", r.content);
     }
 
     fn report_args(from: Option<&str>) -> Value {

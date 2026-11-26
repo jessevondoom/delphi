@@ -44,6 +44,18 @@ fn report(findings: &[Finding]) {
     }
 }
 
+/// May this page be printed (`specs/142` §2.5 item 4 (d))? Not when it carries more of a held source than may leave this machine: a page
+/// printed goes wherever the terminal's output goes. Says why on standard error when it may not.
+fn printable(home: &Path, markdown: &str) -> bool {
+    emit(home, markdown, &mut std::io::sink()).map_err(|e| eprintln!("delphi pages: the page is not printed: {}", e)).is_ok()
+}
+
+/// Write `markdown` to `out` when it may leave, and nothing when it may not.
+fn emit(home: &Path, markdown: &str, out: &mut dyn std::io::Write) -> Result<(), String> {
+    delphi_engine::held_text::check_in_home(home, markdown, &[])?;
+    out.write_all(markdown.as_bytes()).map_err(|e| e.to_string())
+}
+
 fn search(home: &Path, ws_dir: &Path, query: &str, external: Option<bool>, as_json: bool) -> i32 {
     use delphi_core::spawn::{connect_or_spawn, SpawnOptions};
     let Some(exe) = crate::chat::daemon_exe() else {
@@ -62,6 +74,7 @@ fn search(home: &Path, ws_dir: &Path, query: &str, external: Option<bool>, as_js
         let _ = attached.client.call("daemon.shutdown", json!({}));
     }
     match r {
+        Ok(v) if !printable(home, v["markdown"].as_str().unwrap_or("")) => 1,
         Ok(v) if as_json => {
             println!("{}", v);
             0
@@ -99,6 +112,7 @@ fn expand(home: &Path, ws_dir: &Path, query: &str, as_json: bool) -> i32 {
         let _ = attached.client.call("daemon.shutdown", json!({}));
     }
     match r {
+        Ok(v) if !printable(home, v["markdown"].as_str().unwrap_or("")) => 1,
         Ok(v) if as_json => {
             println!("{}", v);
             0
@@ -240,6 +254,7 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
             };
             let topic = pos.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
             match lib.build_page(&topic, draft.as_deref(), style) {
+                Ok(p) if !printable(home, &p.markdown) => 1,
                 Ok(p) => {
                     print!("{}", p.markdown);
                     if !p.flags.is_empty() {
@@ -441,6 +456,30 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A held source written as the library keeps one (`specs/142` §2.5 item 2): its record with the `text_held` mark and its text.
+    pub(crate) fn held_source(home: &Path, id: &str, text: &str) {
+        let dir = home.join("library/sources").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("meta.json"), json!({"type": "webpage", "title": "Held", "licence": "unknown", "capture_level": "full", "text_held": true, "status": "not validated"}).to_string()).unwrap();
+        std::fs::write(dir.join("source.md"), text).unwrap();
+    }
+
+    /// `specs/142` AC-9, a page printed: a page that carries 400 characters of a held source no record of it names is not printed, and
+    /// nothing reaches the output; a page that quotes 200 characters of it is printed whole.
+    #[test]
+    fn a_page_that_carries_a_held_source_past_the_bound_is_not_printed() {
+        let home = tempfile::tempdir().unwrap();
+        let text: String = (0..300).map(|i| format!("Held sentence {i:03} runs on and on. ")).collect();
+        held_source(home.path(), "held-a", &text);
+        let long = format!("# Tides\n\nA note copied this: {}\n", text.chars().skip(50).take(400).collect::<String>());
+        let mut out = Vec::new();
+        let err = emit(home.path(), &long, &mut out).unwrap_err();
+        assert!(err.contains("s-held-a") && out.is_empty(), "{err}");
+        let short = format!("# Tides\n\nA short quote: {}\n", text.chars().skip(50).take(200).collect::<String>());
+        emit(home.path(), &short, &mut out).unwrap();
+        assert_eq!(out, short.as_bytes());
+    }
 
     fn tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
         let mut out = Vec::new();

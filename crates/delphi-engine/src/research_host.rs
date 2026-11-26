@@ -516,10 +516,18 @@ impl KeepStep {
     /// Under `private_text`: may this page be kept whole as a private source? Not when it shows a rights notice the code detects, nor
     /// when its trusted-list entry allows a summary only (`specs/119` §3 item 3): such a page is kept as excerpts.
     fn private_whole(&self, snap: &crate::fact_fetch::Snapshot) -> bool {
+        self.unknown_licence == delphi_adapter::config::UnknownLicence::PrivateText && self.may_keep_whole(snap)
+    }
+
+    /// Under `local_text` (`specs/142` §2.5 items 2 and 6): may this page be kept whole for local reading (`text_held`)? The same two
+    /// refusals as for `private_text`: a rights notice the code detects, or a trusted-list entry that allows a summary only. Such a page
+    /// is kept as excerpts.
+    fn held_whole(&self, snap: &crate::fact_fetch::Snapshot) -> bool {
+        self.unknown_licence == delphi_adapter::config::UnknownLicence::LocalText && self.may_keep_whole(snap)
+    }
+
+    fn may_keep_whole(&self, snap: &crate::fact_fetch::Snapshot) -> bool {
         use delphi_adapter::research::trusted::Reuse;
-        if self.unknown_licence != delphi_adapter::config::UnknownLicence::PrivateText {
-            return false;
-        }
         let summary_only = self.rules.as_ref().and_then(|r| r.list.allows_url(snap.final_url.for_daemon())).is_some_and(|e| e.reuse != Reuse::Full);
         !summary_only && !delphi_adapter::research::fetch::shows_rights_notice(&String::from_utf8_lossy(snap.body_for_daemon()))
     }
@@ -527,7 +535,7 @@ impl KeepStep {
     /// The options one page is captured with, or the fixed word for why it is not kept.
     fn opts(&self, snap: &crate::fact_fetch::Snapshot) -> Result<crate::library::AddOpts, String> {
         use crate::fact_sources::Class;
-        let mut opts = crate::library::AddOpts { keep_closed_privately: self.private_whole(snap), ..Default::default() };
+        let mut opts = crate::library::AddOpts { keep_closed_privately: self.private_whole(snap), keep_closed_held: self.held_whole(snap), ..Default::default() };
         let Some(r) = &self.rules else { return Ok(opts) };
         let url = snap.final_url.for_daemon();
         let class = r.classes.classify(url).class;
@@ -540,6 +548,7 @@ impl KeepStep {
             }
             opts.level = Some(crate::library::Level::Pointer);
             opts.keep_closed_privately = false;
+            opts.keep_closed_held = false;
             return Ok(opts);
         }
         if let Some(entry) = r.list.allows_url(url) {
@@ -1383,7 +1392,7 @@ mod tests {
         assert!(meta["attribution_text"].as_str().is_some_and(|a| a.contains("Open Handbook") && a.contains("CC-BY-4.0")), "the attribution the licence asks for is the source's: {meta}");
         // Without the step's rules (the default) the same page is captured on what the page itself declares: nothing, a pointer.
         let other = tempfile::tempdir().unwrap();
-        let (lib, url, text) = kept_library(other.path(), KeepStep::default(), "https://open-r4.example/handbook", &[KEEP_PROSE]);
+        let (lib, url, text) = kept_library(other.path(), excerpts_step(), "https://open-r4.example/handbook", &[KEEP_PROSE]);
         let plain = lib.capture(&url, &text, true).await.unwrap();
         assert_eq!(lib.kept(&plain).unwrap().0, "pointer", "this is the case that fails without the keep step");
     }
@@ -1407,9 +1416,16 @@ mod tests {
             let (lib, url, text) = kept_library(home.path(), KeepStep::new(keep_rules(mode), None), "https://web.archive.org/web/2020/https://x.org", &[KEEP_PROSE]);
             assert_eq!(lib.capture(&url, &text, false).await.unwrap_err(), crate::research_run::EXCLUDED_SOURCE);
             // A host no list names is weak only by default: it is kept as it was before the step, a pointer, and never refused.
-            let (lib, url, text) = kept_library(home.path(), KeepStep::new(keep_rules(mode), None), "https://unlisted-r4.example/page", &[KEEP_PROSE]);
+            let step = KeepStep { unknown_licence: delphi_adapter::config::UnknownLicence::Excerpts, ..KeepStep::new(keep_rules(mode), None) };
+            let (lib, url, text) = kept_library(home.path(), step, "https://unlisted-r4.example/page", &[KEEP_PROSE]);
             let id = lib.capture(&url, &text, false).await.unwrap();
             assert_eq!(lib.kept(&id).unwrap().0, "pointer");
+            // Under `local_text` (`specs/142`, the default now) the same unlisted page is kept whole for local reading, and held.
+            let elsewhere = tempfile::tempdir().unwrap();
+            let (lib, url, text) = kept_library(elsewhere.path(), KeepStep::new(keep_rules(mode), None), "https://unlisted-r4.example/held", &[KEEP_PROSE]);
+            let id = lib.capture(&url, &text, false).await.unwrap();
+            assert_eq!(lib.kept(&id).unwrap().0, "full");
+            assert!(crate::library::is_held(&crate::library::Library::in_home(elsewhere.path()).read_meta(&id).unwrap()));
         }
         assert_eq!(l.list().len(), 2, "the refused pages left no source: {:?}", l.list().iter().map(|(id, _)| id.clone()).collect::<Vec<_>>());
     }
@@ -1618,7 +1634,14 @@ mod tests {
     /// One run's worth of the live path for one page: the run's own search returns `url`, the page is fetched once and captured, and
     /// the claim `x` it states is staged, or, when the library already holds it, anchored. Returns the library claim's id.
     async fn run_keeps(home: &std::path::Path, topic: &str, project: Option<&str>, url: &str, text: &str, x: &Extracted, state: delphi_core::research::ClaimState) -> Option<String> {
-        run_keeps_with(home, topic, project, url, text, x, state, KeepStep::default()).await
+        run_keeps_with(home, topic, project, url, text, x, state, excerpts_step()).await
+    }
+
+    /// The keep step under `[library] unknown_licence = "excerpts"`, the default of `specs/119` §3 that these tests were written for.
+    /// `specs/142` §2.5 item 1 made `local_text` the default; its behaviour is tested by
+    /// `local_text_keeps_a_page_of_unknown_licence_whole_and_held_unless_it_shows_a_rights_notice`.
+    fn excerpts_step() -> KeepStep {
+        KeepStep { unknown_licence: delphi_adapter::config::UnknownLicence::Excerpts, ..Default::default() }
     }
 
     /// [`run_keeps`] with the keep step given, for `[library] unknown_licence` (`specs/119` §3).
@@ -1713,11 +1736,11 @@ mod tests {
         assert!(ledger.contains(&format!("\"topic\":\"{t1}\"")), "{ledger}");
     }
 
-    /// `specs/119` §3 item 6 and AC-3: with no setting, a page of unknown licence keeps the passage the run quoted (and up to 200
+    /// `specs/119` §3 item 6 and AC-3: under `excerpts` (the default until `specs/142`), a page of unknown licence keeps the passage the run quoted (and up to 200
     /// characters of the page on either side), no other text; the passage is searchable; the claim's anchor is an ordinary one into it.
     /// With `unknown_licence = "pointer"` nothing of the page is kept and the anchor holds the quote alone, as before.
     #[tokio::test]
-    async fn a_page_of_unknown_licence_keeps_the_quoted_passage_by_default_and_nothing_under_pointer() {
+    async fn a_page_of_unknown_licence_keeps_the_quoted_passage_under_excerpts_and_nothing_under_pointer() {
         use delphi_adapter::config::UnknownLicence;
         use delphi_core::research::ClaimState;
         let filler = "Unrelated words about the weather in spring and the price of bread. ".repeat(12);
@@ -1827,6 +1850,37 @@ mod tests {
         // `specs/142` §2.4 item 3: eviction is not a takedown. The record stays and says the text was evicted.
         assert!(first["text_evicted"].is_string() && first["purged"].is_null() && first["kept_privately"].is_string() && !l.source_dir(&id).join("source.md").exists(), "its text went and its pointer stays: {first}");
         assert!(l.capture_record(&id).unwrap()["evicted"]["text"].is_string());
+    }
+
+    /// `specs/142` AC-8: with no setting a page of unknown licence is kept whole with `rights: held` and the `text_held` mark, is not
+    /// library-private, and is indexed; its blocks are in the held-text index. With `excerpts` it keeps the quoted passages only; under
+    /// `local_text` a page that shows a rights notice is kept as excerpts, not whole.
+    #[tokio::test]
+    async fn local_text_keeps_a_page_of_unknown_licence_whole_and_held_unless_it_shows_a_rights_notice() {
+        use delphi_adapter::config::UnknownLicence;
+        assert_eq!(UnknownLicence::default(), UnknownLicence::LocalText, "the default");
+        let home = tempfile::tempdir().unwrap();
+        let (lib, url, text) = kept_library(home.path(), KeepStep::default(), "https://b-held.example/a", &[KEEP_PROSE]);
+        let id = lib.capture(&url, &text, false).await.unwrap();
+        let l = crate::library::Library::in_home(home.path());
+        let m = l.read_meta(&id).unwrap();
+        assert_eq!((m["capture_level"].as_str(), m["text_held"].as_bool(), m["private"].as_bool()), (Some("full"), Some(true), None), "{m}");
+        assert!(crate::library::is_held(&m) && !crate::library::is_private(&m));
+        assert_eq!(l.capture_record(&id).unwrap()["rights"], "held");
+        assert!(l.indexable().iter().any(|(i, _)| *i == id), "held text is indexed for the operator and the operator's agents");
+        assert!(crate::held_text::indexed(&l).contains(&id), "and its blocks are in the held-text index");
+        // `excerpts`: the passages only.
+        let excerpts = KeepStep { unknown_licence: UnknownLicence::Excerpts, ..Default::default() };
+        let (lib2, url2, text2) = kept_library(home.path(), excerpts, "https://b-excerpts.example/a", &[KEEP_PROSE]);
+        let id2 = lib2.capture(&url2, &text2, false).await.unwrap();
+        let m2 = l.read_meta(&id2).unwrap();
+        assert!(m2["capture_level"] != "full" && m2["text_held"].is_null() && !l.source_dir(&id2).join("source.md").exists(), "{m2}");
+        // A rights notice under `local_text`: not whole.
+        let notice = "Copyright 2026 Example Press. All rights reserved.";
+        let (lib3, url3, text3) = kept_library(home.path(), KeepStep::default(), "https://b-notice.example/a", &[KEEP_PROSE, notice]);
+        let id3 = lib3.capture(&url3, &text3, false).await.unwrap();
+        let m3 = l.read_meta(&id3).unwrap();
+        assert!(m3["capture_level"] != "full" && m3["text_held"].is_null() && !l.source_dir(&id3).join("source.md").exists(), "{m3}");
     }
 
     /// `specs/112` §3.1, §3.2 and §9: a run's claim is scoped to the run's project; the run's own verdict and counts are not copied

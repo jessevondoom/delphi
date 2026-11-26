@@ -151,13 +151,14 @@ fn set_key(doc: &mut DocumentMut, table: &str, key: &str, v: toml_edit::Value) {
     doc[table][key] = Item::Value(v);
 }
 
-/// §2 item 5 and §3: how much of a page whose licence is unknown research keeps. One question; the operator chose `excerpts` as the
-/// default (2026-11-14). Written only when the answer changes what `config.toml` says. Returns whether `doc` changed.
+/// §2 item 5 and §3: how much of a page whose licence is unknown research keeps. One question; `local_text` is the default
+/// (`specs/142` §2.5 item 1, 2026-11-25). Written only when the answer changes what `config.toml` says. Returns whether `doc` changed.
 fn ask_kept_text(ui: &mut dyn Ui, doc: &mut DocumentMut) -> bool {
     use delphi_adapter::config::UnknownLicence;
     let now = UnknownLicence::read(&doc.to_string());
     ui.say("\nMost web pages do not say what licence they are under. How much of such a page should research keep?");
-    ui.say("  excerpts      the passages it quotes, at most 300 characters each with a little context (the default)");
+    ui.say("  local_text    the whole page, kept on this machine for you and your agents to search; anything sent out carries at most 300 characters of it at a time (the default)");
+    ui.say("  excerpts      the passages it quotes, at most 300 characters each with a little context");
     ui.say("  pointer       the address and title only; nothing can be searched or quoted later");
     ui.say("  private_text  the whole page, kept privately: never exported, quoted at most 300 characters at a time");
     loop {
@@ -169,7 +170,7 @@ fn ask_kept_text(ui: &mut dyn Ui, doc: &mut DocumentMut) -> bool {
                 ui.say(&format!("  [library] unknown_licence = \"{}\"", a.as_str()));
                 return true;
             }
-            None => ui.say("  One of: excerpts, pointer, private_text."),
+            None => ui.say("  One of: local_text, excerpts, pointer, private_text."),
         }
     }
 }
@@ -569,10 +570,10 @@ mod tests {
         let kept = |o: &Opts| UnknownLicence::read(&std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap());
         let (_t, o) = workspace();
         let before = std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap();
-        let mut ui = Script { lines: ["searxng", "https://searx.example", "excerpts"].map(String::from).into(), ..Default::default() };
+        let mut ui = Script { lines: ["searxng", "https://searx.example", "local_text"].map(String::from).into(), ..Default::default() };
         run(&mut ui, &Keychain::default(), None, &o).unwrap();
         assert!(ui.said.iter().any(|l| l == "? Keep"), "{:?}", ui.said);
-        assert_eq!(kept(&o), UnknownLicence::Excerpts);
+        assert_eq!(kept(&o), UnknownLicence::LocalText);
         let after = std::fs::read_to_string(o.ws_dir.join("config.toml")).unwrap();
         assert!(!after.lines().any(|l| l.trim_start().starts_with("unknown_licence")) && before != after, "the default answer writes nothing: {after}");
         let (_t, o) = workspace();

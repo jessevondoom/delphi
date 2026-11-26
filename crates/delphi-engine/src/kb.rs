@@ -383,8 +383,12 @@ fn library_files(ws: &Path, out: &mut Vec<SourceFile>) {
     let entries = delphi_core::bundles::read(ws).map(|l| l.bundle).unwrap_or_default();
     for (id, path) in lib.indexable() {
         if std::fs::metadata(&path).is_ok_and(|m| m.len() <= MAX_FILE_BYTES) {
-            let vouched_by = lib.read_meta(&id).and_then(|m| lib.vouched_by(&m, &entries));
-            out.push(SourceFile { rel_path: format!("library/sources/{}/source.md", id), zone: "library", path, default_source: crate::research::TIER, bundle: None, vouched_by });
+            let meta = lib.read_meta(&id);
+            let vouched_by = meta.as_ref().and_then(|m| lib.vouched_by(m, &entries));
+            // A held source's text (`specs/142` §2.5 item 3) is web text no licence lets the library copy: it is indexed for the operator
+            // and the operator's agents at `external_untrusted`, so a span that is given a passage of it is tainted (§2.5 item 5).
+            let tier = if meta.as_ref().is_some_and(crate::library::is_held) { UNTRUSTED } else { crate::research::TIER };
+            out.push(SourceFile { rel_path: format!("library/sources/{}/source.md", id), zone: "library", path, default_source: tier, bundle: None, vouched_by });
         }
     }
     // A source kept as excerpts (`specs/119` §3 item 6): its passages, at the same tier, never a private one.
@@ -1593,6 +1597,11 @@ impl Kb {
     /// The vectors of every embedded chunk, as a preloaded-vector cache for the model in use (`specs/004` §3.6).
     /// Keys are hashes of the text given to the model, so the cache is valid for any workspace that has the same text.
     pub fn export_vectors(&self) -> Result<Vec<u8>, KbError> {
+        self.export_vectors_except(&|_| false)
+    }
+
+    /// [`Kb::export_vectors`] with the chunks of the documents `withhold` names left out (`specs/142` §2.5 item 4 (b): a held source's).
+    pub fn export_vectors_except(&self, withhold: &dyn Fn(&str) -> bool) -> Result<Vec<u8>, KbError> {
         let model = self.embedder.as_ref().ok_or_else(|| KbError::Io("there is no embedding model to export vectors for".into()))?;
         let rows: Vec<(i64, String, String, String, i64)> = {
             let mut st = self.conn.prepare("SELECT c.chunk_id, c.rel_path, c.heading_path, c.raw_content, m.windows FROM kb_chunks c JOIN kb_chunk_vec m ON m.chunk_id = c.chunk_id ORDER BY c.chunk_id")?;
@@ -1602,6 +1611,9 @@ impl Kb {
         let mut seen = HashSet::new();
         let mut entries: Vec<(embed::vectors::Key, Vec<Vec<f32>>)> = Vec::new();
         for (id, path, heading, raw, windows) in rows {
+            if withhold(&path) {
+                continue;
+            }
             let pieces: Vec<String> = embed::windows(&raw, WINDOW_CHARS, VEC_STRIDE as usize).into_iter().map(|p| embed_text(&path, &heading, &p)).collect();
             let k = embed::vectors::key(&pieces);
             if pieces.len() as i64 != windows || !seen.insert(k) {
@@ -3461,7 +3473,8 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     eprintln!("delphi kb: {} of {} chunk(s) have no vector; run `delphi kb index` first", c - v, c);
                     return Ok(1);
                 }
-                let bytes = kb.export_vectors()?;
+                // No vector of a chunk of a held source is written out (`specs/142` §2.5 item 4 (b)).
+                let bytes = kb.export_vectors_except(&|p| crate::held_text::withholds_path(home, p))?;
                 std::fs::write(out, &bytes).map_err(|e| KbError::Io(format!("{}: {}", out, e)))?;
                 println!("wrote {} ({:.1} KB) for {}", out, bytes.len() as f64 / 1024.0, kb.embedder().map(|e| e.model_id()).unwrap_or(""));
                 Ok(0)

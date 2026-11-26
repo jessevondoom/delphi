@@ -236,6 +236,13 @@ pub fn run(args: &[String]) -> i32 {
             bundle_pack::sign(&dir, &xenia_cmd::key_path(&h), flag(args, "--against").map(PathBuf::from), &*host, &bundle_pack::tty_confirm)
         }
         "package" => {
+            // Held text (`specs/142` §2.5 item 4 (e)): the bundle's files, `sources/` and knowledge alike, read as one output before
+            // the bundle crate is called. A bundle that carries more of a held source than may leave is not packaged.
+            let h = home::delphi_home(flag(args, "--home").as_deref());
+            if let Err(e) = delphi_engine::held_text::check_path(&h, &dir) {
+                eprintln!("delphi bundle: the bundle {}; nothing was packaged", e);
+                return 1;
+            }
             if args.iter().any(|a| a == "--vectors") {
                 let h = home::delphi_home(flag(args, "--home").as_deref());
                 let model = match delphi_engine::embed::open_default(Some(&h)) {
@@ -535,6 +542,39 @@ mod tests {
         assert_eq!(run(&args(&["prereg", "check", "/nonexistent-prereg.md"])), 2);
         assert_eq!(run(&args(&["prereg", "digest", t.path().to_str().unwrap()])), 0);
         assert_eq!(run(&args(&["prereg"])), 2);
+    }
+
+    /// `specs/142` AC-9 and AC-27, a bundle: a knowledge file that quotes 400 characters of a held source no record names, or ten files
+    /// that each quote 290 characters of it, stop `package` before the bundle crate is called, and no archive is written; the same
+    /// bundle without them packages.
+    #[test]
+    fn a_bundle_whose_files_quote_a_held_source_is_not_packaged() {
+        let home = tempfile::tempdir().unwrap();
+        let text: String = (0..300).map(|i| format!("Held sentence {i:03} runs on and on. ")).collect();
+        let held = home.path().join("library/sources/held-a");
+        fs::create_dir_all(&held).unwrap();
+        fs::write(held.join("meta.json"), serde_json::json!({"type": "webpage", "title": "Held", "licence": "unknown", "capture_level": "full", "text_held": true}).to_string()).unwrap();
+        fs::write(held.join("source.md"), &text).unwrap();
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let out_dir = tempfile::tempdir().unwrap();
+        let out = out_dir.path().join("held.xbundle");
+        let package = |dir: &Path| run(&args(&["package", dir.to_str().unwrap(), "--home", home.path().to_str().unwrap(), "--no-eval", "-o", out.to_str().unwrap()]));
+        let one = tempfile::tempdir().unwrap();
+        copy(&golden(), one.path());
+        fs::write(one.path().join("knowledge/copied.md"), format!("# Copied\n\n{}\n", text.chars().skip(10).take(400).collect::<String>())).unwrap();
+        assert_eq!(package(one.path()), 1);
+        assert!(!out.exists(), "nothing was packaged");
+        let ten = tempfile::tempdir().unwrap();
+        copy(&golden(), ten.path());
+        for k in 0..10 {
+            fs::write(ten.path().join(format!("knowledge/q{k}.md")), format!("# Q{k}\n\n{}\n", text.chars().skip(k * 600).take(290).collect::<String>())).unwrap();
+        }
+        assert_eq!(package(ten.path()), 1, "ten quotations under the run bound pass the aggregate cap together");
+        assert!(!out.exists());
+        let clean = tempfile::tempdir().unwrap();
+        copy(&golden(), clean.path());
+        assert_eq!(package(clean.path()), 0);
+        assert!(out.is_file());
     }
 
     #[test]

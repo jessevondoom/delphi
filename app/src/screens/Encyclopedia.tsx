@@ -4,8 +4,8 @@ import { Ask, CopyCommand, Problem, useRead } from '../EncyParts.tsx';
 import { Rich, toSection } from '../Rich.tsx';
 import type { Bridge } from '../bridge.ts';
 import {
-  NOTE_MAX, builtAt, byDay, byLetter, byProject, changeRows, contents, continueCommand, dayOfUnix, disputeCommand, findQuote, kindOf, matching, parts, passages,
-  pieces, rebuildCommand, routeInAddress, sectionNote, shownValue, sourceFacts, statusWhy,
+  HELD_RUN_MAX, NOTE_MAX, builtAt, byDay, byLetter, byProject, changeRows, contents, continueCommand, dayOfUnix, disputeCommand, findQuote, kindOf, matching, parts, passages,
+  copyAllowed, exportAllowed, pieces, rebuildCommand, routeInAddress, sectionNote, shownValue, sourceFacts, statusWhy,
   type Anchor, type Changes, type ClaimView, type Links, type Orphan, type PageParts, type Research, type ResearchRecord, type Route, type SourceView, type Topic, type TopicPage, type Version,
 } from '../ency.ts';
 import { EMPTY, annotate, arrive, editNote, exportMarkdown, fresh, lastHere, markRead, newSince, parseMarks, passageKey, pinned, placed, togglePin, type Annotation, type Marks } from '../marks.ts';
@@ -443,8 +443,9 @@ function TopicView({ bridge, go, way, topics, marksSaid, slug, version, research
         {!version && page.change && <p className="changed"><span className="caps">What changed</span> {page.change}</p>}
         <div className="row no-print">
           <button type="button" className="btn small" aria-pressed={pinned(marks, slug)} onClick={() => mark((m) => togglePin(m, slug))}>{pinned(marks, slug) ? 'Unpin from the home page' : 'Pin to the home page'}</button>
-          {page.markdown && <button type="button" className="btn small" onClick={out}>Export as Markdown</button>}
-          {page.markdown && <button type="button" className="btn small" onClick={() => { void bridge?.print().catch((e: unknown) => setSaid(e instanceof Error ? e.message : String(e))); }}>Print or save as PDF</button>}
+          {page.markdown && exportAllowed(page) && <button type="button" className="btn small" onClick={out}>Export as Markdown</button>}
+          {page.markdown && exportAllowed(page) && <button type="button" className="btn small" onClick={() => { void bridge?.print().catch((e: unknown) => setSaid(e instanceof Error ? e.message : String(e))); }}>Print or save as PDF</button>}
+          {page.markdown && !exportAllowed(page) && <span className="muted" style={{ fontSize: 12 }}>Not exported or printed: {page.export_refused ?? 'the page carries more of a source kept for reading on this machine than may leave it'}.</span>}
           {!version && <CopyCommand small label="Rebuild now" command={rebuildCommand(slug)} request={rebuildRequest(slug)} />}
           {topicId && <Ask small label="Ask a follow-up" prompt={`One line that narrows the next research run on this topic (at most ${NOTE_MAX} characters).`} max={NOTE_MAX} build={(w) => (w.trim() ? continueCommand(topicId, w) : '')} request={(typed) => followUpRequest(topicId, typed)} asking={FOLLOW_UP} />}
         </div>
@@ -594,6 +595,7 @@ export function Orphans({ orphans, open }: { orphans: Orphan[]; open?: (claim: s
 function SourcePage({ bridge, go, way, id, quote }: Shared & { id: string; quote?: string }) {
   const got = useRead<SourceView>(bridge, 'library.source', quote ? { id, quote } : { id });
   const at = useRef<HTMLElement>(null);
+  const [copyNote, setCopyNote] = useState('');
   const v = got.data;
   const range = useMemo(() => (v && quote ? findQuote(v.text, quote) : null), [v, quote]);
   // The quoted passage is brought into view at once: no gliding, so nothing for reduce motion to still.
@@ -622,8 +624,13 @@ function SourcePage({ bridge, go, way, id, quote }: Shared & { id: string; quote
         {citing.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>No claim is anchored to this source.</div> : citing.map((c) => <ClaimRow key={c} id={c} bridge={bridge} go={go} />)}
       </section>
 
-      <section className="stack" aria-label="Text">
+      <section className={v.text_held ? 'stack no-print' : 'stack'} aria-label="Text" onCopy={(e) => {
+        // A held source (spec 142 §2.5 item 4 (h)): shown here, but not copied out past the bound, and not printed (`no-print`).
+        const selected = window.getSelection()?.toString() ?? '';
+        if (!copyAllowed(v, selected)) { e.preventDefault(); setCopyNote(`Not copied: this text is kept for reading on this machine only; copy at most ${HELD_RUN_MAX} characters at a time.`); }
+      }}>
         <h2 className="caps">{v.passage_only ? 'The cited passage' : 'Its text as the library keeps it'}</h2>
+        {copyNote && <div className="notice" role="status">{copyNote}</div>}
         {quote && !range && <div className="notice" role="status">{v.passage_only ? 'The quoted passage is not in the text the library keeps for this source, so nothing of it is shown.' : 'The quoted passage was not found in the stored text as written; the text is shown from its start.'} The quotation: <span className="quoted">{quote}</span></div>}
         {v.passage_only && <span className="muted" style={{ fontSize: 12 }}>This source is kept privately for retrieval (spec 119): this window shows the passage a claim cites and no more of it. <span className="mono">delphi sources show {v.id}</span> at a terminal prints its record.</span>}
         {v.text ? (

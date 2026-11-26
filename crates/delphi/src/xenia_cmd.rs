@@ -381,6 +381,11 @@ fn act(home: &Path, word: &str, p: &Parsed, approver: &mut dyn Approver) -> i32 
                 eprintln!("delphi xenia {word}: {e}; `publish` takes a file of your own, not one from the library or the host-noted store");
                 return 2;
             }
+            // A file of the operator's own that quotes a held source past the bound (`specs/142` §2.5 item 4).
+            if let Err(e) = delphi_engine::held_text::check_path(home, std::path::Path::new(t)) {
+                eprintln!("delphi xenia {word}: {e}; `publish` sends the file off this machine");
+                return 2;
+            }
         }
     }
     let action = match Action::build(word, p.positional.first().map(String::as_str), &p.opts, &ctx) {

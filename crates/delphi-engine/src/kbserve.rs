@@ -120,6 +120,16 @@ pub struct Reader<'a> {
 }
 
 impl Reader<'_> {
+    /// A held source's text (`specs/142` §2.5 item 4 (c)) is not served over HTTP, which is how a client off this machine reads: only
+    /// the operator's own view (the console and the app, through the daemon's socket) is given it.
+    fn withheld(&self, rel_path: &str) -> bool {
+        !self.operator
+            && match crate::held_text::home_of_ws(self.ws) {
+                Some(home) => crate::held_text::withholds_path(home, rel_path),
+                None => rel_path.starts_with("library/sources/"),
+            }
+    }
+
     /// The documents this request may see.
     fn view(&self, q: &HashMap<String, String>) -> SearchOpts {
         if self.operator {
@@ -251,6 +261,9 @@ impl Reader<'_> {
         let private: Vec<String> = if projects.is_some() { crate::scope::project_entries(self.ws).into_iter().filter(|e| e.private).map(|e| e.id.as_str().to_string()).collect() } else { Vec::new() };
         let mut out = Vec::new();
         for h in hits {
+            if self.withheld(&h.rel_path) {
+                continue;
+            }
             let Some(d) = self.kb.document(&h.rel_path, &self.view_of(q, &h.rel_path)).map_err(|e| e.to_string())? else { continue };
             if collection.map(|c| c != &d.zone).unwrap_or(false) {
                 continue;
@@ -298,6 +311,9 @@ impl Reader<'_> {
 
     fn doc(&self, q: &HashMap<String, String>) -> Result<Reply, String> {
         let Some(path) = q.get("path").filter(|p| !p.is_empty() && !p.contains('\0')) else { return Ok(fail(400, "`path` is required")) };
+        if self.withheld(path) {
+            return Ok(fail(404, "not in the knowledge base"));
+        }
         let Some(info) = self.kb.document(path, &self.view_of(q, path)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
         // The file comes from the indexer's own list, so the logical path cannot name anything else.
         let Some(src) = kb::sources(self.ws).into_iter().find(|s| s.rel_path == info.rel_path) else { return Ok(fail(404, "no longer on disk")) };
