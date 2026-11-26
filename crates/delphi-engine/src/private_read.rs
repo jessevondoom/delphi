@@ -145,7 +145,7 @@ const SEATS_CANNOT_READ: &str = "an answer written by seats that cannot read a n
 const MCP_OWN: &str = "runs in the MCP server's own process over files and the index; their file sets and zones exclude `staged` (`the_mcp_servers_own_readers_never_return_a_noted_entry`) and the index lists no private source";
 
 /// The methods of the host socket (`delphi_core::server::HOST_METHODS`).
-pub const HOST_SURFACE: [Surface; 33] = [
+pub const HOST_SURFACE: [Surface; 34] = [
     no_return("session.ping", "answers `pong`"),
     Surface { name: "host.search_kb", how: How::Marks },
     no_return("host.propose_note", WRITES),
@@ -172,6 +172,7 @@ pub const HOST_SURFACE: [Surface; 33] = [
     no_return("host.research_status", "fixed-form progress; no entry text"),
     no_return("host.research_result", "the answer of a run over the indexed KB (no private source, no staged note) and pages the run fetched; a claim resting on a private source is counted and kept out of outbound queries; NOT VALIDATED beyond reading the run's callers"),
     no_return("host.record_research", "a write: it returns a topic id, a research id, counts and fixed words, never the text of an entry"),
+    no_return("host.capture_source", "a write (`specs/142` §2.2): the host's own text or file in; per item a source id, digests, an outcome, a label and findings about the host's own fields out, and in a dry run the record that would be written (citation fields, never the text). Under the mark the daemon fetches nothing and every source is library-private"),
     no_return("host.research_feed", "a write (`specs/119` §2.1 item 4): search results in (a query the run asked and addresses; no title or snippet is kept), counts and fixed words out, never an entry's text. Under the mark the daemon fetches none of the addresses"),
     no_return("host.cancel_job", WRITES),
     no_return("host.route_decided", WRITES),
@@ -182,7 +183,7 @@ pub const HOST_SURFACE: [Surface; 33] = [
 ];
 
 /// The tools of the MCP server (`mcp_host::tools()`).
-pub const MCP_SURFACE: [Surface; 47] = [
+pub const MCP_SURFACE: [Surface; 48] = [
     Surface { name: "search_kb", how: How::Marks },
     no_return("list_roles", PROJECT_FILES),
     no_return("delphi_roster", PROJECT_FILES),
@@ -226,6 +227,7 @@ pub const MCP_SURFACE: [Surface; 47] = [
     no_return("research_status", "fixed-form progress; no entry text"),
     no_return("research_result", "see `host.research_result`"),
     no_return("record_research", WRITES),
+    no_return("capture_source", "see `host.capture_source`"),
     no_return("research_feed", "see `host.research_feed`"),
     no_return("cancel_job", WRITES),
     no_return("ask_family", "see `host.ask_family`"),

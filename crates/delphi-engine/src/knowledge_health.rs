@@ -33,6 +33,9 @@ pub struct Health {
     /// Anchors that no longer resolve (`specs/142` §2.3 item 3), by why: `not in the newer text`, `text evicted`, `text purged`.
     pub orphans: BTreeMap<String, usize>,
     pub pages: usize,
+    /// Pages held at `pass_contested` because a statement rests only on text a host handed over that was read privately and can never
+    /// be confirmed (`specs/142` §2.2 item 5).
+    pub pages_host_private: usize,
     /// Topic pages due for a rebuild (`specs/117` §2 item 3).
     pub pages_due: usize,
     /// The newest idle rebuild failed and none has run since (`specs/143` §2.7 item 3): the cause code and the day it was first seen.
@@ -134,6 +137,14 @@ pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
         h.orphans.insert(why.to_string(), n);
     }
     h.pages = files_under(&lib.root().join("pages"), ".json", &[]).len();
+    h.pages_host_private = std::fs::read_dir(lib.root().join("pages"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
+        .filter_map(|e| serde_json::from_slice::<Value>(&std::fs::read(e.path()).ok()?).ok())
+        .filter(|v| v["host_line"] == crate::library::page_validate::HOST_LINE_PRIVATE)
+        .count();
     // A read for a reader: the index is not opened, so nothing is written.
     h.pages_due = lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(ws_dir), now: now.max(0) as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
     h.pages_failed = crate::daemon_notice::last_failure(ws_dir, crate::daemon_notice::Job::Pages).map(|(c, since)| (c.code().to_string(), since));
@@ -210,6 +221,9 @@ impl Health {
             o.insert("orphaned_anchors".into(), json!({"total": self.orphans.values().sum::<usize>(), "why": self.orphans}));
         }
         o.insert("pages".into(), json!(self.pages));
+        if self.pages_host_private > 0 {
+            o.insert("pages_host_private".into(), json!(self.pages_host_private));
+        }
         if let Some((cause, since)) = &self.pages_failed {
             o.insert("pages_idle_rebuild".into(), json!({"due": self.pages_due, "failed": cause, "since": since}));
         }
@@ -266,6 +280,11 @@ impl Health {
         let orphans: usize = self.orphans.values().sum();
         if orphans > 0 {
             out.push(fact(format!("{orphans} orphaned anchors ({}): delphi sources show <id> lists a source's", self.orphans.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", "))));
+        }
+
+        // `specs/142` §2.2 item 5: pages that cannot pass, because they rest on text read privately that Delphi can never confirm.
+        if self.pages_host_private > 0 {
+            out.push(fact(format!("{} pages held at pass_contested: they rest in part on text a host read privately, which Delphi cannot confirm", self.pages_host_private)));
         }
 
         if let Some(n) = self.topics {

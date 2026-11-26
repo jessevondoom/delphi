@@ -1242,6 +1242,80 @@ impl EngineService {
 
     /// The registered project a host's folder belongs to, as `(name, root)`; `None` for a folder outside every registered project
     /// and when the registry cannot be trusted. A research run asked from inside a project belongs to it (`specs/112` §2.1).
+    /// `host.capture_source` (`specs/142` §2.2): a host hands over the text it read, or a file it saved, or names an address for the
+    /// daemon to read under its own rules. The logic is `host_capture::capture`; this checks the caller, holds the host gate across the
+    /// limit check and the write (so two sessions cannot pass the hour's limit together), and hands it the daemon's fetcher. Under the
+    /// private-read mark the fetcher is never built: nothing is requested.
+    async fn host_capture_source(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::host_capture as hc;
+        use crate::host_rpc as h;
+        need_host(&ctx)?;
+        let ws = &self.engine.ws;
+        h::gate(&ws.dir).map_err(host_err)?;
+        let c = h::Caller::parse(&p).map_err(host_err)?;
+        let (items, dry) = hc::parse(&p).map_err(host_err)?;
+        let label = c.label(p["model"].as_str());
+        let private_read = crate::private_read::state(&ws.dir, &c.mission()).would_affect_a_send();
+        let project = self.host_project(&c.cwd);
+        let library = self.engine.cfg.get().library.clone();
+        let (e, wsd, home, wider, secrets) = (self.engine.clone(), ws.dir.clone(), ws.home.clone(), self.engine.settings.wider_fetch.clone(), self.engine.secrets.clone());
+        let session = c.session.clone();
+        let now_unix = (self.engine.clock_unix)();
+        // One host capture at a time: the hour's limits are checked and counted with nothing else handing over in between.
+        let _gate = self.host_gate.lock().await;
+        let observed = match self.mission_at(Some(&c.mission()), c.cwd.to_str()).await {
+            Ok(m) => m.replay().map(|ev| crate::research_observed::from_events(&ev)).unwrap_or_default(),
+            Err(_) => Default::default(),
+        };
+        let reply = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+            let identifiers = crate::query_guard::identifiers(&wsd);
+            let now = delphi_core::time::format_unix_millis(now_unix, 0);
+            let ctx = hc::Ctx {
+                home: &home,
+                session: &session,
+                label: &label,
+                project_root: project.as_ref().map(|(_, r)| r.as_path()),
+                handover: hc::Ctx::handover_of(&home, &session),
+                read_marked: private_read,
+                identifiers: &identifiers,
+                keep: library.unknown_licence.as_str(),
+                cache_max: Some(library.text_cache_max_mib.saturating_mul(1024 * 1024)),
+                limits: hc::Limits::of(library.handover_session_mib, library.handover_hour_mib),
+                now,
+                now_unix,
+                limited: true,
+            };
+            let redact = |s: &str| secrets.redact(s);
+            let wants_web = !private_read && !dry;
+            if wants_web {
+                let transport = Arc::new(delphi_adapter::research::transport::HttpTransport::new()?);
+                let list = Arc::new(crate::research_setup::lists(&wsd, &home)?);
+                let web = crate::research_host::LiveWeb::new(transport, list, crate::research_setup::engines(&e), wider);
+                web.observed.restore(observed);
+                let fetch = |u: &str| -> Result<crate::host_research::Fetched, String> {
+                    use crate::research_run::Web;
+                    let page = web.fetch(u)?;
+                    let snap = web.held.read_as(&page.url, &page.text).ok_or_else(|| "fetch_failed".to_string())?;
+                    Ok((page.url, snap))
+                };
+                hc::capture(&ctx, &items, dry, &redact, &fetch)
+            } else {
+                // §2.2 item 5: under the mark the daemon fetches nothing; no transport is made.
+                hc::capture(&ctx, &items, dry, &redact, &|_| Err("not fetched".to_string()))
+            }
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|m| err(code::INVALID_PARAMS, m))?;
+        drop(_gate);
+        // What was kept is indexed now, so the next search finds it. A failure is not the call's.
+        if !dry {
+            let (w, hm) = (ws.dir.clone(), ws.home.clone());
+            let _ = tokio::task::spawn_blocking(move || refresh_kb(&w, &hm)).await;
+        }
+        Ok(reply)
+    }
+
     fn host_project(&self, cwd: &std::path::Path) -> Option<(String, std::path::PathBuf)> {
         let ws = &self.engine.ws.dir;
         let id = crate::scope::resolve(ws, cwd).project.filter(|id| id.as_str() != crate::scope::DEFAULT_PROJECT)?;
@@ -5645,6 +5719,7 @@ impl Extension for ServiceExt {
                 "host.council_result" => svc.host_council_read(params, ctx, true).await,
                 "host.request_research" => svc.host_request_research(params, ctx).await,
                 "host.record_research" => svc.host_record_research(params, ctx).await,
+                "host.capture_source" => svc.host_capture_source(params, ctx).await,
                 "host.research_feed" => svc.host_research_feed(params, ctx).await,
                 "host.research_status" => svc.host_research_read(params, ctx, false).await,
                 "host.research_result" => svc.host_research_read(params, ctx, true).await,

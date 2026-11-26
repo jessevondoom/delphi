@@ -322,6 +322,8 @@ sandbox = "off"
 # text_cache_max_mib = 1024        # the most text kept with no open licence, in MiB (at least 16); past it the least recently used
 #                                  # is evicted, its raw bytes first, then its text. private_text_max_mib is its old name and is
 #                                  # read when this key is absent.
+# handover_session_mib = 16        # the most one host session may hand over with capture_source in an hour, in MiB (and 120 sources)
+# handover_hour_mib = 64           # the most all host sessions together may hand over in an hour, in MiB (and 300 sources)
 # private_to_models = "deny"       # deny | allow
 
 # Generated search pages (specs/057). `delphi pages search "<question>"` has the writer role write a page from the library and checks it

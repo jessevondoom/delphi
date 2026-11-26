@@ -54,6 +54,22 @@ pub struct AnchorSpec {
 
 /// What a claim reads when the text its anchors were checked against is gone and no verified excerpt was kept (`specs/142` §2.3 item 4).
 pub const UNVERIFIABLE: &str = "unverifiable, text evicted";
+/// Where an anchor was found when the text it is in was handed over by a host (`specs/142` §2.2 item 3): its `in`.
+pub const HOST_CAPTURE: &str = "host_capture";
+
+/// Is this anchor the host's word alone: found in text a host handed over that the daemon has not read and found the same
+/// (`specs/142` §2.2 item 3)? Such an anchor is no origin for corroboration.
+fn host_word_only(a: &Value, meta: &Value) -> bool {
+    a["in"] == HOST_CAPTURE && meta["confirmed_by_daemon"].is_null()
+}
+
+/// Mark an anchor found in a source's current text `in: host_capture` when that text is a host's.
+fn mark_host_capture(a: &mut Value, meta: &Value) {
+    if meta["host_capture"].is_object() {
+        a["in"] = json!(HOST_CAPTURE);
+    }
+}
+
 /// Why an anchor is an orphan (`specs/142` §2.3 item 3).
 pub const NOT_IN_NEWER_TEXT: &str = "not in the newer text";
 pub const TEXT_EVICTED: &str = "text evicted";
@@ -635,8 +651,9 @@ impl Library {
         }
         let mut cited: Vec<&str> = Vec::new();
         for spec in rc.anchors {
-            // Only a private pointer may carry a host's own quote: a public source's anchor is the daemon's to find.
-            if !self.read_meta(&spec.source_id).is_some_and(|m| is_private(&m)) {
+            // Only a private pointer, or text a host handed over (`specs/142` §2.2 item 3), may carry a host's own quote: a public
+            // source's anchor is the daemon's to find.
+            if !self.read_meta(&spec.source_id).is_some_and(|m| is_private(&m) || m["host_capture"].is_object()) {
                 continue;
             }
             let Ok(a) = self.research_anchor(spec) else { continue };
@@ -685,6 +702,91 @@ impl Library {
         changed
     }
 
+    /// A host's claim whose quote rests on a source the daemon could not read (`specs/142` §2.2 item 6): the quote waits on the claim,
+    /// under the id the source would have, for text a host hands over later. At most [`RESEARCH_QUOTE_MAX`] characters; nothing is
+    /// anchored and nothing counts until then.
+    pub fn add_waiting(&self, claim_id: &str, source_id: &str, locator: &str, quote: &str) -> Result<(), String> {
+        let quote: String = clean_text(quote.trim()).chars().take(RESEARCH_QUOTE_MAX).collect();
+        if quote.is_empty() || !valid_id(source_id) {
+            return Ok(());
+        }
+        let mut c = self.claim(claim_id).ok_or_else(|| format!("no claim `{claim_id}`"))?;
+        let entry = json!({"source_id": source_id, "locator": locator, "quote": quote});
+        let mut all = c["waiting"].as_array().cloned().unwrap_or_default();
+        if !all.contains(&entry) {
+            all.push(entry);
+        }
+        c["waiting"] = Value::Array(all);
+        self.save_claim(&c)
+    }
+
+    /// The claims whose quotes wait on `source_id`, with each quote: what a dry run of a capture of it says would anchor.
+    pub fn waiting_on(&self, source_id: &str) -> Vec<(String, String)> {
+        self.claims()
+            .iter()
+            .flat_map(|c| c["waiting"].as_array().into_iter().flatten().filter(|w| w["source_id"] == source_id).map(move |w| (c["id"].as_str().unwrap_or("").to_string(), w["quote"].as_str().unwrap_or("").to_string())))
+            .collect()
+    }
+
+    /// The text of `source_id` arrived (`specs/142` §2.2 item 6): each quote waiting on it is looked for in that text. One that is found
+    /// becomes an anchor (`in: host_capture` when the text is a host's) and its claim, `host-reported, not found` until now, reads
+    /// `host-reported`; one that is not found keeps waiting. Returns how many anchors were added.
+    pub fn attach_waiting(&self, source_id: &str) -> usize {
+        let mut added = 0;
+        for mut c in self.claims().into_iter().filter(|c| c["waiting"].as_array().is_some_and(|w| w.iter().any(|x| x["source_id"] == source_id))) {
+            let id = c["id"].as_str().unwrap_or("").to_string();
+            let mut left = Vec::new();
+            let mut anchored = false;
+            for w in c["waiting"].as_array().cloned().unwrap_or_default() {
+                if w["source_id"] != source_id {
+                    left.push(w);
+                    continue;
+                }
+                let spec = AnchorSpec { source_id: source_id.to_string(), locator: w["locator"].as_str().map(String::from), quote: w["quote"].as_str().unwrap_or("").to_string(), prefix: None, suffix: None, read: None };
+                match self.research_anchor(&spec) {
+                    Ok(a) if a["start"].is_u64() => {
+                        let held = c["anchors"].as_array().is_some_and(|all| all.iter().any(|x| x["source_id"] == a["source_id"] && x["quote_hash"] == a["quote_hash"]));
+                        if !held {
+                            match c["anchors"].as_array_mut() {
+                                Some(all) => all.push(a),
+                                None => c["anchors"] = json!([a]),
+                            }
+                            added += 1;
+                        }
+                        anchored = true;
+                    }
+                    _ => left.push(w),
+                }
+            }
+            if left.is_empty() {
+                c.as_object_mut().map(|m| m.remove("waiting"));
+            } else {
+                c["waiting"] = Value::Array(left);
+            }
+            if anchored {
+                let marks: Vec<Value> = c["host_reported"].as_array().cloned().unwrap_or_default().into_iter().map(|m| if m == "host-reported, not found" { json!("host-reported") } else { m }).fold(Vec::new(), |mut v, m| {
+                    if !v.contains(&m) {
+                        v.push(m);
+                    }
+                    v
+                });
+                c["host_reported"] = Value::Array(marks);
+            }
+            if self.save_claim(&c).is_ok() && anchored {
+                let _ = self.cite(source_id, &id);
+                self.refresh_support(&id);
+                self.log("claim_waiting_anchored", json!({"id": id, "source": source_id}));
+            }
+        }
+        added
+    }
+
+    /// Whether the library holds the source's text and `quote` is in it, compared as a host's quote is (`host_research::quote_in`:
+    /// case, punctuation and spacing folded). A yes or a no; no text is returned.
+    pub fn holds_quote_folded(&self, source_id: &str, quote: &str) -> bool {
+        valid_id(source_id) && std::fs::read_to_string(self.source_dir(source_id).join("source.md")).is_ok_and(|t| crate::host_research::quote_in(&t, quote))
+    }
+
     /// Whether the library holds the source's text and `quote` is in it letter for letter. A yes or a no; no text is returned.
     pub fn holds_quote(&self, source_id: &str, quote: &str) -> bool {
         !quote.trim().is_empty() && std::fs::read_to_string(self.source_dir(source_id).join("source.md")).is_ok_and(|t| t.contains(quote))
@@ -717,6 +819,7 @@ impl Library {
             let mut v = serde_json::to_value(a).map_err(|e| e.to_string())?;
             v["state"] = json!("active");
             v["via"] = json!("research");
+            mark_host_capture(&mut v, &meta);
             self.pin_anchor(&v)?;
             return Ok(v);
         }
@@ -787,6 +890,9 @@ impl Library {
             return Err("an anchor records where it is from (--locator)".into());
         }
         v["state"] = json!("active");
+        if held.is_some() {
+            mark_host_capture(&mut v, &meta);
+        }
         self.pin_anchor(&v)?;
         Ok(v)
     }
@@ -979,6 +1085,7 @@ impl Library {
         // context (`specs/142` §2.3 items 1 and 2). One that is found takes the new text's hash with its new place.
         let sha = sha256_hex(text.as_bytes());
         let now = delphi_core::time::now_rfc3339();
+        let meta = self.read_meta(source_id).unwrap_or(Value::Null);
         for mut c in self.citing(source_id) {
             let mut changed = false;
             let mut lost = Vec::new();
@@ -993,6 +1100,9 @@ impl Library {
                         a["start"] = json!(start);
                         a["end"] = json!(end);
                         a["text_sha256"] = json!(sha);
+                        // Found in the text the source now holds: a host's (`in: host_capture`) or the daemon's.
+                        a.as_object_mut().map(|m| m.remove("in"));
+                        mark_host_capture(a, &meta);
                         // The text is back: an anchor orphaned by eviction or purge resolves again.
                         if let Some(m) = a.as_object_mut() {
                             m.remove("orphan");
@@ -1240,6 +1350,11 @@ impl Library {
             }
             let Some(meta) = self.read_meta(sid) else { continue };
             if !live_origin(&meta) {
+                continue;
+            }
+            // `specs/142` §2.2 item 3: a quote found in text a host handed over is the host's word; it counts for no origin until the
+            // daemon reads the address itself and finds the same text.
+            if host_word_only(a, &meta) {
                 continue;
             }
             // `specs/115` §2 item 3: a private or internal source is never an origin for corroboration, in any project. The claim's
@@ -1750,6 +1865,26 @@ mod tests {
 
     const WORDS: &str = "The harbour opens at dawn. The tide turns twice a day in this bay. The harbour closes at dusk.";
     const QUOTE: &str = "The tide turns twice a day in this bay";
+
+    /// The fitness function of `specs/142` §6 (AC-5, AC-6): a quote found in text a host handed over anchors `in: host_capture` and
+    /// adds no origin to its claim until the daemon reads the address itself and finds the same text; then it counts as any daemon
+    /// capture does.
+    #[test]
+    fn a_host_capture_is_no_origin_until_the_daemon_confirms_it() {
+        let (_d, l) = lib();
+        let url = "https://harbour.example.net/bay";
+        let id = crate::library::source_id(url);
+        let h = crate::library::capture::Handed { id: id.clone(), url: Some(url.into()), locator: url.into(), kind: "web".into(), retrieved: "2026-11-26T00:00:00Z".into(), raw: WORDS.as_bytes().to_vec(), media_type: "text/plain".into(), captured_by: "host:t/m".into(), keep: "local_text".into(), ..Default::default() };
+        l.add_handed(&h, &Budgets::default()).unwrap();
+        let c = research(&l, "The tide turns twice a day in the bay.", "0123456789abcdef", &[spec(&id, QUOTE)]);
+        assert_eq!(c["anchors"][0]["in"], HOST_CAPTURE);
+        assert!(l.cites_of(&c).is_empty(), "unconfirmed: no origin");
+        assert_eq!(c["support"]["origins"].as_u64().unwrap_or(0), 0);
+        l.add_fetched(url, &crate::fact_fetch::test_text_snapshot(url, WORDS), &AddOpts { keep_closed_held: true, ..Default::default() }, &Budgets::default()).unwrap();
+        let c = l.claim(c["id"].as_str().unwrap()).unwrap();
+        assert_eq!(l.cites_of(&c).len(), 1, "confirmed: it counts");
+        assert_eq!(c["support"]["origins"], 1, "the support was recomputed on confirmation");
+    }
 
     /// The fitness function of `specs/142` §6 and AC-22: an anchor made under this spec has a pinned excerpt of at most 300
     /// characters with the `text_sha256` and position it was found at, under every value of `unknown_licence`.

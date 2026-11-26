@@ -365,7 +365,7 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
             continue;
         }
         let Some(url) = public_url(s) else {
-            read.push(Read::Nothing);
+            read.push(unread(&lib, &s.locator));
             sources_out.push(json!({"index": i, "kind": s.kind, "fetched": false}));
             continue;
         };
@@ -396,11 +396,12 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
             Err(e) => {
                 topic.refused(run, url, if e == "capture_failed" { "capture_failed" } else { refusal_word(&e) })?;
                 sources_out.push(json!({"index": i, "kind": s.kind, "fetched": false, "url": url}));
-                read.push(Read::Nothing);
+                read.push(unread(&lib, url));
             }
         }
     }
     let (mut ids, mut found, mut not_found, mut private_claims, mut claims_out) = (Vec::new(), 0usize, 0usize, 0usize, Vec::new());
+    let mut handed_claims = 0usize;
     for c in &parsed.claims {
         let page = c.source.and_then(|i| read.get(i)).unwrap_or(&Read::Nothing);
         let (written, mark) = match page {
@@ -416,20 +417,37 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
                 let anchors: Vec<AnchorSpec> = (!quote.trim().is_empty()).then(|| AnchorSpec { source_id: sid.clone(), locator: Some(locator.clone()), quote, prefix: None, suffix: None, read: None }).into_iter().collect();
                 (lib.add_host_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &anchors }, HOST_REPORTED), Some(HOST_REPORTED))
             }
+            // `specs/142` §2.2 items 3 and 6: a quote found in text a host handed over anchors there and stays the host's word.
+            Read::Handed(sid, at) if lib.holds_quote_folded(sid, &c.quote) => {
+                let fp = private_fingerprint(&c.text);
+                let anchors = [AnchorSpec { source_id: sid.clone(), locator: Some(at.clone()), quote: c.quote.clone(), prefix: None, suffix: None, read: None }];
+                (lib.add_host_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &anchors }, HOST_REPORTED), Some(HOST_REPORTED))
+            }
             _ => {
                 let fp = private_fingerprint(&c.text);
-                (lib.add_host_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &[] }, NOT_FOUND), Some(NOT_FOUND))
+                let written = lib.add_host_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &[] }, NOT_FOUND);
+                // The address was not read: the quote waits for text a host may hand over later (§2.2 item 6).
+                if let (Ok(v), Read::Waiting(sid, at)) = (&written, page) {
+                    let _ = lib.add_waiting(v["id"].as_str().unwrap_or(""), sid, at, &mask(&c.quote, ctx.identifiers));
+                }
+                (written, Some(NOT_FOUND))
             }
         };
         match written {
             Ok(v) => {
                 let id = v["id"].as_str().unwrap_or("").to_string();
+                let on_handed = matches!(page, Read::Handed(..)) && mark == Some(HOST_REPORTED);
                 match mark {
                     None => found += 1,
+                    Some(HOST_REPORTED) if on_handed => handed_claims += 1,
                     Some(HOST_REPORTED) => private_claims += 1,
                     Some(_) => not_found += 1,
                 }
-                claims_out.push(json!({"id": id, "quote_found": mark.is_none(), "mark": mark}));
+                let mut line = json!({"id": id, "quote_found": mark.is_none() || on_handed, "mark": mark});
+                if on_handed {
+                    line["in"] = json!(crate::library::claims::HOST_CAPTURE);
+                }
+                claims_out.push(line);
                 if !id.is_empty() && !ids.contains(&id) {
                     ids.push(id);
                 }
@@ -447,7 +465,7 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
     topic.amend(|rec| rec["gaps"] = json!(gaps))?;
     Ok(json!({
         "recorded": true, "topic_id": topic.id, "research_id": run, "claims": parsed.claims.len(), "library_claims": ids.len(),
-        "quotes_found": found, "quotes_not_found": not_found, "private_sources": private_sources, "private_claims": private_claims, "fetched_nothing": ctx.read_marked, "status": NOT_VALIDATED,
+        "quotes_found": found, "quotes_not_found": not_found, "private_sources": private_sources, "private_claims": private_claims, "quotes_in_host_captures": handed_claims, "fetched_nothing": ctx.read_marked, "status": NOT_VALIDATED,
         "note": "not validated. Delphi fetched each public source itself and looked for each quote in what it read: a quote it found is an anchor into the page it keeps; one it did not find (or could not look for) is kept as `host-reported, not found`. A private, internal, file or person source was not fetched: only its locator, title and date are kept, and its claims stay private and count for no corroboration. Read it back with research_result and this research_id, or find it with search_kb.",
     }))
 }
@@ -463,8 +481,25 @@ enum Read {
     Page(String, String, String),
     /// A private pointer: the library source and the locator.
     Private(String, String),
+    /// Text a host handed over with `capture_source` (`specs/142` §2.2 item 6): the library source and the address. Its quotes are the
+    /// host's word: an anchor found in it is `in: host_capture` and its claim stays `host-reported`.
+    Handed(String, String),
+    /// Nothing yet: the address the daemon did not read, and the source id its text would be kept under, for a quote to wait on.
+    Waiting(String, String),
     /// Nothing (not public, or the fetch failed).
     Nothing,
+}
+
+/// For an address the daemon did not read: the host's capture of it, or the id a later capture of it would have.
+fn unread(lib: &Library, locator: &str) -> Read {
+    let mut f = Vec::new();
+    let Some((url, true)) = crate::source_normalise::locator(locator, &mut f) else { return Read::Nothing };
+    let sid = crate::library::source_id(&url);
+    if lib.read_meta(&sid).is_some_and(|m| m["host_capture"].is_object()) {
+        Read::Handed(sid, url)
+    } else {
+        Read::Waiting(sid, url)
+    }
 }
 
 #[cfg(test)]

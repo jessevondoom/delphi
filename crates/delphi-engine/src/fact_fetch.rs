@@ -21,6 +21,8 @@
 //! hashes of the extracted text: a page that shows a bot something else is `cloaked`.
 
 use delphi_adapter::reqwest::{self, header, redirect, Url};
+/// The web address type, for code that only parses an address and opens no connection (`source_normalise`).
+pub type Address = Url;
 use delphi_core::provenance::Span;
 use regex::Regex;
 use serde::Serialize;

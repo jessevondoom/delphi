@@ -18,6 +18,8 @@ const USAGE: &str = "usage:
   delphi sources show <id> [--json] [--offline] [--home <dir>]
   delphi sources history <id> [--json] [--home <dir>]
   delphi sources verify [<id>] [--json] [--home <dir>]
+  delphi sources capture <file.json> [--dry-run] [--json] [--home <dir>]
+  delphi sources lint [<id>] [--json] [--home <dir>]
   delphi sources archive <id | url> [--licence <id>] [--title <t>] [--level full|excerpts|pointer] [--workspace <name>] [--home <dir>]
   delphi sources excerpt add <id> --locator <where> --purpose <why> (--text <passage> | --file <file>) [--prefix <t>] [--suffix <t>]
     [--work-bytes <n>] [--home <dir>]
@@ -95,6 +97,8 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
         Some("private") => private(&lib, rest),
         Some("history") => history(&lib, rest),
         Some("verify") => verify(&lib, rest),
+        Some("capture") => capture(rest, home),
+        Some("lint") => lint(rest, home),
         Some("excerpt") => excerpt(&lib, rest),
         Some("bib") => bibliography(&lib, rest),
         Some("acquire") => crate::sources_acquire_cmd::acquire(home, rest),
@@ -311,6 +315,15 @@ fn show(lib: &Library, args: &[String], home: &Path) -> i32 {
         let gone = if rec["purged"].is_string() { "; text purged" } else if rec["evicted"]["text"].is_string() { "; text evicted" } else if rec["evicted"]["raw"].is_string() { "; raw evicted" } else { "" };
         println!("  capture        by {}, text by {}{}, {} revisit(s){}", clean(rec["captured_by"].as_str().unwrap_or("?"), 60), clean(rec["extractor"]["name"].as_str().unwrap_or("?"), 40), rec["extractor"]["version"].as_str().map(|v| format!(" {}", clean(v, 10))).unwrap_or_default(), rec["revisits"].as_array().map_or(0, Vec::len) as u64 + rec["revisits_more"].as_u64().unwrap_or(0), gone);
     }
+    // `specs/142` §2.2 items 3 and 5: text a host handed over is the host's word until the daemon reads the same text itself.
+    match delphi_engine::library::capture::host_word(&m) {
+        Some(w) => println!("  host capture   {}: counts for no corroboration{}", w, if w == delphi_engine::library::capture::CANNOT_CONFIRM { " (read privately, or of a kind Delphi never reads)" } else { " until Delphi reads the address and finds the same text" }),
+        None if !m["confirmed_by_daemon"].is_null() => println!("  host capture   confirmed by the daemon on {}", clean(m["confirmed_by_daemon"].as_str().unwrap_or("?"), 30)),
+        None => {}
+    }
+    if let Some(c) = m["licence_claimed"].as_str() {
+        println!("  licence claimed {} (the host's word; never changes what is kept or what may leave)", clean(c, 60));
+    }
     if !orphans.is_empty() {
         println!("  orphans        {} anchor(s) that no longer resolve", orphans.len());
         for o in &orphans {
@@ -400,6 +413,71 @@ fn verify(lib: &Library, args: &[String]) -> i32 {
         println!("{} capture(s) checked, {} differ; {} kept from before captures were recorded (nothing to compare with). Nothing was changed.", v.checked, v.differ.len(), v.unrecorded);
     }
     i32::from(!v.differ.is_empty())
+}
+
+/// `delphi sources capture <file.json> [--dry-run]` (`specs/142` §2.2 item 10): the operator hands the library sources as
+/// `capture_source` takes them, through the same checks, and they are kept as `captured_by: operator`. A file named in an item is read
+/// beneath the folder of the JSON file. With --dry-run nothing is written and each item shows the record it would be stored as.
+fn capture(args: &[String], home: &Path) -> i32 {
+    if !operator_only("capture") {
+        return 2;
+    }
+    let pos = positional(args);
+    let [file] = pos[..] else {
+        eprintln!("{}", USAGE);
+        return 2;
+    };
+    let toml = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
+    let cap = delphi_adapter::config::Config::parse(&toml).map(|c| c.library.text_cache_max_mib).unwrap_or(1024);
+    let dry = args.iter().any(|a| a == "--dry-run");
+    match delphi_engine::host_capture::operator_call(home, Path::new(file), dry, delphi_adapter::config::UnknownLicence::read(&toml).as_str(), Some(cap.saturating_mul(1024 * 1024))) {
+        Err(e) => {
+            eprintln!("delphi sources capture: {}", clean(&e, 300));
+            1
+        }
+        Ok(v) => {
+            if args.iter().any(|a| a == "--json") {
+                println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            } else {
+                for item in v["sources"].as_array().into_iter().flatten() {
+                    println!("{}  {}  {}{}", item["index"], item["outcome"].as_str().unwrap_or("?"), item["source_id"].as_str().unwrap_or("-"), item["why"].as_str().map(|w| format!(": {}", clean(w, 200))).unwrap_or_default());
+                    for f in item["findings"].as_array().into_iter().flatten() {
+                        println!("    {} {}: {} ({})", f["kind"].as_str().unwrap_or(""), clean(f["field"].as_str().unwrap_or(""), 40), clean(f["problem"].as_str().unwrap_or(""), 120), clean(f["fix"].as_str().unwrap_or(""), 120));
+                    }
+                }
+                println!("{}", if dry { "dry run: nothing was written" } else { "kept as not validated" });
+            }
+            i32::from(v["sources"].as_array().into_iter().flatten().any(|i| i["outcome"] == "refused"))
+        }
+    }
+}
+
+/// `delphi sources lint [<id>]` (`specs/142` §2.2 item 10): the validation of `capture_source` run over stored records, listing what
+/// normalising each again would change. It reads only; exit 1 when a record would change.
+fn lint(args: &[String], home: &Path) -> i32 {
+    let pos = positional(args);
+    let id = match pos[..] {
+        [] => None,
+        [id] => Some(id.as_str()),
+        _ => {
+            eprintln!("{}", USAGE);
+            return 2;
+        }
+    };
+    let found = delphi_engine::host_capture::lint(home, id);
+    if args.iter().any(|a| a == "--json") {
+        let rows: Vec<Value> = found.iter().map(|(i, f)| serde_json::json!({"id": i, "findings": f.iter().map(|x| x.to_json()).collect::<Vec<_>>()})).collect();
+        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+    } else {
+        for (i, f) in &found {
+            println!("{}", i);
+            for x in f {
+                println!("    {}", clean(&delphi_engine::host_capture::finding_line(x), 240));
+            }
+        }
+        println!("{} source(s) would change if normalised again. Nothing was changed.", found.len());
+    }
+    i32::from(!found.is_empty())
 }
 
 /// `delphi sources private list|purge` (`specs/119` §3 item 4): the text research kept privately under `[library] unknown_licence =

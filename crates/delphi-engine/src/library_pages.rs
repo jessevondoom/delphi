@@ -158,6 +158,11 @@ impl Library {
             Stamp::Validator { result } => banner(&date, Some((&date, &format!("{}{}", result, unsupported))), ""),
             Stamp::NotRun { note } => banner(&date, None, &format!("{}{}", note, unsupported)),
         };
+        // `specs/142` §2.2 items 3 and 5: one line under the banner of a page resting in part on text a host handed over.
+        let head = match extra["host_line"].as_str() {
+            Some(l) => format!("{head}\n\n{l}."),
+            None => head,
+        };
         // The credit line under each picture is the daemon's (`specs/118` §2 item 4), written from the picture's licence record.
         let markdown = format!("{}\n\n{}\n\n{}", head, self.with_credits(&body), self.bibliography_table(&checked.cited, style, scope));
         if self.ensure().is_ok() {

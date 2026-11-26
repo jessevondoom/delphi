@@ -458,7 +458,8 @@ fn copilot_tools(host: &[&str], delphi: &[&str]) -> String {
 /// The Delphi tools a research worker may call beyond the read tools (spec 113 §4 item 1): ask for research and read it, and hand what
 /// it found to Delphi. Each stages content or reads a job; none changes a file, runs a command or approves anything. `record_finding`
 /// (spec 116) is on it because the scout's and the investigator's charters end every investigation with it.
-const WORKER_CAPTURE_TOOLS: &[&str] = &["request_research", "research_status", "research_result", "record_research", "record_finding", "propose_kb_entry", "propose_note", "record_session_summary"];
+/// `capture_source` (`specs/142` §2.2) hands over the text of a source the daemon cannot read itself.
+const WORKER_CAPTURE_TOOLS: &[&str] = &["request_research", "research_status", "research_result", "record_research", "capture_source", "record_finding", "propose_kb_entry", "propose_note", "record_session_summary"];
 /// The red-team's charter names three of them (its source ladder: `request_research`, `propose_kb_entry`, `record_session_summary`); it
 /// gets those and the two that read a research job back, and nothing else (spec 113 §4 item 2).
 const RED_TEAM_CAPTURE_TOOLS: &[&str] = &["request_research", "research_status", "research_result", "propose_kb_entry", "record_session_summary"];
@@ -572,7 +573,7 @@ fn worker_body(role: &str, inherits_tools: bool, host: &str, inline: Option<&Inl
     };
     // Spec 113 §4: a research worker hands what it found to Delphi; those tools stage content and change no file.
     let scope = if !inherits_tools && worker_tools(role).contains(&"record_research") {
-        format!("{scope} Delphi's capture tools change no file: hand Delphi what you found (`record_research` for a piece of research, before you answer) as your role's pack says.")
+        format!("{scope} Delphi's capture tools change no file: hand Delphi what you found (`record_research` for a piece of research, before you answer) as your role's pack says. For a page Delphi cannot read itself (off its trusted lists, behind your sign-in, internal, or read in a private session), hand over the text you read with `capture_source`, or save the page to the session's handover folder (`<Delphi home>/handover/<session>/`, named in its reply) and pass `file`.")
     } else {
         scope
     };
@@ -1246,13 +1247,13 @@ mod tests {
     fn the_strategists_worker_gains_three_research_tools_and_no_other_role_changes() {
         let with = |extra: &[&'static str]| WORKER_READ_TOOLS.iter().chain(extra).copied().collect::<Vec<_>>();
         assert_eq!(worker_tools("strategist"), with(&["request_research", "research_status", "research_result"]));
-        for gone in ["record_research", "record_finding", "propose_kb_entry", "propose_note", "record_session_summary", "research_feed"] {
+        for gone in ["record_research", "capture_source", "record_finding", "propose_kb_entry", "propose_note", "record_session_summary", "research_feed"] {
             assert!(!worker_tools("strategist").contains(&gone), "{gone}");
         }
         for (role, _) in WORKER_ROLES {
             let want = match *role {
                 "strategist" => continue,
-                "scout" | "investigator" => with(&["request_research", "research_status", "research_result", "record_research", "record_finding", "propose_kb_entry", "propose_note", "record_session_summary"]),
+                "scout" | "investigator" => with(&["request_research", "research_status", "research_result", "record_research", "capture_source", "record_finding", "propose_kb_entry", "propose_note", "record_session_summary"]),
                 "red-team" => with(&["request_research", "research_status", "research_result", "propose_kb_entry", "record_session_summary"]),
                 // Spec 126 §14 AC-A4: the orchestrator's worker gains two read tools and nothing else.
                 "orchestrator" => with(&["route", "session_brief"]),

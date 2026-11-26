@@ -273,7 +273,8 @@ mod tests {
             ("delphi-engine/src/research_host.rs".to_string(), (1, 0, 1, 1)),
             // the daemon restores the set for a host's claim (`propose_kb_entry`) and a host's recorded research (`record_research`, specs/113
             // §2 item 3) from the `research.observed` events its own research job wrote
-            ("delphi-engine/src/service.rs".to_string(), (0, 2, 0, 0)),
+            // and a host's handed text (`capture_source`, specs/142 §2.2 item 1), whose address alone the daemon reads under the same rules
+            ("delphi-engine/src/service.rs".to_string(), (0, 3, 0, 0)),
         ]
         .into_iter()
         .collect();

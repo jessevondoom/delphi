@@ -1566,6 +1566,46 @@ mod page_validation {
         assert_eq!(status(&got), Status::Noted);
         assert_eq!(l.origin_of(&got), "page:tides-abc.md");
     }
+
+    /// `specs/142` AC-26 and the fitness function of §6: a page with one statement supported only by an unconfirmed host capture ends
+    /// `pass_contested` at most and shows the host-reported line, though the validator passes everything; once the daemon reads the
+    /// address, finds the same text and confirms the capture, the rebuilt page can end `pass` and the line is gone. One read privately
+    /// says it cannot be confirmed.
+    #[test]
+    fn an_unconfirmed_host_capture_caps_the_outcome() {
+        use crate::library::capture::Handed;
+        let words = "The north harbour closes its inner basin an hour before high water on every spring tide.";
+        let url = "https://harbour.example.net/basin";
+        for private in [false, true] {
+            let (d, l) = lib();
+            let id = if private { crate::library::private_pointer_id("internal", "the harbour notice board") } else { crate::library::source_id(url) };
+            let h = Handed { id: id.clone(), url: (!private).then(|| url.to_string()), locator: if private { "the harbour notice board".into() } else { url.into() }, kind: if private { "internal".into() } else { "web".into() }, retrieved: "2026-11-26T00:00:00Z".into(), raw: words.as_bytes().to_vec(), media_type: "text/plain".into(), captured_by: "host:t/m".into(), private, unconfirmable: private, keep: "local_text".into(), ..Default::default() };
+            l.add_handed(&h, &Budgets::default()).unwrap();
+            let spec = AnchorSpec { source_id: id.clone(), locator: Some("p1".into()), quote: "closes its inner basin an hour before high water".into(), ..Default::default() };
+            let c = l.add_claim("The inner basin closes an hour before high water.", &ClaimOpts::default(), &[spec]).unwrap()["id"].as_str().unwrap().to_string();
+            assert_eq!(l.claim(&c).unwrap()["anchors"][0]["in"], "host_capture");
+            let draft = format!("The inner basin closes an hour before high water [{c}].");
+            let pass_all = || Fake::new(vec![Ok(vec![a(Judgement::Supported, Some(&c), "The inner basin closes an hour before high water.")])]);
+            let scope = if private { Scope::Internal } else { Scope::External };
+            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            let p = rt.block_on(l.build_page_checked("basin", &draft, Format::Plain, scope, &pass_all(), &rw(Err("unused")), &TokenLedger::new(1_000_000))).unwrap();
+            assert_eq!(p.verdict.outcome, Outcome::PassContested, "private {private}: {:?}", p.verdict);
+            let line = if private { HOST_LINE_PRIVATE } else { HOST_LINE };
+            assert!(p.page.markdown.contains(line), "{}", p.page.markdown);
+            assert_eq!(p.verdict.assertions[0].result, "host-reported");
+            if private {
+                // `delphi kb health` counts the page held for this reason (§2.2 item 5).
+                assert_eq!(crate::knowledge_health::gather(d.path(), d.path(), 0).pages_host_private, 1);
+                continue;
+            }
+            // The daemon reads the address and finds the same text: the capture is confirmed and the page can pass.
+            l.add_fetched(url, &crate::fact_fetch::test_text_snapshot(url, words), &AddOpts { keep_closed_held: true, ..Default::default() }, &Budgets::default()).unwrap();
+            assert!(!l.read_meta(&id).unwrap()["confirmed_by_daemon"].is_null());
+            let p = rt.block_on(l.build_page_checked("basin", &draft, Format::Plain, scope, &pass_all(), &rw(Err("unused")), &TokenLedger::new(1_000_000))).unwrap();
+            assert_eq!(p.verdict.outcome, Outcome::Pass, "{:?}", p.verdict);
+            assert!(!p.page.markdown.contains("rests in part on text a host handed over"));
+        }
+    }
 }
 
 mod acquisition {
