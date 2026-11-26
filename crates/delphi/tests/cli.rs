@@ -283,6 +283,47 @@ fn research_setup_needs_a_terminal_or_flags_writes_the_search_table_and_init_poi
 
 // specs/119 §5 and AC-7: `delphi kb health` on a workspace with sources and no claims prints the stalled-loop line, the doctor
 // carries the same lines, one line a day goes to `local/health.jsonl`, and a home that does not exist is never created.
+// specs/143 §2.9 and AC-21: `delphi bridge setup claude` needs a terminal or a reference; a token on the command line is not a
+// reference; inside an agent seat it is refused whatever the flags; no refusal writes anything. With a reference and --no-test it
+// writes only the reference.
+#[test]
+fn bridge_setup_needs_a_terminal_or_a_reference_and_is_refused_in_a_seat() {
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().join("home");
+    let delphi = |args: &[&str], seat: bool| {
+        let mut c = Command::new(DELPHI);
+        c.args(args).arg("--home").arg(&home).env_remove("DELPHI_WORKSPACE").env_remove("DELPHI_BRIDGE_SOCKET").env_remove("DELPHI_BRIDGE_TOKEN").stdin(Stdio::null()).current_dir(t.path());
+        if seat {
+            c.env("DELPHI_BRIDGE_SOCKET", "/tmp/none.sock");
+        }
+        c.output().unwrap()
+    };
+    let o = delphi(&["init", "--non-interactive", "--workspace", "w"], false);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let cfg = home.join("workspaces/w/config.toml");
+    let before = std::fs::read_to_string(&cfg).unwrap();
+    let token = "sk-ant-oat01-pasted-on-the-command-line";
+    for (args, seat, says) in [
+        (vec!["bridge", "setup", "claude", "--workspace", "w"], false, "needs a terminal"),
+        (vec!["bridge", "setup", "claude", "--workspace", "w", "--credential", token, "--no-test"], false, "never the token itself"),
+        (vec!["bridge", "setup", "claude", "--workspace", "w", "--credential", "env:BRIDGE_TOKEN", "--no-test"], true, "refused inside an agent seat"),
+        (vec!["bridge", "setup", "codex", "--workspace", "w"], false, "only `setup claude`"),
+    ] {
+        let o = delphi(&args, seat);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", text(&o.stderr));
+        assert!(text(&o.stderr).contains(says), "{args:?}: {}", text(&o.stderr));
+        assert!(!text(&o.stderr).contains(token) && !text(&o.stdout).contains(token), "the token is never repeated");
+    }
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), before, "no refusal wrote anything");
+    let o = delphi(&["bridge", "setup", "claude", "--workspace", "w", "--credential", "keychain:bridge-claude", "--no-test"], false);
+    assert_eq!(o.status.code(), Some(0), "{}{}", text(&o.stdout), text(&o.stderr));
+    assert!(text(&o.stdout).contains("subscription quota") && text(&o.stdout).contains("API-key endpoint"), "{}", text(&o.stdout));
+    let after = std::fs::read_to_string(&cfg).unwrap();
+    let block = "[bridge.claude]\ncredential = \"keychain:bridge-claude\"\n\n";
+    assert!(after.contains(block), "{after}");
+    assert_eq!(after.replacen(block, "", 1), before, "only the reference is added; every other line is kept");
+}
+
 #[test]
 fn kb_health_prints_the_stalled_loop_lines_writes_one_line_a_day_and_never_creates_a_home() {
     let (t, home) = workspace();

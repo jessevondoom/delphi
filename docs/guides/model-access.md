@@ -82,6 +82,20 @@ models = { fast = "gpt-6-luna", workhorse = "gpt-6.2-sol", frontier = "gpt-6.2-a
 
 `delphi capabilities` lists both programs with their versions; for Copilot it says whether a login config exists, without opening it.
 
+## Background jobs on your Claude subscription
+
+Some of Delphi's work sends one prompt and reads one answer: topic and search pages, their validator, summaries, and the scout's own calls. An API endpoint serves these. On an install whose only endpoints are subscription CLIs, the single-turn bridge can serve them through your own `claude` CLI instead. It runs one prompt with every tool off, in a home built empty for each call, and never reads your own CLI login ([`specs/143`](../../specs/143-a-single-turn-harness-bridge-one-prompt-one-answer-through-an-allowed-harness.md)).
+
+**The bridge spends your own subscription quota**, the same quota your own use of Claude draws on, and it is for you alone on this machine. For heavy or unattended use, add an API-key endpoint (`path = "api"`) instead. The vendor asks products to use API keys, and an API key does not share your plan's limits. `[bridge.limits]` caps what the bridge may spend, and `[bridge.jobs]` can keep each job manual.
+
+To give the bridge its token, run this at a terminal:
+
+```sh
+delphi bridge setup claude
+```
+
+It asks you to run `claude setup-token` yourself, takes the token with hidden input, and makes one test call. Only then does it keep the token in your keychain and write the reference `keychain:bridge-claude`, never the token, to `[bridge.claude] credential`. It shows the change for you to ratify. A token whose test fails is not stored. The command is refused inside an agent seat. `delphi doctor` says whether the bridge serves single calls, and names this command when no token is set.
+
 ## When a model runs out
 
 The pool keeps your models in preference order. When one is out of quota or cooling down the next takes over and work continues. When none is usable a task waits, and says so, instead of failing; a weaker model substitutes only after you confirm it for that task. To set the order explicitly:

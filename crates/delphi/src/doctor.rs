@@ -390,7 +390,7 @@ fn check_single_calls(cfg_text: &str, r: &mut Report) {
     }
     match single_call_server(&cfg) {
         Some(endpoint) => r.push(Level::Ok, "7 model-access", "config.toml", format!("single model calls (topic and search pages, their validator, summaries, the scout's calls) are served by the harness `{endpoint}`, one prompt and one answer with its tools off; they spend that subscription's own quota")),
-        None => r.warn("7 model-access", "config.toml", "every allowed endpoint is a harness and none serves a single model call, so topic and search pages, their validator, summaries and the scout's calls cannot run. Either add an endpoint with path = \"api\" (or a cloud or gateway one) to [[endpoints]] and allowed_endpoints, or let a harness serve single calls: [routing] single_call_harness = \"auto\" (the default) or \"on\", with a CLI that can run one prompt with its tools off (claude; not agy) and its subscription token named in [bridge.claude] credential"),
+        None => r.warn("7 model-access", "config.toml", "every allowed endpoint is a harness and none serves a single model call, so topic and search pages, their validator, summaries and the scout's calls cannot run. Either add an endpoint with path = \"api\" (or a cloud or gateway one) to [[endpoints]] and allowed_endpoints, or let a harness serve single calls: [routing] single_call_harness = \"auto\" (the default) or \"on\", with a CLI that can run one prompt with its tools off (claude; not agy) and its subscription token named in [bridge.claude] credential (`delphi bridge setup claude` stores it)"),
     }
 }
 

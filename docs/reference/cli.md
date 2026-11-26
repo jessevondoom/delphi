@@ -106,6 +106,16 @@ The connectors that are configured, logged in and pinned.
   delphi connectors status | test <name> | pin <name> [--workspace <name>] [--home <dir>]
 ```
 
+### `delphi bridge`
+
+Give background jobs your Claude subscription, through your own CLI.
+
+```
+  delphi bridge setup claude [--credential <keychain:name|env:NAME|command:[...]>] [--no-test] [--home <dir>] [--workspace <name>]
+```
+
+The single-turn bridge (specs/143) lets Delphi's background jobs (topic pages, their validator, summaries, the scout's own calls) send one prompt and read one answer through your own `claude` CLI, with its tools off, in a home built empty for each call. Every bridged call spends your own subscription quota, the quota your own use of Claude draws on; for heavy or unattended use add an API-key endpoint instead (path = "api"), which the vendor asks products to use and which does not share your plan's limits. `setup claude` says this first, asks you to run `claude setup-token` yourself, takes the token with hidden input, makes one test call through the bridge (a few thousand tokens), and only then keeps the token in your keychain (service delphi, account bridge-claude) and writes the reference `keychain:bridge-claude`, never the token, to [bridge.claude] credential in config.toml; the change is shown for you to ratify. A token whose test fails is not stored and nothing is written. Without a terminal it asks and stores nothing: pass --credential with a reference to where the token is kept; it tests that token, writes the reference and does not ratify. It never reads your own `claude` login and is refused inside an agent seat. Exit codes: 0 set up · 1 the test failed or nothing was saved · 2 usage or refusal.
+
 ### `delphi relay`
 
 Send approval cards to your email or Telegram.
