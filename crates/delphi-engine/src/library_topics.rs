@@ -353,6 +353,9 @@ pub const SEED_EXPANSION: &str = "a seed page, due for the writer's expansion";
 /// queued. The idle rebuild takes queued topics first, the earliest first; a writer's page, or a seed the writer could not expand,
 /// clears it.
 pub const EXPANSION_QUEUED: &str = "expansion_queued";
+/// A topic record's old slugs (`specs/139` §2.4, the operator's ruling of 2026-11-26): a topic re-slugged by `rename` or `retitle`
+/// keeps its old slugs here, and a `page:<old slug>` link resolves to it. Other pages' text is not rewritten.
+pub const ALIASES: &str = "aliases";
 
 /// The start of what [`Library::topic_rebuild`] says when the writer could not expand a seed page: the seed stands
 /// (`specs/139` §2.3 item 5), and no page of the claims alone takes its place.
@@ -633,7 +636,12 @@ impl Library {
         }
         let query = clip_title(query);
         let query = if query.is_empty() { title.clone() } else { query };
-        let slug = slug_for(&title);
+        let mut slug = slug_for(&title);
+        // A slug that is an old slug of another topic is not taken: the new topic gets the next free one, `<slug>-2` and on, so a
+        // `page:` link to the old slug still opens the topic it was written for.
+        if self.topic_side(&slug).is_none() && self.alias_owner(&slug).is_some() {
+            slug = self.free_slug(&slug)?;
+        }
         if let Some(mut side) = self.topic_side(&slug) {
             if let Origin::Research(id) = &origin {
                 let mut ids: Vec<String> = side["research_topics"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
@@ -676,33 +684,111 @@ impl Library {
     }
 
     /// `delphi pages rename <slug> <title>` (`specs/139` §2.4 item 2): the operator's title, which always wins. A topic with no
-    /// written page (`version` 0) takes the slug of its new title; one with a page keeps its slug for good (§2.4 item 4).
+    /// writer's page (none yet, or seed pages only) takes the slug of its new title, and its old slug becomes an alias; one with a
+    /// writer's page keeps its slug for good (§2.4 item 4, as the operator ruled on 2026-11-26).
     pub fn topic_rename(&self, slug: &str, title: &str) -> Result<TopicEntry, String> {
         self.topic_set_title(slug, title, TitleSource::Operator)
     }
 
-    /// Give `slug` the title `title` from `source`, and the slug of that title when the topic has no page yet. Refused when that slug
-    /// is another topic's.
+    /// Give `slug` the title `title` from `source`, and the slug of that title when the topic has no writer's page. Refused when that
+    /// slug is another topic's, or an old slug of another topic. A re-slugged topic keeps its old slug as an alias, and its seed page,
+    /// its versions and its row of the link table move with it.
     fn topic_set_title(&self, slug: &str, title: &str, source: TitleSource) -> Result<TopicEntry, String> {
         let mut side = self.topic_side(slug).ok_or_else(|| format!("no topic `{}`", slug))?;
         let title = clip_title(title);
         if title.is_empty() {
             return Err("a topic needs a title".into());
         }
-        let new_slug = if side["version"].as_u64().unwrap_or(0) == 0 { slug_for(&title) } else { slug.to_string() };
+        let new_slug = if self.topic_has_writers_page(slug, &side) { slug.to_string() } else { slug_for(&title) };
         if new_slug != slug && self.topic_side_path(&new_slug).exists() {
             return Err(format!("the topic `{}` already exists, so `{}` keeps its slug and its title", new_slug, slug));
         }
+        if let Some(owner) = self.alias_owner(&new_slug).filter(|o| o != slug) {
+            return Err(format!("`{}` is an old slug of the topic `{}`, so `{}` keeps its slug and its title", new_slug, owner, slug));
+        }
+        let old_title = side["title"].as_str().unwrap_or(slug).to_string();
         side["title"] = json!(title);
         side["title_source"] = json!(source.as_str());
         side["slug"] = json!(new_slug);
-        self.write_topic_side(&new_slug, &side)?;
         if new_slug != slug {
-            // A topic with no page has only its record: nothing else is under the old slug.
+            let mut aliases = aliases_of(&side);
+            aliases.retain(|a| *a != new_slug);
+            if !aliases.iter().any(|a| a == slug) {
+                aliases.push(slug.to_string());
+            }
+            side[ALIASES] = json!(aliases);
+        }
+        self.write_topic_side(&new_slug, &side)?;
+        // A seed page is code's: its frontmatter and its heading take the new slug and title. A writer's page is never re-slugged.
+        let page = self.topic_file(slug);
+        if let Ok(md) = std::fs::read_to_string(&page) {
+            let seed = side["outcome"] == Outcome::Seed.as_str();
+            let md = if seed && (new_slug != slug || old_title != title) { retitle_seed_text(&md, &new_slug, &title) } else { md };
+            std::fs::write(self.topic_file(&new_slug), md).map_err(|e| e.to_string())?;
+            if new_slug != slug {
+                let _ = std::fs::remove_file(&page);
+            }
+        }
+        if new_slug != slug {
+            let (from, to) = (self.topic_versions_dir(slug), self.topic_versions_dir(&new_slug));
+            if from.is_dir() {
+                std::fs::rename(&from, &to).map_err(|e| e.to_string())?;
+            }
+            let mut t = self.link_table();
+            if let Some(out) = t.remove(slug) {
+                t.insert(new_slug.clone(), out);
+                let _ = self.write_json(&self.links_path(), &json!(t));
+            }
             let _ = std::fs::remove_file(self.topic_side_path(slug));
         }
         self.log("topic_retitled", json!({"slug": slug, "new_slug": new_slug, "title_source": source.as_str()}));
         Ok(self.topic_entry(&new_slug, &side, None))
+    }
+
+    /// Has the topic a writer's page, now or among its versions: one of any outcome but `seed`? Such a topic keeps its slug for good.
+    /// A version whose record cannot be read counts as one.
+    fn topic_has_writers_page(&self, slug: &str, side: &Value) -> bool {
+        let writers = |v: &Value| v["built"].as_u64().is_some() && v["outcome"].as_str() != Some(Outcome::Seed.as_str());
+        if writers(side) || side["written"] == true {
+            return true;
+        }
+        let Ok(rd) = std::fs::read_dir(self.topic_versions_dir(slug)) else { return false };
+        rd.flatten()
+            .filter(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".json")))
+            .any(|e| std::fs::read(e.path()).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).is_none_or(|v| writers(&v)))
+    }
+
+    /// The topic whose old slugs hold `slug`, if one does.
+    fn alias_owner(&self, slug: &str) -> Option<String> {
+        if !valid_slug(slug) {
+            return None;
+        }
+        self.topic_sides().into_iter().find(|(_, side)| aliases_of(side).iter().any(|a| a == slug)).map(|(s, _)| s)
+    }
+
+    /// The first of `<base>-2`, `<base>-3`, ... that is no topic's slug and no topic's old slug.
+    fn free_slug(&self, base: &str) -> Result<String, String> {
+        (2..1000)
+            .map(|n| {
+                let tail = format!("-{}", n);
+                format!("{}{}", base.chars().take(MAX_SLUG - tail.len()).collect::<String>().trim_end_matches('-'), tail)
+            })
+            .find(|s| valid_slug(s) && self.topic_side(s).is_none() && self.alias_owner(s).is_none())
+            .ok_or_else(|| format!("no free slug for `{}`", base))
+    }
+
+    /// The live slug `slug` names: its own, when it is a topic, else the topic it is an old slug of. A live topic's own slug always wins
+    /// over an alias. Reads only.
+    pub fn topic_resolve(&self, slug: &str) -> Option<String> {
+        if self.topic_side(slug).is_some() {
+            return Some(slug.to_string());
+        }
+        self.alias_owner(slug)
+    }
+
+    /// What a `page:` link may name: every topic's slug and every old slug (an alias). The page check is given these.
+    pub fn topic_link_names(&self) -> BTreeSet<String> {
+        self.topic_sides().into_iter().flat_map(|(s, side)| std::iter::once(s).chain(aliases_of(&side))).collect()
     }
 
     /// `delphi pages retitle [--apply]` (`specs/139` §2.4 item 4): for each topic whose title code made from its question, the title
@@ -730,13 +816,16 @@ impl Library {
             if title == current {
                 continue;
             }
-            let new_slug = if side["version"].as_u64().unwrap_or(0) == 0 { slug_for(&title) } else { slug.clone() };
+            let new_slug = if self.topic_has_writers_page(slug, side) { slug.clone() } else { slug_for(&title) };
             plan.push(Retitle { slug: slug.clone(), new_slug, title: current.to_string(), new_title: title, source, collision: false });
         }
         let existing: BTreeSet<&str> = sides.iter().map(|(s, _)| s.as_str()).collect();
+        // An old slug of another topic is taken too; a topic's own old slug is its to take back.
+        let alias_of = |a: &str| sides.iter().find(|(_, side)| aliases_of(side).iter().any(|x| x == a)).map(|(s, _)| s.clone());
         let taken: Vec<String> = plan.iter().map(|p| p.new_slug.clone()).collect();
         for (i, p) in plan.iter_mut().enumerate() {
-            p.collision = p.new_slug != p.slug && (existing.contains(p.new_slug.as_str()) || taken.iter().enumerate().any(|(j, s)| j != i && *s == p.new_slug));
+            let aliased = alias_of(&p.new_slug).is_some_and(|o| o != p.slug);
+            p.collision = p.new_slug != p.slug && (existing.contains(p.new_slug.as_str()) || aliased || taken.iter().enumerate().any(|(j, s)| j != i && *s == p.new_slug));
         }
         if apply {
             for p in plan.iter().filter(|p| !p.collision) {
@@ -794,6 +883,7 @@ impl Library {
     /// One topic and its page (the current one, or the version `version` names), the frontmatter left off. A topic not yet
     /// built has an empty page. Reads only.
     pub fn topic_get(&self, slug: &str, version: Option<&str>, ctx: &DueCtx<'_>) -> Option<(TopicEntry, String)> {
+        let slug = &self.topic_resolve(slug)?;
         let side = self.topic_side(slug)?;
         let entry = self.topic_entry(slug, &side, Some(ctx));
         let md = match version {
@@ -806,7 +896,7 @@ impl Library {
 
     /// The earlier versions of a topic's page, newest first: their stamp, when each was built and what it changed. Reads only.
     pub fn topic_versions(&self, slug: &str) -> Option<Vec<Value>> {
-        self.topic_side(slug)?;
+        let slug = &self.topic_resolve(slug)?;
         let Ok(rd) = std::fs::read_dir(self.topic_versions_dir(slug)) else { return Some(Vec::new()) };
         let mut out: Vec<Value> = rd
             .flatten()
@@ -1247,11 +1337,62 @@ impl Library {
         if !valid_slug(slug) {
             return None;
         }
+        // An old slug answers for the topic it now names: a link to it, or to the live slug, links here.
+        let slug = self.topic_resolve(slug).unwrap_or_else(|| slug.to_string());
+        let mut names = vec![slug.clone()];
+        names.extend(self.topic_side(&slug).map(|s| aliases_of(&s)).unwrap_or_default());
         let t = self.link_table();
-        let here: Vec<&String> = t.iter().filter(|(from, to)| *from != slug && to.iter().any(|x| x == slug)).map(|(from, _)| from).collect();
-        let out = t.get(slug).cloned().unwrap_or_default();
-        Some(json!({"slug": slug, "links_here": here, "links_out": out, "exists": self.topic_side(slug).is_some()}))
+        let here: Vec<&String> = t.iter().filter(|(from, to)| !names.contains(from) && to.iter().any(|x| names.contains(x))).map(|(from, _)| from).collect();
+        let out = t.get(&slug).cloned().unwrap_or_default();
+        Some(json!({"slug": slug, "links_here": here, "links_out": out, "exists": self.topic_side(&slug).is_some()}))
     }
+}
+
+/// A topic record's old slugs.
+fn aliases_of(side: &Value) -> Vec<String> {
+    side[ALIASES].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect()
+}
+
+/// A seed page's text with its frontmatter key and title, and its own heading, made `slug` and `title`. The rest is as it was.
+fn retitle_seed_text(md: &str, slug: &str, title: &str) -> String {
+    let quoted = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
+    let (front, body) = match md.strip_prefix("---\n").and_then(|r| r.find("\n---\n").map(|i| (&r[..i], &r[i..]))) {
+        Some((f, b)) => (Some(f), b),
+        None => (None, md),
+    };
+    let mut out = String::new();
+    if let Some(f) = front {
+        let lines: Vec<String> = f
+            .lines()
+            .map(|l| {
+                if l.starts_with("id: ") {
+                    format!("id: page-{}", slug)
+                } else if l.starts_with("title: ") {
+                    format!("title: {}", quoted(title))
+                } else if l.starts_with("query_key: ") {
+                    format!("query_key: {}", quoted(slug))
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        out.push_str("---\n");
+        out.push_str(&lines.join("\n"));
+    }
+    let mut done = false;
+    let body: Vec<String> = body
+        .split('\n')
+        .map(|l| {
+            if !done && l.starts_with("# ") {
+                done = true;
+                format!("# {}", title.split_whitespace().collect::<Vec<_>>().join(" "))
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    out.push_str(&body.join("\n"));
+    out
 }
 
 /// Live: not disproved, retired or superseded.
@@ -1563,6 +1704,8 @@ mod rebuild_tests {
         assert!(l.topic_rename("tidal-turning", "Moon").unwrap_err().contains("already exists"));
         let mut side = l.topic_side("moon").unwrap();
         side["version"] = json!(1);
+        side["built"] = json!(2);
+        side["outcome"] = json!("pass");
         l.write_topic_side("moon", &side).unwrap();
         let kept = l.topic_rename("moon", "The Moon and its pull").unwrap();
         assert_eq!((kept.slug.as_str(), kept.title.as_str()), ("moon", "The Moon and its pull"), "a topic with a page keeps its slug");
@@ -1831,5 +1974,97 @@ mod seed_tests {
         let err = l.topic_seed_build(SeedRequest { slug: &slug, now: 1, settings: &cfg, style: bib::Format::Plain, seed: &seed, held: &Refuses, gaps: &[], cancel: None }).unwrap_err();
         assert!(err.starts_with("check_failed"), "{err}");
         assert!(!l.pages_dir().join(format!("{slug}.md")).exists());
+    }
+
+    /// A topic with a run seeded twice: its seed page and one version of it.
+    fn seeded_twice(home: &Path) -> (Library, std::path::PathBuf, String) {
+        let ws = home.join("workspaces/w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let l = Library::in_home(home);
+        let t = Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
+        t.finish("r-1", "done", Some(&json!({"answer": "Tides lag because the estuary is shallow.", "claims": []})), &[], None, 0).unwrap();
+        let slug = l.topics_from_research(&ws, 1).remove(0);
+        seed_build(&l, &slug, &ws, 100).unwrap();
+        t.amend(|_| {}).unwrap();
+        let path = t.answer_path();
+        std::fs::write(&path, std::fs::read_to_string(&path).unwrap().replace("shallow", "shallow and long")).unwrap();
+        assert_eq!(seed_build(&l, &slug, &ws, 200).unwrap().outcome.as_deref(), Some("seed"));
+        assert_eq!(l.topic_versions(&slug).unwrap().len(), 1);
+        (l, ws, slug)
+    }
+
+    /// The operator's ruling of 2026-11-26, item 1: "no written page" means no writer's page. A topic whose only pages are seeds is
+    /// re-slugged by `rename`; its seed page, its versions and its row of the link table move with it, and the seed takes the new title.
+    #[test]
+    fn a_seed_only_topic_is_re_slugged_and_its_seed_versions_and_links_move() {
+        let home = tempfile::tempdir().unwrap();
+        let (l, _ws, old) = seeded_twice(home.path());
+        l.update_links(&old, &json!({"links": ["moon"]}));
+        let e = l.topic_rename(&old, "Estuary lag").unwrap();
+        assert_eq!((e.slug.as_str(), e.title.as_str(), e.version), ("estuary-lag", "Estuary lag", 2));
+        assert_eq!(e.side[ALIASES], json!([old]), "the old slug is kept as an alias");
+        assert!(l.topic_side(&old).is_none() && !l.pages_dir().join(format!("{old}.json")).exists(), "the old record is gone");
+        assert!(!l.pages_dir().join(format!("{old}.md")).exists() && !l.topic_versions_dir(&old).exists(), "nothing is left under the old slug");
+        let md = std::fs::read_to_string(l.pages_dir().join("estuary-lag.md")).unwrap();
+        assert!(md.contains("id: page-estuary-lag\n") && md.contains("title: \"Estuary lag\"\n") && md.contains("\n# Estuary lag\n"), "{md}");
+        assert!(md.contains("Tides lag because the estuary is shallow and long."), "the seed's text moved: {md}");
+        assert_eq!(l.topic_versions("estuary-lag").unwrap().len(), 1, "the version moved");
+        assert_eq!(l.topic_links("estuary-lag").unwrap()["links_out"], json!(["moon"]), "the link table's row moved");
+        assert!(!l.link_table().contains_key(&old));
+    }
+
+    /// Item 1, the other side: a topic with a writer's page, now or only among its versions, keeps its slug for good.
+    #[test]
+    fn a_topic_with_a_writers_page_keeps_its_slug() {
+        let home = tempfile::tempdir().unwrap();
+        let (l, _ws, slug) = seeded_twice(home.path());
+        // Only a version was the writer's: the current page is a seed again.
+        let dir = l.topic_versions_dir(&slug);
+        let v = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "json")).unwrap();
+        let mut old: Value = serde_json::from_slice(&std::fs::read(&v).unwrap()).unwrap();
+        old["outcome"] = json!("pass");
+        std::fs::write(&v, serde_json::to_vec(&old).unwrap()).unwrap();
+        let e = l.topic_rename(&slug, "Estuary lag").unwrap();
+        assert_eq!((e.slug.as_str(), e.title.as_str()), (slug.as_str(), "Estuary lag"), "a writer's page among the versions keeps the slug");
+        assert!(e.side.get(ALIASES).is_none());
+        // The current page is the writer's.
+        let mut side = l.topic_side(&slug).unwrap();
+        side["outcome"] = json!("pass");
+        l.write_topic_side(&slug, &side).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(l.topic_rename(&slug, "Harbour lag").unwrap().slug, slug, "a current writer's page keeps the slug");
+    }
+
+    /// The operator's ruling of 2026-11-26, item 2: an old slug is an alias. `page:<old slug>` passes the page check's `## See also`,
+    /// and the topic lookups (`pages topic`, the app's `pages.get`, versions and links) find the topic by it. A live slug wins over an
+    /// alias; a new topic whose slug would be another's alias takes the next free slug; a rename onto another's alias is refused.
+    #[test]
+    fn an_old_slug_resolves_as_an_alias_in_a_page_link_and_in_the_topic_lookups() {
+        let home = tempfile::tempdir().unwrap();
+        let (l, ws, old) = seeded_twice(home.path());
+        l.update_links("moon", &json!({"links": [old]}));
+        let title = l.topic_side(&old).unwrap()["title"].as_str().unwrap().to_string();
+        l.topic_rename(&old, "Estuary lag").unwrap();
+        let see_also = format!("## See also\n\n- [Tides](page:{old})\n");
+        assert!(!section_findings(&see_also, &l.topic_slugs()).is_empty(), "by the live slugs alone it is unknown");
+        assert!(section_findings(&see_also, &l.topic_link_names()).is_empty(), "the alias resolves");
+        assert_eq!(l.topic_resolve(&old).as_deref(), Some("estuary-lag"));
+        let ctx = DueCtx { ws: Some(&ws), now: 300, index: false };
+        let (e, md) = l.topic_get(&old, None, &ctx).unwrap();
+        assert_eq!(e.slug, "estuary-lag");
+        assert!(md.contains("# Estuary lag"));
+        assert_eq!(l.topic_versions(&old).unwrap().len(), 1);
+        assert_eq!(l.topic_links(&old).unwrap()["links_here"], json!(["moon"]), "a link to the old slug links here");
+        let got = crate::encyclopedia::pages_get(home.path(), &ws, 300, &json!({"slug": old})).unwrap();
+        assert_eq!(got["slug"], "estuary-lag", "the app's lookup resolves the alias");
+        // A new topic whose title gives the old slug takes the next free one; the alias still names the renamed topic.
+        let fresh = l.topic_create(&title, Origin::Operator, 400).unwrap();
+        assert_eq!(fresh.slug, format!("{old}-2"));
+        assert_eq!(l.topic_resolve(&old).as_deref(), Some("estuary-lag"));
+        let refused = l.topic_rename(&fresh.slug, &title).unwrap_err();
+        assert!(refused.contains("old slug of the topic `estuary-lag`"), "{refused}");
+        // Renaming the topic back takes its own old slug again.
+        assert_eq!(l.topic_rename("estuary-lag", &title).unwrap().slug, old);
+        assert_eq!(l.topic_side(&old).unwrap()[ALIASES], json!(["estuary-lag"]));
     }
 }

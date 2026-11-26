@@ -2,6 +2,7 @@
 state: built
 date: 2026-11-26
 title: "titles: subject, the writer's title, the derived title, pages rename, pages retitle"
+eval_waived: "no ranking term, search path or index changes in this slice; the diff base counts knowledge-v2's own retrieval changes"
 ---
 
 Slice D of spec 139, built 2026-11-26 on `build/139-de` (from `knowledge-v2`).
@@ -37,4 +38,23 @@ Slice D of spec 139, built 2026-11-26 on `build/139-de` (from `knowledge-v2`).
 
 - No run on the operator's workspace. `delphi pages retitle` there is the operator's step.
 - No real writer model has been asked for `title=`.
-- A re-slug does not rewrite another page's `page:<slug>` link to the old slug. A topic with no page has no links of its own.
+
+## Operator rulings, 2026-11-26
+
+These replace two of the builder decisions above.
+
+- "No written page" means no writer's page. `rename` and `retitle` re-slug a topic whose pages are all seeds (outcome `seed`, now and in its versions), not only one at `version` 0. Its record, seed page, versions folder and row of the link table move to the new slug. The seed page's frontmatter and heading take the new title. A topic with any other outcome, now or in a version, keeps its slug.
+- Old slugs become aliases. A re-slugged topic keeps its old slugs in `aliases`. A `page:<old slug>` link passes the page check (`topic_link_names`), and `pages topic`, `pages versions`, the app's `pages.get`, `pages.versions` and `pages.links` find the topic by it (`topic_resolve`). Other pages' text is not rewritten. A topic's own slug wins over an alias.
+- Builder decision: a new topic whose slug is another topic's alias takes the next free slug (`<slug>-2`, then `-3`). A `rename` onto another topic's alias is refused and names that topic. `retitle` prints it as a collision. A topic may take back its own old slug.
+- An over-long `subject` no longer refuses `record_research`. The schema keeps `maxLength: 80`. The daemon records the research, does not take the subject, and the reply says `{taken: false, reason: "it is longer than 80 characters"}`.
+- Help: the `pages` detail and the `rename` output say so.
+
+New tests:
+
+- `a_seed_only_topic_is_re_slugged_and_its_seed_versions_and_links_move` (`library_topics.rs`).
+- `a_topic_with_a_writers_page_keeps_its_slug` (`library_topics.rs`): a writer's page now, or only in a version.
+- `an_old_slug_resolves_as_an_alias_in_a_page_link_and_in_the_topic_lookups` (`library_topics.rs`): the see-also check, `topic_get`, versions, links, `pages.get`, the next free slug, the refused rename.
+- `pages_topic_finds_a_renamed_topic_by_its_old_slug` (`pages_cmd.rs`).
+- `an_81_character_subject_records_the_research_and_the_reply_says_the_subject_was_not_taken` (`host_research.rs`).
+
+The two older tests that faked "a page" with `version` 1 now give it a writer's outcome.

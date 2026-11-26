@@ -193,8 +193,45 @@ pub fn status(run: &Run, live: Option<&Value>, home: &Path) -> Value {
             "coverage": result.and_then(|r| r["coverage"].as_str()),
         })
     });
-    json!({
+    // `specs/139` §2.5 item 4, as the operator ruled on 2026-11-26: a finished run whose topic has a seed or written page names it, as
+    // the host's `research_result` and the `record_research` reply do.
+    let page = (phase == "done").then(|| topic_id.as_deref().and_then(|id| lib.topic_for_research(id))).flatten().and_then(|t| t.outcome.map(|o| json!({"slug": t.slug, "outcome": o})));
+    let mut v = json!({
         "topic": run.question, "phase": phase, "found": lines.len(), "read": fetched.len(), "skipped": refused.len(), "hosts": hosts, "sources": lines,
         "tokens": 0, "error": error, "report": report, "topic_id": topic_id, "research_id": run.run_id,
-    })
+    });
+    if let Some(p) = page {
+        v["page"] = p;
+    }
+    v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::topics::SeedRequest;
+    use crate::library::Library;
+    use crate::research_record::{Asker, Begin};
+
+    /// `specs/139` §2.5 item 4, as the operator ruled on 2026-11-26: the console's `research.status` of a finished run names the topic's
+    /// page, `{slug, outcome}`, once a seed (or a written page) exists; before any page it names none.
+    #[test]
+    fn research_status_carries_the_page_of_a_finished_run() {
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let t = Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
+        t.finish("r-1", "done", Some(&json!({"answer": "Tides lag because the estuary is shallow.", "claims": []})), &[], None, 0).unwrap();
+        let run = Run { question: "Why do tides lag?".into(), run_id: "r-1".into(), topic: Some(t), project: false };
+        assert!(status(&run, None, home.path()).get("page").is_none(), "no page yet: none is named");
+        let lib = Library::in_home(home.path());
+        let slug = lib.topics_from_research(&ws, 1).remove(0);
+        let seed = crate::topic_seed::assemble_linked(&lib, &ws, &lib.topic_side(&slug).unwrap());
+        let cfg = delphi_adapter::config::PagesConfig::default();
+        let req = SeedRequest { slug: &slug, now: 2, settings: &cfg, style: crate::library::bib::Format::Plain, seed: &seed, held: &crate::topic_seed::NoHeldText, gaps: &[], cancel: None };
+        lib.topic_seed_build(req).unwrap();
+        let v = status(&run, None, home.path());
+        assert_eq!(v["phase"], "done");
+        assert_eq!(v["page"], json!({"slug": slug, "outcome": "seed"}), "{v}");
+    }
 }

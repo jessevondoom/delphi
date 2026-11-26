@@ -2,6 +2,7 @@
 state: built
 date: 2026-11-26
 title: "build now: seed at once, expansion queued for idle"
+eval_waived: "no ranking term, search path or index changes in this slice; the diff base counts knowledge-v2's own retrieval changes"
 ---
 
 Slice E of spec 139, built 2026-11-26 on `build/139-de` (from `knowledge-v2`).
@@ -43,3 +44,11 @@ Slice E of spec 139, built 2026-11-26 on `build/139-de` (from `knowledge-v2`).
 
 - No live run: no real research run or host call has written a seed this way on the operator's install.
 - The idle expansion is proven only with a scripted model whose call fails (the seed stands). A writer's page landing after a queued expansion is covered by the existing rebuild tests, not by this slice's own test.
+
+## Operator rulings, 2026-11-26
+
+This replaces the builder decision that the console's status does not name the page.
+
+- The console's `research.status` names the page: `page: {slug, outcome}` once a finished run's topic has a seed or written page, as the host's `research_result` and the `record_research` reply do. Before any page there is no `page` field.
+- New test: `research_console::tests::research_status_carries_the_page_of_a_finished_run`.
+- Re-slugging a seed-only topic and aliases are slice D's (see D.md).

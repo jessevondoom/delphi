@@ -408,7 +408,8 @@ impl Engine {
         *material = !gathered.is_empty();
         // The page check resolves `[s-kb-...]` and `[f-...]` against these records and nothing else.
         let gaps = lib.topic_gaps(&side, &self.ws.dir);
-        let slugs = lib.topic_slugs();
+        // A `page:` link may name a topic by an old slug: it resolves through the topic's aliases.
+        let slugs = lib.topic_link_names();
         let lib = lib.with_records(gathered.records.clone()).with_topic_slugs(slugs);
         // No writer can be reached (an install with only harnesses, `specs/139` O7): the page is the seed, which calls no model. The
         // idle rebuild still raises its `no_route` notice for it (`specs/143` §2.7 item 6: the seed page stands, the cause is shown).
