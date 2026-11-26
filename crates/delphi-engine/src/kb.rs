@@ -2024,6 +2024,23 @@ impl Kb {
         ).ok()
     }
 
+    /// Every document the index holds, `(logical path, zone)`, in path order (`specs/140` §2.1: the golden set is built from them).
+    pub fn document_zones(&self) -> Vec<(String, String)> {
+        let Ok(mut st) = self.conn.prepare("SELECT rel_path, zone FROM kb_documents ORDER BY rel_path") else { return Vec::new() };
+        st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// The chunks of one document, `(start line, end line, heading path)`, in order.
+    pub fn chunk_spans(&self, rel_path: &str) -> Vec<(usize, usize, String)> {
+        let Ok(mut st) = self.conn.prepare("SELECT start_line, end_line, heading_path FROM kb_chunks WHERE rel_path = ?1 ORDER BY start_line, chunk_id") else { return Vec::new() };
+        st.query_map([rel_path], |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as usize, r.get::<_, String>(2)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// The tier the index computed for a document.
+    pub fn document_tier(&self, rel_path: &str) -> Option<String> {
+        self.conn.query_row("SELECT source_type FROM kb_documents WHERE rel_path = ?1", [rel_path], |r| r.get(0)).ok()
+    }
+
     /// `search`, and the best score the reranker gave any result it read (`None` when it did not run).
     pub fn search_scored(&self, query: &str, opts: &SearchOpts) -> Result<(Vec<Hit>, Option<f32>), KbError> {
         self.search_found(query, opts).map(|f| (f.hits, f.best_rerank))
