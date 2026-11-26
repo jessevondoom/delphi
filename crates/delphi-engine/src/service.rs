@@ -87,6 +87,8 @@ pub struct EngineService {
     /// (`None` until the first look, which starts at the ledger's end so an old merge never concludes a later prompt).
     merge_checked: std::sync::atomic::AtomicI64,
     merge_offset: Mutex<Option<u64>>,
+    /// When the search service's warm-up and record last ran (`specs/140` §2.5); 0 until the first tick.
+    retrieval_checked: std::sync::atomic::AtomicI64,
     research_jobs: crate::research_jobs::Jobs,
     /// What each app key asked in the last hour, and what of it still runs (`specs/120` §4.2 item 3).
     app_asked: Mutex<app_requests::Tally>,
@@ -298,6 +300,9 @@ fn need_host(ctx: &CallContext) -> Result<(), RpcError> {
 const HELP_WAIT: Duration = Duration::from_secs(45);
 /// How often the daemon looks at the merge ledger for the history store's merge trigger (`specs/102` §3.2). A hypothesis.
 const MERGE_TICK_SECS: i64 = 5;
+/// How often the daemon warms the search service's reader after a sync and records how searches were answered (`specs/140` §2.5).
+/// A reopen with the model loaded costs about 2 ms, so a sync is followed within this many seconds at little cost.
+const RETRIEVAL_TICK_SECS: i64 = 5;
 
 /// How long `host.ask_result` holds with `wait: true` (`specs/104` §2).
 const ASK_RESULT_WAIT: Duration = Duration::from_secs(25);
@@ -461,7 +466,7 @@ impl EngineService {
         let _ = engine.research_ask.set(tx);
         // One queue for every research run, under the one limits table (`specs/112` §4 item 6).
         let research_queue = crate::research_jobs::Jobs::with_limits(&engine.settings.research_limits);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), research_jobs: research_queue, app_asked: Default::default(), update: Default::default(),
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), retrieval_checked: Default::default(), research_jobs: research_queue, app_asked: Default::default(), update: Default::default(),
             #[cfg(test)]
             research_web: Mutex::new(None),
             #[cfg(test)]
@@ -2944,6 +2949,7 @@ impl EngineService {
                 svc.forge_probe_tick().await;
                 svc.merge_ledger_tick().await;
                 svc.health_tick().await;
+                let _ = svc.retrieval_tick().await;
                 svc.consolidate_tick().await;
                 svc.notices_tick().await;
             }
@@ -2998,6 +3004,29 @@ impl EngineService {
         tokio::task::spawn_blocking(move || {
             let _ = crate::knowledge_health::write_daily(&ws, &crate::knowledge_health::gather(&home, &ws, now));
         });
+    }
+
+    /// The search service's warm-up and its record (`specs/140` §2.5 items 2 and 3). At the first tick, and every
+    /// [`RETRIEVAL_TICK_SECS`] after, the reader of the workspace's index is opened on a thread of its own when it is missing or older
+    /// than the index, so a sync by any process is followed by a warm-up and no search pays for the model's load. On the same beat
+    /// the counts of the searches answered since the last tick, by mode, are appended to `local/search-modes.jsonl`, which
+    /// `delphi kb health` and the doctor read.
+    pub async fn retrieval_tick(&self) -> Option<tokio::task::JoinHandle<()>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = (self.engine.clock_unix)();
+        let last = self.retrieval_checked.load(SeqCst);
+        if (last != 0 && now - last < RETRIEVAL_TICK_SECS) || self.retrieval_checked.compare_exchange(last, now, SeqCst, SeqCst).is_err() {
+            return None;
+        }
+        let (home, ws) = (self.engine.ws.home.clone(), self.engine.ws.dir.clone());
+        Some(tokio::task::spawn_blocking(move || {
+            let db = ws.join("local/state.db");
+            if let Some(h) = crate::retrieval::warm(&home, &db) {
+                // This thread is the tick's own, not the timer loop's: waiting here holds up nothing but the next record line.
+                let _ = h.join();
+            }
+            let _ = crate::retrieval::record_modes(&ws, now, crate::retrieval::take_mode_counts(&db));
+        }))
     }
 
     /// Consolidation (`specs/116` §6): once a day, when `[memory] consolidate` is on and the daemon has been idle five minutes with no
@@ -5783,6 +5812,34 @@ mod tests {
     use super::*;
     use crate::model::Step;
     use crate::testkit::{events_of, setup, Fx};
+
+    /// `specs/140` §2.5 items 2 and 3 (slice E): the daemon's tick opens the search reader outside any search, so the first search
+    /// after it is not cold; it runs again only after five seconds, and then appends the searches' modes to the record that
+    /// `delphi kb health` and the doctor read.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_retrieval_tick_warms_the_reader_and_records_how_searches_were_answered() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let f = setup(vec![], 5.0, |_| {});
+        f.now.store(1_795_608_000, SeqCst);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        let (home, ws) = (f.engine.ws.home.clone(), f.engine.ws.dir.clone());
+        let db = ws.join("local/state.db");
+        fs::create_dir_all(ws.join("local")).unwrap();
+        crate::kb::Kb::open(&db).unwrap().upsert_from("context/heron.md", "context", "external_untrusted", "# Heron\n\nThe heron wades in shallow water.\n", "t").unwrap();
+        svc.retrieval_tick().await.expect("the first tick runs").await.unwrap();
+        let opts = crate::kb::SearchOpts { include_untrusted: true, ..Default::default() };
+        let r = crate::retrieval::search(&home, &db, "heron water", opts.clone()).unwrap();
+        assert!(!r.timing.cold && !r.hits.is_empty(), "the tick opened the reader; the search did not");
+        assert!(svc.retrieval_tick().await.is_none(), "not again within five seconds");
+        assert!(crate::knowledge_health::modes_since(&ws, 0).is_none(), "nothing recorded before the next tick");
+        f.now.fetch_add(RETRIEVAL_TICK_SECS, SeqCst);
+        svc.retrieval_tick().await.expect("the next tick").await.unwrap();
+        let n = crate::knowledge_health::modes_since(&ws, 0).expect("the search is recorded");
+        assert_eq!(n, [0, 1, 0, 0], "one search, answered by keywords (no model in a test home)");
+        let health = crate::knowledge_health::gather(&home, &ws, (f.engine.clock_unix)());
+        let line = health.lines((f.engine.clock_unix)()).into_iter().find(|l| l.text.contains("service searches in 24 hours")).expect("the health line");
+        assert!(!line.warn && line.text.contains("lexical-deadline 0 (0.0%)"), "{}", line.text);
+    }
 
     /// An install whose only endpoint is a harness that cannot serve a single call (`agy`: its tools cannot be turned off).
     fn harness_only(f: &Fx) -> Arc<EngineService> {
