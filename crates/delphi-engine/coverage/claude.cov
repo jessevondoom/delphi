@@ -10,13 +10,13 @@ flag | * | --help | na | | every CLI prints its help
 flag | . | --print | used | | as -p
 flag | . | --input-format, --output-format, --verbose, --setting-sources, --no-session-persistence, --resume, --fork-session, --strict-mcp-config, --mcp-config, --model, --append-system-prompt, --tools, --effort, --max-budget-usd, --json-schema, --fallback-model, --settings, --include-partial-messages, --agents, --add-dir, --permission-mode | used | |
 flag | . | --permission-prompt-tool | used | | hidden: absent from `claude --help` 2.1.312 but passed on every span; S0 probes that it is still accepted
-flag | . | --max-turns | used | | hidden: absent from `claude --help` 2.1.312; S0 probes whether it still ends a span with error_max_turns
+flag | . | --max-turns | used | | hidden: absent from `claude --help` 2.1.312 and 2.1.332; S0 probes whether it still ends a span with error_max_turns; a single call through the bridge passes `1` (spec 143 §2.2; accepted by 2.1.332 on 2026-11-25)
 
 # ── Planned: narrowing and hygiene (spec 046 S1) ──
 flag | . | --allowedTools, --allowed-tools, --disallowed-tools | planned | S1 | narrowing only: a profile names tools it denies, never ones beyond the span's own set
 flag | . | --disallowedTools | used | | spec 092 S2d1: a launch that holds an operator authorization repeats `--tools ""` by naming the CLI's native tools; a profile's own use stays planned (S1)
 flag | . | --restricted | planned | S1 | removes code-running tools and WebFetch and confines file tools; verify on the installed version first
-flag | . | --permission-prompts | planned | S1 | `none` for a span with no bridge, so an unanswerable request is denied instead of hanging
+flag | . | --permission-prompts | used | | spec 143 §2.2: `none` in a single call through the bridge, so anything that would prompt is denied; for a span with no bridge it stays planned (S1)
 flag | . | --exclude-dynamic-system-prompt-sections | planned | S1 | moves cwd/env/git status out of the system prompt so spans share a prompt cache; measure before default-on
 flag | . | --session-id | planned | S1 | Delphi picks the id so a retry can resume without waiting for the init event
 flag | . | --name | planned | S1 | the span label (`role/mission`)
@@ -41,7 +41,7 @@ flag | . | --continue, --from-pr | refused | | picks a session by directory or P
 flag | . | --worktree, --tmux | refused | | Delphi owns worktrees (specs 003, 008)
 flag | . | --system-prompt | na | | replaces the CLI's default prompt and its safety text; Delphi appends instead
 flag | . | --replay-user-messages | na | | Delphi already keeps the turn it sent
-flag | . | --safe-mode | na | | --setting-sources "" and --strict-mcp-config already disable what it targets
+flag | . | --safe-mode | used | | spec 143 §2.2: a single call through the bridge passes it (no CLAUDE.md, skill, plugin, hook, MCP server or custom command); a span does not, because --setting-sources "" and --strict-mcp-config already disable what it targets there
 flag | . | --brief, --prompt-suggestions, --ax-screen-reader, --file | na | | interactive or cloud-file feature
 flag | . | --version | na | | prints the version; Delphi reads it for doctor
 

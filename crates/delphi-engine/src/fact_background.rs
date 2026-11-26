@@ -278,6 +278,19 @@ impl crate::engine::Engine {
         }
     }
 
+    /// Whether a model can judge a background claim now. When none can, the check is not started, the claim stays due and no
+    /// attempt is counted against it; the daemon raises a `no_route` notice (`specs/143` §2.7 item 2).
+    pub(crate) fn background_judge_or_notice(&self) -> bool {
+        match self.judge_key(None) {
+            // A harness that would judge is asked for admission first (`specs/143` §2.3 item 6).
+            Some(key) => self.idle_job_may_start(crate::daemon_notice::Job::Validation, &key),
+            None => {
+                self.job_failed(crate::daemon_notice::Job::Validation, crate::daemon_notice::Cause::NoRoute);
+                false
+            }
+        }
+    }
+
     /// One look for work: if every gate passes, check the next claim (one per look). Returns the claim's fact id when a check ran. Where the
     /// install has no library there is nothing to validate.
     pub async fn background_validate_tick(self: &std::sync::Arc<Self>, m: &std::sync::Arc<crate::mission::MissionState>, last_operator: i64, tasks_running: usize) -> Option<String> {
@@ -290,6 +303,9 @@ impl crate::engine::Engine {
             let i = self.background_inputs(&lib, &state, last_operator, tasks_running);
             pick(&i).ok()?
         };
+        if !self.background_judge_or_notice() {
+            return None;
+        }
         record_attempt(&state, &chosen.fact_id, (self.clock_unix)());
         let _ = self.run_background_claim(m, &chosen.text).await;
         Some(chosen.fact_id)

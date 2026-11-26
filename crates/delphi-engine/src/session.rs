@@ -159,10 +159,12 @@ pub fn log_path(home: &Path) -> PathBuf {
 }
 
 /// Append a model-written summary of a session to the central log, on a line of its own (`specs/030` §4.3). `redact` is applied first.
-pub fn append_summary(home: &Path, mission: &str, session_id: &str, text: &str, model: &str, redact: &dyn Fn(&str) -> String) -> std::io::Result<()> {
+/// `tier` is the tier of the summary's text (`specs/143` §2.2 item 5): the lowest tier of what the model was shown, never above
+/// `internal_generated`. It is stored with the text, and nothing made from the summary is trusted above it.
+pub fn append_summary(home: &Path, mission: &str, session_id: &str, text: &str, model: &str, tier: delphi_core::provenance::Tier, redact: &dyn Fn(&str) -> String) -> std::io::Result<()> {
     std::fs::create_dir_all(home)?;
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(log_path(home))?;
-    writeln!(f, "{}", serde_json::json!({"kind": "summary", "mission_id": mission, "session_id": session_id, "text": redact(text), "model": model}))
+    writeln!(f, "{}", serde_json::json!({"kind": "summary", "mission_id": mission, "session_id": session_id, "text": redact(text), "model": model, "tier": tier.name()}))
 }
 
 /// Append a digest to the central log. `redact` is applied to every line first, as for any text the daemon writes.

@@ -857,7 +857,7 @@ impl Engine {
         // Spec 092 TA-5: in a run that holds a grant a seat starts only if its own tools can be proven off for this launch. The Claude
         // seat's native list and account connectors are cleared; a Builder, agy and codex are refused (`seat_native_tools_off`).
         let connectors = connectors && !granted;
-        let mut lp = LaunchProfile { native_tools: if granted || builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers, lock_down: granted && cli == Cli::Claude };
+        let mut lp = LaunchProfile { native_tools: if granted || builder || sc.readonly || sc.toolless || cli != Cli::Claude { vec![] } else { profile.native_tools.clone() }, auto_approve: delegate, claudeai_connectors: connectors, mcp_config: None, settle: self.settings.connector_settle, expect_servers, lock_down: granted && cli == Cli::Claude, single_call: false };
         // A forge reader on the Claude CLI: exactly its read list with `--tools`. Its working directory stays empty, so every read of
         // the copy is outside it and comes to `harness_decide` as a permission request first.
         if let (Some(f), Cli::Claude) = (&sc.forge, cli) {
@@ -993,6 +993,9 @@ impl Engine {
                 return Ok(Err(HarnessErr::retry(format!("a run with an operator authorization cannot use the claude seat: {why}"))));
             }
         }
+        // `specs/143` §2.3 item 3: from before it starts until it has ended, a seat or a span holds its endpoint against bridged
+        // calls. It checks nothing and waits for nothing.
+        let _holds_endpoint = self.bridge.gate.seat(&ep.id);
         let mut session = match Session::start(&launch).await {
             Ok(s) => s,
             Err(e) => return Ok(Err(HarnessErr::retry(e))),

@@ -57,7 +57,7 @@ pub(crate) fn ipr(role: &crate::role_call::RoleText, contract: String) -> Ipr {
 impl EnginePageWriter {
     async fn call(&self, contract: String) -> Result<String, String> {
         let role = crate::role_call::load(&self.engine, crate::role_call::Step::WritePage).await?;
-        let raw = self.engine.one_shot_raw(&self.key, &ipr(&role, contract), self.max_tokens + 400).await.ok_or_else(|| "the writer's call failed".to_string())?;
+        let raw = self.engine.one_shot_raw(&self.key, &ipr(&role, contract), self.max_tokens + 400, Some(delphi_core::provenance::Tier::L0)).await.map_err(|e| format!("the writer's call failed: {e}"))?;
         let text = self.engine.secrets.redact(&raw.text);
         if text.trim().is_empty() { Err("the writer returned nothing".into()) } else { Ok(text) }
     }
@@ -89,7 +89,19 @@ impl PageWriter for EnginePageWriter {
 pub fn share_allows(state: &std::path::Path, install_week: u64, now: i64) -> Result<(), String> {
     let spent: u64 = Journal::new(state).all().iter().filter(|e| e["kind"] == "span" && e["mission"] == BACKGROUND && e["page"] == true && e["at"].as_i64().unwrap_or(0) >= now - WEEK_SECS).map(|e| e["tokens"].as_u64().unwrap_or(0)).sum();
     let cap = FLOOR_TOKENS.max((BACKGROUND_SHARE * install_week as f64) as u64);
-    if spent + PAGE_RESERVE <= cap { Ok(()) } else { Err(format!("the validator's share of this week's tokens is spent ({} of {}); cached pages still open", spent, cap)) }
+    if spent + PAGE_RESERVE <= cap { Ok(()) } else { Err(format!("{} ({} of {}); cached pages still open", SHARE_SPENT, spent, cap)) }
+}
+
+/// What a page build says when routing has no model for the writer.
+pub const NO_WRITER: &str = "no model is available for the writer right now";
+/// How the refusal of the validator's weekly share begins ([`share_allows`]).
+const SHARE_SPENT: &str = "the validator's share of this week's tokens is spent";
+
+/// What an idle rebuild did (`specs/143` §2.7): the page, or the reason, and the cause of the notice when the job could not run.
+/// A rebuild that wrote the claims alone although the library had material is a failed check: its page stands and it has a cause.
+pub struct IdleRebuild {
+    pub built: Result<crate::library::topics::TopicEntry, String>,
+    pub cause: Option<crate::daemon_notice::Cause>,
 }
 
 /// What a page search tells the caller besides the page.
@@ -99,9 +111,9 @@ pub struct PageRun {
 }
 
 impl Engine {
-    fn writer_key(&self) -> Option<PoolKey> {
+    pub(crate) fn writer_key(&self) -> Option<PoolKey> {
         let cfg = self.cfg.get();
-        let req = crate::route::RouteRequest { role: "writer".into(), tier: "workhorse".into(), prefer_family: Some(cfg.primary_family().to_string()), target: cfg.routing.targets.get("writer").cloned(), turn_by_turn: true, ..Default::default() };
+        let req = crate::route::RouteRequest { role: "writer".into(), tier: "workhorse".into(), prefer_family: Some(cfg.primary_family().to_string()), target: cfg.routing.targets.get("writer").cloned(), turn_by_turn: true, single_call: true, ..Default::default() };
         match crate::route::resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &req) {
             crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => Some(key),
             _ => None,
@@ -208,7 +220,7 @@ impl Engine {
         let mut notes = Vec::new();
         let now = (self.clock_unix)();
         let extra = if external { self.capture_external(&lib, query, &mut notes).await? } else { Vec::new() };
-        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        let key = self.writer_key().ok_or_else(|| NO_WRITER.to_string())?;
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
         let ledger = self.validator.ledger();
@@ -241,7 +253,7 @@ impl Engine {
         let mut notes = Vec::new();
         let now = (self.clock_unix)();
         let extra = self.capture_external_reputable(&lib, query, &mut notes).await?;
-        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        let key = self.writer_key().ok_or_else(|| NO_WRITER.to_string())?;
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
         let ledger = self.validator.ledger();
@@ -274,7 +286,7 @@ impl Engine {
         let mut notes = Vec::new();
         let now = (self.clock_unix)();
         let extra = if external { self.capture_external(&lib, query, &mut notes).await? } else { Vec::new() };
-        let key = self.writer_key().ok_or_else(|| "no model is available for the writer right now".to_string())?;
+        let key = self.writer_key().ok_or_else(|| NO_WRITER.to_string())?;
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
         let ledger = self.validator.ledger();
@@ -320,6 +332,11 @@ impl Engine {
     /// [`Engine::topic_rebuild`] that `cancel` can stop before its writer's model call or before the page is written (a rebuild the
     /// desktop app asked for, stopped by revoking its key: `specs/129` §10.2). The tokens it spent are journalled however it ends.
     pub async fn topic_rebuild_cancellable(self: &Arc<Self>, slug: &str, cancel: Option<&crate::library::topics::Cancel>) -> Result<crate::library::topics::TopicEntry, String> {
+        self.topic_rebuild_with(slug, cancel, &mut false).await
+    }
+
+    /// The rebuild; `material` is set when the library had something for the page, so the writer was to be asked.
+    async fn topic_rebuild_with(self: &Arc<Self>, slug: &str, cancel: Option<&crate::library::topics::Cancel>, material: &mut bool) -> Result<crate::library::topics::TopicEntry, String> {
         let settings = self.cfg.get().library.pages.clone();
         if !settings.enabled {
             return Err("generated pages are off ([library.pages] enabled = false)".into());
@@ -329,11 +346,13 @@ impl Engine {
         let now = (self.clock_unix)();
         let gathered = self.topic_material(&side).await;
         let seed = self.topic_seed(&side).await;
+        *material = !gathered.is_empty();
         // The page check resolves `[s-kb-...]` and `[f-...]` against these records and nothing else.
         let gaps = lib.topic_gaps(&side, &self.ws.dir);
         let slugs = lib.topic_slugs();
         let lib = lib.with_records(gathered.records.clone()).with_topic_slugs(slugs);
-        // No writer can be reached (an install with only harnesses, `specs/139` O7): the page is the seed, which calls no model.
+        // No writer can be reached (an install with only harnesses, `specs/139` O7): the page is the seed, which calls no model. The
+        // idle rebuild still raises its `no_route` notice for it (`specs/143` §2.7 item 6: the seed page stands, the cause is shown).
         let Some(key) = self.writer_key() else {
             let req = crate::library::topics::SeedRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, seed: &seed, held: &crate::topic_seed::NoHeldText, gaps: &gaps, cancel };
             return lib.topic_seed_build(req);
@@ -359,6 +378,13 @@ impl Engine {
     /// waited longest (never built first, then the oldest build). `None` when nothing is due, pages are off, `auto_rebuild` is off or
     /// today's `per_day` is spent. The caller decides that the daemon is idle.
     pub async fn topic_idle_rebuild(self: &Arc<Self>) -> Option<Result<crate::library::topics::TopicEntry, String>> {
+        self.topic_idle_rebuild_report().await.map(|r| r.built)
+    }
+
+    /// [`Engine::topic_idle_rebuild`], with the cause of the notice when the job could not run (`specs/143` §2.7 items 1 and 6). With
+    /// no route for the writer nothing is written: the topic stays due, no stub takes its page's place, and the cause is `no_route`.
+    pub async fn topic_idle_rebuild_report(self: &Arc<Self>) -> Option<IdleRebuild> {
+        use crate::daemon_notice::Cause;
         let settings = self.cfg.get().library.pages.clone();
         if !settings.enabled || !settings.auto_rebuild {
             return None;
@@ -373,7 +399,24 @@ impl Engine {
         let mut due: Vec<_> = lib.topic_pages(&ctx).into_iter().filter(|t| t.due.is_some()).collect();
         due.sort_by_key(|t| (t.built.is_some(), t.built.unwrap_or(0)));
         let slug = due.first()?.slug.clone();
-        Some(self.topic_rebuild(&slug).await)
+        // A harness that would write the page is asked for admission first (`specs/143` §2.3 item 6): a rebuild that is not
+        // admitted writes nothing and the topic stays due.
+        if let Some(key) = self.writer_key() {
+            if !self.idle_job_may_start(crate::daemon_notice::Job::Pages, &key) {
+                return None;
+            }
+        }
+        let mut material = false;
+        let built = self.topic_rebuild_with(&slug, None, &mut material).await;
+        let cause = match &built {
+            Err(e) if e == NO_WRITER => Some(Cause::NoRoute),
+            // A seed page built because no writer could be reached: the page stands, and the missing route is still the cause.
+            Ok(t) if t.outcome.as_deref() == Some("seed") && self.writer_key().is_none() => Some(Cause::NoRoute),
+            Err(e) if e.starts_with(SHARE_SPENT) => Some(Cause::Budget),
+            Ok(t) if material && t.outcome.as_deref() == Some("claims_only") => Some(Cause::CheckFailed),
+            _ => None,
+        };
+        Some(IdleRebuild { built, cause })
     }
 }
 

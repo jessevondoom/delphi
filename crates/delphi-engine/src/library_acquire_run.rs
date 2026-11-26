@@ -42,12 +42,12 @@ impl Scout for EngineScout {
                 return Err("its token share is too small for one call".into());
             }
             let cfg = e.cfg.get();
-            let req = RouteRequest { role: "scout".into(), tier: "fast".into(), turn_by_turn: true, ..Default::default() };
+            let req = RouteRequest { role: "scout".into(), tier: "fast".into(), turn_by_turn: true, single_call: true, ..Default::default() };
             let key = match crate::route::resolve_route(&cfg, &e.pool.snapshot(), (e.clock_unix)(), &req) {
                 crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => key,
                 _ => return Err("no model is available for the scout right now".into()),
             };
-            let raw = e.one_shot_raw(&key, &ipr(seed), SCOUT_MAX_OUTPUT).await.ok_or_else(|| "the scout's call failed".to_string())?;
+            let raw = e.one_shot_raw(&key, &ipr(seed), SCOUT_MAX_OUTPUT, None).await.map_err(|e| format!("the scout's call failed: {e}"))?;
             Ok((raw.text.lines().map(|l| l.trim_matches(|c: char| c == '-' || c == '*' || c.is_whitespace()).to_string()).filter(|l| !l.is_empty()).collect(), raw.tokens))
         })
     }

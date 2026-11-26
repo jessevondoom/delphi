@@ -342,6 +342,10 @@ pub fn brief(ws_dir: &Path, cwd: &Path, current: Option<&str>, nonce: &str) -> S
     if no_web > 0 {
         plain.push(crate::research_asks::brief_line(no_web));
     }
+    // Spec 143 §2.7 item 3: background jobs that could not run are said once for each cause, in one line of fixed words.
+    if let Some(l) = crate::daemon_notice::take_brief_line(ws_dir) {
+        plain.push(l);
+    }
     let project_id = project.active_project_id();
     // Spec 113 §4 item 4: research the last session left as files and did not hand over is said once, in fixed words and a number.
     if let Some(n) = research_note(ws_dir, project_id.as_deref(), current) {
@@ -1257,6 +1261,24 @@ mod tests {
         assert!(!data.contains('<'), "{data}");
         assert!(data.contains("Project specs: 2 approved, ") && data.contains("1 draft") && data.contains("(4 in all)."), "{data}");
         assert!(data.contains("001-a (approved)") && data.contains("002-b (draft)"), "{data}");
+    }
+
+    // specs/143 §2.7 item 3: background jobs that could not run are one line in the next brief, in fixed words, and only once.
+    #[test]
+    fn background_jobs_that_could_not_run_are_said_once_in_the_next_brief() {
+        use crate::daemon_notice::{record, Cause, Failure, Job};
+        let (t, dir) = ws();
+        let (root, _) = project(&t, &dir);
+        assert!(!brief(&dir, &root, None, N).contains("background jobs"), "nothing failed");
+        record(&dir, Failure { job: Job::Pages, cause: Cause::NoRoute, key: None }, 1_800_000_000);
+        record(&dir, Failure { job: Job::Validation, cause: Cause::NoRoute, key: None }, 1_800_000_060);
+        let b = brief(&dir, &root, None, N);
+        let said: Vec<&str> = b.lines().filter(|l| l.contains("background jobs")).collect();
+        assert_eq!(said.len(), 1, "{b}");
+        assert!(said[0].contains("no model route (no_route, 2 times)") && said[0].contains("`delphi doctor`"), "{b}");
+        assert!(b.chars().count() <= MAX_BRIEF);
+        assert!(b.find("background jobs").unwrap() < b.find("DELPHI DATA").unwrap_or(b.len()), "{b}");
+        assert!(!brief(&dir, &root, None, N).contains("background jobs"), "said once");
     }
 
     // specs/119 §13.2 item 9: research that ran with no web search is said in the next brief, with its count, and only once.

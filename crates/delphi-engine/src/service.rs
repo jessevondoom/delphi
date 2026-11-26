@@ -2906,6 +2906,8 @@ impl EngineService {
 
     /// Start the once-a-second timer loop on the current runtime.
     pub fn start_timers(self: &Arc<Self>) {
+        // `specs/143` §2.3 item 4: the directories of bridged calls that a crash left behind are removed before any new call.
+        crate::harness_single::sweep(&crate::harness_single::roots(&self.engine.ws.home));
         let svc = self.clone();
         tokio::spawn(async move {
             let mut every = tokio::time::interval(Duration::from_secs(1));
@@ -2920,6 +2922,7 @@ impl EngineService {
                 svc.merge_ledger_tick().await;
                 svc.health_tick().await;
                 svc.consolidate_tick().await;
+                svc.notices_tick().await;
             }
         });
     }
@@ -2994,7 +2997,7 @@ impl EngineService {
         }
         let e = self.engine.clone();
         tokio::spawn(async move {
-            e.consolidate_pass(mem.consolidate, mem.consolidate_tokens).await;
+            crate::daemon_notice::in_job(crate::daemon_notice::Job::Consolidation, e.consolidate_pass(mem.consolidate, mem.consolidate_tokens)).await;
             RUNNING.store(false, SeqCst);
         });
     }
@@ -3035,7 +3038,7 @@ impl EngineService {
         };
         let (svc, tasks) = (self.clone(), self.running.lock().unwrap().len());
         tokio::spawn(async move {
-            let _ = svc.engine.background_validate_tick(&m, svc.last_operator.load(SeqCst), tasks).await;
+            let _ = crate::daemon_notice::in_job(crate::daemon_notice::Job::Validation, svc.engine.background_validate_tick(&m, svc.last_operator.load(SeqCst), tasks)).await;
             svc.background_running.store(false, SeqCst);
         });
     }
@@ -3111,12 +3114,119 @@ impl EngineService {
         }
         let svc = self.clone();
         tokio::spawn(async move {
-            // Fixed words only: a reason can carry a page's or a claim's text, which the error log never holds.
-            if let Some(Err(_)) = svc.engine.topic_idle_rebuild().await {
-                delphi_core::elog::warn("daemon", "topic_rebuild_failed", "an idle rebuild of a topic page did not finish", json!({}));
-            }
+            svc.topic_idle_rebuild_noticed().await;
             svc.topics_running.store(false, SeqCst);
         });
+    }
+
+    /// One idle rebuild, and what the operator is told when it could not run (`specs/143` §2.7): a failure with a cause becomes a
+    /// notice; a page that was built clears the failure `delphi kb health` shows; a failure with no cause in the closed list is one
+    /// line in the error log at its default level. Fixed words only: a reason can carry a page's or a claim's text, which neither the
+    /// notice nor the error log ever holds.
+    async fn topic_idle_rebuild_noticed(&self) {
+        use crate::daemon_notice::Job;
+        // A writer's or a validator's call that failed inside the rebuild has left its own cause (`one_shot_raw`); the page is then
+        // the claims alone for that reason, and it is not counted a second time as a failed check.
+        let (report, call_failed) = crate::daemon_notice::in_job(Job::Pages, self.engine.topic_idle_rebuild_report()).await;
+        let Some(r) = report else { return };
+        if call_failed {
+            self.notices_tick().await;
+            return;
+        }
+        match (&r.built, r.cause) {
+            (_, Some(cause)) => self.engine.job_failed(Job::Pages, cause),
+            (Ok(_), None) => crate::daemon_notice::cleared(&self.engine.ws.dir, Job::Pages),
+            (Err(_), None) => delphi_core::elog::error("daemon", "topic_rebuild_failed", "an idle rebuild of a topic page did not finish", json!({})),
+        }
+        self.notices_tick().await;
+    }
+
+    /// Raise what the engine left in its sink (`specs/143` §2.7): each failure is counted in the workspace's record, and the first
+    /// of a cause in a day is one `daemon.notice` event and one line in the error log, with the cause code and nothing of the work.
+    /// The console's line for it is read from the record (`status`), so it carries the day's count.
+    pub(crate) async fn notices_tick(&self) {
+        self.bridge_records().await;
+        let failures = self.engine.job_failures.drain();
+        if failures.is_empty() {
+            return;
+        }
+        let now = (self.engine.clock_unix)();
+        for f in failures {
+            if !crate::daemon_notice::record(&self.engine.ws.dir, f, now).first {
+                continue;
+            }
+            delphi_core::elog::error("daemon", crate::daemon_notice::LOG_SLUG, crate::daemon_notice::LOG_WORDS, json!({"reason": f.cause.code()}));
+            if let Ok(m) = self.mission(None).await {
+                let _ = m.append(EventEnvelope::new(&m.id, "daemon.notice", json!({"cause": f.cause.code(), "job": f.job.code(), "key": f.key}))).await;
+            }
+        }
+    }
+
+    /// What each ended bridged call leaves in the log (`specs/143` §2.2 item 3, §2.3 item 1): a seat receipt that says it was
+    /// tool-less and which model the CLI reported it served, and one `agent.usage` with `cost_model = subscription` and the
+    /// tokens the CLI reported, or an estimate marked as one. No dollar price is invented.
+    async fn bridge_records(&self) {
+        let records = self.engine.bridge.drain();
+        if records.is_empty() {
+            return;
+        }
+        let Ok(m) = self.mission(None).await else { return };
+        for r in records {
+            let ok = r.outcome == "ok";
+            // A single call runs outside any task and any span: its own id stands for both.
+            let stamp = |mut e: EventEnvelope| {
+                e.task_id = Some(format!("single-call-{}", r.id));
+                e.span_id = Some(format!("single-call-{}", r.id));
+                e.model_tier = Some(r.model_tier.clone());
+                e.attempt = Some(1);
+                e.endpoint_id = Some(r.endpoint_id.clone());
+                e.model_id = Some(r.model_id.clone());
+                e.access_path = Some("harness".into());
+                e.agent = Some(r.job.map(|j| j.code()).unwrap_or("single-call").to_string());
+                e
+            };
+            let usage = delphi_core::usage::UsagePayload {
+                provider: "anthropic".into(),
+                input_tokens: r.tokens.saturating_sub(r.tokens_out),
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                output_tokens: r.tokens_out,
+                thinking_tokens: 0,
+                cost_usd: 0.0,
+                reserved_usd: 0.0,
+                usage_source: if r.estimated { "estimated" } else { "reported" }.into(),
+                cost_model: "subscription".into(),
+                outcome: if ok { "ok" } else { "error" }.into(),
+                reservation_id: None,
+            };
+            let mut usage = usage.to_value();
+            usage["single_call"] = json!(true);
+            usage["failure"] = if ok { Value::Null } else { json!(r.outcome) };
+            let receipt = crate::seat::Receipt {
+                seat_id: format!("single-call-{}", r.prompt_hash.chars().take(12).collect::<String>()),
+                requested_endpoint: r.endpoint_id.clone(),
+                requested_model: r.model_id.clone(),
+                served: crate::seat::resolve(&self.engine.family_table(), r.served.as_deref()),
+                carrier: crate::seat::Carrier { kind: "claude".into(), cli_version: None, tools_offered: vec![], native_tools: Some(0), dispatch_allowed: false },
+                tool_grant: json!({"builtin": "none", "native": [], "bridge": [], "gated": false, "single_call": true}),
+                prompt_hash: r.prompt_hash.clone(),
+                prompt_bytes: Some(r.prompt_bytes),
+                context_cut: None,
+                cut_suspected: false,
+                tokens_in: r.tokens.saturating_sub(r.tokens_out),
+                tokens_out: r.tokens_out,
+                outcome: if ok { "ok" } else { "error" }.into(),
+            };
+            let _ = m.append(stamp(EventEnvelope::new(&m.id, "agent.usage", usage))).await;
+            let _ = m.append(stamp(EventEnvelope::new(&m.id, crate::seat::RECEIPT_KIND, receipt.to_value()))).await;
+        }
+    }
+
+    /// The console's notices: the daemon's own, then today's background failures, one line a cause with its count.
+    fn notices_json(&self) -> Vec<String> {
+        let mut out = self.notices.lock().unwrap().clone();
+        out.extend(crate::daemon_notice::lines(&self.engine.ws.dir, (self.engine.clock_unix)()));
+        out
     }
 
     fn timers_json(&self) -> Value {
@@ -4999,11 +5109,12 @@ impl EngineService {
                 if mode != crate::summary::SummaryMode::Off && !d.tainted && d.turns >= 2 {
                     let (engine, mission, record, sid) = (self.engine.clone(), m.clone(), crate::summary::record_of(session), id.clone());
                     tokio::spawn(async move {
-                        let Some(w) = engine.summarize_session(mode, &record).await else { return };
+                        let (written, _) = crate::daemon_notice::in_job(crate::daemon_notice::Job::SessionSummaries, engine.summarize_session(mode, &record, Some(delphi_core::provenance::Tier::L3))).await;
+                        let Some(w) = written else { return };
                         let model = format!("{}/{}", w.endpoint_id, w.model_id);
                         let secrets = engine.secrets.clone();
-                        if crate::session::append_summary(&engine.ws.home, &mission.id, &sid, &w.text, &model, &|s| secrets.redact(s)).is_ok() {
-                            let _ = mission.append(EventEnvelope::new(&mission.id, "session.summarized", json!({"session_id": sid, "model": model, "tokens": w.tokens}))).await;
+                        if crate::session::append_summary(&engine.ws.home, &mission.id, &sid, &w.text, &model, w.tier, &|s| secrets.redact(s)).is_ok() {
+                            let _ = mission.append(EventEnvelope::new(&mission.id, "session.summarized", json!({"session_id": sid, "model": model, "tokens": w.tokens, "tier": w.tier.name()}))).await;
                         }
                     });
                 }
@@ -5199,7 +5310,7 @@ impl EngineService {
             "pending_approvals": self.pending_json(),
             "recovery": self.recovery_json(&m.id),
             "pending_proposals": crate::ratify::list(&self.engine.ws.home, &self.engine.ws.dir).len(),
-            "notices": self.notices.lock().unwrap().clone(),
+            "notices": self.notices_json(),
             "running_tasks": running,
             "timers": self.timers_json()["timers"].as_array().cloned().unwrap_or_default().into_iter().filter(|t| t["state"] == "pending").collect::<Vec<_>>(),
             "enabled_agents": self.engine.settings.enabled_agents,
@@ -5373,6 +5484,12 @@ impl Extension for ServiceExt {
             // A console that only polls (a snapshot, a list, a status) is not the operator at work; any other console call is.
             if ctx.scope == Scope::Console && !(method == "snapshot" || method.ends_with(".snapshot") || [".list", ".status", ".get", ".read"].iter().any(|s| method.ends_with(s))) {
                 svc.last_operator.store((svc.engine.clock_unix)(), std::sync::atomic::Ordering::SeqCst);
+                svc.engine.bridge.active((svc.engine.clock_unix)());
+            }
+            // `specs/143` §2.3 item 7: a host session's hook, and any host tool call over MCP, is the operator at work too. On a
+            // host with no hooks installed its tool calls are the only sign of a session the daemon gets.
+            if method.starts_with("host.") {
+                svc.engine.bridge.active((svc.engine.clock_unix)());
             }
             Some(match method.as_str() {
                 "mission.open" => match need_console(&ctx) {
@@ -5542,6 +5659,228 @@ mod tests {
     use super::*;
     use crate::model::Step;
     use crate::testkit::{events_of, setup, Fx};
+
+    /// An install whose only endpoint is a harness that cannot serve a single call (`agy`: its tools cannot be turned off).
+    fn harness_only(f: &Fx) -> Arc<EngineService> {
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&crate::testkit::harness_only_config().replace("harness = \"claude\"", "harness = \"agy\"")).unwrap());
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        svc
+    }
+
+    // `specs/143` AC-7 and §2.7 item 6: an idle rebuild that fails for want of a route writes one `daemon.notice` with cause
+    // `no_route`, one line in the log at the default level and one line in `delphi kb health`; the same failure an hour later
+    // writes no second notice that day; the topic stays due and no stub is written; none of it holds text of a page or a claim.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_idle_rebuild_with_no_route_is_one_notice_a_day_and_holds_no_entry_text() {
+        use crate::daemon_notice as dn;
+        let f = setup(vec![], 5.0, |_| {});
+        // Noon, so that an hour later is the same day whenever the test runs.
+        f.now.store(1_795_608_000, std::sync::atomic::Ordering::SeqCst);
+        let svc = harness_only(&f);
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        lib.topic_create("Zanzibar lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        svc.topic_idle_rebuild_noticed().await;
+        let notices = events_of(&f, "daemon.notice");
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].payload, json!({"cause": "no_route", "job": "pages", "key": null}));
+        assert!(fs::read(lib.root().join("pages/zanzibar-lighthouse-lamps.md")).is_err(), "no stub takes the page's place");
+        let now = (f.engine.clock_unix)();
+        let due = |now: i64| lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(&f.engine.ws.dir), now: now as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
+        assert_eq!(due(now), 1, "the topic stays due");
+
+        // An hour later: counted, not said again.
+        f.now.fetch_add(3600, std::sync::atomic::Ordering::SeqCst);
+        svc.topic_idle_rebuild_noticed().await;
+        assert_eq!(events_of(&f, "daemon.notice").len(), 1, "one notice for a cause in a day");
+        let console = svc.notices_json();
+        assert_eq!(console, vec![dn::line(dn::Cause::NoRoute, 2, None)]);
+
+        // One line of `delphi kb health`, with the day the cause was first seen.
+        let health = crate::knowledge_health::gather(&f.engine.ws.home, &f.engine.ws.dir, now + 3600);
+        let day: String = delphi_core::time::format_unix_millis(now, 0).chars().take(10).collect();
+        let lines: Vec<String> = health.lines(now + 3600).into_iter().filter(|l| l.text.starts_with("pages:")).map(|l| l.text).collect();
+        assert_eq!(lines, vec![format!("pages: 1 due, last idle rebuild failed: no model route, since {day}. See delphi doctor.")]);
+
+        // The log line is written at `error`, the level a fresh install logs at, with the fixed words and the cause code only.
+        let logger = delphi_core::elog::Logger::new(&f.engine.ws.home, "daemon", "test", delphi_core::elog::settings_for(&f.engine.ws.home));
+        assert!(logger.enabled(delphi_core::elog::Level::Error) && !logger.enabled(delphi_core::elog::Level::Warn));
+        let logged = logger.render(delphi_core::elog::Level::Error, "daemon", dn::LOG_SLUG, dn::LOG_WORDS, &json!({"reason": "no_route"}), &[], None);
+        assert!(logged.contains("a background job could not run") && logged.contains("no_route"), "{logged}");
+
+        // No text of the topic anywhere the operator is told.
+        let record = fs::read_to_string(f.engine.ws.dir.join(dn::FILE)).unwrap();
+        let brief = dn::take_brief_line(&f.engine.ws.dir).expect("the brief's line");
+        for told in [notices[0].payload.to_string(), console.join("\n"), lines.join("\n"), logged, record, brief] {
+            let low = told.to_lowercase();
+            assert!(!low.contains("zanzibar") && !low.contains("lighthouse") && !low.contains("lamps"), "{told}");
+        }
+    }
+
+    // `specs/143` AC-18: with the bridge `off` on a harness-only config the cause is `no_route` and the notice names the key.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_the_bridge_off_the_no_route_notice_names_the_key() {
+        let f = setup(vec![], 5.0, |_| {});
+        let svc = harness_only(&f);
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}[routing]\nsingle_call_harness = \"off\"\n[bridge.claude]\ncredential = \"keychain:bridge-claude\"\n", crate::testkit::harness_only_config())).unwrap());
+        crate::library::Library::in_home(&f.engine.ws.home).topic_create("Tide tables", crate::library::topics::Origin::Operator, 1).unwrap();
+        svc.topic_idle_rebuild_noticed().await;
+        let notices = events_of(&f, "daemon.notice");
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].payload, json!({"cause": "no_route", "job": "pages", "key": "[routing] single_call_harness"}));
+        assert!(svc.notices_json()[0].contains("`[routing] single_call_harness` decides it"));
+    }
+
+    // `specs/143` AC-5 and the token scan of AC-21: an ended bridged call leaves a tool-less seat receipt that names the model the
+    // CLI reported, and one `agent.usage` with `cost_model = subscription` and the reported tokens; a call that reported none is
+    // marked `estimated`; a failed one is recorded too. The fixture token is in no event, no notice and no ledger line.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_bridged_call_leaves_a_tool_less_receipt_and_its_usage() {
+        use crate::harness_single::tests::{answers, recording_cli, INIT};
+        let d = tempfile::tempdir().unwrap();
+        let rec = d.path().join("rec");
+        let f = crate::summary::tests::bridged(&recording_cli(d.path(), &rec, &answers("the token is sk-fixture-bridge-token-0001")), true);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let key = f.engine.scout_key().unwrap();
+        let contract = crate::summary::session_contract("Operator: hello");
+        let w = f.engine.one_shot(&key, &contract, 100, None).await.unwrap();
+        assert!(!w.text.contains("sk-fixture"));
+        svc.notices_tick().await;
+        let usage = events_of(&f, "agent.usage");
+        assert_eq!(usage.len(), 1);
+        let u = &usage[0].payload;
+        assert_eq!((u["cost_model"].as_str(), u["usage_source"].as_str(), u["outcome"].as_str(), u["cost_usd"].as_f64()), (Some("subscription"), Some("reported"), Some("ok"), Some(0.0)));
+        assert_eq!((u["input_tokens"].as_u64(), u["output_tokens"].as_u64()), (Some(40), Some(2)));
+        assert_eq!((usage[0].endpoint_id.as_deref(), usage[0].access_path.as_deref()), (Some("claude-sub"), Some("harness")));
+        let receipts = events_of(&f, crate::seat::RECEIPT_KIND);
+        assert_eq!(receipts.len(), 1);
+        let r = &receipts[0].payload;
+        assert!(crate::seat::receipt_toolless(r), "{r}");
+        assert_eq!((r["served"]["model"].as_str(), r["tool_grant"]["single_call"].as_bool(), r["outcome"].as_str()), (Some("claude-served-1"), Some(true), Some("ok")));
+        svc.notices_tick().await;
+        assert_eq!(events_of(&f, "agent.usage").len(), 1, "written once");
+
+        // A CLI that reports no tokens, and one that fails.
+        let silent = format!("{INIT}\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"an answer\"}}'");
+        for (body, source, outcome) in [(silent, "estimated", "ok"), (format!("{INIT}\nexit 3"), "estimated", "error")] {
+            let f = crate::summary::tests::bridged(&recording_cli(d.path(), &rec, &body), true);
+            let svc = EngineService::new(f.engine.clone(), "m1");
+            svc.adopt(f.m.clone());
+            let _ = f.engine.one_shot(&f.engine.scout_key().unwrap(), &contract, 100, None).await;
+            svc.notices_tick().await;
+            let u = &events_of(&f, "agent.usage")[0].payload;
+            assert_eq!((u["usage_source"].as_str(), u["outcome"].as_str(), u["cost_model"].as_str()), (Some(source), Some(outcome), Some("subscription")), "{u}");
+            assert!(u["input_tokens"].as_u64().unwrap() > 0);
+            assert_eq!(events_of(&f, crate::seat::RECEIPT_KIND)[0].payload["outcome"].as_str(), Some(outcome));
+        }
+
+        // The scan: every event of the mission, the console's notices and the ledger.
+        let everything = format!("{}\n{}\n{}", f.m.replay().unwrap().iter().map(|e| format!("{e:?}")).collect::<Vec<_>>().join("\n"), svc.notices_json().join("\n"), fs::read_to_string(f.engine.ws.home.join("bridge/ledger.jsonl")).unwrap());
+        assert!(!everything.contains("sk-fixture"), "the token is written nowhere");
+    }
+
+    // `specs/143` §2.3 items 6 and 7, for the idle rebuild: while the operator is working a rebuild a harness would write does
+    // not start, writes nothing and raises nothing, and the topic stays due; with the idle share spent it raises `budget` once
+    // and still writes nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_idle_rebuild_through_the_bridge_waits_for_the_pause_and_stops_at_the_idle_share() {
+        use crate::harness_single::tests::{answers, recording_cli};
+        use crate::job_admission::{credential_id, Call, Ledger, Origin};
+        let d = tempfile::tempdir().unwrap();
+        let rec = d.path().join("rec");
+        let f = crate::summary::tests::bridged(&recording_cli(d.path(), &rec, &answers("a page")), true);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        lib.topic_create("Tide tables", crate::library::topics::Origin::Operator, 1).unwrap();
+        let now = (f.engine.clock_unix)();
+        let due = || lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(&f.engine.ws.dir), now: now as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
+
+        f.engine.bridge.active(now);
+        svc.topic_idle_rebuild_noticed().await;
+        svc.notices_tick().await;
+        assert!(events_of(&f, "daemon.notice").is_empty() && !rec.join("args.txt").exists() && due() == 1, "paused: nothing started, nothing said, still due");
+        assert!(fs::read(lib.root().join("pages/tide-tables.md")).is_err());
+
+        // The idle share of the window (15 of 30 calls) is spent.
+        f.advance(crate::job_admission::PAUSE_SECS);
+        let now = (f.engine.clock_unix)();
+        let cred = credential_id(f.engine.cfg.get().bridge.claude_credential.as_deref().unwrap());
+        let ledger = Ledger::in_home(&f.engine.ws.home);
+        for k in 0..15 {
+            ledger.start(&Call { id: format!("x{k}"), at: now - 60, job: Some(crate::daemon_notice::Job::Validation), origin: Origin::Idle, credential: cred.clone(), endpoint: "claude-sub".into(), tokens: 10, outcome: None });
+        }
+        svc.topic_idle_rebuild_noticed().await;
+        svc.notices_tick().await;
+        let notices = events_of(&f, "daemon.notice");
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].payload, json!({"cause": "budget", "job": "pages", "key": null}));
+        assert!(!rec.join("args.txt").exists() && due() == 1 && fs::read(lib.root().join("pages/tide-tables.md")).is_err(), "nothing started, nothing written, still due");
+    }
+
+    // `specs/143` §2.3 item 7: a host tool call over MCP is a sign of the operator at work, on a host with no hook installed too.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_tool_call_counts_as_the_operator_at_work() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let seen = || f.engine.bridge.last_active.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(seen(), 0);
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            // Whatever the call answers, it was a host's.
+            let _ = c.call("host.cancel_job", json!({"session": "abcdef0123456789", "tool": "claude-code", "research_id": "none"}));
+        })
+        .await;
+        assert_eq!(seen(), (f.engine.clock_unix)(), "the call was seen");
+    }
+
+    // `specs/143` §6, the fitness function "a background failure is never silent": every idle job, enumerated from the closed list,
+    // raises a notice when no model can serve it. `match` is exhaustive, so a job added to the list fails to compile until it has a
+    // row here. AC-18: failures of different jobs with one cause in a day are one notice with their count.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_idle_job_failure_writes_a_notice() {
+        use crate::daemon_notice::{Cause, Job};
+        let f = setup(vec![], 5.0, |_| {});
+        let svc = harness_only(&f);
+        let mut built = 0;
+        for job in Job::ALL {
+            let exists = match job {
+                Job::Pages => {
+                    crate::library::Library::in_home(&f.engine.ws.home).topic_create("Tide tables", crate::library::topics::Origin::Operator, 1).unwrap();
+                    svc.topic_idle_rebuild_noticed().await;
+                    true
+                }
+                Job::Validation => {
+                    assert!(!f.engine.background_judge_or_notice(), "no judge, so the check is not started");
+                    true
+                }
+                Job::SessionSummaries => {
+                    assert!(f.engine.summarize_session(crate::summary::SummaryMode::Fast, "Operator: pick a queue", None).await.is_none());
+                    true
+                }
+                Job::Consolidation => {
+                    f.engine.consolidate_pass(delphi_adapter::config::Consolidate::Model, 1000).await;
+                    true
+                }
+                // Source summaries are `specs/142` §2.6 and are not built: the job joins this test when it is.
+                Job::Summaries => false,
+            };
+            svc.notices_tick().await;
+            let record: Value = serde_json::from_slice(&fs::read(f.engine.ws.dir.join(crate::daemon_notice::FILE)).unwrap()).unwrap();
+            let named = record["causes"]["no_route"]["jobs"].as_array().unwrap().iter().any(|j| j == job.code());
+            assert_eq!(named, exists, "{job:?}");
+            built += exists as u64;
+            assert_eq!(record["causes"]["no_route"]["count"], json!(built), "{job:?}");
+        }
+        assert_eq!(built, 4);
+        assert_eq!(events_of(&f, "daemon.notice").len(), 1, "one notice for the cause, whatever the job");
+        assert_eq!(svc.notices_json(), vec![crate::daemon_notice::line(Cause::NoRoute, 4, None)]);
+        assert_eq!(f.model.requests().len(), 0, "no model was called");
+    }
     use delphi_core::client::{Client, ClientError};
     use delphi_core::server::{Daemon, DaemonConfig, TtyPolicy};
     use std::fs;

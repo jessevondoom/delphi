@@ -71,6 +71,15 @@ max_parallel_agents = 4
 # degrade_prompt_secs = 300           # how long the "run on a weaker model?" card waits; no answer means look again, then ask again
 # max_park_secs = 0                  # omit to wait as long as it takes; 0 = never wait (escalate at once); N = give up after N seconds
 
+# Single model calls through a subscription CLI (specs/143). Topic and search pages, their validator, summaries and the scout's
+# calls each send one prompt and read one answer. "auto" (default): a harness endpoint serves them only when no other allowed
+# endpoint can, one prompt at a time with its tools off. "on": a harness competes like any endpoint. "off": never.
+# A `claude` harness serves them only once its subscription token is named in [bridge.claude] credential (below).
+# A bridged call spends that subscription's own quota; for heavy or unattended use add an endpoint with path = "api".
+# single_call_harness = "auto"
+# single_call_harness_parallel = 2         # bridged calls at once on one endpoint; each yields to a seat or a span there
+# single_call_harness_timeout_secs = 180   # a bridged call past this is stopped (SIGTERM, then SIGKILL five seconds later)
+
 # Bundle agents (specs/041). "flat" (default): the orchestrator is shown one line per bundle agent, up to 20, and told how many
 # are not listed. "auto": past 20 agents it is shown a short index of domains and gets the `search_agent_registry` tool instead.
 # `delphi route "<task>"` shows what the search would return, without a model call.
@@ -535,6 +544,22 @@ default_peer_trust_ceiling = "federated_peer"
 # issuer = "https://idp.example.com"
 # client_id = "<from your IdP admin>"
 # scopes = ["llm.invoke"]
+
+# ── The single-turn bridge (specs/143): where the subscription token for single calls through `claude` is kept. A reference,
+# never the token: make the token with `claude setup-token`, put it in your keychain (service `delphi`, account `bridge-claude`),
+# and name it here. Without it a `claude` harness serves no single call. The bridge spends your own subscription quota.
+# [bridge.claude]
+# credential = "keychain:bridge-claude"
+# What one credential may spend through the bridge. Jobs nobody started get idle_share of the window and of the day, and pause
+# while you are working; nothing passes ceiling_factor times the daily cap. First guesses: change them as you learn your plan.
+# [bridge.limits]
+# window_hours = 5
+# window_calls = 30
+# window_tokens = 300000
+# daily_calls = 100
+# daily_tokens = 1000000
+# ceiling_factor = 3
+# idle_share = 0.5
 
 # ── Subscription CLIs (specs/020). Nothing here is needed: with no [harness.claude] block, the values shown below ARE the
 # defaults. Delphi's tools (timer, dispatch, scoped files, connectors) reach the Claude CLI over a per-span MCP bridge; for roles

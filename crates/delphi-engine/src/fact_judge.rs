@@ -100,20 +100,27 @@ pub struct EngineJudge {
     pub author_model: Option<String>,
 }
 
+impl crate::engine::Engine {
+    /// The model that serves the judge: the validator's fast tier, away from the author's family. `None` when none is usable now.
+    pub(crate) fn judge_key(&self, author_family: Option<&str>) -> Option<delphi_adapter::config::PoolKey> {
+        let cfg = self.cfg.get();
+        let req = crate::route::RouteRequest { role: "validator".into(), tier: "fast".into(), avoid_families: author_family.iter().map(|f| f.to_string()).collect(), turn_by_turn: true, single_call: true, ..Default::default() };
+        match crate::route::resolve_route(&cfg, &self.pool.snapshot(), (self.clock_unix)(), &req) {
+            crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => Some(key),
+            _ => None,
+        }
+    }
+}
+
 impl FactJudge for EngineJudge {
     fn judge<'a>(&'a self, q: &'a JudgeQuery) -> JudgeFuture<'a> {
         Box::pin(async move {
             let e = &self.engine;
-            let cfg = e.cfg.get();
-            let req = crate::route::RouteRequest { role: "validator".into(), tier: "fast".into(), avoid_families: self.author_family.iter().cloned().collect(), turn_by_turn: true, ..Default::default() };
-            let key = match crate::route::resolve_route(&cfg, &e.pool.snapshot(), (e.clock_unix)(), &req) {
-                crate::route::Route::Target { key, .. } | crate::route::Route::Similar { key, .. } => key,
-                _ => return Err("no model is available for the judge right now".into()),
-            };
+            let Some(key) = e.judge_key(self.author_family.as_deref()) else { return Err("no model is available for the judge right now".into()) };
             if self.author_model.as_deref() == Some(key.model_id.as_str()) {
                 return Err("the only model available is the claim author's; the judge must be a second model".into());
             }
-            let raw = e.one_shot_raw(&key, &ipr(contract(q)), JUDGE_MAX_OUTPUT).await.ok_or_else(|| "the judge's call failed".to_string())?;
+            let raw = e.one_shot_raw(&key, &ipr(contract(q)), JUDGE_MAX_OUTPUT, Some(delphi_core::provenance::Tier::L0)).await.map_err(|e| format!("the judge's call failed: {e}"))?;
             let verdict = parse_verdict(&raw.text).ok_or_else(|| "the judge's answer was not entails, neutral or contradicts".to_string())?;
             Ok(JudgeReply { verdict, model: format!("{}/{}", raw.endpoint_id, raw.model_id), family: key.family, tokens: raw.tokens })
         })

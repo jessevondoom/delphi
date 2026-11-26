@@ -89,6 +89,9 @@ pub struct LaunchProfile {
     /// calling a tool the CLI refuses ends at the cap). All three exist in claude 2.1.319; a CLI that does not know one fails to start
     /// (a refused option), so a flag the guard relies on is never silently dropped.
     pub lock_down: bool,
+    /// A single call through the bridge (`specs/143` §2.2): one prompt and one answer, with the deny-all and no-connector
+    /// arguments of [`single_call_args`] in place of every other argument, and no API key in the environment. Claude only.
+    pub single_call: bool,
 }
 
 /// The CLI's own tools named in `--disallowedTools` of a locked-down launch. `--tools ""` is the guard; this list only repeats it.
@@ -156,6 +159,9 @@ pub struct Opts {
     pub print_timeout_secs: Option<u64>,
     /// An API key for the Claude CLI (`ANTHROPIC_API_KEY`), in place of the subscription login. Never shown by `Debug`.
     pub api_key: Option<delphi_adapter::credential::Secret>,
+    /// The subscription token of a single call (`CLAUDE_CODE_OAUTH_TOKEN`, `specs/143` §2.2 item 1): set in the child's
+    /// environment only, never an argument. Never shown by `Debug`.
+    pub oauth_token: Option<delphi_adapter::credential::Secret>,
     /// Codex: drive `codex app-server --stdio` instead of `exec --json`, so the CLI's approval requests reach Delphi as
     /// [`Event::Permission`] (`specs/047` S2b). Read-only thread; no Builder uses it until the file-change and writable-root
     /// probes are done.
@@ -1144,7 +1150,20 @@ fn push_flag(a: &mut Vec<String>, name: &str, value: Option<String>) {
     }
 }
 
+/// The arguments of a single call (`specs/143` §2.2 item 1), checked flag by flag against `claude` 2.1.332 (the spike of slice B):
+/// print mode over the stream transport, every customisation off (`--safe-mode`), no built-in tool (`--tools ""`), every
+/// connector tool denied, no MCP server but those of an (absent) `--mcp-config`, no slash command or skill, no saved session, one
+/// turn, and nobody to answer a permission prompt, so anything that would prompt is denied. `--bare` is never used: it does not
+/// use the subscription login. Neither the prompt nor the token is here: the prompt goes to standard input, the token to the
+/// environment. Nothing of the launch's profile or options adds to this list.
+pub fn single_call_args(model: &str) -> Vec<String> {
+    ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--safe-mode", "--tools", "", "--disallowedTools", "mcp__*", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--max-turns", "1", "--permission-prompts", "none", "--model", model].iter().map(|s| s.to_string()).collect()
+}
+
 fn args(l: &Launch) -> Vec<String> {
+    if l.profile.single_call {
+        return single_call_args(&l.model);
+    }
     let o = &l.opts;
     let strings = |v: &[&str]| -> Vec<String> { v.iter().map(|s| s.to_string()).collect() };
     // Directories and subagents widen what a span can reach, so only a span that has tools gets them.
@@ -1335,6 +1354,17 @@ impl Session {
                 env.insert("COPILOT_GITHUB_TOKEN".into(), k.expose().to_string());
             }
             _ => {}
+        }
+        if l.profile.single_call {
+            // `specs/143` §2.2 item 1: only `claude` serves a single call; an API key left in the environment would silently switch
+            // `-p` to API billing, so it is removed whatever put it there; the token is this child's alone.
+            if l.cli != Cli::Claude {
+                return Err("only the claude CLI serves a single call (specs/143 §2.1)".into());
+            }
+            env.remove("ANTHROPIC_API_KEY");
+            if let Some(t) = &l.opts.oauth_token {
+                env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), t.expose().to_string());
+            }
         }
         if l.cli == Cli::Copilot {
             // `auto` lets the service pick the model, so the family that answered would be unknown (`specs/051` §1.1).
@@ -1563,6 +1593,34 @@ impl Session {
     /// Let the CLI finish (it exits once its input closes after the result).
     pub fn close_input(&mut self) {
         self.stdin = None;
+    }
+
+    /// Stop the CLI and everything it started, politely first (`specs/143` §2.3 item 4): `SIGTERM` to its process group, and
+    /// `SIGKILL` when it is still there after `grace`. Whatever of the group outlives its leader is killed too.
+    pub async fn terminate(&mut self, grace: Duration) {
+        self.stdin = None;
+        self.out = None;
+        if self.pgid > 0 {
+            // SAFETY: plain signal delivery to the process group the launcher created for this child.
+            unsafe {
+                libc::kill(-self.pgid, libc::SIGTERM);
+            }
+        }
+        let left = tokio::time::timeout(grace, self.child.wait()).await.is_ok();
+        if left && self.pgid > 0 {
+            // SAFETY: as above.
+            unsafe {
+                libc::kill(-self.pgid, libc::SIGKILL);
+            }
+        } else if !left {
+            self.kill().await;
+        }
+        self.exited = true;
+    }
+
+    /// The process group the launcher made for this CLI (its leader's process id).
+    pub fn pgid(&self) -> i32 {
+        self.pgid
     }
 
     /// Kill the CLI and everything it started.
@@ -1933,6 +1991,21 @@ echo '{"type":"result","subtype":"success","result":"fin","usage":{"input_tokens
 
     fn launch(program: String, dir: &std::path::Path) -> Launch {
         Launch { cli: Cli::Claude, program, model: "sonnet".into(), system_prompt: "s".into(), user_prompt: "do it".into(), cwd: dir.to_path_buf(), tools: Tools::Standard, env: cli_env(), profile: Default::default(), opts: Opts::default() }
+    }
+
+    // `specs/143` §2.2 item 1: a launch with the single-call profile gets exactly the single-call arguments, whatever else its
+    // profile, its options or its tools say: nothing can add a tool, a connector, a settings file or a system prompt to them.
+    #[test]
+    fn a_single_call_launch_gets_the_single_call_arguments_and_nothing_else() {
+        let d = tempfile::tempdir().unwrap();
+        let mut l = launch("claude".into(), d.path());
+        l.profile = LaunchProfile { single_call: true, mcp_config: Some(d.path().join("mcp.json")), native_tools: vec!["Bash".into()], auto_approve: true, claudeai_connectors: true, lock_down: true, ..Default::default() };
+        l.opts = Opts { effort: Some("high".into()), max_turns: Some(40), settings_json: Some("{}".into()), add_dirs: vec![d.path().to_path_buf()], ..Default::default() };
+        l.tools = Tools::Standard;
+        assert_eq!(args(&l), single_call_args("sonnet"));
+        let a = single_call_args("sonnet");
+        assert!(a.windows(2).any(|w| w[0] == "--tools" && w[1].is_empty()) && a.windows(2).any(|w| w[0] == "--max-turns" && w[1] == "1"), "{a:?}");
+        assert!(!a.iter().any(|x| x == "--bare" || x == "--mcp-config" || x == "--append-system-prompt" || x == "--permission-prompt-tool"), "{a:?}");
     }
 
     #[tokio::test]

@@ -633,6 +633,41 @@ impl Grades {
     }
 }
 
+/// `[routing] single_call_harness` (`specs/143` §2.1 item 4): whether a harness endpoint may serve a single call (one prompt, one
+/// answer, no tools) through the single-turn bridge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SingleCallHarness {
+    /// A harness serves a single call only when no other allowed endpoint is eligible for it.
+    #[default]
+    Auto,
+    /// A harness competes like any endpoint.
+    On,
+    /// A harness never serves a single call.
+    Off,
+}
+
+impl SingleCallHarness {
+    /// The key, as a notice and the doctor name it.
+    pub const KEY: &'static str = "[routing] single_call_harness";
+
+    pub fn parse(s: &str) -> Option<SingleCallHarness> {
+        match s {
+            "auto" => Some(SingleCallHarness::Auto),
+            "on" => Some(SingleCallHarness::On),
+            "off" => Some(SingleCallHarness::Off),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SingleCallHarness::Auto => "auto",
+            SingleCallHarness::On => "on",
+            SingleCallHarness::Off => "off",
+        }
+    }
+}
+
 /// `[routing]`: the model pool and per-role targets (`specs/002` §4.1, D-26). Other keys in the table
 /// (`enable_dynamic_scaling`, …) are not read here.
 #[derive(Debug, Clone, PartialEq)]
@@ -655,11 +690,60 @@ pub struct Routing {
     pub emergency: Option<(String, String)>,
     /// `[routing] max_cost_class` (`specs/056` §10.5), ratified; `standard` for every role when absent.
     pub max_cost_class: CostCap,
+    /// `[routing] single_call_harness` (`specs/143` §2.1 item 4); `auto` when absent.
+    pub single_call_harness: SingleCallHarness,
+    /// `[routing] single_call_harness_timeout_secs` (`specs/143` §2.3 item 4): how long a bridged call may run. 180 when absent.
+    pub single_call_harness_timeout_secs: u64,
+    /// `[routing] single_call_harness_parallel` (`specs/143` §2.3 item 3): bridged calls at once on one endpoint. 2 when absent.
+    pub single_call_harness_parallel: u64,
+}
+
+/// The longest a bridged call runs when the config does not say.
+pub const DEFAULT_SINGLE_CALL_TIMEOUT_SECS: u64 = 180;
+
+/// `[bridge]` (`specs/143`): the single-turn harness bridge.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BridgeConfig {
+    /// `[bridge.claude] credential`: a credential reference (never the token) for the subscription token the bridge signs the
+    /// `claude` CLI in with (`specs/143` §2.2 item 1, §2.9). Absent: that CLI is not eligible for a single call (§2.9 item 4).
+    pub claude_credential: Option<String>,
+    /// `[bridge.limits]` (`specs/143` §2.3 item 6): what one credential may spend through the bridge.
+    pub limits: BridgeLimits,
+}
+
+/// `[bridge.limits]` (`specs/143` §2.3 item 6), for each credential. Guesses until a week of use shows what a subscription allows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BridgeLimits {
+    /// The rolling window, in hours.
+    pub window_hours: u64,
+    /// The most bridged calls in any window.
+    pub window_calls: u64,
+    /// The most tokens in any window.
+    pub window_tokens: u64,
+    /// The most bridged calls in a day (UTC).
+    pub daily_calls: u64,
+    /// The most tokens in a day.
+    pub daily_tokens: u64,
+    /// The ceiling nothing passes, as a multiple of the daily cap.
+    pub ceiling_factor: u64,
+    /// The share of the window and of the daily cap that jobs nobody started may use.
+    pub idle_share: f64,
+}
+
+impl Default for BridgeLimits {
+    fn default() -> BridgeLimits {
+        BridgeLimits { window_hours: 5, window_calls: 30, window_tokens: 300_000, daily_calls: 100, daily_tokens: 1_000_000, ceiling_factor: 3, idle_share: 0.5 }
+    }
+}
+
+impl BridgeConfig {
+    /// The key, as a notice and the doctor name it.
+    pub const CLAUDE_CREDENTIAL_KEY: &'static str = "[bridge.claude] credential";
 }
 
 impl Default for Routing {
     fn default() -> Routing {
-        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None, max_cost_class: CostCap::default() }
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None, max_cost_class: CostCap::default(), single_call_harness: SingleCallHarness::Auto, single_call_harness_timeout_secs: DEFAULT_SINGLE_CALL_TIMEOUT_SECS, single_call_harness_parallel: 2 }
     }
 }
 
@@ -693,6 +777,8 @@ pub struct Config {
     pub connectors: BTreeMap<String, Connector>,
     /// `[harness.<cli>]` (`claude`, `agy`): how Delphi runs and equips each subscription CLI.
     pub harness: BTreeMap<String, HarnessProfile>,
+    /// `[bridge]`: the single-turn harness bridge (`specs/143`).
+    pub bridge: BridgeConfig,
     /// `[search]`: the engines the archives pane's research job asks, in order (`specs/028` §10).
     pub search: crate::research::SearchConfig,
     /// `[validator]`: the fact validator's mode and the operator's additions to the source list (`specs/040` §15.1, §6.1).
@@ -1561,6 +1647,34 @@ impl Config {
                 }
             }
         }
+        if let Some(c) = root.get("bridge").and_then(|b| b.get("claude")).and_then(|c| c.get("credential")) {
+            // A reference, never a secret: the same kinds an endpoint's credential takes. The value is not shown when it is refused.
+            match c.as_str().map(crate::credential::CredentialRef::parse) {
+                Some(Ok(_)) => cfg.bridge.claude_credential = c.as_str().map(String::from),
+                Some(Err(e)) => errs.push(format!("[bridge.claude] credential: {e}")),
+                None => errs.push("[bridge.claude] credential must be a credential reference, such as \"keychain:bridge-claude\"".into()),
+            }
+        }
+        if let Some(l) = root.get("bridge").and_then(|b| b.get("limits")).and_then(|l| l.as_table()) {
+            let lim = &mut cfg.bridge.limits;
+            for (key, slot) in [("window_hours", &mut lim.window_hours), ("window_calls", &mut lim.window_calls), ("window_tokens", &mut lim.window_tokens), ("daily_calls", &mut lim.daily_calls), ("daily_tokens", &mut lim.daily_tokens), ("ceiling_factor", &mut lim.ceiling_factor)] {
+                if let Some(v) = l.get(key) {
+                    match v.as_integer().filter(|n| *n >= 1) {
+                        Some(n) => *slot = n as u64,
+                        None => errs.push(format!("[bridge.limits] {key} must be a whole number of 1 or more")),
+                    }
+                }
+            }
+            if let Some(v) = l.get("idle_share") {
+                match v.as_float().or_else(|| v.as_integer().map(|n| n as f64)).filter(|s| (0.0..=1.0).contains(s)) {
+                    Some(s) => lim.idle_share = s,
+                    None => errs.push("[bridge.limits] idle_share must be a number from 0 to 1".into()),
+                }
+            }
+            for key in l.keys().filter(|k| !["window_hours", "window_calls", "window_tokens", "daily_calls", "daily_tokens", "ceiling_factor", "idle_share"].contains(&k.as_str())) {
+                errs.push(format!("[bridge.limits] has no key `{key}`"));
+            }
+        }
         if let Some(r) = root.get("routing").and_then(|r| r.as_table()) {
             if let Some(p) = r.get("pool") {
                 match p.clone().try_into::<PoolRaw>() {
@@ -1594,6 +1708,24 @@ impl Config {
                 match CostCap::parse(v) {
                     Ok(cap) => cfg.routing.max_cost_class = cap,
                     Err(e) => errs.push(e),
+                }
+            }
+            if let Some(a) = r.get("single_call_harness") {
+                match a.as_str().and_then(SingleCallHarness::parse) {
+                    Some(v) => cfg.routing.single_call_harness = v,
+                    None => errs.push("[routing] single_call_harness must be \"auto\", \"on\" or \"off\"".into()),
+                }
+            }
+            if let Some(n) = r.get("single_call_harness_parallel") {
+                match n.as_integer().filter(|n| (1..=16).contains(n)) {
+                    Some(n) => cfg.routing.single_call_harness_parallel = n as u64,
+                    None => errs.push("[routing] single_call_harness_parallel must be a whole number from 1 to 16".into()),
+                }
+            }
+            if let Some(n) = r.get("single_call_harness_timeout_secs") {
+                match n.as_integer().filter(|n| (1..=3600).contains(n)) {
+                    Some(n) => cfg.routing.single_call_harness_timeout_secs = n as u64,
+                    None => errs.push("[routing] single_call_harness_timeout_secs must be a whole number of seconds from 1 to 3600".into()),
                 }
             }
             if let Some(a) = r.get("registry") {
@@ -2429,6 +2561,28 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
 
     #[test]
     fn the_agent_registry_is_flat_unless_asked_for() {
+        assert_eq!(with_routing("").unwrap().routing.single_call_harness, SingleCallHarness::Auto, "specs/143 §2.4 item 2: the shipped default");
+        for (word, mode) in [("auto", SingleCallHarness::Auto), ("on", SingleCallHarness::On), ("off", SingleCallHarness::Off)] {
+            assert_eq!(with_routing(&format!("[routing]\nsingle_call_harness = \"{word}\"")).unwrap().routing.single_call_harness, mode);
+            assert_eq!(mode.as_str(), word);
+        }
+        assert_eq!(with_routing("").unwrap().routing.single_call_harness_timeout_secs, 180);
+        assert_eq!(with_routing("[routing]\nsingle_call_harness_timeout_secs = 30").unwrap().routing.single_call_harness_timeout_secs, 30);
+        assert!(with_routing("[routing]\nsingle_call_harness_timeout_secs = 0").is_err());
+        assert_eq!(with_routing("").unwrap().bridge.claude_credential, None);
+        assert_eq!(with_routing("").unwrap().routing.single_call_harness_parallel, 2);
+        assert_eq!(with_routing("[routing]\nsingle_call_harness_parallel = 1").unwrap().routing.single_call_harness_parallel, 1);
+        assert!(with_routing("[routing]\nsingle_call_harness_parallel = 0").is_err());
+        assert_eq!(with_routing("").unwrap().bridge.limits, BridgeLimits::default());
+        let set = with_routing("[bridge.limits]\nwindow_hours = 4\nwindow_calls = 10\nwindow_tokens = 1000\ndaily_calls = 20\ndaily_tokens = 2000\nceiling_factor = 2\nidle_share = 0.25").unwrap().bridge.limits;
+        assert_eq!(set, BridgeLimits { window_hours: 4, window_calls: 10, window_tokens: 1000, daily_calls: 20, daily_tokens: 2000, ceiling_factor: 2, idle_share: 0.25 });
+        for bad in ["window_calls = 0", "idle_share = 1.5", "weekly = 3"] {
+            assert!(with_routing(&format!("[bridge.limits]\n{bad}")).is_err(), "{bad}");
+        }
+        assert_eq!(with_routing("[bridge.claude]\ncredential = \"keychain:bridge-claude\"").unwrap().bridge.claude_credential.as_deref(), Some("keychain:bridge-claude"));
+        let pasted = with_routing("[bridge.claude]\ncredential = \"sk-ant-oat01-pasted-secret\"").unwrap_err().join("; ");
+        assert!(pasted.contains("[bridge.claude] credential") && !pasted.contains("pasted-secret"), "a pasted token is refused and not shown: {pasted}");
+        assert!(with_routing("[routing]\nsingle_call_harness = \"maybe\"").is_err_and(|e| e.join("; ").contains("must be \"auto\", \"on\" or \"off\"")));
         assert_eq!(with_routing("").unwrap().routing.registry, RegistryMode::Flat);
         assert_eq!(with_routing("[routing]\nregistry = \"auto\"").unwrap().routing.registry, RegistryMode::Auto);
         assert!(with_routing("[routing]\nregistry = \"on\"").is_err());

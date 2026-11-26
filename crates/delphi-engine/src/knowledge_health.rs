@@ -31,6 +31,10 @@ pub struct Health {
     /// By derived status (`noted`, `checking`, `validated`, …).
     pub claims: BTreeMap<String, usize>,
     pub pages: usize,
+    /// Topic pages due for a rebuild (`specs/117` §2 item 3).
+    pub pages_due: usize,
+    /// The newest idle rebuild failed and none has run since (`specs/143` §2.7 item 3): the cause code and the day it was first seen.
+    pub pages_failed: Option<(String, String)>,
     pub summaries: usize,
     pub summaries_without_source: usize,
     pub staged: usize,
@@ -113,6 +117,9 @@ pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
         count(&mut h.claims, crate::library::claims::status(&claim).as_str());
     }
     h.pages = files_under(&lib.root().join("pages"), ".json", &[]).len();
+    // A read for a reader: the index is not opened, so nothing is written.
+    h.pages_due = lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(ws_dir), now: now.max(0) as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
+    h.pages_failed = crate::daemon_notice::last_failure(ws_dir, crate::daemon_notice::Job::Pages).map(|(c, since)| (c.code().to_string(), since));
 
     // Imported summary pages and their bibliographies (`specs/068`).
     let summaries = ws_dir.join(crate::kb_import::DIR);
@@ -182,6 +189,9 @@ impl Health {
         o.insert("sources".into(), json!({"total": self.sources_total(), "kept": self.sources}));
         o.insert("claims".into(), json!({"total": self.claims_total(), "status": self.claims}));
         o.insert("pages".into(), json!(self.pages));
+        if let Some((cause, since)) = &self.pages_failed {
+            o.insert("pages_idle_rebuild".into(), json!({"due": self.pages_due, "failed": cause, "since": since}));
+        }
         o.insert("summaries".into(), json!({"total": self.summaries, "no_source": self.summaries_without_source}));
         o.insert("staged_notes".into(), json!({"waiting": self.staged, "oldest": self.staged_oldest}));
         o.insert("lessons".into(), json!(self.lessons));
@@ -233,6 +243,10 @@ impl Health {
         }
 
         out.push(if self.pages == 0 { stalled("0 pages: no page has been built from the library. See delphi pages search \"<question>\".".into()) } else { fact(format!("{} pages", self.pages)) });
+        // `specs/143` §2.7 item 3: the newest idle rebuild failed. The cause is a fixed code; no page or claim text is in the line.
+        if let Some((cause, since)) = self.pages_failed.as_ref().and_then(|(c, s)| crate::daemon_notice::Cause::parse(c).map(|c| (c, s))) {
+            out.push(stalled(format!("{}. See delphi doctor.", crate::daemon_notice::pages_health_line(self.pages_due, cause, since))));
+        }
 
         if self.summaries_without_source > 0 {
             out.push(stalled(format!("{} imported summaries, {} with no source listed: what they say cannot be traced. See delphi kb import <file> (import the page again with its links).", self.summaries, self.summaries_without_source)));

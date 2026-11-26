@@ -498,7 +498,13 @@ impl crate::engine::Engine {
         let merged = tokio::task::spawn_blocking(move || mechanical(&w, &n2).len()).await.unwrap_or(0);
         let (mut proposed, mut tokens) = (0usize, 0u64);
         if mode == delphi_adapter::config::Consolidate::Model {
-            if let Some(key) = self.scout_key() {
+            let key = self.scout_key();
+            if key.is_none() {
+                // No model can serve the pass: the mechanical merge above stands, and the operator is told (`specs/143` §2.7).
+                self.job_failed(crate::daemon_notice::Job::Consolidation, crate::daemon_notice::Cause::NoRoute);
+            }
+            // A harness that would serve it is asked for admission first (`specs/143` §2.3 item 6).
+            if let Some(key) = key.filter(|k| self.idle_job_may_start(crate::daemon_notice::Job::Consolidation, k)) {
                 let w = ws.clone();
                 let inputs = tokio::task::spawn_blocking(move || gather(&w)).await.unwrap_or_default();
                 for i in inputs {
@@ -509,7 +515,7 @@ impl crate::engine::Engine {
                     let room = cap.saturating_sub(tokens);
                     let chars = ((room / 2) * 4).min(40_000) as usize;
                     let ipr = crate::research::scout_call(LINE, &crate::role_call::RoleText::bare(crate::role_call::Step::Plan), prompt(&i, chars));
-                    let Some(raw) = self.one_shot_raw(&key, &ipr, (room / 2).clamp(200, 1500)).await else { continue };
+                    let Ok(raw) = self.one_shot_raw(&key, &ipr, (room / 2).clamp(200, 1500), None).await else { continue };
                     tokens += raw.tokens.max((chars / 4) as u64);
                     let notes = pn::list(&ws);
                     let secrets = self.secrets.clone();

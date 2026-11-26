@@ -78,8 +78,48 @@ pub struct RouteRequest {
     pub target: Option<String>,
     /// The caller can only drive one model turn at a time, so a harness (which runs a whole span) is not a candidate.
     pub turn_by_turn: bool,
+    /// The caller will send one prompt and read one answer, with no tools (`specs/143` §2.1 item 1). A harness may serve such a
+    /// request through the single-turn bridge, when `[routing] single_call_harness` lets it and its CLI can run one prompt with
+    /// its tools off. Only the callers of [`SINGLE_CALLERS`] set it.
+    pub single_call: bool,
+    /// The room left in the rolling window of a harness endpoint's credential, by endpoint id (`specs/143` §2.3 item 6): between
+    /// harnesses the existing ranking leaves level, the one with the most room serves a single call. An endpoint not listed has
+    /// its whole window.
+    pub harness_room: Vec<(String, u64)>,
     /// Present when the engine asks for discovered assignment (`specs/056`); used only with `[routing] assignment = "discovered"`.
     pub assign: Option<crate::assign::Assign>,
+}
+
+/// The files whose route request sets `single_call` (`specs/143` §2.1 item 1). The list is closed and tested: a caller added later
+/// sets `single_call`, states the tier of its inputs to `Engine::one_shot_raw` and joins `single_call_tests`, or it does not go
+/// through the bridge (`route::tests::the_marked_callers_are_the_tested_callers`).
+pub const SINGLE_CALLERS: [&str; 7] = ["decision_run.rs", "fact_judge.rs", "library_acquire_run.rs", "library_page_validate.rs", "page_run.rs", "research.rs", "summary.rs"];
+
+/// Whether a harness CLI can be run for one prompt with its tools off (`specs/143` §2.1 item 3), or why not.
+pub fn single_call_cli(harness: &str) -> Result<(), &'static str> {
+    match harness {
+        "claude" => Ok(()),
+        "agy" => Err("its tools cannot be turned off, so it never serves a single call"),
+        "codex" | "copilot" => Err("its one-prompt mode has not been probed, so it does not serve a single call yet"),
+        _ => Err("the single-turn bridge does not know this CLI"),
+    }
+}
+
+/// Why this harness endpoint cannot serve a single call whatever `[routing] single_call_harness` says, or `None` when it can:
+/// its CLI cannot run one prompt with its tools off (§2.1 item 3), or no subscription token is named for it (§2.9 item 4: the
+/// bridge signs the CLI in by a token of its own and never by the operator's own login, so without one there is nothing to run).
+pub fn single_call_unable(cfg: &Config, ep: &delphi_adapter::config::Endpoint) -> Option<String> {
+    if let Err(why) = single_call_cli(ep.harness.as_deref().unwrap_or("claude")) {
+        return Some(why.to_string());
+    }
+    cfg.bridge.claude_credential.is_none().then(|| format!("no subscription token is named for it ({})", delphi_adapter::config::BridgeConfig::CLAUDE_CREDENTIAL_KEY))
+}
+
+/// True when `[routing] single_call_harness = "off"` is what keeps an allowed harness from serving single calls: a `no_route`
+/// notice then names the key (`specs/143` §2.7 item 1).
+pub fn single_call_switched_off(cfg: &Config) -> bool {
+    use delphi_adapter::config::{AccessPath, SingleCallHarness};
+    cfg.routing.single_call_harness == SingleCallHarness::Off && cfg.endpoints.iter().any(|e| e.path == AccessPath::Harness && cfg.is_allowed(&e.id) && single_call_unable(cfg, e).is_none())
 }
 
 /// An eligible pair that cannot be used right now, and when it may come back.
@@ -209,7 +249,7 @@ pub fn over_cap(cfg: &Config, endpoint_id: &str, model_id: &str, role: &str) -> 
 /// card names. Empty when the cap excluded nothing. A harness pair counts even for a turn-by-turn caller: the engine tries the
 /// harness first, so a capped one must not let the turn-by-turn fallback serve a lower tier in its place.
 pub fn capped(cfg: &Config, req: &RouteRequest) -> Vec<PoolKey> {
-    let any_caller = RouteRequest { turn_by_turn: false, ..req.clone() };
+    let any_caller = RouteRequest { turn_by_turn: false, single_call: false, ..req.clone() };
     cfg.pool_entries().into_iter().filter(|k| ineligible_before_cap(cfg, k, &any_caller).is_none() && over_cap(cfg, &k.endpoint_id, &k.model_id, &req.role).is_some()).collect()
 }
 
@@ -269,8 +309,18 @@ fn ineligible_before_cap(cfg: &Config, key: &PoolKey, req: &RouteRequest) -> Opt
     if !cfg.is_allowed(&ep.id) {
         return Some("the endpoint is not in allowed_endpoints".into());
     }
-    if req.turn_by_turn && ep.path == delphi_adapter::config::AccessPath::Harness {
-        return Some("a harness runs whole spans, not single turns".into());
+    if (req.turn_by_turn || req.single_call) && ep.path == delphi_adapter::config::AccessPath::Harness {
+        // `specs/143` §2.1 item 2: a harness never serves a tool loop driven turn by turn. It may serve a single call, when the
+        // bridge is on and its CLI can run one prompt with its tools off.
+        if !req.single_call {
+            return Some("a harness runs whole spans, not single turns".into());
+        }
+        if cfg.routing.single_call_harness == delphi_adapter::config::SingleCallHarness::Off {
+            return Some(format!("a harness serves a single call only through the single-turn bridge, and {} is \"off\"", delphi_adapter::config::SingleCallHarness::KEY));
+        }
+        if let Some(why) = single_call_unable(cfg, ep) {
+            return Some(format!("this harness cannot serve a single call: {why}"));
+        }
     }
     if req.mutating && !ep.can_mutate() && !req.mutating_harnesses.contains(&ep.id) {
         return Some("this harness has no approval bridge, so it can only serve read-only roles".into());
@@ -305,6 +355,15 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
         }
     }
 
+    // `specs/143` §2.1 item 4: under `auto` a harness serves a single call only when no other allowed endpoint is eligible for it,
+    // so an install with an API endpoint behaves as it did.
+    let is_harness = |k: &PoolKey| cfg.endpoint(&k.endpoint_id).is_some_and(|e| e.path == delphi_adapter::config::AccessPath::Harness);
+    if req.single_call && cfg.routing.single_call_harness == delphi_adapter::config::SingleCallHarness::Auto && eligible.iter().any(|(_, k)| !is_harness(k)) {
+        let (keep, bridged): (Vec<_>, Vec<_>) = eligible.into_iter().partition(|(_, k)| !is_harness(k));
+        rejected.extend(bridged.into_iter().map(|(_, k)| (k, format!("another allowed endpoint serves single calls, and {} is \"auto\"", delphi_adapter::config::SingleCallHarness::KEY))));
+        eligible = keep;
+    }
+
     // Candidate order: pairs outside the avoided families first, then the preferred family, then the
     // operator's `[routing.pool]` order if there is one. Without it, the default pool is tier-major, which
     // says nothing about which endpoint to try first for one tier, so the ratified endpoint order within
@@ -322,7 +381,17 @@ pub fn resolve_route(cfg: &Config, state: &[Entry], now: i64, req: &RouteRequest
             Pace::Frugal => !cfg.endpoint(&k.endpoint_id).is_some_and(|e| e.is_metered_by_subscription() || e.is_local()) as u8,
         }
     };
-    let order = |k: &PoolKey, i: usize| (avoided(k) as u8, pace_rank(k), (req.prefer_family.as_deref() != Some(k.family.as_str())) as u8, failover(k), policy_index(k), i);
+    // `specs/143` §2.1 item 6: between harnesses that may serve a single call, after the existing ranking (the family preference,
+    // then the `[routing.pool]` order): the one with the most room left in its rolling window, then the endpoint id, so the same
+    // state gives the same answer. For every other request these three are level and the order is what it was.
+    let bridged = |k: &PoolKey| req.single_call && is_harness(k);
+    let pool_position = |k: &PoolKey| match (&cfg.routing.pool, req.single_call) {
+        (Some(order), true) => order.iter().position(|m| m == &k.model_id).unwrap_or(usize::MAX),
+        _ => 0,
+    };
+    let room_used = |k: &PoolKey| if bridged(k) { u64::MAX - req.harness_room.iter().find(|(id, _)| id == &k.endpoint_id).map(|(_, room)| *room).unwrap_or(u64::MAX) } else { 0 };
+    let bridged_id = |k: &PoolKey| if bridged(k) { k.endpoint_id.clone() } else { String::new() };
+    let order = |k: &PoolKey, i: usize| (avoided(k) as u8, pace_rank(k), (req.prefer_family.as_deref() != Some(k.family.as_str())) as u8, failover(k), policy_index(k), pool_position(k), room_used(k), bridged_id(k), i);
     let mut by_preference = eligible.clone();
     by_preference.sort_by_key(|(i, k)| order(k, *i));
 
@@ -1002,5 +1071,138 @@ order = { claude = ["direct", "bedrock"] }
                 assert!(r.key().is_none_or(|k| k.endpoint_id != "direct" && k.endpoint_id != "agy-sub"), "{} {:?}", tier, r);
             }
         }
+    }
+
+    // ---- `specs/143` §2.1: a harness may serve a single call ----
+
+    const CLAUDE_SUB: &str = "\n[[endpoints]]\nid = \"claude-sub\"\nfamily = \"claude\"\npath = \"harness\"\nharness = \"claude\"\ncredential = \"harness-login\"\ncost_model = \"subscription\"\n";
+
+    /// The bridge's token, named (a reference; routing never reads the token).
+    const TOKEN: &str = "[bridge.claude]\ncredential = \"keychain:bridge-claude\"\n";
+
+    /// [`CONFIG`] with a `claude` harness added, the endpoints of `allowed` allowed, the bridge's token named, and `extra` at the end.
+    fn bridged(allowed: &[&str], extra: &str) -> Config {
+        let (head, _) = CONFIG.split_once("[access]").unwrap();
+        let allowed = allowed.iter().map(|a| format!("\"{a}\"")).collect::<Vec<_>>().join(", ");
+        Config::parse(&format!("{head}{CLAUDE_SUB}\n[access]\nallowed_endpoints = [{allowed}]\n{TOKEN}{extra}")).unwrap()
+    }
+
+    fn single(role: &str, tier: &str) -> RouteRequest {
+        RouteRequest { turn_by_turn: true, single_call: true, ..req(role, tier) }
+    }
+
+    fn why_not(r: &Route, endpoint: &str) -> String {
+        match r {
+            Route::NoModel { ineligible, .. } => ineligible.iter().filter(|(k, _)| k.endpoint_id == endpoint).map(|(_, why)| why.clone()).next().unwrap_or_default(),
+            other => panic!("expected no model, got {other:?}"),
+        }
+    }
+
+    // AC-1: with only a `claude` harness allowed and `auto`, a single call resolves to it; a turn-by-turn request that is not a
+    // single call is refused with today's reason; with `off` both are refused; an `agy` harness is never chosen for a single call.
+    #[test]
+    fn a_single_call_goes_to_an_allowed_claude_harness_under_auto_and_never_to_agy() {
+        let c = bridged(&["claude-sub"], "");
+        assert_eq!(c.routing.single_call_harness, delphi_adapter::config::SingleCallHarness::Auto);
+        match resolve_route(&c, &[], NOW, &single("writer", "workhorse")) {
+            Route::Target { key, .. } => assert_eq!(key.endpoint_id, "claude-sub"),
+            other => panic!("{other:?}"),
+        }
+        let looped = resolve_route(&c, &[], NOW, &RouteRequest { turn_by_turn: true, ..req("writer", "workhorse") });
+        assert_eq!(why_not(&looped, "claude-sub"), "a harness runs whole spans, not single turns");
+
+        let off = bridged(&["claude-sub"], "[routing]\nsingle_call_harness = \"off\"\n");
+        assert!(why_not(&resolve_route(&off, &[], NOW, &single("writer", "workhorse")), "claude-sub").contains("[routing] single_call_harness is \"off\""));
+        assert_eq!(why_not(&resolve_route(&off, &[], NOW, &RouteRequest { turn_by_turn: true, ..req("writer", "workhorse") }), "claude-sub"), "a harness runs whole spans, not single turns");
+        assert!(single_call_switched_off(&off) && !single_call_switched_off(&c));
+
+        // §2.9 item 4: with no token named, the CLI is not eligible, under `auto` and under `on`, and the key is not the cause.
+        for mode in ["auto", "on", "off"] {
+            let (head, _) = CONFIG.split_once("[access]").unwrap();
+            let bare = Config::parse(&format!("{head}{CLAUDE_SUB}\n[access]\nallowed_endpoints = [\"claude-sub\"]\n[routing]\nsingle_call_harness = \"{mode}\"\n")).unwrap();
+            let r = resolve_route(&bare, &[], NOW, &single("writer", "workhorse"));
+            assert!(r.key().is_none() && !single_call_switched_off(&bare), "{mode}: {r:?}");
+            if mode != "off" {
+                assert!(why_not(&r, "claude-sub").contains("no subscription token is named for it ([bridge.claude] credential)"), "{mode}: {r:?}");
+            }
+        }
+
+        for mode in ["auto", "on"] {
+            let agy = bridged(&["agy-sub"], &format!("[routing]\nsingle_call_harness = \"{mode}\"\n"));
+            let r = resolve_route(&agy, &[], NOW, &RouteRequest { prefer_family: Some("gemini".into()), ..single("writer", "workhorse") });
+            assert!(why_not(&r, "agy-sub").contains("its tools cannot be turned off"), "{mode}: {r:?}");
+        }
+        assert!(!single_call_switched_off(&bridged(&["agy-sub"], "[routing]\nsingle_call_harness = \"off\"\n")), "no harness could have served, so the key is not the cause");
+    }
+
+    // The fitness function "a harness never serves a tool loop": whatever the key says, a turn-by-turn request that is not a single
+    // call never resolves to a harness, and the probe table admits `claude` alone.
+    #[test]
+    fn a_harness_is_refused_turn_by_turn_unless_single_call() {
+        for mode in ["auto", "on", "off"] {
+            let c = bridged(&["claude-sub", "agy-sub"], &format!("[routing]\nsingle_call_harness = \"{mode}\"\n"));
+            for tier in ["fast", "workhorse", "frontier"] {
+                let r = resolve_route(&c, &[], NOW, &RouteRequest { turn_by_turn: true, ..req("builder", tier) });
+                assert!(r.key().is_none(), "{mode} {tier}: {r:?}");
+                let r = resolve_route(&c, &[], NOW, &single("writer", tier));
+                assert_eq!(r.key().map(|k| k.endpoint_id.as_str()), (mode != "off").then_some("claude-sub"), "{mode} {tier}");
+            }
+        }
+        assert_eq!((single_call_cli("claude"), single_call_cli("agy").is_err(), single_call_cli("codex").is_err(), single_call_cli("copilot").is_err(), single_call_cli("other").is_err()), (Ok(()), true, true, true, true));
+    }
+
+    // AC-2: with a harness and an API endpoint both allowed and `auto`, a single call goes to the API endpoint, also when that
+    // endpoint is cooling down (eligible is not the same as usable now); with `on` the existing ranking chooses.
+    #[test]
+    fn under_auto_an_api_endpoint_takes_the_single_call_and_under_on_the_ranking_decides() {
+        let auto = bridged(&["direct", "claude-sub"], "");
+        let r = resolve_route(&auto, &[], NOW, &single("writer", "workhorse"));
+        assert_eq!(r.key().map(|k| k.endpoint_id.as_str()), Some("direct"));
+        let cooling = down(&auto, &["sonnet-x", "haiku-x", "opus-x"]);
+        let r = resolve_route(&auto, &cooling, NOW, &single("writer", "workhorse"));
+        assert!(r.key().is_none_or(|k| k.endpoint_id != "claude-sub"), "the harness does not stand in under auto: {r:?}");
+
+        // `on`: the ratified endpoint order within the family is the existing ranking, so it decides either way.
+        let api_first = bridged(&["direct", "claude-sub"], "[routing]\nsingle_call_harness = \"on\"\n");
+        assert_eq!(resolve_route(&api_first, &[], NOW, &single("writer", "workhorse")).key().map(|k| k.endpoint_id.as_str()), Some("direct"));
+        let harness_first = Config::parse(&CONFIG.replace("[access]\norder = { claude = [\"direct\", \"bedrock\"] }", &format!("{CLAUDE_SUB}\n[routing]\nsingle_call_harness = \"on\"\n[access]\norder = {{ claude = [\"claude-sub\", \"direct\"] }}\nallowed_endpoints = [\"direct\", \"claude-sub\"]\n{TOKEN}"))).unwrap();
+        assert_eq!(resolve_route(&harness_first, &[], NOW, &single("writer", "workhorse")).key().map(|k| k.endpoint_id.as_str()), Some("claude-sub"));
+        // A request that is not a single call is routed as it always was, whatever the key says.
+        assert_eq!(resolve_route(&harness_first, &[], NOW, &RouteRequest { turn_by_turn: true, ..req("writer", "workhorse") }).key().map(|k| k.endpoint_id.as_str()), Some("direct"));
+    }
+
+    // The bridge uses only allowed endpoints: a harness outside `allowed_endpoints` never serves a single call.
+    #[test]
+    fn a_harness_that_is_not_allowed_never_serves_a_single_call() {
+        for mode in ["auto", "on"] {
+            let c = bridged(&["agy-sub"], &format!("[routing]\nsingle_call_harness = \"{mode}\"\n"));
+            let r = resolve_route(&c, &[], NOW, &single("writer", "workhorse"));
+            // An endpoint outside the pin is not even in the pool, so it is neither chosen nor listed.
+            assert!(r.key().is_none() && why_not(&r, "claude-sub").is_empty() && !c.pool_entries().iter().any(|k| k.endpoint_id == "claude-sub"), "{mode}: {r:?}");
+        }
+    }
+
+    // AC-18 and §2.1 item 6: between harnesses the existing ranking leaves level, the one with more room in its window serves,
+    // and the endpoint id breaks a tie; the existing ranking still comes first.
+    #[test]
+    fn between_level_harnesses_the_one_with_more_room_serves_and_the_id_breaks_a_tie() {
+        let two = |extra: &str| {
+            let second = CLAUDE_SUB.replace("claude-sub", "claude-alt");
+            let (head, _) = CONFIG.split_once("[access]").unwrap();
+            Config::parse(&format!("{head}{CLAUDE_SUB}{second}\n[access]\nallowed_endpoints = [\"claude-sub\", \"claude-alt\"]\n{TOKEN}{extra}")).unwrap()
+        };
+        let pick = |c: &Config, room: &[(&str, u64)]| {
+            let r = RouteRequest { harness_room: room.iter().map(|(id, n)| (id.to_string(), *n)).collect(), ..single("writer", "workhorse") };
+            resolve_route(c, &[], NOW, &r).key().map(|k| k.endpoint_id.clone()).unwrap()
+        };
+        // An explicit pool order ranks models, not endpoints, so the two harnesses are level on it.
+        let level = two("[routing.pool]\norder = [\"sonnet-x\", \"haiku-x\", \"opus-x\"]\n");
+        assert_eq!(pick(&level, &[("claude-sub", 5), ("claude-alt", 20)]), "claude-alt", "more room");
+        assert_eq!(pick(&level, &[("claude-sub", 20), ("claude-alt", 5)]), "claude-sub");
+        assert_eq!(pick(&level, &[("claude-sub", 7), ("claude-alt", 7)]), "claude-alt", "a tie: the endpoint id");
+        assert_eq!(pick(&level, &[]), "claude-alt", "nothing known: both have their whole window");
+        // Without a pool order the ratified endpoint order of the family is the existing ranking, and it comes before the room.
+        let ordered = two("");
+        assert_eq!(pick(&ordered, &[("claude-sub", 1), ("claude-alt", 99)]), "claude-sub");
     }
 }
