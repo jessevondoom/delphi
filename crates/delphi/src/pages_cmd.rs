@@ -131,59 +131,20 @@ pub(crate) enum Target<'a> {
 /// word typed back), and without it stays within the limits; past the ceiling nothing runs. Exit codes: 0 built · 1 a page failed or
 /// is the claims alone · 2 off or usage · 3 a limit · 4 the daemon could not start.
 fn rebuild(home: &Path, ws_dir: &Path, target: Target<'_>) -> i32 {
-    use delphi_core::spawn::{connect_or_spawn, SpawnOptions};
-    let Some(exe) = crate::chat::daemon_exe() else {
-        eprintln!("delphi pages rebuild: cannot locate this program to start the daemon");
-        return 4;
-    };
-    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) }) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("delphi pages rebuild: {}", e);
-            return 4;
-        }
-    };
-    let code = rebuild_on(&mut attached.client, target);
-    if attached.spawned {
-        let _ = attached.client.call("daemon.shutdown", json!({}));
-    }
-    code
+    crate::bridge_cmd::with_daemon(home, ws_dir, "pages rebuild", |client| rebuild_on(client, target))
 }
 
 fn rebuild_on(client: &mut delphi_core::client::Client, target: Target<'_>) -> i32 {
-    let pre = client.call("bridge.preflight", json!({"job": "pages"})).unwrap_or_else(|_| json!({"admission": "admit"}));
-    let mut confirmed = false;
-    match pre["admission"].as_str().unwrap_or("admit") {
-        "off" => {
-            eprintln!("delphi pages rebuild: {}", delphi_engine::service::PAGES_OFF);
-            return 2;
-        }
-        "ceiling" => {
-            eprintln!("delphi pages rebuild: {}; nothing passes it. {}", delphi_engine::service::CEILING, crate::bridge_cmd::usage_line(&pre["usage"]));
-            return 3;
-        }
-        "confirm" => {
-            let what = format!("{}.\n{} Passing it spends more of your subscription's quota.", delphi_engine::service::LIMIT, crate::bridge_cmd::usage_line(&pre["usage"]));
-            if let Err(why) = crate::bridge_cmd::confirm_at_terminal(&what) {
-                eprintln!("delphi pages rebuild: {}", why);
-                return 3;
-            }
-            confirmed = true;
-        }
-        _ => {}
-    }
+    let confirmed = match crate::bridge_cmd::preflight(client, "pages", "pages rebuild") {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
     let params = match target {
         Target::Slug(slug) => json!({"slug": slug, "confirmed": confirmed}),
         Target::Due => json!({"due": true, "confirmed": confirmed}),
         Target::All => json!({"all": true, "confirmed": confirmed}),
     };
-    let passed = |client: &mut delphi_core::client::Client| {
-        if confirmed {
-            if let Ok(p) = client.call("bridge.preflight", json!({"job": "pages"})) {
-                eprintln!("Passed the limit by the confirmation. {}", crate::bridge_cmd::usage_line(&p["usage"]));
-            }
-        }
-    };
+    let passed = |client: &mut delphi_core::client::Client| crate::bridge_cmd::say_passed(client, "pages", confirmed);
     match (target_is_one(&params), client.call("pages.rebuild", params)) {
         (true, Ok(v)) => {
             println!("{} version {} · {} · {}", v["slug"].as_str().unwrap_or(""), v["version"], v["outcome"].as_str().unwrap_or(""), v["change"].as_str().unwrap_or(""));

@@ -285,7 +285,10 @@ impl crate::engine::Engine {
             // A harness that would judge is asked for admission first (`specs/143` §2.3 item 6).
             Some(key) => self.idle_job_may_start(crate::daemon_notice::Job::Validation, &key),
             None => {
-                self.job_failed(crate::daemon_notice::Job::Validation, crate::daemon_notice::Cause::NoRoute);
+                // A check the operator started says so itself; only one nobody started is a notice.
+                if crate::daemon_notice::current_command().is_none() {
+                    self.job_failed(crate::daemon_notice::Job::Validation, crate::daemon_notice::Cause::NoRoute);
+                }
                 false
             }
         }
@@ -294,21 +297,34 @@ impl crate::engine::Engine {
     /// One look for work: if every gate passes, check the next claim (one per look). Returns the claim's fact id when a check ran. Where the
     /// install has no library there is nothing to validate.
     pub async fn background_validate_tick(self: &std::sync::Arc<Self>, m: &std::sync::Arc<crate::mission::MissionState>, last_operator: i64, tasks_running: usize) -> Option<String> {
+        self.validate_next(m, last_operator, tasks_running, false).await.ok()
+    }
+
+    /// Check the next waiting claim (one per call): the claim's fact id, or why none was checked. `by_hand` is the operator's
+    /// `delphi kb validate --pending` (`specs/143` §2.8 item 1): it is not held to `[validator] background`, to the operator being
+    /// away or to a running task, which only stop the check from running by itself; every other gate (the mode, the latch, the
+    /// backlog, the validator's own daily cap and weekly share) holds as it does for the daemon.
+    pub async fn validate_next(self: &std::sync::Arc<Self>, m: &std::sync::Arc<crate::mission::MissionState>, last_operator: i64, tasks_running: usize, by_hand: bool) -> Result<String, String> {
         if !self.ws.home.join("library").is_dir() {
-            return None;
+            return Err(Wait::Nothing.to_string());
         }
         let lib = Library::in_home(&self.ws.home);
         let state = crate::fact_mode::state_dir(&self.ws.dir);
         let chosen = {
-            let i = self.background_inputs(&lib, &state, last_operator, tasks_running);
-            pick(&i).ok()?
+            let mut i = self.background_inputs(&lib, &state, last_operator, tasks_running);
+            if by_hand {
+                i.enabled = true;
+                i.last_operator = 0;
+                i.busy = false;
+            }
+            pick(&i).map_err(|w| w.to_string())?
         };
         if !self.background_judge_or_notice() {
-            return None;
+            return Err("no model can judge the claim now (see delphi doctor)".into());
         }
         record_attempt(&state, &chosen.fact_id, (self.clock_unix)());
         let _ = self.run_background_claim(m, &chosen.text).await;
-        Some(chosen.fact_id)
+        Ok(chosen.fact_id)
     }
 }
 

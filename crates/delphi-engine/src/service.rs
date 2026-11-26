@@ -413,6 +413,22 @@ pub const PAGES_OFF: &str = "[bridge.jobs] pages = \"off\": no page is written t
 pub const LIMIT: &str = "the bridge's limit is reached (the rolling window, the daily cap or the job's weekly budget)";
 /// The start of what it says past the ceiling, which nothing passes.
 pub const CEILING: &str = "the bridge's ceiling for today is reached";
+/// What a consolidation the operator asked for says when `[bridge.jobs] consolidation = "off"`.
+pub const CONSOLIDATION_OFF: &str = "[bridge.jobs] consolidation = \"off\": no consolidation call goes through the bridge. Set it to \"manual\" or \"auto\" in config.toml to allow it";
+/// What a validation the operator asked for says when `[bridge.jobs] validation = "off"`.
+pub const VALIDATION_OFF: &str = "[bridge.jobs] validation = \"off\": no claim is checked through the bridge. Set it to \"manual\" or \"auto\" in config.toml to allow it";
+
+/// Why a job the operator started must not run, from its preflight (`specs/143` §2.8 item 3), or `None` to go on: `off` says
+/// `off_words`; past a limit it needs `confirmed`; past the ceiling nothing runs.
+pub fn command_stop(pf: crate::summary::Preflight, confirmed: bool, off_words: &str) -> Option<String> {
+    use crate::summary::Preflight;
+    match pf {
+        Preflight::Off => Some(off_words.to_string()),
+        Preflight::Ceiling(_) => Some(format!("{CEILING}: nothing more goes through it until tomorrow (UTC)")),
+        Preflight::Confirmable(_) if !confirmed => Some(format!("{LIMIT}: run the command at a terminal to confirm passing it")),
+        _ => None,
+    }
+}
 
 fn need_console(ctx: &CallContext) -> Result<(), RpcError> {
     if ctx.scope == Scope::Console {
@@ -3757,6 +3773,7 @@ impl EngineService {
         let job = p["job"].as_str().and_then(crate::daemon_notice::Job::parse).ok_or_else(|| err(code::INVALID_PARAMS, "job must be one of pages, summaries, validation, session_summaries, consolidation"))?;
         let key = match job {
             crate::daemon_notice::Job::Pages => self.engine.writer_key(),
+            crate::daemon_notice::Job::Validation => self.engine.judge_key(None),
             _ => self.engine.scout_key(),
         };
         Ok(self.engine.bridge_preflight(job, key.as_ref()).to_json())
@@ -3771,14 +3788,7 @@ impl EngineService {
         need_console(&ctx)?;
         let confirmed = p["confirmed"].as_bool().unwrap_or(false);
         let job = crate::daemon_notice::Job::Pages;
-        let stop = |pf: Preflight| -> Option<String> {
-            match pf {
-                Preflight::Off => Some(PAGES_OFF.to_string()),
-                Preflight::Ceiling(_) => Some(format!("{CEILING}: no page is written through it until tomorrow (UTC)")),
-                Preflight::Confirmable(_) if !confirmed => Some(format!("{LIMIT}: run the command at a terminal to confirm passing it")),
-                _ => None,
-            }
-        };
+        let stop = |pf: Preflight| command_stop(pf, confirmed, PAGES_OFF);
         if let Some(why) = stop(self.engine.bridge_preflight(job, self.engine.writer_key().as_ref())) {
             return Err(err(code::INVALID_PARAMS, why));
         }
@@ -3808,6 +3818,58 @@ impl EngineService {
             }
         }
         Ok(json!({"topics": slugs.len(), "built": built, "failed": failed, "stopped": stopped}))
+    }
+
+    /// `memory.consolidate {confirmed}` (`specs/143` §2.8 item 1, `specs/116` §6): one consolidation pass now, as the job
+    /// `consolidation` started by the operator. Refused when `[memory] consolidate` is off, when the job is `off` through the bridge,
+    /// past a limit unless `confirmed`, and past the ceiling. It runs whether or not a pass ran today.
+    async fn memory_consolidate(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let confirmed = p["confirmed"].as_bool().unwrap_or(false);
+        let job = crate::daemon_notice::Job::Consolidation;
+        let mem = self.engine.cfg.get().memory.clone();
+        if mem.consolidate == delphi_adapter::config::Consolidate::Off {
+            return Err(err(code::INVALID_PARAMS, "consolidation is off ([memory] consolidate = false); turn it on in config.toml to run it"));
+        }
+        // The mechanical merge needs no model; the bridge's rules apply only to a pass that would call one through it.
+        if mem.consolidate == delphi_adapter::config::Consolidate::Model {
+            if let Some(why) = command_stop(self.engine.bridge_preflight(job, self.engine.scout_key().as_ref()), confirmed, CONSOLIDATION_OFF) {
+                return Err(err(code::INVALID_PARAMS, why));
+            }
+        }
+        let (merged, proposed, tokens) = crate::daemon_notice::in_command(job, confirmed, self.engine.consolidate_pass(mem.consolidate, mem.consolidate_tokens)).await;
+        Ok(json!({"merged": merged, "proposed": proposed, "tokens": tokens}))
+    }
+
+    /// `validation.pending {confirmed, limit}` (`specs/143` §2.8 item 1, `specs/040`): check waiting library claims now, one after
+    /// another, as the job `validation` started by the operator, at most `limit` (default 20). It is not held to `[validator]
+    /// background` or to the operator being away; the validator's mode, latch, backlog, daily cap and weekly share hold. It stops at
+    /// the first of those, and at the bridge's first limit.
+    async fn validation_pending(self: &Arc<Self>, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let confirmed = p["confirmed"].as_bool().unwrap_or(false);
+        let limit = p["limit"].as_u64().unwrap_or(20).clamp(1, 200);
+        let job = crate::daemon_notice::Job::Validation;
+        let m = self.mission(None).await?;
+        let (mut checked, mut stopped): (Vec<String>, Option<String>) = (Vec::new(), None);
+        while (checked.len() as u64) < limit {
+            if let Some(why) = command_stop(self.engine.bridge_preflight(job, self.engine.judge_key(None).as_ref()), confirmed, VALIDATION_OFF) {
+                if checked.is_empty() {
+                    return Err(err(code::INVALID_PARAMS, why));
+                }
+                stopped = Some(why);
+                break;
+            }
+            let running = self.running.lock().unwrap().len();
+            match crate::daemon_notice::in_command(job, confirmed, self.engine.validate_next(&m, 0, running, true)).await {
+                Ok(fact) => checked.push(fact),
+                Err(why) => {
+                    stopped = Some(why);
+                    break;
+                }
+            }
+        }
+        Ok(json!({"checked": checked.len(), "facts": checked, "stopped": stopped}))
     }
 
     async fn pages_pin(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -5640,6 +5702,8 @@ impl Extension for ServiceExt {
                 "pages.pin" => svc.pages_pin(params, ctx).await,
                 "pages.rebuild" => svc.pages_rebuild(params, ctx).await,
                 "bridge.preflight" => svc.bridge_preflight(params, ctx),
+                "memory.consolidate" => svc.memory_consolidate(params, ctx).await,
+                "validation.pending" => svc.validation_pending(params, ctx).await,
                 "pages.get" => svc.pages_get(params, ctx).await,
                 "pages.versions" => svc.pages_versions(params, ctx).await,
                 "pages.links" => svc.pages_links(params, ctx).await,
@@ -5983,6 +6047,74 @@ mod tests {
         let e = svc.pages_rebuild(json!({"slug": "tide-tables", "confirmed": true}), console()).await.unwrap_err();
         assert!(format!("{e:?}").contains(super::CEILING), "{e:?}");
         assert!(!rec.join("args.txt").exists(), "nothing passes the ceiling");
+    }
+
+    // `specs/143` §2.8 items 1 and 3, part 2: `memory.consolidate` is refused when `[memory] consolidate` is off; the mechanical pass
+    // runs by hand with no model; a model pass that would go through the bridge is refused when the job is `off`, with its reason,
+    // and launches nothing. `validation.pending` with the job `off` is refused the same way; with nothing waiting it says so.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn consolidation_and_validation_run_by_hand_and_are_refused_when_off() {
+        use crate::harness_single::tests::{answers, recording_cli};
+        use delphi_adapter::config::{Consolidate, JobMode};
+        let d = tempfile::tempdir().unwrap();
+        let rec = d.path().join("rec");
+        let f = crate::summary::tests::bridged(&recording_cli(d.path(), &rec, &answers("nothing to propose")), true);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let console = || CallContext { scope: Scope::Console, client_id: 0 };
+        let set = |consolidate: Consolidate, jobs: JobMode| {
+            let mut c = (*f.engine.cfg.get()).clone();
+            c.memory.consolidate = consolidate;
+            c.bridge.jobs.consolidation = jobs;
+            c.bridge.jobs.validation = jobs;
+            f.engine.cfg.set(c);
+        };
+        set(Consolidate::Off, JobMode::Auto);
+        let e = svc.memory_consolidate(json!({}), console()).await.unwrap_err();
+        assert!(format!("{e:?}").contains("[memory] consolidate = false"), "{e:?}");
+
+        set(Consolidate::Mechanical, JobMode::Off);
+        let v = svc.memory_consolidate(json!({}), console()).await.unwrap();
+        assert_eq!((v["proposed"].as_u64(), v["tokens"].as_u64()), (Some(0), Some(0)), "the mechanical pass needs no model: {v}");
+
+        set(Consolidate::Model, JobMode::Off);
+        let e = svc.memory_consolidate(json!({}), console()).await.unwrap_err();
+        assert!(format!("{e:?}").contains("[bridge.jobs] consolidation"), "{e:?}");
+        let e = svc.validation_pending(json!({}), console()).await.unwrap_err();
+        assert!(format!("{e:?}").contains("[bridge.jobs] validation"), "{e:?}");
+        assert!(!rec.join("args.txt").exists(), "nothing was launched");
+
+        set(Consolidate::Model, JobMode::Manual);
+        let v = svc.validation_pending(json!({}), console()).await.unwrap();
+        assert_eq!(v["checked"].as_u64(), Some(0));
+        assert!(v["stopped"].as_str().is_some_and(|w| w.starts_with("idle")), "{v}");
+        svc.notices_tick().await;
+        assert!(events_of(&f, "daemon.notice").is_empty(), "a job the operator started raises no notice");
+    }
+
+    // `specs/143` §2.8 items 3 and 5: inside a job the operator started, `manual` admits and `off` refuses, with no notice either way;
+    // outside one (the daemon's own), `manual` waits silently.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_command_scope_is_admitted_in_manual_and_refused_in_off_without_a_notice() {
+        use crate::daemon_notice::{in_command, Job};
+        use delphi_adapter::config::JobMode;
+        let d = tempfile::tempdir().unwrap();
+        let f = crate::summary::tests::bridged(&crate::harness_single::tests::recording_cli(d.path(), &d.path().join("rec"), &crate::harness_single::tests::answers("ok")), true);
+        let key = f.engine.scout_key().unwrap();
+        let set = |m: JobMode| {
+            let mut c = (*f.engine.cfg.get()).clone();
+            c.bridge.jobs.consolidation = m;
+            // The job's own switch must say yes: the bridge's mode never turns its "no" into a yes.
+            c.memory.consolidate = delphi_adapter::config::Consolidate::Model;
+            f.engine.cfg.set(c);
+        };
+        f.advance(crate::job_admission::PAUSE_SECS);
+        set(JobMode::Manual);
+        assert!(!f.engine.idle_job_may_start(Job::Consolidation, &key), "the daemon's own run waits");
+        assert!(in_command(Job::Consolidation, false, async { f.engine.idle_job_may_start(Job::Consolidation, &key) }).await, "the operator's runs");
+        set(JobMode::Off);
+        assert!(!in_command(Job::Consolidation, true, async { f.engine.idle_job_may_start(Job::Consolidation, &key) }).await, "off refuses even confirmed");
+        assert!(f.engine.job_failures.drain().is_empty(), "no notice either way");
     }
 
     // `specs/143` §2.3 item 7: a host tool call over MCP is a sign of the operator at work, on a host with no hook installed too.

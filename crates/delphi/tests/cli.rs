@@ -324,6 +324,22 @@ fn bridge_setup_needs_a_terminal_or_a_reference_and_is_refused_in_a_seat() {
     assert_eq!(after.replacen(block, "", 1), before, "only the reference is added; every other line is kept");
 }
 
+// specs/143 §2.8 item 1: `delphi memory consolidate` and `delphi kb validate --pending` exist; anything else is a usage error that
+// starts no daemon and writes nothing.
+#[test]
+fn memory_consolidate_and_kb_validate_answer_usage_without_a_daemon() {
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().join("home");
+    let delphi = |args: &[&str]| Command::new(DELPHI).args(args).arg("--home").arg(&home).env_remove("DELPHI_WORKSPACE").stdin(Stdio::null()).current_dir(t.path()).output().unwrap();
+    assert!(delphi(&["init", "--non-interactive", "--workspace", "w"]).status.success());
+    for (args, says) in [(vec!["memory", "--workspace", "w"], "delphi memory consolidate"), (vec!["kb", "validate", "--workspace", "w"], "delphi kb validate --pending"), (vec!["kb", "validate", "--pending", "--limit", "0", "--workspace", "w"], "--limit")] {
+        let o = delphi(&args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", text(&o.stderr));
+        assert!(text(&o.stderr).contains(says), "{args:?}: {}", text(&o.stderr));
+    }
+    assert!(!home.join("workspaces/w/local/daemon.sock").exists() && !home.join("run").join("w.sock").exists(), "no daemon was started");
+}
+
 #[test]
 fn kb_health_prints_the_stalled_loop_lines_writes_one_line_a_day_and_never_creates_a_home() {
     let (t, home) = workspace();

@@ -434,24 +434,35 @@ impl Engine {
         }
     }
 
-    /// Before an idle job starts work that `key` would serve: `true` to go on. A harness key is asked for admission first, so a
-    /// job that is not admitted does nothing and stays due: a wait is silent, a refusal is the job's notice. Any other key goes on
-    /// as it always did.
+    /// Before a job starts work that `key` would serve: `true` to go on. A harness key is asked for admission first, so a job that is
+    /// not admitted does nothing and stays due. Run by the daemon while idle, a wait is silent and a refusal is the job's notice; a job
+    /// in `manual` or `off` waits with no notice (`specs/143` §2.8 item 5). Run inside [`crate::daemon_notice::in_command`] (the
+    /// operator started it), it is asked with the origin `command` or `confirmed`, only `off` stops it, and a refusal raises no notice:
+    /// the command says why. Any other key goes on as it always did.
     pub(crate) fn idle_job_may_start(&self, job: crate::daemon_notice::Job, key: &delphi_adapter::config::PoolKey) -> bool {
         use crate::job_admission::{Admission, Origin};
+        use delphi_adapter::config::JobMode;
         let cfg = self.cfg.get();
         if !cfg.endpoint(&key.endpoint_id).is_some_and(|e| e.path == delphi_adapter::config::AccessPath::Harness) {
             return true;
         }
-        // A job the operator keeps by hand, or off, is not a failure: it waits, with no notice (`specs/143` §2.8 item 5).
-        if bridge_job_mode(&cfg.bridge.jobs, job) != delphi_adapter::config::JobMode::Auto {
+        let by_hand = crate::daemon_notice::current_command().filter(|(j, _)| *j == job);
+        let mode = bridge_job_mode(&cfg.bridge.jobs, job);
+        let origin = match by_hand {
+            Some((_, true)) => Origin::Confirmed,
+            Some((_, false)) => Origin::Command,
+            None => Origin::Idle,
+        };
+        if mode == JobMode::Off || (origin == Origin::Idle && mode != JobMode::Auto) {
             return false;
         }
-        match self.bridge_admission(Some(job), Origin::Idle) {
+        match self.bridge_admission(Some(job), origin) {
             Admission::Admit => true,
             Admission::Wait(_) => false,
             Admission::Refuse(cause) => {
-                self.job_failed(job, cause);
+                if by_hand.is_none() {
+                    self.job_failed(job, cause);
+                }
                 false
             }
         }

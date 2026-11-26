@@ -284,6 +284,137 @@ pub fn confirm_at_terminal(what: &str) -> Result<(), String> {
     confirm(what, word, terminal, refusal, &mut |prompt| crate::run_granted::tty_ask(prompt))
 }
 
+// ── a job the operator starts (`specs/143` §2.8 items 1 and 3) ─────────────────────────────────────────────────────────────────
+
+/// Run `f` on a client of the workspace's daemon, starting one for the call when none runs (and stopping it afterwards). Exit 4
+/// when it cannot be reached.
+pub fn with_daemon(home: &Path, ws_dir: &Path, name: &str, f: impl FnOnce(&mut delphi_core::client::Client) -> i32) -> i32 {
+    use delphi_core::spawn::{connect_or_spawn, SpawnOptions};
+    let Some(exe) = crate::chat::daemon_exe() else {
+        eprintln!("delphi {name}: cannot locate this program to start the daemon");
+        return 4;
+    };
+    let mut attached = match connect_or_spawn(&SpawnOptions { home, workspace: ws_dir, daemon_exe: &exe, extra_args: vec![], prefix_args: vec!["__core".into()], own_version: Some(env!("CARGO_PKG_VERSION")) }) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("delphi {name}: {e}");
+            return 4;
+        }
+    };
+    let code = f(&mut attached.client);
+    if attached.spawned {
+        let _ = attached.client.call("daemon.shutdown", serde_json::json!({}));
+    }
+    code
+}
+
+/// Before a job the operator starts runs: the daemon's preflight for `job`. `Ok(confirmed)` to go on, `confirmed` when a limit was
+/// passed by the typed confirmation; `Err(exit code)` when it must not run, with why already printed: `off` (2), the ceiling (3), a
+/// limit not confirmed (3).
+pub fn preflight(client: &mut delphi_core::client::Client, job: &str, name: &str) -> Result<bool, i32> {
+    let pre = client.call("bridge.preflight", serde_json::json!({"job": job})).unwrap_or_else(|_| serde_json::json!({"admission": "admit"}));
+    match pre["admission"].as_str().unwrap_or("admit") {
+        "off" => {
+            eprintln!("delphi {name}: [bridge.jobs] {job} = \"off\": it does not run through the bridge. Set it to \"manual\" or \"auto\" in config.toml to allow it");
+            Err(2)
+        }
+        "ceiling" => {
+            eprintln!("delphi {name}: {}; nothing passes it. {}", delphi_engine::service::CEILING, usage_line(&pre["usage"]));
+            Err(3)
+        }
+        "confirm" => {
+            let what = format!("{}.\n{} Passing it spends more of your subscription's quota.", delphi_engine::service::LIMIT, usage_line(&pre["usage"]));
+            match confirm_at_terminal(&what) {
+                Ok(()) => Ok(true),
+                Err(why) => {
+                    eprintln!("delphi {name}: {why}");
+                    Err(3)
+                }
+            }
+        }
+        _ => Ok(false),
+    }
+}
+
+/// After a confirmed run: how far the daily cap was passed.
+pub fn say_passed(client: &mut delphi_core::client::Client, job: &str, confirmed: bool) {
+    if confirmed {
+        if let Ok(p) = client.call("bridge.preflight", serde_json::json!({"job": job})) {
+            eprintln!("Passed the limit by the confirmation. {}", usage_line(&p["usage"]));
+        }
+    }
+}
+
+/// `delphi memory consolidate`: one consolidation pass now (`specs/116` §6), as a job the operator started. Exit codes: 0 ran · 1
+/// refused by its own switch or failed · 2 off through the bridge · 3 a limit · 4 the daemon could not start.
+pub fn memory_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
+    if args.first().map(String::as_str) != Some("consolidate") {
+        eprintln!("usage: delphi memory consolidate [--home <dir>] [--workspace <name>]");
+        return 2;
+    }
+    with_daemon(home, ws_dir, "memory consolidate", |client| {
+        let confirmed = match preflight(client, "consolidation", "memory consolidate") {
+            Ok(c) => c,
+            Err(code) => return code,
+        };
+        match client.call("memory.consolidate", serde_json::json!({"confirmed": confirmed})) {
+            Ok(v) => {
+                println!("consolidated: {} merged, {} proposed for review, {} tokens", v["merged"], v["proposed"], v["tokens"]);
+                say_passed(client, "consolidation", confirmed);
+                0
+            }
+            Err(e) => {
+                eprintln!("delphi memory consolidate: {e}");
+                1
+            }
+        }
+    })
+}
+
+/// `delphi kb validate --pending [--limit <n>]`: check waiting library claims now (`specs/040`), as a job the operator started.
+/// Exit codes: 0 checked, or nothing waits · 1 refused or failed · 2 off through the bridge or usage · 3 a limit · 4 no daemon.
+pub fn validate_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
+    if !args.iter().any(|a| a == "--pending") {
+        eprintln!("usage: delphi kb validate --pending [--limit <n>] [--home <dir>] [--workspace <name>]");
+        return 2;
+    }
+    let limit = match crate::flag(args, "--limit").map(|l| l.parse::<u64>()) {
+        None => 20,
+        Some(Ok(n)) if n >= 1 => n,
+        Some(_) => {
+            eprintln!("delphi kb validate: --limit takes a whole number of 1 or more");
+            return 2;
+        }
+    };
+    with_daemon(home, ws_dir, "kb validate", |client| {
+        let confirmed = match preflight(client, "validation", "kb validate") {
+            Ok(c) => c,
+            Err(code) => return code,
+        };
+        match client.call("validation.pending", serde_json::json!({"confirmed": confirmed, "limit": limit})) {
+            Ok(v) => {
+                println!("{} claim(s) checked", v["checked"]);
+                say_passed(client, "validation", confirmed);
+                match v["stopped"].as_str() {
+                    Some(why) if v["checked"] == 0 && why.starts_with("idle") => {
+                        println!("{why}");
+                        0
+                    }
+                    Some(why) => {
+                        eprintln!("stopped: {why}");
+                        if why.starts_with(delphi_engine::service::LIMIT) || why.starts_with(delphi_engine::service::CEILING) { 3 } else { 0 }
+                    }
+                    None => 0,
+                }
+            }
+            Err(e) => {
+                eprintln!("delphi kb validate: {e}");
+                if e.to_string().contains("[bridge.jobs]") { 2 } else { 1 }
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

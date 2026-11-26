@@ -490,7 +490,7 @@ pub fn due(mode: delphi_adapter::config::Consolidate, now: i64, last_operator: i
 impl crate::engine::Engine {
     /// One consolidation pass (`specs/116` §6), run by the daemon's timer when [`due`]: the mechanical merge, then, with
     /// `consolidate = true`, one tool-less model call per role inside the day's token cap, whose answer becomes proposals.
-    pub async fn consolidate_pass(&self, mode: delphi_adapter::config::Consolidate, cap: u64) {
+    pub async fn consolidate_pass(&self, mode: delphi_adapter::config::Consolidate, cap: u64) -> (usize, usize, u64) {
         let ws = self.ws.dir.clone();
         let (now, date) = (delphi_core::time::now_rfc3339(), delphi_core::bundles::today());
         let w = ws.clone();
@@ -499,7 +499,7 @@ impl crate::engine::Engine {
         let (mut proposed, mut tokens) = (0usize, 0u64);
         if mode == delphi_adapter::config::Consolidate::Model {
             let key = self.scout_key();
-            if key.is_none() {
+            if key.is_none() && crate::daemon_notice::current_command().is_none() {
                 // No model can serve the pass: the mechanical merge above stands, and the operator is told (`specs/143` §2.7).
                 self.job_failed(crate::daemon_notice::Job::Consolidation, crate::daemon_notice::Cause::NoRoute);
             }
@@ -530,6 +530,7 @@ impl crate::engine::Engine {
         if let Err(e) = record_run(&ws, &date, merged, proposed, tokens) {
             delphi_core::elog::warn("engine", "consolidate_run", &e, json!({}));
         }
+        (merged, proposed, tokens)
     }
 }
 

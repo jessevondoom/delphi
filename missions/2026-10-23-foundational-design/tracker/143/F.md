@@ -4,7 +4,7 @@ date: 2026-11-26
 title: "by hand and by mode: [bridge.jobs], origins, the typed confirmation and the ceiling, commands and app buttons"
 ---
 
-Slice F of spec 143. **Part 1 built 2026-11-26** on `knowledge-v2`: the machinery, and the pages job end to end. The other jobs' commands and the app's buttons are part 2 (below), so the slice stays `not-built` until they land.
+Slice F of spec 143. **Parts 1 and 2 built 2026-11-26** on `knowledge-v2`: the machinery, and the commands for pages, consolidation and background validation. Session summaries and the app's buttons are part 3 (below), so the slice stays `not-built` until they land.
 
 ## Part 1 (built)
 
@@ -36,7 +36,29 @@ Limits, stated:
 - **The confirmation is the command's, not the daemon's.** The daemon accepts `confirmed: true` from any console-scope client. A program that can reach the socket could send it without a terminal. This is the weakness of §2.8 item 3's "a command is not proof of the operator", one layer down; the follow-up spec named in the handoff (the agent-seat check) covers both.
 - The typed confirmation has not been run at a real terminal; its pure half is tested.
 
-## Part 2 (not built)
+## Part 2 (built)
 
-- The commands of §2.8 item 1 for the other jobs, each as a daemon method running that job's pass inside `in_command`: `delphi memory consolidate` (`consolidate_pass`), `delphi sessions summarize <session> | --pending`, `delphi kb validate --pending` (`background_validate_tick`). `delphi kb summarize` waits for 142 G and `delphi kb eval run` calls no model.
-- The app's buttons for those jobs, and their daemon methods in `crates/delphi/tests/app_grants.toml`. That is a gate-changing path, so it goes in its own pull request, which the operator merges at a terminal.
+- **The admission inside a command.** `idle_job_may_start` (`summary.rs`) now serves both kinds of run.
+  - Inside `in_command` it asks with the origin `command` or `confirmed`. Only `off` stops it, and a refusal raises no notice.
+  - The daemon's own run is unchanged: idle origin, and `manual` or `off` wait silently.
+  - The `no_route` notices of consolidation and background validation are raised only for the daemon's own runs.
+- **`delphi memory consolidate`** (a new top-level command) calls `memory.consolidate {confirmed}`. It runs one pass now (`consolidate_pass`, which now returns what it merged, proposed and spent), whether or not one ran today.
+  - It is refused when `[memory] consolidate = false`.
+  - A model pass that would go through the bridge gets the preflight, the typed confirmation and the ceiling. The mechanical pass needs no model and no preflight.
+- **`delphi kb validate --pending [--limit <n>]`** calls `validation.pending {confirmed, limit}` (default 20). It checks waiting claims one after another through `validate_next(by_hand)`.
+  - A by-hand run is not held to `[validator] background`, to the operator being away or to a running task; those only stop the check running by itself.
+  - The validator's mode, latch, backlog, daily cap and weekly share still hold.
+  - It stops at the first of those, and at the bridge's first limit.
+- **Shared code.** The command side is `bridge_cmd::{with_daemon, preflight, say_passed}`, which `pages rebuild` now uses too. The daemon side is `service::command_stop`.
+
+Verified (tests):
+
+- `service::tests::consolidation_and_validation_run_by_hand_and_are_refused_when_off`.
+- `service::tests::a_command_scope_is_admitted_in_manual_and_refused_in_off_without_a_notice`.
+- `tests/cli.rs::memory_consolidate_and_kb_validate_answer_usage_without_a_daemon`.
+
+## Part 3 (not built)
+
+- **`delphi sessions summarize <session> | --pending`.** `Engine::summarize_session` exists but has no caller outside a test, so nothing yet finds the sessions that are due or stores a summary for them (`specs/030` §4.3). The command needs that pipeline first.
+- **`delphi kb summarize`** waits for 142 G. `delphi kb eval run` calls no model and needs nothing here.
+- **The app's buttons** for these jobs, and their daemon methods in `crates/delphi/tests/app_grants.toml` (`pages.rebuild`, `memory.consolidate`, `validation.pending`, `bridge.preflight`), with the app's confirmation dialog. That is a gate-changing path, so it goes in its own pull request, which the operator merges at a terminal.

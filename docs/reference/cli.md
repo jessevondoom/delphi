@@ -116,6 +116,20 @@ Give background jobs your Claude subscription, through your own CLI.
 
 The single-turn bridge (specs/143) lets Delphi's background jobs (topic pages, their validator, summaries, the scout's own calls) send one prompt and read one answer through your own `claude` CLI, with its tools off, in a home built empty for each call. Every bridged call spends your own subscription quota, the quota your own use of Claude draws on; for heavy or unattended use add an API-key endpoint instead (path = "api"), which the vendor asks products to use and which does not share your plan's limits. `setup claude` says this first, asks you to run `claude setup-token` yourself, takes the token with hidden input, makes one test call through the bridge (a few thousand tokens), and only then keeps the token in your keychain (service delphi, account bridge-claude) and writes the reference `keychain:bridge-claude`, never the token, to [bridge.claude] credential in config.toml; the change is shown for you to ratify. A token whose test fails is not stored and nothing is written. Without a terminal it asks and stores nothing: pass --credential with a reference to where the token is kept; it tests that token, writes the reference and does not ratify. It never reads your own `claude` login and is refused inside an agent seat. Exit codes: 0 set up · 1 the test failed or nothing was saved · 2 usage or refusal.
 
+## Work
+
+### `delphi memory`
+
+Run a consolidation pass of the agents' memory now.
+
+```
+  delphi memory consolidate [--home <dir>] [--workspace <name>]
+```
+
+`consolidate` runs one consolidation pass now (specs/116 section 6), the pass the daemon otherwise runs once a day while idle: the mechanical merge of duplicate notes, then, with [memory] consolidate = true, one tool-less model call per role, inside [memory] consolidate_tokens, whose answers become proposals for you to review. It runs whether or not a pass ran today, and is refused when [memory] consolidate = false. When its model calls go through the single-turn bridge (specs/143 section 2.8) it is a job you started: it waits for no idle pause and is held to the bridge's whole window and daily cap; past a limit it prints what was spent today and a word, and goes on only when you type that word at a terminal; nothing passes the ceiling; with [bridge.jobs] consolidation = "off" it refuses and says why. Exit codes: 0 ran · 1 refused or failed · 2 off through the bridge or usage · 3 a limit · 4 the daemon could not start.
+
+## Set up
+
 ### `delphi relay`
 
 Send approval cards to your email or Telegram.
@@ -449,7 +463,7 @@ The knowledge base: index it, search it.
 ```
   delphi kb search <query> [--role <role>] [--untrusted|--all] [--staged] [--unreviewed] [--about] [--summaries|--bibs]
   delphi kb search <query> --project <name> | --all-projects
-  delphi kb import <file.md | dir | -> [--home <dir>] [--workspace <name>]
+  delphi kb import <file.md | dir | -> | validate --pending [--limit <n>] [--home <dir>] [--workspace <name>]
   delphi kb review [stats | show <ref> | keep <ref>…|--all | discard <ref>…|--all] | flag <ptr> --why <text>
   delphi kb refresh [--stale [--minutes <n, at most 4>] | <id> (--still-current | <file.md | ->)]
   delphi kb quarantine [<id> [--restore]] | extract <page-id> (--auto | <candidates.json | ->)
