@@ -181,6 +181,7 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | `[library.pages] min_ttl_days` | `1` | the shortest cache lifetime, in days, the daemon accepts for a page ([`specs/097`](../../specs/097-encyclopedia-search-pages.md)) |
 | `[library.pages] max_ttl_days` | `365` | the longest; the `writer` proposes a lifetime from how fast the topic changes and the daemon keeps it within these bounds |
 | `[library.pages] auto_rebuild` | `true` | topic pages that are due (a claim or source they cite changed, a new claim carries their topic, or their lifetime passed) are rebuilt while the daemon is idle, within `per_day` ([`specs/117`](../../specs/117-the-encyclopedia-in-the-desktop-app-topic-pages-navigation-and-a-view-of-agent-memory.md) §2 item 3); `false` leaves rebuilding to `delphi pages rebuild` |
+| `[library.pages] build_after_research` | `true` | when a research run ends `done` or `partial`, and when a host's `record_research` returns, the research topic's topic page is made and its seed page written at once, with no model call, and the writer's expansion is queued for the next idle time, ahead of older due topics ([`specs/139`](../../specs/139-pages-seeded-from-research-a-seed-that-is-never-empty-a-long-depth-and-concept-titles.md) §2.5); the reply to `record_research` and the research result name the page's slug and outcome; `false` turns the trigger off, and `auto_rebuild` still governs the writer's rebuilds |
 
 ## Away mode and hooks ◆
 

@@ -53,6 +53,7 @@
     },
     "gaps": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 300 }, "description": "What you looked for and did not find." },
     "topic_id": { "type": "string", "maxLength": 57, "description": "A research topic id Delphi gave you, to add this as a new run of it." },
+    "subject": { "type": "string", "maxLength": 80, "description": "What the research is about, as a name (a concept such as `Web Bot Auth`, not a question): the title of its topic page. Taken only if it shares a word with the question or a heading of your answer; otherwise Delphi makes the title from the question." },
     "model": { "type": "string", "maxLength": 64, "description": "Your model name, self-reported." }
   },
   "required": ["question", "answer"],

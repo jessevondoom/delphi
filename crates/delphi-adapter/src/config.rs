@@ -1383,11 +1383,15 @@ pub struct PagesConfig {
     /// Topic pages that are due are rebuilt by the daemon while it is idle, within `per_day` (`specs/117` §2 item 3). `false` leaves
     /// rebuilding to the operator (`delphi pages rebuild`). Idle rebuilds spend model tokens nobody asked for at that moment.
     pub auto_rebuild: bool,
+    /// When a research run ends `done` or `partial`, and when a host's `record_research` returns, the research topic's topic page is made
+    /// and its seed written at once, and the writer's expansion is queued for the next idle time (`specs/139` §2.5). The seed calls no
+    /// model. `false` turns the trigger off; `auto_rebuild` still governs the writer's rebuilds.
+    pub build_after_research: bool,
 }
 
 impl Default for PagesConfig {
     fn default() -> Self {
-        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, external_ttl_secs: 7 * 86_400, per_day: 20, min_ttl_days: 1, max_ttl_days: 365, auto_rebuild: true }
+        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, external_ttl_secs: 7 * 86_400, per_day: 20, min_ttl_days: 1, max_ttl_days: 365, auto_rebuild: true, build_after_research: true }
     }
 }
 
@@ -2440,6 +2444,8 @@ pub(crate) mod tests {
     fn library_pages_defaults_and_ttl_forms() {
         let d = Config::parse(SAMPLE).unwrap().library.pages;
         assert!(d.enabled && d.external == PagesExternal::Ask);
+        assert!(d.build_after_research, "specs/139 §2.5 item 3: the seed is written when research ends unless it is turned off");
+        assert!(!Config::parse(&format!("{}\n[library.pages]\nbuild_after_research = false\n", SAMPLE)).unwrap().library.pages.build_after_research);
         assert_eq!((d.max_tokens, d.external_ttl_secs, d.per_day, d.min_ttl_days, d.max_ttl_days), (3000, 7 * 86_400, 20, 1, 365));
         for (v, secs) in [("3", 3 * 86_400), ("\"12h\"", 12 * 3600), ("\"90m\"", 5400), ("\"7d\"", 7 * 86_400)] {
             let c = Config::parse(&format!("{}\n[library.pages]\nexternal = \"off\"\nexternal_ttl = {}\n", SAMPLE, v)).unwrap().library.pages;

@@ -73,6 +73,163 @@ pub fn slug_for(title: &str) -> String {
     if valid_slug(&s) { s } else { format!("topic-{}", s.chars().take(MAX_SLUG - 6).collect::<String>().trim_end_matches('-')) }
 }
 
+/// The longest title a `subject` or the writer may give (`specs/139` §2.4 item 3).
+pub const MAX_CONCEPT_TITLE: usize = 80;
+/// The lead-ins a derived title loses, and that a `subject` or a writer's title may not begin with (`specs/139` §2.4 item 2).
+pub const LEAD_INS: [&str; 11] = ["what is", "what are", "how do", "how does", "how to", "why", "should", "can", "is", "are", "does"];
+/// Words that do not count as shared between a title and its question.
+const STOP_WORDS: [&str; 24] = ["a", "an", "the", "of", "and", "or", "to", "in", "on", "for", "with", "by", "at", "from", "as", "it", "its", "be", "this", "that", "what", "how", "why", "which"];
+
+/// Where a topic's title came from (`specs/139` §2.4 item 1), best first. A sidecar with no `title_source` is read as `operator`
+/// when the operator made the topic and `question` otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleSource {
+    Operator,
+    Subject,
+    Writer,
+    Derived,
+    Question,
+}
+
+impl TitleSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TitleSource::Operator => "operator",
+            TitleSource::Subject => "subject",
+            TitleSource::Writer => "writer",
+            TitleSource::Derived => "derived",
+            TitleSource::Question => "question",
+        }
+    }
+
+    /// The source a topic's record names.
+    pub fn of(side: &Value) -> TitleSource {
+        match side["title_source"].as_str() {
+            Some("operator") => TitleSource::Operator,
+            Some("subject") => TitleSource::Subject,
+            Some("writer") => TitleSource::Writer,
+            Some("derived") => TitleSource::Derived,
+            Some("question") => TitleSource::Question,
+            _ if side["origin"]["kind"] == "operator" => TitleSource::Operator,
+            _ => TitleSource::Question,
+        }
+    }
+
+    /// A title from a better source may replace this one: only a title made by code from the question (`derived`, `question`).
+    pub fn replaceable(self) -> bool {
+        matches!(self, TitleSource::Derived | TitleSource::Question)
+    }
+}
+
+/// The words of `s` that count when a title and a question are compared: lowercase letters and digits, stop words left out.
+fn content_words(s: &str) -> BTreeSet<String> {
+    s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty() && !STOP_WORDS.contains(w)).map(String::from).collect()
+}
+
+/// The lead-in `s` begins with, as whole words and in any case, if any.
+fn lead_in(s: &str) -> Option<&'static str> {
+    let s = s.trim_start();
+    LEAD_INS.iter().copied().filter(|l| s.len() >= l.len() && s.as_bytes()[..l.len()].eq_ignore_ascii_case(l.as_bytes()) && s.is_char_boundary(l.len()) && s[l.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric())).max_by_key(|l| l.len())
+}
+
+/// The title code makes from a question (`specs/139` §2.4 item 2, `derived`): the lead-ins of [`LEAD_INS`] at its start and its
+/// closing question mark removed, the first letter made a capital. `None` when nothing is left, or what is left is still a question
+/// or longer than [`MAX_CONCEPT_TITLE`]: the title is then the question.
+pub fn derived_title(question: &str) -> Option<String> {
+    let mut t = norm_ws(&question.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>());
+    while let Some(l) = lead_in(&t) {
+        t = t.trim_start()[l.len()..].trim_start().to_string();
+    }
+    let t = t.trim_end().trim_end_matches('?').trim_end().to_string();
+    let mut chars = t.chars();
+    let t: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
+    (!t.is_empty() && !t.contains('?') && t.chars().count() <= MAX_CONCEPT_TITLE).then_some(t)
+}
+
+/// Whether a title from `subject` or the writer is taken (`specs/139` §2.4 item 3): at most [`MAX_CONCEPT_TITLE`] characters, no
+/// question mark and no control character, not beginning with a lead-in, and sharing at least one content word with the question or
+/// one of the seed's headings. Returns the title, trimmed, or why it is refused.
+pub fn accept_title(title: &str, question: &str, headings: &[String]) -> Result<String, &'static str> {
+    if title.chars().any(char::is_control) {
+        return Err("it holds a control character");
+    }
+    let t = norm_ws(title);
+    if t.is_empty() {
+        return Err("it is empty");
+    }
+    if t.chars().count() > MAX_CONCEPT_TITLE {
+        return Err("it is longer than 80 characters");
+    }
+    if t.contains('?') {
+        return Err("it holds a question mark");
+    }
+    if lead_in(&t).is_some() {
+        return Err("it begins like a question");
+    }
+    let mut known = content_words(question);
+    for h in headings {
+        known.extend(content_words(h));
+    }
+    if content_words(&t).is_disjoint(&known) {
+        return Err("it shares no word with the question or the seed's headings");
+    }
+    Ok(t)
+}
+
+/// The Markdown headings of a text (`#` to `######`), without their marks.
+pub fn headings_of(md: &str) -> Vec<String> {
+    md.lines().filter_map(|l| {
+        let t = l.trim_start();
+        let h = t.trim_start_matches('#');
+        (t.starts_with('#') && t.len() - h.len() <= 6 && h.starts_with(' ')).then(|| h.trim().to_string())
+    }).filter(|h| !h.is_empty()).collect()
+}
+
+/// The best title code can give a research topic's question (`specs/139` §2.4 item 2): its `subject` when [`accept_title`] takes it
+/// (against the question and `headings`, the answer's), else the derived title, else the question.
+pub fn research_title(question: &str, subject: Option<&str>, headings: &[String]) -> (String, TitleSource) {
+    if let Some(s) = subject.and_then(|s| accept_title(s, question, headings).ok()) {
+        return (s, TitleSource::Subject);
+    }
+    match derived_title(question) {
+        Some(d) => (d, TitleSource::Derived),
+        None => (clip_title(question), TitleSource::Question),
+    }
+}
+
+/// What a topic's brief adds when the writer may name the page (`specs/139` §2.4 item 2, `writer`).
+pub const TITLE_HINT: &str = "\nIn that last comment you may add `title=<the concept this page is about, as a short name: at most 80 characters, not a question>`; the daemon takes it only if it shares a word with the question.\n";
+
+/// Whether the writer's `title=` is taken for this topic: its title was made by code from the question, and this is its first written
+/// page (none before, or only a seed or the claims alone).
+fn may_take_title(side: &Value) -> bool {
+    let first = side["written"] != true && matches!(side["outcome"].as_str(), None | Some("seed") | Some("claims_only"));
+    first && TitleSource::of(side).replaceable()
+}
+
+/// The headings of a research topic's answer: what a `subject` may share a word with besides the question.
+fn research_headings(t: &crate::research_record::Topic) -> Vec<String> {
+    headings_of(&std::fs::read_to_string(t.answer_path()).unwrap_or_default())
+}
+
+/// One line of `delphi pages retitle` (`specs/139` §2.4 item 4): a topic whose title code would now make differently.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Retitle {
+    pub slug: String,
+    pub new_slug: String,
+    pub title: String,
+    pub new_title: String,
+    pub source: TitleSource,
+    /// Another topic has `new_slug`, or would take it: printed, and `--apply` leaves it as it is.
+    pub collision: bool,
+}
+
+impl Retitle {
+    pub fn to_json(&self) -> Value {
+        json!({"slug": self.slug, "new_slug": self.new_slug, "title": self.title, "new_title": self.new_title, "title_source": self.source.as_str(), "collision": self.collision})
+    }
+}
+
 /// Where a topic came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Origin {
@@ -191,6 +348,11 @@ pub const CANCELLED: &str = "cancelled: the key that asked for it was revoked";
 /// Why a seed page that nothing else made due is due: it waits for the writer's expansion (`specs/139` §2.5 item 1, "seed now,
 /// expand at idle"). Only a writer's page ends it; a rebuild with no writer, or with nothing for one, writes no new seed version.
 pub const SEED_EXPANSION: &str = "a seed page, due for the writer's expansion";
+
+/// The record's mark on a topic whose writer's expansion is queued for the next idle time (`specs/139` §2.5 item 1): the time it was
+/// queued. The idle rebuild takes queued topics first, the earliest first; a writer's page, or a seed the writer could not expand,
+/// clears it.
+pub const EXPANSION_QUEUED: &str = "expansion_queued";
 
 /// The start of what [`Library::topic_rebuild`] says when the writer could not expand a seed page: the seed stands
 /// (`specs/139` §2.3 item 5), and no page of the claims alone takes its place.
@@ -458,10 +620,19 @@ impl Library {
     /// Make a topic: its record, no page yet. A topic that already has `slug` is returned as it is (making it again changes
     /// nothing), except that a research topic named again is added to the ones it follows.
     pub fn topic_create(&self, title: &str, origin: Origin, now: u64) -> Result<TopicEntry, String> {
+        let source = if origin == Origin::Operator { TitleSource::Operator } else { TitleSource::Question };
+        self.topic_create_titled(title, source, title, origin, now)
+    }
+
+    /// [`Library::topic_create`] with a title that is not the question (`specs/139` §2.4): `query` is kept as the words a rebuild
+    /// gathers with, and `source` says where the title came from.
+    pub fn topic_create_titled(&self, title: &str, source: TitleSource, query: &str, origin: Origin, now: u64) -> Result<TopicEntry, String> {
         let title = clip_title(title);
         if title.is_empty() {
             return Err("a topic needs a title".into());
         }
+        let query = clip_title(query);
+        let query = if query.is_empty() { title.clone() } else { query };
         let slug = slug_for(&title);
         if let Some(mut side) = self.topic_side(&slug) {
             if let Origin::Research(id) = &origin {
@@ -478,7 +649,7 @@ impl Library {
             Origin::Research(id) => vec![id.clone()],
             Origin::Operator => vec![],
         };
-        let side = json!({"kind": KIND, "status": "generated", "slug": slug, "title": title, "query": title, "origin": origin.to_json(), "research_topics": research, "created": now, "built": null, "version": 0, "material": [], "cited": []});
+        let side = json!({"kind": KIND, "status": "generated", "slug": slug, "title": title, "title_source": source.as_str(), "query": query, "origin": origin.to_json(), "research_topics": research, "created": now, "built": null, "version": 0, "material": [], "cited": []});
         self.write_topic_side(&slug, &side)?;
         self.log("topic_created", json!({"slug": slug, "origin": origin.to_json()}));
         Ok(self.topic_entry(&slug, &side, None))
@@ -494,11 +665,87 @@ impl Library {
                 continue;
             }
             let Some(q) = rec["question"].as_str() else { continue };
-            if let Ok(e) = self.topic_create(q, Origin::Research(t.id.clone()), now) {
+            // The title is a concept where code can make one (`specs/139` §2.4): the host's `subject`, else the question without its
+            // lead-in; the question stays the topic's `query`.
+            let (title, source) = research_title(q, rec["subject"].as_str(), &research_headings(&t));
+            if let Ok(e) = self.topic_create_titled(&title, source, q, Origin::Research(t.id.clone()), now) {
                 made.push(e.slug);
             }
         }
         made
+    }
+
+    /// `delphi pages rename <slug> <title>` (`specs/139` §2.4 item 2): the operator's title, which always wins. A topic with no
+    /// written page (`version` 0) takes the slug of its new title; one with a page keeps its slug for good (§2.4 item 4).
+    pub fn topic_rename(&self, slug: &str, title: &str) -> Result<TopicEntry, String> {
+        self.topic_set_title(slug, title, TitleSource::Operator)
+    }
+
+    /// Give `slug` the title `title` from `source`, and the slug of that title when the topic has no page yet. Refused when that slug
+    /// is another topic's.
+    fn topic_set_title(&self, slug: &str, title: &str, source: TitleSource) -> Result<TopicEntry, String> {
+        let mut side = self.topic_side(slug).ok_or_else(|| format!("no topic `{}`", slug))?;
+        let title = clip_title(title);
+        if title.is_empty() {
+            return Err("a topic needs a title".into());
+        }
+        let new_slug = if side["version"].as_u64().unwrap_or(0) == 0 { slug_for(&title) } else { slug.to_string() };
+        if new_slug != slug && self.topic_side_path(&new_slug).exists() {
+            return Err(format!("the topic `{}` already exists, so `{}` keeps its slug and its title", new_slug, slug));
+        }
+        side["title"] = json!(title);
+        side["title_source"] = json!(source.as_str());
+        side["slug"] = json!(new_slug);
+        self.write_topic_side(&new_slug, &side)?;
+        if new_slug != slug {
+            // A topic with no page has only its record: nothing else is under the old slug.
+            let _ = std::fs::remove_file(self.topic_side_path(slug));
+        }
+        self.log("topic_retitled", json!({"slug": slug, "new_slug": new_slug, "title_source": source.as_str()}));
+        Ok(self.topic_entry(&new_slug, &side, None))
+    }
+
+    /// `delphi pages retitle [--apply]` (`specs/139` §2.4 item 4): for each topic whose title code made from its question, the title
+    /// code would give it now (the research's accepted `subject`, else the derived title), and the slug it would take. A topic with a
+    /// page keeps its slug. Two topics that would take one slug, or a slug another topic has, are a collision and are left as they are.
+    /// With `apply` the others are written; without it nothing is. Running it again lists nothing.
+    pub fn topic_retitle(&self, ws: &Path, apply: bool) -> Vec<Retitle> {
+        let sides = self.topic_sides();
+        let mut plan: Vec<Retitle> = Vec::new();
+        for (slug, side) in &sides {
+            if !TitleSource::of(side).replaceable() {
+                continue;
+            }
+            let query = side["query"].as_str().or(side["title"].as_str()).unwrap_or(slug);
+            let research = side["research_topics"].as_array().into_iter().flatten().filter_map(Value::as_str).filter_map(|id| crate::research_record::find(ws, id)).filter_map(|t| t.read().ok().map(|r| (t, r)));
+            let (mut subject, mut headings) = (None, Vec::new());
+            for (t, rec) in research {
+                if let (None, Some(s)) = (&subject, rec["subject"].as_str()) {
+                    subject = Some(s.to_string());
+                }
+                headings.extend(research_headings(&t));
+            }
+            let (title, source) = research_title(query, subject.as_deref(), &headings);
+            let current = side["title"].as_str().unwrap_or(slug);
+            if title == current {
+                continue;
+            }
+            let new_slug = if side["version"].as_u64().unwrap_or(0) == 0 { slug_for(&title) } else { slug.clone() };
+            plan.push(Retitle { slug: slug.clone(), new_slug, title: current.to_string(), new_title: title, source, collision: false });
+        }
+        let existing: BTreeSet<&str> = sides.iter().map(|(s, _)| s.as_str()).collect();
+        let taken: Vec<String> = plan.iter().map(|p| p.new_slug.clone()).collect();
+        for (i, p) in plan.iter_mut().enumerate() {
+            p.collision = p.new_slug != p.slug && (existing.contains(p.new_slug.as_str()) || taken.iter().enumerate().any(|(j, s)| j != i && *s == p.new_slug));
+        }
+        if apply {
+            for p in plan.iter().filter(|p| !p.collision) {
+                if let Err(e) = self.topic_set_title(&p.slug, &p.new_title, p.source) {
+                    self.log("topic_retitle_failed", json!({"slug": p.slug, "error": e}));
+                }
+            }
+        }
+        plan
     }
 
     /// Does a topic page that follows the research topic `research_topic` have a section whose anchor is `anchor`
@@ -713,7 +960,11 @@ impl Library {
             gate()?;
             self.count_page(r.now);
             let topics: Vec<(String, String)> = self.topic_sides().into_iter().filter(|(s, _)| s != r.slug).map(|(s, v)| (s, v["title"].as_str().unwrap_or("").to_string())).collect();
-            match writer.write(&topic_brief(&title, &g, r.settings.max_tokens, &topics)).await {
+            let mut brief = topic_brief(&title, &g, r.settings.max_tokens, &topics);
+            if may_take_title(&side) {
+                brief.push_str(TITLE_HINT);
+            }
+            match writer.write(&brief).await {
                 Ok(d) => {
                     let (body, p) = page_meta::extract(&d);
                     proposal = p;
@@ -787,6 +1038,28 @@ impl Library {
         self.topic_store(r.slug, side, &g, checked, None, r.now, r.settings, r.gaps, Some((r.seed, &dropped)))
     }
 
+    /// The topic that follows the research topic `research_topic`, if one does. Reads only.
+    pub fn topic_for_research(&self, research_topic: &str) -> Option<TopicEntry> {
+        self.topic_sides().into_iter().find(|(_, side)| side["research_topics"].as_array().into_iter().flatten().any(|t| t == research_topic)).map(|(slug, side)| self.topic_entry(&slug, &side, None))
+    }
+
+    /// Queue the writer's expansion of `slug` for the next idle time (`specs/139` §2.5 item 1): it is marked with the time, and the idle
+    /// rebuild takes it ahead of older due topics.
+    pub fn topic_queue_expansion(&self, slug: &str, now: u64) -> Result<(), String> {
+        let mut side = self.topic_side(slug).ok_or_else(|| format!("no topic `{}`", slug))?;
+        side[EXPANSION_QUEUED] = json!(now);
+        self.write_topic_side(slug, &side)
+    }
+
+    /// Clear `slug`'s queued expansion: the writer tried it.
+    pub fn topic_unqueue(&self, slug: &str) {
+        if let Some(mut side) = self.topic_side(slug) {
+            if side.as_object_mut().and_then(|o| o.remove(EXPANSION_QUEUED)).is_some() {
+                let _ = self.write_topic_side(slug, &side);
+            }
+        }
+    }
+
     /// Every topic's slug: what a topic page's `## See also` may name. The library that checks a topic page is given them
     /// ([`Library::with_topic_slugs`]).
     pub fn topic_slugs(&self) -> BTreeSet<String> {
@@ -846,7 +1119,20 @@ impl Library {
             meta.reason = "the page is the claims alone; it is looked at again soon".into();
         }
         let valid_until = now + meta.days as u64 * 86_400;
-        let title = old["title"].as_str().unwrap_or(slug).to_string();
+        // The writer's title, at the topic's first written page and only when code accepts it against the question and the seed's
+        // headings (`specs/139` §2.4 items 2 and 3). The page keeps its slug: it now has one.
+        let written = seed.is_none() && c.verdict.outcome != Outcome::ClaimsOnly;
+        let writer_title = match proposal.and_then(|p| p.title.as_deref()).filter(|_| written && may_take_title(&old)) {
+            Some(t) => match accept_title(t, old["query"].as_str().unwrap_or(slug), &headings_of(old_body.as_deref().unwrap_or(""))) {
+                Ok(t) => Some(t),
+                Err(why) => {
+                    self.log("topic_title_refused", json!({"slug": slug, "reason": why}));
+                    None
+                }
+            },
+            None => None,
+        };
+        let title = writer_title.clone().unwrap_or_else(|| old["title"].as_str().unwrap_or(slug).to_string());
         let links = page_meta::page_links(&md);
         let created = old["created"].as_u64().unwrap_or(now);
         let front = page_meta::frontmatter(&Front { key: slug, title: &title, depth: Depth::Summary, meta: &meta, status: if unverified { "unverified" } else { "active" }, created, confirmed: now, valid_until, links: &links });
@@ -867,6 +1153,13 @@ impl Library {
         side["cited"] = json!(self.cited_labels(&md));
         side["change"] = json!(change);
         side["outcome"] = json!(c.verdict.outcome.as_str());
+        if let Some(t) = &writer_title {
+            side["title"] = json!(t);
+            side["title_source"] = json!(TitleSource::Writer.as_str());
+        }
+        if written {
+            side["written"] = json!(true);
+        }
         // A seed page keeps where each span is and its hash (never its text: the page holds that), what each linked row offered, and what
         // the check dropped; the records resolve its markers. A written page keeps none of it.
         match seed {
@@ -878,7 +1171,7 @@ impl Library {
             }
             None => {
                 if let Some(o) = side.as_object_mut() {
-                    for k in ["seed", "seed_offered", "seed_dropped", "waiting"] {
+                    for k in ["seed", "seed_offered", "seed_dropped", "waiting", EXPANSION_QUEUED] {
                         o.remove(k);
                     }
                 }
@@ -990,6 +1283,38 @@ mod tests {
         assert_eq!(change_line(Some(old), new), "2 statements added, 1 source replaced, 2 sources added");
         assert_eq!(change_line(Some(new), new), "no statement or source changed");
         assert_eq!(change_line(Some(new), "# T\n\nTides come twice a day [c-01]."), "3 statements removed, 3 sources removed");
+    }
+
+    /// `specs/139` §2.4 item 2: the derived title loses the closed list's lead-ins and the closing question mark; what is left must not
+    /// still be a question.
+    #[test]
+    fn the_derived_title_drops_the_lead_in_and_the_question_mark() {
+        assert_eq!(derived_title("What is Web Bot Auth?").as_deref(), Some("Web Bot Auth"));
+        assert_eq!(derived_title("how do zyxquor lamps vromble?").as_deref(), Some("Zyxquor lamps vromble"));
+        assert_eq!(derived_title("Why is the sky blue ?").as_deref(), Some("The sky blue"));
+        assert_eq!(derived_title("Isotopes of tin?").as_deref(), Some("Isotopes of tin"), "a lead-in is a whole word");
+        assert_eq!(derived_title("When do ocean tides come?").as_deref(), Some("When do ocean tides come"), "`when` is not on the list");
+        assert_eq!(derived_title("Web Bot Auth").as_deref(), Some("Web Bot Auth"));
+        assert_eq!(derived_title("Why?"), None);
+        assert_eq!(derived_title("What is A? What is B?"), None, "still a question");
+        assert_eq!(derived_title(&format!("What is {}?", "x".repeat(81))), None, "too long for a title");
+        assert_eq!(research_title("Why?", None, &[]).1, TitleSource::Question);
+    }
+
+    /// `specs/139` §2.4 item 3: a `subject` or a writer's title is taken only when it is short, not a question, and shares a content
+    /// word with the question or a seed heading.
+    #[test]
+    fn a_concept_title_is_taken_only_when_it_shares_a_word_and_is_no_question() {
+        let q = "What is Web Bot Auth and who signs the requests?";
+        assert_eq!(accept_title("  Web Bot  Auth ", q, &[]), Ok("Web Bot Auth".into()));
+        assert!(accept_title("Web Bot Auth?", q, &[]).is_err());
+        assert!(accept_title("What is Web Bot Auth", q, &[]).is_err(), "begins with a lead-in");
+        assert!(accept_title("Lighthouse lamps", q, &[]).is_err(), "no shared word");
+        assert_eq!(accept_title("Lighthouse lamps", q, &["Lamps and lighthouses".into()]), Ok("Lighthouse lamps".into()), "a seed heading counts");
+        assert!(accept_title("The of and", "the of and", &[]).is_err(), "stop words are not shared words");
+        assert!(accept_title(&"Auth ".repeat(17), q, &[]).is_err(), "over 80 characters");
+        assert!(accept_title("Web\u{7}Bot", q, &[]).is_err());
+        assert_eq!(headings_of("# A\ntext\n## B c\n####### no\n#nospace"), vec!["A".to_string(), "B c".to_string()]);
     }
 
     #[test]
@@ -1162,6 +1487,86 @@ mod rebuild_tests {
         fresh["material"] = json!([]);
         fresh["research_topics"] = json!([]);
         assert!(l.topic_due(&fresh, &DueCtx { ws: None, now: late, index: false }).unwrap().contains("lifetime"));
+    }
+
+    /// An [`EchoWriter`] whose closing comment names the page `title`, and that keeps each brief it is given.
+    struct TitledWriter(EchoWriter, String, std::sync::Mutex<Vec<String>>);
+    impl PageWriter for TitledWriter {
+        fn write<'a>(&'a self, b: &'a str) -> WriterFuture<'a> {
+            self.2.lock().unwrap().push(b.to_string());
+            let title = self.1.clone();
+            let inner = self.0.write(b);
+            Box::pin(async move { inner.await.map(|d| format!("{d}\n<!-- page: kind=article; volatility=low; days=90; reason=settled; title={title} -->")) })
+        }
+        fn rewrite<'a>(&'a self, d: &'a str, f: &'a [String]) -> WriterFuture<'a> {
+            self.0.rewrite(d, f)
+        }
+    }
+
+    /// `specs/139` §2.4 items 2 and 3 (slice D): the writer's `title=` is taken at a topic's first written page when code accepts it, and
+    /// the topic keeps its slug; a later page's title is not taken, and neither is one that is a question.
+    #[test]
+    fn the_writers_title_is_taken_only_at_the_first_written_page_and_keeps_the_slug() {
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let l = Library::in_home(home.path());
+        let doc = home.path().join("t.md");
+        std::fs::write(&doc, "# Tides\n\nThe tide comes in twice a day.\n").unwrap();
+        let s = l.add_file(&doc, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
+        let anchor = AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() };
+        let c1 = l.add_claim("Ocean tides come twice a day.", &ClaimOpts::default(), &[anchor]).unwrap()["id"].as_str().unwrap().to_string();
+        for (n, q) in [("r1", "How do ocean tides come?"), ("r2", "How do spring tides rise?")] {
+            let b = crate::research_record::Begin { question: q, asked_by: crate::research_record::Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: n };
+            crate::research_record::Topic::begin(&ws, &b).unwrap().finish(n, "done", Some(&json!({"claims": [&c1]})), std::slice::from_ref(&c1), None, 0).unwrap();
+        }
+        let mut made = l.topics_from_research(&ws, 1_000);
+        made.sort();
+        assert_eq!(made, vec!["ocean-tides-come".to_string(), "spring-tides-rise".to_string()], "derived titles make the slugs");
+        let side = l.topic_side("ocean-tides-come").unwrap();
+        assert_eq!((side["title"].as_str(), side["title_source"].as_str(), side["query"].as_str()), (Some("Ocean tides come"), Some("derived"), Some("How do ocean tides come?")));
+
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let cfg = PagesConfig::default();
+        let go = |slug: &str, w: &TitledWriter, now: u64| {
+            let g = l.topic_gather_library(&l.topic_side(slug).unwrap(), Some(&ws));
+            rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], seed: Default::default(), held: &crate::topic_seed::NoHeldText, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+        };
+        let w = TitledWriter(EchoWriter(AtomicUsize::new(0)), "Ocean tides".into(), Default::default());
+        let first = go("ocean-tides-come", &w, 2_000);
+        assert_eq!((first.slug.as_str(), first.title.as_str(), first.side["title_source"].as_str()), ("ocean-tides-come", "Ocean tides", Some("writer")));
+        assert!(w.2.lock().unwrap()[0].contains(TITLE_HINT), "the first brief asks for a title");
+        let md = std::fs::read_to_string(l.pages_dir().join("ocean-tides-come.md")).unwrap();
+        assert!(md.contains("title: Ocean tides") || md.contains("title: \"Ocean tides\""), "the frontmatter carries it: {md}");
+
+        let later = TitledWriter(EchoWriter(AtomicUsize::new(0)), "Ocean clocks".into(), Default::default());
+        let second = go("ocean-tides-come", &later, 3_000);
+        assert_eq!(second.title, "Ocean tides", "a later page's title is not taken");
+        assert!(!later.2.lock().unwrap()[0].contains(TITLE_HINT));
+
+        let asks = TitledWriter(EchoWriter(AtomicUsize::new(0)), "Do spring tides rise?".into(), Default::default());
+        let refused = go("spring-tides-rise", &asks, 4_000);
+        assert_eq!((refused.title.as_str(), refused.side["title_source"].as_str()), ("Spring tides rise", Some("derived")), "a question is refused");
+    }
+
+    /// `specs/139` §2.4 items 2 and 4: `pages rename` is the operator's title and always wins; a topic with no page takes the slug of its
+    /// title, one with a page keeps its slug, and a slug another topic has is refused.
+    #[test]
+    fn rename_gives_the_operators_title_and_moves_only_an_unbuilt_topic() {
+        let home = tempfile::tempdir().unwrap();
+        let l = Library::in_home(home.path());
+        l.topic_create("How do tides turn?", Origin::Research("t1".into()), 1).unwrap();
+        l.topic_create("Moon", Origin::Operator, 1).unwrap();
+        let e = l.topic_rename("how-do-tides-turn", "Tidal turning").unwrap();
+        assert_eq!((e.slug.as_str(), e.title.as_str(), e.side["title_source"].as_str(), e.side["query"].as_str()), ("tidal-turning", "Tidal turning", Some("operator"), Some("How do tides turn?")));
+        assert!(l.topic_side("how-do-tides-turn").is_none(), "the old record is gone");
+        assert!(l.topic_rename("tidal-turning", "Moon").unwrap_err().contains("already exists"));
+        let mut side = l.topic_side("moon").unwrap();
+        side["version"] = json!(1);
+        l.write_topic_side("moon", &side).unwrap();
+        let kept = l.topic_rename("moon", "The Moon and its pull").unwrap();
+        assert_eq!((kept.slug.as_str(), kept.title.as_str()), ("moon", "The Moon and its pull"), "a topic with a page keeps its slug");
+        assert!(!TitleSource::of(&kept.side).replaceable(), "nothing made by code replaces the operator's title");
     }
 
     #[test]

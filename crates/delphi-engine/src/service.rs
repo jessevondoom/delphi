@@ -1085,6 +1085,7 @@ impl EngineService {
         // So is a host's run with no engine configured: the host's tools are its only web source.
         let engines = if sources == crate::research_run::Sources::Local || host.as_ref().is_some_and(|t| !t.engines) { Vec::new() } else { engines };
         let recorder = topic.clone().map(|topic| crate::research_record::RunRecorder { topic, run_id: research_id.clone() });
+        let topic_id_of_run = topic.as_ref().map(|t| t.id.clone());
         // `specs/112` §3.2: the claims the run keeps name its topic, and its project when it has one.
         let (claims_topic, claims_project) = (topic.as_ref().map(|t| t.id.clone()), project);
         let (engine, wsd, home) = (self.engine.clone(), ws.dir.clone(), ws.home.clone());
@@ -1156,14 +1157,31 @@ impl EngineService {
             out
         };
         // However the job ends (done, partial, failed, out of time, cancelled), its record learns it before the job reads as finished.
-        self.research_jobs.submit_with(&research_id, &session, depth, run, move |ended| {
+        // The caller's `after` is told once the step below has run, with what the job ended with.
+        type EndedOwned = (crate::research_jobs::State, Option<Value>, Option<String>, u64);
+        let ended_copy: Arc<std::sync::Mutex<Option<EndedOwned>>> = Default::default();
+        let keep = ended_copy.clone();
+        let on_end = move |ended: &crate::research_jobs::Ended<'_>| {
             if let Some(t) = &topic {
                 crate::research_record::record_end(t, &ended_rid, ended);
             }
-            if let Some(after) = after {
-                after(ended);
-            }
+            *keep.lock().unwrap() = Some((ended.state, ended.result.cloned(), ended.error.map(String::from), ended.ms));
+        };
+        // `specs/139` §2.5 item 1: a run that ended `done` or `partial` gets its topic's seed page at once, after its record has its answer
+        // and before its result is read; the writer's expansion waits for the next idle time.
+        let (seed_engine, seed_topic) = (self.engine.clone(), topic_id_of_run);
+        let then: crate::research_jobs::Then = Box::new(move |state| {
+            Box::pin(async move {
+                if let (Some(id), crate::research_jobs::State::Done | crate::research_jobs::State::Partial) = (seed_topic, state) {
+                    let _ = seed_engine.seed_after_research(&id).await;
+                }
+                let copy = ended_copy.lock().unwrap().take();
+                if let (Some(after), Some((state, result, error, ms))) = (after, copy) {
+                    after(&crate::research_jobs::Ended { state, result: result.as_ref(), error: error.as_deref(), ms });
+                }
+            })
         });
+        self.research_jobs.submit_then(&research_id, &session, depth, run, on_end, Some(then));
     }
 
     /// `host.record_research` (`specs/113` §2): a host hands over research it did with its own tools. The daemon writes a topic record
@@ -1199,7 +1217,7 @@ impl EngineService {
         // call and every source is kept private. An unreadable mark counts as a mark here, as it does on the other sends.
         let private_read = crate::private_read::state(&ws.dir, &c.mission()).would_affect_a_send();
         let any_public = !private_read && parsed.sources.iter().any(|s| !hr::is_private(s, false) && hr::public_url(s).is_some());
-        let (reply, topic_id) = tokio::task::spawn_blocking(move || -> Result<(Value, String), String> {
+        let (mut reply, topic_id) = tokio::task::spawn_blocking(move || -> Result<(Value, String), String> {
             let root = project.as_ref().map(|(_, r)| r.clone()).unwrap_or_else(|| wsd.clone());
             let identifiers = crate::query_guard::identifiers(&wsd);
             let ctx = hr::Ctx { home: &home, root: &root, project: project.as_ref().map(|(n, _)| n.as_str()), label: &lab, run_id: &rid, read_marked: private_read, identifiers: &identifiers, pictures: None };
@@ -1244,6 +1262,10 @@ impl EngineService {
         // The pages kept are indexed now, so the next `search_kb` finds them, as after a research run. A failure is not the call's.
         let (w, hm) = (ws.dir.clone(), ws.home.clone());
         let _ = tokio::task::spawn_blocking(move || refresh_kb(&w, &hm)).await;
+        // `specs/139` §2.5: the topic's seed page is written now and the writer's expansion queued; the reply names the page.
+        if let Some(page) = self.engine.seed_after_research(&topic_id).await {
+            reply["page"] = page;
+        }
         Ok(reply)
     }
 
@@ -1290,6 +1312,12 @@ impl EngineService {
         };
         if let (Some(t), true) = (&topic, v.is_object()) {
             v["topic_id"] = json!(t.id);
+            // `specs/139` §2.5 item 4: a finished run's result names its topic page and the page's outcome.
+            if result && matches!(v["status"].as_str(), Some("done" | "partial")) {
+                if let Some(page) = self.engine.research_page(&t.id) {
+                    v["page"] = page;
+                }
+            }
         }
         if v["answered_by"].as_str().is_some() {
             let id = crate::research_host::identity(&ws.dir, &ws.home, "scout", None);
@@ -7429,6 +7457,50 @@ mod tests {
         assert_eq!(crate::research_record::list(&ws_dir).len(), 10, "the refused call wrote no topic");
     }
 
+    // `specs/139` AC-10 (slice E): `record_research` writes the topic's seed page at once, with no model call, and returns its slug with
+    // outcome `seed`; the research result names it too, and the writer's expansion is queued. With `[library.pages] build_after_research =
+    // false` no topic or page is made and neither reply names one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn record_research_writes_the_seed_page_at_once_and_names_it_unless_the_trigger_is_off() {
+        for on in [true, false] {
+            let f = setup(vec![], 5.0, |_| {});
+            if !on {
+                let off = crate::testkit::CONFIG.replace("[access]", "[library.pages]\nbuild_after_research = false\n[access]");
+                f.engine.cfg.set(delphi_adapter::config::Config::parse(&off).unwrap());
+            }
+            let s = serve(&f).await;
+            let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+            let cwd = f.root.to_string_lossy().to_string();
+            let (r, back) = blocking(move || {
+                let mut c = Client::connect(&hsock).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+                c.hello(&htok).unwrap();
+                let who = |mut v: Value| {
+                    v["session"] = json!("abcdef0123456789");
+                    v["tool"] = json!("claude-code");
+                    v["cwd"] = json!(cwd);
+                    v
+                };
+                let r = c.call("host.record_research", who(json!({"question": "What is Web Bot Auth?", "subject": "Web Bot Auth", "answer": "Web Bot Auth signs each request an agent sends.\n\n## Keys\n\nThe keys are published in a directory."}))).unwrap();
+                let back = c.call("host.research_result", who(json!({"research_id": r["research_id"]}))).unwrap();
+                (r, back)
+            })
+            .await;
+            let lib = crate::library::Library::in_home(&f.engine.ws.home);
+            let page = lib.root().join("pages/web-bot-auth.md");
+            if on {
+                assert_eq!(r["page"], json!({"slug": "web-bot-auth", "outcome": "seed"}), "{r}");
+                assert_eq!(back["page"], json!({"slug": "web-bot-auth", "outcome": "seed"}), "{back}");
+                assert!(fs::read_to_string(&page).unwrap().contains("Web Bot Auth signs each request an agent sends."));
+                assert!(lib.topic_side("web-bot-auth").unwrap()[crate::library::topics::EXPANSION_QUEUED].is_u64());
+                assert_eq!(f.model.requests().len(), 0, "the seed calls no model");
+            } else {
+                assert!(r.get("page").is_none() && back.get("page").is_none(), "{r} {back}");
+                assert!(!page.exists() && lib.topic_side("web-bot-auth").is_none());
+            }
+        }
+    }
+
     // specs/113 AC-3 over the socket: a session under the private-read mark records, the daemon fetches nothing (the canned page is never
     // served, though the session's search returned it) and the source is kept private.
     #[tokio::test(flavor = "multi_thread")]
@@ -12784,13 +12856,16 @@ mod tests {
         assert_eq!((last["state"].as_str(), last["ids"]["section"].as_str()), (Some("refused"), Some("why-twice-a-day")), "{last}");
         // A page that follows it, with that heading: the run's note names the section by its anchor.
         let lib = crate::library::Library::in_home(&f.engine.ws.home);
-        let made = lib.topics_from_research(&f.engine.ws.dir, 1);
-        assert_eq!(made.len(), 1, "{made:?}");
+        // The run that ended wrote its topic's seed page (`specs/139` §2.5); this test writes a page of its own in its place.
+        lib.topics_from_research(&f.engine.ws.dir, 1);
+        let made = [lib.topic_for_research(&id).expect("the run made its topic").slug];
         std::fs::write(f.engine.ws.home.join("library/pages").join(format!("{}.md", made[0])), "# Aspirin\n\nLead.\n\n## Why twice a day?\n\nBecause.\n").unwrap();
         assert!(lib.topic_has_section(&id, "why-twice-a-day") && !lib.topic_has_section(&id, "lead") && !lib.topic_has_section("other-topic-0123abcd", "why-twice-a-day"));
         let asked = ext.app_request(APP_KEY, "app.research_continue", json!({"topic_id": id, "section": "why-twice-a-day", "note": "and at night"})).await.unwrap().unwrap();
         assert_eq!(app_ended(&f, asked["request"].as_str().unwrap()).await.last().map(String::as_str), Some("done"));
         assert_eq!(runs()[3]["note"].as_str(), Some("and at night (section: why-twice-a-day)"));
+        // That run wrote a new seed page in place of the hand-written one; the section is put back for the next request.
+        std::fs::write(f.engine.ws.home.join("library/pages").join(format!("{}.md", made[0])), "# Aspirin\n\nLead.\n\n## Why twice a day?\n\nBecause.\n").unwrap();
         // A note that, with its section, is longer than the terminal's `--note` takes is refused by the terminal's own rule.
         let long = ext.app_request(APP_KEY, "app.research_continue", json!({"topic_id": id, "section": "why-twice-a-day", "note": "x".repeat(110)})).await.unwrap().unwrap_err();
         assert_eq!(long.code, code::INVALID_PARAMS);

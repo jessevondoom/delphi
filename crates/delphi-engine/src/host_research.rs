@@ -78,6 +78,9 @@ pub struct Parsed {
     pub searches: Vec<Search>,
     pub gaps: Vec<String>,
     pub topic_id: Option<String>,
+    /// What the research is about, as a name (`specs/139` §2.4 item 2): the topic page's title when code accepts it. Data: it sets
+    /// no trust, status or privacy.
+    pub subject: Option<String>,
 }
 
 /// The tool's input as a JSON Schema: the MCP tool declares it (`mcp_host::tools`) and `schemas/record-research.schema.json` is the
@@ -107,6 +110,7 @@ pub fn input_schema() -> Value {
             }, "required": ["query"], "additionalProperties": false}},
             "gaps": {"type": "array", "maxItems": MAX_GAPS, "items": {"type": "string", "maxLength": 300}, "description": "What you looked for and did not find."},
             "topic_id": {"type": "string", "maxLength": 57, "description": "A research topic id Delphi gave you, to add this as a new run of it."},
+            "subject": {"type": "string", "maxLength": crate::library::topics::MAX_CONCEPT_TITLE, "description": "What the research is about, as a name (a concept such as `Web Bot Auth`, not a question): the title of its topic page. Taken only if it shares a word with the question or a heading of your answer; otherwise Delphi makes the title from the question."},
             "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
         },
         "required": ["question", "answer"],
@@ -200,7 +204,8 @@ pub fn parse(p: &Value, redact: &dyn Fn(&str) -> String) -> Result<Parsed, HostE
         Some(_) => return bad("`topic_id` is a research topic id as Delphi gave it"),
         None => None,
     };
-    Ok(Parsed { question, answer, sources, claims, searches, gaps, topic_id })
+    let subject = Some(redact(&capped(&p["subject"], "subject", crate::library::topics::MAX_CONCEPT_TITLE)?)).filter(|s| !s.is_empty());
+    Ok(Parsed { question, answer, sources, claims, searches, gaps, topic_id, subject })
 }
 
 /// How many `record_research` calls a session made in the hour before `now` (unix seconds), from its log. The limit is
@@ -301,6 +306,7 @@ fn masked(p: &Parsed, ids: &[String]) -> Parsed {
         searches: p.searches.iter().map(|s| Search { place: m(&s.place), words: m(&s.words) }).collect(),
         gaps: p.gaps.iter().map(|g| m(g)).collect(),
         topic_id: p.topic_id.clone(),
+        subject: p.subject.as_deref().map(m),
     }
 }
 
@@ -444,9 +450,18 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
     let private_sources = read.iter().filter(|r| matches!(r, Read::Private(..))).count();
     topic.finish(run, "done", Some(&result), &ids, None, started.elapsed().as_millis() as u64)?;
     let gaps = parsed.gaps.clone();
-    topic.amend(|rec| rec["gaps"] = json!(gaps))?;
+    // The subject is kept only when code accepts it as a title (`specs/139` §2.4 item 3): the topic page takes it, and the question stays
+    // its query. A refused one is said in the reply, and the title is made from the question.
+    let subject = parsed.subject.as_deref().map(|s| crate::library::topics::accept_title(s, &question, &crate::library::topics::headings_of(&parsed.answer)));
+    let taken = subject.as_ref().and_then(|r| r.as_ref().ok()).cloned();
+    topic.amend(|rec| {
+        rec["gaps"] = json!(gaps);
+        if let Some(t) = taken {
+            rec["subject"] = json!(t);
+        }
+    })?;
     Ok(json!({
-        "recorded": true, "topic_id": topic.id, "research_id": run, "claims": parsed.claims.len(), "library_claims": ids.len(),
+        "recorded": true, "topic_id": topic.id, "subject": subject.map(|r| match r { Ok(t) => json!({"taken": true, "title": t}), Err(why) => json!({"taken": false, "reason": why}) }), "research_id": run, "claims": parsed.claims.len(), "library_claims": ids.len(),
         "quotes_found": found, "quotes_not_found": not_found, "private_sources": private_sources, "private_claims": private_claims, "fetched_nothing": ctx.read_marked, "status": NOT_VALIDATED,
         "note": "not validated. Delphi fetched each public source itself and looked for each quote in what it read: a quote it found is an anchor into the page it keeps; one it did not find (or could not look for) is kept as `host-reported, not found`. A private, internal, file or person source was not fetched: only its locator, title and date are kept, and its claims stay private and count for no corroboration. Read it back with research_result and this research_id, or find it with search_kb.",
     }))
@@ -713,6 +728,28 @@ mod tests {
         let mut unknown = call();
         unknown["topic_id"] = json!("no-such-topic-deadbeef");
         assert!(record(&ctx(&f, "h-3"), &parse(&unknown, &id).unwrap(), &web(&asked)).unwrap_err().contains("no research topic"));
+    }
+
+    /// `specs/139` AC-8: `record_research` with `subject: "Web Bot Auth"` makes the topic `web-bot-auth` with that title and the question
+    /// as its query; a subject that ends in a question mark, or shares no word with the question, is refused (the reply says why) and the
+    /// derived title is used.
+    #[test]
+    fn a_subject_titles_the_topic_and_a_question_or_an_unrelated_subject_is_refused() {
+        let question = "What is Web Bot Auth and who signs the requests?";
+        let derived = crate::library::topics::slug_for("Web Bot Auth and who signs the requests");
+        for (subject, taken, slug) in [("Web Bot Auth", true, "web-bot-auth"), ("Web Bot Auth?", false, derived.as_str()), ("Lighthouse lamps", false, derived.as_str())] {
+            let f = fx();
+            let p = parse(&json!({"question": question, "answer": "Agents sign each request.", "subject": subject}), &id).unwrap();
+            let reply = record(&ctx(&f, "h-1"), &p, &|_| Err("not fetched".to_string())).unwrap();
+            assert_eq!(reply["subject"]["taken"], taken, "{subject}: {reply}");
+            let lib = Library::in_home(&f.home);
+            assert_eq!(lib.topics_from_research(&f.ws, 1), vec![slug.to_string()], "{subject}");
+            let side = lib.topic_side(slug).unwrap();
+            let want = if taken { ("Web Bot Auth", "subject") } else { ("Web Bot Auth and who signs the requests", "derived") };
+            assert_eq!((side["title"].as_str().unwrap(), side["title_source"].as_str().unwrap(), side["query"].as_str().unwrap()), (want.0, want.1, question), "{subject}");
+        }
+        assert!(parse(&json!({"question": "q", "answer": "a", "subject": "x".repeat(81)}), &id).is_err(), "over 80 characters, as the schema says");
+        assert_eq!(input_schema()["properties"]["subject"]["maxLength"], 80);
     }
 
     /// AC-6: the 41st claim (and the 41st source) in one call is refused with the limit named; nothing is parsed past it.
