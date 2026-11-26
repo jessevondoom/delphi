@@ -229,7 +229,7 @@ pub fn state_merged(state: &str) -> bool {
 pub const DIR: &str = "missions/2026-10-23-foundational-design/tracker";
 /// The states a per-slice file may give.
 pub const STATES: [&str; 7] = ["not-built", "approved", "built", "merged", "run", "deferred", "superseded"];
-const KEYS: [&str; 4] = ["state", "date", "pr", "title"];
+const KEYS: [&str; 7] = ["state", "date", "pr", "title", "eval_before", "eval_after", "eval_waived"];
 
 /// A per-slice file, read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,6 +240,11 @@ pub struct SliceFile {
     pub date: String,
     pub pr: Option<u64>,
     pub title: Option<String>,
+    /// A retrieval change's runs (`specs/140` §2.4 item 3): the stamps of `delphi kb eval run` before and after it, on one set.
+    pub eval_before: Option<String>,
+    pub eval_after: Option<String>,
+    /// Why a change on the retrieval paths cannot move ranking, in place of the two runs.
+    pub eval_waived: Option<String>,
     /// The prose after the frontmatter.
     pub notes: String,
     /// The path in the checkout, `/`-separated.
@@ -267,6 +272,12 @@ pub fn valid_slice_id(s: &str) -> bool {
 fn valid_date(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 10 && b[4] == b'-' && b[7] == b'-' && b.iter().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+}
+
+/// A run stamp of `delphi kb eval run`: `YYYYMMDDTHHMMSSZ`.
+fn valid_stamp(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 16 && b[8] == b'T' && b[15] == b'Z' && b.iter().enumerate().all(|(i, c)| i == 8 || i == 15 || c.is_ascii_digit())
 }
 
 /// Reads a per-slice file from its path in the checkout and its text; every problem is listed.
@@ -318,10 +329,23 @@ pub fn parse_slice_file(path: &str, text: &str) -> Result<SliceFile, Vec<String>
     if crate::frontmatter::has(&m, "title") && title.as_deref().is_none_or(|t| t.is_empty() || t.contains('\n')) {
         errs.push("`title` must be one line of text".into());
     }
+    // `specs/140` §2.4 item 3: two run stamps (`YYYYMMDDTHHMMSSZ`), given together, or a one-line reason.
+    let (eval_before, eval_after, eval_waived) = (s("eval_before"), s("eval_after"), s("eval_waived"));
+    for (k, v) in [("eval_before", &eval_before), ("eval_after", &eval_after)] {
+        if crate::frontmatter::has(&m, k) && !v.as_deref().is_some_and(valid_stamp) {
+            errs.push(format!("`{}` must be a run stamp of `delphi kb eval run`, YYYYMMDDTHHMMSSZ", k));
+        }
+    }
+    if crate::frontmatter::has(&m, "eval_before") != crate::frontmatter::has(&m, "eval_after") {
+        errs.push("`eval_before` and `eval_after` go together: the runs before and after the change".into());
+    }
+    if crate::frontmatter::has(&m, "eval_waived") && eval_waived.as_deref().is_none_or(|t| t.is_empty() || t.contains('\n')) {
+        errs.push("`eval_waived` must be one line: why the change cannot move ranking".into());
+    }
     if !errs.is_empty() {
         return Err(errs);
     }
-    Ok(SliceFile { spec, slice, state, date, pr, title, notes: body.trim().to_string(), path: path.to_string() })
+    Ok(SliceFile { spec, slice, state, date, pr, title, eval_before, eval_after, eval_waived, notes: body.trim().to_string(), path: path.to_string() })
 }
 
 /// The per-slice files of a checkout, each read or with its problems, sorted by path.
@@ -551,6 +575,19 @@ mod tests {
         assert!(p("13/E1.md", "---\nstate: built\ndate: 2026-11-22\n---\n").is_err());
         assert!(p("135/sub/E1.md", "---\nstate: built\ndate: 2026-11-22\n---\n").is_err());
         assert_eq!(p("135/E1.md", "---\nstate: built\ndate: 22-11-2026\npr: -3\ntitle: \"\"\n---\n").unwrap_err().len(), 3);
+    }
+
+    /// `specs/140` §2.4 item 3: a slice file may carry the two run stamps of a retrieval change, together, or a one-line waiver.
+    #[test]
+    fn a_slice_file_carries_the_runs_of_a_retrieval_change_or_its_waiver() {
+        let p = |text: &str| parse_slice_file(&format!("{}/140/E.md", DIR), &format!("---\nstate: built\ndate: 2026-11-26\n{text}---\n"));
+        let f = p("eval_before: 20261126T005148Z\neval_after: 20261126T010203Z\n").unwrap();
+        assert_eq!((f.eval_before.as_deref(), f.eval_after.as_deref(), f.eval_waived), (Some("20261126T005148Z"), Some("20261126T010203Z"), None));
+        assert_eq!(p("eval_waived: a comment only\n").unwrap().eval_waived.as_deref(), Some("a comment only"));
+        assert!(p("eval_before: 20261126T005148Z\n").unwrap_err().iter().any(|e| e.contains("go together")));
+        assert!(p("eval_before: yesterday\neval_after: 20261126T010203Z\n").unwrap_err().iter().any(|e| e.contains("run stamp")));
+        assert!(p("eval_waived: \"\"\n").is_err());
+        assert!(p("eval_maybe: x\n").unwrap_err().iter().any(|e| e.contains("unknown key")));
     }
 
     /// AC-28: the view has both shapes, says where each row came from, and cuts long cells.

@@ -109,6 +109,146 @@ fn spec_title(repo: &Path, stem: &str) -> String {
     text.lines().skip(1).take_while(|l| l.trim() != "---").find_map(|l| l.strip_prefix("title:").map(|t| t.trim().trim_matches('"').to_string())).unwrap_or_else(|| stem.to_string())
 }
 
+// ── The retrieval rule (`specs/140` §2.4) ────────────────────────────────────────────────────────────────────────────────
+
+/// The paths whose change is a retrieval change (`specs/140` §2.4 item 2). The `[retrieval]` keys of [`RETRIEVAL_CONFIG`] are on
+/// the list too: that file counts when its diff touches them ([`config_touches_retrieval`]).
+pub const RETRIEVAL_PATHS: [&str; 7] = [
+    "crates/delphi-engine/src/kb.rs",
+    "crates/delphi-engine/src/retrieval.rs",
+    "crates/delphi-engine/src/kb_docs.rs",
+    "crates/delphi-engine/src/embed.rs",
+    "crates/delphi-engine/src/embed/**",
+    "crates/delphi-engine/src/research_index.rs",
+    "crates/delphi-engine/src/use_signals.rs",
+];
+/// The file that holds the `[retrieval]` keys.
+pub const RETRIEVAL_CONFIG: &str = "crates/delphi-adapter/src/config.rs";
+
+/// Does a diff of [`RETRIEVAL_CONFIG`] change a `[retrieval]` key? A changed line that names retrieval, or a hunk whose context
+/// line is inside `RetrievalConfig`.
+pub fn config_touches_retrieval(diff: &str) -> bool {
+    diff.lines().any(|l| {
+        let changed = (l.starts_with('+') && !l.starts_with("+++")) || (l.starts_with('-') && !l.starts_with("---"));
+        (changed && l.to_lowercase().contains("retrieval")) || (l.starts_with("@@") && l.contains("RetrievalConfig"))
+    })
+}
+
+/// The changed files on [`RETRIEVAL_PATHS`], in the order given; the config file only when its diff touches a `[retrieval]` key.
+pub fn retrieval_touched(changed: &[String], config_diff: &str) -> Vec<String> {
+    changed.iter().filter(|p| RETRIEVAL_PATHS.iter().any(|pat| crate::merge::gates::matches(pat, p)) || (p.as_str() == RETRIEVAL_CONFIG && config_touches_retrieval(config_diff))).cloned().collect()
+}
+
+/// What the retrieval check found (`specs/140` §2.4 item 3). Advice only: it is not a merge gate (§2.4 item 5).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RetrievalCheck {
+    /// The branch changes no listed path: nothing is asked.
+    NotTouched,
+    /// The changed files could not be listed; said, not asked.
+    Unknown(String),
+    Waived { paths: Vec<String>, reason: String },
+    Compared { paths: Vec<String>, text: String },
+    /// A finding: what is missing, and what to run.
+    Missing { paths: Vec<String>, why: String },
+}
+
+impl RetrievalCheck {
+    /// The finisher's one line.
+    pub fn line(&self) -> String {
+        match self {
+            RetrievalCheck::NotTouched => "retrieval: no listed path changed".into(),
+            RetrievalCheck::Unknown(why) => format!("retrieval: not checked ({})", why),
+            RetrievalCheck::Waived { reason, .. } => format!("retrieval: a retrieval change, eval waived: {}", reason),
+            RetrievalCheck::Compared { .. } => "retrieval: a retrieval change, before and after runs compared (in the body)".into(),
+            RetrievalCheck::Missing { .. } => "retrieval: a retrieval change without a before-and-after run".into(),
+        }
+    }
+
+    /// The pull request body's section; empty when the branch is not a retrieval change.
+    pub fn body(&self) -> String {
+        let touches = |p: &[String]| p.iter().map(|p| format!("`{}`", p)).collect::<Vec<_>>().join(", ");
+        match self {
+            RetrievalCheck::Waived { paths, reason } => format!("\n## Retrieval change (specs/140 §2.4)\n\nTouches {}.\n\nEval waived: {}\n", touches(paths), reason),
+            RetrievalCheck::Compared { paths, text } => format!("\n## Retrieval change (specs/140 §2.4)\n\nTouches {}.\n\n```text\n{}```\n", touches(paths), text),
+            RetrievalCheck::Missing { paths, .. } => format!("\n## Retrieval change (specs/140 §2.4)\n\nTouches {}. No before-and-after run yet.\n", touches(paths)),
+            _ => String::new(),
+        }
+    }
+}
+
+/// The files this branch changes against its merge base with `origin/main` (untracked ones too), and the diff of
+/// [`RETRIEVAL_CONFIG`] when it is among them. The same base as the fast tier (`finisher_fast::selection`).
+fn branch_changes(repo: &Path, runner: &mut dyn crate::finisher_gates::Runner) -> Result<(Vec<String>, String), String> {
+    let git = |args: &[&str]| crate::finisher_gates::GateCmd { program: "git".into(), args: args.iter().map(|s| s.to_string()).collect(), env: Vec::new() };
+    let base = runner.run(repo, &git(&["merge-base", "HEAD", "origin/main"]));
+    let sha = base.output.lines().map(str::trim).find(|l| (l.len() == 40 || l.len() == 64) && l.chars().all(|c| c.is_ascii_hexdigit())).map(String::from);
+    let Some(sha) = sha.filter(|_| base.started && base.ok) else { return Err("no merge base with origin/main (fetch it?)".into()) };
+    let diff = runner.run(repo, &git(&["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", &sha]));
+    let untracked = runner.run(repo, &git(&["-c", "core.quotePath=false", "ls-files", "--others", "--exclude-standard"]));
+    if !(diff.started && diff.ok && untracked.started && untracked.ok) {
+        return Err("git could not list the changed files".into());
+    }
+    let mut changed: Vec<String> = Vec::new();
+    for l in diff.output.lines().chain(untracked.output.lines()).map(str::trim).filter(|l| !l.is_empty()) {
+        if !changed.iter().any(|c| c == l) {
+            changed.push(l.to_string());
+        }
+    }
+    let config = if changed.iter().any(|c| c == RETRIEVAL_CONFIG) {
+        let d = runner.run(repo, &git(&["diff", &sha, "--", RETRIEVAL_CONFIG]));
+        // An untracked config file has no diff: all of it is new, so all of it counts.
+        if d.started && d.ok && !d.output.trim().is_empty() { d.output } else { std::fs::read_to_string(repo.join(RETRIEVAL_CONFIG)).unwrap_or_default().lines().map(|l| format!("+{}\n", l)).collect() }
+    } else {
+        String::new()
+    };
+    Ok((changed, config))
+}
+
+/// The two runs, read from the same workspace of `home` (`<home>/workspaces/<name>/local/eval/runs/<stamp>.json`).
+fn find_runs(home: &Path, before: &str, after: &str) -> Result<(serde_json::Value, serde_json::Value), String> {
+    let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(home.join("workspaces")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    names.sort();
+    for ws in names {
+        if let (Ok(a), Ok(b)) = (delphi_engine::kb_eval::read_run(&ws, before), delphi_engine::kb_eval::read_run(&ws, after)) {
+            return Ok((a, b));
+        }
+    }
+    Err(format!("the runs {} and {} are not both in one workspace of {}", before, after, home.display()))
+}
+
+/// The per-slice file of a slice, read, when it exists and is valid.
+fn slice_file(repo: &Path, spec_number: &str, slice: &str) -> Option<tracker::SliceFile> {
+    let rel = format!("{}/{}/{}.md", tracker::DIR, spec_number, slice);
+    tracker::parse_slice_file(&rel, &std::fs::read_to_string(repo.join(&rel)).ok()?).ok()
+}
+
+/// The retrieval check (`specs/140` §2.4 item 3): on a branch that changes a listed path, the slice's tracker file must carry
+/// `eval_before` and `eval_after` (two runs on one set version, compared here) or `eval_waived: <reason>`.
+pub fn retrieval_check(repo: &Path, home: &Path, file: Option<&tracker::SliceFile>, file_path: &str, runner: &mut dyn crate::finisher_gates::Runner) -> RetrievalCheck {
+    let (changed, config) = match branch_changes(repo, runner) {
+        Ok(c) => c,
+        Err(e) => return RetrievalCheck::Unknown(e),
+    };
+    let paths = retrieval_touched(&changed, &config);
+    if paths.is_empty() {
+        return RetrievalCheck::NotTouched;
+    }
+    if let Some(reason) = file.and_then(|f| f.eval_waived.clone()) {
+        return RetrievalCheck::Waived { paths, reason };
+    }
+    let ask = format!(
+        "run `delphi kb eval run --label before` on the base and `delphi kb eval run --label after` on this branch, then add `eval_before: <stamp>` and `eval_after: <stamp>` to {}; for a change that cannot move ranking (a comment, a rename), add `eval_waived: <reason>` instead",
+        file_path
+    );
+    let (Some(before), Some(after)) = (file.and_then(|f| f.eval_before.clone()), file.and_then(|f| f.eval_after.clone())) else {
+        return RetrievalCheck::Missing { why: format!("this branch changes retrieval ({}) and has no before-and-after run (specs/140 §2.4): {}", paths.join(", "), ask), paths };
+    };
+    match find_runs(home, &before, &after).and_then(|(a, b)| delphi_engine::kb_eval::compare(&a, &b)) {
+        Ok(text) => RetrievalCheck::Compared { paths, text },
+        Err(e) => RetrievalCheck::Missing { why: format!("eval_before {} and eval_after {} cannot be compared: {}", before, after, e), paths },
+    }
+}
+
 pub fn finish(r: &FinishReq) -> Out {
     finish_with(r, &mut crate::finisher_gates::SystemRunner)
 }
@@ -217,6 +357,21 @@ pub fn finish_with(r: &FinishReq, runner: &mut dyn crate::finisher_gates::Runner
         },
     }
 
+    // 4b. The retrieval rule (`specs/140` §2.4): a branch that changes a listed path needs a before-and-after run, or a waiver.
+    // Advice: a finding like the tracker's, never a merge gate (§2.4 item 5).
+    let mut retrieval = None;
+    if let Some((stem, slice)) = &target {
+        let num = tracker::spec_number(stem).unwrap_or_default();
+        let file_path = format!("{}/{}/{}.md", tracker::DIR, num, slice);
+        let c = retrieval_check(repo, r.home, slice_file(repo, &num, slice).as_ref(), &file_path, runner);
+        out.push_str(&format!("{}\n", c.line()));
+        if let RetrievalCheck::Missing { why, .. } = &c {
+            err.push_str(&format!("finding: {}\n", why));
+            finding = true;
+        }
+        retrieval = Some(c);
+    }
+
     // 5. The gates: run with --gates (not after a generator failed), else printed.
     let mut gates = None;
     if r.gates && failed {
@@ -240,6 +395,7 @@ pub fn finish_with(r: &FinishReq, runner: &mut dyn crate::finisher_gates::Runner
         if let Some((stem, slice)) = &target {
             out.push('\n');
             out.push_str(&body(repo, stem, slice, row.as_ref(), &s.changed, gates.as_deref()));
+            out.push_str(&retrieval.as_ref().map(RetrievalCheck::body).unwrap_or_default());
         } else {
             err.push_str("--body needs a slice: pass --spec and --slice, or claim the slice on this branch\n");
             finding = true;
@@ -368,6 +524,109 @@ mod tests {
         let b = body(t.path(), "135-x", "F1b", None, &[], Some(&crate::finisher_gates::checked_lines(&results)));
         assert!(b.contains("- [x] `cargo test` (flaky, passed on a rerun: `a::b`)\n- [ ] `cargo clippy` (FAILED)\n- [ ] `delphi lint` (not run: an earlier gate failed)\n"), "{}", b);
         assert!(!b.contains("--locked -- -D warnings"), "the unrun list is not added: {}", b);
+    }
+
+    /// `specs/140` §2.4 item 2: the listed paths are retrieval changes, `embed/**` at any depth; the config file only when its diff
+    /// touches a `[retrieval]` key.
+    #[test]
+    fn the_retrieval_paths_and_the_retrieval_keys_of_the_config_are_a_retrieval_change() {
+        let changed: Vec<String> = ["crates/delphi-engine/src/retrieval.rs", "crates/delphi-engine/src/embed/local/mod.rs", "crates/delphi-engine/src/kb_eval.rs", "docs/x.md", RETRIEVAL_CONFIG].iter().map(|s| s.to_string()).collect();
+        let other = "@@ -10,3 +10,4 @@ pub struct LibraryConfig {\n+    pub shelf: bool,\n";
+        assert_eq!(retrieval_touched(&changed, other), vec![changed[0].clone(), changed[1].clone()]);
+        let field = "@@ -961,6 +961,7 @@ pub struct RetrievalConfig {\n+    pub eval_every_days: u32,\n";
+        assert_eq!(retrieval_touched(&changed, field).last().map(String::as_str), Some(RETRIEVAL_CONFIG));
+        assert!(config_touches_retrieval("@@ -1 +1 @@ fn x() {\n-    let r = cfg.retrieval.auto;\n"));
+        assert!(retrieval_touched(&["crates/delphi-engine/src/kb_eval.rs".into()], "").is_empty());
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = std::process::Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]).args(args).current_dir(dir).output().unwrap();
+        assert!(ok.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&ok.stderr));
+    }
+
+    /// A checkout whose `origin/main` is its first commit, on a branch `feat` that changed `path`.
+    fn branch_changing(path: &str) -> tempfile::TempDir {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path();
+        git(r, &["init", "-q", "-b", "main"]);
+        fs::create_dir_all(r.join("specs")).unwrap();
+        fs::write(r.join("specs/140-a-golden-set.md"), "---\nid: x\ntitle: \"140: a golden set\"\nstatus: approved\n---\n# 140\n").unwrap();
+        git(r, &["add", "-A"]);
+        git(r, &["commit", "-q", "-m", "init"]);
+        git(r, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(r, &["checkout", "-q", "-b", "feat"]);
+        fs::create_dir_all(r.join(path).parent().unwrap()).unwrap();
+        fs::write(r.join(path), "// changed\n").unwrap();
+        git(r, &["add", "-A"]);
+        git(r, &["commit", "-q", "-m", "change"]);
+        t
+    }
+
+    /// A run file of `kb eval run`, numbers only, on set version `v`.
+    fn run_file(home: &Path, stamp: &str, v: u32, ndcg: f64) {
+        let dir = home.join("workspaces/w/local/eval/runs");
+        fs::create_dir_all(&dir).unwrap();
+        let run = serde_json::json!({"run": stamp, "set": {"version": v, "sha256": format!("s{v}")}, "corpus": {"index_generation": 3}, "paths": [{"path": "service", "metrics": {"recall10": 0.9, "recall20": 0.93, "ndcg10": ndcg, "mrr": 0.98}, "ranks": {"r-1": 1}}]});
+        fs::write(dir.join(format!("{stamp}.json")), run.to_string()).unwrap();
+    }
+
+    fn slice_with(extra: &str) -> tracker::SliceFile {
+        tracker::parse_slice_file(&format!("{}/140/E.md", tracker::DIR), &format!("---\nstate: built\ndate: 2026-11-26\n{extra}---\n")).unwrap()
+    }
+
+    /// `specs/140` AC-9: on a branch that changes `retrieval.rs` the check fails without `eval_before` and `eval_after`, passes with
+    /// them and gives the comparison, and passes with `eval_waived`; on a branch that touches no listed path it does not ask.
+    #[test]
+    fn ac9_a_retrieval_change_needs_two_runs_or_a_waiver_and_another_change_is_not_asked() {
+        let home = tempfile::tempdir().unwrap();
+        let file = format!("{}/140/E.md", tracker::DIR);
+        let mut sys = crate::finisher_gates::SystemRunner;
+        let t = branch_changing("crates/delphi-engine/src/retrieval.rs");
+        let missing = retrieval_check(t.path(), home.path(), Some(&slice_with("")), &file, &mut sys);
+        let RetrievalCheck::Missing { paths, why } = &missing else { panic!("{missing:?}") };
+        assert_eq!(paths, &vec!["crates/delphi-engine/src/retrieval.rs".to_string()]);
+        assert!(why.contains("delphi kb eval run --label before") && why.contains("eval_before: <stamp>") && why.contains("eval_waived: <reason>") && why.contains(&file), "{why}");
+        assert!(matches!(retrieval_check(t.path(), home.path(), None, &file, &mut sys), RetrievalCheck::Missing { .. }), "no tracker file is the same as no runs");
+        // Two runs on one set: compared, numbers only.
+        run_file(home.path(), "20261126T010000Z", 1, 0.90);
+        run_file(home.path(), "20261126T020000Z", 1, 0.93);
+        let both = slice_with("eval_before: 20261126T010000Z\neval_after: 20261126T020000Z\n");
+        let compared = retrieval_check(t.path(), home.path(), Some(&both), &file, &mut sys);
+        let RetrievalCheck::Compared { text, .. } = &compared else { panic!("{compared:?}") };
+        assert!(text.contains("ndcg10    0.9000 -> 0.9300 (+0.0300)"), "{text}");
+        assert!(compared.body().contains("## Retrieval change") && compared.body().contains(text.as_str()));
+        // Runs on two set versions are not a before and an after.
+        run_file(home.path(), "20261126T030000Z", 2, 0.95);
+        let apart = slice_with("eval_before: 20261126T010000Z\neval_after: 20261126T030000Z\n");
+        let refused = retrieval_check(t.path(), home.path(), Some(&apart), &file, &mut sys);
+        assert!(matches!(&refused, RetrievalCheck::Missing { why, .. } if why.contains("different golden sets")), "{refused:?}");
+        // A waiver passes, and the body says why.
+        let waived = retrieval_check(t.path(), home.path(), Some(&slice_with("eval_waived: a comment only\n")), &file, &mut sys);
+        assert!(matches!(&waived, RetrievalCheck::Waived { reason, .. } if reason == "a comment only"), "{waived:?}");
+        assert!(waived.body().contains("Eval waived: a comment only"));
+        // A branch that changes no listed path is not asked, whatever its tracker file says.
+        let other = branch_changing("crates/delphi-engine/src/kb_eval.rs");
+        assert_eq!(retrieval_check(other.path(), home.path(), None, &file, &mut sys), RetrievalCheck::NotTouched);
+        assert_eq!(RetrievalCheck::NotTouched.body(), "");
+    }
+
+    /// AC-9 through `forge finish`: the finding is printed with the command to run, and the comparison reaches the body.
+    #[test]
+    fn ac9_forge_finish_prints_the_retrieval_finding_and_puts_the_comparison_in_the_body() {
+        let home = tempfile::tempdir().unwrap();
+        let t = branch_changing("crates/delphi-engine/src/retrieval.rs");
+        let f = t.path().join(tracker::DIR).join("140/E.md");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(&f, "---\nstate: built\ndate: 2026-11-26\ntitle: the warm-up\n---\n").unwrap();
+        let finish = || finish_with(&FinishReq { repo: t.path(), home: home.path(), check: false, spec: Some("140"), slice: Some("E"), body: true, gates: false, fast_only: false, now: 1_795_000_000 }, &mut crate::finisher_gates::SystemRunner);
+        let o = finish();
+        assert!(o.code != 0 && o.out.contains("retrieval: a retrieval change without a before-and-after run"), "{} / {}", o.out, o.err);
+        assert!(o.err.contains("finding: this branch changes retrieval (crates/delphi-engine/src/retrieval.rs)"), "{}", o.err);
+        run_file(home.path(), "20261126T010000Z", 1, 0.90);
+        run_file(home.path(), "20261126T020000Z", 1, 0.91);
+        fs::write(&f, "---\nstate: built\ndate: 2026-11-26\ntitle: the warm-up\neval_before: 20261126T010000Z\neval_after: 20261126T020000Z\n---\n").unwrap();
+        let o = finish();
+        assert!(!o.err.contains("finding: this branch changes retrieval") && o.out.contains("## Retrieval change (specs/140 §2.4)") && o.out.contains("ndcg10    0.9000 -> 0.9100"), "{} / {}", o.out, o.err);
     }
 
     #[test]
