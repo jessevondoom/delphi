@@ -44,6 +44,8 @@ pub const EMBED_FORMAT: &str = "1";
 const EMBED_BATCH: usize = 16;
 /// How many nearest windows the vector ranking looks at before duplicates and visibility are applied.
 const VEC_CANDIDATES: usize = 120;
+/// The most results a search returns unless `SearchOpts::cap` says otherwise (`specs/140` §2.2 item 4).
+pub const SEARCH_CAP: usize = 10;
 /// Default weight of the vector ranking in the fusion (`specs/004` §3.4); each lexical ranking weighs 1.0, definitions 2.0.
 const VEC_WEIGHT: f64 = 3.0;
 /// Default factor on the keyword rankings when the query is a sentence (`is_natural_question`).
@@ -1617,12 +1619,15 @@ impl Kb {
 
     /// Chunks nearest the query, best first, each once, with cosine similarity at or above the model's floor.
     /// Visibility is decided by `allowed` (the same filter the lexical rankings use), not by the vector table.
-    fn vector_ranked(&self, query: &str, opts: &SearchOpts, allowed: &str) -> Result<Vec<(i64, f32)>, KbError> {
+    fn vector_ranked(&self, query: &str, opts: &SearchOpts, allowed: &str, stages: &mut Stages) -> Result<Vec<(i64, f32)>, KbError> {
         let Some(model) = &self.embedder else { return Ok(vec![]) };
         if !has_vec(&self.conn) {
             return Ok(vec![]);
         }
-        let Ok(q) = model.embed_query(query) else { return Ok(vec![]) };
+        let t = std::time::Instant::now();
+        let embedded = model.embed_query(query);
+        stages.embed = t.elapsed();
+        let Ok(q) = embedded else { return Ok(vec![]) };
         let mut sql = format!("SELECT rowid, distance FROM kb_vec WHERE embedding MATCH ?1 AND k = {}", VEC_CANDIDATES);
         if !opts.include_untrusted {
             sql.push_str(" AND trusted = 1");
@@ -1661,6 +1666,9 @@ pub struct SearchOpts {
     /// The calling agent's role: `memory/agents/<role>/` is visible only to it. `None` is the operator.
     pub role: Option<String>,
     pub limit: usize,
+    /// The most results any search returns, whatever `limit` asks: [`SEARCH_CAP`] by default; only the golden-set eval sets it
+    /// higher (`specs/140` §2.2 item 4).
+    pub cap: usize,
     /// Include documents whose provenance is untrusted or federated-peer, and inactive ones.
     pub include_untrusted: bool,
     /// Include `kind: attributed` records, which are otherwise never returned (`specs/040` §24.3).
@@ -1783,6 +1791,23 @@ pub struct SharedResearch {
     pub identifiers: Vec<String>,
 }
 
+/// How long each stage of one search took (`specs/140` §2.5): the query's embedding, the nearest-neighbour search, the keyword
+/// rankings, and the whole search; what is left of `search` is fusion and assembling the results.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Stages {
+    pub embed: std::time::Duration,
+    pub vector: std::time::Duration,
+    pub lexical: std::time::Duration,
+    pub search: std::time::Duration,
+}
+
+impl Stages {
+    /// Fusion, ranking terms and assembling the hits: the search's time that no other stage accounts for.
+    pub fn fusion(&self) -> std::time::Duration {
+        self.search.saturating_sub(self.embed + self.vector + self.lexical)
+    }
+}
+
 /// What a search found: the hits, the best score the reranker gave (when it ran), and how many results of another project were
 /// withheld because they name one of the workspace's privacy identifiers (`specs/115` §3 item 6).
 #[derive(Debug, Clone, Default)]
@@ -1865,7 +1890,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None, provisional: ProvisionalView::Off, automatic: false, ranking: Ranking::default() }
+        SearchOpts { role: None, limit: 10, cap: SEARCH_CAP, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None, provisional: ProvisionalView::Off, automatic: false, ranking: Ranking::default() }
     }
 }
 
@@ -2004,6 +2029,23 @@ impl Kb {
         ).ok()
     }
 
+    /// Every document the index holds, `(logical path, zone)`, in path order (`specs/140` §2.1: the golden set is built from them).
+    pub fn document_zones(&self) -> Vec<(String, String)> {
+        let Ok(mut st) = self.conn.prepare("SELECT rel_path, zone FROM kb_documents ORDER BY rel_path") else { return Vec::new() };
+        st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// The chunks of one document, `(start line, end line, heading path)`, in order.
+    pub fn chunk_spans(&self, rel_path: &str) -> Vec<(usize, usize, String)> {
+        let Ok(mut st) = self.conn.prepare("SELECT start_line, end_line, heading_path FROM kb_chunks WHERE rel_path = ?1 ORDER BY start_line, chunk_id") else { return Vec::new() };
+        st.query_map([rel_path], |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as usize, r.get::<_, String>(2)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// The tier the index computed for a document.
+    pub fn document_tier(&self, rel_path: &str) -> Option<String> {
+        self.conn.query_row("SELECT source_type FROM kb_documents WHERE rel_path = ?1", [rel_path], |r| r.get(0)).ok()
+    }
+
     /// `search`, and the best score the reranker gave any result it read (`None` when it did not run).
     pub fn search_scored(&self, query: &str, opts: &SearchOpts) -> Result<(Vec<Hit>, Option<f32>), KbError> {
         self.search_found(query, opts).map(|f| (f.hits, f.best_rerank))
@@ -2011,13 +2053,28 @@ impl Kb {
 
     /// `search_scored`, and how many results of another project were withheld for naming a privacy identifier (`specs/115` §3 item 6).
     pub fn search_found(&self, query: &str, opts: &SearchOpts) -> Result<Found, KbError> {
+        self.search_staged(query, opts, &mut Stages::default())
+    }
+
+    /// `search_found`, with the time each stage took written to `stages` (`specs/140` §2.5).
+    pub fn search_staged(&self, query: &str, opts: &SearchOpts, stages: &mut Stages) -> Result<Found, KbError> {
+        let started = std::time::Instant::now();
+        let found = self.search_inner(query, opts, stages);
+        stages.search = started.elapsed();
+        found
+    }
+
+    fn search_inner(&self, query: &str, opts: &SearchOpts, stages: &mut Stages) -> Result<Found, KbError> {
         let terms = match_terms(query);
         if terms.is_empty() {
             return Ok(Found::default());
         }
         let allowed = allowed_sql(opts);
         let mut score: HashMap<i64, f64> = HashMap::new();
-        let nearest = if opts.legs != Legs::LexicalOnly { self.vector_ranked(query, opts, &allowed)? } else { vec![] };
+        let t = std::time::Instant::now();
+        let nearest = if opts.legs != Legs::LexicalOnly { self.vector_ranked(query, opts, &allowed, stages)? } else { vec![] };
+        stages.vector = t.elapsed().saturating_sub(stages.embed);
+        let t = std::time::Instant::now();
         if opts.legs != Legs::VectorOnly {
             // Precise first (every term), then any term, so a long question still finds something.
             let mut ident = Vec::new();
@@ -2052,6 +2109,7 @@ impl Kb {
                 *score.entry(*id).or_default() += factor / (RRF_K + r as f64 + 1.0);
             }
         }
+        stages.lexical = t.elapsed();
         for (r, (id, _)) in nearest.iter().enumerate() {
             *score.entry(*id).or_default() += opts.vec_weight / (RRF_K + r as f64 + 1.0);
         }
@@ -2148,7 +2206,7 @@ impl Kb {
         let mut readiness: HashMap<String, Option<String>> = HashMap::new();
         let mut episodes = 0usize;
         for (id, s) in order.into_iter() {
-            if hits.len() >= opts.limit.min(10) {
+            if hits.len() >= opts.limit.min(opts.cap) {
                 break;
             }
             if let Some(cap) = opts.max_episodes.filter(|_| opts.include_staged) {
