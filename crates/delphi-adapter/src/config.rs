@@ -709,6 +709,66 @@ pub struct BridgeConfig {
     pub claude_credential: Option<String>,
     /// `[bridge.limits]` (`specs/143` §2.3 item 6): what one credential may spend through the bridge.
     pub limits: BridgeLimits,
+    /// `[bridge.jobs]` (`specs/143` §2.8 item 4): for each job, whether its bridged calls run by themselves, only by hand, or not.
+    pub jobs: BridgeJobs,
+}
+
+/// A job's mode through the bridge (`specs/143` §2.8 item 4). It governs bridged calls only: a job an API endpoint serves is governed
+/// by its own switches, and where one of those says no this mode cannot say yes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum JobMode {
+    /// Runs by itself while the daemon is idle, within every limit, and by hand.
+    #[default]
+    Auto,
+    /// Runs only when the operator starts it.
+    Manual,
+    /// Does not run through a harness at all; its command says so.
+    Off,
+}
+
+impl JobMode {
+    pub fn parse(s: &str) -> Option<JobMode> {
+        match s {
+            "auto" => Some(JobMode::Auto),
+            "manual" => Some(JobMode::Manual),
+            "off" => Some(JobMode::Off),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JobMode::Auto => "auto",
+            JobMode::Manual => "manual",
+            JobMode::Off => "off",
+        }
+    }
+}
+
+/// `[bridge.jobs]` (`specs/143` §2.8 item 4): one mode for each job the bridge can serve. Every one is `auto` unless set.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BridgeJobs {
+    pub pages: JobMode,
+    pub summaries: JobMode,
+    pub validation: JobMode,
+    pub session_summaries: JobMode,
+    pub consolidation: JobMode,
+}
+
+impl BridgeJobs {
+    /// The keys of the table, in its order.
+    pub const KEYS: [&'static str; 5] = ["pages", "summaries", "validation", "session_summaries", "consolidation"];
+
+    fn slot(&mut self, key: &str) -> Option<&mut JobMode> {
+        match key {
+            "pages" => Some(&mut self.pages),
+            "summaries" => Some(&mut self.summaries),
+            "validation" => Some(&mut self.validation),
+            "session_summaries" => Some(&mut self.session_summaries),
+            "consolidation" => Some(&mut self.consolidation),
+            _ => None,
+        }
+    }
 }
 
 /// `[bridge.limits]` (`specs/143` §2.3 item 6), for each credential. Guesses until a week of use shows what a subscription allows.
@@ -1684,6 +1744,16 @@ impl Config {
             }
             for key in l.keys().filter(|k| !["window_hours", "window_calls", "window_tokens", "daily_calls", "daily_tokens", "ceiling_factor", "idle_share"].contains(&k.as_str())) {
                 errs.push(format!("[bridge.limits] has no key `{key}`"));
+            }
+        }
+        if let Some(j) = root.get("bridge").and_then(|b| b.get("jobs")).and_then(|j| j.as_table()) {
+            for (key, v) in j {
+                let mode = v.as_str().and_then(JobMode::parse);
+                match (cfg.bridge.jobs.slot(key), mode) {
+                    (Some(slot), Some(m)) => *slot = m,
+                    (Some(_), None) => errs.push(format!("[bridge.jobs] {key} must be \"auto\", \"manual\" or \"off\"")),
+                    (None, _) => errs.push(format!("[bridge.jobs] has no key `{key}` (expected {})", BridgeJobs::KEYS.join(", "))),
+                }
             }
         }
         if let Some(r) = root.get("routing").and_then(|r| r.as_table()) {
@@ -2883,5 +2953,23 @@ tools = { search = "read", note = "draft", send = "write" }
             assert!(errs.contains("[handling]"), "{bad}: {errs}");
             assert_eq!(HandlingConfig::read(bad), HandlingConfig::default(), "{bad}: a broken table configures nothing");
         }
+    }
+}
+
+#[cfg(test)]
+mod bridge_jobs_tests {
+    use super::*;
+
+    // `specs/143` §2.8 item 4: every job is `auto` unless set; each takes auto, manual or off; another value or another key is refused.
+    #[test]
+    fn bridge_jobs_default_to_auto_and_take_only_their_three_modes() {
+        assert_eq!(Config::parse("").unwrap().bridge.jobs, BridgeJobs::default());
+        assert_eq!(BridgeJobs::default().pages, JobMode::Auto);
+        let c = Config::parse("[bridge.jobs]\npages = \"manual\"\nconsolidation = \"off\"\n").unwrap();
+        assert_eq!((c.bridge.jobs.pages, c.bridge.jobs.consolidation, c.bridge.jobs.summaries), (JobMode::Manual, JobMode::Off, JobMode::Auto));
+        let e = Config::parse("[bridge.jobs]\npages = \"sometimes\"\n").unwrap_err().join("; ");
+        assert!(e.contains("[bridge.jobs] pages must be"), "{e}");
+        let e = Config::parse("[bridge.jobs]\nwriting = \"auto\"\n").unwrap_err().join("; ");
+        assert!(e.contains("has no key `writing`"), "{e}");
     }
 }

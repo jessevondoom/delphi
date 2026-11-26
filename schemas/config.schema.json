@@ -358,6 +358,18 @@
             "idle_share": { "type": "number", "minimum": 0, "maximum": 1, "description": "The share of the window and of the daily cap that jobs nobody started may use. Default 0.5." }
           }
         },
+        "jobs": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "For each job the bridge can serve, whether its bridged calls run by themselves (auto), only when you start them (manual), or not at all through a harness (off) (specs/143 section 2.8). It governs bridged calls only; a job an API endpoint serves keeps its own switches. Each is auto unless set.",
+          "properties": {
+            "pages": { "enum": ["auto", "manual", "off"] },
+            "summaries": { "enum": ["auto", "manual", "off"] },
+            "validation": { "enum": ["auto", "manual", "off"] },
+            "session_summaries": { "enum": ["auto", "manual", "off"] },
+            "consolidation": { "enum": ["auto", "manual", "off"] }
+          }
+        },
         "claude": {
           "type": "object",
           "additionalProperties": false,

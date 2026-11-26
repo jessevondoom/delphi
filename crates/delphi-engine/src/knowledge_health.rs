@@ -37,6 +37,9 @@ pub struct Health {
     pub pages_due: usize,
     /// The newest idle rebuild failed and none has run since (`specs/143` §2.7 item 3): the cause code and the day it was first seen.
     pub pages_failed: Option<(String, String)>,
+    /// `[bridge.jobs] pages`, when it is not `auto` and the pages would be written through the bridge (every allowed endpoint is a
+    /// harness): due pages then wait for the operator, or are off (`specs/143` §2.8 item 5).
+    pub pages_mode: Option<delphi_adapter::config::JobMode>,
     pub summaries: usize,
     pub summaries_without_source: usize,
     pub staged: usize,
@@ -95,6 +98,15 @@ fn rules_in(path: &Path) -> usize {
     std::fs::read_to_string(path).map(|t| crate::workspace::rule_ids(crate::workspace::split_frontmatter(&t).1).len()).unwrap_or(0)
 }
 
+/// A job's `[bridge.jobs]` mode, when it is not `auto` and the job's calls would go through the bridge: the workspace's every allowed
+/// endpoint is a harness. `None` otherwise, and when `config.toml` cannot be read.
+fn bridged_mode(ws_dir: &Path, pick: impl Fn(&delphi_adapter::config::BridgeJobs) -> delphi_adapter::config::JobMode) -> Option<delphi_adapter::config::JobMode> {
+    use delphi_adapter::config::{AccessPath, Config, JobMode};
+    let cfg = Config::parse(&std::fs::read_to_string(ws_dir.join("config.toml")).ok()?).ok()?;
+    let bridged = !cfg.endpoints.is_empty() && !cfg.endpoints.iter().any(|e| e.path != AccessPath::Harness && cfg.is_allowed(&e.id));
+    Some(pick(&cfg.bridge.jobs)).filter(|m| bridged && *m != JobMode::Auto)
+}
+
 /// Count everything. `now` is Unix seconds. Reads only.
 pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
     let mut h = Health { date: day_of(now), ..Health::default() };
@@ -125,6 +137,7 @@ pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
     // A read for a reader: the index is not opened, so nothing is written.
     h.pages_due = lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(ws_dir), now: now.max(0) as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
     h.pages_failed = crate::daemon_notice::last_failure(ws_dir, crate::daemon_notice::Job::Pages).map(|(c, since)| (c.code().to_string(), since));
+    h.pages_mode = bridged_mode(ws_dir, |j| j.pages);
 
     // Imported summary pages and their bibliographies (`specs/068`).
     let summaries = ws_dir.join(crate::kb_import::DIR);
@@ -200,6 +213,9 @@ impl Health {
         if let Some((cause, since)) = &self.pages_failed {
             o.insert("pages_idle_rebuild".into(), json!({"due": self.pages_due, "failed": cause, "since": since}));
         }
+        if let Some(mode) = self.pages_mode {
+            o.insert("pages_bridged".into(), json!({"due": self.pages_due, "mode": mode.as_str()}));
+        }
         o.insert("summaries".into(), json!({"total": self.summaries, "no_source": self.summaries_without_source}));
         o.insert("staged_notes".into(), json!({"waiting": self.staged, "oldest": self.staged_oldest}));
         o.insert("lessons".into(), json!(self.lessons));
@@ -257,6 +273,13 @@ impl Health {
         }
 
         out.push(if self.pages == 0 { stalled("0 pages: no page has been built from the library. See delphi pages search \"<question>\".".into()) } else { fact(format!("{} pages", self.pages)) });
+        // `specs/143` §2.8 item 5: a job kept by hand, or off, is not a failure; its due pages wait for the operator.
+        if let (Some(mode), true) = (self.pages_mode, self.pages_due > 0) {
+            out.push(stalled(match mode {
+                delphi_adapter::config::JobMode::Off => format!("pages: {} due, off: [bridge.jobs] pages = \"off\", so no page is written through the bridge. See delphi help bridge.", self.pages_due),
+                _ => format!("pages: {} due, waiting for the operator: [bridge.jobs] pages = \"manual\". See delphi pages rebuild --due.", self.pages_due),
+            }));
+        }
         // `specs/143` §2.7 item 3: the newest idle rebuild failed. The cause is a fixed code; no page or claim text is in the line.
         if let Some((cause, since)) = self.pages_failed.as_ref().and_then(|(c, s)| crate::daemon_notice::Cause::parse(c).map(|c| (c, s))) {
             out.push(stalled(format!("{}. See delphi doctor.", crate::daemon_notice::pages_health_line(self.pages_due, cause, since))));
@@ -480,6 +503,31 @@ mod tests {
     }
 
     // It must never create the Delphi home, and a home with nothing in it is a set of zeros, not an error.
+    // `specs/143` §2.8 item 5: a bridged job kept by hand or off is not a failure; `kb health` says the due pages wait for the
+    // operator, or are off, and names the command or the key. The mode counts only where every allowed endpoint is a harness.
+    #[test]
+    fn due_pages_of_a_manual_or_off_job_wait_for_the_operator() {
+        use delphi_adapter::config::JobMode;
+        let t = tempfile::tempdir().unwrap();
+        let ws = t.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let harness_only = crate::testkit::harness_only_config();
+        std::fs::write(ws.join("config.toml"), format!("{harness_only}[bridge.jobs]\npages = \"manual\"\n")).unwrap();
+        assert_eq!(bridged_mode(&ws, |j| j.pages), Some(JobMode::Manual));
+        assert_eq!(bridged_mode(&ws, |j| j.summaries), None, "auto says nothing");
+        std::fs::write(ws.join("config.toml"), format!("{}[bridge.jobs]\npages = \"manual\"\n", crate::testkit::CONFIG)).unwrap();
+        assert_eq!(bridged_mode(&ws, |j| j.pages), None, "an API endpoint serves the pages: the bridge's mode does not apply");
+
+        let h = Health { pages: 3, pages_due: 2, pages_mode: Some(JobMode::Manual), ..Health::default() };
+        let lines: Vec<String> = h.lines(NOW).into_iter().map(|l| l.text).filter(|l| l.starts_with("pages:")).collect();
+        assert_eq!(lines, vec!["pages: 2 due, waiting for the operator: [bridge.jobs] pages = \"manual\". See delphi pages rebuild --due.".to_string()]);
+        let off = Health { pages_mode: Some(JobMode::Off), ..h.clone() };
+        assert!(off.lines(NOW).iter().any(|l| l.text.starts_with("pages: 2 due, off: [bridge.jobs] pages = \"off\"")));
+        assert_eq!(off.to_json()["pages_bridged"], json!({"due": 2, "mode": "off"}));
+        let none_due = Health { pages_due: 0, ..h };
+        assert!(!none_due.lines(NOW).iter().any(|l| l.text.starts_with("pages:")), "nothing due, nothing to say");
+    }
+
     #[test]
     fn nothing_is_created_and_an_empty_or_missing_home_is_all_zeros() {
         let t = tempfile::tempdir().unwrap();

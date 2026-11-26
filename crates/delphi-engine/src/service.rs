@@ -407,6 +407,13 @@ async fn blocking_read(f: impl FnOnce() -> Result<Value, String> + Send + 'stati
     tokio::task::spawn_blocking(f).await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(code::NOT_FOUND, e))
 }
 
+/// What a page rebuild the operator asked for says when `[bridge.jobs] pages = "off"` (`specs/143` §2.8 item 4).
+pub const PAGES_OFF: &str = "[bridge.jobs] pages = \"off\": no page is written through the bridge. Set it to \"manual\" or \"auto\" in config.toml to allow it";
+/// The start of what a job the operator asked for says past a limit that the typed confirmation passes (`specs/143` §2.8 item 3).
+pub const LIMIT: &str = "the bridge's limit is reached (the rolling window, the daily cap or the job's weekly budget)";
+/// The start of what it says past the ceiling, which nothing passes.
+pub const CEILING: &str = "the bridge's ceiling for today is reached";
+
 fn need_console(ctx: &CallContext) -> Result<(), RpcError> {
     if ctx.scope == Scope::Console {
         Ok(())
@@ -3744,11 +3751,63 @@ impl EngineService {
     }
 
     /// `pages.rebuild`: the operator rebuilds one topic's page now (`specs/117` §2 item 2). Console only; it calls the writer and the validator.
-    async fn pages_rebuild(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+    /// `bridge.preflight {job}` (`specs/143` §2.8 item 3): what a job the operator starts would meet at the bridge now. Reads only.
+    fn bridge_preflight(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_console(&ctx)?;
-        let slug = p["slug"].as_str().unwrap_or("").to_string();
-        let e = self.engine.clone().topic_rebuild(&slug).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
-        Ok(e.to_json())
+        let job = p["job"].as_str().and_then(crate::daemon_notice::Job::parse).ok_or_else(|| err(code::INVALID_PARAMS, "job must be one of pages, summaries, validation, session_summaries, consolidation"))?;
+        let key = match job {
+            crate::daemon_notice::Job::Pages => self.engine.writer_key(),
+            _ => self.engine.scout_key(),
+        };
+        Ok(self.engine.bridge_preflight(job, key.as_ref()).to_json())
+    }
+
+    /// `pages.rebuild {slug | due | all, confirmed}` (`specs/117` §2 item 2, `specs/143` §2.8): the operator's rebuild, as the job
+    /// `pages` with the origin `command`, or `confirmed`. A job that is `off` through the bridge is refused and says why; past a limit
+    /// it is refused unless `confirmed`; past the ceiling always. `due` and `all` rebuild one topic after another and stop at the
+    /// first limit.
+    async fn pages_rebuild(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::summary::Preflight;
+        need_console(&ctx)?;
+        let confirmed = p["confirmed"].as_bool().unwrap_or(false);
+        let job = crate::daemon_notice::Job::Pages;
+        let stop = |pf: Preflight| -> Option<String> {
+            match pf {
+                Preflight::Off => Some(PAGES_OFF.to_string()),
+                Preflight::Ceiling(_) => Some(format!("{CEILING}: no page is written through it until tomorrow (UTC)")),
+                Preflight::Confirmable(_) if !confirmed => Some(format!("{LIMIT}: run the command at a terminal to confirm passing it")),
+                _ => None,
+            }
+        };
+        if let Some(why) = stop(self.engine.bridge_preflight(job, self.engine.writer_key().as_ref())) {
+            return Err(err(code::INVALID_PARAMS, why));
+        }
+        let many = p["due"].as_bool().unwrap_or(false) || p["all"].as_bool().unwrap_or(false);
+        if !many {
+            let slug = p["slug"].as_str().unwrap_or("").to_string();
+            let e = crate::daemon_notice::in_command(job, confirmed, self.engine.clone().topic_rebuild(&slug)).await.map_err(|e| err(code::INVALID_PARAMS, e))?;
+            return Ok(e.to_json());
+        }
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let now = (self.engine.clock_unix)().max(0) as u64;
+        let slugs: Vec<String> = lib
+            .topic_pages(&crate::library::topics::DueCtx { ws: Some(&self.engine.ws.dir), now, index: true })
+            .into_iter()
+            .filter(|t| p["all"].as_bool().unwrap_or(false) || t.due.is_some())
+            .map(|t| t.slug)
+            .collect();
+        let (mut built, mut failed, mut stopped) = (Vec::new(), Vec::new(), None);
+        for slug in &slugs {
+            if let Some(why) = stop(self.engine.bridge_preflight(job, self.engine.writer_key().as_ref())) {
+                stopped = Some(why);
+                break;
+            }
+            match crate::daemon_notice::in_command(job, confirmed, self.engine.clone().topic_rebuild(slug)).await {
+                Ok(e) => built.push(e.to_json()),
+                Err(e) => failed.push(json!({"slug": slug, "error": e})),
+            }
+        }
+        Ok(json!({"topics": slugs.len(), "built": built, "failed": failed, "stopped": stopped}))
     }
 
     async fn pages_pin(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -5580,6 +5639,7 @@ impl Extension for ServiceExt {
                 "pages.open" => svc.pages_open(params, ctx).await,
                 "pages.pin" => svc.pages_pin(params, ctx).await,
                 "pages.rebuild" => svc.pages_rebuild(params, ctx).await,
+                "bridge.preflight" => svc.bridge_preflight(params, ctx),
                 "pages.get" => svc.pages_get(params, ctx).await,
                 "pages.versions" => svc.pages_versions(params, ctx).await,
                 "pages.links" => svc.pages_links(params, ctx).await,
@@ -5839,6 +5899,90 @@ mod tests {
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].payload, json!({"cause": "budget", "job": "pages", "key": null}));
         assert!(!rec.join("args.txt").exists() && due() == 1 && fs::read(lib.root().join("pages/tide-tables.md")).is_err(), "nothing started, nothing written, still due");
+    }
+
+    // `specs/143` AC-20 and §2.8 items 4 and 5: with `[bridge.jobs] pages = "manual"` a due topic is not rebuilt at idle, raises no
+    // notice and shows as waiting for the operator; `pages.rebuild {due}` rebuilds it as a command. With `off` the command refuses and
+    // says why, and nothing is launched.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_manual_job_waits_for_the_operator_and_an_off_job_is_refused_with_its_reason() {
+        use crate::harness_single::tests::{answers, recording_cli};
+        let d = tempfile::tempdir().unwrap();
+        let rec = d.path().join("rec");
+        let f = crate::summary::tests::bridged(&recording_cli(d.path(), &rec, &answers("a page")), true);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let set_mode = |m: delphi_adapter::config::JobMode| {
+            let mut c = (*f.engine.cfg.get()).clone();
+            c.bridge.jobs.pages = m;
+            f.engine.cfg.set(c);
+        };
+        set_mode(delphi_adapter::config::JobMode::Manual);
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        topic_with_material(&f, "Tide tables");
+        f.advance(crate::job_admission::PAUSE_SECS);
+        let now = (f.engine.clock_unix)();
+        let due = || lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(&f.engine.ws.dir), now: now as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
+
+        svc.topic_idle_rebuild_noticed().await;
+        svc.notices_tick().await;
+        assert!(events_of(&f, "daemon.notice").is_empty() && !rec.join("args.txt").exists() && due() == 1, "manual: nothing at idle, nothing said, still due");
+        let console = || CallContext { scope: Scope::Console, client_id: 0 };
+        assert_eq!(svc.bridge_preflight(json!({"job": "pages"}), console()).unwrap()["admission"], "admit");
+
+        // Off: refused, with the reason, before anything runs.
+        set_mode(delphi_adapter::config::JobMode::Off);
+        assert_eq!(svc.bridge_preflight(json!({"job": "pages"}), console()).unwrap()["admission"], "off");
+        let e = svc.pages_rebuild(json!({"due": true}), console()).await.unwrap_err();
+        assert!(format!("{e:?}").contains("[bridge.jobs] pages"), "{e:?}");
+        assert!(!rec.join("args.txt").exists(), "nothing was launched");
+
+        // Manual again: the operator's command rebuilds the due topic through the bridge.
+        set_mode(delphi_adapter::config::JobMode::Manual);
+        let v = svc.pages_rebuild(json!({"due": true}), console()).await.unwrap();
+        assert_eq!((v["topics"].as_u64(), v["built"].as_array().map(Vec::len), v["stopped"].is_null()), (Some(1), Some(1), true), "{v}");
+        assert!(rec.join("args.txt").exists(), "the writer ran through the bridge");
+        let calls = crate::job_admission::Ledger::in_home(&f.engine.ws.home).calls();
+        assert!(calls.iter().all(|c| c.job == Some(crate::daemon_notice::Job::Pages) && c.origin == crate::job_admission::Origin::Command), "{calls:?}");
+        assert!(events_of(&f, "daemon.notice").is_empty());
+    }
+
+    // `specs/143` AC-16 and AC-19, the daemon's half: past the daily cap a command's preflight is `confirm` with the day's usage, and
+    // `pages.rebuild` without `confirmed` is refused before anything runs; past the ceiling it is `ceiling`, confirmed or not.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn past_the_daily_cap_a_command_needs_the_confirmation_and_past_the_ceiling_nothing_runs() {
+        use crate::harness_single::tests::{answers, recording_cli};
+        use crate::job_admission::{credential_id, Call, Ledger, Origin};
+        let d = tempfile::tempdir().unwrap();
+        let rec = d.path().join("rec");
+        let f = crate::summary::tests::bridged(&recording_cli(d.path(), &rec, &answers("a page")), true);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        topic_with_material(&f, "Tide tables");
+        let console = || CallContext { scope: Scope::Console, client_id: 0 };
+        let cred = credential_id(f.engine.cfg.get().bridge.claude_credential.as_deref().unwrap());
+        let ledger = Ledger::in_home(&f.engine.ws.home);
+        let now = (f.engine.clock_unix)();
+        let daily = f.engine.cfg.get().bridge.limits.daily_calls;
+        let fill = |from: u64, to: u64| {
+            for k in from..to {
+                // Spread over the day so the rolling window is not what refuses.
+                ledger.start(&Call { id: format!("x{k}"), at: now - now.rem_euclid(86_400) + 1, job: None, origin: Origin::Command, credential: cred.clone(), endpoint: "claude-sub".into(), tokens: 1, outcome: Some("ok".into()) });
+            }
+        };
+        fill(0, daily);
+        let pre = svc.bridge_preflight(json!({"job": "pages"}), console()).unwrap();
+        assert_eq!(pre["admission"], "confirm", "{pre}");
+        assert_eq!(pre["usage"]["calls_today"].as_u64(), Some(daily));
+        let e = svc.pages_rebuild(json!({"slug": "tide-tables"}), console()).await.unwrap_err();
+        assert!(format!("{e:?}").contains(super::LIMIT), "{e:?}");
+        assert!(!rec.join("args.txt").exists());
+
+        fill(daily, daily * f.engine.cfg.get().bridge.limits.ceiling_factor);
+        assert_eq!(svc.bridge_preflight(json!({"job": "pages"}), console()).unwrap()["admission"], "ceiling");
+        let e = svc.pages_rebuild(json!({"slug": "tide-tables", "confirmed": true}), console()).await.unwrap_err();
+        assert!(format!("{e:?}").contains(super::CEILING), "{e:?}");
+        assert!(!rec.join("args.txt").exists(), "nothing passes the ceiling");
     }
 
     // `specs/143` §2.3 item 7: a host tool call over MCP is a sign of the operator at work, on a host with no hook installed too.

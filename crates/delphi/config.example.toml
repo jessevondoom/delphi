@@ -548,8 +548,8 @@ default_peer_trust_ceiling = "federated_peer"
 # scopes = ["llm.invoke"]
 
 # ── The single-turn bridge (specs/143): where the subscription token for single calls through `claude` is kept. A reference,
-# never the token: make the token with `claude setup-token`, put it in your keychain (service `delphi`, account `bridge-claude`),
-# and name it here. Without it a `claude` harness serves no single call. The bridge spends your own subscription quota.
+# never the token: `delphi bridge setup claude` asks you to make the token with `claude setup-token`, tests it, keeps it in your
+# keychain (service `delphi`, account `bridge-claude`) and names it here. Without it a `claude` harness serves no single call. The bridge spends your own subscription quota.
 # [bridge.claude]
 # credential = "keychain:bridge-claude"
 # What one credential may spend through the bridge. Jobs nobody started get idle_share of the window and of the day, and pause
@@ -562,6 +562,15 @@ default_peer_trust_ceiling = "federated_peer"
 # daily_tokens = 1000000
 # ceiling_factor = 3
 # idle_share = 0.5
+# Which jobs may run through the bridge by themselves. auto: while Delphi is idle, within the limits above, and by hand; manual:
+# only when you start them (`delphi pages rebuild --due`, for example); off: never through a harness, and the command says so.
+# Passing a limit by hand needs a word typed at a terminal; nothing passes the ceiling.
+# [bridge.jobs]
+# pages = "auto"
+# summaries = "auto"
+# validation = "auto"
+# session_summaries = "auto"
+# consolidation = "auto"
 
 # ── Subscription CLIs (specs/020). Nothing here is needed: with no [harness.claude] block, the values shown below ARE the
 # defaults. Delphi's tools (timer, dispatch, scoped files, connectors) reach the Claude CLI over a per-span MCP bridge; for roles

@@ -104,6 +104,10 @@ impl Job {
             Job::Consolidation => "consolidation",
         }
     }
+
+    pub fn parse(code: &str) -> Option<Job> {
+        Job::ALL.into_iter().find(|j| j.code() == code)
+    }
 }
 
 /// One job that could not run. `key` is the configuration key the notice names, when a setting is what stopped the job (the
@@ -164,6 +168,23 @@ pub fn failing_job() -> Option<Job> {
         s.job
     })
     .ok()
+}
+
+tokio::task_local! {
+    /// The job the operator started that the current task runs (`specs/143` §2.8 item 3), and whether its limits were confirmed.
+    static COMMAND: (Job, bool);
+}
+
+/// Run `f` as the job `job`, started by the operator (`specs/143` §2.8 item 3): its bridged calls have the origin `command`, or
+/// `confirmed` when `confirmed` is set, so they are held to that job's mode and weekly budget, need no idle pause and are not held to
+/// the idle share. A failure inside it raises no notice: it is shown where the operator asked.
+pub async fn in_command<F: std::future::Future>(job: Job, confirmed: bool, f: F) -> F::Output {
+    COMMAND.scope((job, confirmed), f).await
+}
+
+/// The job the operator started that the current task runs, and whether its limits were confirmed; `None` outside one.
+pub fn current_command() -> Option<(Job, bool)> {
+    COMMAND.try_with(|c| *c).ok()
 }
 
 /// What [`record`] did.

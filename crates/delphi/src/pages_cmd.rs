@@ -118,8 +118,19 @@ fn expand(home: &Path, ws_dir: &Path, query: &str, as_json: bool) -> i32 {
     }
 }
 
-/// `delphi pages rebuild <slug>`: the daemon rebuilds one topic's page (`specs/117` §2 item 2); it calls the writer and the validator.
-fn rebuild(home: &Path, ws_dir: &Path, slug: &str) -> i32 {
+/// What `delphi pages rebuild` rebuilds.
+pub(crate) enum Target<'a> {
+    Slug(&'a str),
+    Due,
+    All,
+}
+
+/// `delphi pages rebuild <slug> | --due | --all` (`specs/117` §2 item 2, `specs/143` §2.8): the daemon rebuilds topic pages as the job
+/// `pages` started by the operator. Before anything runs it asks the daemon what the job would meet at the bridge: `off` refuses and
+/// says why; past the window, the daily cap or the weekly budget it asks for the typed confirmation (a terminal, no agent seat, the
+/// word typed back), and without it stays within the limits; past the ceiling nothing runs. Exit codes: 0 built · 1 a page failed or
+/// is the claims alone · 2 off or usage · 3 a limit · 4 the daemon could not start.
+fn rebuild(home: &Path, ws_dir: &Path, target: Target<'_>) -> i32 {
     use delphi_core::spawn::{connect_or_spawn, SpawnOptions};
     let Some(exe) = crate::chat::daemon_exe() else {
         eprintln!("delphi pages rebuild: cannot locate this program to start the daemon");
@@ -132,20 +143,78 @@ fn rebuild(home: &Path, ws_dir: &Path, slug: &str) -> i32 {
             return 4;
         }
     };
-    let r = attached.client.call("pages.rebuild", json!({"slug": slug}));
+    let code = rebuild_on(&mut attached.client, target);
     if attached.spawned {
         let _ = attached.client.call("daemon.shutdown", json!({}));
     }
-    match r {
-        Ok(v) => {
-            println!("{} version {} · {} · {}", slug, v["version"], v["outcome"].as_str().unwrap_or(""), v["change"].as_str().unwrap_or(""));
+    code
+}
+
+fn rebuild_on(client: &mut delphi_core::client::Client, target: Target<'_>) -> i32 {
+    let pre = client.call("bridge.preflight", json!({"job": "pages"})).unwrap_or_else(|_| json!({"admission": "admit"}));
+    let mut confirmed = false;
+    match pre["admission"].as_str().unwrap_or("admit") {
+        "off" => {
+            eprintln!("delphi pages rebuild: {}", delphi_engine::service::PAGES_OFF);
+            return 2;
+        }
+        "ceiling" => {
+            eprintln!("delphi pages rebuild: {}; nothing passes it. {}", delphi_engine::service::CEILING, crate::bridge_cmd::usage_line(&pre["usage"]));
+            return 3;
+        }
+        "confirm" => {
+            let what = format!("{}.\n{} Passing it spends more of your subscription's quota.", delphi_engine::service::LIMIT, crate::bridge_cmd::usage_line(&pre["usage"]));
+            if let Err(why) = crate::bridge_cmd::confirm_at_terminal(&what) {
+                eprintln!("delphi pages rebuild: {}", why);
+                return 3;
+            }
+            confirmed = true;
+        }
+        _ => {}
+    }
+    let params = match target {
+        Target::Slug(slug) => json!({"slug": slug, "confirmed": confirmed}),
+        Target::Due => json!({"due": true, "confirmed": confirmed}),
+        Target::All => json!({"all": true, "confirmed": confirmed}),
+    };
+    let passed = |client: &mut delphi_core::client::Client| {
+        if confirmed {
+            if let Ok(p) = client.call("bridge.preflight", json!({"job": "pages"})) {
+                eprintln!("Passed the limit by the confirmation. {}", crate::bridge_cmd::usage_line(&p["usage"]));
+            }
+        }
+    };
+    match (target_is_one(&params), client.call("pages.rebuild", params)) {
+        (true, Ok(v)) => {
+            println!("{} version {} · {} · {}", v["slug"].as_str().unwrap_or(""), v["version"], v["outcome"].as_str().unwrap_or(""), v["change"].as_str().unwrap_or(""));
+            passed(client);
             if v["outcome"] == "claims_only" { 1 } else { 0 }
         }
-        Err(e) => {
+        (false, Ok(v)) => {
+            let built = v["built"].as_array().cloned().unwrap_or_default();
+            for b in &built {
+                println!("{} version {} · {} · {}", b["slug"].as_str().unwrap_or(""), b["version"], b["outcome"].as_str().unwrap_or(""), b["change"].as_str().unwrap_or(""));
+            }
+            for f in v["failed"].as_array().into_iter().flatten() {
+                eprintln!("{}: {}", f["slug"].as_str().unwrap_or(""), f["error"].as_str().unwrap_or(""));
+            }
+            println!("{} of {} topics rebuilt", built.len(), v["topics"]);
+            passed(client);
+            if let Some(why) = v["stopped"].as_str() {
+                eprintln!("delphi pages rebuild: stopped: {}", why);
+                return 3;
+            }
+            if v["failed"].as_array().is_some_and(|f| !f.is_empty()) || built.iter().any(|b| b["outcome"] == "claims_only") { 1 } else { 0 }
+        }
+        (_, Err(e)) => {
             eprintln!("delphi pages rebuild: {}", e);
-            1
+            if e.to_string().contains("[bridge.jobs] pages") { 2 } else { 1 }
         }
     }
+}
+
+fn target_is_one(params: &serde_json::Value) -> bool {
+    params["slug"].is_string()
 }
 
 /// `delphi pages seeds --count` (`specs/139` §4 slice A, AC-17): for each topic, how many spans each row of §2.1 would give its seed, and
@@ -372,9 +441,18 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
             let Some(ws) = ws_dir else { return 4 };
             seeds_count(&lib, home, ws, rest.iter().any(|a| a == "--json"))
         }
-        Some("rebuild") if pos.len() == 1 => {
+        Some("rebuild") => {
             let Some(ws) = ws_dir else { return 4 };
-            rebuild(home, ws, pos[0])
+            let (due, all) = (rest.iter().any(|a| a == "--due"), rest.iter().any(|a| a == "--all"));
+            match (pos.as_slice(), due, all) {
+                ([slug], false, false) => rebuild(home, ws, Target::Slug(slug)),
+                ([], true, false) => rebuild(home, ws, Target::Due),
+                ([], false, true) => rebuild(home, ws, Target::All),
+                _ => {
+                    eprintln!("usage: delphi pages rebuild <slug> | --due | --all");
+                    2
+                }
+            }
         }
         Some("dispute") if pos.len() == 1 => {
             if crate::xenia_terminal::inside_an_agent_seat() {

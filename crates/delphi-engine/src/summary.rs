@@ -132,6 +132,69 @@ pub struct Written {
     pub tier: Tier,
 }
 
+/// What one credential has spent today through the bridge, against the daily cap (`specs/143` §2.3 item 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Usage {
+    pub calls_today: u64,
+    pub tokens_today: u64,
+    pub daily_calls: u64,
+    pub daily_tokens: u64,
+}
+
+/// What a job the operator starts would meet at the bridge ([`crate::engine::Engine::bridge_preflight`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preflight {
+    /// What would serve it is not a harness: the bridge's modes and limits do not apply.
+    NotBridged,
+    /// It would run now.
+    Admit,
+    /// `[bridge.jobs]` says `off` for it.
+    Off,
+    /// The window, the daily cap or the job's weekly budget is reached: only the typed confirmation passes it.
+    Confirmable(Usage),
+    /// The ceiling is reached: nothing passes it.
+    Ceiling(Usage),
+    /// The subscription said its quota is spent.
+    Quota,
+    /// Nothing can serve it: no writer, no token, or its own switch says no.
+    NoRoute,
+}
+
+impl Preflight {
+    /// The word the daemon answers with.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Preflight::NotBridged => "not_bridged",
+            Preflight::Admit => "admit",
+            Preflight::Off => "off",
+            Preflight::Confirmable(_) => "confirm",
+            Preflight::Ceiling(_) => "ceiling",
+            Preflight::Quota => "quota",
+            Preflight::NoRoute => "no_route",
+        }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut v = serde_json::json!({"admission": self.code()});
+        if let Preflight::Confirmable(u) | Preflight::Ceiling(u) = self {
+            v["usage"] = serde_json::json!({"calls_today": u.calls_today, "tokens_today": u.tokens_today, "daily_calls": u.daily_calls, "daily_tokens": u.daily_tokens});
+        }
+        v
+    }
+}
+
+/// A job's `[bridge.jobs]` mode (`specs/143` §2.8 item 4).
+pub fn bridge_job_mode(jobs: &delphi_adapter::config::BridgeJobs, job: crate::daemon_notice::Job) -> delphi_adapter::config::JobMode {
+    use crate::daemon_notice::Job;
+    match job {
+        Job::Pages => jobs.pages,
+        Job::Summaries => jobs.summaries,
+        Job::Validation => jobs.validation,
+        Job::SessionSummaries => jobs.session_summaries,
+        Job::Consolidation => jobs.consolidation,
+    }
+}
+
 /// Why a single call gave no answer (`specs/143` §2.2 item 4). Closed, and one to one with the causes a notice carries
 /// ([`CallError::cause`]). It holds no text: nothing of a prompt, an answer or a provider's message travels in it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -319,17 +382,55 @@ impl Engine {
         adm::job_may_run(job, origin, &adm::credential_id(reference), &inputs)
     }
 
+    /// What a job the operator starts would meet at the bridge now (`specs/143` §2.8 item 3), when `key` is what would serve it.
+    /// Reads only. A command asks this first, so that it can refuse a job that is `off`, and ask for the typed confirmation before
+    /// a limit is passed rather than after.
+    pub fn bridge_preflight(&self, job: crate::daemon_notice::Job, key: Option<&delphi_adapter::config::PoolKey>) -> Preflight {
+        use crate::job_admission::{self as adm, Admission, Origin};
+        let cfg = self.cfg.get();
+        let Some(key) = key else { return Preflight::NoRoute };
+        if !cfg.endpoint(&key.endpoint_id).is_some_and(|e| e.path == delphi_adapter::config::AccessPath::Harness) {
+            return Preflight::NotBridged;
+        }
+        if bridge_job_mode(&cfg.bridge.jobs, job) == delphi_adapter::config::JobMode::Off {
+            return Preflight::Off;
+        }
+        let Some(reference) = cfg.bridge.claude_credential.as_deref() else { return Preflight::NoRoute };
+        let calls = adm::Ledger::in_home(&self.ws.home).calls();
+        let now = (self.clock_unix)();
+        let credential = adm::credential_id(reference);
+        let day_start = now - now.rem_euclid(86_400);
+        let today: Vec<&adm::Call> = calls.iter().filter(|c| c.credential == credential && c.at >= day_start).collect();
+        let usage = Usage { calls_today: today.len() as u64, tokens_today: today.iter().map(|c| c.tokens).sum(), daily_calls: cfg.bridge.limits.daily_calls, daily_tokens: cfg.bridge.limits.daily_tokens };
+        match self.bridge_admission(Some(job), Origin::Command) {
+            Admission::Admit | Admission::Wait(_) => Preflight::Admit,
+            Admission::Refuse(crate::daemon_notice::Cause::Budget) => match self.bridge_admission(Some(job), Origin::Confirmed) {
+                Admission::Admit => Preflight::Confirmable(usage),
+                _ => Preflight::Ceiling(usage),
+            },
+            Admission::Refuse(crate::daemon_notice::Cause::Quota) => Preflight::Quota,
+            Admission::Refuse(_) => Preflight::NoRoute,
+        }
+    }
+
     /// The job's own switch, read in one place (§2.3 item 6). A job the operator started is not held by the switch that only
     /// stops it running by itself.
     fn job_switched_on(&self, job: Option<crate::daemon_notice::Job>, origin: crate::job_admission::Origin, cfg: &delphi_adapter::config::Config) -> bool {
         use crate::daemon_notice::Job;
         let idle = origin == crate::job_admission::Origin::Idle;
-        match job {
+        let own = match job {
             Some(Job::Pages) => cfg.library.pages.enabled && (!idle || cfg.library.pages.auto_rebuild),
             Some(Job::Validation) => !idle || cfg.validator.background,
             Some(Job::Consolidation) => cfg.memory.consolidate != delphi_adapter::config::Consolidate::Off,
             // The session summary's switch is the daemon's (`[session] summary`), read where the job is started.
             Some(Job::SessionSummaries) | Some(Job::Summaries) | None => true,
+        };
+        // `[bridge.jobs]` (`specs/143` §2.8 item 4): asked only here, for bridged calls. `manual` stops what nobody started; `off`
+        // stops all of it. It never turns the job's own "no" into a yes.
+        own && match job.map(|j| bridge_job_mode(&cfg.bridge.jobs, j)) {
+            Some(delphi_adapter::config::JobMode::Off) => false,
+            Some(delphi_adapter::config::JobMode::Manual) => !idle,
+            _ => true,
         }
     }
 
@@ -338,8 +439,13 @@ impl Engine {
     /// as it always did.
     pub(crate) fn idle_job_may_start(&self, job: crate::daemon_notice::Job, key: &delphi_adapter::config::PoolKey) -> bool {
         use crate::job_admission::{Admission, Origin};
-        if !self.cfg.get().endpoint(&key.endpoint_id).is_some_and(|e| e.path == delphi_adapter::config::AccessPath::Harness) {
+        let cfg = self.cfg.get();
+        if !cfg.endpoint(&key.endpoint_id).is_some_and(|e| e.path == delphi_adapter::config::AccessPath::Harness) {
             return true;
+        }
+        // A job the operator keeps by hand, or off, is not a failure: it waits, with no notice (`specs/143` §2.8 item 5).
+        if bridge_job_mode(&cfg.bridge.jobs, job) != delphi_adapter::config::JobMode::Auto {
+            return false;
         }
         match self.bridge_admission(Some(job), Origin::Idle) {
             Admission::Admit => true,
@@ -392,8 +498,13 @@ impl Engine {
         }
         let reference = cfg.bridge.claude_credential.clone().ok_or(CallError::Launch)?;
         // A call made inside a background job is that job's, and nobody asked for it; any other call was asked for.
-        let job = crate::daemon_notice::current_job();
-        let origin = if job.is_some() { Origin::Idle } else { Origin::Command };
+        // A job the operator started (`specs/143` §2.8 item 3) is that job's too, with the origin `command`, or `confirmed` when
+        // the operator typed the confirmation; it is held to the job's mode and weekly budget.
+        let (job, origin) = match (crate::daemon_notice::current_job(), crate::daemon_notice::current_command()) {
+            (Some(j), _) => (Some(j), Origin::Idle),
+            (None, Some((j, confirmed))) => (Some(j), if confirmed { Origin::Confirmed } else { Origin::Command }),
+            (None, None) => (None, Origin::Command),
+        };
         match self.bridge_admission(job, origin) {
             Admission::Admit => {}
             Admission::Wait(_) => return Err(Stop::Wait),

@@ -239,6 +239,51 @@ pub fn cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
     }
 }
 
+// ── passing a limit: the typed confirmation (`specs/143` §2.8 item 3, slice F) ─────────────────────────────────────────────────
+
+/// The words the confirmation picks from: short, plain, unlike one another.
+const WORDS: [&str; 16] = ["amber", "basil", "cedar", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "juniper", "kestrel", "lantern", "meadow", "nutmeg", "orchid", "pebble"];
+
+/// A word of [`WORDS`] chosen from the system's randomness; `None` when there is none to read.
+pub fn random_word() -> Option<&'static str> {
+    use std::io::Read;
+    let mut b = [0u8; 1];
+    std::fs::File::open("/dev/urandom").ok()?.read_exact(&mut b).ok()?;
+    Some(WORDS[(b[0] as usize) % WORDS.len()])
+}
+
+/// One line of what a credential has spent today against the daily cap, from a preflight's `usage`.
+pub fn usage_line(u: &serde_json::Value) -> String {
+    format!("Today through the bridge: {} of {} calls, {} of {} tokens.", u["calls_today"], u["daily_calls"], u["tokens_today"], u["daily_tokens"])
+}
+
+/// The confirmation, pure: it passes only when stdin and stdout are a terminal (`terminal`), nothing in the process says an agent
+/// seat started it (`refusal`), and `word` is typed back exactly through `ask` (which reads the controlling terminal). No flag, no
+/// environment variable and no piped input stands in for it. `what` says what will be spent.
+pub fn confirm(what: &str, word: &str, terminal: bool, refusal: Option<String>, ask: &mut dyn FnMut(&str) -> Option<String>) -> Result<(), String> {
+    if !terminal {
+        return Err("passing a limit needs the confirmation typed at a terminal, and this command's input or output is not one; it stays within the limits".into());
+    }
+    if let Some(why) = refusal {
+        return Err(format!("passing a limit is the operator's act: {why}"));
+    }
+    match ask(&format!("{what}\nTo pass the limit, type the word `{word}`: ")) {
+        Some(typed) if typed.trim() == word => Ok(()),
+        Some(_) => Err("the word typed was not the one asked for; nothing was run".into()),
+        None => Err("no answer was typed; nothing was run".into()),
+    }
+}
+
+/// [`confirm`] at the operator's real terminal: stdin and stdout must be one, the process must not be inside an agent seat (its
+/// variables or its ancestry), and the word is read from `/dev/tty`.
+pub fn confirm_at_terminal(what: &str) -> Result<(), String> {
+    use std::io::IsTerminal;
+    let terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let refusal = if crate::xenia_terminal::inside_an_agent_seat() { Some("this process runs inside an agent seat".to_string()) } else { crate::run_granted::seat_refusal() };
+    let word = random_word().ok_or("no randomness to choose the confirmation word with")?;
+    confirm(what, word, terminal, refusal, &mut |prompt| crate::run_granted::tty_ask(prompt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +345,29 @@ mod tests {
 
     fn no_resolve(_: &str) -> Option<Secret> {
         None
+    }
+
+    // AC-19: the confirmation passes only at a terminal, outside a seat, with the exact word; a wrong word, no answer, no terminal or
+    // a seat each refuse, and nothing is asked when it cannot pass.
+    #[test]
+    fn the_typed_confirmation_passes_only_with_the_word_at_a_terminal_outside_a_seat() {
+        let asked = RefCell::new(0);
+        let answer = |a: Option<&str>| {
+            let a = a.map(String::from);
+            let asked = &asked;
+            move |_: &str| {
+                *asked.borrow_mut() += 1;
+                a.clone()
+            }
+        };
+        assert!(confirm("spend", "cedar", true, None, &mut answer(Some(" cedar\n"))).is_ok());
+        assert!(confirm("spend", "cedar", true, None, &mut answer(Some("yes"))).unwrap_err().contains("not the one"));
+        assert!(confirm("spend", "cedar", true, None, &mut answer(None)).unwrap_err().contains("no answer"));
+        assert_eq!(*asked.borrow(), 3);
+        assert!(confirm("spend", "cedar", false, None, &mut answer(Some("cedar"))).unwrap_err().contains("not one"));
+        assert!(confirm("spend", "cedar", true, Some("refused: an agent seat".into()), &mut answer(Some("cedar"))).unwrap_err().contains("operator's act"));
+        assert_eq!(*asked.borrow(), 3, "nothing is asked when it cannot pass");
+        assert!(WORDS.contains(&random_word().unwrap()));
     }
 
     // AC-21 and §2.9 item 1: at a terminal the notice comes first, the token is taken hidden, tested, kept in the keychain under the
