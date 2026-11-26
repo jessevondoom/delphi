@@ -204,7 +204,9 @@ pub fn parse(p: &Value, redact: &dyn Fn(&str) -> String) -> Result<Parsed, HostE
         Some(_) => return bad("`topic_id` is a research topic id as Delphi gave it"),
         None => None,
     };
-    let subject = Some(redact(&capped(&p["subject"], "subject", crate::library::topics::MAX_CONCEPT_TITLE)?)).filter(|s| !s.is_empty());
+    // An over-long subject does not refuse the call (the operator's ruling of 2026-11-26): it is cut just past the limit, so the title
+    // check refuses it and the reply says why, as for any other subject that is not taken.
+    let subject = Some(redact(&one_line(p["subject"].as_str().unwrap_or("")).chars().take(crate::library::topics::MAX_CONCEPT_TITLE + 1).collect::<String>())).filter(|s| !s.is_empty());
     Ok(Parsed { question, answer, sources, claims, searches, gaps, topic_id, subject })
 }
 
@@ -783,8 +785,26 @@ mod tests {
             let want = if taken { ("Web Bot Auth", "subject") } else { ("Web Bot Auth and who signs the requests", "derived") };
             assert_eq!((side["title"].as_str().unwrap(), side["title_source"].as_str().unwrap(), side["query"].as_str().unwrap()), (want.0, want.1, question), "{subject}");
         }
-        assert!(parse(&json!({"question": "q", "answer": "a", "subject": "x".repeat(81)}), &id).is_err(), "over 80 characters, as the schema says");
         assert_eq!(input_schema()["properties"]["subject"]["maxLength"], 80);
+    }
+
+    /// The operator's ruling of 2026-11-26: a `subject` over 80 characters does not refuse `record_research`. The research is
+    /// recorded, the subject is not taken, the reply says why, and the topic's title is made from the question.
+    #[test]
+    fn an_81_character_subject_records_the_research_and_the_reply_says_the_subject_was_not_taken() {
+        let f = fx();
+        let question = "What is Web Bot Auth?";
+        let long = format!("Web Bot Auth {}", "x".repeat(81 - 13));
+        assert_eq!(long.chars().count(), 81);
+        let p = parse(&json!({"question": question, "answer": "Agents sign each request.", "subject": long}), &id).expect("an over-long subject does not refuse the call");
+        let reply = record(&ctx(&f, "h-1"), &p, &|_| Err("not fetched".to_string())).unwrap();
+        assert_eq!(reply["recorded"], true, "{reply}");
+        assert_eq!(reply["subject"], json!({"taken": false, "reason": "it is longer than 80 characters"}), "{reply}");
+        let topic = crate::research_record::find(&f.ws, reply["topic_id"].as_str().unwrap()).unwrap();
+        assert!(topic.read().unwrap()["subject"].is_null(), "the subject is not kept");
+        let lib = Library::in_home(&f.home);
+        assert_eq!(lib.topics_from_research(&f.ws, 1), vec!["web-bot-auth".to_string()], "the title is the derived one");
+        assert_eq!(lib.topic_side("web-bot-auth").unwrap()["title_source"], "derived");
     }
 
     /// AC-6: the 41st claim (and the 41st source) in one call is refused with the limit named; nothing is parsed past it.

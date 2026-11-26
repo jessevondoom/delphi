@@ -394,7 +394,7 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
                     0
                 }
                 Ok(e) => {
-                    println!("{} is now {} ({}); it had no page yet, so it took the slug of its title", pos[0], e.slug, e.title);
+                    println!("{} is now {} ({}); it had no writer's page, so it took the slug of its title and keeps {} as an alias", pos[0], e.slug, e.title, pos[0]);
                     0
                 }
                 Err(e) => {
@@ -593,6 +593,8 @@ mod tests {
         let built = lib.root().join("pages/how-does-lamp-oil-burn.json");
         let mut side: serde_json::Value = serde_json::from_slice(&std::fs::read(&built).unwrap()).unwrap();
         side["version"] = json!(1);
+        side["built"] = json!(1);
+        side["outcome"] = json!("pass");
         std::fs::write(&built, serde_json::to_vec(&side).unwrap()).unwrap();
         let before = tree(home.path());
         assert_eq!(cli(&["retitle".into()], home.path(), Some(&ws)), 0);
@@ -616,6 +618,19 @@ mod tests {
         assert_eq!(clash.iter().filter(|p| p.collision && p.new_slug == "tide-power").count(), 2, "{clash:?}");
         assert_eq!(cli(&["retitle".into(), "--apply".into()], home.path(), Some(&ws)), 1, "a collision is refused");
         assert!(lib.topic_side("what-is-tide-power").is_some() && lib.topic_side("is-tide-power").is_some() && lib.topic_side("tide-power").is_none());
+    }
+
+    /// The operator's ruling of 2026-11-26: a re-slugged topic's old slug is an alias, so `pages topic <old slug>` finds it.
+    #[test]
+    fn pages_topic_finds_a_renamed_topic_by_its_old_slug() {
+        use delphi_engine::library::topics::Origin;
+        let home = tempfile::tempdir().unwrap();
+        let lib = Library::in_home(home.path());
+        lib.topic_create("How do tides turn?", Origin::Research("t-1".into()), 1).unwrap();
+        assert_eq!(lib.topic_rename("how-do-tides-turn", "Tidal turning").unwrap().slug, "tidal-turning");
+        assert_eq!(cli(&["topic".into(), "tidal-turning".into()], home.path(), None), 0);
+        assert_eq!(cli(&["topic".into(), "how-do-tides-turn".into()], home.path(), None), 0, "the old slug is an alias");
+        assert_eq!(cli(&["topic".into(), "no-such-topic".into()], home.path(), None), 1);
     }
 
     #[test]
