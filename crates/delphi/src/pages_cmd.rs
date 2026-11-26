@@ -20,6 +20,8 @@ const USAGE: &str = "usage:
   delphi pages list [--json] [--home <dir>]
   delphi pages pin|unpin <key> [--home <dir>]
   delphi pages new <title words...> [--home <dir>]
+  delphi pages rename <slug> <title words...> [--home <dir>]
+  delphi pages retitle [--apply] [--json] [--home <dir>] [--workspace <name>]
   delphi pages topics [--json] [--home <dir>]
   delphi pages topic <slug> [--version <stamp>] [--json] [--home <dir>]
   delphi pages versions <slug> [--json] [--home <dir>]
@@ -210,6 +212,34 @@ fn seeds_count(lib: &Library, home: &Path, ws: &Path, as_json: bool) -> i32 {
     0
 }
 
+/// `delphi pages retitle [--apply]` (`specs/139` §2.4 item 4, AC-9): the titles code would give the topics whose title it made from
+/// their question, and the slugs they would take. It prints first; only `--apply` writes, and a collision is never applied.
+fn retitle(lib: &Library, ws: &Path, apply: bool, as_json: bool) -> i32 {
+    let plan = lib.topic_retitle(ws, apply);
+    let collisions = plan.iter().filter(|p| p.collision).count();
+    if as_json {
+        println!("{}", json!({"applied": apply, "topics": plan.iter().map(|p| p.to_json()).collect::<Vec<_>>(), "collisions": collisions}));
+        return if apply && collisions > 0 { 1 } else { 0 };
+    }
+    if plan.is_empty() {
+        println!("every topic already has the title code would give it");
+        return 0;
+    }
+    for p in &plan {
+        let slug = if p.new_slug == p.slug { format!("{} (keeps its slug)", p.slug) } else { format!("{} -> {}", p.slug, p.new_slug) };
+        let mark = if p.collision { "  COLLISION: another topic has or would take this slug; left as it is" } else { "" };
+        println!("{}  \"{}\" -> \"{}\" ({}){}", slug, p.title, p.new_title, p.source.as_str(), mark);
+    }
+    let done = plan.len() - collisions;
+    if apply {
+        println!("{} topic(s) retitled{}", done, if collisions > 0 { format!(", {} collision(s) left as they are", collisions) } else { String::new() });
+        if collisions > 0 { 1 } else { 0 }
+    } else {
+        println!("nothing written; run again with --apply to retitle {} topic(s){}", done, if collisions > 0 { format!(" ({} collision(s) are refused)", collisions) } else { String::new() });
+        0
+    }
+}
+
 fn now_unix() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -336,6 +366,36 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
                     1
                 }
             }
+        }
+        Some("rename") if pos.len() >= 2 => {
+            if crate::xenia_terminal::inside_an_agent_seat() {
+                eprintln!("delphi pages rename: refused; a topic's title is the operator's to give and this process was started by an agent seat");
+                return 2;
+            }
+            let title = pos[1..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+            match lib.topic_rename(pos[0], &title) {
+                Ok(e) if e.slug == *pos[0] => {
+                    println!("{} is now titled {}", e.slug, e.title);
+                    0
+                }
+                Ok(e) => {
+                    println!("{} is now {} ({}); it had no page yet, so it took the slug of its title", pos[0], e.slug, e.title);
+                    0
+                }
+                Err(e) => {
+                    eprintln!("delphi pages rename: {}", e);
+                    1
+                }
+            }
+        }
+        Some("retitle") if pos.is_empty() => {
+            let Some(ws) = ws_dir else { return 4 };
+            let apply = rest.iter().any(|a| a == "--apply");
+            if apply && crate::xenia_terminal::inside_an_agent_seat() {
+                eprintln!("delphi pages retitle --apply: refused; a topic's title is the operator's to change and this process was started by an agent seat");
+                return 2;
+            }
+            retitle(&lib, ws, apply, rest.iter().any(|a| a == "--json"))
         }
         Some("topics") => {
             let ctx = delphi_engine::library::topics::DueCtx { ws: ws_dir, now: now_unix(), index: true };
@@ -473,9 +533,50 @@ mod tests {
         assert_eq!(cli(&["seeds".into(), "--count".into()], home.path(), Some(&ws)), 0);
         assert_eq!(tree(home.path()), before, "the count writes nothing");
         assert_eq!(cli(&["seeds".into()], home.path(), Some(&ws)), 2, "only the count exists");
-        let seed = delphi_engine::topic_seed::assemble(&lib, home.path(), &ws, &lib.topic_side("why-do-tides-lag").unwrap(), &delphi_engine::topic_seed::Assemble { identifiers: &[], search: true });
-        let line = delphi_engine::topic_seed::count_json("why-do-tides-lag", &seed);
+        let seed = delphi_engine::topic_seed::assemble(&lib, home.path(), &ws, &lib.topic_side("do-tides-lag").unwrap(), &delphi_engine::topic_seed::Assemble { identifiers: &[], search: true });
+        let line = delphi_engine::topic_seed::count_json("do-tides-lag", &seed);
         assert_eq!((line["rows"][0]["kept"].clone(), line["spans"].clone()), (json!(2), json!(2)));
+    }
+
+    /// `specs/139` AC-9: on three unbuilt topics and one built, `pages retitle` prints and writes nothing; `--apply` gives each unbuilt
+    /// topic its new slug, and the built one its title only; a second run changes nothing; two topics that would take one slug are a
+    /// collision, and `--apply` leaves them as they are.
+    #[test]
+    fn pages_retitle_prints_first_applies_only_with_apply_and_refuses_a_collision() {
+        use delphi_engine::library::topics::Origin;
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let lib = Library::in_home(home.path());
+        for q in ["What is Web Bot Auth?", "How do tides turn?", "Why is the sky blue?", "How does lamp oil burn?"] {
+            lib.topic_create(q, Origin::Research(format!("t-{}", q.len())), 1).unwrap();
+        }
+        let built = lib.root().join("pages/how-does-lamp-oil-burn.json");
+        let mut side: serde_json::Value = serde_json::from_slice(&std::fs::read(&built).unwrap()).unwrap();
+        side["version"] = json!(1);
+        std::fs::write(&built, serde_json::to_vec(&side).unwrap()).unwrap();
+        let before = tree(home.path());
+        assert_eq!(cli(&["retitle".into()], home.path(), Some(&ws)), 0);
+        let plan = lib.topic_retitle(&ws, false);
+        assert_eq!(tree(home.path()), before, "without --apply nothing is written");
+        let moves: Vec<(&str, &str, &str)> = plan.iter().map(|p| (p.slug.as_str(), p.new_slug.as_str(), p.new_title.as_str())).collect();
+        assert_eq!(moves, [("how-do-tides-turn", "tides-turn", "Tides turn"), ("how-does-lamp-oil-burn", "how-does-lamp-oil-burn", "Lamp oil burn"), ("what-is-web-bot-auth", "web-bot-auth", "Web Bot Auth"), ("why-is-the-sky-blue", "the-sky-blue", "The sky blue")]);
+        assert!(plan.iter().all(|p| !p.collision));
+
+        assert_eq!(cli(&["retitle".into(), "--apply".into()], home.path(), Some(&ws)), 0);
+        let slugs: Vec<String> = lib.topic_pages(&delphi_engine::library::topics::DueCtx { ws: None, now: 2, index: false }).into_iter().map(|t| format!("{}={}", t.slug, t.title)).collect();
+        assert_eq!(slugs, ["how-does-lamp-oil-burn=Lamp oil burn", "the-sky-blue=The sky blue", "tides-turn=Tides turn", "web-bot-auth=Web Bot Auth"]);
+        assert_eq!(lib.topic_side("web-bot-auth").unwrap()["query"], "What is Web Bot Auth?", "the question stays the query");
+        let after = tree(home.path());
+        assert!(lib.topic_retitle(&ws, true).is_empty(), "a second run changes nothing");
+        assert_eq!(tree(home.path()), after);
+
+        lib.topic_create("What is tide power?", Origin::Research("t-a".into()), 1).unwrap();
+        lib.topic_create("Is tide power?", Origin::Research("t-b".into()), 1).unwrap();
+        let clash = lib.topic_retitle(&ws, false);
+        assert_eq!(clash.iter().filter(|p| p.collision && p.new_slug == "tide-power").count(), 2, "{clash:?}");
+        assert_eq!(cli(&["retitle".into(), "--apply".into()], home.path(), Some(&ws)), 1, "a collision is refused");
+        assert!(lib.topic_side("what-is-tide-power").is_some() && lib.topic_side("is-tide-power").is_some() && lib.topic_side("tide-power").is_none());
     }
 
     #[test]

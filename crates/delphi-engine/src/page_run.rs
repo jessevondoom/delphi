@@ -468,8 +468,8 @@ mod tests {
         assert!(f.engine.topic_idle_rebuild().await.is_none(), "off: nothing is rebuilt");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(crate::testkit::CONFIG).unwrap());
         let built = f.engine.topic_idle_rebuild().await.expect("a due topic").expect("built");
-        assert_eq!((built.slug.as_str(), built.version, built.outcome.as_deref()), ("how-do-zyxquor-lamps-vromble", 1, Some("seed")));
-        let md = std::fs::read_to_string(lib.root().join("pages/how-do-zyxquor-lamps-vromble.md")).unwrap();
+        assert_eq!((built.slug.as_str(), built.version, built.outcome.as_deref()), ("zyxquor-lamps-vromble", 1, Some("seed")));
+        let md = std::fs::read_to_string(lib.root().join("pages/zyxquor-lamps-vromble.md")).unwrap();
         assert!(md.contains(crate::topic_seed::SEED_BANNER) && md.contains("Zyxquor lamps vromble on a mercury bath."), "{md}");
         assert!(f.engine.topic_idle_rebuild().await.is_none(), "nothing is due any more");
         assert!(std::fs::read(lib.root().join("pages/lighthouse-lamps.md")).is_err(), "no stub");

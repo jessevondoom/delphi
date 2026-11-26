@@ -90,6 +90,9 @@ pub struct Proposal {
     pub volatility: Option<Volatility>,
     pub days: Option<u64>,
     pub reason: Option<String>,
+    /// The concept the writer names the page after (`specs/139` §2.4 item 2): taken only at a topic's first written page, and only
+    /// when code accepts it (`library::topics::accept_title`).
+    pub title: Option<String>,
 }
 
 /// What the daemon keeps: the proposal after the clamp.
@@ -135,6 +138,8 @@ pub fn extract(draft: &str) -> (String, Option<Proposal>) {
                     "volatility" => p.volatility = Volatility::parse(v),
                     "days" => p.days = v.parse().ok(),
                     "reason" if !v.is_empty() => p.reason = Some(one_line(v, REASON_MAX)),
+                    // Kept whole up to the line's cap: a title over 80 characters is refused by its check, not cut to pass it.
+                    "title" if !v.is_empty() => p.title = Some(one_line(v, REASON_MAX)),
                     _ => {}
                 }
             }
