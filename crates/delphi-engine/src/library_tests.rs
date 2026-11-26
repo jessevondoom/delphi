@@ -1445,6 +1445,19 @@ mod page_validation {
         assert!(l.check_page_text(&p.page.markdown, Scope::External).findings.is_empty());
     }
 
+    /// The rewrite prompt tells the writer to keep its `<!-- page: ... -->` line last; the rewritten draft is checked without it, as
+    /// the first draft is, so the line never reads as an item of the page's last section (`See also`, `Start here`).
+    #[test]
+    fn a_rewrite_that_keeps_its_page_directive_is_checked_without_it() {
+        let (_d, l, v, _n) = setup();
+        let bad = Assertion { text: "Tides come once a day.".into(), judgement: Judgement::Contradicts, record: Some(v.clone()) };
+        let f = Fake::new(vec![Ok(vec![bad]), Ok(vec![a(Judgement::Supported, None, "ok")])]);
+        let w = Rewriter { out: Ok(format!("Tides come twice a day, again [{v}].\n\n## See also\n\n<!-- page: kind=article; volatility=low; days=30; reason=stable -->")), calls: Mutex::new(vec![]) };
+        let p = run(&l, &format!("Tides come once a day [{v}]."), &f, &w, 1_000_000).unwrap();
+        assert_eq!((p.verdict.outcome.clone(), p.verdict.rewrites), (Outcome::Pass, 1), "{:?}", p.verdict.reason);
+        assert!(!p.page.markdown.contains("<!-- page:"), "{}", p.page.markdown);
+    }
+
     #[test]
     fn a_contradiction_with_a_validated_claim_fails_once_is_rewritten_with_the_findings_and_is_not_shown() {
         let (_d, l, v, _n) = setup();

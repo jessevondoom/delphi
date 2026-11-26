@@ -478,7 +478,9 @@ impl Library {
                     }
                     match writer.rewrite(&draft, &findings).await {
                         Ok(d) => {
-                            draft = d.trim().to_string();
+                            // The rewrite keeps the writer's `<!-- page: ... -->` line, as its prompt asks; the first draft's proposal
+                            // stands, and the line is taken off here as it was from the first draft, or it reads as body text.
+                            draft = super::page_meta::extract(d.trim()).0;
                             rewrites += 1;
                         }
                         Err(e) => {
