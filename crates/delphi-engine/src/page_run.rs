@@ -326,6 +326,62 @@ impl Engine {
         .unwrap_or_default()
     }
 
+    /// "Seed now, expand at idle" (`specs/139` §2.5): when a research run ends `done` or `partial`, and when a host's `record_research`
+    /// returns. The research topic's topic page is made if it has none, and its seed page is written at once: no model is called, so it
+    /// is never paused and counts against no budget. A topic whose page the writer wrote keeps it (its due check sees the new research),
+    /// and a seed page whose spans did not change is not written again. Then the writer's expansion is queued for the next idle time,
+    /// ahead of older due topics. `None` when pages are off, `[library.pages] build_after_research = false`, or no topic follows the
+    /// research (a private one). Otherwise `{slug, outcome}`: `seed`, the written page's outcome, `waiting` when the research gives the
+    /// seed nothing yet, or `check_failed`. Fixed words only.
+    pub async fn seed_after_research(self: &Arc<Self>, research_topic: &str) -> Option<serde_json::Value> {
+        use crate::library::topics::{DueCtx, SeedRequest, SEED_EXPANSION};
+        let settings = self.cfg.get().library.pages.clone();
+        if !settings.enabled || !settings.build_after_research {
+            return None;
+        }
+        let now = (self.clock_unix)().max(0) as u64;
+        let (home, ws, id) = (self.ws.home.clone(), self.ws.dir.clone(), research_topic.to_string());
+        let topic = tokio::task::spawn_blocking(move || {
+            let lib = Library::in_home(&home);
+            lib.topics_from_research(&ws, now);
+            let t = lib.topic_for_research(&id)?;
+            let due = lib.topic_due(&t.side, &DueCtx { ws: Some(&ws), now, index: false });
+            Some((t, due))
+        })
+        .await
+        .ok()??;
+        let (topic, due) = topic;
+        let lib = Library::in_home(&self.ws.home);
+        let seeded = topic.outcome.as_deref() == Some(crate::library::page_validate::Outcome::Seed.as_str());
+        let outcome = match topic.outcome.clone() {
+            // A page the writer wrote stands; the new research makes it due by its own check.
+            Some(o) if !seeded => o,
+            // A seed page that nothing changed is not written again.
+            Some(o) if due.as_deref() == Some(SEED_EXPANSION) => o,
+            _ => {
+                let seed = self.topic_seed(&topic.side).await;
+                let gaps = lib.topic_gaps(&topic.side, &self.ws.dir);
+                let req = SeedRequest { slug: &topic.slug, now, settings: &settings, style: crate::library::bib::Format::Apa, seed: &seed, held: &crate::topic_seed::NoHeldText, gaps: &gaps, cancel: None };
+                match lib.topic_seed_build(req) {
+                    Ok(e) => e.outcome.unwrap_or_default(),
+                    Err(e) => {
+                        let word = if e.starts_with(crate::topic_seed::WAITING) { "waiting" } else if e.starts_with("check_failed") { "check_failed" } else { "failed" };
+                        return Some(json!({"slug": topic.slug, "outcome": word}));
+                    }
+                }
+            }
+        };
+        let _ = lib.topic_queue_expansion(&topic.slug, now);
+        Some(json!({"slug": topic.slug, "outcome": outcome}))
+    }
+
+    /// The page of the topic that follows `research_topic`, as a research result names it (`specs/139` §2.5 item 4): its slug and outcome
+    /// (`null` before any page). Reads only.
+    pub fn research_page(&self, research_topic: &str) -> Option<serde_json::Value> {
+        let t = Library::in_home(&self.ws.home).topic_for_research(research_topic)?;
+        Some(json!({"slug": t.slug, "outcome": t.outcome}))
+    }
+
     /// Rebuild one topic's page now (`specs/117` §2 item 2): the operator's `delphi pages rebuild`, or the idle rebuild. The writer and the
     /// validator are the search page's; the validator's tokens are journalled against the background share, as a search page's are.
     pub async fn topic_rebuild(self: &Arc<Self>, slug: &str) -> Result<crate::library::topics::TopicEntry, String> {
@@ -399,11 +455,13 @@ impl Engine {
         }
         lib.topics_from_research(&self.ws.dir, now);
         let ctx = crate::library::topics::DueCtx { ws: Some(&self.ws.dir), now, index: true };
-        use crate::library::topics::SEED_EXPANSION;
+        use crate::library::topics::{EXPANSION_QUEUED, SEED_EXPANSION};
         let expand_only = |t: &crate::library::topics::TopicEntry| t.due.as_deref() == Some(SEED_EXPANSION);
+        let queued = |t: &crate::library::topics::TopicEntry| t.side[EXPANSION_QUEUED].as_u64();
         let mut due: Vec<_> = lib.topic_pages(&ctx).into_iter().filter(|t| t.due.is_some()).collect();
-        // A page with something new comes first; a seed page that waits only for its expansion after it (`specs/139` §2.5 item 1).
-        due.sort_by_key(|t| (expand_only(t), t.built.is_some(), t.built.unwrap_or(0)));
+        // An expansion queued when research ended comes first, the earliest first (`specs/139` §2.5 item 1); then a page with something
+        // new; then a seed page that waits only for its expansion.
+        due.sort_by_key(|t| (queued(t).is_none(), queued(t).unwrap_or(0), expand_only(t), t.built.is_some(), t.built.unwrap_or(0)));
         let first = due.first()?;
         let slug = if !expand_only(first) {
             first.slug.clone()
@@ -432,6 +490,10 @@ impl Engine {
         }
         let mut material = false;
         let built = self.topic_rebuild_with(&slug, None, &mut material).await;
+        // The writer tried a queued expansion and the seed stands: it waits as any seed page does from now on, not first in line.
+        if matches!(&built, Err(e) if e.starts_with(crate::library::topics::SEED_STANDS)) {
+            lib.topic_unqueue(&slug);
+        }
         let cause = match &built {
             Err(e) if e == NO_WRITER => Some(Cause::NoRoute),
             // A seed page built because no writer could be reached: the page stands, and the missing route is still the cause.
@@ -475,5 +537,62 @@ mod tests {
         assert!(std::fs::read(lib.root().join("pages/lighthouse-lamps.md")).is_err(), "no stub");
         assert_eq!(f.model.requests().len(), 0);
         assert_eq!(lib.pages_today(u64::MAX / 2), 0, "a seed counts against no page budget");
+    }
+
+    /// `specs/139` AC-10 (slice E): when research ends, its topic's seed page is written at once with no model call and the writer's
+    /// expansion is queued; the next idle rebuild asks the writer for it ahead of an older due topic. A seed the writer could not expand
+    /// stands and leaves the queue. With `build_after_research = false` none of it happens and the older topic goes first.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_queued_expansion_runs_ahead_of_an_older_due_topic_unless_the_trigger_is_off() {
+        use crate::library::topics::EXPANSION_QUEUED;
+        use crate::research_record::{Asker, Begin, Topic};
+        for on in [true, false] {
+            let f = setup(vec![], 5.0, |_| {});
+            if !on {
+                let off = crate::testkit::CONFIG.replace("[access]", "[library.pages]\nbuild_after_research = false\n[access]");
+                f.engine.cfg.set(delphi_adapter::config::Config::parse(&off).unwrap());
+            }
+            let ws = f.engine.ws.dir.clone();
+            let lib = crate::library::Library::in_home(&f.engine.ws.home);
+            let doc = f.engine.ws.home.join("tides.md");
+            std::fs::write(&doc, "# Tides\n\nThe tide comes in twice a day.\n").unwrap();
+            let s = lib.add_file(&doc, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+            let anchor = crate::library::claims::AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() };
+            let c = lib.add_claim("Tides come twice a day.", &Default::default(), &[anchor]).unwrap()["id"].as_str().unwrap().to_string();
+            let run = |q: &str, id: &str, answer: &str| {
+                let t = Topic::begin(&ws, &Begin { question: q, asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: id }).unwrap();
+                t.finish(id, "done", Some(&serde_json::json!({"answer": answer, "claims": [&c]})), std::slice::from_ref(&c), None, 0).unwrap();
+                t
+            };
+            // The older topic: made at an earlier idle time and never built, so it is due.
+            run("Are anchor tides early?", "r-1", "Anchor tides come early in spring.");
+            lib.topics_from_research(&ws, 1);
+            let newer = run("How do lighthouse lamps turn?", "r-2", "Lighthouse lamps turn on a mercury bath.");
+            let page = f.engine.seed_after_research(&newer.id).await;
+            let side = lib.topic_side("lighthouse-lamps-turn");
+            if on {
+                assert_eq!(page, Some(serde_json::json!({"slug": "lighthouse-lamps-turn", "outcome": "seed"})));
+                let side = side.expect("the topic was made");
+                assert!(side[EXPANSION_QUEUED].is_u64(), "{side}");
+                let md = std::fs::read_to_string(lib.root().join("pages/lighthouse-lamps-turn.md")).unwrap();
+                assert!(md.contains(crate::topic_seed::SEED_BANNER) && md.contains("Lighthouse lamps turn on a mercury bath."), "{md}");
+                assert_eq!(f.model.requests().len(), 0, "the seed calls no model");
+                assert_eq!(f.engine.seed_after_research(&newer.id).await, page, "nothing changed: the seed is not written again");
+                assert_eq!(lib.topic_versions("lighthouse-lamps-turn").unwrap().len(), 0);
+            } else {
+                assert_eq!(page, None);
+                assert!(side.is_none(), "the trigger is off: no topic and no page until an idle time");
+            }
+            let r = f.engine.topic_idle_rebuild_report().await.expect("a due topic");
+            let first = f.model.requests().first().map(|s| s.body.to_string()).unwrap_or_default();
+            if on {
+                assert!(first.contains("QUERY: Lighthouse lamps turn"), "the queued expansion goes first: {first}");
+                assert!(r.built.unwrap_err().starts_with(crate::library::topics::SEED_STANDS), "the writer failed and the seed stands");
+                let side = lib.topic_side("lighthouse-lamps-turn").unwrap();
+                assert_eq!((side["outcome"].as_str(), side[EXPANSION_QUEUED].is_null()), (Some("seed"), true), "tried once, it leaves the queue");
+            } else {
+                assert!(first.contains("QUERY: Anchor tides early"), "the older due topic goes first: {first}");
+            }
+        }
     }
 }

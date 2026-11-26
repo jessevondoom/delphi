@@ -349,6 +349,11 @@ pub const CANCELLED: &str = "cancelled: the key that asked for it was revoked";
 /// expand at idle"). Only a writer's page ends it; a rebuild with no writer, or with nothing for one, writes no new seed version.
 pub const SEED_EXPANSION: &str = "a seed page, due for the writer's expansion";
 
+/// The record's mark on a topic whose writer's expansion is queued for the next idle time (`specs/139` §2.5 item 1): the time it was
+/// queued. The idle rebuild takes queued topics first, the earliest first; a writer's page, or a seed the writer could not expand,
+/// clears it.
+pub const EXPANSION_QUEUED: &str = "expansion_queued";
+
 /// The start of what [`Library::topic_rebuild`] says when the writer could not expand a seed page: the seed stands
 /// (`specs/139` §2.3 item 5), and no page of the claims alone takes its place.
 pub const SEED_STANDS: &str = "the seed stands";
@@ -1033,6 +1038,28 @@ impl Library {
         self.topic_store(r.slug, side, &g, checked, None, r.now, r.settings, r.gaps, Some((r.seed, &dropped)))
     }
 
+    /// The topic that follows the research topic `research_topic`, if one does. Reads only.
+    pub fn topic_for_research(&self, research_topic: &str) -> Option<TopicEntry> {
+        self.topic_sides().into_iter().find(|(_, side)| side["research_topics"].as_array().into_iter().flatten().any(|t| t == research_topic)).map(|(slug, side)| self.topic_entry(&slug, &side, None))
+    }
+
+    /// Queue the writer's expansion of `slug` for the next idle time (`specs/139` §2.5 item 1): it is marked with the time, and the idle
+    /// rebuild takes it ahead of older due topics.
+    pub fn topic_queue_expansion(&self, slug: &str, now: u64) -> Result<(), String> {
+        let mut side = self.topic_side(slug).ok_or_else(|| format!("no topic `{}`", slug))?;
+        side[EXPANSION_QUEUED] = json!(now);
+        self.write_topic_side(slug, &side)
+    }
+
+    /// Clear `slug`'s queued expansion: the writer tried it.
+    pub fn topic_unqueue(&self, slug: &str) {
+        if let Some(mut side) = self.topic_side(slug) {
+            if side.as_object_mut().and_then(|o| o.remove(EXPANSION_QUEUED)).is_some() {
+                let _ = self.write_topic_side(slug, &side);
+            }
+        }
+    }
+
     /// Every topic's slug: what a topic page's `## See also` may name. The library that checks a topic page is given them
     /// ([`Library::with_topic_slugs`]).
     pub fn topic_slugs(&self) -> BTreeSet<String> {
@@ -1139,7 +1166,7 @@ impl Library {
             }
             None => {
                 if let Some(o) = side.as_object_mut() {
-                    for k in ["seed", "seed_offered", "seed_dropped", "waiting"] {
+                    for k in ["seed", "seed_offered", "seed_dropped", "waiting", EXPANSION_QUEUED] {
                         o.remove(k);
                     }
                 }

@@ -93,6 +93,9 @@ pub struct Ended<'a> {
     pub ms: u64,
 }
 
+/// A step awaited after a job ends and before it reads as finished ([`Jobs::submit_then`]), given the state it ended in.
+pub type Then = Box<dyn FnOnce(State) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+
 /// The budget ran out; the runner should return what it has as [`Finish::Partial`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct BudgetSpent;
@@ -392,6 +395,18 @@ impl Jobs {
         Fut: Future<Output = Result<Finish, String>> + Send + 'static,
         E: FnOnce(&Ended<'_>) + Send + 'static,
     {
+        self.submit_then(id, session, depth, run, on_end, None)
+    }
+
+    /// [`submit_with`](Jobs::submit_with), and `then`, when given, is awaited once the job has ended, however it ended, after `on_end` and
+    /// before the job reads as finished, with the state it ended in. It is how a research run writes its topic's seed page (`specs/139`
+    /// §2.5 item 1) before its result is read.
+    pub fn submit_then<F, Fut, E>(&self, id: &str, session: &str, depth: Depth, run: F, on_end: E, then: Option<Then>)
+    where
+        F: FnOnce(Arc<JobCtx>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Finish, String>> + Send + 'static,
+        E: FnOnce(&Ended<'_>) + Send + 'static,
+    {
         let ctx = Arc::new(JobCtx::with_budget(self.limits.steps_at(depth)));
         let cancel = Arc::new(Notify::new());
         {
@@ -407,6 +422,9 @@ impl Jobs {
             };
             let Some(permit) = permit else {
                 on_end(&Ended { state: State::Cancelled, result: None, error: None, ms: 0 });
+                if let Some(then) = then {
+                    then(State::Cancelled).await;
+                }
                 me.end(&id, State::Cancelled, None, None);
                 return;
             };
@@ -433,6 +451,9 @@ impl Jobs {
                 v
             });
             on_end(&Ended { state, result: result.as_ref(), error: error.as_deref(), ms });
+            if let Some(then) = then {
+                then(state).await;
+            }
             me.end(&id, state, result, error);
         });
     }
@@ -765,6 +786,31 @@ mod tests {
             assert_eq!(jobs.wait(id, "s", Duration::from_secs(5)).await.unwrap()["status"], "cancelled", "{id}");
         }
         assert!(!jobs.cancel("run", "s"), "already finished");
+    }
+
+    /// `specs/139` §2.5 item 1 (slice E): the step after a job ends is awaited before the job reads as finished, so a research run's seed
+    /// page is written before its result can be read; it is told the state the job ended in.
+    #[tokio::test]
+    async fn the_step_after_a_job_ends_runs_before_the_job_reads_as_finished() {
+        let jobs = Jobs::new(2, Duration::from_secs(5));
+        let seen: Arc<std::sync::Mutex<Vec<&'static str>>> = Default::default();
+        for (id, partial) in [("done", false), ("partial", true)] {
+            let s = seen.clone();
+            let then: Then = Box::new(move |state| {
+                Box::pin(async move {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    s.lock().unwrap().push(state.as_str());
+                })
+            });
+            jobs.submit_then(id, "s", Depth::Quick, move |_| async move { if partial { Ok(Finish::Partial(json!({}))) } else { done(json!({})) } }, |_| {}, Some(then));
+        }
+        for id in ["done", "partial"] {
+            let r = jobs.wait(id, "s", Duration::from_secs(5)).await.expect("finished");
+            assert!(seen.lock().unwrap().contains(&r["status"].as_str().unwrap()), "the step ran before {id} read as finished");
+        }
+        let mut got = seen.lock().unwrap().clone();
+        got.sort();
+        assert_eq!(got, ["done", "partial"]);
     }
 
     /// `specs/112` §2.4: the record learns how a job ended whichever way it ended, before the job reads as finished.

@@ -287,7 +287,8 @@
             "per_day": { "type": "integer", "minimum": 0, "default": 20, "description": "Pages the daemon builds in one day (a cache hit is free). Their validator tokens also count against the validator's share (specs/040 section 20)." },
             "min_ttl_days": { "type": "integer", "minimum": 1, "default": 1, "description": "The shortest cache lifetime, in days, the daemon accepts for a page the writer proposed one for (specs/097)." },
             "max_ttl_days": { "type": "integer", "minimum": 1, "default": 365, "description": "The longest cache lifetime, in days, the daemon accepts for a page the writer proposed one for (specs/097)." },
-            "auto_rebuild": { "type": "boolean", "default": true, "description": "Topic pages that are due (a claim or source they cite changed, a new claim carries their topic, or their lifetime passed) are rebuilt by the daemon while it is idle, within per_day (specs/117 section 2 item 3). false: only `delphi pages rebuild` rebuilds them." }
+            "auto_rebuild": { "type": "boolean", "default": true, "description": "Topic pages that are due (a claim or source they cite changed, a new claim carries their topic, or their lifetime passed) are rebuilt by the daemon while it is idle, within per_day (specs/117 section 2 item 3). false: only `delphi pages rebuild` rebuilds them." },
+            "build_after_research": { "type": "boolean", "default": true, "description": "When a research run ends done or partial, and when a host's record_research returns, the research topic's topic page is made and its seed page written at once (no model call), and the writer's expansion is queued for the next idle time, ahead of older due topics (specs/139 section 2.5). false: neither happens. auto_rebuild still governs the writer's rebuilds." }
           }
         }
       }

@@ -332,6 +332,7 @@ sandbox = "off"
 # min_ttl_days = 1        # the writer proposes how long a page stays fresh (specs/097); the daemon keeps it within these bounds
 # max_ttl_days = 365
 # auto_rebuild = true     # topic pages that are due are rebuilt while the daemon is idle, within per_day (specs/117); false: only `delphi pages rebuild`
+# build_after_research = true  # when research ends, its topic's seed page is written at once (no model) and the writer's expansion queued for idle (specs/139)
 
 # Research (specs/028 section 10): the web search engines the archives pane's expand mode asks, in order, one at a time (the next only if
 # the last failed). Ratified, because it names who receives your queries. Which sites may be read is context/sources/trusted.toml plus your
