@@ -385,13 +385,412 @@ pub fn load_accepted(ws: &Path, v: Option<u32>) -> Result<(Header, Vec<Case>), S
     Ok((h, parse_jsonl(&String::from_utf8_lossy(&bytes))?))
 }
 
+// ── the run (§2.2) ──────────────────────────────────────────────────────────
+
+/// The depth a run reads: twenty results (§2.2 item 4), through `SearchOpts::cap`.
+pub const RUN_CAP: usize = 20;
+
+/// Where one returned hit falls: its path and lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Got {
+    pub path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+impl From<&crate::kb::Hit> for Got {
+    fn from(h: &crate::kb::Hit) -> Got {
+        Got { path: h.rel_path.clone(), start_line: h.start_line, end_line: h.end_line }
+    }
+}
+
+/// The grade of each returned hit, in order: the best grade among the case's passages that it overlaps (by path and lines, never by
+/// heading), each passage counted once; 0 for a hit that matches none.
+pub fn grades(relevant: &[Relevant], got: &[Got]) -> Vec<u8> {
+    let mut used = vec![false; relevant.len()];
+    got.iter()
+        .map(|g| {
+            let best = relevant.iter().enumerate().filter(|(i, r)| !used[*i] && r.path == g.path && r.start_line >= g.start_line && r.start_line <= g.end_line.max(g.start_line)).max_by_key(|(_, r)| r.grade).map(|(i, r)| (i, r.grade));
+            match best {
+                Some((i, grade)) => {
+                    used[i] = true;
+                    grade
+                }
+                None => 0,
+            }
+        })
+        .collect()
+}
+
+/// recall@k: the share of the case's passages in the first `k` results, out of as many as `k` results could hold (so a perfect
+/// ranking scores 1 even for a document longer than `k` passages).
+pub fn recall_at(g: &[u8], relevant: usize, k: usize) -> f64 {
+    if relevant == 0 {
+        return 0.0;
+    }
+    g.iter().take(k).filter(|x| **x > 0).count() as f64 / relevant.min(k) as f64
+}
+
+/// nDCG@k with graded gains and the standard log2 discount: Σ grade / log2(rank + 1), over the ideal ordering of the case's grades.
+pub fn ndcg_at(g: &[u8], relevant: &[Relevant], k: usize) -> f64 {
+    let dcg = |gs: &mut dyn Iterator<Item = u8>| gs.take(k).enumerate().map(|(i, x)| x as f64 / ((i + 2) as f64).log2()).sum::<f64>();
+    let mut ideal: Vec<u8> = relevant.iter().map(|r| r.grade).collect();
+    ideal.sort_unstable_by(|a, b| b.cmp(a));
+    let idcg = dcg(&mut ideal.into_iter());
+    if idcg == 0.0 {
+        return 0.0;
+    }
+    dcg(&mut g.iter().copied()) / idcg
+}
+
+/// The rank (from 1) of the first relevant result, if any.
+pub fn first_rank(g: &[u8]) -> Option<usize> {
+    g.iter().position(|x| *x > 0).map(|i| i + 1)
+}
+
+/// The metrics of one path over a set (§2.2 item 2).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Metrics {
+    pub cases: usize,
+    pub recall10: f64,
+    pub recall20: f64,
+    pub ndcg10: f64,
+    pub mrr: f64,
+    /// `none` cases, and how many of them still returned a result.
+    pub none_cases: usize,
+    pub none_answered: usize,
+    /// Cases a passage of which is no longer in the index: listed, not scored (§2.1 item 7).
+    pub stale: Vec<String>,
+}
+
+fn round4(x: f64) -> f64 {
+    (x * 10_000.0).round() / 10_000.0
+}
+
+/// Score a path: `results` holds, for each case, what the path returned (at most [`RUN_CAP`]). `present` says whether a passage is
+/// still in the index. Returns the metrics and, per case, the rank of its first relevant passage.
+pub fn score(cases: &[Case], results: &[Vec<Got>], present: &dyn Fn(&Relevant) -> bool) -> (Metrics, BTreeMap<String, Option<usize>>) {
+    let mut m = Metrics::default();
+    let mut ranks = BTreeMap::new();
+    let (mut r10, mut r20, mut nd, mut rr) = (0.0, 0.0, 0.0, 0.0);
+    for (c, got) in cases.iter().zip(results) {
+        if c.none {
+            m.none_cases += 1;
+            m.none_answered += (!got.is_empty()) as usize;
+            continue;
+        }
+        if !c.relevant.iter().all(present) {
+            m.stale.push(c.id.clone());
+            continue;
+        }
+        let g = grades(&c.relevant, got);
+        m.cases += 1;
+        r10 += recall_at(&g, c.relevant.len(), 10);
+        r20 += recall_at(&g, c.relevant.len(), 20);
+        nd += ndcg_at(&g, &c.relevant, 10);
+        let first = first_rank(&g);
+        rr += first.map_or(0.0, |r| 1.0 / r as f64);
+        ranks.insert(c.id.clone(), first);
+    }
+    let n = m.cases.max(1) as f64;
+    (m.recall10, m.recall20, m.ndcg10, m.mrr) = (round4(r10 / n), round4(r20 / n), round4(nd / n), round4(rr / n));
+    (m, ranks)
+}
+
+/// A path of §2.2 item 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunPath {
+    Service,
+    Hybrid,
+    Lexical,
+}
+
+impl RunPath {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunPath::Service => "service",
+            RunPath::Hybrid => "hybrid",
+            RunPath::Lexical => "lexical",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Vec<RunPath>> {
+        match s {
+            "service" => Some(vec![RunPath::Service]),
+            "hybrid" => Some(vec![RunPath::Hybrid]),
+            "lexical" => Some(vec![RunPath::Lexical]),
+            "all" => Some(vec![RunPath::Service, RunPath::Hybrid, RunPath::Lexical]),
+            _ => None,
+        }
+    }
+}
+
+/// The search options every path of a run uses: the operator's view (§3: untrusted passages and every registered project's
+/// research included, as `kb search --all-projects` reads them), twenty results, the reranker off (the service never reranks), and
+/// the workspace's own ranking terms.
+pub fn run_opts(ws: &Path) -> crate::kb::SearchOpts {
+    let projects: Vec<(String, String)> = crate::scope::project_entries(ws).into_iter().map(|p| (p.id.as_str().to_string(), p.name)).collect();
+    crate::kb::SearchOpts {
+        limit: RUN_CAP,
+        cap: RUN_CAP,
+        include_untrusted: true,
+        rerank_weight: 0.0,
+        shared: (!projects.is_empty()).then(|| crate::kb::SharedResearch { projects, ..Default::default() }),
+        ranking: crate::use_signals::ranking(ws),
+        ..Default::default()
+    }
+}
+
+/// The options as a run file records them.
+fn opts_json(o: &crate::kb::SearchOpts) -> Value {
+    json!({"limit": o.limit, "cap": o.cap, "include_untrusted": o.include_untrusted, "vec_weight": o.vec_weight, "natural_lex_weight": o.natural_lex_weight, "loose_weight": o.loose_weight, "rerank_weight": o.rerank_weight, "shared_projects": o.shared.as_ref().map_or(0, |s| s.projects.len()), "ranking": {"use_boost": o.ranking.use_boost, "dispute_penalty": o.ranking.dispute_penalty, "confidence_weight": o.ranking.confidence_weight}})
+}
+
+fn percentile(sorted: &[f64], p: f64) -> Option<f64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let i = ((sorted.len() as f64 - 1.0) * p).round() as usize;
+    Some((sorted[i] * 10.0).round() / 10.0)
+}
+
+/// One path's part of a run.
+fn path_run(home: &Path, ws: &Path, db: &Path, path: RunPath, cases: &[Case], present: &dyn Fn(&Relevant) -> bool) -> Result<Value, String> {
+    let opts = run_opts(ws);
+    let mut results: Vec<Vec<Got>> = Vec::with_capacity(cases.len());
+    let mut modes: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let (mut cold, mut warm): (Option<f64>, Vec<f64>) = (None, Vec::new());
+    let mut stages: Vec<Value> = Vec::new();
+    match path {
+        RunPath::Service => {
+            // The reader is forgotten first, so the first query opens it: that one is the cold one, whether or not it answered in
+            // time (a late answer carries no timing of its own to say so).
+            crate::retrieval::forget_reader(db);
+            for (i, c) in cases.iter().enumerate() {
+                let r = crate::retrieval::search(home, db, &c.q, opts.clone()).map_err(|e| e.to_string())?;
+                *modes.entry(r.mode.as_str()).or_default() += 1;
+                let ms = r.ms as f64;
+                if i == 0 {
+                    cold = Some(ms);
+                } else {
+                    warm.push(ms);
+                }
+                stages.push(json!({"id": c.id, "mode": r.mode.as_str(), "ms": ms}));
+                results.push(r.hits.iter().map(Got::from).collect());
+            }
+        }
+        RunPath::Hybrid | RunPath::Lexical => {
+            let mut kb = Kb::open_readonly(db).map_err(|e| e.to_string())?;
+            let opts = if path == RunPath::Hybrid {
+                if !crate::kb::attach_default_readonly(home, &mut kb) {
+                    return Err("the hybrid path needs the embedding model the index's vectors were made with".into());
+                }
+                opts
+            } else {
+                crate::kb::SearchOpts { legs: crate::kb::Legs::LexicalOnly, ..opts }
+            };
+            for c in cases {
+                let t = std::time::Instant::now();
+                let hits = kb.search(&c.q, &opts).map_err(|e| e.to_string())?;
+                warm.push(t.elapsed().as_secs_f64() * 1000.0);
+                results.push(hits.iter().map(Got::from).collect());
+            }
+        }
+    }
+    let (m, ranks) = score(cases, &results, present);
+    warm.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = cases.len().max(1) as f64;
+    let mut v = json!({"path": path.as_str(), "metrics": m, "ranks": ranks, "p50_ms": percentile(&warm, 0.5), "p95_ms": percentile(&warm, 0.95)});
+    if path == RunPath::Service {
+        v["cold_ms"] = json!(cold);
+        v["modes"] = json!(modes.iter().map(|(k, c)| (k.to_string(), json!({"count": c, "share": round4(*c as f64 / n)}))).collect::<serde_json::Map<String, Value>>());
+        v["vector_leg"] = json!(round4(modes.get("hybrid").copied().unwrap_or(0) as f64 / n));
+        v["queries"] = json!(stages);
+    }
+    Ok(v)
+}
+
+/// A run's stamp: the UTC time to the second, `YYYYMMDDTHHMMSSZ`.
+fn stamp() -> String {
+    let now = delphi_core::time::now_rfc3339();
+    let digits: String = now.chars().take(19).filter(|c| c.is_ascii_digit()).collect();
+    format!("{}T{}Z", &digits[..8.min(digits.len())], &digits[8.min(digits.len())..])
+}
+
+pub fn runs_dir(ws: &Path) -> PathBuf {
+    eval_dir(ws).join("runs")
+}
+
+/// Score the accepted set (§2.2) on `paths` and write the run file. The index is opened read-only; nothing else is written.
+pub fn run(home: &Path, ws: &Path, paths: &[RunPath], label: Option<&str>) -> Result<(PathBuf, Value), String> {
+    let (h, cases) = load_accepted(ws, None)?;
+    let db = ws.join("local/state.db");
+    let kb = Kb::open_readonly(&db).map_err(|e| e.to_string())?;
+    let spans: BTreeSet<(String, usize)> = cases.iter().flat_map(|c| c.relevant.iter()).map(|r| (r.path.clone(), r.start_line)).filter(|(p, s)| kb.chunk_spans(p).iter().any(|(a, _, _)| a == s)).collect();
+    let present = |r: &Relevant| spans.contains(&(r.path.clone(), r.start_line));
+    let (documents, chunks) = kb.counts().map_err(|e| e.to_string())?;
+    let generation = kb.index_generation();
+    drop(kb);
+    let mut out = Vec::new();
+    for p in paths {
+        out.push(path_run(home, ws, &db, *p, &cases, &present)?);
+    }
+    let stamp = stamp();
+    let v = json!({
+        "v": 1, "run": stamp, "label": label,
+        "set": {"version": h.version, "sha256": h.sha256, "counts": h.counts},
+        "corpus": {"documents": documents, "chunks": chunks, "index_generation": generation},
+        "models": {"embedder": crate::embed::installed_model_id(Some(home)), "reranker": crate::embed::installed_reranker_id(Some(home))},
+        "build": {"version": env!("CARGO_PKG_VERSION"), "commit": option_env!("DELPHI_GIT_COMMIT").unwrap_or("unknown")},
+        "opts": opts_json(&run_opts(ws)),
+        "paths": out,
+    });
+    std::fs::create_dir_all(runs_dir(ws)).map_err(|e| e.to_string())?;
+    let file = runs_dir(ws).join(format!("{stamp}.json"));
+    if file.exists() {
+        return Err(format!("a run named {stamp} already exists; run again in a second"));
+    }
+    std::fs::write(&file, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n").map_err(|e| e.to_string())?;
+    Ok((file, v))
+}
+
+/// The summary a terminal or a pull request shows: numbers and case ids, never a question or a passage (§2.2 item 5).
+pub fn summary(v: &Value) -> String {
+    let mut s = format!("run {} on golden-v{} ({} chunk(s), index generation {})\n", v["run"].as_str().unwrap_or("?"), v["set"]["version"], v["corpus"]["chunks"], v["corpus"]["index_generation"]);
+    s.push_str(&format!("  {:<8} {:>6} {:>9} {:>9} {:>8} {:>6} {:>8} {:>8}\n", "path", "cases", "recall@10", "recall@20", "nDCG@10", "MRR", "p50 ms", "p95 ms"));
+    for p in v["paths"].as_array().into_iter().flatten() {
+        let m = &p["metrics"];
+        let f = |x: &Value| x.as_f64().map_or("-".to_string(), |x| format!("{x:.4}"));
+        let ms = |x: &Value| x.as_f64().map_or("-".to_string(), |x| format!("{x:.0}"));
+        s.push_str(&format!("  {:<8} {:>6} {:>9} {:>9} {:>8} {:>6} {:>8} {:>8}\n", p["path"].as_str().unwrap_or("?"), m["cases"], f(&m["recall10"]), f(&m["recall20"]), f(&m["ndcg10"]), f(&m["mrr"]), ms(&p["p50_ms"]), ms(&p["p95_ms"])));
+        if m["none_cases"].as_u64().unwrap_or(0) > 0 {
+            s.push_str(&format!("           none cases answered: {} of {}\n", m["none_answered"], m["none_cases"]));
+        }
+        if let Some(st) = m["stale"].as_array().filter(|a| !a.is_empty()) {
+            s.push_str(&format!("           stale (a passage is gone; not scored): {}\n", st.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")));
+        }
+        if p["path"] == "service" {
+            let modes: Vec<String> = p["modes"].as_object().into_iter().flatten().map(|(k, c)| format!("{k} {}", c["share"])).collect();
+            s.push_str(&format!("           modes: {}; cold {} ms\n", modes.join(", "), ms(&p["cold_ms"])));
+        }
+    }
+    s
+}
+
+pub fn read_run(ws: &Path, name: &str) -> Result<Value, String> {
+    let p = if name.ends_with(".json") && Path::new(name).is_file() { PathBuf::from(name) } else { runs_dir(ws).join(format!("{}.json", name.trim_end_matches(".json"))) };
+    let text = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// Two runs side by side (§2.2 item 6): the change in each metric, and the case ids whose first relevant rank moved by more than
+/// three. Refused for runs on different set versions. No question text: a run file holds none.
+pub fn compare(a: &Value, b: &Value) -> Result<String, String> {
+    if a["set"]["version"] != b["set"]["version"] || a["set"]["sha256"] != b["set"]["sha256"] {
+        return Err(format!("the runs are on different golden sets (v{} and v{}); runs are compared only on the same set", a["set"]["version"], b["set"]["version"]));
+    }
+    let mut s = format!("{} -> {} on golden-v{}\n", a["run"].as_str().unwrap_or("?"), b["run"].as_str().unwrap_or("?"), a["set"]["version"]);
+    if a["corpus"]["index_generation"] != b["corpus"]["index_generation"] {
+        s.push_str(&format!("  warning: the index changed between the runs (generation {} -> {}); the corpus, not the code, may have moved the numbers\n", a["corpus"]["index_generation"], b["corpus"]["index_generation"]));
+    }
+    for pa in a["paths"].as_array().into_iter().flatten() {
+        let Some(pb) = b["paths"].as_array().into_iter().flatten().find(|p| p["path"] == pa["path"]) else { continue };
+        s.push_str(&format!("  {}:\n", pa["path"].as_str().unwrap_or("?")));
+        for k in ["recall10", "recall20", "ndcg10", "mrr"] {
+            let (x, y) = (pa["metrics"][k].as_f64().unwrap_or(0.0), pb["metrics"][k].as_f64().unwrap_or(0.0));
+            s.push_str(&format!("    {:<9} {:.4} -> {:.4} ({:+.4})\n", k, x, y, y - x));
+        }
+        for k in ["p50_ms", "p95_ms", "vector_leg"] {
+            if let (Some(x), Some(y)) = (pa[k].as_f64(), pb[k].as_f64()) {
+                s.push_str(&format!("    {:<9} {} -> {}\n", k, x, y));
+            }
+        }
+        let rank = |p: &Value, id: &str| p["ranks"][id].as_u64().map(|r| r as i64).unwrap_or(RUN_CAP as i64 + 1);
+        let moved: Vec<String> = pa["ranks"].as_object().into_iter().flatten().map(|(id, _)| id).filter(|id| (rank(pa, id) - rank(pb, id)).abs() > 3).map(|id| format!("{id} ({} -> {})", rank(pa, id), rank(pb, id))).collect();
+        s.push_str(&format!("    moved more than three ranks: {}\n", if moved.is_empty() { "none".into() } else { moved.join(", ") }));
+    }
+    Ok(s)
+}
+
+/// The runs on file, oldest first: `(stamp, set version, label)`.
+pub fn list_runs(ws: &Path) -> Vec<Value> {
+    let mut names: Vec<String> = std::fs::read_dir(runs_dir(ws)).into_iter().flatten().flatten().filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".json")).map(String::from)).collect();
+    names.sort();
+    names.into_iter().filter_map(|n| read_run(ws, &n).ok()).map(|v| json!({"run": v["run"], "set": v["set"]["version"], "label": v["label"], "paths": v["paths"].as_array().into_iter().flatten().map(|p| json!({"path": p["path"], "recall10": p["metrics"]["recall10"], "ndcg10": p["metrics"]["ndcg10"]})).collect::<Vec<_>>()})).collect()
+}
+
 // ── the command (§2.3) ──────────────────────────────────────────────────────
 
-pub const USAGE: &str = "usage: delphi kb eval build --real-only | accept [--workspace <name>] [--home <dir>]";
+pub const USAGE: &str = "usage: delphi kb eval build --real-only | accept | run [--path service|hybrid|lexical|all] [--label <text>] [--json] | compare <run> <run> [--json] | runs [--json]   [--workspace <name>] [--home <dir>]";
 
-/// `delphi kb eval build|accept …` for the workspace at `ws`. The caller has refused these inside an agent seat.
-pub fn cli(_home: &Path, ws: &Path, args: &[String]) -> i32 {
+/// `delphi kb eval build|accept|run|compare|runs …` for the workspace at `ws`. The caller has refused `build` and `accept` inside an
+/// agent seat; `run`, `compare` and `runs` read only.
+pub fn cli(home: &Path, ws: &Path, args: &[String]) -> i32 {
+    let json_out = args.iter().any(|a| a == "--json");
+    let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     match args.first().map(String::as_str) {
+        Some("run") => {
+            let Some(paths) = RunPath::parse(flag("--path").as_deref().unwrap_or("all")) else {
+                eprintln!("delphi kb eval run: --path is service, hybrid, lexical or all\n{USAGE}");
+                return 2;
+            };
+            match run(home, ws, &paths, flag("--label").as_deref()) {
+                Ok((file, v)) => {
+                    if json_out {
+                        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+                    } else {
+                        print!("{}", summary(&v));
+                        println!("  written: {}", file.display());
+                    }
+                    0
+                }
+                Err(e) => {
+                    eprintln!("delphi kb eval run: {e}");
+                    1
+                }
+            }
+        }
+        Some("compare") => {
+            let names: Vec<&String> = args[1..].iter().filter(|a| !a.starts_with("--")).collect();
+            let [a, b] = names[..] else {
+                eprintln!("{USAGE}");
+                return 2;
+            };
+            match (read_run(ws, a), read_run(ws, b)) {
+                (Ok(a), Ok(b)) => match compare(&a, &b) {
+                    Ok(text) => {
+                        if json_out {
+                            println!("{}", serde_json::to_string_pretty(&json!({"before": a["run"], "after": b["run"], "set": a["set"]["version"], "text": text})).unwrap_or_default());
+                        } else {
+                            print!("{text}");
+                        }
+                        0
+                    }
+                    Err(e) => {
+                        eprintln!("delphi kb eval compare: {e}");
+                        1
+                    }
+                },
+                (Err(e), _) | (_, Err(e)) => {
+                    eprintln!("delphi kb eval compare: {e}");
+                    1
+                }
+            }
+        }
+        Some("runs") => {
+            let runs = list_runs(ws);
+            if json_out {
+                println!("{}", serde_json::to_string_pretty(&runs).unwrap_or_default());
+            } else if runs.is_empty() {
+                println!("no runs yet (`delphi kb eval run`)");
+            } else {
+                for r in &runs {
+                    let paths: Vec<String> = r["paths"].as_array().into_iter().flatten().map(|p| format!("{} recall@10 {} nDCG@10 {}", p["path"].as_str().unwrap_or("?"), p["recall10"], p["ndcg10"])).collect();
+                    println!("{}  golden-v{}  {}{}", r["run"].as_str().unwrap_or("?"), r["set"], paths.join("; "), r["label"].as_str().map(|l| format!("  ({l})")).unwrap_or_default());
+                }
+            }
+            0
+        }
         Some("build") => {
             if !args.iter().any(|a| a == "--real-only") {
                 eprintln!("delphi kb eval build: only --real-only can be built yet (synthetic cases need the single-turn bridge, specs/143)\n{USAGE}");
@@ -547,5 +946,108 @@ mod tests {
         assert_eq!(s.len(), SAMPLE);
         assert_eq!(s.iter().filter(|&&i| cases[i].kind == "synthetic").count(), 4);
         assert_eq!(sample(&cases[..5]).len(), 5);
+    }
+
+    fn rel(path: &str, start_line: usize, grade: u8) -> Relevant {
+        Relevant { path: path.into(), start_line, grade, tier: String::new() }
+    }
+
+    fn got(path: &str, a: usize, b: usize) -> Got {
+        Got { path: path.into(), start_line: a, end_line: b }
+    }
+
+    /// AC-5: a known ranking, scored by hand.
+    ///
+    /// Relevant: a.md:1 (grade 3), a.md:10 (grade 2), b.md:5 (grade 1). Returned, in order: x.md:1-4 (0), a.md:8-12 (holds a.md:10,
+    /// grade 2), a.md:1-6 (grade 3), y.md:1-2 (0), then 15 misses and b.md:5-6 at rank 20 (grade 1).
+    /// - recall@10 = 2 found / min(3, 10) = 0.6667; recall@20 = 3 / 3 = 1.
+    /// - DCG@10 = 2/log2(3) + 3/log2(4) = 1.26186 + 1.5 = 2.76186; IDCG@10 = 3/log2(2) + 2/log2(3) + 1/log2(4) = 3 + 1.26186 + 0.5
+    ///   = 4.76186; nDCG@10 = 0.5800.
+    /// - first relevant at rank 2: MRR 0.5.
+    #[test]
+    fn the_metrics_equal_values_computed_by_hand() {
+        let relevant = vec![rel("a.md", 1, 3), rel("a.md", 10, 2), rel("b.md", 5, 1)];
+        let mut ranking = vec![got("x.md", 1, 4), got("a.md", 8, 12), got("a.md", 1, 6), got("y.md", 1, 2)];
+        ranking.extend((0..15).map(|i| got("z.md", i * 10 + 1, i * 10 + 5)));
+        ranking.push(got("b.md", 5, 6));
+        let g = grades(&relevant, &ranking);
+        assert_eq!(&g[..4], &[0, 2, 3, 0]);
+        assert_eq!(g[19], 1);
+        assert_eq!(round4(recall_at(&g, relevant.len(), 10)), 0.6667);
+        assert_eq!(round4(recall_at(&g, relevant.len(), 20)), 1.0);
+        assert_eq!(round4(ndcg_at(&g, &relevant, 10)), 0.58);
+        assert_eq!(first_rank(&g), Some(2));
+        // The same passage returned twice counts once; a heading never decides a match.
+        assert_eq!(grades(&relevant, &[got("a.md", 1, 6), got("a.md", 1, 6)]), vec![3, 0]);
+        // Scored over cases, for each path alike: a `none` case and a stale case are counted apart, not scored.
+        let cases = vec![
+            Case { id: "r-1".into(), q: "q".into(), kind: "real".into(), from: "f1".into(), relevant: relevant.clone(), none: false },
+            Case { id: "n-1".into(), q: "q".into(), kind: "real".into(), from: "f2".into(), relevant: vec![], none: true },
+            Case { id: "r-2".into(), q: "q".into(), kind: "real".into(), from: "f3".into(), relevant: vec![rel("gone.md", 1, 3)], none: false },
+        ];
+        let (m, ranks) = score(&cases, &[ranking, vec![got("x.md", 1, 2)], vec![]], &|r: &Relevant| r.path != "gone.md");
+        assert_eq!((m.cases, m.recall10, m.recall20, m.ndcg10, m.mrr), (1, 0.6667, 1.0, 0.58, 0.5));
+        assert_eq!((m.none_cases, m.none_answered, m.stale.clone()), (1, 1, vec!["r-2".to_string()]));
+        assert_eq!(ranks.get("r-1"), Some(&Some(2)));
+    }
+
+    /// An accepted set on the fixture, with every sampled case kept.
+    fn accepted() -> (tempfile::TempDir, PathBuf) {
+        let (d, ws) = fixture();
+        build(&ws, &open(&ws)).unwrap();
+        accept(&ws, &mut answers(&"keep\n".repeat(SAMPLE)), &mut Vec::new()).unwrap();
+        (d, ws)
+    }
+
+    /// AC-6: a reader made to answer late gives `lexical-deadline` for the query, and what came back is scored.
+    #[test]
+    fn a_late_reader_is_reported_as_lexical_deadline_and_still_scored() {
+        let (d, ws) = accepted();
+        let db = ws.join("local/state.db");
+        crate::retrieval::test_hooks::LATE.lock().unwrap().push((db.clone(), crate::retrieval::DEADLINE + std::time::Duration::from_millis(300)));
+        let (_, v) = run(d.path(), &ws, &[RunPath::Service], Some("late")).unwrap();
+        crate::retrieval::test_hooks::LATE.lock().unwrap().retain(|(p, _)| *p != db);
+        let p = &v["paths"][0];
+        assert_eq!(p["path"], "service");
+        assert_eq!(p["modes"]["lexical-deadline"]["count"], 5 + 4, "every query answered late");
+        assert_eq!(p["vector_leg"], 0.0);
+        assert!(p["cold_ms"].as_f64().is_some_and(|ms| ms >= crate::retrieval::DEADLINE.as_millis() as f64), "a cold query that missed is still reported");
+        assert!(p["metrics"]["recall10"].as_f64().unwrap() > 0.0, "what the keyword answer returned is scored");
+    }
+
+    /// AC-7: two runs on one set compare; on two versions they are refused; neither the summary nor the comparison holds a question.
+    #[test]
+    fn runs_compare_on_one_set_only_and_print_no_question_text() {
+        let (d, ws) = accepted();
+        let (_, a) = run(d.path(), &ws, &[RunPath::Lexical, RunPath::Hybrid, RunPath::Service], None).unwrap_or_else(|e| {
+            // No model in a test home: the hybrid path says so, and the rest run.
+            assert!(e.contains("embedding model"), "{e}");
+            run(d.path(), &ws, &[RunPath::Lexical, RunPath::Service], None).unwrap()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let (_, b) = run(d.path(), &ws, &[RunPath::Lexical, RunPath::Service], Some("after")).unwrap();
+        let cmp = compare(&a, &b).unwrap();
+        assert!(cmp.contains("recall10") && cmp.contains("moved more than three ranks"), "{cmp}");
+        let (_, cases) = load_accepted(&ws, None).unwrap();
+        for text in [summary(&a), cmp.clone(), serde_json::to_string(&a).unwrap()] {
+            for c in &cases {
+                assert!(!text.contains(&c.q), "a question appeared: {}", c.id);
+            }
+        }
+        assert_eq!(list_runs(&ws).len(), 2);
+        let mut other = b.clone();
+        other["set"]["version"] = json!(2);
+        assert!(compare(&a, &other).unwrap_err().contains("different golden sets"));
+    }
+
+    /// The run opens the index read-only: the index file and the set are unchanged, and the only new file is the run's.
+    #[test]
+    fn a_run_writes_nothing_but_its_own_file() {
+        let (d, ws) = accepted();
+        let db = ws.join("local/state.db");
+        let before = (std::fs::read(&db).unwrap(), std::fs::read(set_path(&ws, 1)).unwrap());
+        let (file, _) = run(d.path(), &ws, &[RunPath::Lexical], None).unwrap();
+        assert_eq!((std::fs::read(&db).unwrap(), std::fs::read(set_path(&ws, 1)).unwrap()), before);
+        assert!(file.starts_with(runs_dir(&ws)));
     }
 }

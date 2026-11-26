@@ -44,6 +44,8 @@ pub const EMBED_FORMAT: &str = "1";
 const EMBED_BATCH: usize = 16;
 /// How many nearest windows the vector ranking looks at before duplicates and visibility are applied.
 const VEC_CANDIDATES: usize = 120;
+/// The most results a search returns unless `SearchOpts::cap` says otherwise (`specs/140` §2.2 item 4).
+pub const SEARCH_CAP: usize = 10;
 /// Default weight of the vector ranking in the fusion (`specs/004` §3.4); each lexical ranking weighs 1.0, definitions 2.0.
 const VEC_WEIGHT: f64 = 3.0;
 /// Default factor on the keyword rankings when the query is a sentence (`is_natural_question`).
@@ -1664,6 +1666,9 @@ pub struct SearchOpts {
     /// The calling agent's role: `memory/agents/<role>/` is visible only to it. `None` is the operator.
     pub role: Option<String>,
     pub limit: usize,
+    /// The most results any search returns, whatever `limit` asks: [`SEARCH_CAP`] by default; only the golden-set eval sets it
+    /// higher (`specs/140` §2.2 item 4).
+    pub cap: usize,
     /// Include documents whose provenance is untrusted or federated-peer, and inactive ones.
     pub include_untrusted: bool,
     /// Include `kind: attributed` records, which are otherwise never returned (`specs/040` §24.3).
@@ -1885,7 +1890,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None, provisional: ProvisionalView::Off, automatic: false, ranking: Ranking::default() }
+        SearchOpts { role: None, limit: 10, cap: SEARCH_CAP, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None, provisional: ProvisionalView::Off, automatic: false, ranking: Ranking::default() }
     }
 }
 
@@ -2201,7 +2206,7 @@ impl Kb {
         let mut readiness: HashMap<String, Option<String>> = HashMap::new();
         let mut episodes = 0usize;
         for (id, s) in order.into_iter() {
-            if hits.len() >= opts.limit.min(10) {
+            if hits.len() >= opts.limit.min(opts.cap) {
                 break;
             }
             if let Some(cap) = opts.max_episodes.filter(|_| opts.include_staged) {
