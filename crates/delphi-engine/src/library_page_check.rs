@@ -615,7 +615,13 @@ impl Library {
             Ok(bytes) => {
                 cost.bytes = bytes.len() as u64;
                 let t = std::time::Instant::now();
-                let altered = meta["type"] == "document" && meta["content_hash"].as_str().is_some_and(|h| h != format!("sha256:{}", sha256_hex(&bytes)));
+                // A capture with a record states the hash of its stored text (`specs/142` §2.1); one from before the record is
+                // checked against the hash of the file it was read from, as it always was.
+                let altered = meta["type"] == "document"
+                    && match self.capture_record(id).and_then(|r| r["text_sha256"].as_str().map(String::from)) {
+                        Some(text_sha) => text_sha != sha256_hex(&bytes),
+                        None => meta["content_hash"].as_str().is_some_and(|h| h != format!("sha256:{}", sha256_hex(&bytes))),
+                    };
                 if meta["type"] == "document" {
                     cost.hash_ns = t.elapsed().as_nanos() as u64;
                 }

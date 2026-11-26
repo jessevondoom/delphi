@@ -449,3 +449,61 @@ fn teach_and_unteach_refuse_stdin_that_is_not_a_terminal_and_write_nothing() {
     assert_eq!(files.iter().map(|p| std::fs::read(ws.join(p)).ok()).collect::<Vec<_>>(), before, "nothing was written");
     assert!(!ws.join("local/lessons-log").exists() && !home.join("operator/lessons-log").exists(), "not even the lessons log");
 }
+
+/// A home with nothing in it, and `delphi` run against it from outside any agent seat.
+fn library_home() -> (tempfile::TempDir, std::path::PathBuf) {
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    (t, home)
+}
+
+fn delphi_at(home: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(DELPHI).args(args).arg("--home").arg(home).env_remove("DELPHI_WORKSPACE").env_remove("DELPHI_BRIDGE_SOCKET").env_remove("DELPHI_BRIDGE_TOKEN").stdin(Stdio::null()).current_dir(home.parent().unwrap()).output().unwrap()
+}
+
+fn tree(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        if e.path().is_dir() {
+            out.extend(tree(&e.path()));
+        } else {
+            out.push((e.path(), std::fs::read(e.path()).unwrap()));
+        }
+    }
+    out.sort();
+    out
+}
+
+// specs/142 AC-3: `delphi sources verify` passes a capture as it was stored, reports a version whose `source.md` was edited by hand
+// with exit 1, and changes nothing.
+#[test]
+fn sources_verify_reports_a_capture_edited_by_hand_and_changes_nothing() {
+    let (t, home) = library_home();
+    let page = t.path().join("tides.md");
+    std::fs::write(&page, "# Tides\n\nThe tide turns twice a day.\n").unwrap();
+    let o = delphi_at(&home, &["sources", "add", page.to_str().unwrap(), "--licence", "CC0-1.0"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let id = std::fs::read_dir(home.join("library/sources")).unwrap().flatten().next().unwrap().file_name().to_string_lossy().to_string();
+    let dir = home.join("library/sources").join(&id);
+    assert!(dir.join("raw").is_file() && dir.join("capture.json").is_file() && dir.join("source.md").is_file());
+
+    let o = delphi_at(&home, &["sources", "verify"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert!(text(&o.stdout).contains("1 capture(s) checked, 0 differ"), "{}", text(&o.stdout));
+
+    std::fs::write(dir.join("source.md"), "# Tides\n\nThe tide never turns.\n").unwrap();
+    let before = tree(&home);
+    let o = delphi_at(&home, &["sources", "verify", &id]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains(&format!("{id} version 1: source.md is not what was captured")) && out.contains("1 capture(s) checked, 1 differ") && out.contains("Nothing was changed."), "{out}");
+    let o = delphi_at(&home, &["sources", "verify", "--json"]);
+    assert_eq!(o.status.code(), Some(1));
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!((v["checked"].as_u64(), v["differ"][0]["id"].as_str(), v["differ"][0]["file"].as_str(), v["differ"][0]["version"].as_str()), (Some(1), Some(id.as_str()), Some("source.md"), Some("1")), "{v}");
+    assert_eq!(tree(&home), before, "verify changes nothing");
+
+    let o = delphi_at(&home, &["sources", "verify", "no-such-source"]);
+    assert_eq!(o.status.code(), Some(1));
+}

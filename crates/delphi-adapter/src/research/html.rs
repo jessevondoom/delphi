@@ -156,6 +156,12 @@ pub fn strip_images(md: &str) -> String {
     out
 }
 
+/// The name this HTML conversion is recorded under wherever its output is kept (`specs/142` §2.1 item 4).
+pub const EXTRACTOR_NAME: &str = "html-markdown";
+/// Its version: raised whenever [`to_markdown`] gives different output for the same bytes, so text made by an older conversion can be
+/// told apart and made again from the kept bytes.
+pub const EXTRACTOR_VERSION: &str = "1";
+
 /// Convert `html` (fetched from `base`) to markdown. Output is capped at `max_chars`, cut at a paragraph boundary. Images are left out.
 pub fn to_markdown(html: &str, base: &str, max_chars: usize) -> Converted {
     convert(html, base, max_chars, false)

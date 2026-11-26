@@ -107,7 +107,7 @@ impl Library {
             kept += 1;
         }
         let assets = (kept > 0).then(|| stage.clone());
-        let stored = self.store(Prepared { id, meta, text: Some(text), assets, requested: Some(Level::Full), excerpts: None, imported: false }, budgets);
+        let stored = self.store(Prepared { id, meta, text: Some(text), assets, requested: Some(Level::Full), excerpts: None, imported: false, capture: None }, budgets);
         // Each picture's licence record (`specs/118` §2 item 1): the operator's own material, `internal`, decided by where it is.
         if let Ok(s) = &stored {
             let retrieved = delphi_core::time::now_rfc3339();

@@ -215,6 +215,12 @@ pub(crate) fn test_text_snapshot(url: &str, text: &str) -> Snapshot {
     snap
 }
 
+/// A snapshot of the HTML `body` at `url`, for tests that need two pages whose bytes differ and whose text does not.
+#[cfg(test)]
+pub(crate) fn test_html_snapshot(url: &str, body: &str) -> Snapshot {
+    build(Raw { final_url: Url::parse(url).unwrap(), status: 200, headers: vec![], content_type: "text/html".into(), body: body.as_bytes().to_vec(), truncated: false, redirects: vec![] }, false)
+}
+
 /// The refusal the fetcher gives a redirect from `from` to `to` on another origin, for tests of a caller that takes the hop up itself.
 #[cfg(test)]
 pub(crate) fn test_cross_origin_refusal(from: &str, to: &str) -> FetchError {
@@ -370,6 +376,11 @@ fn squash(s: &str) -> String {
 fn entities(s: &str) -> String {
     s.replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
 }
+
+/// The name [`extract_text`] is recorded under in every library capture whose text it made (`specs/142` §2.1 item 4).
+pub const EXTRACTOR_NAME: &str = "fact-fetch-text";
+/// Its version: raised whenever [`extract_text`] gives different text for the same bytes.
+pub const EXTRACTOR_VERSION: &str = "1";
 
 /// Title and visible text of a page, by code. Scripts, styles and comments are dropped; markup is removed.
 pub fn extract_text(body: &[u8], content_type: &str) -> (String, String) {
