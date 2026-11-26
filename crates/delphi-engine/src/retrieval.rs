@@ -2,6 +2,11 @@
 //! daemon. The index is opened read-only and kept, with the embedder attached once; it is reopened only when a sync has
 //! changed the index (`index_generation`). A search never writes, never syncs and never runs the reranker, and it falls
 //! back to keywords if the vector search does not answer within the deadline.
+//!
+//! The warm-up (`specs/140` §2.5 item 2, slice E): the daemon opens the reader at start and after each sync, outside any search
+//! ([`warm`]). The service's reader loads the embedding model only, never the reranker it does not use. A search that arrives
+//! while the reader is being opened does not wait for it: it answers by keywords at once and is counted `lexical-warming`, not
+//! `lexical-deadline`.
 
 use crate::kb::{Hit, Kb, KbError, Legs, SearchOpts, Stages};
 use delphi_core::provenance::Tier;
@@ -20,6 +25,8 @@ pub enum Mode {
     Lexical,
     /// The vector search missed the deadline.
     Deadline,
+    /// The reader was being opened by the warm-up, so the keyword answer was given at once (`specs/140` §2.5 item 2).
+    Warming,
 }
 
 impl Mode {
@@ -28,6 +35,7 @@ impl Mode {
             Mode::Hybrid => "hybrid",
             Mode::Lexical => "lexical",
             Mode::Deadline => "lexical-deadline",
+            Mode::Warming => "lexical-warming",
         }
     }
 }
@@ -54,12 +62,111 @@ impl Timing {
     }
 }
 
-/// How many service searches this process answered in each mode, in the order of [`Mode`]: hybrid, lexical, lexical-deadline.
-static MODE_COUNTS: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+/// Every mode, in the order of [`Mode`].
+pub const MODES: [Mode; 4] = [Mode::Hybrid, Mode::Lexical, Mode::Deadline, Mode::Warming];
+
+/// How many service searches this process answered in each mode, in the order of [`MODES`].
+static MODE_COUNTS: [AtomicU64; 4] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
 /// The service searches this process has answered, by mode (`specs/140` §2.5).
-pub fn mode_counts() -> [(Mode, u64); 3] {
-    [Mode::Hybrid, Mode::Lexical, Mode::Deadline].map(|m| (m, MODE_COUNTS[m as usize].load(Ordering::Relaxed)))
+pub fn mode_counts() -> [(Mode, u64); 4] {
+    MODES.map(|m| (m, MODE_COUNTS[m as usize].load(Ordering::Relaxed)))
+}
+
+/// The service searches of each index not yet handed to the workspace's record of modes, by index.
+fn pending() -> &'static Mutex<HashMap<PathBuf, [u64; 4]>> {
+    static P: OnceLock<Mutex<HashMap<PathBuf, [u64; 4]>>> = OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+/// Take the counts of the searches of `db` made since the last take, by mode in the order of [`MODES`]. The daemon calls it on its
+/// tick and appends them to the workspace's record ([`record_modes`]).
+pub fn take_mode_counts(db: &Path) -> [u64; 4] {
+    pending().lock().unwrap().remove(db).unwrap_or_default()
+}
+
+/// The daemon's record of how its service searches were answered (`specs/140` §2.5 item 3), in the workspace: one line per tick
+/// that had searches, `{"t": <unix>, "n": [hybrid, lexical, lexical-deadline, lexical-warming]}`. Counts only, never a query.
+pub const MODES_FILE: &str = "local/search-modes.jsonl";
+/// The record is cut back to its last seven days when it grows past this many bytes.
+const MODES_FILE_CAP: u64 = 256 * 1024;
+
+/// Append one tick's counts to the workspace's record. Nothing is written for a tick with no search, or when the workspace has no
+/// `local/` directory. When the file has grown past its cap, lines older than seven days are dropped: the record is a counter, not
+/// a ledger.
+pub fn record_modes(ws_dir: &Path, now: i64, counts: [u64; 4]) -> Result<bool, String> {
+    use std::io::Write;
+    let path = ws_dir.join(MODES_FILE);
+    if counts.iter().all(|n| *n == 0) || !path.parent().is_some_and(Path::is_dir) {
+        return Ok(false);
+    }
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > MODES_FILE_CAP) {
+        let week = now - 7 * 86_400;
+        let kept: String = std::fs::read_to_string(&path).unwrap_or_default().lines().filter(|l| serde_json::from_str::<serde_json::Value>(l).ok().and_then(|v| v["t"].as_i64()).is_some_and(|t| t >= week)).map(|l| format!("{l}\n")).collect();
+        std::fs::write(&path, kept).map_err(|e| format!("{MODES_FILE}: {e}"))?;
+    }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| format!("{MODES_FILE}: {e}"))?;
+    writeln!(f, "{}", serde_json::json!({"t": now, "n": counts})).map_err(|e| format!("{MODES_FILE}: {e}"))?;
+    Ok(true)
+}
+
+fn count_mode(db: &Path, mode: Mode) {
+    MODE_COUNTS[mode as usize].fetch_add(1, Ordering::Relaxed);
+    pending().lock().unwrap().entry(db.to_path_buf()).or_default()[mode as usize] += 1;
+}
+
+/// The indexes whose reader the warm-up is opening now.
+fn warming() -> &'static Mutex<std::collections::HashSet<PathBuf>> {
+    static W: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
+fn is_warming(db: &Path) -> bool {
+    warming().lock().unwrap().contains(db)
+}
+
+/// Whether the kept reader of `db` is missing or older than the index.
+fn stale(reader: &Option<Reader>, db: &Path) -> bool {
+    match (reader, current_generation(db)) {
+        (Some(r), Some(g)) => r.generation != g,
+        _ => true,
+    }
+}
+
+/// The warm-up (`specs/140` §2.5 item 2): open the reader of `db` on a thread of its own when it is missing or older than the index,
+/// so that no search pays for the open. The daemon calls it at start and on its tick, which follows every sync, whichever process
+/// made it. A warm-up already under way, an index that does not exist and a current reader are left alone. The handle is for
+/// tests; the daemon drops it.
+pub fn warm(home: &Path, db: &Path) -> Option<std::thread::JoinHandle<()>> {
+    if !db.is_file() || is_warming(db) {
+        return None;
+    }
+    let slot = slots().lock().unwrap().entry(db.to_path_buf()).or_default().clone();
+    let (home, db) = (home.to_path_buf(), db.to_path_buf());
+    Some(std::thread::spawn(move || {
+        let mut guard = slot.lock().unwrap();
+        if !stale(&guard, &db) || !warming().lock().unwrap().insert(db.clone()) {
+            return;
+        }
+        #[cfg(test)]
+        {
+            // Read, then released before the sleep, as `LATE` is: the hook's own lock is never held across it.
+            let slow = test_hooks::SLOW_WARM.lock().unwrap().iter().find(|(p, _)| *p == db).map(|(_, d)| *d);
+            if let Some(slow) = slow {
+                std::thread::sleep(slow);
+            }
+        }
+        if let Ok(r) = open_reader(&home, &db, &mut Timing::default()) {
+            *guard = Some(r);
+        }
+        warming().lock().unwrap().remove(&db);
+    }))
+}
+
+/// What a search's worker sends back.
+enum Answer {
+    Done(Result<(crate::kb::Found, Mode, Timing), KbError>),
+    Warming,
 }
 
 pub struct Retrieved {
@@ -86,12 +193,17 @@ fn slots() -> &'static Mutex<HashMap<PathBuf, Slot>> {
     S.get_or_init(Default::default)
 }
 
+/// Open the service's reader: the index read-only and the embedding model. The reranker is not loaded, since the service never
+/// reranks (`specs/140` §2.5 item 2).
 fn open_reader(home: &Path, db: &Path, timing: &mut Timing) -> Result<Reader, KbError> {
     let t = Instant::now();
     let mut kb = Kb::open_readonly(db)?;
     timing.open = t.elapsed();
     let t = Instant::now();
-    let hybrid = crate::kb::attach_default_readonly(home, &mut kb);
+    let hybrid = match crate::embed::open_default(Some(home)) {
+        Ok(Some(e)) => kb.attach_embedder_readonly(e),
+        _ => false,
+    };
     timing.models = t.elapsed();
     timing.cold = true;
     let generation = kb.index_generation();
@@ -131,23 +243,24 @@ fn search_index(home: &Path, db: &Path, query: &str, mut opts: SearchOpts) -> Re
         }
     }
     let slot = slots().lock().unwrap().entry(db.to_path_buf()).or_default().clone();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::channel::<Answer>();
     {
         let (slot, home, db, query, opts) = (slot.clone(), home.to_path_buf(), db.to_path_buf(), query.to_string(), opts.clone());
         std::thread::spawn(move || {
+            // The warm-up holds the reader while it opens it: this search does not queue behind it.
+            if is_warming(&db) {
+                let _ = tx.send(Answer::Warming);
+                return;
+            }
             let mut timing = Timing::default();
             let t = Instant::now();
             let mut guard = slot.lock().unwrap();
             timing.waited = t.elapsed();
-            let stale = match (&*guard, current_generation(&db)) {
-                (Some(r), Some(g)) => r.generation != g,
-                _ => true,
-            };
-            if stale {
+            if stale(&guard, &db) {
                 match open_reader(&home, &db, &mut timing) {
                     Ok(r) => *guard = Some(r),
                     Err(e) => {
-                        let _ = tx.send(Err(e));
+                        let _ = tx.send(Answer::Done(Err(e)));
                         return;
                     }
                 }
@@ -163,20 +276,23 @@ fn search_index(home: &Path, db: &Path, query: &str, mut opts: SearchOpts) -> Re
             }
             let r = guard.as_ref().unwrap();
             let mode = if r.hybrid { Mode::Hybrid } else { Mode::Lexical };
-            let _ = tx.send(r.kb.search_staged(&query, &opts, &mut timing.stages).map(|f| (f, mode, timing)));
+            let _ = tx.send(Answer::Done(r.kb.search_staged(&query, &opts, &mut timing.stages).map(|f| (f, mode, timing))));
         });
     }
     let (found, mode, timing) = match rx.recv_timeout(DEADLINE) {
-        Ok(r) => r?,
-        Err(_) => {
+        Ok(Answer::Done(r)) => r?,
+        // The reader is being warmed, or the answer is late: the keyword answer. A search that queued just before a warm-up took
+        // the reader is counted as warming too, not as a missed deadline.
+        got => {
+            let mode = if matches!(got, Ok(Answer::Warming)) || is_warming(db) { Mode::Warming } else { Mode::Deadline };
             let t = Instant::now();
             let kb = Kb::open_readonly(db)?;
             opts.legs = Legs::LexicalOnly;
             let found = kb.search_found(query, &opts)?;
-            (found, Mode::Deadline, Timing { fallback: t.elapsed(), ..Timing::default() })
+            (found, mode, Timing { fallback: t.elapsed(), ..Timing::default() })
         }
     };
-    MODE_COUNTS[mode as usize].fetch_add(1, Ordering::Relaxed);
+    count_mode(db, mode);
     Ok(Retrieved { hits: found.hits, mode, ms: start.elapsed().as_millis(), timing, withheld: found.withheld })
 }
 
@@ -187,6 +303,8 @@ pub(crate) mod test_hooks {
     use std::sync::Mutex;
     use std::time::Duration;
     pub static LATE: Mutex<Vec<(PathBuf, Duration)>> = Mutex::new(Vec::new());
+    /// Make the warm-up of one index slow, as a cold model load is.
+    pub static SLOW_WARM: Mutex<Vec<(PathBuf, Duration)>> = Mutex::new(Vec::new());
 }
 
 /// What a span starts with unless `[retrieval]` says otherwise (`specs/116` §4.2): six passages, 4,000 characters in all.
@@ -568,6 +686,51 @@ mod tests {
         for k in ["cold", "waited_ms", "open_ms", "models_ms", "embed_ms", "vector_ms", "lexical_ms", "fusion_ms", "search_ms", "fallback_ms"] {
             assert!(j.get(k).is_some(), "{k}");
         }
+    }
+
+    /// `specs/140` §2.5 item 2 (slice E): the warm-up opens the reader outside any search, so the next search is not cold; a current
+    /// reader is left alone, and after a sync the warm-up opens the newer index.
+    #[test]
+    fn the_warm_up_opens_the_reader_so_no_search_pays_for_it() {
+        let (d, db) = fixture();
+        let opts = SearchOpts { include_untrusted: true, ..Default::default() };
+        warm(d.path(), &db).expect("a warm-up starts").join().unwrap();
+        let first = search(d.path(), &db, "heron water", opts.clone()).unwrap();
+        assert!(!first.timing.cold && first.timing.open == Duration::ZERO, "the warm-up opened it");
+        assert_eq!(first.mode, Mode::Lexical, "no model in a test home");
+        let mut kb = Kb::open(&db).unwrap();
+        let f = d.path().join("b.md");
+        std::fs::write(&f, "# Otter\n\nThe otter swims.\n").unwrap();
+        kb.sync_lexical(&[src("knowledge/b.md", f)], "").unwrap();
+        warm(d.path(), &db).expect("a warm-up starts").join().unwrap();
+        let after = search(d.path(), &db, "otter", opts).unwrap();
+        assert!(!after.timing.cold && !after.hits.is_empty(), "the newer index was opened by the warm-up");
+        assert!(warm(d.path(), &d.path().join("absent.db")).is_none(), "no index, no warm-up");
+    }
+
+    /// `specs/140` §2.5 item 2: a search that arrives while the reader is being opened does not wait behind it. It answers by keywords
+    /// at once and is counted `lexical-warming`, never `lexical-deadline`; the counts are handed to the daemon's record once.
+    #[test]
+    fn a_search_during_the_warm_up_answers_by_keywords_at_once_and_is_counted_warming() {
+        let (d, db) = fixture();
+        test_hooks::SLOW_WARM.lock().unwrap().push((db.clone(), Duration::from_millis(1500)));
+        let h = warm(d.path(), &db).expect("a warm-up starts");
+        let until = Instant::now() + Duration::from_secs(5);
+        while !is_warming(&db) {
+            assert!(Instant::now() < until, "the warm-up never started");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let r = search(d.path(), &db, "heron water", SearchOpts { include_untrusted: true, ..Default::default() }).unwrap();
+        assert_eq!(r.mode, Mode::Warming);
+        assert_eq!(r.mode.as_str(), "lexical-warming");
+        assert!(!r.hits.is_empty(), "the keyword answer");
+        assert!(r.ms < DEADLINE.as_millis(), "answered at once, not at the deadline: {} ms", r.ms);
+        assert_eq!(take_mode_counts(&db), [0, 0, 0, 1], "one warming answer, no missed deadline");
+        assert_eq!(take_mode_counts(&db), [0; 4], "taken once");
+        h.join().unwrap();
+        test_hooks::SLOW_WARM.lock().unwrap().retain(|(p, _)| *p != db);
+        let warm_now = search(d.path(), &db, "heron water", SearchOpts { include_untrusted: true, ..Default::default() }).unwrap();
+        assert_eq!((warm_now.mode, warm_now.timing.cold), (Mode::Lexical, false), "after the warm-up, the kept reader answers");
     }
 
     /// The spike of `specs/140` §2.5 (slice A), run by hand on a copy of a workspace, never in CI:

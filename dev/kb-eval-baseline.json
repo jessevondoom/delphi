@@ -1,0 +1,6 @@
+{
+  "about": "The last numbers of the repository set (dev/kb-eval.json) over the repository's own documents, read by keywords as `delphi kb eval --lexical` reads them, at twenty results (specs/140 section 2.4 item 4). A test fails when recall10 or ndcg10 falls more than 0.02 below these; a change that moves them on purpose updates this file in the same commit.",
+  "taken": "2026-11-26",
+  "cases": 40,
+  "lexical": {"recall10": 0.4750, "recall20": 0.5250, "ndcg10": 0.3315, "mrr": 0.2861}
+}

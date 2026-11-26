@@ -584,6 +584,58 @@ pub fn write_merged(ws_dir: &Path, parts: &[Note], text: &str, now: &str) -> Res
     Ok(n.reference())
 }
 
+/// The trigger of a note the daemon writes itself, from numbers (`specs/140` §2.6 item 7).
+pub const DAEMON_TRIGGER: &str = "retrieval_eval";
+
+/// A note no agent's event raised (`specs/140` §2.6 item 7): the daemon's own words, made by code from numbers. It is a `fact` of the
+/// home layer in the [`SHARED`] folder, at the daemon's own tier (`L3`, never above), under the mission `retrieval-eval`; `key` makes
+/// its id. It is a provisional note like any other: unreviewed, data, never instruction, and promoted only by the operator.
+/// `Ok(None)` when the tier is off (`[memory] provisional`), the same note is already held, or its fingerprint was marked wrong
+/// within 180 days.
+pub fn keep_daemon_fact(ws_dir: &Path, key: &str, text: &str, now: &str) -> Result<Option<String>, String> {
+    if !enabled(ws_dir) {
+        return Ok(None);
+    }
+    let text = one_line(text);
+    let (root, _) = root_of(ws_dir, "").ok_or("the workspace has no home layer")?;
+    let hash = blake3::hash(format!("{key}\n{text}").as_bytes()).to_hex().to_string();
+    let n = Note {
+        id: format!("{}-retrieval-eval-e{}", day(now), &hash[..8]),
+        role: SHARED.into(),
+        mission: "retrieval-eval".into(),
+        note: format!("e{}", &hash[..8]),
+        project: String::new(),
+        tier: Tier::L3,
+        kind: "fact".into(),
+        created: now.to_string(),
+        valid_until: date_plus(now, LIFE_DAYS),
+        uses: 0,
+        trigger: DAEMON_TRIGGER.into(),
+        source: None,
+        left_uses: None,
+        text,
+        path: PathBuf::new(),
+    };
+    if n.text.is_empty() || !plain(&n.id) {
+        return Err("the note says nothing".into());
+    }
+    lock(ws_dir, || {
+        let print = n.fingerprint();
+        if rejected(ws_dir, &print, now) {
+            return Ok(None);
+        }
+        let dir = plain_dir(&root, &[&n.role])?;
+        if note_files(&dir).iter().filter_map(|p| read(p)).any(|o| o.fingerprint() == print) {
+            return Ok(None);
+        }
+        let file = dir.join(format!("{}.md", n.id));
+        let text = n.render();
+        let shown = crate::handling::label_file(ws_dir, None, &file, &text, None, &[]).unwrap_or(text);
+        write_atomic(&file, &shown)?;
+        Ok(Some(n.rel_path()))
+    })
+}
+
 /// The operator retired a note from the digest (`specs/116` §6 item 2: covered by a lesson): it moves to `retired/` with `key: value`
 /// naming why. Its fingerprint is not remembered: unlike a note marked wrong, it may be written again.
 pub fn retire(ws_dir: &Path, n: &Note, key: &str, value: &str, now: &str) -> Result<PathBuf, String> {

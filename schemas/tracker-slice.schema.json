@@ -10,6 +10,10 @@
     "state": { "enum": ["not-built", "approved", "built", "merged", "run", "deferred", "superseded"] },
     "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "The day the state was last changed." },
     "pr": { "type": "integer", "minimum": 1, "description": "The pull request number." },
-    "title": { "type": "string", "minLength": 1, "pattern": "^[^\\n]+$", "description": "One line: what the slice is." }
-  }
+    "title": { "type": "string", "minLength": 1, "pattern": "^[^\\n]+$", "description": "One line: what the slice is." },
+    "eval_before": { "type": "string", "pattern": "^\\d{8}T\\d{6}Z$", "description": "A retrieval change (specs/140 section 2.4): the stamp of the `delphi kb eval run` before it. Given with `eval_after`." },
+    "eval_after": { "type": "string", "pattern": "^\\d{8}T\\d{6}Z$", "description": "A retrieval change: the stamp of the run after it, on the same golden set. Given with `eval_before`." },
+    "eval_waived": { "type": "string", "minLength": 1, "pattern": "^[^\\n]+$", "description": "A change on the retrieval paths that cannot move ranking: one line saying why, in place of the two runs." }
+  },
+  "dependentRequired": { "eval_before": ["eval_after"], "eval_after": ["eval_before"] }
 }

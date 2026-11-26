@@ -2774,6 +2774,11 @@ pub struct Recall {
     pub at3: f64,
     pub at5: f64,
     pub at10: f64,
+    /// The answer among the first twenty (`specs/140` §2.4 item 4).
+    pub at20: f64,
+    /// nDCG@10 with the one expected answer as the only relevant result: 1 / log2(rank + 1) within the first ten.
+    pub ndcg10: f64,
+    /// Within the first ten, as before twenty were read.
     pub mrr: f64,
     /// Mean milliseconds per question.
     pub ms: f64,
@@ -2808,6 +2813,27 @@ pub struct EvalReport {
 
 /// Recall of each ranking on `cases`. A result is right when it is in the expected file (if one is named) under a
 /// heading containing the expected text.
+/// How deep `delphi kb eval` reads: twenty results (`specs/140` §2.4 item 4).
+pub const EVAL_DEPTH: usize = 20;
+/// The repository set's committed numbers (`specs/140` §2.4 item 4), relative to the repository root.
+pub const BASELINE_FILE: &str = "dev/kb-eval-baseline.json";
+/// How far recall@10 or nDCG@10 may fall below [`BASELINE_FILE`] before the baseline test fails.
+pub const BASELINE_SLACK: f64 = 0.02;
+
+/// Where `measured` falls below the baseline's numbers for `mode` by more than [`BASELINE_SLACK`], one line per metric; empty when
+/// it holds. A mode the baseline does not name holds.
+pub fn baseline_falls(baseline: &serde_json::Value, mode: &str, measured: &Recall) -> Vec<String> {
+    let mut out = Vec::new();
+    for (key, got) in [("recall10", measured.at10), ("ndcg10", measured.ndcg10)] {
+        if let Some(want) = baseline[mode][key].as_f64() {
+            if got < want - BASELINE_SLACK {
+                out.push(format!("{mode} {key} {got:.4} is more than {BASELINE_SLACK} below the baseline {want:.4}"));
+            }
+        }
+    }
+    out
+}
+
 pub fn evaluate(kb: &Kb, cases: &[EvalCase], base: &SearchOpts) -> Result<EvalReport, KbError> {
     let mut rep = EvalReport::default();
     let positives: Vec<&EvalCase> = cases.iter().filter(|c| !c.none).collect();
@@ -2823,24 +2849,27 @@ pub fn evaluate(kb: &Kb, cases: &[EvalCase], base: &SearchOpts) -> Result<EvalRe
     }
     let last = modes.len() - 1;
     for (m, (name, legs, rerank_weight)) in modes.into_iter().enumerate() {
-        let opts = SearchOpts { legs, include_untrusted: true, rerank_weight, ..base.clone() };
+        // Twenty results are read (`specs/140` §2.4 item 4); the first ten are the same as a search for ten gives.
+        let opts = SearchOpts { legs, include_untrusted: true, rerank_weight, limit: EVAL_DEPTH, cap: EVAL_DEPTH, ..base.clone() };
         let mut r = Recall::default();
         let started = std::time::Instant::now();
         for c in &positives {
             let hits = kb.search(&c.q, &opts)?;
             let rank = hits.iter().position(|h| (c.path.is_empty() || h.rel_path == c.path) && h.heading_path.to_lowercase().contains(&c.heading.to_lowercase()));
-            if let Some(i) = rank {
+            if let Some(i) = rank.filter(|i| *i < 10) {
                 r.mrr += 1.0 / (i as f64 + 1.0);
                 r.at1 += (i < 1) as u8 as f64;
                 r.at3 += (i < 3) as u8 as f64;
                 r.at5 += (i < 5) as u8 as f64;
                 r.at10 += 1.0;
+                r.ndcg10 += 1.0 / ((i + 2) as f64).log2();
             } else if m == last {
                 rep.misses.push(c.q.clone());
             }
+            r.at20 += rank.is_some() as u8 as f64;
         }
         let n = positives.len().max(1) as f64;
-        rep.per_mode.push((name, Recall { at1: r.at1 / n, at3: r.at3 / n, at5: r.at5 / n, at10: r.at10 / n, mrr: r.mrr / n, ms: started.elapsed().as_secs_f64() * 1000.0 / n }));
+        rep.per_mode.push((name, Recall { at1: r.at1 / n, at3: r.at3 / n, at5: r.at5 / n, at10: r.at10 / n, at20: r.at20 / n, ndcg10: r.ndcg10 / n, mrr: r.mrr / n, ms: started.elapsed().as_secs_f64() * 1000.0 / n }));
         if !negatives.is_empty() {
             let answered = negatives.iter().filter(|c| kb.search(&c.q, &opts).map(|h| !h.is_empty()).unwrap_or(false)).count();
             rep.off_topic.push((name, answered, negatives.len()));
@@ -2867,10 +2896,10 @@ pub fn evaluate(kb: &Kb, cases: &[EvalCase], base: &SearchOpts) -> Result<EvalRe
 }
 
 pub(crate) fn print_eval(rep: &EvalReport) {
-    println!("recall over {} question(s), top 10:", rep.cases);
-    println!("  {:<8} {:>6} {:>6} {:>6} {:>6} {:>6} {:>8}", "ranking", "@1", "@3", "@5", "@10", "MRR", "ms/q");
+    println!("recall over {} question(s), top 20:", rep.cases);
+    println!("  {:<8} {:>6} {:>6} {:>6} {:>6} {:>6} {:>8} {:>6} {:>8}", "ranking", "@1", "@3", "@5", "@10", "@20", "nDCG@10", "MRR", "ms/q");
     for (name, r) in &rep.per_mode {
-        println!("  {:<8} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6.3} {:>8.0}", name, r.at1, r.at3, r.at5, r.at10, r.mrr, r.ms);
+        println!("  {:<8} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>8.4} {:>6.3} {:>8.0}", name, r.at1, r.at3, r.at5, r.at10, r.at20, r.ndcg10, r.mrr, r.ms);
     }
     for (name, answered, of) in &rep.off_topic {
         println!("  {:<8} answered {} of {} off-topic question(s) (fewer is better)", name, answered, of);
@@ -3498,6 +3527,34 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `specs/140` §2.4 item 4 and AC-10: the repository set (`dev/kb-eval.json`), read by keywords over the repository's own
+    /// documents as `delphi kb eval --lexical` reads them, holds the numbers committed in `dev/kb-eval-baseline.json` within 0.02. A
+    /// ranking weight lowered so that nDCG@10 falls by 0.05 or more fails it, until the file holds the new numbers.
+    ///
+    /// When this fails after a change to ranking, run `delphi kb eval --lexical` and update the file in the same commit. A change
+    /// to the repository's documents alone can move the numbers too; the file says when its numbers were taken.
+    #[test]
+    fn the_repository_set_holds_its_committed_baseline_and_a_lowered_weight_fails_it() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let cases: Vec<EvalCase> = serde_json::from_str(&std::fs::read_to_string(root.join("dev/kb-eval.json")).unwrap()).unwrap();
+        let baseline: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join(BASELINE_FILE)).unwrap()).unwrap();
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.sync_lexical(&eval_sources(&root), "2026-11-26T00:00:00Z").unwrap();
+        let lexical = |opts: &SearchOpts| evaluate(&kb, &cases, opts).unwrap().per_mode.into_iter().find(|(m, _)| *m == "lexical").unwrap().1;
+        let now = lexical(&SearchOpts::default());
+        let falls = baseline_falls(&baseline, "lexical", &now);
+        assert!(falls.is_empty(), "{falls:?}; measured recall@10 {:.4}, recall@20 {:.4}, nDCG@10 {:.4}, MRR {:.4}: if a ranking change meant this, update {BASELINE_FILE} in the same commit", now.at10, now.at20, now.ndcg10, now.mrr);
+        assert_eq!(baseline["cases"].as_u64(), Some(cases.iter().filter(|c| !c.none).count() as u64), "the baseline was taken on this set");
+        // A ranking change that lowers nDCG@10 by 0.05. No weight of `SearchOpts` moves the keyword ranking of this set that far (on
+        // 2026-11-26: `natural_lex_weight` 0 moved it by 0.0013, `loose_weight` 0 by 0.0005, both by 0.0055), so the measurement is
+        // lowered as such a change would lower it.
+        let file_of = |r: &Recall| serde_json::json!({"lexical": {"recall10": r.at10, "ndcg10": r.ndcg10}});
+        let lowered = Recall { ndcg10: now.ndcg10 - 0.05, ..now };
+        assert!(!baseline_falls(&file_of(&now), "lexical", &lowered).is_empty(), "a fall of 0.05 fails the baseline");
+        assert!(baseline_falls(&file_of(&now), "lexical", &Recall { ndcg10: now.ndcg10 - 0.01, ..now }).is_empty(), "a fall inside the slack holds");
+        assert!(baseline_falls(&file_of(&lowered), "lexical", &lowered).is_empty(), "and passes once the file holds its numbers");
+    }
 
     /// `delphi doctor` states the knowledge base's size by zone (`specs/098` §7.5 item 9): nothing before an index exists, then a count per zone.
     #[test]

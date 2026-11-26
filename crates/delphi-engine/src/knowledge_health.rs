@@ -56,6 +56,12 @@ pub struct Health {
     pub topics: Option<usize>,
     /// Provisional notes (`specs/116`): how many wait and the day of the oldest, when the store exists.
     pub provisional: Option<(usize, Option<String>)>,
+    /// The daemon's service searches in the last 24 hours, by mode in the order of `retrieval::MODES` (`specs/140` §2.5 item 3), when
+    /// the daemon recorded any.
+    pub searches_24h: Option<[u64; 4]>,
+    /// The newest golden-set run against the median of the five before it in its series (`specs/140` §2.6 item 6): the series, its
+    /// nDCG@10 and that median (none for a series' first run), when the history holds a run.
+    pub retrieval_quality: Option<(String, f64, Option<f64>)>,
 }
 
 /// One printed line.
@@ -64,6 +70,37 @@ pub struct Line {
     pub text: String,
     /// The line marks a loop that is not turning; its text says so and names the command that helps.
     pub stalled: bool,
+    /// The doctor shows the line as a warning, not a fact (`specs/140` §2.5 item 3: more than 5% of searches missed the deadline).
+    pub warn: bool,
+}
+
+/// The daemon's record of how its service searches were answered (`retrieval::record_modes`).
+pub const MODES_FILE: &str = crate::retrieval::MODES_FILE;
+/// A share of `lexical-deadline` answers above this, in the last 24 hours, is a warning in `delphi doctor`.
+pub const DEADLINE_WARN_SHARE: f64 = 0.05;
+const DAY: i64 = 86_400;
+
+/// The searches the record holds since `since`, by mode; `None` when it holds none (no daemon has searched, or not lately).
+pub fn modes_since(ws_dir: &Path, since: i64) -> Option<[u64; 4]> {
+    let mut sum = [0u64; 4];
+    for v in std::fs::read_to_string(ws_dir.join(MODES_FILE)).unwrap_or_default().lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+        if v["t"].as_i64().is_some_and(|t| t >= since) {
+            for (i, n) in v["n"].as_array().into_iter().flatten().take(4).enumerate() {
+                sum[i] += n.as_u64().unwrap_or(0);
+            }
+        }
+    }
+    (sum.iter().sum::<u64>() > 0).then_some(sum)
+}
+
+/// The share of `lexical-deadline` answers among the searches counted.
+pub fn deadline_share(n: &[u64; 4]) -> f64 {
+    let total: u64 = n.iter().sum();
+    if total == 0 {
+        0.0
+    } else {
+        n[2] as f64 / total as f64
+    }
 }
 
 fn day_of(unix: i64) -> String {
@@ -188,6 +225,8 @@ pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
         let notes = files_under(&provisional, ".md", &crate::provisional_notes::SHELVES);
         h.provisional = Some((notes.len(), notes.iter().min().map(|t| day_of(*t))));
     }
+    h.searches_24h = modes_since(ws_dir, now - DAY);
+    h.retrieval_quality = crate::kb_eval::health_numbers(ws_dir);
     h
 }
 
@@ -227,13 +266,19 @@ impl Health {
         if let Some((n, oldest)) = &self.provisional {
             o.insert("provisional_notes".into(), json!({"waiting": n, "oldest": oldest}));
         }
+        if let Some(n) = &self.searches_24h {
+            o.insert("service_searches_24h".into(), json!({"hybrid": n[0], "lexical": n[1], "lexical_deadline": n[2], "lexical_warming": n[3], "deadline_share": (deadline_share(n) * 10_000.0).round() / 10_000.0}));
+        }
+        if let Some((series, ndcg, median)) = &self.retrieval_quality {
+            o.insert("retrieval_quality".into(), json!({"series": series, "ndcg10": ndcg, "median_of_five_before": median}));
+        }
         Value::Object(o)
     }
 
     /// What `delphi kb health` and the doctor print, in a fixed order. `now` is Unix seconds, for the age of the oldest note.
     pub fn lines(&self, now: i64) -> Vec<Line> {
-        let fact = |text: String| Line { text, stalled: false };
-        let stalled = |text: String| Line { text, stalled: true };
+        let fact = |text: String| Line { text, stalled: false, warn: false };
+        let stalled = |text: String| Line { text, stalled: true, warn: false };
         let setup = crate::research_setup::SETUP_COMMAND;
         let by = |m: &BTreeMap<String, usize>, order: &[&str]| -> String {
             let mut parts: Vec<String> = order.iter().filter(|k| m.contains_key(**k) || !matches!(**k, "purged")).map(|k| format!("{} {}", k, m.get(*k).copied().unwrap_or(0))).collect();
@@ -320,6 +365,25 @@ impl Health {
         });
 
         out.push(fact(format!("{} searches of the knowledge base found nothing in 30 days", self.searches_found_nothing)));
+
+        // `specs/140` §2.6 item 6: the newest golden-set run against the median of the five before it.
+        if let Some((series, ndcg, median)) = &self.retrieval_quality {
+            out.push(fact(match median {
+                Some(m) => format!("retrieval quality, {series}: nDCG@10 {ndcg:.4} in the newest run, {:+.4} from the median of the runs before it ({m:.4}). See delphi kb eval history.", ndcg - m),
+                None => format!("retrieval quality, {series}: nDCG@10 {ndcg:.4} in the first run. See delphi kb eval history."),
+            }));
+        }
+
+        // `specs/140` §2.5 item 3: how the daemon's searches were answered in the last 24 hours; above 5% missed is a warning.
+        if let Some(n) = &self.searches_24h {
+            let share = deadline_share(n);
+            let text = format!("{} service searches in 24 hours: hybrid {}, lexical {}, lexical-warming {}, lexical-deadline {} ({:.1}%)", n.iter().sum::<u64>(), n[0], n[1], n[3], n[2], share * 100.0);
+            out.push(if share > DEADLINE_WARN_SHARE {
+                Line { text: format!("{text}: the vector search missed its 800 ms deadline for more than 5%. See delphi kb eval run --path service."), stalled: true, warn: true }
+            } else {
+                fact(text)
+            });
+        }
         out
     }
 }
@@ -376,6 +440,32 @@ mod tests {
 
     fn texts(h: &Health) -> Vec<String> {
         h.lines(NOW).into_iter().map(|l| l.text).collect()
+    }
+
+    /// `specs/140` §2.5 item 3 (slice E): the share of `lexical-deadline` answers in the last 24 hours is a line of `kb health`, a
+    /// fact at 5% or less and a warning above; older lines are not counted, and with no record there is no line.
+    #[test]
+    fn the_share_of_missed_deadlines_in_24_hours_is_a_health_line_and_a_warning_above_five_percent() {
+        let (t, ws) = home();
+        let line = |h: &Health| h.lines(NOW).into_iter().find(|l| l.text.contains("service searches in 24 hours"));
+        assert!(line(&gather(t.path(), &ws, NOW)).is_none(), "no record, no line");
+        assert!(!crate::retrieval::record_modes(&ws, NOW, [0; 4]).unwrap(), "a tick with no search writes nothing");
+        assert!(crate::retrieval::record_modes(&ws, NOW - 2 * DAY, [0, 0, 50, 0]).unwrap());
+        assert!(crate::retrieval::record_modes(&ws, NOW - 100, [90, 0, 4, 6]).unwrap());
+        let h = gather(t.path(), &ws, NOW);
+        assert_eq!(h.searches_24h, Some([90, 0, 4, 6]), "the line of two days ago is not counted");
+        let l = line(&h).unwrap();
+        assert_eq!(l.text, "100 service searches in 24 hours: hybrid 90, lexical 0, lexical-warming 6, lexical-deadline 4 (4.0%)");
+        assert!(!l.warn && !l.stalled);
+        assert!(crate::retrieval::record_modes(&ws, NOW - 50, [0, 0, 2, 0]).unwrap());
+        let h = gather(t.path(), &ws, NOW);
+        let l = line(&h).unwrap();
+        assert!(l.warn && l.stalled && l.text.contains("(5.9%): the vector search missed its 800 ms deadline for more than 5%"), "{}", l.text);
+        assert_eq!(h.to_json()["service_searches_24h"]["lexical_deadline"], 6);
+        // A workspace with no `local/` is never written into.
+        let bare = t.path().join("workspaces/bare");
+        fs::create_dir_all(&bare).unwrap();
+        assert!(!crate::retrieval::record_modes(&bare, NOW, [1, 0, 0, 0]).unwrap() && !bare.join("local").exists());
     }
 
     // specs/119 AC-7: a workspace with sources and no claims prints the stalled-loop line, in the words of §5 item 2.

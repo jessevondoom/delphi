@@ -437,11 +437,16 @@ fn check_history(ws: &Workspace, cfg_text: &str, r: &mut Report) {
 
 /// `21 knowledge-health` (`specs/119` §5 item 1): the figures of `delphi kb health`, read from the files and written nowhere. Each is a
 /// fact, never a warning: an empty library is a property of a young install (as check 17 treats it), and a line that marks a
-/// stalled loop already says so in words and names the command that helps.
+/// stalled loop already says so in words and names the command that helps. The one exception is the share of service searches that
+/// missed the vector deadline in the last 24 hours: above 5% it is a warning (`specs/140` §2.5 item 3).
 fn check_knowledge_health(home: &Path, ws: &Workspace, r: &mut Report) {
     let now = delphi_core::xenia_index::unix_of(&delphi_core::time::now_rfc3339()).unwrap_or(0);
     for line in delphi_engine::knowledge_health::gather(home, &ws.dir, now).lines(now) {
-        r.push(Level::Ok, "21 knowledge-health", "", line.text);
+        if line.warn {
+            r.warn("21 knowledge-health", delphi_engine::knowledge_health::MODES_FILE, line.text);
+        } else {
+            r.push(Level::Ok, "21 knowledge-health", "", line.text);
+        }
     }
 }
 
