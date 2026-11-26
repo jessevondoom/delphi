@@ -153,8 +153,13 @@ fn search_index(home: &Path, db: &Path, query: &str, mut opts: SearchOpts) -> Re
                 }
             }
             #[cfg(test)]
-            if let Some(late) = test_hooks::LATE.lock().unwrap().iter().find(|(p, _)| *p == db).map(|(_, d)| *d) {
-                std::thread::sleep(late);
+            {
+                // The lock is released before the sleep: held in an `if let` it would live through it, and every other index's
+                // search in the process would wait on it and miss its own deadline.
+                let late = test_hooks::LATE.lock().unwrap().iter().find(|(p, _)| *p == db).map(|(_, d)| *d);
+                if let Some(late) = late {
+                    std::thread::sleep(late);
+                }
             }
             let r = guard.as_ref().unwrap();
             let mode = if r.hybrid { Mode::Hybrid } else { Mode::Lexical };

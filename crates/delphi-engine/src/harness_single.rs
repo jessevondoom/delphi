@@ -518,10 +518,11 @@ pub(crate) mod tests {
             let home = CallHome::make(&f.roots, &[]).unwrap();
             let base = home.base.clone();
             let l = launch(&prog, "sonnet", "q".into(), &home, token());
-            let started = std::time::Instant::now();
             let mut s = Session::start(&l).await.unwrap();
             let pid = s.pgid();
             drop(s.next(Duration::from_secs(5)).await);
+            // Only the termination is timed: the launch and the first line take longer on a loaded machine.
+            let started = std::time::Instant::now();
             s.terminate(Duration::from_millis(1500)).await;
             let alive = unsafe { libc::kill(pid, 0) } == 0;
             assert!(!alive, "the process is gone");
