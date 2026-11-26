@@ -1080,7 +1080,7 @@ impl EngineService {
             let limits = &engine.settings.research_limits;
             let rules = crate::research_host::KeepRules { list: web.list.clone(), classes: crate::fact_sources::SourceList::new(engine.cfg.get().validator.sources.clone()), weak: engine.cfg.get().validator.weak_sources };
             let pics = pictures.then(|| crate::research_host::Pictures { transport: transport.clone(), per_source: limits.pictures_per_source, left: std::sync::atomic::AtomicUsize::new(limits.pictures_per_run), svg: engine.settings.research_svg });
-            let mut keep = crate::research_host::KeepStep::new(rules, pics).with_unknown_licence(engine.cfg.get().library.unknown_licence, engine.cfg.get().library.private_text_max_mib).with_archive(engine.settings.archive.clone());
+            let mut keep = crate::research_host::KeepStep::new(rules, pics).with_unknown_licence(engine.cfg.get().library.unknown_licence, engine.cfg.get().library.text_cache_max_mib).with_archive(engine.settings.archive.clone());
             if let Some(r) = &recorder {
                 keep = keep.recording(r.topic.clone(), &r.run_id);
             }
@@ -6620,7 +6620,7 @@ mod tests {
         let (open, secret) = (source("open", "Numbatfish tanks are held at 28 degrees, the guide says.", false), source("secret", "The numbatfish vault code is 4417.", true));
         let topic = rr::Topic::begin(&ws_dir, &rr::Begin { question: "What temperature do numbatfish tanks need?", asked_by: rr::Asker::host("host:claude-code/unknown"), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
         let claim = |text: &str, fp: &str, source: &str, quote: &str| {
-            let anchors = [AnchorSpec { source_id: source.to_string(), locator: Some("https://example.org/numbatfish".into()), quote: quote.into(), prefix: None, suffix: None }];
+            let anchors = [AnchorSpec { source_id: source.to_string(), locator: Some("https://example.org/numbatfish".into()), quote: quote.into(), prefix: None, suffix: None, read: None }];
             lib.add_research_claim(&ResearchClaim { text, fingerprint: fp, project: None, topic: Some(&topic.id), anchors: &anchors }).unwrap().0["id"].as_str().unwrap().to_string()
         };
         let kept = claim("numbatfish tanks need 28 degrees", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &open, "tanks are held at 28 degrees");
@@ -6885,7 +6885,7 @@ mod tests {
         let secret = lib.add_file(&memo, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), level: Some(crate::library::Level::Full), private: true, ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
         // The topic's record is in A's own folder; the registry's display name is the id (`register_projects`), which is what a claim names.
         let topic = crate::research_record::Topic::begin(&a, &crate::research_record::Begin { question: "When does the wallabyvault code rotate?", asked_by: crate::research_record::Asker::host("host:claude-code/m"), project: Some(PROJ_A), depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
-        let anchors = [crate::library::claims::AnchorSpec { source_id: secret, locator: Some("https://example.org/memo".into()), quote: "code rotates monthly".into(), prefix: None, suffix: None }];
+        let anchors = [crate::library::claims::AnchorSpec { source_id: secret, locator: Some("https://example.org/memo".into()), quote: "code rotates monthly".into(), prefix: None, suffix: None, read: None }];
         let claim = lib.add_research_claim(&crate::library::claims::ResearchClaim { text: "the wallabyvault code rotates monthly", fingerprint: "dddddddddddddddddddddddddddddd01", project: Some(PROJ_A), topic: Some(&topic.id), anchors: &anchors }).unwrap().0["id"].as_str().unwrap().to_string();
         refresh_kb(&ws_dir, &home).unwrap();
         let unmarked = crate::private_read::State::Unmarked;

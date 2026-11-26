@@ -2419,7 +2419,11 @@ fn purging_private_text_keeps_the_pointer_and_marks_its_anchors_text_removed() {
     assert!(!l.source_dir(&s.id).join("source.md").exists() && l.read_meta(&s.id).is_some(), "the text goes, the pointer stays");
     let claim = l.claim(&c).unwrap();
     let a = &claim["anchors"][0];
-    assert!(a["text_removed"].is_string() && a["state"] == "pointer_only", "{a}");
+    // `specs/142` §2.3 items 3 to 5: a purge of the cache is not a takedown. The anchor keeps its quote and reads as an orphan of
+    // kind `text purged`; its verified excerpt is kept, so it counts as it did.
+    assert!(a["text_removed"].is_string() && a["state"] == "active" && a["orphan"]["why"] == "text purged" && !a["quote"].as_str().unwrap().is_empty(), "{a}");
+    assert_eq!(l.orphans_of(&s.id).iter().map(|o| o.reason()).collect::<Vec<_>>(), vec!["text purged, verified excerpt kept".to_string()]);
+    assert!(l.read_meta(&s.id).unwrap()["purged"].is_null() && l.capture_record(&s.id).unwrap()["purged"].is_string(), "the record stays and says purged");
     assert!(l.source_dir(&own).join("source.md").exists(), "a source the operator flagged private is not purged here");
     assert!(l.private_texts().is_empty());
 }

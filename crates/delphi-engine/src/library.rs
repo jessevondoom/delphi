@@ -20,6 +20,8 @@ pub mod acquire;
 pub mod assets;
 #[path = "library_bib.rs"]
 pub mod bib;
+#[path = "library_capture.rs"]
+pub mod capture;
 #[path = "library_claims.rs"]
 pub mod claims;
 #[path = "library_extract.rs"]
@@ -131,6 +133,9 @@ pub struct AddOpts {
     /// whose text was read whole, is kept in full as a private source (`kept_privately`), never as a pointer. Set by the research
     /// run's keep step from the operator's setting, and only when the page shows no rights notice (§3 item 3).
     pub keep_closed_privately: bool,
+    /// The operator added this by hand (`delphi sources add`): the capture says `captured_by: operator` (`specs/142` §2.1). Unset, a
+    /// page the daemon fetched says `daemon`.
+    pub by_operator: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,6 +235,9 @@ pub struct Library {
     /// The topic slugs a topic page's `## See also` may name (`specs/117` §2 item 5). `None`: the page is not a topic's, and its
     /// sections are not checked as one.
     topic_slugs: Option<std::collections::BTreeSet<String>>,
+    /// `[library] text_cache_max_mib`, in bytes (`specs/142` §2.4): set, every capture this library stores is followed by the cap on
+    /// what is kept with no open licence ([`Library::cap_text_cache`]). `None` (the default): this library evicts nothing.
+    text_cache: Option<u64>,
 }
 
 /// A short stable id from the canonical URL or identifier, not from content (`specs/055` §3.2).
@@ -354,11 +362,20 @@ struct Prepared {
     excerpts: Option<Value>,
     /// Adopted from an added bundle at `bundle add`: the operator's add is the act of trust, so the licence is not a ceiling.
     imported: bool,
+    /// What was read, as it came (`specs/142` §2.1): its bytes, who captured it and what made the text. `None` for a record that
+    /// reads nothing (a private pointer, a page over the size limit).
+    capture: Option<capture::Capture>,
 }
 
 impl Library {
     pub fn in_home(home: &Path) -> Library {
-        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new(), topic_slugs: None }
+        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new(), topic_slugs: None, text_cache: None }
+    }
+
+    /// The same library holding its text cache to `max_bytes` after every capture it stores (`specs/142` §2.4 item 3).
+    pub fn with_text_cache(mut self, max_bytes: Option<u64>) -> Library {
+        self.text_cache = max_bytes;
+        self
     }
 
     /// The same library, whose page check resolves `[s-kb-...]` and `[f-...]` markers against `records` (and nothing else).
@@ -505,7 +522,14 @@ impl Library {
             return Err(format!("`{}` is not a valid source id", p.id));
         }
         let licence = p.meta.get("licence").and_then(Value::as_str).unwrap_or("unknown").to_string();
-        let asset_bytes = p.assets.as_deref().map(dir_bytes).unwrap_or(0);
+        // `specs/142` §2.3 item 1: the text is stored in one normal form, and `text_sha256` is the hash of exactly what is stored. It is
+        // taken here, before a level below full drops the text, so a pointer still records what was read.
+        // A record with no capture (an archived copy, a workspace document) is stored as it always was.
+        if p.capture.is_some() {
+            p.text = p.text.map(|t| capture::normalise(&t));
+        }
+        let text_sha = p.text.as_deref().map(|t| sha256_hex(t.as_bytes()));
+        let asset_bytes = p.assets.as_deref().map(dir_bytes).unwrap_or(0) + p.capture.as_ref().map_or(0, |c| c.raw.len() as u64);
         let (mut level, notes) = self.decide(&p.meta, p.requested, p.text.as_deref(), asset_bytes, p.imported, b)?;
         if let Some(t) = &p.text {
             p.meta.insert("work_bytes".into(), json!(t.len()));
@@ -533,6 +557,21 @@ impl Library {
                 let mut m = o.clone();
                 m["last_checked"] = json!(now);
                 self.write_json(&self.source_dir(&p.id).join("meta.json"), &m)?;
+                // The same bytes again: a revisit on the capture's record, not a second copy (`specs/142` §2.1 item 3).
+                self.revisit(&p.id, &now, p.capture.as_ref(), text_sha.as_deref(), false)?;
+                // a revisit is a use (`specs/142` §2.4 item 2)
+                self.note_use(&[p.id.as_str()], delphi_core::time::parse_rfc3339(&now).unwrap_or(0));
+                return Ok(Stored { id: p.id, level, outcome: Outcome::Unchanged, notes });
+            }
+            // Other bytes and the same text (the markup or a timestamp changed, the words did not): a revisit marked `raw_changed`,
+            // no new version and no re-anchoring. Only against a capture whose record states its text and whose text was not removed.
+            let same_text = text_sha.as_deref().is_some_and(|t| self.capture_record(&p.id).is_some_and(|r| r["text_sha256"] == t && r["evicted"]["text"].is_null() && r["purged"].is_null()));
+            if same_text && !purged && old_level == Some(level) && p.capture.is_some() {
+                let mut m = o.clone();
+                m["last_checked"] = json!(now);
+                self.write_json(&self.source_dir(&p.id).join("meta.json"), &m)?;
+                self.revisit(&p.id, &now, p.capture.as_ref(), text_sha.as_deref(), true)?;
+                self.note_use(&[p.id.as_str()], delphi_core::time::parse_rfc3339(&now).unwrap_or(0));
                 return Ok(Stored { id: p.id, level, outcome: Outcome::Unchanged, notes });
             }
             if !purged && old_level.is_some_and(|ol| ol > level) && old_text.is_some() {
@@ -589,6 +628,14 @@ impl Library {
             if let Some(t) = &p.text {
                 std::fs::write(stage.join("source.md"), t).map_err(|e| e.to_string())?;
             }
+            // The capture's record, and its bytes where its text is kept (`specs/142` §2.1 item 1). Written once, here.
+            if let Some(c) = &p.capture {
+                if p.text.is_some() {
+                    std::fs::write(stage.join(capture::RAW), &c.raw).map_err(|e| e.to_string())?;
+                }
+                let rights = capture::rights_of(&p.meta, p.imported);
+                self.write_json(&stage.join(capture::RECORD), &capture::record(c, text_sha.as_deref(), &p.meta["retrieved"], rights, version))?;
+            }
             if level != Level::Pointer {
                 let empty = json!([]);
                 if let Some(x) = p.excerpts.as_ref().or((level == Level::Excerpts).then_some(&empty)) {
@@ -613,7 +660,8 @@ impl Library {
             let old_n = version - 1;
             for e in std::fs::read_dir(&dest).map_err(|e| e.to_string())?.flatten() {
                 let name = e.file_name();
-                if name == "versions" {
+                // Pinned excerpts belong to the source, not to one version (`specs/142` §2.3 item 5); a takedown has removed them.
+                if name == "versions" || (name == excerpts::PINNED && !purged) {
                     continue;
                 }
                 if purged {
@@ -639,6 +687,10 @@ impl Library {
         self.log("capture", json!({"id": p.id, "level": level.as_str(), "version": version, "content_hash": p.meta.get("content_hash")}));
         // Checked against the local snapshot after the capture is in place, so it adds no step before a source is kept (`specs/101` §4 item 3).
         self.check_retraction(&p.id);
+        // The cache cap (`specs/142` §2.4 item 3): what this capture took the cache past, the least recently used give up.
+        if let Some(max) = self.text_cache {
+            self.cap_text_cache(max, &p.id, delphi_core::time::parse_rfc3339(&now).unwrap_or(0));
+        }
         Ok(Stored { id: p.id, level, outcome, notes })
     }
 
@@ -686,6 +738,13 @@ impl Library {
     }
 
     /// The record a web page starts from: its address without a fragment, the source id that address gives, and the fields every capture has.
+    /// The text a snapshot is stored as: its title as a heading, then its text, in the stored normal form. What `text_sha256` is the
+    /// hash of, and what an anchor's position counts in.
+    pub fn capture_text(snap: &crate::fact_fetch::Snapshot) -> String {
+        let title = snap.title.for_daemon();
+        capture::normalise(&format!("{}{}\n", if title.is_empty() { String::new() } else { format!("# {}\n\n", title) }, snap.text.for_daemon()))
+    }
+
     fn url_record(url: &str, opts: &AddOpts) -> Result<(String, String, Map<String, Value>), String> {
         let canonical = delphi_adapter::reqwest::Url::parse(url).map_err(|_| "not a URL".to_string()).map(|mut u| {
             u.set_fragment(None);
@@ -708,7 +767,7 @@ impl Library {
         match fetch_snapshot_checked(&policy, &canonical).await {
             Err(e) if e.refusal == Refusal::TooLarge => {
                 let mut notes = vec![format!("the page is over the {}-byte text limit; kept as a pointer (raise it with --max-text-mib)", b.text)];
-                let mut s = self.store(Prepared { id, meta, text: None, assets: None, requested: Some(Level::Pointer), excerpts: None, imported: false }, &b)?;
+                let mut s = self.store(Prepared { id, meta, text: None, assets: None, requested: Some(Level::Pointer), excerpts: None, imported: false, capture: None }, &b)?;
                 s.notes.append(&mut notes);
                 Ok(s)
             }
@@ -797,7 +856,7 @@ impl Library {
             notes.push("the page showed different text to a browser than to the daemon (cloaking); kept as a pointer".into());
             requested = Some(Level::Pointer);
         }
-        let (text, over) = if snap.truncated { (None, true) } else { (Some(format!("{}{}\n", if title.is_empty() { String::new() } else { format!("# {}\n\n", title) }, snap.text.for_daemon())), false) };
+        let (text, over) = if snap.truncated { (None, true) } else { (Some(Self::capture_text(snap)), false) };
         if over {
             notes.push(format!("the page is over the {}-byte text limit; kept as a pointer", limit));
             requested = Some(Level::Pointer);
@@ -810,7 +869,9 @@ impl Library {
             notes.push("no licence lets the library keep this page whole; kept in full as a private source (`[library] unknown_licence = \"private_text\"`)".into());
             requested = Some(Level::Full);
         }
-        let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None, imported: false }, b)?;
+        let by = if opts.by_operator { "operator" } else { "daemon" };
+        let capture = capture::Capture { raw: snap.body_for_daemon().to_vec(), media_type: snap.content_type.clone(), captured_by: by.into(), fetched: Some((snap.final_url.for_daemon().clone(), snap.status)), extractor: (crate::fact_fetch::EXTRACTOR_NAME, Some(crate::fact_fetch::EXTRACTOR_VERSION)) };
+        let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None, imported: false, capture: Some(capture) }, b)?;
         // A page expanded with its pictures (`specs/118` §1 E-3): the same gates, licence decision and record as a research run's
         // pictures (`research_images::keep_for_source`), so a picture kept here has its licence record. At most three a page.
         if opts.save_images && s.level == Level::Full && matches!(s.outcome, Outcome::Added | Outcome::NewVersion(_)) {
@@ -851,7 +912,7 @@ impl Library {
             meta.insert("content_hash".into(), json!(one(h, 80)));
         }
         meta.insert("tags".into(), json!([]));
-        Ok(self.store(Prepared { id, meta, text: None, assets: None, requested: Some(Level::Pointer), excerpts: None, imported: false }, &Budgets::default())?.id)
+        Ok(self.store(Prepared { id, meta, text: None, assets: None, requested: Some(Level::Pointer), excerpts: None, imported: false, capture: None }, &Budgets::default())?.id)
     }
 
     /// Capture a local text or Markdown file the operator names.
@@ -875,7 +936,9 @@ impl Library {
         }
         meta.insert("tags".into(), json!([]));
         Self::attribute(&mut meta, opts.attribution_text.as_ref(), "operator");
-        let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None, imported: false }, &b)?;
+        // The file's own bytes are the capture's `raw`; its text is those bytes in the stored normal form, so nothing extracted it.
+        let capture = (len <= b.text).then(|| capture::Capture { raw: bytes, media_type: if name.ends_with(".md") { "text/markdown" } else { "text/plain" }.into(), captured_by: "operator".into(), fetched: None, extractor: ("plain-text", None) });
+        let mut s = self.store(Prepared { id, meta, text, assets: None, requested, excerpts: None, imported: false, capture }, &b)?;
         notes.append(&mut s.notes);
         s.notes = notes;
         Ok(s)
@@ -888,13 +951,18 @@ impl Library {
         let dir = self.source_dir(id);
         let before = dir_bytes(&dir);
         for e in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
-            if e.file_name() == "meta.json" {
+            if e.file_name() == "meta.json" || e.file_name() == capture::RECORD {
                 continue;
             }
             let _ = if e.path().is_dir() { std::fs::remove_dir_all(e.path()) } else { std::fs::remove_file(e.path()) };
         }
         meta["capture_level"] = json!("pointer");
         meta["purged"] = json!(delphi_core::time::now_rfc3339());
+        // The bodies are gone; the capture's record stays with its digests and says so (`specs/142` §2.1 item 2).
+        if let Some(mut rec) = self.capture_record(id) {
+            rec["purged"] = meta["purged"].clone();
+            self.write_json(&dir.join(capture::RECORD), &rec)?;
+        }
         self.write_json(&dir.join("meta.json"), &meta)?;
         let removed = before.saturating_sub(dir_bytes(&dir));
         self.source_purged(id);
@@ -949,7 +1017,9 @@ impl Library {
         }
         meta.insert("imported_from".into(), json!(label));
         let assets = dir.join("assets");
-        let stored = self.store(Prepared { id: id.to_string(), meta, text, assets: assets.is_dir().then_some(assets), requested: Some(level), excerpts: std::fs::read(dir.join("excerpts.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()), imported: true }, budgets)?;
+        // What the bundle shipped is what was handed over: its `source.md` is the capture's `raw`.
+        let capture = text.as_ref().map(|t| capture::Capture { raw: t.clone().into_bytes(), media_type: "text/markdown".into(), captured_by: "ingest".into(), fetched: None, extractor: ("bundle", None) });
+        let stored = self.store(Prepared { id: id.to_string(), meta, text, assets: assets.is_dir().then_some(assets), requested: Some(level), excerpts: std::fs::read(dir.join("excerpts.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()), imported: true, capture }, budgets)?;
         if matches!(stored.outcome, Outcome::Added | Outcome::NewVersion(_)) {
             self.record_bundle_pictures(id, label, &given);
         }

@@ -198,7 +198,7 @@ fn a_claim_takes_the_traits_of_the_sources_it_is_anchored_to() {
     let sid = lib.add_private_pointer("person", "talk with the lab manager", "conversation", "2026-11-15", None).unwrap();
     let h = Handling::library_only(&home);
     h.add(&source_item(&sid), None, &host_kind("person"), &By::Host, &[]).unwrap();
-    let anchors = [crate::library::claims::AnchorSpec { source_id: sid.clone(), locator: Some("talk".into()), quote: "the tank is cleaned on Mondays".into(), prefix: None, suffix: None }];
+    let anchors = [crate::library::claims::AnchorSpec { source_id: sid.clone(), locator: Some("talk".into()), quote: "the tank is cleaned on Mondays".into(), prefix: None, suffix: None, read: None }];
     let fp = "0123456789abcdef0123";
     let c = lib.add_host_claim(&crate::library::claims::ResearchClaim { text: "The tank is cleaned on Mondays.", fingerprint: fp, project: None, topic: None, anchors: &anchors }, "host-reported").unwrap();
     let id = c["id"].as_str().unwrap();

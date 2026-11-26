@@ -270,7 +270,7 @@ impl Library {
         meta.insert("content_hash".into(), json!(format!("sha256:{}", snap.id)));
         meta.insert("archived_copy".into(), json!({"archive": host, "archived_at": archived_at, "retrieved_at": snap.retrieved, "live_url": original}));
         let text = document(&title, &archived_at, original, &host, snap.text.for_daemon());
-        let prepared = Prepared { id: id.clone(), meta, text: Some(text), assets: None, requested, excerpts: None, imported: false };
+        let prepared = Prepared { id: id.clone(), meta, text: Some(text), assets: None, requested, excerpts: None, imported: false, capture: None };
         match self.store(prepared, budgets) {
             Ok(s) => match s.outcome {
                 Outcome::Added => self.captured(&id, 1, archived_at),

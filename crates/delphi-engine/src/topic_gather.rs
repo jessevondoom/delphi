@@ -85,6 +85,8 @@ pub fn sort_hits(lib: &Library, g: &mut Gathered, hits: &[Hit], texts: &[String]
             if g.sources.len() < MAX_SOURCES + 2 && !g.sources.iter().any(|(s, _, _)| s == id) {
                 if let Some(meta) = lib.read_meta(id).filter(|m| !is_private(m) && m["purged"].is_null() && m["retired"].is_null()) {
                     g.sources.push((id.to_string(), meta, clip(text, RECORD_TEXT)));
+                    // a page build gathered it: a use (`specs/142` §2.4 item 2)
+                    lib.note_use(&[id], delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0));
                 }
             }
             continue;

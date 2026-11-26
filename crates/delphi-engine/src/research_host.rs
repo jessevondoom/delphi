@@ -66,6 +66,12 @@ impl Held {
         self.inner.lock().unwrap().get(url).filter(|s| s.text.for_daemon() == text).cloned()
     }
 
+    /// The text the library stores for the page this run read at `url` (`Library::capture_text`): what a verified excerpt is pinned
+    /// from when the text itself is not kept (`specs/142` §2.3 item 5).
+    pub fn capture_text_of(&self, url: &str) -> Option<String> {
+        self.inner.lock().unwrap().get(url).map(crate::library::Library::capture_text)
+    }
+
     /// The text this run read at `url`, for the context of a quoted passage (`specs/119` §3 item 6).
     pub fn text_of(&self, url: &str) -> Option<String> {
         self.inner.lock().unwrap().get(url).map(|s| s.text.for_daemon().clone())
@@ -455,7 +461,8 @@ pub struct KeepStep {
     /// `[library] unknown_licence` (`specs/119` §3): how much of a page no licence lets the library keep whole is kept. The default is
     /// `excerpts`: the passages the run quoted, with their context, and an ordinary anchor into each.
     pub unknown_licence: delphi_adapter::config::UnknownLicence,
-    /// `[library] private_text_max_mib`, in bytes: under `private_text`, past it the oldest privately kept text is removed first.
+    /// `[library] text_cache_max_mib`, in bytes (`specs/142` §2.4; `private_text_max_mib` is read as its old name): past it the least
+    /// recently used text kept with no open licence is evicted, its `raw` first.
     pub private_text_max: Option<u64>,
     /// `[research] archive_fallback` and `archive_endpoint` (`specs/119` §4): a page the run finds gone that a claim rests on is looked
     /// up in the archive. Off by default.
@@ -605,7 +612,9 @@ impl LiveLibrary {
     fn anchor(&self, source_id: &str, quote: &str, url: &str) -> crate::library::claims::AnchorSpec {
         let around = (self.keep.unknown_licence != delphi_adapter::config::UnknownLicence::Pointer).then(|| self.held.as_ref().and_then(|h| h.text_of(url))).flatten().and_then(|t| crate::library::claims::context_of(&t, quote));
         let (prefix, suffix) = around.map_or((None, None), |(b, a)| (Some(b), Some(a)));
-        crate::library::claims::AnchorSpec { source_id: source_id.to_string(), locator: Some(url.to_string()), quote: quote.to_string(), prefix, suffix }
+        // The text as the library stores it, whatever `unknown_licence` says: the quote found in it is pinned as a verified excerpt.
+        let read = self.held.as_ref().and_then(|h| h.capture_text_of(url));
+        crate::library::claims::AnchorSpec { source_id: source_id.to_string(), locator: Some(url.to_string()), quote: quote.to_string(), prefix, suffix, read }
     }
 }
 
@@ -636,7 +645,8 @@ impl Library for LiveLibrary {
     /// `text` (a chained work's landing address, which the run never reads; `specs/101` §6 item 8) is fetched here, once.
     fn capture<'a>(&'a self, url: &'a str, text: &'a str, _trusted: bool) -> BoxFut<'a, Result<String, String>> {
         Box::pin(async move {
-            let lib = crate::library::Library::in_home(&self.home).with_retractions(self.retractions.clone());
+            // The cache cap is the library's own, after every capture it stores (`specs/142` §2.4 item 3).
+            let lib = crate::library::Library::in_home(&self.home).with_retractions(self.retractions.clone()).with_text_cache(self.keep.private_text_max);
             let budgets = crate::library::Budgets::default();
             if text.is_empty() {
                 return Ok(lib.add_url(&crate::fact_fetch::FetchPolicy::default(), url, &crate::library::AddOpts::default(), &budgets).await?.id);
@@ -646,13 +656,9 @@ impl Library for LiveLibrary {
             let opts = self.keep.opts(&snap)?;
             let stored = lib.add_fetched(url, &snap, &opts, &budgets)?;
             self.keep.remember(&stored);
-            // `specs/119` §3: anchors an earlier run wrote with the quote alone gain the passage now that the page is read again; and under
-            // `private_text` the privately kept text stays under its cap, oldest first, never the page just kept.
+            // `specs/119` §3: anchors an earlier run wrote with the quote alone gain the passage now that the page is read again.
             if self.keep.unknown_licence != delphi_adapter::config::UnknownLicence::Pointer && stored.level != crate::library::Level::Full {
                 lib.upgrade_quote_anchors(&stored.id, text);
-            }
-            if let Some(max) = self.keep.private_text_max.filter(|_| lib.read_meta(&stored.id).is_some_and(|m| m["kept_privately"].is_string())) {
-                lib.cap_private_text(max, &stored.id);
             }
             if stored.level == crate::library::Level::Full && matches!(stored.outcome, crate::library::Outcome::Added | crate::library::Outcome::NewVersion(_)) {
                 self.keep.pictures(&lib, &stored.id, &snap);
@@ -1818,7 +1824,9 @@ mod tests {
         let held: Vec<String> = l.private_texts().into_iter().map(|p| p.id).collect();
         assert_eq!(held, vec![id3.clone()], "the oldest went first");
         let first = l.read_meta(&id).unwrap();
-        assert!(!first["purged"].is_null() && first["kept_privately"].is_string() && !l.source_dir(&id).join("source.md").exists(), "its text went and its pointer stays: {first}");
+        // `specs/142` §2.4 item 3: eviction is not a takedown. The record stays and says the text was evicted.
+        assert!(first["text_evicted"].is_string() && first["purged"].is_null() && first["kept_privately"].is_string() && !l.source_dir(&id).join("source.md").exists(), "its text went and its pointer stays: {first}");
+        assert!(l.capture_record(&id).unwrap()["evicted"]["text"].is_string());
     }
 
     /// `specs/112` §3.1, §3.2 and §9: a run's claim is scoped to the run's project; the run's own verdict and counts are not copied

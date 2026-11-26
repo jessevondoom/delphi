@@ -17,6 +17,7 @@ const USAGE: &str = "usage:
   delphi sources list [--json] [--home <dir>]
   delphi sources show <id> [--json] [--offline] [--home <dir>]
   delphi sources history <id> [--json] [--home <dir>]
+  delphi sources verify [<id>] [--json] [--home <dir>]
   delphi sources archive <id | url> [--licence <id>] [--title <t>] [--level full|excerpts|pointer] [--workspace <name>] [--home <dir>]
   delphi sources excerpt add <id> --locator <where> --purpose <why> (--text <passage> | --file <file>) [--prefix <t>] [--suffix <t>]
     [--work-bytes <n>] [--home <dir>]
@@ -64,6 +65,7 @@ fn parse_opts(args: &[String]) -> Result<AddOpts, String> {
         doi: None,
         raise_text: mib(args, "--max-text-mib")?,
         raise_source: mib(args, "--max-source-mib")?,
+        by_operator: true,
         ..Default::default()
     })
 }
@@ -92,6 +94,7 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
         Some("purge") => purge(&lib, rest),
         Some("private") => private(&lib, rest),
         Some("history") => history(&lib, rest),
+        Some("verify") => verify(&lib, rest),
         Some("excerpt") => excerpt(&lib, rest),
         Some("bib") => bibliography(&lib, rest),
         Some("acquire") => crate::sources_acquire_cmd::acquire(home, rest),
@@ -255,7 +258,17 @@ fn show(lib: &Library, args: &[String], home: &Path) -> i32 {
         Some(Recheck::Fresh) | Some(Recheck::NotApplicable(_)) | None => {}
     }
     let Some(m) = lib.read_meta(id) else { return 1 };
+    // The operator opened it: a use, written to the ledger before this command ends (`specs/142` §2.4 item 2).
+    lib.note_use(&[id.as_str()], delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0));
+    lib.flush_uses();
+    // `specs/142` §2.3 item 3: the anchors into this source that no longer resolve, each with its own quote, the version and date it
+    // last resolved in, and why.
+    let orphans = lib.orphans_of(id);
     if args.iter().any(|a| a == "--json") {
+        let mut m = m;
+        if !orphans.is_empty() {
+            m["orphans"] = Value::Array(orphans.iter().map(|o| o.to_json()).collect());
+        }
         println!("{}", serde_json::to_string_pretty(&m).unwrap_or_default());
         return 0;
     }
@@ -293,6 +306,17 @@ fn show(lib: &Library, args: &[String], home: &Path) -> i32 {
     let versions = std::fs::read_dir(dir.join("versions")).map(|d| d.flatten().count()).unwrap_or(0);
     if versions > 0 {
         println!("  earlier versions: {}", versions);
+    }
+    if let Some(rec) = lib.capture_record(id) {
+        let gone = if rec["purged"].is_string() { "; text purged" } else if rec["evicted"]["text"].is_string() { "; text evicted" } else if rec["evicted"]["raw"].is_string() { "; raw evicted" } else { "" };
+        println!("  capture        by {}, text by {}{}, {} revisit(s){}", clean(rec["captured_by"].as_str().unwrap_or("?"), 60), clean(rec["extractor"]["name"].as_str().unwrap_or("?"), 40), rec["extractor"]["version"].as_str().map(|v| format!(" {}", clean(v, 10))).unwrap_or_default(), rec["revisits"].as_array().map_or(0, Vec::len) as u64 + rec["revisits_more"].as_u64().unwrap_or(0), gone);
+    }
+    if !orphans.is_empty() {
+        println!("  orphans        {} anchor(s) that no longer resolve", orphans.len());
+        for o in &orphans {
+            let quote = if o.quote.is_empty() { "(the quote went with the capture)".to_string() } else { format!("\"{}\"", clean(&o.quote, 120)) };
+            println!("    {}  last found in version {}{}: {}  ({})", quote, clean(&o.version, 10), if o.date.is_empty() { String::new() } else { format!(" of {}", clean(&o.date, 10)) }, o.reason(), clean(&o.claim, 40));
+        }
     }
     0
 }
@@ -345,6 +369,37 @@ fn purge(lib: &Library, args: &[String]) -> i32 {
             1
         }
     }
+}
+
+/// `delphi sources verify [<id>]` (`specs/142` §2.1 item 6): hash again every kept `raw` and `source.md` and report each that is not
+/// what its capture record states. It reads only. Exit 0 when every kept file matches, 1 when one differs or the source is unknown.
+fn verify(lib: &Library, args: &[String]) -> i32 {
+    let pos = positional(args);
+    let id = match pos[..] {
+        [] => None,
+        [id] => Some(id.as_str()),
+        _ => {
+            eprintln!("{}", USAGE);
+            return 2;
+        }
+    };
+    if let Some(id) = id {
+        if lib.read_meta(id).is_none() {
+            eprintln!("delphi sources verify: no source `{}`", clean(id, 80));
+            return 1;
+        }
+    }
+    let v = lib.verify(id);
+    if args.iter().any(|a| a == "--json") {
+        let rows: Vec<Value> = v.differ.iter().map(|d| serde_json::json!({"id": d.id, "version": d.version, "file": d.file, "recorded": d.recorded, "found": d.found})).collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"checked": v.checked, "unrecorded": v.unrecorded, "differ": rows})).unwrap_or_default());
+    } else {
+        for d in &v.differ {
+            println!("{} version {}: {} is not what was captured (recorded sha256 {}, found {})", d.id, d.version, d.file, d.recorded.get(..12).unwrap_or(&d.recorded), d.found.get(..12).unwrap_or(&d.found));
+        }
+        println!("{} capture(s) checked, {} differ; {} kept from before captures were recorded (nothing to compare with). Nothing was changed.", v.checked, v.differ.len(), v.unrecorded);
+    }
+    i32::from(!v.differ.is_empty())
 }
 
 /// `delphi sources private list|purge` (`specs/119` §3 item 4): the text research kept privately under `[library] unknown_licence =

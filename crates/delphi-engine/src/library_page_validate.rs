@@ -63,6 +63,9 @@ pub struct Material {
     pub validated: bool,
     pub cited: bool,
     pub text: String,
+    /// A claim whose only anchors lost their text to eviction or purge with no verified excerpt kept (`specs/142` §2.3 item 4): it
+    /// reads `unverifiable, text evicted`, and a page statement resting on it is not counted as supported.
+    pub unverifiable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -253,7 +256,8 @@ pub struct AssertionRecord {
     /// What the validator said.
     pub judgement: Judgement,
     pub record: Option<String>,
-    /// What the daemon made of it: `supported`, `unchecked`, `contested` or `fail`.
+    /// What the daemon made of it: `supported`, `unchecked`, `contested`, `fail`, or `unverifiable` (supported only by a claim whose
+    /// source text was evicted with no verified excerpt kept; listed with the unchecked statements).
     pub result: &'static str,
 }
 
@@ -299,6 +303,11 @@ fn classify(assertions: &[Assertion], material: &[Material]) -> Classified {
     for a in assertions {
         let named = a.record.as_ref().and_then(|r| material.iter().find(|m| m.id == *r));
         let result = match (a.judgement, named) {
+            // `specs/142` §2.3 item 4: an unbacked anchor cannot support a page statement, whatever the validator said of it.
+            (Judgement::Supported, Some(m)) if m.unverifiable => {
+                c.unchecked.push(a.text.clone());
+                "unverifiable"
+            }
             (Judgement::Supported, _) => "supported",
             (Judgement::UncitedConsistent, _) => {
                 c.unchecked.push(a.text.clone());
@@ -367,11 +376,15 @@ impl Library {
         };
         for c in &checked.cited {
             match self.resolve(c, scope) {
-                Ok(Rec::Claim(cl)) => add(Material { id: c.label(), standing: shown_status(super::claims::status(&cl)), validated: super::claims::status(&cl) == Status::Validated, cited: true, text: cl["text"].as_str().unwrap_or("").into() }, &mut out),
-                Ok(Rec::Record(r)) => add(Material { id: c.label(), standing: r.status.clone(), validated: r.status == "● validated", cited: true, text: r.text.chars().take(EXCERPT_MAX).collect() }, &mut out),
+                Ok(Rec::Claim(cl)) => {
+                    let unverifiable = self.unverifiable(&cl);
+                    let standing = if unverifiable { format!("{} · {}", shown_status(super::claims::status(&cl)), super::claims::UNVERIFIABLE) } else { shown_status(super::claims::status(&cl)) };
+                    add(Material { id: c.label(), standing, validated: super::claims::status(&cl) == Status::Validated, cited: true, text: cl["text"].as_str().unwrap_or("").into(), unverifiable }, &mut out)
+                }
+                Ok(Rec::Record(r)) => add(Material { id: c.label(), standing: r.status.clone(), validated: r.status == "● validated", cited: true, text: r.text.chars().take(EXCERPT_MAX).collect(), unverifiable: false }, &mut out),
                 Ok(Rec::Source(id, m)) => {
                     let text: String = self.stored_text(&id).unwrap_or_default().chars().take(EXCERPT_MAX).collect();
-                    add(Material { id: c.label(), standing: format!("○ {}", m["status"].as_str().unwrap_or("not validated")), validated: m["status"] == "validated", cited: true, text }, &mut out)
+                    add(Material { id: c.label(), standing: format!("○ {}", m["status"].as_str().unwrap_or("not validated")), validated: m["status"] == "validated", cited: true, text, unverifiable: false }, &mut out)
                 }
                 Err(_) => {}
             }
@@ -379,7 +392,8 @@ impl Library {
         for cl in self.topic_claims(topic).0 {
             let id = cl["id"].as_str().unwrap_or("").to_string();
             let st = super::claims::status(&cl);
-            add(Material { id, standing: shown_status(st), validated: st == Status::Validated, cited: false, text: cl["text"].as_str().unwrap_or("").into() }, &mut out);
+            let unverifiable = self.unverifiable(&cl);
+            add(Material { id, standing: shown_status(st), validated: st == Status::Validated, cited: false, text: cl["text"].as_str().unwrap_or("").into(), unverifiable }, &mut out);
         }
         out
     }
@@ -519,3 +533,22 @@ impl Library {
 
 #[allow(dead_code)]
 fn _cite_is_used(_: &Cite) {}
+
+#[cfg(test)]
+mod unverifiable_tests {
+    use super::*;
+
+    /// `specs/142` §2.3 item 4 and AC-14: a page statement that rests on a claim whose text was evicted with no verified excerpt
+    /// kept does not pass as supported, whatever the validator judged; the same statement on a claim that still counts does.
+    #[test]
+    fn a_statement_resting_on_an_unverifiable_claim_is_not_supported() {
+        let material = |unverifiable: bool| vec![Material { id: "c-1".into(), standing: "○ not validated".into(), validated: false, cited: true, text: "The tide turns twice a day.".into(), unverifiable }];
+        let said = vec![Assertion { text: "The tide turns twice a day.".into(), judgement: Judgement::Supported, record: Some("c-1".into()) }];
+        let barred = classify(&said, &material(true));
+        assert_eq!(barred.records[0].result, "unverifiable");
+        assert_eq!(barred.unchecked, vec!["The tide turns twice a day.".to_string()], "it is listed with what was not checked");
+        assert!(barred.hard.is_empty() && barred.contested.is_empty());
+        let counted = classify(&said, &material(false));
+        assert_eq!((counted.records[0].result, counted.unchecked.len()), ("supported", 0));
+    }
+}

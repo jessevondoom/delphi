@@ -742,7 +742,7 @@ impl Library {
             return Err(CANCELLED.into());
         }
         // The bibliography resolves the seed's spans as records, and names the sources read that gave no span.
-        let lib = Library { root: self.root.clone(), support: self.support.clone(), retractions: self.retractions.clone(), records: r.seed.records(), topic_slugs: None };
+        let lib = Library { root: self.root.clone(), support: self.support.clone(), retractions: self.retractions.clone(), records: r.seed.records(), topic_slugs: None, text_cache: self.text_cache };
         let mut cited: Vec<Cite> = Vec::new();
         for c in markers(&page.body).into_iter().chain(r.seed.named_sources.iter().map(|id| Cite { id: id.clone(), source: true, shown: None })) {
             if !cited.iter().any(|x| x.label() == c.label()) {
@@ -916,10 +916,14 @@ impl Library {
     /// host. Reads only.
     pub fn source_view(&self, id: &str, max: usize) -> Option<Value> {
         let meta = self.read_meta(id)?;
+        // the operator opened it: a use (`specs/142` §2.4 item 2)
+        self.note_use(&[id], delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0));
         let text = self.stored_text(id).unwrap_or_default();
         let truncated = text.chars().count() > max;
         let assets: Vec<String> = self.image_assets(id).into_iter().map(|a| a.uri).collect();
-        Some(json!({"id": id, "label": format!("s-{}", id), "meta": meta, "private": is_private(&meta), "capture_level": meta["capture_level"], "status": meta["status"], "text": text.chars().take(max).collect::<String>(), "truncated": truncated, "assets": assets}))
+        // `specs/142` §2.3 item 3: the anchors into it that no longer resolve, shown below the text.
+        let orphans: Vec<Value> = self.orphans_of(id).iter().map(|o| o.to_json()).collect();
+        Some(json!({"id": id, "label": format!("s-{}", id), "meta": meta, "private": is_private(&meta), "capture_level": meta["capture_level"], "status": meta["status"], "text": text.chars().take(max).collect::<String>(), "truncated": truncated, "assets": assets, "orphans": orphans}))
     }
 
     /// What links to `slug` and what it links to (`specs/117` §2 item 6), from the link table. Reads only.

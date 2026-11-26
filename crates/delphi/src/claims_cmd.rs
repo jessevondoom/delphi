@@ -69,7 +69,7 @@ fn spec_from(args: &[String]) -> Result<Option<AnchorSpec>, String> {
     let (source, quote) = (value_of(args, "--source")?, value_of(args, "--quote")?);
     match (source, quote) {
         (None, None) => Ok(None),
-        (Some(source_id), Some(quote)) => Ok(Some(AnchorSpec { source_id, quote, locator: value_of(args, "--locator")?, prefix: value_of(args, "--prefix")?, suffix: value_of(args, "--suffix")? })),
+        (Some(source_id), Some(quote)) => Ok(Some(AnchorSpec { source_id, quote, locator: value_of(args, "--locator")?, prefix: value_of(args, "--prefix")?, suffix: value_of(args, "--suffix")?, read: None })),
         _ => Err("an anchor needs both --source and --quote".into()),
     }
 }

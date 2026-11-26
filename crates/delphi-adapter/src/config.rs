@@ -1219,8 +1219,12 @@ pub struct LibraryConfig {
     /// How much of a web page whose licence is unknown (or closed) a research run keeps (`specs/119` §3). The default is `excerpts`.
     #[serde(deserialize_with = "de_unknown_licence")]
     pub unknown_licence: UnknownLicence,
-    /// The most text kept under `unknown_licence = "private_text"`, in MiB (`specs/119` §3 item 5); past it the oldest is removed first.
+    /// The old name of [`LibraryConfig::text_cache_max_mib`] (`specs/119` §3 item 5), read as it when the new key is absent.
     pub private_text_max_mib: u64,
+    /// The most text kept with no open licence, in MiB (`specs/142` §2.4 item 1): the text and `raw` of what research kept privately,
+    /// of every held capture and of every host capture. Past it the least recently used is evicted, its `raw` first. Default 1024,
+    /// at least 16. With this key absent and `private_text_max_mib` set, that value is the cap.
+    pub text_cache_max_mib: u64,
     /// `deny` (the default) or `allow` (`specs/098` §7.2). Read by the doctor and the seat check from the file itself; named here so
     /// that `[library]` with it parses.
     #[serde(deserialize_with = "de_private_to_models")]
@@ -1229,7 +1233,7 @@ pub struct LibraryConfig {
 
 impl Default for LibraryConfig {
     fn default() -> Self {
-        LibraryConfig { pages: PagesConfig::default(), acquire: AcquireConfig::default(), unknown_licence: UnknownLicence::default(), private_text_max_mib: 500, private_to_models: "deny".into() }
+        LibraryConfig { pages: PagesConfig::default(), acquire: AcquireConfig::default(), unknown_licence: UnknownLicence::default(), private_text_max_mib: 500, text_cache_max_mib: 1024, private_to_models: "deny".into() }
     }
 }
 
@@ -1565,11 +1569,18 @@ impl Config {
                 Err(e) => errs.push(format!("[validator]: {}", e)),
             }
         }
-        if let Some(v) = root.get("library") {
-            match v.clone().try_into::<LibraryConfig>() {
+        if let Some(table) = root.get("library") {
+            match table.clone().try_into::<LibraryConfig>() {
                 Ok(v) if v.private_text_max_mib == 0 => errs.push("[library]: private_text_max_mib is at least 1".into()),
-                Ok(v) => match v.acquire.check() {
-                    Ok(()) => cfg.library = v,
+                Ok(v) if v.text_cache_max_mib < 16 => errs.push("[library]: text_cache_max_mib is at least 16".into()),
+                Ok(mut v) => match v.acquire.check() {
+                    Ok(()) => {
+                        // `specs/142` §2.4 item 1: the old key is read as the new one's name when the new key is absent.
+                        if table.get("text_cache_max_mib").is_none() && table.get("private_text_max_mib").is_some() {
+                            v.text_cache_max_mib = v.private_text_max_mib;
+                        }
+                        cfg.library = v
+                    }
                     Err(e) => errs.push(format!("[library.acquire]: {}", e)),
                 },
                 Err(e) => errs.push(format!("[library]: {}", e)),
@@ -2817,6 +2828,21 @@ tools = { search = "read", note = "draft", send = "write" }
             assert!(errs.contains(why), "{}: {}", bad, errs);
         }
         assert_eq!(UnknownLicence::read("[library]\nunknown_licence = \"full\"\n"), UnknownLicence::Excerpts, "a wrong word keeps the default");
+    }
+
+    /// `specs/142` §2.4 item 1 and AC-12: the cache cap is 1 GiB by default and at least 16 MiB; with no new key set and
+    /// `private_text_max_mib = 20` the cap is 20 MiB; the new key wins when both are set.
+    #[test]
+    fn the_text_cache_cap_defaults_to_a_gibibyte_and_reads_the_old_key_when_the_new_one_is_absent() {
+        let lib = |body: &str| Config::parse(&format!("{}\n[library]\n{}\n", SAMPLE, body)).map(|c| c.library);
+        assert_eq!(Config::parse(SAMPLE).unwrap().library.text_cache_max_mib, 1024);
+        assert_eq!(lib("unknown_licence = \"pointer\"").unwrap().text_cache_max_mib, 1024);
+        assert_eq!(lib("private_text_max_mib = 20").unwrap().text_cache_max_mib, 20);
+        assert_eq!(lib("text_cache_max_mib = 64").unwrap().text_cache_max_mib, 64);
+        assert_eq!(lib("private_text_max_mib = 20\ntext_cache_max_mib = 64").unwrap().text_cache_max_mib, 64);
+        assert_eq!(lib("text_cache_max_mib = 16").unwrap().text_cache_max_mib, 16);
+        let err = lib("text_cache_max_mib = 15").unwrap_err();
+        assert!(format!("{err:?}").contains("text_cache_max_mib is at least 16"), "{err:?}");
         assert_eq!(UnknownLicence::read("not toml ["), UnknownLicence::Excerpts);
     }
 
