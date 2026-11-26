@@ -156,6 +156,15 @@ The builders decided these themselves. Confirm each, or amend the spec.
   - **143 against 139.** With no writer route, a rebuild builds the seed page, and the idle rebuild still raises `no_route` (`page_run.rs`).
   - **Two service tests** made a hand-made topic with no linked row. Since 139 B such a topic waits and gets no page, so the tests now link a research record.
   - **The egress scan** matched `body_may_leave(` as `may_leave(`. It now matches the whole word only.
+  - **143's idle-job tests** now use a topic with a linked research record (`topic_with_material` in `service.rs`), for the same reason.
+  - **`retractions_grant_nothing`** now lists `library_topics.rs`, whose seed build copies the library handle.
+  - **FIRST TASK for the next session: one test is `#[ignore]`d on purpose.** `an_idle_rebuild_with_no_route_is_one_notice_a_day_and_holds_no_entry_text` follows 143 §2.7 item 6, where a topic with no writer stays due and the failure is counted again each hour. Under 139 B the seed page is built and is not due, so nothing is counted again.
+    - The architect decides. One way: a seed page counts as due for expansion, which is what 139 E's "seed now, expand at idle" wants anyway, without writing a new seed version when nothing has changed.
+    - Then un-ignore the test.
+  - **SECOND TASK: two deadline tests.** `mcp_host::tests::get_agent_with_a_task_ends_with_a_section_outside_the_pack_and_its_hash` and `mcp_project::tests::a_task_section_never_shows_another_roles_memory_or_another_projects_files` pass alone. They failed in all three full local runs of `cargo test --workspace` on this branch, with no other build running on the machine.
+    - They run into the retrieval deadline. Find out whether 140 A's stage timings in the service path, or the merge, made the service path slower under load.
+    - Compare a full run on `origin/main`, and the CI result for this branch's first PR.
+- **Local gates at the push** (the last commit on this branch): clippy `--workspace --all-targets -D warnings` clean; `delphi lint` 0/0; the `delphi` crate's tests pass; `delphi-engine` lib 3,207 passed, 2 failed (the deadline tests above), 14 ignored.
 
 ## 6. Traps
 

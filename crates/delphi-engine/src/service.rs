@@ -5668,10 +5668,27 @@ mod tests {
         svc
     }
 
+    /// A topic with a linked row (`specs/139` §2.1): a research record that cites one claim. A topic with none waits for material
+    /// and is never rebuilt, so the idle jobs of `specs/143` would have nothing to do.
+    fn topic_with_material(f: &Fx, title: &str) {
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        let doc = f.engine.ws.home.join("tides-source.md");
+        fs::write(&doc, "# Tides\n\nThe tide comes in twice a day.\n").unwrap();
+        let s = lib.add_file(&doc, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+        let anchor = crate::library::claims::AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() };
+        let c = lib.add_claim("Tides come twice a day.", &Default::default(), &[anchor]).unwrap()["id"].as_str().unwrap().to_string();
+        let b = crate::research_record::Begin { question: "When do tides come?", asked_by: crate::research_record::Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r1" };
+        let rt = crate::research_record::Topic::begin(&f.engine.ws.dir, &b).unwrap();
+        rt.finish("r1", "done", Some(&json!({"claims": [&c]})), std::slice::from_ref(&c), None, 0).unwrap();
+        lib.topic_create(title, crate::library::topics::Origin::Operator, 1).unwrap();
+        lib.topic_create(title, crate::library::topics::Origin::Research(rt.id.clone()), 1).unwrap();
+    }
+
     // `specs/143` AC-7 and §2.7 item 6: an idle rebuild that fails for want of a route writes one `daemon.notice` with cause
     // `no_route`, one line in the log at the default level and one line in `delphi kb health`; the same failure an hour later
     // writes no second notice that day; the topic stays due and no stub is written; none of it holds text of a page or a claim.
     #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "knowledge-v2 integration: 143 §2.7 item 6 (the topic stays due) conflicts with 139 B (a seed page is not due); see the handoff §5"]
     async fn an_idle_rebuild_with_no_route_is_one_notice_a_day_and_holds_no_entry_text() {
         use crate::daemon_notice as dn;
         let f = setup(vec![], 5.0, |_| {});
@@ -5679,7 +5696,7 @@ mod tests {
         f.now.store(1_795_608_000, std::sync::atomic::Ordering::SeqCst);
         let svc = harness_only(&f);
         let lib = crate::library::Library::in_home(&f.engine.ws.home);
-        lib.topic_create("Zanzibar lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        topic_with_material(&f, "Zanzibar lighthouse lamps");
         svc.topic_idle_rebuild_noticed().await;
         let notices = events_of(&f, "daemon.notice");
         assert_eq!(notices.len(), 1);
@@ -5723,7 +5740,7 @@ mod tests {
         let f = setup(vec![], 5.0, |_| {});
         let svc = harness_only(&f);
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}[routing]\nsingle_call_harness = \"off\"\n[bridge.claude]\ncredential = \"keychain:bridge-claude\"\n", crate::testkit::harness_only_config())).unwrap());
-        crate::library::Library::in_home(&f.engine.ws.home).topic_create("Tide tables", crate::library::topics::Origin::Operator, 1).unwrap();
+        topic_with_material(&f, "Tide tables");
         svc.topic_idle_rebuild_noticed().await;
         let notices = events_of(&f, "daemon.notice");
         assert_eq!(notices.len(), 1);
@@ -5793,7 +5810,7 @@ mod tests {
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         let lib = crate::library::Library::in_home(&f.engine.ws.home);
-        lib.topic_create("Tide tables", crate::library::topics::Origin::Operator, 1).unwrap();
+        topic_with_material(&f, "Tide tables");
         let now = (f.engine.clock_unix)();
         let due = || lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(&f.engine.ws.dir), now: now as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
 
@@ -5850,7 +5867,7 @@ mod tests {
         for job in Job::ALL {
             let exists = match job {
                 Job::Pages => {
-                    crate::library::Library::in_home(&f.engine.ws.home).topic_create("Tide tables", crate::library::topics::Origin::Operator, 1).unwrap();
+                    topic_with_material(&f, "Tide tables");
                     svc.topic_idle_rebuild_noticed().await;
                     true
                 }

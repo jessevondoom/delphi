@@ -14,6 +14,7 @@ const READERS: &[(&str, &str)] = &[
     ("crates/delphi-engine/src/retractions.rs", "defines the snapshot, its reader, its index and the policy; opens no connection"),
     ("crates/delphi-engine/src/library_retraction.rs", "looks a source's DOI up in the snapshot and writes or lifts the mark; only downgrades"),
     ("crates/delphi-engine/src/library.rs", "holds the policy, carries a mark across a new version of a capture, and checks a source after it is stored"),
+    ("crates/delphi-engine/src/library_topics.rs", "the seed build (`specs/139` §2.2) copies the library's handle with its policy unchanged; it reads no mark"),
     ("crates/delphi-engine/src/library_claims.rs", "a source with a dropping mark is not an origin; a retracted source contests a claim nothing else supports"),
     ("crates/delphi-engine/src/library_recheck.rs", "checks the source again after the 30-day re-check"),
     ("crates/delphi-engine/src/digest_review.rs", "offers the operator a line saying a source was marked; keep or dismiss, nothing else"),
