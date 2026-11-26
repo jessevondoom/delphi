@@ -993,6 +993,9 @@ impl Engine {
                 return Ok(Err(HarnessErr::retry(format!("a run with an operator authorization cannot use the claude seat: {why}"))));
             }
         }
+        // `specs/143` §2.3 item 3: from before it starts until it has ended, a seat or a span holds its endpoint against bridged
+        // calls. It checks nothing and waits for nothing.
+        let _holds_endpoint = self.bridge.gate.seat(&ep.id);
         let mut session = match Session::start(&launch).await {
             Ok(s) => s,
             Err(e) => return Ok(Err(HarnessErr::retry(e))),

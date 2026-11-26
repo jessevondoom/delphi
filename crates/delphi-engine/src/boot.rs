@@ -581,6 +581,7 @@ pub fn build_with_model(home: &Path, ws_dir: &Path, hub: Hub, model: Option<Arc<
         model,
         secrets,
         job_failures: Default::default(),
+        bridge: Default::default(),
         ledger: Arc::new(Mutex::new(ledger)),
         settings: {
             let st = settings_from(&root);

@@ -3145,6 +3145,7 @@ impl EngineService {
     /// of a cause in a day is one `daemon.notice` event and one line in the error log, with the cause code and nothing of the work.
     /// The console's line for it is read from the record (`status`), so it carries the day's count.
     pub(crate) async fn notices_tick(&self) {
+        self.bridge_records().await;
         let failures = self.engine.job_failures.drain();
         if failures.is_empty() {
             return;
@@ -3158,6 +3159,66 @@ impl EngineService {
             if let Ok(m) = self.mission(None).await {
                 let _ = m.append(EventEnvelope::new(&m.id, "daemon.notice", json!({"cause": f.cause.code(), "job": f.job.code(), "key": f.key}))).await;
             }
+        }
+    }
+
+    /// What each ended bridged call leaves in the log (`specs/143` §2.2 item 3, §2.3 item 1): a seat receipt that says it was
+    /// tool-less and which model the CLI reported it served, and one `agent.usage` with `cost_model = subscription` and the
+    /// tokens the CLI reported, or an estimate marked as one. No dollar price is invented.
+    async fn bridge_records(&self) {
+        let records = self.engine.bridge.drain();
+        if records.is_empty() {
+            return;
+        }
+        let Ok(m) = self.mission(None).await else { return };
+        for r in records {
+            let ok = r.outcome == "ok";
+            // A single call runs outside any task and any span: its own id stands for both.
+            let stamp = |mut e: EventEnvelope| {
+                e.task_id = Some(format!("single-call-{}", r.id));
+                e.span_id = Some(format!("single-call-{}", r.id));
+                e.model_tier = Some(r.model_tier.clone());
+                e.attempt = Some(1);
+                e.endpoint_id = Some(r.endpoint_id.clone());
+                e.model_id = Some(r.model_id.clone());
+                e.access_path = Some("harness".into());
+                e.agent = Some(r.job.map(|j| j.code()).unwrap_or("single-call").to_string());
+                e
+            };
+            let usage = delphi_core::usage::UsagePayload {
+                provider: "anthropic".into(),
+                input_tokens: r.tokens.saturating_sub(r.tokens_out),
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                output_tokens: r.tokens_out,
+                thinking_tokens: 0,
+                cost_usd: 0.0,
+                reserved_usd: 0.0,
+                usage_source: if r.estimated { "estimated" } else { "reported" }.into(),
+                cost_model: "subscription".into(),
+                outcome: if ok { "ok" } else { "error" }.into(),
+                reservation_id: None,
+            };
+            let mut usage = usage.to_value();
+            usage["single_call"] = json!(true);
+            usage["failure"] = if ok { Value::Null } else { json!(r.outcome) };
+            let receipt = crate::seat::Receipt {
+                seat_id: format!("single-call-{}", r.prompt_hash.chars().take(12).collect::<String>()),
+                requested_endpoint: r.endpoint_id.clone(),
+                requested_model: r.model_id.clone(),
+                served: crate::seat::resolve(&self.engine.family_table(), r.served.as_deref()),
+                carrier: crate::seat::Carrier { kind: "claude".into(), cli_version: None, tools_offered: vec![], native_tools: Some(0), dispatch_allowed: false },
+                tool_grant: json!({"builtin": "none", "native": [], "bridge": [], "gated": false, "single_call": true}),
+                prompt_hash: r.prompt_hash.clone(),
+                prompt_bytes: Some(r.prompt_bytes),
+                context_cut: None,
+                cut_suspected: false,
+                tokens_in: r.tokens.saturating_sub(r.tokens_out),
+                tokens_out: r.tokens_out,
+                outcome: if ok { "ok" } else { "error" }.into(),
+            };
+            let _ = m.append(stamp(EventEnvelope::new(&m.id, "agent.usage", usage))).await;
+            let _ = m.append(stamp(EventEnvelope::new(&m.id, crate::seat::RECEIPT_KIND, receipt.to_value()))).await;
         }
     }
 
@@ -5048,12 +5109,12 @@ impl EngineService {
                 if mode != crate::summary::SummaryMode::Off && !d.tainted && d.turns >= 2 {
                     let (engine, mission, record, sid) = (self.engine.clone(), m.clone(), crate::summary::record_of(session), id.clone());
                     tokio::spawn(async move {
-                        let (written, _) = crate::daemon_notice::in_job(crate::daemon_notice::Job::SessionSummaries, engine.summarize_session(mode, &record)).await;
+                        let (written, _) = crate::daemon_notice::in_job(crate::daemon_notice::Job::SessionSummaries, engine.summarize_session(mode, &record, Some(delphi_core::provenance::Tier::L3))).await;
                         let Some(w) = written else { return };
                         let model = format!("{}/{}", w.endpoint_id, w.model_id);
                         let secrets = engine.secrets.clone();
-                        if crate::session::append_summary(&engine.ws.home, &mission.id, &sid, &w.text, &model, &|s| secrets.redact(s)).is_ok() {
-                            let _ = mission.append(EventEnvelope::new(&mission.id, "session.summarized", json!({"session_id": sid, "model": model, "tokens": w.tokens}))).await;
+                        if crate::session::append_summary(&engine.ws.home, &mission.id, &sid, &w.text, &model, w.tier, &|s| secrets.redact(s)).is_ok() {
+                            let _ = mission.append(EventEnvelope::new(&mission.id, "session.summarized", json!({"session_id": sid, "model": model, "tokens": w.tokens, "tier": w.tier.name()}))).await;
                         }
                     });
                 }
@@ -5423,6 +5484,12 @@ impl Extension for ServiceExt {
             // A console that only polls (a snapshot, a list, a status) is not the operator at work; any other console call is.
             if ctx.scope == Scope::Console && !(method == "snapshot" || method.ends_with(".snapshot") || [".list", ".status", ".get", ".read"].iter().any(|s| method.ends_with(s))) {
                 svc.last_operator.store((svc.engine.clock_unix)(), std::sync::atomic::Ordering::SeqCst);
+                svc.engine.bridge.active((svc.engine.clock_unix)());
+            }
+            // `specs/143` §2.3 item 7: a host session's hook, and any host tool call over MCP, is the operator at work too. On a
+            // host with no hooks installed its tool calls are the only sign of a session the daemon gets.
+            if method.starts_with("host.") {
+                svc.engine.bridge.active((svc.engine.clock_unix)());
             }
             Some(match method.as_str() {
                 "mission.open" => match need_console(&ctx) {
@@ -5608,6 +5675,8 @@ mod tests {
     async fn an_idle_rebuild_with_no_route_is_one_notice_a_day_and_holds_no_entry_text() {
         use crate::daemon_notice as dn;
         let f = setup(vec![], 5.0, |_| {});
+        // Noon, so that an hour later is the same day whenever the test runs.
+        f.now.store(1_795_608_000, std::sync::atomic::Ordering::SeqCst);
         let svc = harness_only(&f);
         let lib = crate::library::Library::in_home(&f.engine.ws.home);
         lib.topic_create("Zanzibar lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
@@ -5662,6 +5731,113 @@ mod tests {
         assert!(svc.notices_json()[0].contains("`[routing] single_call_harness` decides it"));
     }
 
+    // `specs/143` AC-5 and the token scan of AC-21: an ended bridged call leaves a tool-less seat receipt that names the model the
+    // CLI reported, and one `agent.usage` with `cost_model = subscription` and the reported tokens; a call that reported none is
+    // marked `estimated`; a failed one is recorded too. The fixture token is in no event, no notice and no ledger line.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_bridged_call_leaves_a_tool_less_receipt_and_its_usage() {
+        use crate::harness_single::tests::{answers, recording_cli, INIT};
+        let d = tempfile::tempdir().unwrap();
+        let rec = d.path().join("rec");
+        let f = crate::summary::tests::bridged(&recording_cli(d.path(), &rec, &answers("the token is sk-fixture-bridge-token-0001")), true);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let key = f.engine.scout_key().unwrap();
+        let contract = crate::summary::session_contract("Operator: hello");
+        let w = f.engine.one_shot(&key, &contract, 100, None).await.unwrap();
+        assert!(!w.text.contains("sk-fixture"));
+        svc.notices_tick().await;
+        let usage = events_of(&f, "agent.usage");
+        assert_eq!(usage.len(), 1);
+        let u = &usage[0].payload;
+        assert_eq!((u["cost_model"].as_str(), u["usage_source"].as_str(), u["outcome"].as_str(), u["cost_usd"].as_f64()), (Some("subscription"), Some("reported"), Some("ok"), Some(0.0)));
+        assert_eq!((u["input_tokens"].as_u64(), u["output_tokens"].as_u64()), (Some(40), Some(2)));
+        assert_eq!((usage[0].endpoint_id.as_deref(), usage[0].access_path.as_deref()), (Some("claude-sub"), Some("harness")));
+        let receipts = events_of(&f, crate::seat::RECEIPT_KIND);
+        assert_eq!(receipts.len(), 1);
+        let r = &receipts[0].payload;
+        assert!(crate::seat::receipt_toolless(r), "{r}");
+        assert_eq!((r["served"]["model"].as_str(), r["tool_grant"]["single_call"].as_bool(), r["outcome"].as_str()), (Some("claude-served-1"), Some(true), Some("ok")));
+        svc.notices_tick().await;
+        assert_eq!(events_of(&f, "agent.usage").len(), 1, "written once");
+
+        // A CLI that reports no tokens, and one that fails.
+        let silent = format!("{INIT}\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"an answer\"}}'");
+        for (body, source, outcome) in [(silent, "estimated", "ok"), (format!("{INIT}\nexit 3"), "estimated", "error")] {
+            let f = crate::summary::tests::bridged(&recording_cli(d.path(), &rec, &body), true);
+            let svc = EngineService::new(f.engine.clone(), "m1");
+            svc.adopt(f.m.clone());
+            let _ = f.engine.one_shot(&f.engine.scout_key().unwrap(), &contract, 100, None).await;
+            svc.notices_tick().await;
+            let u = &events_of(&f, "agent.usage")[0].payload;
+            assert_eq!((u["usage_source"].as_str(), u["outcome"].as_str(), u["cost_model"].as_str()), (Some(source), Some(outcome), Some("subscription")), "{u}");
+            assert!(u["input_tokens"].as_u64().unwrap() > 0);
+            assert_eq!(events_of(&f, crate::seat::RECEIPT_KIND)[0].payload["outcome"].as_str(), Some(outcome));
+        }
+
+        // The scan: every event of the mission, the console's notices and the ledger.
+        let everything = format!("{}\n{}\n{}", f.m.replay().unwrap().iter().map(|e| format!("{e:?}")).collect::<Vec<_>>().join("\n"), svc.notices_json().join("\n"), fs::read_to_string(f.engine.ws.home.join("bridge/ledger.jsonl")).unwrap());
+        assert!(!everything.contains("sk-fixture"), "the token is written nowhere");
+    }
+
+    // `specs/143` §2.3 items 6 and 7, for the idle rebuild: while the operator is working a rebuild a harness would write does
+    // not start, writes nothing and raises nothing, and the topic stays due; with the idle share spent it raises `budget` once
+    // and still writes nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_idle_rebuild_through_the_bridge_waits_for_the_pause_and_stops_at_the_idle_share() {
+        use crate::harness_single::tests::{answers, recording_cli};
+        use crate::job_admission::{credential_id, Call, Ledger, Origin};
+        let d = tempfile::tempdir().unwrap();
+        let rec = d.path().join("rec");
+        let f = crate::summary::tests::bridged(&recording_cli(d.path(), &rec, &answers("a page")), true);
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        svc.adopt(f.m.clone());
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        lib.topic_create("Tide tables", crate::library::topics::Origin::Operator, 1).unwrap();
+        let now = (f.engine.clock_unix)();
+        let due = || lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(&f.engine.ws.dir), now: now as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
+
+        f.engine.bridge.active(now);
+        svc.topic_idle_rebuild_noticed().await;
+        svc.notices_tick().await;
+        assert!(events_of(&f, "daemon.notice").is_empty() && !rec.join("args.txt").exists() && due() == 1, "paused: nothing started, nothing said, still due");
+        assert!(fs::read(lib.root().join("pages/tide-tables.md")).is_err());
+
+        // The idle share of the window (15 of 30 calls) is spent.
+        f.advance(crate::job_admission::PAUSE_SECS);
+        let now = (f.engine.clock_unix)();
+        let cred = credential_id(f.engine.cfg.get().bridge.claude_credential.as_deref().unwrap());
+        let ledger = Ledger::in_home(&f.engine.ws.home);
+        for k in 0..15 {
+            ledger.start(&Call { id: format!("x{k}"), at: now - 60, job: Some(crate::daemon_notice::Job::Validation), origin: Origin::Idle, credential: cred.clone(), endpoint: "claude-sub".into(), tokens: 10, outcome: None });
+        }
+        svc.topic_idle_rebuild_noticed().await;
+        svc.notices_tick().await;
+        let notices = events_of(&f, "daemon.notice");
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].payload, json!({"cause": "budget", "job": "pages", "key": null}));
+        assert!(!rec.join("args.txt").exists() && due() == 1 && fs::read(lib.root().join("pages/tide-tables.md")).is_err(), "nothing started, nothing written, still due");
+    }
+
+    // `specs/143` §2.3 item 7: a host tool call over MCP is a sign of the operator at work, on a host with no hook installed too.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_tool_call_counts_as_the_operator_at_work() {
+        let f = setup(vec![], 5.0, |_| {});
+        let s = serve(&f).await;
+        let seen = || f.engine.bridge.last_active.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(seen(), 0);
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            c.hello(&htok).unwrap();
+            // Whatever the call answers, it was a host's.
+            let _ = c.call("host.cancel_job", json!({"session": "abcdef0123456789", "tool": "claude-code", "research_id": "none"}));
+        })
+        .await;
+        assert_eq!(seen(), (f.engine.clock_unix)(), "the call was seen");
+    }
+
     // `specs/143` §6, the fitness function "a background failure is never silent": every idle job, enumerated from the closed list,
     // raises a notice when no model can serve it. `match` is exhaustive, so a job added to the list fails to compile until it has a
     // row here. AC-18: failures of different jobs with one cause in a day are one notice with their count.
@@ -5683,7 +5859,7 @@ mod tests {
                     true
                 }
                 Job::SessionSummaries => {
-                    assert!(f.engine.summarize_session(crate::summary::SummaryMode::Fast, "Operator: pick a queue").await.is_none());
+                    assert!(f.engine.summarize_session(crate::summary::SummaryMode::Fast, "Operator: pick a queue", None).await.is_none());
                     true
                 }
                 Job::Consolidation => {

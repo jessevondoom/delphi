@@ -58,6 +58,7 @@
         "adopt_threshold": { "type": "number", "minimum": 0, "maximum": 1, "description": "The confidence at or above which route marks its best candidate adopt = true (specs/098 section 8). Provisional default 0.55; delphi route --adopt-eval measures a labeled set." },
         "registry": { "enum": ["flat", "auto"], "description": "How the orchestrator learns of bundle agents (specs/041). flat: one line per agent, up to 20. auto: past 20, a domain index and the search_agent_registry tool." },
         "single_call_harness": { "enum": ["auto", "on", "off"], "description": "Whether a harness endpoint may serve a single model call (one prompt, one answer, its tools off) through the single-turn bridge (specs/143 section 2.1). auto (the default): only when no other allowed endpoint is eligible for the call. on: a harness competes like any endpoint. off: a harness never serves a single call. Only a CLI that can run one prompt with its tools off is eligible (claude; never agy)." },
+        "single_call_harness_parallel": { "type": "integer", "minimum": 1, "maximum": 16, "description": "How many single calls through a harness run at once on one endpoint (specs/143 section 2.3). Further calls wait in order, and every one of them yields to a Council or Panel seat or an agent's span on that endpoint. Default 2." },
         "single_call_harness_timeout_secs": { "type": "integer", "minimum": 1, "maximum": 3600, "description": "How long a single call through a harness may run (specs/143 section 2.3). Past it the CLI's process group gets SIGTERM and, five seconds later, SIGKILL, and the call fails with `timeout`. Default 180." },
         "assignment": { "enum": ["static", "discovered"], "description": "How a dispatch picks its model (specs/056). static: the role's tier. discovered: capability class, measured results and quota." },
         "evidence_enough": { "type": "integer", "minimum": 1, "description": "Measured results per (role, kind, model) after which a model is scored by them alone." },
@@ -342,6 +343,20 @@
       "description": "The single-turn harness bridge (specs/143): one prompt and one answer through a subscription CLI, with its tools off.",
       "additionalProperties": false,
       "properties": {
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "What one credential may spend through the bridge (specs/143 section 2.3). Counted from the ledger in the Delphi home, so they survive a restart; a call that failed or timed out counts.",
+          "properties": {
+            "window_hours": { "type": "integer", "minimum": 1, "description": "The rolling window, in hours. Default 5." },
+            "window_calls": { "type": "integer", "minimum": 1, "description": "The most bridged calls in any window. Default 30." },
+            "window_tokens": { "type": "integer", "minimum": 1, "description": "The most tokens in any window. Default 300000." },
+            "daily_calls": { "type": "integer", "minimum": 1, "description": "The most bridged calls in a day (UTC). Default 100." },
+            "daily_tokens": { "type": "integer", "minimum": 1, "description": "The most tokens in a day. Default 1000000." },
+            "ceiling_factor": { "type": "integer", "minimum": 1, "description": "The ceiling nothing passes, as a multiple of the daily cap. Default 3." },
+            "idle_share": { "type": "number", "minimum": 0, "maximum": 1, "description": "The share of the window and of the daily cap that jobs nobody started may use. Default 0.5." }
+          }
+        },
         "claude": {
           "type": "object",
           "additionalProperties": false,

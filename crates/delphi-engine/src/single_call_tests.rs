@@ -19,7 +19,7 @@ fn one_request_with_no_tools(f: &Fx) {
 #[tokio::test(flavor = "multi_thread")]
 async fn summary_makes_one_request_with_no_tools() {
     let f = setup(vec![Step::text("They chose Postgres.")], 5.0, |_| {});
-    let w = f.engine.summarize_session(crate::summary::SummaryMode::Fast, "Operator: pick a queue\nTeam: Postgres.").await;
+    let w = f.engine.summarize_session(crate::summary::SummaryMode::Fast, "Operator: pick a queue\nTeam: Postgres.", Some(delphi_core::provenance::Tier::L3)).await;
     assert!(w.is_some());
     one_request_with_no_tools(&f);
 }
@@ -84,7 +84,7 @@ fn source(file: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     // A file's test module is not a caller (`#[cfg(test)]` on its own line, then `mod`).
-    text.split("\n#[cfg(test)]\nmod ").next().unwrap_or("").to_string()
+    text.split("\n#[cfg(test)]\nmod ").next().unwrap_or("").split("\n#[cfg(test)]\npub(crate) mod ").next().unwrap_or("").to_string()
 }
 
 /// The marked callers, the list and the tested callers are one set (AC-13).

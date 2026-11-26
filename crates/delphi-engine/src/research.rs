@@ -246,7 +246,7 @@ impl Judge for EngineJudge {
         Box::pin(async move {
             let key = e.scout_key().ok_or_else(|| "no model is available for the scout right now".to_string())?;
             let role = crate::role_call::load(&e, crate::role_call::Step::JudgePage).await?;
-            let raw = e.one_shot_raw(&key, &scout_ipr(&role, contract(&input)), SCOUT_MAX_OUTPUT, None).await.map_err(|e| format!("the scout's call failed: {e}"))?;
+            let raw = e.one_shot_raw(&key, &scout_ipr(&role, contract(&input)), SCOUT_MAX_OUTPUT, Some(delphi_core::provenance::Tier::L0)).await.map_err(|e| format!("the scout's call failed: {e}"))?;
             let mut j = parse_judged(&e.secrets.redact(&raw.text), &input.full_text)?;
             j.tokens = raw.tokens;
             Ok(j)

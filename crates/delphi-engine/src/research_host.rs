@@ -343,7 +343,7 @@ impl Scout for LiveScout {
             let e = &self.0;
             let key = e.scout_key().ok_or_else(|| crate::research_empty::NO_SCOUT_MODEL.to_string())?;
             let role = crate::role_call::load(e, crate::role_call::Step::JudgePage).await?;
-            let raw = e.one_shot_raw(&key, &scout_ipr(&role, claim_contract(question, page, e.settings.research_limits.page_chars, subs)), CLAIM_OUTPUT, None).await.map_err(|e| format!("the scout's call failed: {e}"))?;
+            let raw = e.one_shot_raw(&key, &scout_ipr(&role, claim_contract(question, page, e.settings.research_limits.page_chars, subs)), CLAIM_OUTPUT, Some(delphi_core::provenance::Tier::L0)).await.map_err(|e| format!("the scout's call failed: {e}"))?;
             claims_from_reply(&e.secrets.redact(&raw.text), &page.text, &page.url)
         })
     }
@@ -358,7 +358,7 @@ impl Scout for LiveScout {
             let key = e.scout_key().ok_or_else(|| crate::research_empty::NO_SCOUT_MODEL.to_string())?;
             let role = crate::role_call::load(e, crate::role_call::Step::WriteAnswer).await?;
             let ipr = crate::research::scout_call(crate::research::WRITE_LINE, &role, crate::research_method::answer_contract(ask));
-            let raw = e.one_shot_raw(&key, &ipr, ANSWER_OUTPUT, None).await.map_err(|e| format!("the scout's answer call failed: {e}"))?;
+            let raw = e.one_shot_raw(&key, &ipr, ANSWER_OUTPUT, Some(delphi_core::provenance::Tier::L0)).await.map_err(|e| format!("the scout's answer call failed: {e}"))?;
             Ok(e.secrets.redact(&raw.text))
         })
     }

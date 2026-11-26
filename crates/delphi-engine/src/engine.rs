@@ -372,6 +372,8 @@ pub struct Engine {
     pub secrets: Arc<SecretRegistry>,
     /// Background jobs that could not run, left here for the daemon to raise as notices (`specs/143` §2.7).
     pub job_failures: crate::daemon_notice::Sink,
+    /// The single-turn bridge's gate, the last sign of the operator at work, and the call records the daemon writes (`specs/143` §2.3).
+    pub bridge: crate::job_admission::Bridge,
     pub ledger: Arc<Mutex<Ledger>>,
     pub settings: Settings,
     pub probe: Arc<dyn ProjectProbe>,
@@ -1945,10 +1947,10 @@ impl Engine {
         if let (Some(key), true) = (key, self.settings.checkpoint_model && !tainted) {
             let wait = self.settings.checkpoint_wait;
             let work = crate::checkpoint::work_contract(&facts.prompt, &crate::checkpoint::work_lines(history));
-            parts.work = tokio::time::timeout(wait, self.one_shot(key, &work, 500, None)).await.ok().and_then(Result::ok).map(|w| crate::summary::clean_to(&w.text, 900));
+            parts.work = tokio::time::timeout(wait, self.one_shot(key, &work, 500, Some(delphi_core::provenance::Tier::L3))).await.ok().and_then(Result::ok).map(|w| crate::summary::clean_to(&w.text, 900));
             let record = crate::summary::record_of(session);
             if !record.is_empty() {
-                parts.chat = tokio::time::timeout(wait, self.one_shot(key, &crate::summary::session_contract(&record), 400, None)).await.ok().and_then(Result::ok).map(|w| w.text);
+                parts.chat = tokio::time::timeout(wait, self.one_shot(key, &crate::summary::session_contract(&record), 400, Some(delphi_core::provenance::Tier::L3))).await.ok().and_then(Result::ok).map(|w| w.text);
             }
         }
         let text = self.secrets.redact(&crate::checkpoint::note(&facts, history, &events, session, &parts));

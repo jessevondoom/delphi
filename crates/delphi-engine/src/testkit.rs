@@ -162,6 +162,7 @@ fn assemble(t: tempfile::TempDir, root: PathBuf, steps: Vec<Step>, budget_usd: f
         model: model.clone(),
         secrets,
         job_failures: Default::default(),
+        bridge: Default::default(),
         ledger,
         settings,
         probe: Arc::new(AssumeClean),

@@ -205,7 +205,7 @@ impl PageValidator for EnginePageValidator {
             if self.writer_model.as_deref() == Some(key.model_id.as_str()) {
                 return Err("the only model available is the writer's; the validator must be a second model".into());
             }
-            let raw = e.one_shot_raw(&key, &ipr(contract(q)), VALIDATOR_MAX_OUTPUT, None).await.map_err(|e| format!("the validator's call failed: {e}"))?;
+            let raw = e.one_shot_raw(&key, &ipr(contract(q)), VALIDATOR_MAX_OUTPUT, Some(delphi_core::provenance::Tier::L0)).await.map_err(|e| format!("the validator's call failed: {e}"))?;
             let assertions = parse_reply(&raw.text).ok_or_else(|| "the validator's reply was not a list of assertions".to_string())?;
             Ok(ValidatorReply { assertions, model: format!("{}/{}", raw.endpoint_id, raw.model_id), family: key.family, tokens: raw.tokens })
         })

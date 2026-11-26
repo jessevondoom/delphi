@@ -120,7 +120,7 @@ impl FactJudge for EngineJudge {
             if self.author_model.as_deref() == Some(key.model_id.as_str()) {
                 return Err("the only model available is the claim author's; the judge must be a second model".into());
             }
-            let raw = e.one_shot_raw(&key, &ipr(contract(q)), JUDGE_MAX_OUTPUT, None).await.map_err(|e| format!("the judge's call failed: {e}"))?;
+            let raw = e.one_shot_raw(&key, &ipr(contract(q)), JUDGE_MAX_OUTPUT, Some(delphi_core::provenance::Tier::L0)).await.map_err(|e| format!("the judge's call failed: {e}"))?;
             let verdict = parse_verdict(&raw.text).ok_or_else(|| "the judge's answer was not entails, neutral or contradicts".to_string())?;
             Ok(JudgeReply { verdict, model: format!("{}/{}", raw.endpoint_id, raw.model_id), family: key.family, tokens: raw.tokens })
         })

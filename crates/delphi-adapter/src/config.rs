@@ -694,6 +694,8 @@ pub struct Routing {
     pub single_call_harness: SingleCallHarness,
     /// `[routing] single_call_harness_timeout_secs` (`specs/143` §2.3 item 4): how long a bridged call may run. 180 when absent.
     pub single_call_harness_timeout_secs: u64,
+    /// `[routing] single_call_harness_parallel` (`specs/143` §2.3 item 3): bridged calls at once on one endpoint. 2 when absent.
+    pub single_call_harness_parallel: u64,
 }
 
 /// The longest a bridged call runs when the config does not say.
@@ -705,6 +707,33 @@ pub struct BridgeConfig {
     /// `[bridge.claude] credential`: a credential reference (never the token) for the subscription token the bridge signs the
     /// `claude` CLI in with (`specs/143` §2.2 item 1, §2.9). Absent: that CLI is not eligible for a single call (§2.9 item 4).
     pub claude_credential: Option<String>,
+    /// `[bridge.limits]` (`specs/143` §2.3 item 6): what one credential may spend through the bridge.
+    pub limits: BridgeLimits,
+}
+
+/// `[bridge.limits]` (`specs/143` §2.3 item 6), for each credential. Guesses until a week of use shows what a subscription allows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BridgeLimits {
+    /// The rolling window, in hours.
+    pub window_hours: u64,
+    /// The most bridged calls in any window.
+    pub window_calls: u64,
+    /// The most tokens in any window.
+    pub window_tokens: u64,
+    /// The most bridged calls in a day (UTC).
+    pub daily_calls: u64,
+    /// The most tokens in a day.
+    pub daily_tokens: u64,
+    /// The ceiling nothing passes, as a multiple of the daily cap.
+    pub ceiling_factor: u64,
+    /// The share of the window and of the daily cap that jobs nobody started may use.
+    pub idle_share: f64,
+}
+
+impl Default for BridgeLimits {
+    fn default() -> BridgeLimits {
+        BridgeLimits { window_hours: 5, window_calls: 30, window_tokens: 300_000, daily_calls: 100, daily_tokens: 1_000_000, ceiling_factor: 3, idle_share: 0.5 }
+    }
 }
 
 impl BridgeConfig {
@@ -714,7 +743,7 @@ impl BridgeConfig {
 
 impl Default for Routing {
     fn default() -> Routing {
-        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None, max_cost_class: CostCap::default(), single_call_harness: SingleCallHarness::Auto, single_call_harness_timeout_secs: DEFAULT_SINGLE_CALL_TIMEOUT_SECS }
+        Routing { pool: None, targets: BTreeMap::new(), tuning: PoolTuning::default(), assignment: Assignment::Static, evidence_enough: DEFAULT_EVIDENCE_ENOUGH, reserve: BTreeMap::new(), registry: RegistryMode::Flat, emergency: None, max_cost_class: CostCap::default(), single_call_harness: SingleCallHarness::Auto, single_call_harness_timeout_secs: DEFAULT_SINGLE_CALL_TIMEOUT_SECS, single_call_harness_parallel: 2 }
     }
 }
 
@@ -1626,6 +1655,26 @@ impl Config {
                 None => errs.push("[bridge.claude] credential must be a credential reference, such as \"keychain:bridge-claude\"".into()),
             }
         }
+        if let Some(l) = root.get("bridge").and_then(|b| b.get("limits")).and_then(|l| l.as_table()) {
+            let lim = &mut cfg.bridge.limits;
+            for (key, slot) in [("window_hours", &mut lim.window_hours), ("window_calls", &mut lim.window_calls), ("window_tokens", &mut lim.window_tokens), ("daily_calls", &mut lim.daily_calls), ("daily_tokens", &mut lim.daily_tokens), ("ceiling_factor", &mut lim.ceiling_factor)] {
+                if let Some(v) = l.get(key) {
+                    match v.as_integer().filter(|n| *n >= 1) {
+                        Some(n) => *slot = n as u64,
+                        None => errs.push(format!("[bridge.limits] {key} must be a whole number of 1 or more")),
+                    }
+                }
+            }
+            if let Some(v) = l.get("idle_share") {
+                match v.as_float().or_else(|| v.as_integer().map(|n| n as f64)).filter(|s| (0.0..=1.0).contains(s)) {
+                    Some(s) => lim.idle_share = s,
+                    None => errs.push("[bridge.limits] idle_share must be a number from 0 to 1".into()),
+                }
+            }
+            for key in l.keys().filter(|k| !["window_hours", "window_calls", "window_tokens", "daily_calls", "daily_tokens", "ceiling_factor", "idle_share"].contains(&k.as_str())) {
+                errs.push(format!("[bridge.limits] has no key `{key}`"));
+            }
+        }
         if let Some(r) = root.get("routing").and_then(|r| r.as_table()) {
             if let Some(p) = r.get("pool") {
                 match p.clone().try_into::<PoolRaw>() {
@@ -1665,6 +1714,12 @@ impl Config {
                 match a.as_str().and_then(SingleCallHarness::parse) {
                     Some(v) => cfg.routing.single_call_harness = v,
                     None => errs.push("[routing] single_call_harness must be \"auto\", \"on\" or \"off\"".into()),
+                }
+            }
+            if let Some(n) = r.get("single_call_harness_parallel") {
+                match n.as_integer().filter(|n| (1..=16).contains(n)) {
+                    Some(n) => cfg.routing.single_call_harness_parallel = n as u64,
+                    None => errs.push("[routing] single_call_harness_parallel must be a whole number from 1 to 16".into()),
                 }
             }
             if let Some(n) = r.get("single_call_harness_timeout_secs") {
@@ -2515,6 +2570,15 @@ allowed_endpoints = ["corp-gateway", "bedrock-us"]
         assert_eq!(with_routing("[routing]\nsingle_call_harness_timeout_secs = 30").unwrap().routing.single_call_harness_timeout_secs, 30);
         assert!(with_routing("[routing]\nsingle_call_harness_timeout_secs = 0").is_err());
         assert_eq!(with_routing("").unwrap().bridge.claude_credential, None);
+        assert_eq!(with_routing("").unwrap().routing.single_call_harness_parallel, 2);
+        assert_eq!(with_routing("[routing]\nsingle_call_harness_parallel = 1").unwrap().routing.single_call_harness_parallel, 1);
+        assert!(with_routing("[routing]\nsingle_call_harness_parallel = 0").is_err());
+        assert_eq!(with_routing("").unwrap().bridge.limits, BridgeLimits::default());
+        let set = with_routing("[bridge.limits]\nwindow_hours = 4\nwindow_calls = 10\nwindow_tokens = 1000\ndaily_calls = 20\ndaily_tokens = 2000\nceiling_factor = 2\nidle_share = 0.25").unwrap().bridge.limits;
+        assert_eq!(set, BridgeLimits { window_hours: 4, window_calls: 10, window_tokens: 1000, daily_calls: 20, daily_tokens: 2000, ceiling_factor: 2, idle_share: 0.25 });
+        for bad in ["window_calls = 0", "idle_share = 1.5", "weekly = 3"] {
+            assert!(with_routing(&format!("[bridge.limits]\n{bad}")).is_err(), "{bad}");
+        }
         assert_eq!(with_routing("[bridge.claude]\ncredential = \"keychain:bridge-claude\"").unwrap().bridge.claude_credential.as_deref(), Some("keychain:bridge-claude"));
         let pasted = with_routing("[bridge.claude]\ncredential = \"sk-ant-oat01-pasted-secret\"").unwrap_err().join("; ");
         assert!(pasted.contains("[bridge.claude] credential") && !pasted.contains("pasted-secret"), "a pasted token is refused and not shown: {pasted}");

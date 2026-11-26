@@ -57,7 +57,7 @@ pub(crate) fn ipr(role: &crate::role_call::RoleText, contract: String) -> Ipr {
 impl EnginePageWriter {
     async fn call(&self, contract: String) -> Result<String, String> {
         let role = crate::role_call::load(&self.engine, crate::role_call::Step::WritePage).await?;
-        let raw = self.engine.one_shot_raw(&self.key, &ipr(&role, contract), self.max_tokens + 400, None).await.map_err(|e| format!("the writer's call failed: {e}"))?;
+        let raw = self.engine.one_shot_raw(&self.key, &ipr(&role, contract), self.max_tokens + 400, Some(delphi_core::provenance::Tier::L0)).await.map_err(|e| format!("the writer's call failed: {e}"))?;
         let text = self.engine.secrets.redact(&raw.text);
         if text.trim().is_empty() { Err("the writer returned nothing".into()) } else { Ok(text) }
     }
@@ -382,6 +382,13 @@ impl Engine {
         let mut due: Vec<_> = lib.topic_pages(&ctx).into_iter().filter(|t| t.due.is_some()).collect();
         due.sort_by_key(|t| (t.built.is_some(), t.built.unwrap_or(0)));
         let slug = due.first()?.slug.clone();
+        // A harness that would write the page is asked for admission first (`specs/143` §2.3 item 6): a rebuild that is not
+        // admitted writes nothing and the topic stays due.
+        if let Some(key) = self.writer_key() {
+            if !self.idle_job_may_start(crate::daemon_notice::Job::Pages, &key) {
+                return None;
+            }
+        }
         let mut material = false;
         let built = self.topic_rebuild_with(&slug, None, &mut material).await;
         let cause = match &built {

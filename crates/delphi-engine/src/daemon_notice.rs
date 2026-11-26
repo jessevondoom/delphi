@@ -152,6 +152,11 @@ pub async fn in_job<F: std::future::Future>(job: Job, f: F) -> (F::Output, bool)
     .await
 }
 
+/// The job the current task runs as; `None` outside a job.
+pub fn current_job() -> Option<Job> {
+    JOB.try_with(|s| s.job).ok()
+}
+
 /// The job the current task runs as, marked as having had a call fail; `None` outside a job.
 pub fn failing_job() -> Option<Job> {
     JOB.try_with(|s| {

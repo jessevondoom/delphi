@@ -17,8 +17,8 @@
 //! There is no OS sandbox behind it: the existing sandbox crate has no profile that leaves the network open, and the CLI opens a
 //! per-user directory outside its home (the same record).
 //!
-//! Not here yet (the rest of slice B): the ledger and the admission function, the yield to seats and spans, the pause, the seat
-//! receipt and the `agent.usage` event, the cooldown on spent quota, and ending a process group a crashed daemon left.
+//! Whether a call may start at all, and when, is not decided here: the ledger, the admission function and the gate are
+//! [`crate::job_admission`], and `Engine::one_shot_raw` asks them before it comes here.
 
 use crate::harness::{Cli, Event, Launch, LaunchProfile, Opts, Session, Tools};
 use crate::summary::CallError;
@@ -109,6 +109,42 @@ impl CallHome {
     }
 }
 
+impl CallHome {
+    /// Note the process group of the CLI this call started, with the moment its leader started, so that a daemon started after a
+    /// crash can end it ([`sweep`]). The moment is what makes the note safe: a process id is reused, a start time with it is not.
+    pub fn record_group(&self, pgid: i32) {
+        if let Some(started) = proc_start(pgid) {
+            let _ = std::fs::write(self.base.join(GROUP_FILE), format!("{pgid} {started}"));
+        }
+    }
+}
+
+/// The note [`CallHome::record_group`] leaves, beside the two directories.
+const GROUP_FILE: &str = "group";
+
+/// When process `pid` started, as the kernel tells it (an opaque number: only equality is used), or `None` when there is no such
+/// process or the platform does not say.
+#[cfg(target_os = "macos")]
+pub fn proc_start(pid: i32) -> Option<u64> {
+    // SAFETY: `proc_pidinfo` fills at most `size` bytes of the zeroed struct it is given and returns how many it wrote.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let wrote = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, &mut info as *mut libc::proc_bsdinfo as *mut libc::c_void, size) };
+    (wrote == size).then(|| info.pbi_start_tvsec.wrapping_mul(1_000_000).wrapping_add(info.pbi_start_tvusec))
+}
+
+#[cfg(target_os = "linux")]
+pub fn proc_start(pid: i32) -> Option<u64> {
+    // Field 22 of `/proc/<pid>/stat`, counted after the command's closing parenthesis (the command may hold spaces).
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse().ok()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn proc_start(_pid: i32) -> Option<u64> {
+    None
+}
+
 impl Drop for CallHome {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.base);
@@ -121,17 +157,33 @@ fn make_private(dir: &Path) -> std::io::Result<()> {
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
-/// At the daemon's start: remove the call directories a crash left behind (§2.3 item 4). Returns how many were removed.
-pub fn sweep(roots: &[PathBuf]) -> usize {
-    let mut n = 0;
+/// At the daemon's start (§2.3 item 4): end the process groups a crashed daemon recorded as running, and remove the call
+/// directories it left behind. A group is ended only when its leader is still the process that was recorded (the same process id
+/// **and** the same start time), so a process id the system has since given to something else is never signalled. Returns how
+/// many directories were removed and how many groups were ended.
+pub fn sweep(roots: &[PathBuf]) -> (usize, usize) {
+    let (mut dirs, mut groups) = (0, 0);
     for root in roots {
         for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
-            if e.file_type().is_ok_and(|t| t.is_dir()) && std::fs::remove_dir_all(e.path()).is_ok() {
-                n += 1;
+            if !e.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let note = std::fs::read_to_string(e.path().join(GROUP_FILE)).unwrap_or_default();
+            if let Some((pgid, started)) = note.split_once(' ').and_then(|(p, s)| Some((p.parse::<i32>().ok()?, s.trim().parse::<u64>().ok()?))) {
+                if pgid > 1 && proc_start(pgid) == Some(started) {
+                    // SAFETY: plain signal delivery to a process group this daemon's predecessor created and recorded.
+                    unsafe {
+                        libc::kill(-pgid, libc::SIGKILL);
+                    }
+                    groups += 1;
+                }
+            }
+            if std::fs::remove_dir_all(e.path()).is_ok() {
+                dirs += 1;
             }
         }
     }
-    n
+    (dirs, groups)
 }
 
 /// The launch of a bridged call. **The one place a `Launch` is built for the bridge**, so what it always has is read here:
@@ -167,11 +219,28 @@ pub struct Answer {
     pub served: Option<String>,
     /// The tokens the CLI reported, or an estimate from the prompt and the answer.
     pub tokens: u64,
+    /// Of those, the tokens of the answer.
+    pub tokens_out: u64,
     pub estimated: bool,
+}
+
+/// What a call showed besides its answer, kept also when it fails: for the ledger, the receipt and the endpoint's cooldown.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Seen {
+    pub served: Option<String>,
+    /// The tokens the CLI reported before the call ended; 0 when it reported none.
+    pub tokens: u64,
+    /// When the CLI said its quota comes back, in Unix seconds.
+    pub resets_at: Option<i64>,
 }
 
 /// Run the launch for one answer. Nothing is retried and nothing is granted.
 pub async fn run(l: &Launch, timeout: Duration) -> Result<Answer, CallError> {
+    run_in(l, None, timeout, &mut Seen::default()).await
+}
+
+/// [`run`], noting the CLI's process group in the call's `home` and leaving what the call showed in `seen`.
+pub async fn run_in(l: &Launch, home: Option<&CallHome>, timeout: Duration, seen: &mut Seen) -> Result<Answer, CallError> {
     if !l.profile.single_call || l.tools != Tools::None {
         return Err(CallError::Launch);
     }
@@ -182,8 +251,11 @@ pub async fn run(l: &Launch, timeout: Duration) -> Result<Answer, CallError> {
             return Err(CallError::Launch);
         }
     };
+    if let Some(home) = home {
+        home.record_group(s.pgid());
+    }
     let deadline = tokio::time::Instant::now() + timeout;
-    let (mut text, mut served, mut reported, mut rejected) = (String::new(), None, 0u64, false);
+    let (mut text, mut served, mut reported, mut written, mut rejected) = (String::new(), None::<String>, 0u64, 0u64, false);
     let mut ended: Option<Result<String, CallError>> = None;
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -205,13 +277,26 @@ pub async fn run(l: &Launch, timeout: Duration) -> Result<Answer, CallError> {
                 s.terminate(KILL_GRACE).await;
                 return Err(CallError::HarnessTool);
             }
-            Some(Event::Served(model)) => served = Some(model),
+            Some(Event::Served(model)) => {
+                seen.served = Some(model.clone());
+                served = Some(model);
+            }
             Some(Event::Text(t)) => text = t,
-            Some(Event::Usage(u)) => reported += u.input + u.cache_read + u.cache_write + u.output,
-            Some(Event::RateLimit { status, .. }) if status == "rejected" => rejected = true,
+            Some(Event::Usage(u)) => {
+                reported += u.input + u.cache_read + u.cache_write + u.output;
+                written += u.output;
+                seen.tokens = reported;
+            }
+            Some(Event::RateLimit { status, resets_at, .. }) if status == "rejected" => {
+                rejected = true;
+                // The CLI sends seconds or milliseconds.
+                seen.resets_at = resets_at.map(|t| if t > 100_000_000_000 { t / 1000 } else { t });
+            }
             Some(Event::Result { text: result, is_error, usage, .. }) => {
                 let total = usage.input + usage.cache_read + usage.cache_write + usage.output;
                 reported = reported.max(total);
+                written = written.max(usage.output);
+                seen.tokens = reported;
                 ended = Some(if is_error {
                     Err(if rejected {
                         CallError::Quota
@@ -241,7 +326,8 @@ pub async fn run(l: &Launch, timeout: Duration) -> Result<Answer, CallError> {
     }
     let estimated = reported == 0;
     let tokens = if estimated { ((l.user_prompt.len() + answer.len()) / 4) as u64 } else { reported };
-    Ok(Answer { text: answer, served, tokens, estimated })
+    let tokens_out = if estimated { (answer.len() / 4) as u64 } else { written };
+    Ok(Answer { text: answer, served, tokens, tokens_out, estimated })
 }
 
 #[cfg(test)]
@@ -491,10 +577,64 @@ pub(crate) mod tests {
             std::fs::create_dir_all(root.join(format!("left-{i}/home/plugins"))).unwrap();
             std::fs::write(root.join(format!("left-{i}/home/.claude.json")), "{}").unwrap();
         }
-        assert_eq!(sweep(&f.roots), 2);
+        assert_eq!(sweep(&f.roots), (2, 0));
         assert!(f.roots.iter().all(|r| r.read_dir().unwrap().next().is_none()));
-        assert_eq!(sweep(&[f.d.path().join("missing")]), 0);
+        assert_eq!(sweep(&[f.d.path().join("missing")]), (0, 0));
         let named = roots(Path::new("/a/home"));
         assert!(named[0].ends_with("run/bridge") && named[1] != roots(Path::new("/another/home"))[1], "two installs never share a temporary root");
+    }
+
+    // AC-17: a daemon started after a crash ends the process groups the crashed one left, and only those: a recorded process id
+    // whose start time is not the recorded one (the id was given to another process since) is never signalled.
+    #[tokio::test]
+    async fn the_sweep_ends_a_recorded_process_group_and_never_a_reused_process_id() {
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+        let f = fx();
+        let prog = recording_cli(f.d.path(), &f.rec, &format!("{INIT}\nwhile :; do sleep 1; done"));
+        // The crashed daemon's call: its CLI still runs, its directory and its note are still there.
+        let home = CallHome::make(&f.roots, &[]).unwrap();
+        let mut left = Session::start(&launch(&prog, "sonnet", "q".into(), &home, token())).await.unwrap();
+        drop(left.next(Duration::from_secs(5)).await);
+        let pid = left.pgid();
+        home.record_group(pid);
+        assert!(proc_start(pid).is_some() && alive(pid));
+        // Another process, whose id a stale note names with a start time that is not its own.
+        let other_home = CallHome::make(&f.roots, &[]).unwrap();
+        let mut other = Session::start(&launch(&prog, "sonnet", "q".into(), &other_home, token())).await.unwrap();
+        drop(other.next(Duration::from_secs(5)).await);
+        let other_pid = other.pgid();
+        std::fs::write(other_home.base.join(GROUP_FILE), format!("{other_pid} {}", proc_start(other_pid).unwrap() + 1)).unwrap();
+        let (base, other_base) = (home.base.clone(), other_home.base.clone());
+        // The crash: nothing is dropped, so nothing is cleaned up by the daemon that died.
+        std::mem::forget(home);
+        std::mem::forget(other_home);
+
+        assert_eq!(sweep(&f.roots), (2, 1), "both directories go; one group is ended");
+        assert!(!base.exists() && !other_base.exists());
+        // The recorded group is gone (its leader is reaped by the session that still holds it here).
+        let gone = tokio::time::timeout(Duration::from_secs(5), async { while let Some(ev) = left.next(Duration::from_secs(5)).await { if matches!(ev, Event::Exit { .. }) { break; } } }).await;
+        assert!(gone.is_ok(), "the recorded CLI ended");
+        assert!(alive(other_pid), "a process the note did not truly name is left alone");
+        other.kill().await;
+        assert_eq!(proc_start(i32::MAX - 7), None);
+    }
+
+    // The call's own note: `run_in` records the group in the call's home, and what the call showed is kept when it fails.
+    #[tokio::test]
+    async fn a_call_notes_its_group_and_keeps_what_it_showed() {
+        let f = fx();
+        let home = CallHome::make(&f.roots, &[]).unwrap();
+        let rate = r#"echo '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1795000000000}}'"#;
+        let result = r#"echo '{"type":"result","subtype":"success","is_error":true,"result":"limit","usage":{"input_tokens":7,"output_tokens":1}}'"#;
+        // The note is written just after the CLI starts, so the stand-in waits a moment before it reads it.
+        let body = format!("sleep 1\ncat '{}/../group' > '{}/group.txt' 2>/dev/null\n{INIT}\n{rate}\n{result}", home.home.display(), f.rec.display());
+        let prog = recording_cli(f.d.path(), &f.rec, &body);
+        let mut seen = Seen::default();
+        let err = run_in(&launch(&prog, "sonnet", "q".into(), &home, token()), Some(&home), Duration::from_secs(20), &mut seen).await.unwrap_err();
+        assert_eq!(err, CallError::Quota);
+        assert_eq!(seen, Seen { served: Some("claude-served-1".into()), tokens: 8, resets_at: Some(1_795_000_000) });
+        let note = read(&f, "group.txt");
+        let (pid, started) = note.trim().split_once(' ').expect("the note");
+        assert!(pid.parse::<i32>().is_ok_and(|p| p > 1) && started.parse::<u64>().is_ok(), "{note}");
     }
 }
