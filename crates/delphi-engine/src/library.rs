@@ -648,7 +648,8 @@ impl Library {
             let old_n = version - 1;
             for e in std::fs::read_dir(&dest).map_err(|e| e.to_string())?.flatten() {
                 let name = e.file_name();
-                if name == "versions" {
+                // Pinned excerpts belong to the source, not to one version (`specs/142` §2.3 item 5); a takedown has removed them.
+                if name == "versions" || (name == excerpts::PINNED && !purged) {
                     continue;
                 }
                 if purged {
@@ -721,6 +722,13 @@ impl Library {
     }
 
     /// The record a web page starts from: its address without a fragment, the source id that address gives, and the fields every capture has.
+    /// The text a snapshot is stored as: its title as a heading, then its text, in the stored normal form. What `text_sha256` is the
+    /// hash of, and what an anchor's position counts in.
+    pub fn capture_text(snap: &crate::fact_fetch::Snapshot) -> String {
+        let title = snap.title.for_daemon();
+        capture::normalise(&format!("{}{}\n", if title.is_empty() { String::new() } else { format!("# {}\n\n", title) }, snap.text.for_daemon()))
+    }
+
     fn url_record(url: &str, opts: &AddOpts) -> Result<(String, String, Map<String, Value>), String> {
         let canonical = delphi_adapter::reqwest::Url::parse(url).map_err(|_| "not a URL".to_string()).map(|mut u| {
             u.set_fragment(None);
@@ -832,7 +840,7 @@ impl Library {
             notes.push("the page showed different text to a browser than to the daemon (cloaking); kept as a pointer".into());
             requested = Some(Level::Pointer);
         }
-        let (text, over) = if snap.truncated { (None, true) } else { (Some(format!("{}{}\n", if title.is_empty() { String::new() } else { format!("# {}\n\n", title) }, snap.text.for_daemon())), false) };
+        let (text, over) = if snap.truncated { (None, true) } else { (Some(Self::capture_text(snap)), false) };
         if over {
             notes.push(format!("the page is over the {}-byte text limit; kept as a pointer", limit));
             requested = Some(Level::Pointer);

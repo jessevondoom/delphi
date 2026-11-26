@@ -45,10 +45,21 @@ pub struct Anchor {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub end: Option<usize>,
     pub quote_hash: String,
+    /// The SHA-256 of the text `start` and `end` count characters in (`specs/142` §2.3 item 1): the source's stored text, in its one
+    /// normal form. A position is used only against a text with this hash; against any other the anchor is found again by its quote.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub text_sha256: Option<String>,
 }
+
+/// The longest verified excerpt pinned for an anchor, in characters (`specs/142` §2.3 item 5; the bound of `specs/119` §3).
+pub const PIN_MAX: usize = PASSAGE_MAX;
+/// Where a source's pinned excerpts are kept: beside its record, outside every version, so neither a new version nor eviction moves it.
+pub(super) const PINNED: &str = "pinned.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum How {
+    /// The text is the one the anchor's position counts in (`text_sha256`): the position was used and nothing was searched.
+    Position,
     Exact,
     /// The quote changed; its stored prefix and suffix were found around text that still reads like it.
     Context,
@@ -112,7 +123,7 @@ impl Anchor {
         if quote.len() > EXCERPT_MAX {
             return Err(format!("the quote is {} bytes, over the {}-byte limit", quote.len(), EXCERPT_MAX));
         }
-        let mut a = Anchor { source_id: source_id.into(), version: version.into(), locator: locator.into(), quote: quote.into(), prefix: last_chars(prefix.unwrap_or(""), CONTEXT_CHARS), suffix: first_chars(suffix.unwrap_or(""), CONTEXT_CHARS), start: None, end: None, quote_hash: format!("sha256:{}", sha256_hex(quote.as_bytes())) };
+        let mut a = Anchor { source_id: source_id.into(), version: version.into(), locator: locator.into(), quote: quote.into(), prefix: last_chars(prefix.unwrap_or(""), CONTEXT_CHARS), suffix: first_chars(suffix.unwrap_or(""), CONTEXT_CHARS), start: None, end: None, quote_hash: format!("sha256:{}", sha256_hex(quote.as_bytes())), text_sha256: None };
         if let Some(t) = text {
             match a.resolve(t) {
                 Resolution::Found { start, end, how: How::Exact } => {
@@ -122,6 +133,7 @@ impl Anchor {
                     a.suffix = first_chars(&t[to..], CONTEXT_CHARS);
                     a.start = Some(start);
                     a.end = Some(end);
+                    a.text_sha256 = Some(sha256_hex(t.as_bytes()));
                 }
                 _ => return Err("the quote is not in the source's text".into()),
             }
@@ -129,8 +141,21 @@ impl Anchor {
         Ok(a)
     }
 
-    /// Find the anchor again in `text`: the exact quote (the occurrence whose surroundings match best when there are
-    /// several), else the stored prefix and suffix around text that still reads like the quote. Otherwise `NotFound`.
+    /// Find the anchor in the text whose hash is `text_sha256` (`specs/142` §2.3 item 2), in order: its position, when that text is
+    /// the one the position counts in, with no search; else the exact quote; else the quote's context. Nothing fuzzier. A position
+    /// made against another text is never used: with another hash the anchor is found by its quote alone.
+    pub fn resolve_in(&self, text: &str, text_sha256: &str) -> Resolution {
+        if let (Some(start), Some(end), true) = (self.start, self.end, self.text_sha256.as_deref() == Some(text_sha256)) {
+            if start <= end {
+                return Resolution::Found { start, end, how: How::Position };
+            }
+        }
+        self.resolve(text)
+    }
+
+    /// Find the anchor again in `text` by what it quotes: the exact quote (the occurrence whose surroundings match best when there
+    /// are several, then the first), else the stored prefix and suffix around text that still reads like the quote. Otherwise
+    /// `NotFound`. The stored position is not read here: it counts in another text.
     pub fn resolve(&self, text: &str) -> Resolution {
         let hits: Vec<usize> = text.match_indices(self.quote.as_str()).map(|(i, _)| i).collect();
         if !hits.is_empty() {
@@ -139,9 +164,8 @@ impl Anchor {
                 let after = &text[i + self.quote.len()..];
                 (!self.prefix.is_empty() && before.ends_with(&self.prefix)) as usize + (!self.suffix.is_empty() && after.starts_with(&self.suffix)) as usize
             };
-            let want = self.start.unwrap_or(0);
-            // best surroundings first, then the one nearest the old position
-            let best = hits.iter().copied().max_by_key(|&i| (score(i), std::cmp::Reverse(char_at(text, i).abs_diff(want)))).unwrap_or(hits[0]);
+            // best surroundings first, then the first in the text
+            let best = hits.iter().copied().max_by_key(|&i| (score(i), std::cmp::Reverse(i))).unwrap_or(hits[0]);
             let start = char_at(text, best);
             return Resolution::Found { start, end: start + self.quote.chars().count(), how: How::Exact };
         }
@@ -194,13 +218,14 @@ pub fn total_allowed(work_bytes: u64) -> u64 {
 /// Not found: the excerpt is carried as `contested` with its old anchor, which stays readable under `versions/`.
 /// Without new text (the source is not held whole) the excerpts are carried unchanged. Nothing is re-pointed silently.
 pub(super) fn carry_forward(old: &[Value], new_text: Option<&str>, version: u64) -> Vec<Value> {
+    let sha = new_text.map(|t| sha256_hex(t.as_bytes()));
     old.iter()
         .map(|e| {
             let (Some(t), Ok(a)) = (new_text, serde_json::from_value::<Anchor>(e["anchor"].clone())) else { return e.clone() };
             let mut e = e.clone();
             match a.resolve(t) {
                 Resolution::Found { start, end, .. } => {
-                    let moved = Anchor { version: version.to_string(), start: Some(start), end: Some(end), ..a };
+                    let moved = Anchor { version: version.to_string(), start: Some(start), end: Some(end), text_sha256: sha.clone(), ..a };
                     e["anchor"] = serde_json::to_value(moved).unwrap_or(Value::Null);
                     e.as_object_mut().map(|m| m.remove("contested"));
                 }
@@ -291,6 +316,44 @@ impl Library {
         Ok(anchor)
     }
 
+    /// The verified excerpts pinned for a source's anchors (`specs/142` §2.3 item 5): `{quote_hash, text, text_sha256, start, end,
+    /// version, pinned}` each. They are outside the cache: no new version, eviction or purge of the text removes them; a takedown
+    /// (`Library::purge`) does.
+    pub fn pinned(&self, id: &str) -> Vec<Value> {
+        if !valid_id(id) {
+            return Vec::new();
+        }
+        std::fs::read(self.source_dir(id).join(PINNED)).ok().and_then(|b| serde_json::from_slice::<Vec<Value>>(&b).ok()).unwrap_or_default()
+    }
+
+    /// Pin the passage an anchor was verified against: the quote as it was found (cut to [`PIN_MAX`] characters), the hash of the text
+    /// it was found in, and where. One per quote of a source; the same quote found again moves its place to the newer text.
+    pub(super) fn pin(&self, id: &str, quote: &str, quote_hash: &str, text_sha256: &str, start: usize, version: &str) -> Result<(), String> {
+        if !valid_id(id) || quote.trim().is_empty() {
+            return Ok(());
+        }
+        let text: String = quote.chars().take(PIN_MAX).collect();
+        let one = json!({"quote_hash": quote_hash, "text": text, "text_sha256": text_sha256, "start": start, "end": start + text.chars().count(), "version": version, "pinned": delphi_core::time::now_rfc3339()});
+        let mut all = self.pinned(id);
+        match all.iter_mut().find(|p| p["quote_hash"] == quote_hash) {
+            Some(slot) if slot["text_sha256"] == text_sha256 && slot["start"] == json!(start) => return Ok(()),
+            Some(slot) => *slot = one,
+            None => all.push(one),
+        }
+        self.write_json(&self.source_dir(id).join(PINNED), &Value::Array(all))
+    }
+
+    /// The passage the library still keeps for an anchor, whatever became of the source's text: its pinned excerpt, else a kept
+    /// excerpt of the source that holds its quote. `None`: nothing the anchor was checked against is kept.
+    pub fn kept_passage(&self, anchor: &Value) -> Option<String> {
+        let id = anchor["source_id"].as_str()?;
+        if let Some(p) = self.pinned(id).iter().find(|p| p["quote_hash"] == anchor["quote_hash"] && p["quote_hash"].is_string()) {
+            return p["text"].as_str().map(String::from);
+        }
+        let quote = anchor["quote"].as_str().filter(|q| !q.trim().is_empty())?;
+        self.excerpts(id).iter().filter(|e| e["contested"] != true).filter_map(|e| e["text"].as_str()).find(|t| t.contains(quote)).map(String::from)
+    }
+
     pub fn excerpts(&self, id: &str) -> Vec<Value> {
         if !valid_id(id) {
             return Vec::new();
@@ -353,5 +416,61 @@ impl Library {
         let all = self.excerpts(source_id);
         let e = all.iter().find(|e| e["id"] == excerpt_id).ok_or_else(|| format!("no excerpt `{}` in `{}`", excerpt_id, source_id))?;
         page_quotation(e["text"].as_str().unwrap_or("")).map(String::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sha(t: &str) -> String {
+        sha256_hex(t.as_bytes())
+    }
+
+    /// AC-13, first half: the text is the one the position counts in, so the position is used and nothing is searched. A text that
+    /// claims the same hash and does not hold the quote still answers with the position, which shows no search was made.
+    #[test]
+    fn a_position_is_used_with_no_search_when_the_text_hash_matches() {
+        let text = "The harbour opens at dawn. The tide turns twice a day. The harbour closes at dusk.";
+        let a = Anchor::new("s", "1", "p1", "turns twice a day", Some(text), None, None).unwrap();
+        assert_eq!(a.text_sha256.as_deref(), Some(sha(text).as_str()));
+        let (start, end) = (a.start.unwrap(), a.end.unwrap());
+        assert_eq!(text.chars().skip(start).take(end - start).collect::<String>(), "turns twice a day");
+        assert_eq!(a.resolve_in(text, &sha(text)), Resolution::Found { start, end, how: How::Position });
+        assert_eq!(a.resolve_in("no such words here at all", &sha(text)), Resolution::Found { start, end, how: How::Position }, "the position is trusted for the text it was made in");
+    }
+
+    /// The fitness function of `specs/142` §6 (AC-22): a position made against one text is never used against another. The quote
+    /// stands twice in the newer text; the old position sits on the second, and the anchor is found by its quote alone.
+    #[test]
+    fn a_position_is_ignored_when_the_text_hash_differs() {
+        let old = "Filler filler filler filler. The tide turns twice a day.";
+        let mut a = Anchor::new("s", "1", "p1", "turns twice a day", Some(old), None, None).unwrap();
+        // no context, so only the position could prefer one occurrence over the other
+        a.prefix.clear();
+        a.suffix.clear();
+        let old_start = a.start.unwrap();
+        let newer = "It turns twice a day, they say. And again it turns twice a day here.";
+        let second = newer.rfind("turns twice a day").unwrap();
+        assert!(newer[..second].chars().count().abs_diff(old_start) < 3usize.abs_diff(old_start), "the old position is nearest the second occurrence");
+        assert_eq!(a.resolve_in(newer, &sha(newer)), Resolution::Found { start: 3, end: 3 + 17, how: How::Exact }, "found by the quote, the first in the text");
+        // a hash that is not the text's own is not believed either way: with the old hash and the old text the position stands
+        assert_eq!(a.resolve_in(old, &sha(old)), Resolution::Found { start: old_start, end: old_start + 17, how: How::Position });
+        // an anchor with a position and no hash (made before the hash was recorded) is always searched for
+        let legacy = Anchor { text_sha256: None, ..a.clone() };
+        assert_eq!(legacy.resolve_in(old, &sha(old)), Resolution::Found { start: old_start, end: old_start + 17, how: How::Exact });
+    }
+
+    /// AC-13: after a change the order is the quote, then its context, then nothing.
+    #[test]
+    fn in_a_newer_text_an_anchor_is_found_by_quote_then_by_context_or_not_at_all() {
+        let old = "Before the storm the harbour master said that the tide turns twice a day in this bay, and nobody doubted the old man at all.";
+        let a = Anchor::new("s", "1", "p1", "the tide turns twice a day in this bay", Some(old), None, None).unwrap();
+        let moved = format!("A new opening paragraph. {}", old);
+        assert!(matches!(a.resolve_in(&moved, &sha(&moved)), Resolution::Found { start, how: How::Exact, .. } if start == a.start.unwrap() + 25));
+        let reworded = old.replace("turns twice a day in this bay", "turns twice each day in this bay");
+        assert!(matches!(a.resolve_in(&reworded, &sha(&reworded)), Resolution::Found { how: How::Context, .. }));
+        let gone = "An entirely different page about lighthouses and their keepers.";
+        assert_eq!(a.resolve_in(gone, &sha(gone)), Resolution::NotFound);
     }
 }

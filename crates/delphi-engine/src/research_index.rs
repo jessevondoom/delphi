@@ -237,7 +237,7 @@ mod tests {
     }
 
     fn research_claim(lib: &Library, text: &str, fp: &str, project: Option<&str>, topic: Option<&str>, source: &str, quote: &str) -> String {
-        let anchors = [AnchorSpec { source_id: source.into(), locator: Some("https://example.org/page".into()), quote: quote.into(), prefix: None, suffix: None }];
+        let anchors = [AnchorSpec { source_id: source.into(), locator: Some("https://example.org/page".into()), quote: quote.into(), prefix: None, suffix: None, read: None }];
         lib.add_research_claim(&ResearchClaim { text, fingerprint: fp, project, topic, anchors: &anchors }).unwrap().0["id"].as_str().unwrap().to_string()
     }
 
@@ -308,7 +308,7 @@ mod tests {
         let hidden = research_claim(&lib, "the wombatregistry password rotates on tuesdays", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", None, None, &secret, "password rotates on Tuesdays");
         // one claim with a public and a private anchor: it rests on a private source, so it is out
         let mixed = research_claim(&lib, "the wombatregistry has two keepers", "cccccccccccccccccccccccccccccccc", None, None, &public, "kept in the open ledger");
-        lib.add_research_claim(&ResearchClaim { text: "the wombatregistry has two keepers", fingerprint: "cccccccccccccccccccccccccccccccc", project: None, topic: None, anchors: &[AnchorSpec { source_id: secret.clone(), locator: Some("https://example.org/s".into()), quote: "password rotates on Tuesdays".into(), prefix: None, suffix: None }] }).unwrap();
+        lib.add_research_claim(&ResearchClaim { text: "the wombatregistry has two keepers", fingerprint: "cccccccccccccccccccccccccccccccc", project: None, topic: None, anchors: &[AnchorSpec { source_id: secret.clone(), locator: Some("https://example.org/s".into()), quote: "password rotates on Tuesdays".into(), prefix: None, suffix: None, read: None }] }).unwrap();
         let scoped = research_claim(&lib, "the wombatregistry belongs to project alpha", "dddddddddddddddddddddddddddddddd", Some("alpha"), None, &public, "kept in the open ledger");
         let operator = lib.add_claim("the wombatregistry was founded by the operator", &ClaimOpts::default(), &[]).unwrap()["id"].as_str().unwrap().to_string();
         let open = finished_topic(&f.ws, "Where is the wombatregistry kept?", "In the open ledger.", &[], false);
@@ -333,7 +333,7 @@ mod tests {
         }
         assert!(text.contains("open ledger"), "{text}");
         // A claim that comes to rest on a private source leaves the index at the next refresh.
-        lib.add_research_claim(&ResearchClaim { text: "the wombatregistry is kept in the open ledger", fingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", project: None, topic: None, anchors: &[AnchorSpec { source_id: secret, locator: Some("https://example.org/s".into()), quote: "password rotates on Tuesdays".into(), prefix: None, suffix: None }] }).unwrap();
+        lib.add_research_claim(&ResearchClaim { text: "the wombatregistry is kept in the open ledger", fingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", project: None, topic: None, anchors: &[AnchorSpec { source_id: secret, locator: Some("https://example.org/s".into()), quote: "password rotates on Tuesdays".into(), prefix: None, suffix: None, read: None }] }).unwrap();
         let hits = search(&f, "wombatregistry open ledger", zone());
         assert!(!hits.iter().any(|h| h.rel_path.contains(seen.as_str())), "{:?}", hits.iter().map(|h| &h.rel_path).collect::<Vec<_>>());
     }

@@ -29,7 +29,9 @@ export type Claim = { id: string; text: string; kind?: string; scope?: string; c
   /** The daemon's count behind the status: independent origins, how many of them trusted sources, and whether something contradicts it. */
   support?: { origins?: number; trusted_sources?: number; contradicted?: boolean } };
 export type ClaimView = { claim: Claim; status: string; shown: string; sources: { id: string; title: string | null; private: boolean }[] };
-export type SourceView = { id: string; label: string; meta: Record<string, unknown>; private: boolean; capture_level?: string | null; status?: string | null; text: string; truncated: boolean; assets: string[]; passage_only?: boolean };
+/** An anchor into a source that no longer resolves (spec 142 §2.3 item 3): its own quote, the version and date it last resolved in, and why. */
+export type Orphan = { claim: string; quote: string; version: string; date: string; why: string };
+export type SourceView = { id: string; label: string; meta: Record<string, unknown>; private: boolean; capture_level?: string | null; status?: string | null; text: string; truncated: boolean; assets: string[]; passage_only?: boolean; orphans?: Orphan[] };
 export type Changes = { since: number; pages: { slug: string; title: string; built: number | null; version: number; change: string | null }[]; research: { id: string; question: string; updated: string; state: string }[]; findings: FindingRow[]; notes: Note[] };
 export type RoleCount = { role: string; lesson_files: number; notes: number; findings: number };
 export type Note = { id: string; role: string; mission?: string; project?: string | null; kind: string; created: string; valid_until?: string | null; uses: number; tier: string; source?: string; text: string; label: string };

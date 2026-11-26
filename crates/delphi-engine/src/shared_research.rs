@@ -625,7 +625,7 @@ mod tests {
     }
 
     fn claim(f: &Fx, text: &str, fp: &str, project: Option<&str>, topic: Option<&str>, source: &str, quote: &str) -> String {
-        let anchors = [AnchorSpec { source_id: source.into(), locator: Some("https://example.org/page".into()), quote: quote.into(), prefix: None, suffix: None }];
+        let anchors = [AnchorSpec { source_id: source.into(), locator: Some("https://example.org/page".into()), quote: quote.into(), prefix: None, suffix: None, read: None }];
         Library::in_home(&f.home).add_research_claim(&ResearchClaim { text, fingerprint: fp, project, topic, anchors: &anchors }).unwrap().0["id"].as_str().unwrap().to_string()
     }
 
@@ -804,7 +804,7 @@ mod tests {
         assert_eq!(lib.refresh_support(&internal).unwrap()["support"]["origins"], json!(0));
         assert!(!lib.rests_on_internal(&lib.claim(&public).unwrap()));
         // B cannot add to A's claim, so B's research cannot count it either.
-        let anchors = [AnchorSpec { source_id: open.clone(), locator: Some("https://example.org/page".into()), quote: "drops to ninety metres".into(), prefix: None, suffix: None }];
+        let anchors = [AnchorSpec { source_id: open.clone(), locator: Some("https://example.org/page".into()), quote: "drops to ninety metres".into(), prefix: None, suffix: None, read: None }];
         assert!(lib.add_research_claim(&ResearchClaim { text: "the numbatshelf cable landing is at grid 44", fingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2", project: Some("beta"), topic: None, anchors: &anchors }).is_err());
         // With A private, or the setting `project`, none of it reaches B.
         register(&f, &[P, A]);
@@ -832,7 +832,7 @@ mod tests {
 
         let t = topic(&f.a, "alpha", "Where does the wombatferry dock?", "The host says the wombatferry docks at pier nine.", false);
         let pointer = lib.add_private_pointer("internal", "harbour desk wiki, page berths", "Harbour desk notes", "2026-11-15T00:00:00Z", None).unwrap();
-        let anchors = [AnchorSpec { source_id: pointer.clone(), locator: Some("harbour desk wiki, page berths".into()), quote: "docks at pier nine".into(), prefix: None, suffix: None }];
+        let anchors = [AnchorSpec { source_id: pointer.clone(), locator: Some("harbour desk wiki, page berths".into()), quote: "docks at pier nine".into(), prefix: None, suffix: None, read: None }];
         let mark = crate::host_research::HOST_REPORTED;
         let hosted = lib.add_host_claim(&ResearchClaim { text: "the wombatferry docks at pier nine", fingerprint: "ddddddddddddddddddddddddddddddd1", project: Some("alpha"), topic: Some(&t.id), anchors: &anchors }, mark).unwrap();
         let personal = lib.add_host_claim(&ResearchClaim { text: "the wombatferry docks at pier eleven", fingerprint: "ddddddddddddddddddddddddddddddd2", project: None, topic: Some(&t.id), anchors: &anchors }, mark).unwrap();

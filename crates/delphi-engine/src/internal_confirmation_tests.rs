@@ -35,7 +35,7 @@ fn fetched(l: &Library, id: &str, host: &str) {
 }
 
 fn spec(source: &str, quote: &str) -> AnchorSpec {
-    AnchorSpec { source_id: source.into(), locator: Some("section 2".into()), quote: quote.into(), prefix: None, suffix: None }
+    AnchorSpec { source_id: source.into(), locator: Some("section 2".into()), quote: quote.into(), prefix: None, suffix: None, read: None }
 }
 
 fn of_alpha() -> ClaimOpts {

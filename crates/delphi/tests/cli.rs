@@ -507,3 +507,36 @@ fn sources_verify_reports_a_capture_edited_by_hand_and_changes_nothing() {
     let o = delphi_at(&home, &["sources", "verify", "no-such-source"]);
     assert_eq!(o.status.code(), Some(1));
 }
+
+// specs/142 AC-14: `delphi sources show` lists a source's orphans below its record, each with its own quote, the version and date it
+// last resolved in, and why; `kb health` counts them.
+#[test]
+fn sources_show_lists_the_orphans_with_their_quote_version_date_and_reason() {
+    let (t, home) = library_home();
+    let page = t.path().join("tides.md");
+    std::fs::write(&page, "# Tides\n\nThe tide turns twice a day in this bay.\n").unwrap();
+    let o = delphi_at(&home, &["sources", "add", page.to_str().unwrap(), "--licence", "CC0-1.0"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let id = std::fs::read_dir(home.join("library/sources")).unwrap().flatten().next().unwrap().file_name().to_string_lossy().to_string();
+    let o = delphi_at(&home, &["claims", "add", "The tide turns twice a day", "--source", &id, "--locator", "p1", "--quote", "turns twice a day in this bay"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let o = delphi_at(&home, &["sources", "show", &id, "--offline"]);
+    assert!(!text(&o.stdout).contains("orphans"), "{}", text(&o.stdout));
+
+    // the page changes and the quote is gone: version 2, and the anchor is an orphan
+    std::fs::write(&page, "# Tides\n\nThe harbour opens at dawn.\n").unwrap();
+    let o = delphi_at(&home, &["sources", "add", page.to_str().unwrap(), "--licence", "CC0-1.0"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let o = delphi_at(&home, &["sources", "show", &id, "--offline"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    let today = &out.lines().find(|l| l.trim_start().starts_with("retrieved")).unwrap().split_whitespace().nth(1).unwrap()[..10];
+    assert!(out.contains("  orphans        1 anchor(s) that no longer resolve"), "{out}");
+    let line = out.lines().find(|l| l.contains("last found in version")).unwrap();
+    assert!(line.starts_with(&format!("    \"turns twice a day in this bay\"  last found in version 1 of {today}: not in the newer text  (")), "{line}");
+    assert!(out.find("  text ").unwrap() < out.find("  orphans").unwrap(), "below the text: {out}");
+    assert!(out.contains("  capture        by operator, text by plain-text, 0 revisit(s)"), "{out}");
+    let o = delphi_at(&home, &["sources", "show", &id, "--offline", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!((v["orphans"][0]["quote"].as_str(), v["orphans"][0]["version"].as_str(), v["orphans"][0]["why"].as_str()), (Some("turns twice a day in this bay"), Some("1"), Some("not in the newer text")), "{v}");
+}

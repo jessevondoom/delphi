@@ -6,7 +6,7 @@ import type { Bridge } from '../bridge.ts';
 import {
   NOTE_MAX, builtAt, byDay, byLetter, byProject, changeRows, contents, continueCommand, dayOfUnix, disputeCommand, findQuote, kindOf, matching, parts, passages,
   pieces, rebuildCommand, routeInAddress, sectionNote, shownValue, sourceFacts, statusWhy,
-  type Anchor, type Changes, type ClaimView, type Links, type PageParts, type Research, type ResearchRecord, type Route, type SourceView, type Topic, type TopicPage, type Version,
+  type Anchor, type Changes, type ClaimView, type Links, type Orphan, type PageParts, type Research, type ResearchRecord, type Route, type SourceView, type Topic, type TopicPage, type Version,
 } from '../ency.ts';
 import { EMPTY, annotate, arrive, editNote, exportMarkdown, fresh, lastHere, markRead, newSince, parseMarks, passageKey, pinned, placed, togglePin, type Annotation, type Marks } from '../marks.ts';
 import { blockText, type Block } from '../md.ts';
@@ -570,6 +570,27 @@ export function SourceText({ text, quote, at }: { text: string; quote?: string; 
   return <div className="said source-text">{range ? <>{text.slice(0, range.from)}<mark ref={at} className="quote">{text.slice(range.from, range.to)}</mark>{text.slice(range.to)}</> : text}</div>;
 }
 
+/** The anchors into a source that no longer resolve (spec 142 §2.3 item 3), below its text: each quote as text, where it was last found, and why. */
+export function Orphans({ orphans, open }: { orphans: Orphan[]; open?: (claim: string) => void }) {
+  if (orphans.length === 0) return null;
+  return (
+    <section className="stack" aria-label="Orphaned anchors">
+      <h2 className="caps">Orphaned anchors · {orphans.length}</h2>
+      <span className="muted" style={{ fontSize: 12 }}>Quotations a claim rests on that are no longer found in the text the library keeps for this source.</span>
+      {orphans.map((o, i) => (
+        <div key={`${o.claim}-${i}`} className="card">
+          <span className="quoted">{o.quote || 'The quotation went with the capture.'}</span>
+          <span className="row" style={{ fontSize: 12 }}>
+            <span className="chip warn">{o.why}</span>
+            <span className="muted">last found in version {o.version}{o.date ? ` of ${o.date}` : ''}</span>
+            {open ? <button type="button" className="cite push" aria-label={`Show ${o.claim}`} onClick={() => open(o.claim)}>{o.claim}</button> : <span className="time push">{o.claim}</span>}
+          </span>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function SourcePage({ bridge, go, way, id, quote }: Shared & { id: string; quote?: string }) {
   const got = useRead<SourceView>(bridge, 'library.source', quote ? { id, quote } : { id });
   const at = useRef<HTMLElement>(null);
@@ -611,6 +632,8 @@ function SourcePage({ bridge, go, way, id, quote }: Shared & { id: string; quote
         {v.truncated && <span className="muted" style={{ fontSize: 12 }}>The text is longer than this window is given; it ends here.</span>}
         {v.assets.length > 0 && <span className="muted" style={{ fontSize: 12 }}>{v.assets.length} {v.assets.length === 1 ? 'picture is' : 'pictures are'} kept with it.</span>}
       </section>
+
+      <Orphans orphans={v.orphans ?? []} open={(claim) => go({ v: 'claim', id: claim })} />
     </main>
   );
 }

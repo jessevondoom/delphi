@@ -99,7 +99,7 @@ pub fn plan(ws: &Path, lib: &Library) -> Plan {
             let held = lib.read_meta(source_id).filter(|m| m["purged"].is_null()).is_some();
             let in_text = held && lib.holds_quote(source_id, &quote);
             if held && !quote.is_empty() && (i == 0 || in_text) {
-                p.anchors.push(AnchorSpec { source_id: source_id.clone(), locator: urls.get(i).cloned().filter(|u| !u.is_empty()), quote: quote.clone(), prefix: None, suffix: None });
+                p.anchors.push(AnchorSpec { source_id: source_id.clone(), locator: urls.get(i).cloned().filter(|u| !u.is_empty()), quote: quote.clone(), prefix: None, suffix: None, read: None });
             } else {
                 p.unanchored += 1;
             }

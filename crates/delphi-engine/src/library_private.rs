@@ -10,6 +10,10 @@
 //! * [`Library::private_texts`], [`Library::purge_private_text`]: what is held, and removing it. A purge removes the text and keeps
 //!   the pointer and the claims; their anchors into it are marked `text_removed`.
 //! * [`Library::cap_private_text`]: the size cap, the oldest first.
+//! * [`Library::remove_bodies`] (`specs/142` §2.1 item 2, §2.3 items 3 and 4): how a capture's bodies go, by eviction or by a purge of
+//!   the cache. `raw` and the text are removed; the record stays with its digests and says `evicted` or `purged` with the date; the
+//!   excerpts, the pinned excerpts, the claims and their anchors stay, the anchors as orphans of kind `text evicted` or `text purged`.
+//!   This is not a takedown (`Library::purge`), which removes the excerpts and the quotes too.
 //!
 //! Sources the operator flagged private by hand (`delphi sources add --private`) are not `kept_privately` and are untouched here.
 
@@ -18,6 +22,15 @@ use std::collections::HashMap;
 
 /// The longest run of a privately kept source's text one citation may carry, in characters (`specs/119` §3 item 2).
 pub const RUN_MAX: usize = super::excerpts::PASSAGE_MAX;
+
+/// Why a capture's bodies were removed (`specs/142` §2.1 item 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gone {
+    /// The cache was over its cap.
+    Evicted,
+    /// The operator purged the cache.
+    Purged,
+}
 
 /// One source kept privately whose text is held.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,27 +107,94 @@ impl Library {
         out
     }
 
-    /// Remove the kept text of one privately kept source: the capture goes (`purge`), the pointer and its claims stay, and every
-    /// anchor into it is marked `text_removed` with the date. Returns the bytes removed. A source not kept privately is refused.
-    fn remove_private_text(&self, id: &str) -> Result<u64, String> {
-        let meta = self.read_meta(id).ok_or_else(|| format!("no source `{}`", id))?;
-        if !meta["kept_privately"].is_string() {
-            return Err(format!("`{}` was not kept privately by research", id));
-        }
-        let removed = self.purge(id)?.unwrap_or(0);
+    /// Remove the bodies of every kept version of a source (`specs/142` §2.1 item 2): `raw`, and with `text_too` the text. Each
+    /// version's record stays and says what went and when (`evicted: {raw, text}`, or `purged`). When the text goes, the source reads as
+    /// a pointer (or as excerpts, when it keeps some), its record is marked `text_evicted` or `text_purged`, and every anchor into it
+    /// that still resolved becomes an orphan of that kind ([`Library::text_removed`]). The excerpts, the pinned excerpts, the claims and
+    /// the citation are untouched. Returns the bytes removed.
+    pub(super) fn remove_bodies(&self, id: &str, gone: Gone, text_too: bool) -> Result<u64, String> {
+        let mut meta = self.read_meta(id).ok_or_else(|| format!("no source `{}`", id))?;
         let now = delphi_core::time::now_rfc3339();
-        for mut c in self.citing(id) {
+        let mut removed = 0u64;
+        let mut text_went = false;
+        for (_, dir) in self.version_dirs(id) {
+            let mut went: Vec<&str> = Vec::new();
+            for (file, what) in [(capture::RAW, "raw"), (capture::TEXT, "text")] {
+                if what == "text" && !text_too {
+                    continue;
+                }
+                let Ok(m) = std::fs::metadata(dir.join(file)) else { continue };
+                if std::fs::remove_file(dir.join(file)).is_ok() {
+                    removed += m.len();
+                    went.push(what);
+                }
+            }
+            if went.is_empty() {
+                continue;
+            }
+            text_went |= went.contains(&"text");
+            if let Some(mut rec) = std::fs::read(dir.join(capture::RECORD)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
+                match gone {
+                    Gone::Evicted => {
+                        for what in went {
+                            rec["evicted"][what] = json!(now);
+                        }
+                    }
+                    Gone::Purged => rec["purged"] = json!(now),
+                }
+                self.write_json(&dir.join(capture::RECORD), &rec)?;
+            }
+        }
+        let (mark, why) = match gone {
+            Gone::Evicted => ("text_evicted", claims::TEXT_EVICTED),
+            Gone::Purged => ("text_purged", claims::TEXT_PURGED),
+        };
+        if text_went {
+            if meta["capture_level"] == "full" {
+                meta["capture_level"] = json!(if self.excerpts(id).is_empty() { Level::Pointer.as_str() } else { Level::Excerpts.as_str() });
+            }
+            meta[mark] = json!(now);
+            self.write_json(&self.source_dir(id).join("meta.json"), &meta)?;
+            self.text_removed(id, why, &now);
+        }
+        if removed > 0 {
+            self.log("bodies_removed", json!({"id": id, "why": why, "text": text_went, "bytes": removed}));
+        }
+        Ok(removed)
+    }
+
+    /// The text of a source was removed by eviction or by a purge of the cache (`specs/142` §2.3 items 3 and 4): every anchor into it
+    /// that still resolved becomes an orphan of that kind, with the date (and keeps the older `text_removed` mark). The claim is
+    /// **not** contested. The anchor keeps its quote, its version and its state; what it then counts for is decided by whether its
+    /// verified excerpt is kept ([`Library::counts`]). Each claim's support is recomputed, so an unbacked anchor leaves the count at once.
+    fn text_removed(&self, source_id: &str, why: &'static str, now: &str) {
+        for mut c in self.citing(source_id) {
             let mut touched = false;
             for a in c["anchors"].as_array_mut().into_iter().flatten() {
-                if a["source_id"] == id && a["text_removed"].is_null() {
+                if a["source_id"] == source_id && claims::active(a) && a["orphan"].is_null() {
+                    a["orphan"] = json!({"why": why, "at": now});
                     a["text_removed"] = json!(now);
                     touched = true;
                 }
             }
-            if touched {
-                self.save_claim(&c)?;
+            if touched && self.save_claim(&c).is_ok() {
+                self.log("claim_text_removed", json!({"id": c["id"], "source": source_id, "why": why}));
+                if let Some(id) = c["id"].as_str() {
+                    self.refresh_support(id);
+                }
             }
         }
+    }
+
+    /// Remove the kept text of one privately kept source: its bodies go ([`Library::remove_bodies`]), the pointer, its excerpts and its
+    /// claims stay, and every anchor into it is an orphan marked `text_removed` with the date. Returns the bytes removed. A source not
+    /// kept privately is refused.
+    fn remove_private_text(&self, id: &str, gone: Gone) -> Result<u64, String> {
+        let meta = self.read_meta(id).ok_or_else(|| format!("no source `{}`", id))?;
+        if !meta["kept_privately"].is_string() {
+            return Err(format!("`{}` was not kept privately by research", id));
+        }
+        let removed = self.remove_bodies(id, gone, true)?;
         self.log("private_text_removed", json!({"id": id, "bytes": removed}));
         Ok(removed)
     }
@@ -128,7 +208,7 @@ impl Library {
             if older_than_days.is_some_and(|d| age_days.is_some_and(|a| a < d)) {
                 continue;
             }
-            out.push((p.id.clone(), self.remove_private_text(&p.id)?));
+            out.push((p.id.clone(), self.remove_private_text(&p.id, Gone::Purged)?));
         }
         Ok(out)
     }
@@ -143,12 +223,12 @@ impl Library {
             if total <= max_bytes {
                 break;
             }
-            if self.remove_private_text(&p.id).is_ok() {
+            if self.remove_private_text(&p.id, Gone::Evicted).is_ok() {
                 total = total.saturating_sub(p.bytes);
                 removed.push(p.id.clone());
             }
         }
-        if total > max_bytes && self.remove_private_text(keep).is_ok() {
+        if total > max_bytes && self.remove_private_text(keep, Gone::Evicted).is_ok() {
             removed.push(keep.to_string());
         }
         removed

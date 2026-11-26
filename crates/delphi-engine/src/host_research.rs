@@ -406,14 +406,14 @@ pub fn record(ctx: &Ctx<'_>, parsed: &Parsed, fetch: &dyn Fn(&str) -> Result<Fet
         let (written, mark) = match page {
             Read::Page(sid, at, text) if quote_in(text, &c.quote) => {
                 let fp = fingerprint(&c.text);
-                let anchors = [AnchorSpec { source_id: sid.clone(), locator: Some(at.clone()), quote: c.quote.clone(), prefix: None, suffix: None }];
+                let anchors = [AnchorSpec { source_id: sid.clone(), locator: Some(at.clone()), quote: c.quote.clone(), prefix: None, suffix: None, read: None }];
                 (lib.add_research_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &anchors }).map(|(v, _)| v), None)
             }
             // A claim on a private source: kept as the host reported it, anchored to the pointer with its quote, private to its place.
             Read::Private(sid, locator) => {
                 let fp = private_fingerprint(&c.text);
                 let quote = mask(&c.quote, ctx.identifiers);
-                let anchors: Vec<AnchorSpec> = (!quote.trim().is_empty()).then(|| AnchorSpec { source_id: sid.clone(), locator: Some(locator.clone()), quote, prefix: None, suffix: None }).into_iter().collect();
+                let anchors: Vec<AnchorSpec> = (!quote.trim().is_empty()).then(|| AnchorSpec { source_id: sid.clone(), locator: Some(locator.clone()), quote, prefix: None, suffix: None, read: None }).into_iter().collect();
                 (lib.add_host_claim(&ResearchClaim { text: &c.text, fingerprint: &fp, project: ctx.project, topic: Some(&topic.id), anchors: &anchors }, HOST_REPORTED), Some(HOST_REPORTED))
             }
             _ => {

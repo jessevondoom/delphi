@@ -30,6 +30,8 @@ pub struct Health {
     pub sources: BTreeMap<String, usize>,
     /// By derived status (`noted`, `checking`, `validated`, …).
     pub claims: BTreeMap<String, usize>,
+    /// Anchors that no longer resolve (`specs/142` §2.3 item 3), by why: `not in the newer text`, `text evicted`, `text purged`.
+    pub orphans: BTreeMap<String, usize>,
     pub pages: usize,
     pub summaries: usize,
     pub summaries_without_source: usize,
@@ -112,6 +114,9 @@ pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
     for claim in lib.claims() {
         count(&mut h.claims, crate::library::claims::status(&claim).as_str());
     }
+    for (why, n) in lib.orphan_counts() {
+        h.orphans.insert(why.to_string(), n);
+    }
     h.pages = files_under(&lib.root().join("pages"), ".json", &[]).len();
 
     // Imported summary pages and their bibliographies (`specs/068`).
@@ -181,6 +186,9 @@ impl Health {
         o.insert("date".into(), json!(self.date));
         o.insert("sources".into(), json!({"total": self.sources_total(), "kept": self.sources}));
         o.insert("claims".into(), json!({"total": self.claims_total(), "status": self.claims}));
+        if !self.orphans.is_empty() {
+            o.insert("orphaned_anchors".into(), json!({"total": self.orphans.values().sum::<usize>(), "why": self.orphans}));
+        }
         o.insert("pages".into(), json!(self.pages));
         o.insert("summaries".into(), json!({"total": self.summaries, "no_source": self.summaries_without_source}));
         o.insert("staged_notes".into(), json!({"waiting": self.staged, "oldest": self.staged_oldest}));
@@ -227,6 +235,12 @@ impl Health {
             let order = ["noted", "checking", "corroborated", "substantiated", "vetted", "validated", "contested", "disproved", "retired"];
             fact(format!("{} claims ({})", self.claims_total(), order.iter().filter_map(|k| self.claims.get(*k).map(|n| format!("{k} {n}"))).collect::<Vec<_>>().join(", ")))
         });
+
+        // Anchors that no longer resolve (`specs/142` §2.3 item 3): said only when there are some.
+        let orphans: usize = self.orphans.values().sum();
+        if orphans > 0 {
+            out.push(fact(format!("{orphans} orphaned anchors ({}): delphi sources show <id> lists a source's", self.orphans.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", "))));
+        }
 
         if let Some(n) = self.topics {
             out.push(fact(format!("{n} research topics")));

@@ -258,7 +258,14 @@ fn show(lib: &Library, args: &[String], home: &Path) -> i32 {
         Some(Recheck::Fresh) | Some(Recheck::NotApplicable(_)) | None => {}
     }
     let Some(m) = lib.read_meta(id) else { return 1 };
+    // `specs/142` §2.3 item 3: the anchors into this source that no longer resolve, each with its own quote, the version and date it
+    // last resolved in, and why.
+    let orphans = lib.orphans_of(id);
     if args.iter().any(|a| a == "--json") {
+        let mut m = m;
+        if !orphans.is_empty() {
+            m["orphans"] = Value::Array(orphans.iter().map(|o| o.to_json()).collect());
+        }
         println!("{}", serde_json::to_string_pretty(&m).unwrap_or_default());
         return 0;
     }
@@ -296,6 +303,17 @@ fn show(lib: &Library, args: &[String], home: &Path) -> i32 {
     let versions = std::fs::read_dir(dir.join("versions")).map(|d| d.flatten().count()).unwrap_or(0);
     if versions > 0 {
         println!("  earlier versions: {}", versions);
+    }
+    if let Some(rec) = lib.capture_record(id) {
+        let gone = if rec["purged"].is_string() { "; text purged" } else if rec["evicted"]["text"].is_string() { "; text evicted" } else if rec["evicted"]["raw"].is_string() { "; raw evicted" } else { "" };
+        println!("  capture        by {}, text by {}{}, {} revisit(s){}", clean(rec["captured_by"].as_str().unwrap_or("?"), 60), clean(rec["extractor"]["name"].as_str().unwrap_or("?"), 40), rec["extractor"]["version"].as_str().map(|v| format!(" {}", clean(v, 10))).unwrap_or_default(), rec["revisits"].as_array().map_or(0, Vec::len) as u64 + rec["revisits_more"].as_u64().unwrap_or(0), gone);
+    }
+    if !orphans.is_empty() {
+        println!("  orphans        {} anchor(s) that no longer resolve", orphans.len());
+        for o in &orphans {
+            let quote = if o.quote.is_empty() { "(the quote went with the capture)".to_string() } else { format!("\"{}\"", clean(&o.quote, 120)) };
+            println!("    {}  last found in version {}{}: {}  ({})", quote, clean(&o.version, 10), if o.date.is_empty() { String::new() } else { format!(" of {}", clean(&o.date, 10)) }, o.reason(), clean(&o.claim, 40));
+        }
     }
     0
 }

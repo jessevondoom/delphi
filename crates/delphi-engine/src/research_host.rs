@@ -66,6 +66,12 @@ impl Held {
         self.inner.lock().unwrap().get(url).filter(|s| s.text.for_daemon() == text).cloned()
     }
 
+    /// The text the library stores for the page this run read at `url` (`Library::capture_text`): what a verified excerpt is pinned
+    /// from when the text itself is not kept (`specs/142` §2.3 item 5).
+    pub fn capture_text_of(&self, url: &str) -> Option<String> {
+        self.inner.lock().unwrap().get(url).map(crate::library::Library::capture_text)
+    }
+
     /// The text this run read at `url`, for the context of a quoted passage (`specs/119` §3 item 6).
     pub fn text_of(&self, url: &str) -> Option<String> {
         self.inner.lock().unwrap().get(url).map(|s| s.text.for_daemon().clone())
@@ -605,7 +611,9 @@ impl LiveLibrary {
     fn anchor(&self, source_id: &str, quote: &str, url: &str) -> crate::library::claims::AnchorSpec {
         let around = (self.keep.unknown_licence != delphi_adapter::config::UnknownLicence::Pointer).then(|| self.held.as_ref().and_then(|h| h.text_of(url))).flatten().and_then(|t| crate::library::claims::context_of(&t, quote));
         let (prefix, suffix) = around.map_or((None, None), |(b, a)| (Some(b), Some(a)));
-        crate::library::claims::AnchorSpec { source_id: source_id.to_string(), locator: Some(url.to_string()), quote: quote.to_string(), prefix, suffix }
+        // The text as the library stores it, whatever `unknown_licence` says: the quote found in it is pinned as a verified excerpt.
+        let read = self.held.as_ref().and_then(|h| h.capture_text_of(url));
+        crate::library::claims::AnchorSpec { source_id: source_id.to_string(), locator: Some(url.to_string()), quote: quote.to_string(), prefix, suffix, read }
     }
 }
 
@@ -1818,7 +1826,9 @@ mod tests {
         let held: Vec<String> = l.private_texts().into_iter().map(|p| p.id).collect();
         assert_eq!(held, vec![id3.clone()], "the oldest went first");
         let first = l.read_meta(&id).unwrap();
-        assert!(!first["purged"].is_null() && first["kept_privately"].is_string() && !l.source_dir(&id).join("source.md").exists(), "its text went and its pointer stays: {first}");
+        // `specs/142` §2.4 item 3: eviction is not a takedown. The record stays and says the text was evicted.
+        assert!(first["text_evicted"].is_string() && first["purged"].is_null() && first["kept_privately"].is_string() && !l.source_dir(&id).join("source.md").exists(), "its text went and its pointer stays: {first}");
+        assert!(l.capture_record(&id).unwrap()["evicted"]["text"].is_string());
     }
 
     /// `specs/112` §3.1, §3.2 and §9: a run's claim is scoped to the run's project; the run's own verdict and counts are not copied

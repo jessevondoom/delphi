@@ -279,7 +279,7 @@ pub fn apply(home: &Path, item: &Item, run_id: &str, identifiers: &[String], fet
     for (sentence, line) in &item.claims {
         let text = crate::host_research::mask(sentence, identifiers);
         let fp = blake3::hash(format!("ingest\0{}", crate::host_noted::fingerprint(&text)).as_bytes()).to_hex()[..32].to_string();
-        let anchors = [AnchorSpec { source_id: source.clone(), locator: Some(format!("{shown}#L{line}-L{line}")), quote: text.clone(), prefix: None, suffix: None }];
+        let anchors = [AnchorSpec { source_id: source.clone(), locator: Some(format!("{shown}#L{line}-L{line}")), quote: text.clone(), prefix: None, suffix: None, read: None }];
         if let Ok(c) = lib.add_host_claim(&ResearchClaim { text: &text, fingerprint: &fp, project: item.project.as_deref(), topic: Some(&topic.id), anchors: &anchors }, INGESTED) {
             if let Some(id) = c["id"].as_str() {
                 claims.push((id.to_string(), sentence.clone()));
@@ -306,7 +306,7 @@ pub fn apply(home: &Path, item: &Item, run_id: &str, identifiers: &[String], fet
                         }
                         let Some(c) = lib.claim(id) else { continue };
                         let Some(fp) = c["fingerprints"][0].as_str() else { continue };
-                        let anchors = [AnchorSpec { source_id: sid.clone(), locator: Some(at.clone()), quote: sentence.clone(), prefix: None, suffix: None }];
+                        let anchors = [AnchorSpec { source_id: sid.clone(), locator: Some(at.clone()), quote: sentence.clone(), prefix: None, suffix: None, read: None }];
                         let _ = lib.add_research_claim(&ResearchClaim { text: c["text"].as_str().unwrap_or(""), fingerprint: fp, project: item.project.as_deref(), topic: Some(&topic.id), anchors: &anchors });
                     }
                 }

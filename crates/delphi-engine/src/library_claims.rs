@@ -46,6 +46,56 @@ pub struct AnchorSpec {
     pub quote: String,
     pub prefix: Option<String>,
     pub suffix: Option<String>,
+    /// The capture's text as the run read it ([`Library::capture_text`]), for a source whose text the library does not keep
+    /// (`specs/142` §2.3 item 5): the quote is found in it and pinned as a verified excerpt, with the hash of that text and the
+    /// place. Used only when its hash is the one the source's capture record states. `None`: nothing is pinned from a read.
+    pub read: Option<String>,
+}
+
+/// What a claim reads when the text its anchors were checked against is gone and no verified excerpt was kept (`specs/142` §2.3 item 4).
+pub const UNVERIFIABLE: &str = "unverifiable, text evicted";
+/// Why an anchor is an orphan (`specs/142` §2.3 item 3).
+pub const NOT_IN_NEWER_TEXT: &str = "not in the newer text";
+pub const TEXT_EVICTED: &str = "text evicted";
+pub const TEXT_PURGED: &str = "text purged";
+/// What an evicted or purged anchor reads when its verified excerpt is kept: it counts as it did.
+pub const EXCERPT_KEPT: &str = "verified excerpt kept";
+
+/// An anchor that does not resolve (`specs/142` §2.3 item 3), as it is shown under its source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Orphan {
+    pub claim: String,
+    /// The anchor's own quote. Empty only after a takedown, which removes the quote with the capture (`specs/055` §3.7).
+    pub quote: String,
+    /// The version it last resolved in, and that version's date.
+    pub version: String,
+    pub date: String,
+    /// [`NOT_IN_NEWER_TEXT`], [`TEXT_EVICTED`] or [`TEXT_PURGED`].
+    pub why: &'static str,
+    /// The text went and the verified excerpt is kept: the anchor counts as it did.
+    pub excerpt_kept: bool,
+}
+
+impl Orphan {
+    /// The reason as it is shown: `not in the newer text`, `text evicted, verified excerpt kept`, `text evicted`, and the same for a purge.
+    pub fn reason(&self) -> String {
+        if self.excerpt_kept { format!("{}, {}", self.why, EXCERPT_KEPT) } else { self.why.to_string() }
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({"claim": self.claim, "quote": self.quote, "version": self.version, "date": self.date, "why": self.reason()})
+    }
+}
+
+/// Why an anchor is an orphan, or `None` for one that resolves. An anchor marked lost before the reason was recorded is `not in the
+/// newer text`, which is the only way one was lost; a takedown's pointer-only anchor is `text purged`.
+fn orphan_why(a: &Value) -> Option<&'static str> {
+    match (a["state"].as_str().unwrap_or("active"), a["orphan"]["why"].as_str()) {
+        (_, Some(TEXT_EVICTED)) => Some(TEXT_EVICTED),
+        (_, Some(TEXT_PURGED)) | ("pointer_only", _) => Some(TEXT_PURGED),
+        ("lost", _) => Some(NOT_IN_NEWER_TEXT),
+        _ => None,
+    }
 }
 
 /// The longest quote a research anchor keeps, in characters: the scout's own bound on a quote (`research_host::parse_claims`).
@@ -199,7 +249,7 @@ fn anchors_of(claim: &Value) -> Vec<&Value> {
     claim["anchors"].as_array().map(|a| a.iter().collect()).unwrap_or_default()
 }
 
-fn active(a: &Value) -> bool {
+pub(super) fn active(a: &Value) -> bool {
     a["state"].as_str().unwrap_or("active") == "active"
 }
 
@@ -620,7 +670,7 @@ impl Library {
             let quotes: Vec<(String, String)> = anchors_of(&c).iter().filter(|a| a["source_id"] == source_id && a["via"] == "research" && a["state"] == "active" && a["start"].is_null()).filter_map(|a| Some((a["quote"].as_str()?.to_string(), a["locator"].as_str().unwrap_or("").to_string()))).collect();
             for (quote, locator) in quotes {
                 let Some((before, after)) = context_of(page_text, &quote) else { continue };
-                let spec = AnchorSpec { source_id: source_id.to_string(), locator: Some(locator), quote, prefix: Some(before), suffix: Some(after) };
+                let spec = AnchorSpec { source_id: source_id.to_string(), locator: Some(locator), quote, prefix: Some(before), suffix: Some(after), read: None };
                 if let Ok(a) = self.research_anchor(&spec) {
                     if upgrade_quote_only(&mut c, &a) {
                         touched = true;
@@ -655,7 +705,8 @@ impl Library {
         if !meta["purged"].is_null() {
             return Err(format!("source `{}` was purged; nothing can anchor into it", spec.source_id));
         }
-        let quote: String = clean_text(spec.quote.trim()).chars().take(RESEARCH_QUOTE_MAX).collect();
+        // In the stored normal form, as the text it is looked up in is (`specs/142` §2.3 item 1).
+        let quote: String = super::capture::normalise(&clean_text(spec.quote.trim())).chars().take(RESEARCH_QUOTE_MAX).collect();
         let locator = spec.locator.as_deref().map(str::trim).filter(|l| !l.is_empty()).or_else(|| meta["canonical_url"].as_str()).unwrap_or("").to_string();
         if locator.is_empty() {
             return Err("an anchor records where it is from".into());
@@ -666,6 +717,7 @@ impl Library {
             let mut v = serde_json::to_value(a).map_err(|e| e.to_string())?;
             v["state"] = json!("active");
             v["via"] = json!("research");
+            self.pin_anchor(&v)?;
             return Ok(v);
         }
         if let (None, Some(before), Some(after)) = (&held, &spec.prefix, &spec.suffix) {
@@ -675,13 +727,37 @@ impl Library {
             if let Ok(a) = self.keep_research_passage(&spec.source_id, &passage, before, &after, &locator) {
                 let mut v = serde_json::to_value(a).map_err(|e| e.to_string())?;
                 v["state"] = json!("active");
+                self.pin_from_read(spec, &v);
                 return Ok(v);
             }
         }
         let mut v = serde_json::to_value(Anchor::new(&spec.source_id, &version, &locator, &quote, None, None, None)?).map_err(|e| e.to_string())?;
         v["state"] = json!("active");
         v["via"] = json!("research");
+        self.pin_from_read(spec, &v);
         Ok(v)
+    }
+
+    /// Pin the verified excerpt of an anchor found in a text the library holds (`specs/142` §2.3 item 5): its quote, the hash of that
+    /// text and its place, from the anchor itself.
+    fn pin_anchor(&self, a: &Value) -> Result<(), String> {
+        let (Some(id), Some(quote), Some(hash), Some(sha), Some(start)) = (a["source_id"].as_str(), a["quote"].as_str(), a["quote_hash"].as_str(), a["text_sha256"].as_str(), a["start"].as_u64()) else { return Ok(()) };
+        self.pin(id, quote, hash, sha, start as usize, a["version"].as_str().unwrap_or("1"))
+    }
+
+    /// Pin the verified excerpt of an anchor into a source whose text is not kept, from the text the run read (`AnchorSpec::read`):
+    /// only when that text is the one the source's capture record states (its `text_sha256`), and the quote is in it. The anchor is
+    /// left as it is; the excerpt holds the hash and the place.
+    fn pin_from_read(&self, spec: &AnchorSpec, a: &Value) {
+        let (Some(read), Some(quote), Some(hash)) = (spec.read.as_deref(), a["quote"].as_str(), a["quote_hash"].as_str()) else { return };
+        let text = super::capture::normalise(read);
+        let sha = sha256_hex(text.as_bytes());
+        if !self.capture_record(&spec.source_id).is_some_and(|r| r["text_sha256"] == sha.as_str()) {
+            return;
+        }
+        if let Some(at) = text.find(quote) {
+            let _ = self.pin(&spec.source_id, quote, hash, &sha, text[..at].chars().count(), a["version"].as_str().unwrap_or("1"));
+        }
     }
 
     /// An anchor into a source. A source held whole resolves the quote in its text; one that is not (excerpts, pointer)
@@ -711,6 +787,7 @@ impl Library {
             return Err("an anchor records where it is from (--locator)".into());
         }
         v["state"] = json!("active");
+        self.pin_anchor(&v)?;
         Ok(v)
     }
 
@@ -898,6 +975,10 @@ impl Library {
     /// source not held whole has no text to look in and its anchors stay as they were.
     pub(super) fn reanchor_claims(&self, source_id: &str, text: Option<&str>, version: u64) {
         let Some(text) = text else { return };
+        // A new version is another text: no stored position counts in it, so every anchor is found again by its quote, then by its
+        // context (`specs/142` §2.3 items 1 and 2). One that is found takes the new text's hash with its new place.
+        let sha = sha256_hex(text.as_bytes());
+        let now = delphi_core::time::now_rfc3339();
         for mut c in self.citing(source_id) {
             let mut changed = false;
             let mut lost = Vec::new();
@@ -911,15 +992,24 @@ impl Library {
                         a["version"] = json!(version.to_string());
                         a["start"] = json!(start);
                         a["end"] = json!(end);
+                        a["text_sha256"] = json!(sha);
+                        // The text is back: an anchor orphaned by eviction or purge resolves again.
+                        if let Some(m) = a.as_object_mut() {
+                            m.remove("orphan");
+                            m.remove("text_removed");
+                        }
                         if how == excerpts::How::Context {
                             a["matched"] = json!("context");
                         } else {
                             a.as_object_mut().map(|m| m.remove("matched"));
+                            // the same words in the newer text: the verified excerpt moves with them
+                            let _ = self.pin_anchor(a);
                         }
                     }
                     Resolution::NotFound => {
                         a["state"] = json!("lost");
                         a["lost_in"] = json!(version.to_string());
+                        a["orphan"] = json!({"why": NOT_IN_NEWER_TEXT, "at": now});
                         lost.push(a["quote_hash"].clone());
                     }
                 }
@@ -937,6 +1027,50 @@ impl Library {
                 }
             }
         }
+    }
+
+    /// Does this anchor still count: for corroboration, and as support for a page statement? It must be live, and when the text it
+    /// was checked against went by eviction or purge, the verified excerpt must be kept (`specs/142` §2.3 item 4). One with no
+    /// excerpt is barred until the source is read again and the anchor resolves.
+    pub fn counts(&self, a: &Value) -> bool {
+        active(a) && (a["orphan"].is_null() || self.kept_passage(a).is_some())
+    }
+
+    /// Does the claim read [`UNVERIFIABLE`]: at least one of its anchors lost its text with no verified excerpt kept, and no other
+    /// anchor still counts?
+    pub fn unverifiable(&self, claim: &Value) -> bool {
+        let anchors = anchors_of(claim);
+        anchors.iter().any(|a| active(a) && !a["orphan"].is_null() && self.kept_passage(a).is_none()) && !anchors.iter().any(|a| self.counts(a))
+    }
+
+    /// The orphans of a source (`specs/142` §2.3 item 3): each anchor into it that does not resolve, with its own quote, the version
+    /// and date it last resolved in, and why. Reads only.
+    pub fn orphans_of(&self, source_id: &str) -> Vec<Orphan> {
+        let current = self.read_meta(source_id);
+        let date_of = |version: &str| -> String {
+            let meta = if current.as_ref().is_some_and(|m| m["version"] == version) { current.clone() } else { std::fs::read(self.source_dir(source_id).join("versions").join(version).join("meta.json")).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) };
+            meta.and_then(|m| m["retrieved"].as_str().map(|d| d.get(..10).unwrap_or(d).to_string())).unwrap_or_default()
+        };
+        let mut out = Vec::new();
+        for c in self.citing(source_id) {
+            for a in anchors_of(&c).into_iter().filter(|a| a["source_id"] == source_id) {
+                let Some(why) = orphan_why(a) else { continue };
+                let version = a["version"].as_str().unwrap_or("").to_string();
+                out.push(Orphan { claim: c["id"].as_str().unwrap_or("").to_string(), quote: clean_text(a["quote"].as_str().unwrap_or("")), date: date_of(&version), version, why, excerpt_kept: why != NOT_IN_NEWER_TEXT && self.kept_passage(a).is_some() });
+            }
+        }
+        out
+    }
+
+    /// How many anchors in the whole library are orphans, by reason (`delphi kb health`).
+    pub fn orphan_counts(&self) -> std::collections::BTreeMap<&'static str, usize> {
+        let mut out = std::collections::BTreeMap::new();
+        for c in self.claims() {
+            for why in anchors_of(&c).into_iter().filter_map(orphan_why) {
+                *out.entry(why).or_insert(0) += 1;
+            }
+        }
+        out
     }
 
     /// A source was retired (gone or moved): the claims it alone supports become contested; a claim another live source
@@ -1098,7 +1232,8 @@ impl Library {
         let captured = claim["created"].as_str().and_then(|d| d.get(..10)).unwrap_or("9999-12-31");
         let mut seen: HashSet<String> = HashSet::new();
         let mut out = Vec::new();
-        for a in anchors_of(claim).iter().filter(|a| active(a)) {
+        // An anchor whose text was evicted or purged counts only while its verified excerpt is kept (`specs/142` §2.3 item 4).
+        for a in anchors_of(claim).iter().filter(|a| self.counts(a)) {
             let Some(sid) = a["source_id"].as_str() else { continue };
             if !seen.insert(sid.to_string()) {
                 continue;
@@ -1531,13 +1666,17 @@ impl Library {
         if st == Status::Contested {
             s.push_str("contested: a source it rests on changed or went away\n");
         }
+        if self.unverifiable(&c) {
+            s.push_str(&format!("{}: the text it was checked against is no longer kept and no verified excerpt was; it counts for no corroboration until the source is read again\n", UNVERIFIABLE));
+        }
         if self.rests_on_private(&c) {
             s.push_str("text withheld: the claim rests on a private source\n");
         } else {
             s.push_str(&format!("\n{}\n", c["text"].as_str().unwrap_or("")));
         }
         for a in anchors_of(&c) {
-            s.push_str(&format!("source {} version {} {} [{}]\n", a["source_id"].as_str().unwrap_or(""), a["version"].as_str().unwrap_or(""), clean_text(a["locator"].as_str().unwrap_or("")), a["state"].as_str().unwrap_or("active")));
+            let orphan = orphan_why(a).map(|w| if w != NOT_IN_NEWER_TEXT && self.kept_passage(a).is_some() { format!(", {}, {}", w, EXCERPT_KEPT) } else { format!(", {}", w) }).unwrap_or_default();
+            s.push_str(&format!("source {} version {} {} [{}{}]\n", a["source_id"].as_str().unwrap_or(""), a["version"].as_str().unwrap_or(""), clean_text(a["locator"].as_str().unwrap_or("")), a["state"].as_str().unwrap_or("active"), orphan));
         }
         Some(s)
     }
@@ -1577,5 +1716,256 @@ impl crate::fact_run::ValidatedFacts for Library {
         }
         found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
         found.into_iter().take(limit).map(|(_, f)| f).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fact_fetch::test_html_snapshot;
+    use crate::library::private::Gone;
+    use crate::library::{AddOpts, Budgets, Level, Outcome};
+
+    fn lib() -> (tempfile::TempDir, Library) {
+        let d = tempfile::tempdir().unwrap();
+        let l = Library::in_home(d.path());
+        (d, l)
+    }
+
+    fn page(url: &str, words: &str) -> crate::fact_fetch::Snapshot {
+        test_html_snapshot(url, &format!("<html><head><title>Tides</title></head><body><p>{}</p></body></html>", words))
+    }
+
+    fn open() -> AddOpts {
+        AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }
+    }
+
+    fn spec(id: &str, quote: &str) -> AnchorSpec {
+        AnchorSpec { source_id: id.into(), locator: Some("p1".into()), quote: quote.into(), ..Default::default() }
+    }
+
+    fn research(l: &Library, text: &str, fingerprint: &str, anchors: &[AnchorSpec]) -> Value {
+        l.add_research_claim(&ResearchClaim { text, fingerprint, project: None, topic: None, anchors }).unwrap().0
+    }
+
+    const WORDS: &str = "The harbour opens at dawn. The tide turns twice a day in this bay. The harbour closes at dusk.";
+    const QUOTE: &str = "The tide turns twice a day in this bay";
+
+    /// The fitness function of `specs/142` §6 and AC-22: an anchor made under this spec has a pinned excerpt of at most 300
+    /// characters with the `text_sha256` and position it was found at, under every value of `unknown_licence`.
+    #[test]
+    fn every_new_anchor_pins_an_excerpt() {
+        let (_d, l) = lib();
+        let pinned_for = |id: &str, a: &Value| -> Value { l.pinned(id).into_iter().find(|p| p["quote_hash"] == a["quote_hash"]).unwrap_or_else(|| panic!("no pinned excerpt for {a}")) };
+
+        // held whole: the operator's claim and a research run's claim
+        let url = "https://example.org/held";
+        let held = l.add_fetched(url, &page(url, WORDS), &open(), &Budgets::default()).unwrap();
+        assert_eq!(held.level, Level::Full);
+        let text_sha = l.capture_record(&held.id).unwrap()["text_sha256"].as_str().unwrap().to_string();
+        let c = l.add_claim("Tides turn twice a day in the bay", &ClaimOpts::default(), &[spec(&held.id, QUOTE)]).unwrap();
+        let a = &c["anchors"][0];
+        let p = pinned_for(&held.id, a);
+        assert_eq!((p["text"].as_str(), p["text_sha256"].as_str(), p["start"].clone(), p["end"].clone()), (Some(QUOTE), Some(text_sha.as_str()), a["start"].clone(), a["end"].clone()));
+        assert_eq!(a["text_sha256"], text_sha.as_str(), "the anchor says which text its position counts in");
+        let r = research(&l, "the harbour closes at dusk", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &[spec(&held.id, "The harbour closes at dusk")]);
+        assert_eq!(pinned_for(&held.id, &r["anchors"][0])["text"], "The harbour closes at dusk");
+        assert_eq!(l.pinned(&held.id).len(), 2);
+
+        // `pointer`: no text is kept and the run gives no context; the excerpt is pinned from the text the run read
+        let url = "https://example.org/pointer";
+        let snap = page(url, WORDS);
+        let pointer = l.add_fetched(url, &snap, &AddOpts::default(), &Budgets::default()).unwrap();
+        assert_eq!(pointer.level, Level::Pointer);
+        let read = Library::capture_text(&snap);
+        let r = research(&l, "the tide turns twice a day", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &[AnchorSpec { read: Some(read.clone()), ..spec(&pointer.id, QUOTE) }]);
+        let a = &r["anchors"][0];
+        assert!(a["start"].is_null() && a["via"] == "research", "the anchor itself is the quote alone, as before: {a}");
+        let p = pinned_for(&pointer.id, a);
+        let at = read.find(QUOTE).unwrap();
+        assert_eq!((p["text"].as_str(), p["text_sha256"].as_str(), p["start"].as_u64()), (Some(QUOTE), l.capture_record(&pointer.id).unwrap()["text_sha256"].as_str(), Some(read[..at].chars().count() as u64)));
+        assert!(!l.source_dir(&pointer.id).join("source.md").exists(), "the text is still not kept");
+
+        // `excerpts`: the run gives the context; the passage is kept as an excerpt and pinned with its place
+        let url = "https://example.org/excerpts";
+        let snap = page(url, WORDS);
+        let ex = l.add_fetched(url, &snap, &AddOpts::default(), &Budgets::default()).unwrap();
+        let read = Library::capture_text(&snap);
+        let (before, after) = context_of(&read, QUOTE).unwrap();
+        let r = research(&l, "the tide turns twice daily", "cccccccccccccccccccccccccccccccc", &[AnchorSpec { prefix: Some(before), suffix: Some(after), read: Some(read), ..spec(&ex.id, QUOTE) }]);
+        assert_eq!(l.read_meta(&ex.id).unwrap()["capture_level"], "excerpts");
+        assert_eq!(pinned_for(&ex.id, &r["anchors"][0])["text"], QUOTE);
+
+        // a quote of 400 characters is pinned as its first 300
+        let long: String = (0..80).map(|i| format!("word{} ", i)).collect::<String>().trim().chars().take(400).collect();
+        let url = "https://example.org/long";
+        let snap = page(url, &format!("Opening. {} Closing.", long));
+        let lp = l.add_fetched(url, &snap, &AddOpts::default(), &Budgets::default()).unwrap();
+        let r = research(&l, "the words are numbered", "dddddddddddddddddddddddddddddddd", &[AnchorSpec { read: Some(Library::capture_text(&snap)), ..spec(&lp.id, &long) }]);
+        let p = pinned_for(&lp.id, &r["anchors"][0]);
+        assert_eq!(p["text"].as_str().unwrap().chars().count(), 300);
+        assert_eq!(p["end"].as_u64().unwrap() - p["start"].as_u64().unwrap(), 300);
+
+        // a text that is not the capture's own pins nothing: the hash must be the one the record states
+        let r = research(&l, "an unrelated claim", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", &[AnchorSpec { read: Some(format!("Some other page. {}", QUOTE)), ..spec(&lp.id, QUOTE) }]);
+        assert!(!l.pinned(&lp.id).iter().any(|p| p["quote_hash"] == r["anchors"][0]["quote_hash"]));
+    }
+
+    /// AC-22: the pinned excerpt outlives eviction and a purge of the text, and a new version of the source; a takedown removes it.
+    #[test]
+    fn a_pinned_excerpt_survives_eviction_purge_and_a_new_version_and_goes_with_a_takedown() {
+        let (_d, l) = lib();
+        for (n, gone) in [Gone::Evicted, Gone::Purged].into_iter().enumerate() {
+            let url = format!("https://example.org/kept-{}", n);
+            let s = l.add_fetched(&url, &page(&url, WORDS), &AddOpts { keep_closed_privately: true, ..Default::default() }, &Budgets::default()).unwrap();
+            assert_eq!(s.level, Level::Full);
+            l.add_claim(&format!("Tides turn twice a day ({})", n), &ClaimOpts::default(), &[spec(&s.id, QUOTE)]).unwrap();
+            let before = l.pinned(&s.id);
+            assert_eq!(before.len(), 1);
+            assert!(l.remove_bodies(&s.id, gone, true).unwrap() > 0);
+            let dir = l.source_dir(&s.id);
+            assert!(!dir.join("source.md").exists() && !dir.join("raw").exists());
+            assert_eq!(l.pinned(&s.id), before, "the excerpt is outside the cache");
+            let rec = l.capture_record(&s.id).unwrap();
+            assert!(rec["raw_sha256"].is_string() && rec["text_sha256"].is_string(), "the digests stay");
+            assert!(if gone == Gone::Evicted { rec["evicted"]["text"].is_string() && rec["evicted"]["raw"].is_string() } else { rec["purged"].is_string() }, "{rec}");
+            // read again with other words around the quote: a new version, the excerpt follows the quote into the newer text
+            let again = l.add_fetched(&url, &page(&url, &format!("A new opening line. {}", WORDS)), &AddOpts { keep_closed_privately: true, ..Default::default() }, &Budgets::default()).unwrap();
+            assert_eq!(again.outcome, Outcome::NewVersion(2));
+            let after = l.pinned(&s.id);
+            assert_eq!((after.len(), after[0]["text"].as_str(), after[0]["version"].as_str()), (1, Some(QUOTE), Some("2")));
+            assert_eq!(after[0]["text_sha256"], l.capture_record(&s.id).unwrap()["text_sha256"]);
+            assert!(after[0]["start"].as_u64().unwrap() > before[0]["start"].as_u64().unwrap());
+            l.purge(&s.id).unwrap();
+            assert!(l.pinned(&s.id).is_empty(), "a takedown removes it");
+        }
+    }
+
+    /// AC-22: `start` and `end` count in the normalised text. The same page with a byte-order mark, with other line endings and in
+    /// another Unicode normal form gives the same `text_sha256` and the same positions.
+    #[test]
+    fn positions_count_in_the_normalised_text() {
+        let (d, l) = lib();
+        let plain = "# Café\n\nThe café opens at dawn.\nIt closes at dusk, naïvely.\n";
+        let variants = [plain.to_string(), format!("\u{feff}{}", plain), plain.replace('\n', "\r\n"), plain.replace('é', "e\u{301}").replace('ï', "i\u{308}")];
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, v) in variants.iter().enumerate() {
+            let f = d.path().join(format!("cafe-{}.md", i));
+            std::fs::write(&f, v).unwrap();
+            let s = l.add_file(&f, &open(), &Budgets::default()).unwrap();
+            let c = l.add_claim(&format!("The café closes at dusk ({})", i), &ClaimOpts::default(), &[spec(&s.id, "closes at dusk, naïvely")]).unwrap();
+            let a = &c["anchors"][0];
+            seen.insert((a["text_sha256"].as_str().unwrap().to_string(), a["start"].as_u64().unwrap(), a["end"].as_u64().unwrap()));
+        }
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        let (_, start, end) = seen.into_iter().next().unwrap();
+        assert_eq!(plain.chars().skip(start as usize).take((end - start) as usize).collect::<String>(), "closes at dusk, naïvely");
+    }
+
+    /// AC-13, on the library: after a new version an anchor is found by its quote (and takes the new text's hash), then by its
+    /// context, or becomes an orphan that shows its quote, the version it was last found in, and `not in the newer text`.
+    #[test]
+    fn a_new_version_re_resolves_by_quote_then_context_and_an_orphan_says_where_it_was_last_found() {
+        let (_d, l) = lib();
+        let url = "https://example.org/moving";
+        let long = "Before the storm the harbour master said that the tide turns twice a day in this bay, and nobody doubted the old man at all.";
+        let s = l.add_fetched(url, &page(url, long), &open(), &Budgets::default()).unwrap();
+        let c = l.add_claim("The tide turns twice a day", &ClaimOpts::default(), &[spec(&s.id, "the tide turns twice a day in this bay")]).unwrap();
+        let id = c["id"].as_str().unwrap().to_string();
+        let first = c["anchors"][0].clone();
+        assert!(l.orphans_of(&s.id).is_empty());
+
+        // by quote
+        l.add_fetched(url, &page(url, &format!("A new opening paragraph. {}", long)), &open(), &Budgets::default()).unwrap();
+        let a = l.claim(&id).unwrap()["anchors"][0].clone();
+        assert_eq!((a["version"].as_str(), a["state"].as_str(), a["matched"].is_null()), (Some("2"), Some("active"), true));
+        assert_eq!(a["start"].as_u64().unwrap(), first["start"].as_u64().unwrap() + 25);
+        assert_eq!(a["text_sha256"], l.capture_record(&s.id).unwrap()["text_sha256"]);
+        assert_ne!(a["text_sha256"], first["text_sha256"]);
+
+        // by context
+        l.add_fetched(url, &page(url, &long.replace("twice a day in this bay", "twice each day in this bay")), &open(), &Budgets::default()).unwrap();
+        let a = l.claim(&id).unwrap()["anchors"][0].clone();
+        assert_eq!((a["version"].as_str(), a["state"].as_str(), a["matched"].as_str()), (Some("3"), Some("active"), Some("context")));
+
+        // not at all: an orphan, and the claim is contested
+        l.add_fetched(url, &page(url, "An entirely different page about lighthouses and their keepers."), &open(), &Budgets::default()).unwrap();
+        let claim = l.claim(&id).unwrap();
+        assert_eq!((claim["anchors"][0]["state"].as_str(), claim["anchors"][0]["orphan"]["why"].as_str()), (Some("lost"), Some(NOT_IN_NEWER_TEXT)));
+        assert_eq!(status(&claim), Status::Contested);
+        let orphans = l.orphans_of(&s.id);
+        assert_eq!(orphans.len(), 1);
+        let o = &orphans[0];
+        assert_eq!((o.claim.as_str(), o.quote.as_str(), o.version.as_str(), o.reason().as_str()), (id.as_str(), "the tide turns twice a day in this bay", "3", NOT_IN_NEWER_TEXT));
+        assert_eq!(o.date.len(), 10, "the date of the version it was last found in: {}", o.date);
+        assert_eq!(l.orphan_counts().get(NOT_IN_NEWER_TEXT), Some(&1));
+    }
+
+    /// The fitness function of `specs/142` §6 and AC-14: an anchor whose text was evicted and whose excerpt is pinned reads `text
+    /// evicted, verified excerpt kept` and counts as before; one with no pinned excerpt makes its claim read `unverifiable, text
+    /// evicted` and adds nothing to the corroboration count, until the source is read again and the anchor resolves. Eviction never
+    /// contests the claim.
+    #[test]
+    fn an_evicted_anchor_without_an_excerpt_is_barred() {
+        let (_d, l) = lib();
+        let url = "https://example.org/evicted";
+        let snap = page(url, WORDS);
+        let s = l.add_fetched(url, &snap, &open(), &Budgets::default()).unwrap();
+        let c = research(&l, "the tide turns twice a day", "ffffffffffffffffffffffffffffffff", &[spec(&s.id, QUOTE)]);
+        let id = c["id"].as_str().unwrap().to_string();
+        assert_eq!(l.cites_of(&c).len(), 1);
+        let origins = |l: &Library| l.claim(&id).unwrap()["support"]["origins"].clone();
+        let counted = origins(&l);
+
+        // evicted, the excerpt pinned: it counts as it did, and the claim is not contested
+        l.remove_bodies(&s.id, Gone::Evicted, true).unwrap();
+        let claim = l.claim(&id).unwrap();
+        assert_eq!((claim["anchors"][0]["state"].as_str(), claim["anchors"][0]["orphan"]["why"].as_str(), claim["anchors"][0]["quote"].as_str()), (Some("active"), Some(TEXT_EVICTED), Some(QUOTE)));
+        assert!(claim["contested_by"].as_array().unwrap().is_empty() && status(&claim) != Status::Contested);
+        assert_eq!(l.orphans_of(&s.id).iter().map(Orphan::reason).collect::<Vec<_>>(), vec![format!("{}, {}", TEXT_EVICTED, EXCERPT_KEPT)]);
+        assert_eq!((l.cites_of(&claim).len(), origins(&l)), (1, counted.clone()));
+        assert!(!l.unverifiable(&claim) && !l.claim_slice(&format!("{}{}", POINTER_PREFIX, id)).unwrap().contains(UNVERIFIABLE));
+        // the page check reads the excerpt in place of the text that went
+        assert!(l.stored_text(&s.id).unwrap().contains(QUOTE));
+
+        // no pinned excerpt (an anchor made before this spec): unverifiable, barred from the count, still not contested
+        std::fs::remove_file(l.source_dir(&s.id).join(super::super::excerpts::PINNED)).unwrap();
+        let claim = l.refresh_support(&id).unwrap();
+        assert!(l.unverifiable(&claim));
+        assert_eq!(l.cites_of(&claim).len(), 0);
+        assert_ne!(origins(&l), counted, "the unbacked anchor left the count");
+        assert_eq!(l.orphans_of(&s.id).iter().map(Orphan::reason).collect::<Vec<_>>(), vec![TEXT_EVICTED.to_string()]);
+        assert!(status(&claim) != Status::Contested && claim["contested_by"].as_array().unwrap().is_empty());
+        assert!(l.claim_slice(&format!("{}{}", POINTER_PREFIX, id)).unwrap().contains(UNVERIFIABLE));
+
+        // read again: the anchor resolves, the excerpt is pinned again, and it counts
+        assert_eq!(l.add_fetched(url, &snap, &open(), &Budgets::default()).unwrap().outcome, Outcome::NewVersion(2));
+        let claim = l.claim(&id).unwrap();
+        assert!(claim["anchors"][0]["orphan"].is_null() && claim["anchors"][0]["start"].is_u64());
+        assert!(!l.unverifiable(&claim) && l.orphans_of(&s.id).is_empty());
+        assert_eq!((l.cites_of(&claim).len(), origins(&l), l.pinned(&s.id).len()), (1, counted, 1));
+    }
+
+    /// AC-14: the source view of the app, the page's bibliography entry and `kb health` each show the orphans.
+    #[test]
+    fn the_source_view_the_bibliography_and_health_show_the_orphans() {
+        let (d, l) = lib();
+        let url = "https://example.org/shown";
+        let s = l.add_fetched(url, &page(url, WORDS), &open(), &Budgets::default()).unwrap();
+        l.add_claim("The tide turns twice a day in the bay", &ClaimOpts::default(), &[spec(&s.id, QUOTE)]).unwrap();
+        let none = l.build_page_scoped("tides", Some(&format!("The harbour opens at dawn [s-{}].", s.id)), super::super::bib::Format::Plain, super::super::pages::Scope::Internal).unwrap();
+        assert!(!none.markdown.contains("orphaned anchor"), "{}", none.markdown);
+        assert!(crate::knowledge_health::gather(d.path(), d.path(), 0).orphans.is_empty());
+
+        l.add_fetched(url, &page(url, "The harbour opens at dawn. Nothing else is said."), &open(), &Budgets::default()).unwrap();
+        let view = l.source_view(&s.id, 10_000).unwrap();
+        assert_eq!(view["orphans"].as_array().unwrap().len(), 1);
+        assert_eq!((view["orphans"][0]["quote"].as_str(), view["orphans"][0]["version"].as_str(), view["orphans"][0]["why"].as_str()), (Some(QUOTE), Some("1"), Some(NOT_IN_NEWER_TEXT)));
+        let page = l.build_page_scoped("harbour hours", Some(&format!("The harbour is open from dawn [s-{}].", s.id)), super::super::bib::Format::Plain, super::super::pages::Scope::Internal).unwrap();
+        assert!(page.markdown.contains(&format!("1 orphaned anchor, listed under s-{}", s.id)), "{}", page.markdown);
+        let h = crate::knowledge_health::gather(d.path(), d.path(), 0);
+        assert_eq!(h.orphans.get(NOT_IN_NEWER_TEXT), Some(&1));
+        assert!(h.lines(0).iter().any(|line| line.text.starts_with("1 orphaned anchors (not in the newer text 1)")), "{:?}", h.lines(0).iter().map(|l| l.text.clone()).collect::<Vec<_>>());
+        assert_eq!(h.to_json()["orphaned_anchors"]["total"], 1);
     }
 }

@@ -242,7 +242,7 @@ mod tests {
     }
 
     fn claim(f: &Fx, text: &str, fingerprint: &str, project: Option<&str>, topic: Option<&str>, source_id: &str, quote: &str) -> String {
-        let anchors = [AnchorSpec { source_id: source_id.into(), locator: Some("https://example.org/page".into()), quote: quote.into(), prefix: None, suffix: None }];
+        let anchors = [AnchorSpec { source_id: source_id.into(), locator: Some("https://example.org/page".into()), quote: quote.into(), prefix: None, suffix: None, read: None }];
         Library::in_home(&f.home).add_research_claim(&ResearchClaim { text, fingerprint, project, topic, anchors: &anchors }).unwrap().0["id"].as_str().unwrap().to_string()
     }
 

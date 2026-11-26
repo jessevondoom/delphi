@@ -7,7 +7,7 @@ import {
   anchorOf, byLetter, byProject, cited, contents, findQuote, kindOf, marker, matching, parts, passages, pieces, routeInAddress, unmarked,
   type ClaimView, type Research, type SourceView, type Topic, type TopicPage,
 } from '../src/ency.ts';
-import { SourceText } from '../src/screens/Encyclopedia.tsx';
+import { Orphans, SourceText } from '../src/screens/Encyclopedia.tsx';
 
 test('a citation marker is read the way the daemon reads one, and anything else in brackets is text', () => {
   assert.deepEqual(marker('[c-01]'), [{ label: 'c-01' }]);
@@ -155,4 +155,20 @@ test('a page named in the address must be a slug or an id of the daemon\'s shape
   assert.deepEqual(routeInAddress('?changes'), { v: 'changes' });
   for (const bad of ['', '?topic=../x', '?topic=Tides', '?source=a/b', '?claim=..', '?claim=', '?research=x%20y', '?doc=a.md']) assert.equal(routeInAddress(bad), null, bad);
   assert.deepEqual(routeInAddress('?topic=tides&version=../x'), { v: 'topic', slug: 'tides' }, 'a version that is not a stamp is dropped');
+});
+
+// Spec 142 §2.3 item 3 and AC-14: the source view lists the anchors that no longer resolve, below the text: each with its own
+// quote (as text, never as markup), the version and date it last resolved in, and why. A source with none shows no section.
+test('the source view lists its orphaned anchors with their quote, version, date and reason', () => {
+  const orphans = [
+    { claim: 'c-fbebef7001b9', quote: 'two <b>bulges</b> of water a day', version: '1', date: '2026-11-20', why: 'not in the newer text' },
+    { claim: 'c-0123456789ab', quote: 'the moon pulls the sea', version: '2', date: '', why: 'text evicted, verified excerpt kept' },
+  ];
+  const html = renderToStaticMarkup(<Orphans orphans={orphans} />);
+  assert.match(html, /Orphaned anchors · 2/);
+  assert.match(html, /two &lt;b&gt;bulges&lt;\/b&gt; of water a day/);
+  assert.match(html, /not in the newer text<\/span><span class="muted">last found in version 1 of 2026-11-20<\/span>/);
+  assert.match(html, /text evicted, verified excerpt kept<\/span><span class="muted">last found in version 2<\/span>/);
+  assert.match(html, /c-fbebef7001b9/);
+  assert.equal(renderToStaticMarkup(<Orphans orphans={[]} />), '');
 });

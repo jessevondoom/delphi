@@ -919,7 +919,9 @@ impl Library {
         let text = self.stored_text(id).unwrap_or_default();
         let truncated = text.chars().count() > max;
         let assets: Vec<String> = self.image_assets(id).into_iter().map(|a| a.uri).collect();
-        Some(json!({"id": id, "label": format!("s-{}", id), "meta": meta, "private": is_private(&meta), "capture_level": meta["capture_level"], "status": meta["status"], "text": text.chars().take(max).collect::<String>(), "truncated": truncated, "assets": assets}))
+        // `specs/142` §2.3 item 3: the anchors into it that no longer resolve, shown below the text.
+        let orphans: Vec<Value> = self.orphans_of(id).iter().map(|o| o.to_json()).collect();
+        Some(json!({"id": id, "label": format!("s-{}", id), "meta": meta, "private": is_private(&meta), "capture_level": meta["capture_level"], "status": meta["status"], "text": text.chars().take(max).collect::<String>(), "truncated": truncated, "assets": assets, "orphans": orphans}))
     }
 
     /// What links to `slug` and what it links to (`specs/117` §2 item 6), from the link table. Reads only.
