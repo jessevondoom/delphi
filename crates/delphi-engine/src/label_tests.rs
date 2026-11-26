@@ -83,7 +83,7 @@ fn build(l: &Library, title: &str, claims: &[&str], records: Vec<KbRecord>, now:
     let lib = Library::in_home(l.root().parent().unwrap()).with_workspace(l.workspace().unwrap()).with_records(records);
     let cfg = PagesConfig::default();
     let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-    rt.block_on(lib.topic_rebuild(TopicRequest { slug: &slug, now, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], seed: Default::default(), held: &crate::topic_seed::NoHeldText, cancel: None }, &Declares, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap();
+    rt.block_on(lib.topic_rebuild(TopicRequest { slug: &slug, now, settings: &cfg, style: bib::Format::Plain, seed: crate::topic_seed::of_material(&g), gathered: g, gaps: vec![], held: &crate::topic_seed::NoHeldText, cancel: None }, &Declares, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap();
     let side = l.topic_side(&slug).unwrap();
     (slug, side)
 }

@@ -361,7 +361,8 @@ impl Engine {
             _ => {
                 let seed = self.topic_seed(&topic.side).await;
                 let gaps = lib.topic_gaps(&topic.side, &self.ws.dir);
-                let req = SeedRequest { slug: &topic.slug, now, settings: &settings, style: crate::library::bib::Format::Apa, seed: &seed, held: &crate::topic_seed::NoHeldText, gaps: &gaps, cancel: None };
+                let held = lib.held();
+                let req = SeedRequest { slug: &topic.slug, now, settings: &settings, style: crate::library::bib::Format::Apa, seed: &seed, held: &held, gaps: &gaps, cancel: None };
                 match lib.topic_seed_build(req) {
                     Ok(e) => e.outcome.unwrap_or_default(),
                     Err(e) => {
@@ -405,8 +406,10 @@ impl Engine {
         let now = (self.clock_unix)();
         let gathered = self.topic_material(&side).await;
         let seed = self.topic_seed(&side).await;
-        *material = !gathered.is_empty();
-        // The page check resolves `[s-kb-...]` and `[f-...]` against these records and nothing else.
+        // The writer expands the seed (`specs/139` §2.3): its spans are material as much as what the search gathered.
+        *material = !gathered.is_empty() || !seed.is_empty();
+        let gathered = lib.expansion_material(&seed, gathered);
+        // The page check resolves `[s-kb-...]` and `[f-...]` against these records (the seed's spans and the gathered) and nothing else.
         let gaps = lib.topic_gaps(&side, &self.ws.dir);
         // A `page:` link may name a topic by an old slug: it resolves through the topic's aliases.
         let slugs = lib.topic_link_names();
@@ -418,7 +421,8 @@ impl Engine {
             let req = crate::library::topics::SeedRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, seed: &seed, held: &held, gaps: &gaps, cancel };
             return lib.topic_seed_build(req);
         };
-        let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.max_tokens };
+        // A topic page is written at the `long` depth, under its own cap (`specs/139` §2.3 item 4).
+        let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.long_max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
         let ledger = self.validator.ledger();
         let state = state_dir(&self.ws.dir);
@@ -473,11 +477,12 @@ impl Engine {
             // counted again at the next idle time (`specs/143` §2.7 item 6).
             return Some(IdleRebuild { built: Err(NO_WRITER.into()), cause: Some(Cause::NoRoute) });
         } else {
-            // The first seed page the writer has material for, of a bounded few: one with nothing to give the writer is left as it is.
+            // The first seed page the writer has material for, of a bounded few: its seed's spans (`specs/139` §2.3) or what the search
+            // gathers. One with nothing to give the writer is left as it is.
             let mut pick = None;
             for t in due.iter().take(EXPANSION_CANDIDATES) {
                 let Some(side) = lib.topic_side(&t.slug) else { continue };
-                if !self.topic_material(&side).await.is_empty() {
+                if !self.topic_seed(&side).await.is_empty() || !self.topic_material(&side).await.is_empty() {
                     pick = Some(t.slug.clone());
                     break;
                 }
@@ -493,15 +498,16 @@ impl Engine {
         }
         let mut material = false;
         let built = self.topic_rebuild_with(&slug, None, &mut material).await;
-        // The writer tried a queued expansion and the seed stands: it waits as any seed page does from now on, not first in line.
-        if matches!(&built, Err(e) if e.starts_with(crate::library::topics::SEED_STANDS)) {
+        // The writer tried a queued expansion and the seed stands: it waits as any seed page does from now on, not first in line. A build
+        // that was not admitted (`per_day`, the share) did not try it, and it stays queued.
+        if matches!(&built, Err(e) if e.starts_with(crate::library::topics::SEED_STANDS) && !e.contains(crate::library::topics::NOT_ADMITTED)) {
             lib.topic_unqueue(&slug);
         }
         let cause = match &built {
             Err(e) if e == NO_WRITER => Some(Cause::NoRoute),
             // A seed page built because no writer could be reached: the page stands, and the missing route is still the cause.
             Ok(t) if t.outcome.as_deref() == Some("seed") && self.writer_key().is_none() => Some(Cause::NoRoute),
-            Err(e) if e.starts_with(SHARE_SPENT) => Some(Cause::Budget),
+            Err(e) if e.starts_with(SHARE_SPENT) || e.contains(SHARE_SPENT) => Some(Cause::Budget),
             // The writer's page of a seed failed its check and the seed stands; a failed writer call has left its own cause.
             Err(e) if material && e.starts_with(crate::library::topics::SEED_STANDS) && e.contains("check") => Some(Cause::CheckFailed),
             Ok(t) if material && t.outcome.as_deref() == Some("claims_only") => Some(Cause::CheckFailed),
@@ -516,9 +522,9 @@ impl Engine {
 mod tests {
     use crate::testkit::*;
 
-    /// `specs/117` §2 item 3 with `specs/139` §2.2: the idle rebuild does nothing with `auto_rebuild = false`, builds a due topic
-    /// otherwise, and then has nothing left to do. A topic with nothing gathered gets its seed page, so no model is called (AC-3); a topic
-    /// with no span is waiting for material and gets no page (AC-4).
+    /// `specs/117` §2 item 3 with `specs/139` §2.2 and §2.3: the idle rebuild does nothing with `auto_rebuild = false`, and otherwise asks
+    /// the writer to expand a due topic's seed; a writer that gives nothing leaves the seed as the page (AC-3, AC-6), and a later failure
+    /// writes no new version. A topic with no span is waiting for material and gets no page (AC-4).
     #[tokio::test]
     async fn the_idle_rebuild_builds_a_due_topic_only_when_it_is_on() {
         use crate::research_record::{Asker, Begin, Topic};
@@ -532,14 +538,18 @@ mod tests {
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&off).unwrap());
         assert!(f.engine.topic_idle_rebuild().await.is_none(), "off: nothing is rebuilt");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(crate::testkit::CONFIG).unwrap());
-        let built = f.engine.topic_idle_rebuild().await.expect("a due topic").expect("built");
-        assert_eq!((built.slug.as_str(), built.version, built.outcome.as_deref()), ("zyxquor-lamps-vromble", 1, Some("seed")));
+        // The writer is asked to expand the seed (`specs/139` §2.3) and gives nothing here: the seed is the page, with outcome `seed`.
+        let err = f.engine.topic_idle_rebuild().await.expect("a due topic").unwrap_err();
+        assert!(err.starts_with(crate::library::topics::SEED_STANDS), "{err}");
+        let built = lib.topic_side("zyxquor-lamps-vromble").unwrap();
+        assert_eq!((built["version"].as_u64(), built["outcome"].as_str()), (Some(1), Some("seed")));
         let md = std::fs::read_to_string(lib.root().join("pages/zyxquor-lamps-vromble.md")).unwrap();
         assert!(md.contains(crate::topic_seed::SEED_BANNER) && md.contains("Zyxquor lamps vromble on a mercury bath."), "{md}");
-        assert!(f.engine.topic_idle_rebuild().await.is_none(), "nothing is due any more");
         assert!(std::fs::read(lib.root().join("pages/lighthouse-lamps.md")).is_err(), "no stub");
-        assert_eq!(f.model.requests().len(), 0);
-        assert_eq!(lib.pages_today(u64::MAX / 2), 0, "a seed counts against no page budget");
+        // The seed stays: a second try that fails again writes no new version.
+        let _ = f.engine.topic_idle_rebuild().await;
+        assert_eq!(lib.topic_side("zyxquor-lamps-vromble").unwrap()["version"].as_u64(), Some(1));
+        assert!(lib.topic_versions("zyxquor-lamps-vromble").unwrap().is_empty());
     }
 
     /// `specs/139` AC-10 (slice E): when research ends, its topic's seed page is written at once with no model call and the writer's

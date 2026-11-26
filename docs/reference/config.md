@@ -177,7 +177,8 @@ Which sites the job may read is not here: it is `context/sources/trusted.toml` (
 | :-- | :-- | :-- |
 | `[library.pages] enabled` | `true` | `false`: no page is written (`delphi pages search` still lists what the library holds) |
 | `[library.pages] external` | `ask` | `ask`: the web is searched only when you ask (`--external`, or the console's key); `off`: never; `on`: every page also searches the web unless `--internal`. Queries go only to the engines in the ratified `[search]` table; `private` sources are never put on an external page or in its query ([`specs/057`](../../specs/057-search-pages-generated-and-checked.md)) |
-| `[library.pages] max_tokens` | `3000` | the longest page the writer may write |
+| `[library.pages] max_tokens` | `3000` | the longest search page the writer may write |
+| `[library.pages] long_max_tokens` | `8000` | the longest topic page the writer may write: topic pages are written at the `long` depth, the writer expanding the seed ([`specs/139`](../../specs/139-pages-seeded-from-research-a-seed-that-is-never-empty-a-long-depth-and-concept-titles.md) §2.3); `max_tokens` still governs search pages |
 | `[library.pages] external_ttl` | `7d` | a page that used the web is stale after this (days as a number, or `12h`, `7d`) |
 | `[library.pages] per_day` | `20` | pages built in one day (a cache hit costs nothing). The validator tokens a page uses also count against the validator's share ([`specs/040`](../../specs/040-validator-role-and-fact-ratification.md) §20) |
 | `[library.pages] min_ttl_days` | `1` | the shortest cache lifetime, in days, the daemon accepts for a page ([`specs/097`](../../specs/097-encyclopedia-search-pages.md)) |

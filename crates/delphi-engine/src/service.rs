@@ -6223,7 +6223,10 @@ mod tests {
         // Manual again: the operator's command rebuilds the due topic through the bridge.
         set_mode(delphi_adapter::config::JobMode::Manual);
         let v = svc.pages_rebuild(json!({"due": true}), console()).await.unwrap();
-        assert_eq!((v["topics"].as_u64(), v["built"].as_array().map(Vec::len), v["stopped"].is_null()), (Some(1), Some(1), true), "{v}");
+        // The scripted harness gives the validator no list, so the writer's page does not land and the seed is the page
+        // (`specs/139` §2.3 item 5): reported as failed with its reason, never as a page of the claims alone.
+        assert_eq!((v["topics"].as_u64(), v["built"].as_array().map(Vec::len), v["stopped"].is_null()), (Some(1), Some(0), true), "{v}");
+        assert!(v["failed"][0]["error"].as_str().unwrap_or("").starts_with(crate::library::topics::SEED_STANDS), "{v}");
         assert!(rec.join("args.txt").exists(), "the writer ran through the bridge");
         let calls = crate::job_admission::Ledger::in_home(&f.engine.ws.home).calls();
         assert!(calls.iter().all(|c| c.job == Some(crate::daemon_notice::Job::Pages) && c.origin == crate::job_admission::Origin::Command), "{calls:?}");
@@ -13012,8 +13015,9 @@ mod tests {
         let asked = ext.app_request(APP_KEY, "app.page_rebuild", json!({"slug": "lighthouse-lamps"})).await.unwrap().unwrap();
         counted += 2;
         assert_eq!(asked["state"].as_str(), Some("running"));
-        assert_eq!(app_ended(&f, asked["request"].as_str().unwrap()).await, ["running", "done"]);
-        assert!(home.join("library/pages/lighthouse-lamps.md").exists(), "the page was built");
+        // No model answers the writer here: the rebuild ends `failed` and the seed is the page (`specs/139` §2.3 item 5).
+        assert_eq!(app_ended(&f, asked["request"].as_str().unwrap()).await, ["running", "failed"]);
+        assert!(home.join("library/pages/lighthouse-lamps.md").exists(), "the seed page is in place");
 
         // AC-8: nothing in the grant answers a card, and the app scope is refused the method that does.
         let refused = ext.call("approval.resolve", json!({"approval_id": "ap_1", "resolution": "allow"}), CallContext { scope: Scope::App, client_id: 7 }).await.unwrap().unwrap_err();
@@ -13437,8 +13441,13 @@ mod encyclopedia_reads_tests {
         lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
         // The topic follows the research record, so its seed has a linked row (`specs/139` §2.1: a topic with none waits, no stub).
         lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Research(rt.id.clone()), 1).unwrap();
-        f.engine.topic_rebuild("lighthouse-lamps").await.unwrap();
-        f.engine.topic_rebuild("lighthouse-lamps").await.unwrap();
+        // No model answers the writer: each rebuild leaves the seed as the page (`specs/139` §2.3 item 5). A second run's claim changes
+        // the seed between the two, so the first seed becomes a version.
+        let _ = f.engine.topic_rebuild("lighthouse-lamps").await;
+        let c2 = lib.add_claim("The tide comes in twice a day.", &Default::default(), &[anchor(&s, "comes in twice")]).unwrap()["id"].as_str().unwrap().to_string();
+        let b2 = crate::research_record::Begin { run_id: "r2", ..b };
+        crate::research_record::Topic::begin(&ws, &b2).unwrap().finish("r2", "done", Some(&json!({"claims": [&c, &c2]})), &[c.clone(), c2.clone()], None, 0).unwrap();
+        let _ = f.engine.topic_rebuild("lighthouse-lamps").await;
         let finding = crate::finding_record::Finding::parse(&json!({"question": "Why do tides come twice?", "conclusion": "The moon and the sun.", "status": "open", "evidence": [], "ruled_out": [], "how_verified": "Read the tables."}), &[], &|s| s.to_string()).unwrap();
         std::fs::create_dir_all(ws.join("local/sessions/m9")).unwrap();
         crate::finding_record::store(&ws, &finding, &crate::finding_record::Meta { author: "scout", role: "scout", mission: "m9", now: "2026-11-15T00:00:00Z", tier: delphi_core::provenance::Tier::L3 }).unwrap();
@@ -13487,7 +13496,7 @@ mod encyclopedia_reads_tests {
 
         // What came back is what the operator's console shows.
         assert_eq!(answers["pages.list"]["topics"][0]["slug"], "lighthouse-lamps");
-        assert!(answers["pages.get"]["markdown"].as_str().unwrap().contains("Generated page. Not authoritative."));
+        assert!(answers["pages.get"]["markdown"].as_str().unwrap().contains(crate::topic_seed::SEED_BANNER));
         assert_eq!(answers["pages.versions"]["versions"].as_array().unwrap().len(), 1);
         assert_eq!(answers["topics.list"]["topics"].as_array().unwrap().len(), 1);
         assert!(answers["library.source"]["private"] == true && answers["library.source"]["text"].as_str().unwrap().contains("every visitor"), "the app is the operator's window");

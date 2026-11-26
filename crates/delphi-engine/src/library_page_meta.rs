@@ -66,12 +66,14 @@ impl Kind {
     }
 }
 
-/// How deep a page goes: the quick search result, or the one rebuilt with outside research (`specs/097` §4.5).
+/// How deep a page goes: the quick search result, the one rebuilt with outside research (`specs/097` §4.5), or a topic page the writer
+/// expands from its seed (`specs/139` §2.3 item 1). Search pages are `summary` or `expanded`; topic pages are written at `long`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Depth {
     #[default]
     Summary,
     Expanded,
+    Long,
 }
 
 impl Depth {
@@ -79,6 +81,7 @@ impl Depth {
         match self {
             Depth::Summary => "summary",
             Depth::Expanded => "expanded",
+            Depth::Long => "long",
         }
     }
 }

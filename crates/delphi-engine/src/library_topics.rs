@@ -8,10 +8,16 @@
 //! and `.json`, so the versions are listed and readable; the new record carries one line, computed by code from the two texts,
 //! that says what changed (`3 statements added, 1 source replaced`). Nothing in the line is a model's.
 //!
-//! **Seeded** (`specs/139` §2.2; slice B). When the writer has nothing gathered, or no writer can be reached, the page is the topic's
-//! seed ([`Library::topic_seed_build`]): the research's own words, assembled and checked by code, with outcome `seed` and its own banner.
-//! It calls no model and counts against no budget. A topic with no span gets no page: it is `waiting for material`. The stub that said
-//! the library held nothing is no longer written.
+//! **Seeded** (`specs/139` §2.2; slice B). When no writer can be reached, the page is the topic's seed ([`Library::topic_seed_build`]):
+//! the research's own words, assembled and checked by code, with outcome `seed` and its own banner. It calls no model and counts against
+//! no budget. A topic with no span gets no page: it is `waiting for material`. The stub that said the library held nothing is no longer
+//! written.
+//!
+//! **Expanded** (`specs/139` §2.3; slice C). The writer writes a topic page at the `long` depth from the seed page, given as
+//! `DRAFT TO EXPAND`, and the spans, claims, sources and assets as records; the page is capped at `[library.pages] long_max_tokens`.
+//! Every rebuild assembles the seed again from the stored documents: the page it replaces and its versions are read only for the change
+//! line and to keep the version, never put in a brief. When the writer errors, its page fails the check, or the budget or the share
+//! refuses the call, the seed is the page ([`Library::topic_keep_seed`]); the claims alone never are.
 //!
 //! **Due.** A page is due when it has never been built, a claim or source it was built from changed or left the library, a
 //! claim of one of its research topics is not yet in it, or its lifetime has passed ([`Library::topic_due`]). The daemon rebuilds
@@ -315,7 +321,8 @@ pub struct TopicRequest<'a> {
     pub gathered: Gathered,
     /// The gaps of the topic's research records: the page's open questions, written by the daemon ([`Library::topic_gaps`]).
     pub gaps: Vec<String>,
-    /// The topic's seed (`specs/139` §2.1), assembled by the caller (`topic_seed::assemble`): the page when nothing is gathered.
+    /// The topic's seed (`specs/139` §2.1), assembled again by the caller for every rebuild (`topic_seed::assemble`): the writer's draft,
+    /// and the page when the writer's does not land (§2.3 items 5 and 6).
     pub seed: crate::topic_seed::Seed,
     /// The held-text predicate the seed page is checked with (`specs/142` §2.5 item 4; [`crate::topic_seed::NoHeldText`] until it exists).
     pub held: &'a dyn crate::topic_seed::HeldText,
@@ -357,9 +364,18 @@ pub const EXPANSION_QUEUED: &str = "expansion_queued";
 /// keeps its old slugs here, and a `page:<old slug>` link resolves to it. Other pages' text is not rewritten.
 pub const ALIASES: &str = "aliases";
 
-/// The start of what [`Library::topic_rebuild`] says when the writer could not expand a seed page: the seed stands
-/// (`specs/139` §2.3 item 5), and no page of the claims alone takes its place.
+/// The start of what [`Library::topic_rebuild`] says when the writer's page did not land: the seed is the page (`specs/139` §2.3
+/// item 5), and no page of the claims alone takes its place. The seed page is in place, with outcome `seed` and the reason.
 pub const SEED_STANDS: &str = "the seed stands";
+
+/// In a [`SEED_STANDS`] error: the build was refused before the writer was asked (`per_day`, the share, a gate), so a queued expansion
+/// stays queued.
+pub const NOT_ADMITTED: &str = "the build was not admitted";
+
+/// The start of what [`Library::topic_rebuild`] says when the writer's page did not land on a topic whose page the writer wrote and
+/// validated before: that page stands, and the topic stays due (a builder decision of `specs/139` slice C: a seed never replaces a
+/// validated page).
+pub const WRITTEN_STANDS: &str = "the written page stands";
 
 /// Whether a piece of work may still be stopped, read and set without a lock. It starts going; a revoke stops it ([`Cancel::stop`])
 /// unless the work has already passed its last check ([`Cancel::commit`]), in which case it runs to its end and the revoke is noted
@@ -529,10 +545,12 @@ pub fn open_questions_section(gaps: &[String]) -> Option<String> {
     Some(s)
 }
 
-/// The brief for a topic's page: a search page's brief (layout, citation rules, records), the three sections of `specs/117` §2 item 5,
-/// and the topics `## See also` may name.
-pub fn topic_brief(title: &str, g: &Gathered, max_tokens: u64, topics: &[(String, String)]) -> String {
-    let mut s = super::page_search::brief_for(title, g, max_tokens, Depth::Summary);
+/// The brief for a topic's page: a search page's brief at the `long` depth (layout, citation rules, records), the three sections of
+/// `specs/117` §2 item 5, the topics `## See also` may name, and the seed page as `DRAFT TO EXPAND` (`specs/139` §2.3 items 2 and 3).
+/// `max_tokens` is `[library.pages] long_max_tokens`. Nothing of the page it replaces is in it (§2.3 item 6): `draft` is the seed page code
+/// just rendered.
+pub fn topic_brief(title: &str, g: &Gathered, max_tokens: u64, topics: &[(String, String)], draft: &str) -> String {
+    let mut s = super::page_search::brief_for(title, g, max_tokens, Depth::Long);
     s.push_str("\nAfter your last section, and only as far as the records support them, add these sections in this order:\n");
     s.push_str(&format!("- `## {}`: at most {} lines, each `- **Term**: one-line definition [marker]`, the marker citing the record the definition comes from.\n", KEY_TERMS, MAX_KEY_TERMS));
     s.push_str(&format!("- `## {}`: a numbered list of three to five records to read first, in the order to read them, each line naming one record by its marker and saying in a few words why it comes first.\n", START_HERE_HEADING));
@@ -541,6 +559,7 @@ pub fn topic_brief(title: &str, g: &Gathered, max_tokens: u64, topics: &[(String
     for (slug, t) in topics.iter().take(60) {
         s.push_str(&format!("TOPIC {} | {}\n", slug, t.replace('\n', " ").chars().take(120).collect::<String>()));
     }
+    s.push_str(&super::page_search::draft_to_expand(draft));
     s
 }
 
@@ -1027,58 +1046,111 @@ impl Library {
         g
     }
 
-    /// Rebuild a topic's page (§2 item 2): the writer writes from `r.gathered`, the page passes the same check and validator as a
-    /// search page, the page it replaces becomes a version, and the record says what changed. The knowledge-base records of
-    /// `r.gathered` are cited only if this library was given the same ones ([`Library::with_records`]). `gate` is asked before any model is
-    /// called; a page counts against `[library.pages] per_day`.
+    /// Rebuild a topic's page (§2 item 2, as `specs/139` §2.3 amends it): the writer expands the topic's seed into a `long` page from the
+    /// seed's spans and `r.gathered`, the page passes the same check and validator as a search page, the page it replaces becomes a
+    /// version, and the record says what changed. The knowledge-base records of `r.gathered` and the seed's spans are cited only if this
+    /// library was given the same ones ([`Library::with_records`]; the seed's are added here). `gate` is asked before any model is called;
+    /// a page counts against `[library.pages] per_day`. A topic with no span gets no page; a writer's page that does not land leaves the
+    /// seed as the page ([`Library::topic_keep_seed`]).
     pub async fn topic_rebuild(&self, r: TopicRequest<'_>, writer: &dyn PageWriter, validator: &dyn PageValidator, ledger: &TokenLedger, gate: super::page_search::Gate<'_>) -> Result<TopicEntry, String> {
         if !r.settings.enabled {
             return Err("generated pages are off ([library.pages] enabled = false)".into());
         }
         let side = self.topic_side(r.slug).ok_or_else(|| format!("no topic `{}`", r.slug))?;
         let title = side["title"].as_str().unwrap_or(r.slug).to_string();
-        let g = r.gathered;
-        // Nothing for a writer: the page is the seed, or no page at all (`specs/139` §2.2 item 4). No stub is written.
-        if g.is_empty() {
-            return self.topic_seed_build(SeedRequest { slug: r.slug, now: r.now, settings: r.settings, style: r.style, seed: &r.seed, held: r.held, gaps: &r.gaps, cancel: r.cancel });
-        }
-        // A seed page the writer could not expand stands (`specs/139` §2.3 item 5): no page of the claims alone replaces it.
-        let was_seed = side["outcome"].as_str() == Some(Outcome::Seed.as_str());
-        let mut proposal = None;
-        let checked = {
-            if self.pages_today(r.now) >= r.settings.per_day {
-                return Err(format!("today's page budget ({} pages) is spent; the topic stays due", r.settings.per_day));
-            }
-            // A rebuild that was stopped asks no model (`specs/129` §10.2): the flag is read where the gate is asked.
-            if r.cancel.is_some_and(Cancel::stopped) {
-                return Err(CANCELLED.into());
-            }
-            gate()?;
-            self.count_page(r.now);
-            let topics: Vec<(String, String)> = self.topic_sides().into_iter().filter(|(s, _)| s != r.slug).map(|(s, v)| (s, v["title"].as_str().unwrap_or("").to_string())).collect();
-            let mut brief = topic_brief(&title, &g, r.settings.max_tokens, &topics);
-            if may_take_title(&side) {
-                brief.push_str(TITLE_HINT);
-            }
-            match writer.write(&brief).await {
-                Ok(d) => {
-                    let (body, p) = page_meta::extract(&d);
-                    proposal = p;
-                    self.build_page_checked(&title, &clean_draft(&body, r.settings.max_tokens), r.style, SCOPE, validator, writer, ledger).await?
-                }
-                Err(e) if was_seed => return Err(format!("{SEED_STANDS}: the writer could not expand it: {e}")),
-                Err(e) => self.claims_only_page(&title, &format!("the writer could not write the page: {}", e), None, Vec::new(), 0, r.style, SCOPE)?,
-            }
+        let seed_req = SeedRequest { slug: r.slug, now: r.now, settings: r.settings, style: r.style, seed: &r.seed, held: r.held, gaps: &r.gaps, cancel: r.cancel };
+        // The rebuild starts from the seed, assembled again from the stored documents (`specs/139` §2.3 item 6). No span, or no block that
+        // passes the seed check: no page, and no writer is asked (§2.2 items 3 and 4).
+        let Ok(draft) = crate::topic_seed::seed_page(&title, &r.seed, r.held) else {
+            return self.topic_seed_build(seed_req);
         };
-        if was_seed && checked.verdict.outcome == Outcome::ClaimsOnly {
-            self.log("topic_seed_kept", json!({"slug": r.slug}));
-            return Err(format!("{SEED_STANDS}: the writer's page did not pass its check"));
+        // The writer's records: the seed's spans first, then what the search found that the seed does not hold, and the seed's claims.
+        let g = self.expansion_material(&r.seed, r.gathered);
+        let lib = self.with_more_records(&g.records);
+        if self.pages_today(r.now) >= r.settings.per_day {
+            return self.topic_keep_seed(&seed_req, &side, &format!("{NOT_ADMITTED}: today's page budget ({} pages) is spent; the topic stays due", r.settings.per_day));
         }
+        // A rebuild that was stopped asks no model (`specs/129` §10.2): the flag is read where the gate is asked.
+        if r.cancel.is_some_and(Cancel::stopped) {
+            return Err(CANCELLED.into());
+        }
+        if let Err(e) = gate() {
+            return self.topic_keep_seed(&seed_req, &side, &format!("{NOT_ADMITTED}: {e}"));
+        }
+        self.count_page(r.now);
+        let topics: Vec<(String, String)> = self.topic_sides().into_iter().filter(|(s, _)| s != r.slug).map(|(s, v)| (s, v["title"].as_str().unwrap_or("").to_string())).collect();
+        let mut brief = topic_brief(&title, &g, r.settings.long_max_tokens, &topics, &draft.body);
+        if may_take_title(&side) {
+            brief.push_str(TITLE_HINT);
+        }
+        let (checked, proposal) = match writer.write(&brief).await {
+            Ok(d) => {
+                // The closing comment is read from this first draft only (§2.3 item 7): a rewrite's is taken off and ignored.
+                let (body, proposal) = page_meta::extract(&d);
+                match lib.build_page_checked(&title, &clean_draft(&body, r.settings.long_max_tokens), r.style, SCOPE, validator, writer, ledger).await {
+                    Ok(c) if c.verdict.outcome != Outcome::ClaimsOnly => (c, proposal),
+                    Ok(c) => return self.topic_keep_seed(&seed_req, &side, &format!("the writer's page did not pass its check: {}", c.verdict.reason.as_deref().unwrap_or("no reason given"))),
+                    Err(e) => return self.topic_keep_seed(&seed_req, &side, &format!("the writer's page could not be checked: {e}")),
+                }
+            }
+            Err(e) => return self.topic_keep_seed(&seed_req, &side, &format!("the writer could not expand it: {e}")),
+        };
         // The last check: a rebuild stopped by now leaves the page as it was; past here it is written whatever is asked.
         if r.cancel.is_some_and(|c| !c.commit()) {
             return Err(CANCELLED.into());
         }
-        self.topic_store(r.slug, side, &g, checked, proposal.as_ref(), r.now, r.settings, &r.gaps, None)
+        lib.topic_store(r.slug, side, &g, checked, proposal.as_ref(), r.now, r.settings, &r.gaps, None)
+    }
+
+    /// The writer's material for a topic page (`specs/139` §2.3 item 3): the seed's spans as records, in seed order, then the records of
+    /// `gathered` the seed does not hold (one label is one passage), and the live claims among the seed's spans beside `gathered`'s.
+    pub fn expansion_material(&self, seed: &crate::topic_seed::Seed, gathered: Gathered) -> Gathered {
+        let mut g = gathered;
+        let mut records = seed.records();
+        for r in std::mem::take(&mut g.records) {
+            if !records.iter().any(|x| x.label == r.label) {
+                records.push(r);
+            }
+        }
+        g.records = records;
+        for s in seed.spans.iter().filter(|s| s.row == crate::topic_seed::Row::Claim) {
+            if !g.claims.iter().any(|c| c["id"] == s.label.as_str()) {
+                g.claims.extend(self.claim(&s.label));
+            }
+        }
+        g
+    }
+
+    /// This library, resolving `records` besides its own (the page check of a topic page resolves the seed's spans as records).
+    fn with_more_records(&self, records: &[super::pages::KbRecord]) -> Library {
+        let mut all = self.records.clone();
+        for r in records {
+            if !all.iter().any(|x| x.label == r.label) {
+                all.push(r.clone());
+            }
+        }
+        Library { root: self.root.clone(), support: self.support.clone(), retractions: self.retractions.clone(), records: all, topic_slugs: self.topic_slugs.clone(), text_cache: self.text_cache, preview: self.preview.clone(), fixed_now: self.fixed_now.clone(), workspace: self.workspace.clone() }
+    }
+
+    /// A failure keeps the seed (`specs/139` §2.3 item 5): the writer errored, its page failed the check, or `per_day`, the share or a gate
+    /// refused the call. The seed page is stored with outcome `seed` and `why` as its reason, or, when the page is already this seed (the
+    /// same spans), stays and only its reason is updated. A page the writer wrote and the validator passed is not replaced (a builder
+    /// decision: a seed never replaces a validated page); it stands and the topic stays due. Always `Err`, saying which page stands.
+    pub fn topic_keep_seed(&self, r: &SeedRequest<'_>, side: &Value, why: &str) -> Result<TopicEntry, String> {
+        self.log("topic_seed_kept", json!({"slug": r.slug, "reason": why}));
+        let outcome = side["outcome"].as_str();
+        if matches!(outcome, Some(o) if o == Outcome::Pass.as_str() || o == Outcome::PassContested.as_str()) {
+            return Err(format!("{WRITTEN_STANDS}: {why}"));
+        }
+        let same: Vec<Value> = r.seed.spans.iter().map(|x| x.to_json()).collect();
+        if outcome == Some(Outcome::Seed.as_str()) && side["seed"].as_array() == Some(&same) && self.topic_file(r.slug).is_file() {
+            let mut s = side.clone();
+            s["reason"] = json!(why);
+            self.write_topic_side(r.slug, &s)?;
+            return Err(format!("{SEED_STANDS}: {why}"));
+        }
+        self.seed_build_with(r, why)?;
+        Err(format!("{SEED_STANDS}: {why}"))
     }
 
     /// Write a topic's seed page (`specs/139` §2.2): rendered and checked by code (`topic_seed::seed_page`), outcome `seed`, its own
@@ -1086,6 +1158,11 @@ impl Library {
     /// with no span writes no page (`waiting for material`); a seed whose every block fails its check writes none either and says
     /// `check_failed`. The page it replaces becomes a version, as any rebuild's does.
     pub fn topic_seed_build(&self, r: SeedRequest<'_>) -> Result<TopicEntry, String> {
+        self.seed_build_with(&r, "a seed draft: no writer has expanded it yet")
+    }
+
+    /// [`Library::topic_seed_build`] with the reason the seed page carries.
+    fn seed_build_with(&self, r: &SeedRequest<'_>, reason: &str) -> Result<TopicEntry, String> {
         if !r.settings.enabled {
             return Err("generated pages are off ([library.pages] enabled = false)".into());
         }
@@ -1116,7 +1193,7 @@ impl Library {
         }
         let markdown = format!("{}\n\n{}\n{}", crate::topic_seed::SEED_BANNER, page.body, lib.bibliography_table(&cited, r.style, SCOPE));
         let at = delphi_core::time::now_rfc3339().chars().take(10).collect::<String>();
-        let reason = "a seed draft: no writer has expanded it yet".to_string();
+        let reason = reason.to_string();
         let verdict = PageVerdict { outcome: Outcome::Seed, reason: Some(reason), model: String::new(), family: String::new(), tokens: 0, rewrites: 0, assertions: Vec::new(), figure_failures: Vec::new(), at };
         let hash = crate::topic_gather::text_hash(&markdown);
         let checked = CheckedPage { page: super::pages::Page { topic: title, validated: Vec::new(), noted: Vec::new(), sources: r.seed.named_sources.clone(), withheld: 0, hash, markdown, cached: false, flags: Vec::new(), figure_failures: Vec::new() }, verdict };
@@ -1233,7 +1310,9 @@ impl Library {
         let title = writer_title.clone().unwrap_or_else(|| old["title"].as_str().unwrap_or(slug).to_string());
         let links = page_meta::page_links(&md);
         let created = old["created"].as_u64().unwrap_or(now);
-        let front = page_meta::frontmatter(&Front { key: slug, title: &title, depth: Depth::Summary, meta: &meta, status: if unverified { "unverified" } else { "active" }, created, confirmed: now, valid_until, links: &links });
+        // A page the writer wrote is at the `long` depth (`specs/139` §2.3 item 1); a seed page keeps the frontmatter slice B gave it.
+        let depth = if seed.is_none() { Depth::Long } else { Depth::Summary };
+        let front = page_meta::frontmatter(&Front { key: slug, title: &title, depth, meta: &meta, status: if unverified { "unverified" } else { "active" }, created, confirmed: now, valid_until, links: &links });
         let change = change_line(old_body.as_deref(), page_meta::strip(&md));
         // The mechanical page's own cache file is not a topic's.
         let temp = format!("{}-{}", super::pages::slug(&c.page.topic), c.page.hash);
@@ -1520,7 +1599,7 @@ mod rebuild_tests {
         let g = l.topic_gather_library(&side, Some(ws));
         let cfg = PagesConfig::default();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], seed: Default::default(), held: &crate::topic_seed::NoHeldText, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+        rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, seed: crate::topic_seed::of_material(&g), gathered: g, gaps: vec![], held: &crate::topic_seed::NoHeldText, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
     }
 
     /// A writer that stops the rebuild while it writes, as a revoke arriving during the model call does.
@@ -1558,7 +1637,7 @@ mod rebuild_tests {
         let go = |w: &dyn PageWriter, cancel: &Cancel| {
             let g = l.topic_gather_library(&l.topic_side(&slug).unwrap(), Some(&ws));
             assert!(!g.is_empty(), "the material is there, so a model would be called");
-            rt.block_on(l.topic_rebuild(TopicRequest { slug: &slug, now: 2_000, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], seed: Default::default(), held: &crate::topic_seed::NoHeldText, cancel: Some(cancel) }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(())))
+            rt.block_on(l.topic_rebuild(TopicRequest { slug: &slug, now: 2_000, settings: &cfg, style: bib::Format::Plain, seed: crate::topic_seed::of_material(&g), gathered: g, gaps: vec![], held: &crate::topic_seed::NoHeldText, cancel: Some(cancel) }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(())))
         };
 
         let stopped = Cancel::default();
@@ -1684,7 +1763,7 @@ mod rebuild_tests {
         let cfg = PagesConfig::default();
         let go = |slug: &str, w: &TitledWriter, now: u64| {
             let g = l.topic_gather_library(&l.topic_side(slug).unwrap(), Some(&ws));
-            rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], seed: Default::default(), held: &crate::topic_seed::NoHeldText, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+            rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: &cfg, style: bib::Format::Plain, seed: crate::topic_seed::of_material(&g), gathered: g, gaps: vec![], held: &crate::topic_seed::NoHeldText, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
         };
         let w = TitledWriter(EchoWriter(AtomicUsize::new(0)), "Ocean tides".into(), Default::default());
         let first = go("ocean-tides-come", &w, 2_000);
@@ -1814,12 +1893,13 @@ mod section_tests {
             let side = l.topic_side(&e.slug).unwrap();
             let g = l.topic_gather_library(&side, None);
             let lib = Library::in_home(home.path()).with_topic_slugs(l.topic_slugs());
-            rt.block_on(lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps, seed: Default::default(), held: &crate::topic_seed::NoHeldText, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap()
+            rt.block_on(lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: bib::Format::Plain, seed: crate::topic_seed::of_material(&g), gathered: g, gaps, held: &crate::topic_seed::NoHeldText, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(())))
         };
-        // A see-also slug that is no topic fails the check twice: the page falls back to the claims alone.
-        let wrong = build(&Sections("sun"), vec![]);
-        assert_eq!(wrong.outcome.as_deref(), Some("claims_only"), "{wrong:?}");
-        let built = build(&Sections("moon"), vec!["Why do spring tides follow the moon?".into()]);
+        // A see-also slug that is no topic fails the check twice: the seed is the page, never the claims alone (`specs/139` §2.3 item 5).
+        let wrong = build(&Sections("sun"), vec![]).unwrap_err();
+        assert!(wrong.starts_with(SEED_STANDS), "{wrong}");
+        assert_eq!(l.topic_side(&e.slug).unwrap()["outcome"], "seed");
+        let built = build(&Sections("moon"), vec!["Why do spring tides follow the moon?".into()]).unwrap();
         assert_eq!(built.outcome.as_deref(), Some("pass"), "{built:?}");
         let side = l.topic_side(&e.slug).unwrap();
         assert_eq!(side["key_terms"][0]["term"], "Tide");
@@ -1860,12 +1940,14 @@ mod seed_tests {
         let t = Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
         t.finish("r-1", "done", Some(&json!({"answer": "Tides lag because the estuary is shallow.\n\n## Measurements\n\nThe lag is an hour at the harbour wall.", "claims": []})), &[], None, 0).unwrap();
         let slug = l.topics_from_research(&ws, 1).remove(0);
-        // Through the ordinary rebuild: nothing gathered, so no writer is asked.
+        // Through the ordinary rebuild, with the share refusing: no writer is asked and the seed is the page (`specs/139` §2.3 item 5).
         let cfg = PagesConfig::default();
         let seed = assemble_linked(&l, &ws, &l.topic_side(&slug).unwrap());
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         let w = rebuild_tests::EchoWriter(std::sync::atomic::AtomicUsize::new(0));
-        let built = rt.block_on(l.topic_rebuild(TopicRequest { slug: &slug, now: 100, settings: &cfg, style: bib::Format::Plain, gathered: Default::default(), gaps: vec![], seed, held: &NoHeldText, cancel: None }, &w, &rebuild_tests::Pass, &TokenLedger::new(1_000_000), &|| Err("no gate".into()))).unwrap();
+        let err = rt.block_on(l.topic_rebuild(TopicRequest { slug: &slug, now: 100, settings: &cfg, style: bib::Format::Plain, gathered: Default::default(), gaps: vec![], seed, held: &NoHeldText, cancel: None }, &w, &rebuild_tests::Pass, &TokenLedger::new(1_000_000), &|| Err("no gate".into()))).unwrap_err();
+        assert!(err.starts_with(SEED_STANDS) && err.contains(NOT_ADMITTED), "{err}");
+        let built = l.topic_pages(&DueCtx { ws: Some(&ws), now: 100, index: false }).remove(0);
         assert_eq!(w.0.load(std::sync::atomic::Ordering::SeqCst), 0, "no model is called");
         assert_eq!((built.version, built.outcome.as_deref()), (1, Some("seed")));
         let md = std::fs::read_to_string(l.pages_dir().join(format!("{slug}.md"))).unwrap();
@@ -2079,5 +2161,255 @@ mod seed_tests {
         // Renaming the topic back takes its own old slug again.
         assert_eq!(l.topic_rename("estuary-lag", &title).unwrap().slug, old);
         assert_eq!(l.topic_side(&old).unwrap()[ALIASES], json!(["estuary-lag"]));
+    }
+}
+
+/// `specs/139` slice C: the writer expands the seed into a `long` page, and a failure keeps the seed (§2.3).
+#[cfg(test)]
+mod expand_tests {
+    use super::*;
+    use crate::library::page_validate::{PageWriter, WriterFuture};
+    use crate::research_record::{Asker, Begin, Topic};
+    use crate::topic_seed::{assemble_linked, NoHeldText, Seed, SEED_BANNER};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    const ANSWER: &str = "Tides lag because the estuary is shallow.\n\n## Measurements\n\nThe lag is an hour at the harbour wall.";
+
+    /// A writer that keeps every text it is given (brief and rewrite alike) and answers with fixed drafts; `{a}` and `{b}` in a draft
+    /// become the labels of the seed's first two spans.
+    struct Scripted {
+        seen: Mutex<Vec<String>>,
+        calls: AtomicUsize,
+        first: Result<String, String>,
+        rewrite: String,
+    }
+    impl Scripted {
+        fn new(seed: &Seed, first: Result<&str, &str>, rewrite: &str) -> Scripted {
+            let fill = |s: &str| s.replace("{a}", &seed.spans[0].label).replace("{b}", &seed.spans[seed.spans.len().min(2) - 1].label);
+            Scripted { seen: Mutex::new(Vec::new()), calls: AtomicUsize::new(0), first: first.map(fill).map_err(String::from), rewrite: fill(rewrite) }
+        }
+        fn seen(&self) -> Vec<String> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+    impl PageWriter for Scripted {
+        fn write<'a>(&'a self, b: &'a str) -> WriterFuture<'a> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen.lock().unwrap().push(b.to_string());
+            let r = self.first.clone();
+            Box::pin(async move { r })
+        }
+        fn rewrite<'a>(&'a self, d: &'a str, f: &'a [String]) -> WriterFuture<'a> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen.lock().unwrap().push(format!("{d}\n{}", f.join("\n")));
+            let r = self.rewrite.clone();
+            Box::pin(async move { Ok(r) })
+        }
+    }
+
+    const GOOD: &str = "# Tides lag\n\n**Tides lag** in a shallow estuary [{a}].\n\n## Measurements\n\nAt the harbour wall the lag is about an hour [{b}].\n";
+    /// A draft whose marker names no record: it fails the check, and so does its rewrite when the rewrite is the same.
+    const BAD: &str = "# Tides lag\n\n**Tides lag** in a shallow estuary [s-kb-0000000000000000].\n";
+
+    fn fixture(home: &Path) -> (Library, std::path::PathBuf, String, Topic) {
+        let ws = home.join("workspaces/w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let l = Library::in_home(home).with_workspace(&ws);
+        let t = Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
+        t.finish("r-1", "done", Some(&json!({"answer": ANSWER, "claims": []})), &[], None, 0).unwrap();
+        let slug = l.topics_from_research(&ws, 1).remove(0);
+        (l, ws, slug, t)
+    }
+
+    fn rebuild_with(l: &Library, ws: &Path, slug: &str, now: u64, cfg: &PagesConfig, w: &dyn PageWriter, gate: super::super::page_search::Gate<'_>) -> Result<TopicEntry, String> {
+        let side = l.topic_side(slug).unwrap();
+        let seed = assemble_linked(l, ws, &side);
+        let g = l.topic_gather_library(&side, Some(ws));
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(l.topic_rebuild(TopicRequest { slug, now, settings: cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], seed, held: &NoHeldText, cancel: None }, w, &rebuild_tests::Pass, &TokenLedger::new(1_000_000), gate))
+    }
+
+    fn seed_of(l: &Library, ws: &Path, slug: &str) -> Seed {
+        assemble_linked(l, ws, &l.topic_side(slug).unwrap())
+    }
+
+    fn page(l: &Library, slug: &str) -> String {
+        std::fs::read_to_string(l.pages_dir().join(format!("{slug}.md"))).unwrap()
+    }
+
+    fn change_answer(t: &Topic) {
+        t.amend(|_| {}).unwrap();
+        let path = t.answer_path();
+        std::fs::write(&path, std::fs::read_to_string(&path).unwrap().replace("an hour", "two hours")).unwrap();
+    }
+
+    /// AC-5: a topic rebuild's brief asks for the long size, holds the seed page under `DRAFT TO EXPAND`, and names `long_max_tokens` as
+    /// the cap the page is cut at; the writer's page is written at the `long` depth.
+    #[test]
+    fn a_topic_brief_asks_for_the_long_size_holds_the_seed_as_the_draft_and_is_cut_at_long_max_tokens() {
+        let home = tempfile::tempdir().unwrap();
+        let (l, ws, slug, _t) = fixture(home.path());
+        let seed = seed_of(&l, &ws, &slug);
+        // A long draft: forty cited paragraphs, far past a cap of 300 tokens (1,200 characters).
+        let mut long = String::from("# Tides lag\n\n");
+        for i in 0..40 {
+            long.push_str(&format!("Paragraph {i}: tides lag in a shallow estuary [{{a}}].\n\n"));
+        }
+        let w = Scripted::new(&seed, Ok(&long), "");
+        let cfg = PagesConfig { long_max_tokens: 300, ..Default::default() };
+        let built = rebuild_with(&l, &ws, &slug, 100, &cfg, &w, &|| Ok(())).unwrap();
+        assert_eq!(built.outcome.as_deref(), Some("pass"), "{built:?}");
+        let brief = w.seen().remove(0);
+        assert!(brief.contains(crate::library::page_search::LONG_SIZE) && brief.contains("1,200 to 2,500 words") && brief.contains("two to four paragraphs"), "{brief}");
+        assert!(brief.contains("At most about 300 tokens."), "the cap the brief names is long_max_tokens");
+        assert!(!brief.contains("about 150 to 400 words"), "not the summary size");
+        // The seed page, as code renders it, is the draft: its blocks and their markers, after the records.
+        let draft = crate::topic_seed::seed_page(&built.title, &seed, &NoHeldText).unwrap().body;
+        let at = brief.rfind("\nDRAFT TO EXPAND (").expect("the draft is in the brief");
+        assert!(brief.find("RECORDS:").unwrap() < at && brief[at..].contains(draft.trim()) && brief[at..].contains("\nEND DRAFT\n"), "{brief}");
+        assert!(brief.contains(&format!("RECORD {} |", seed.spans[0].label)), "the spans are records the page may cite");
+        // The page is cut at the cap, at a paragraph.
+        let md = page(&l, &slug);
+        assert!(md.contains("Paragraph 0:") && !md.contains("Paragraph 39:"), "{md}");
+        let kept = md.matches("Paragraph ").count();
+        assert!(kept * "Paragraph 10: tides lag in a shallow estuary [s-kb-0123456789abcdef].\n\n".len() <= 300 * 4 + 100, "{kept} paragraphs kept");
+        assert!(md.contains("depth: long"), "a writer's topic page is at the long depth: {md}");
+    }
+
+    /// AC-5, second half: a search page's brief is unchanged by the long depth: the summary size line, its own cap, no draft.
+    #[test]
+    fn a_search_pages_brief_is_unchanged() {
+        let g = Gathered::default();
+        let b = crate::library::page_search::brief("tides", &g, 3000);
+        assert_eq!(b, crate::library::page_search::brief_for("tides", &g, 3000, Depth::Summary));
+        assert!(b.contains("about 150 to 400 words") && b.contains("At most about 3000 tokens."));
+        assert!(!b.contains("DRAFT TO EXPAND") && !b.contains(crate::library::page_search::LONG_SIZE));
+        let e = crate::library::page_search::brief_for("tides", &g, 3000, Depth::Expanded);
+        assert!(e.contains("This is the expanded page") && !e.contains("DRAFT TO EXPAND"));
+        assert_eq!(Depth::Long.as_str(), "long");
+    }
+
+    /// AC-6: a writer that errors, a page that fails the check, and a refused budget (`per_day`, the share) each leave the seed page in
+    /// place with outcome `seed` and the reason, and the topic stays due. No page of the claims alone is ever written.
+    #[test]
+    fn a_writer_error_a_failing_page_and_a_refused_budget_each_leave_the_seed_with_its_reason() {
+        let home = tempfile::tempdir().unwrap();
+        let (l, ws, slug, _t) = fixture(home.path());
+        let cfg = PagesConfig::default();
+        let seed = seed_of(&l, &ws, &slug);
+        let ctx = DueCtx { ws: Some(&ws), now: 1_000, index: false };
+        let check = |err: String, why: &str, version: u64| {
+            assert!(err.starts_with(SEED_STANDS) && err.contains(why), "{err}");
+            let t = l.topic_pages(&ctx).remove(0);
+            assert_eq!((t.version, t.outcome.as_deref(), t.due.as_deref()), (version, Some("seed"), Some(SEED_EXPANSION)), "{t:?}");
+            let side = l.topic_side(&slug).unwrap();
+            assert!(side["reason"].as_str().unwrap_or("").contains(why), "{side}");
+            assert!(page(&l, &slug).contains(SEED_BANNER));
+        };
+
+        // The writer errors on a topic with no page yet: the seed is stored, with the reason.
+        let w = Scripted::new(&seed, Err("the model is away"), "");
+        check(rebuild_with(&l, &ws, &slug, 100, &cfg, &w, &|| Ok(())).unwrap_err(), "the writer could not expand it", 1);
+        // Its page fails the check, and so does the rewrite: the seed stays (same spans: no new version), with the new reason.
+        let w = Scripted::new(&seed, Ok(BAD), BAD);
+        check(rebuild_with(&l, &ws, &slug, 200, &cfg, &w, &|| Ok(())).unwrap_err(), "did not pass its check", 1);
+        assert_eq!(w.calls.load(Ordering::SeqCst), 2, "one draft and one rewrite");
+        // The share refuses: no model is asked.
+        let w = Scripted::new(&seed, Ok(GOOD), GOOD);
+        check(rebuild_with(&l, &ws, &slug, 300, &cfg, &w, &|| Err("the validator's share of this week's tokens is spent".into())).unwrap_err(), "share of this week's tokens is spent", 1);
+        // `per_day` is spent: no model is asked.
+        let none = PagesConfig { per_day: 0, ..Default::default() };
+        check(rebuild_with(&l, &ws, &slug, 400, &none, &w, &|| Ok(())).unwrap_err(), "page budget (0 pages) is spent", 1);
+        assert_eq!(w.calls.load(Ordering::SeqCst), 0);
+        assert!(l.topic_versions(&slug).unwrap().is_empty(), "a seed that stays is not written again");
+        // A refused build is marked as not admitted (a queued expansion stays queued); a writer that tried is not.
+        assert!(rebuild_with(&l, &ws, &slug, 450, &none, &w, &|| Ok(())).unwrap_err().contains(NOT_ADMITTED));
+        // The seed changes and the writer errors again: the new seed is stored, the old one is a version.
+        change_answer(&_t);
+        check(rebuild_with(&l, &ws, &slug, 500, &cfg, &Scripted::new(&seed, Err("the model is away"), ""), &|| Ok(())).unwrap_err(), "the writer could not expand it", 2);
+        assert!(page(&l, &slug).contains("two hours"));
+        // The writer's page lands at last.
+        let built = rebuild_with(&l, &ws, &slug, 600, &cfg, &w, &|| Ok(())).unwrap();
+        assert_eq!((built.version, built.outcome.as_deref()), (3, Some("pass")));
+        assert!(!page(&l, &slug).contains(SEED_BANNER));
+    }
+
+    /// A builder decision of slice C: a failure after the writer's page passed validation leaves that page in place (a seed never
+    /// replaces a validated page), and the topic stays due.
+    #[test]
+    fn a_failed_rebuild_never_replaces_a_validated_page_with_the_seed() {
+        let home = tempfile::tempdir().unwrap();
+        let (l, ws, slug, t) = fixture(home.path());
+        let cfg = PagesConfig::default();
+        let seed = seed_of(&l, &ws, &slug);
+        rebuild_with(&l, &ws, &slug, 100, &cfg, &Scripted::new(&seed, Ok(GOOD), GOOD), &|| Ok(())).unwrap();
+        let before = page(&l, &slug);
+        // New research changes the answer, so the page is due; the writer then fails.
+        change_answer(&t);
+        let err = rebuild_with(&l, &ws, &slug, 200, &cfg, &Scripted::new(&seed, Err("the model is away"), ""), &|| Ok(())).unwrap_err();
+        assert!(err.starts_with(WRITTEN_STANDS), "{err}");
+        assert_eq!(page(&l, &slug), before);
+        assert_eq!(l.topic_side(&slug).unwrap()["outcome"], "pass");
+        assert_eq!(l.topic_versions(&slug).unwrap().len(), 0, "nothing was written");
+    }
+
+    /// AC-7, the canary of §2.3 item 6: a sentence planted in the stored page and in each of its versions appears in no text given to the
+    /// writer at the next rebuild, the first brief or the rewrite's.
+    #[test]
+    fn no_brief_holds_text_of_the_previous_page() {
+        const CANARY: &str = "The canary sings at the seventh bell of the harbour.";
+        let home = tempfile::tempdir().unwrap();
+        let (l, ws, slug, t) = fixture(home.path());
+        let cfg = PagesConfig::default();
+        let seed = seed_of(&l, &ws, &slug);
+        rebuild_with(&l, &ws, &slug, 100, &cfg, &Scripted::new(&seed, Ok(GOOD), GOOD), &|| Ok(())).unwrap();
+        change_answer(&t);
+        rebuild_with(&l, &ws, &slug, 200, &cfg, &Scripted::new(&seed_of(&l, &ws, &slug), Ok(GOOD), GOOD), &|| Ok(())).unwrap();
+        // Plant the sentence in the page and in every version.
+        let mut planted = vec![l.pages_dir().join(format!("{slug}.md"))];
+        planted.extend(std::fs::read_dir(l.pages_dir().join("versions").join(&slug)).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "md")));
+        assert!(planted.len() >= 2, "{planted:?}");
+        for p in &planted {
+            let md = std::fs::read_to_string(p).unwrap();
+            let at = md.find("**Tides lag**").unwrap();
+            std::fs::write(p, format!("{}{CANARY}\n\n{}", &md[..at], &md[at..])).unwrap();
+            assert!(std::fs::read_to_string(p).unwrap().contains(CANARY));
+        }
+        // The next rebuild: a first draft that fails, so the rewrite's text is seen too.
+        let w = Scripted::new(&seed_of(&l, &ws, &slug), Ok(BAD), GOOD);
+        rebuild_with(&l, &ws, &slug, 300, &cfg, &w, &|| Ok(())).unwrap();
+        let seen = w.seen();
+        assert_eq!(seen.len(), 2, "a brief and a rewrite");
+        for s in &seen {
+            assert!(!s.contains("canary") && !s.contains("seventh bell"), "{s}");
+        }
+        assert!(seen[0].contains("two hours"), "the brief is built from the seed as it is now");
+    }
+
+    /// §2.3 item 7: the closing comment is read from the writer's first draft only. A rewrite's `title=` and lifetime are ignored.
+    #[test]
+    fn a_rewrites_closing_comment_is_ignored_and_the_first_drafts_stands() {
+        let home = tempfile::tempdir().unwrap();
+        let (l, ws, slug, _t) = fixture(home.path());
+        let cfg = PagesConfig::default();
+        let seed = seed_of(&l, &ws, &slug);
+        let first = format!("{BAD}\n<!-- page: kind=article; volatility=low; days=90; reason=settled; title=Estuary tide lag -->");
+        let rewrite = format!("{GOOD}\n<!-- page: kind=article; volatility=high; days=2; reason=moving; title=Harbour wall tides -->");
+        let built = rebuild_with(&l, &ws, &slug, 100, &cfg, &Scripted::new(&seed, Ok(&first), &rewrite), &|| Ok(())).unwrap();
+        assert_eq!(built.outcome.as_deref(), Some("pass"));
+        let side = l.topic_side(&slug).unwrap();
+        assert_eq!((side["title"].as_str(), side["volatility"].as_str()), (Some("Estuary tide lag"), Some("low")), "{side}");
+        let md = page(&l, &slug);
+        assert!(!md.contains("Harbour wall tides") && !md.contains("<!-- page:"), "{md}");
+    }
+
+    /// The fitness function of §6: a topic page is never the claims alone. `topic_rebuild` (the production text of this file) never calls
+    /// the claims-only fallback.
+    #[test]
+    fn topic_rebuild_never_calls_the_claims_only_fallback() {
+        let src = include_str!("library_topics.rs");
+        let production = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert!(!production.contains(&["claims_only_page", "("].concat()), "library_topics.rs calls the claims-only fallback");
     }
 }

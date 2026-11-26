@@ -552,6 +552,23 @@ fn row_search(lib: &Library, home: &Path, ws: &Path, side: &Value, fs: &[Followe
     out
 }
 
+/// For tests that hand a topic rebuild its material directly: the seed that material gives, its records as search spans (row 6) and its
+/// claims as claim spans (row 7), as [`assemble`] would make them from an index and a research record.
+#[cfg(test)]
+pub fn of_material(g: &crate::library::page_search::Gathered) -> Seed {
+    let mut seed = Seed::default();
+    for r in &g.records {
+        let end = r.start_line + r.text.lines().count().saturating_sub(1);
+        seed.spans.push(Span { row: Row::Search, label: r.label.clone(), kind: r.kind.clone(), rel_path: r.rel_path.clone(), start_line: r.start_line, end_line: end, title: r.title.clone(), hash: r.hash.clone(), text: r.text.clone(), status: r.status.clone(), topic: None });
+    }
+    for c in &g.claims {
+        let id = c["id"].as_str().unwrap_or("").to_string();
+        let text = c["text"].as_str().unwrap_or("").to_string();
+        seed.spans.push(Span { row: Row::Claim, label: id.clone(), kind: "claim".into(), rel_path: format!("library/claims/{}.json", id), start_line: 1, end_line: 1, title: String::new(), hash: crate::library::page_search::claim_print(c), text, status: crate::library::pages::shown_status(crate::library::claims::status(c)), topic: None });
+    }
+    seed
+}
+
 fn row_claims(lib: &Library, side: &Value, ws: &Path, mask: &dyn Fn(&str) -> String) -> Vec<Span> {
     let mut out: Vec<Span> = lib
         .topic_research_claims(side, ws)

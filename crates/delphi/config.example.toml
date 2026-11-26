@@ -333,7 +333,8 @@ sandbox = "off"
 # [library.pages]
 # enabled = true
 # external = "ask"        # ask | off | on
-# max_tokens = 3000
+# max_tokens = 3000      # a search page's cap
+# long_max_tokens = 8000 # a topic page's cap: the writer expands the seed into a long page (specs/139)
 # external_ttl = "7d"     # a page that used the web is rebuilt after this
 # per_day = 20
 # min_ttl_days = 1        # the writer proposes how long a page stays fresh (specs/097); the daemon keeps it within these bounds

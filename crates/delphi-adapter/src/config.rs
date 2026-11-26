@@ -1379,6 +1379,9 @@ pub struct PagesConfig {
     #[serde(deserialize_with = "de_external")]
     pub external: PagesExternal,
     pub max_tokens: u64,
+    /// The longest topic page the writer may write, in tokens (`specs/139` §2.3 item 4): topic pages are written at the `long` depth;
+    /// `max_tokens` still governs search pages.
+    pub long_max_tokens: u64,
     #[serde(deserialize_with = "de_ttl", rename = "external_ttl")]
     pub external_ttl_secs: u64,
     /// Pages the daemon builds in one day; a cache hit is free. They also count against the validator's share (`specs/040` §20).
@@ -1397,7 +1400,7 @@ pub struct PagesConfig {
 
 impl Default for PagesConfig {
     fn default() -> Self {
-        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, external_ttl_secs: 7 * 86_400, per_day: 20, min_ttl_days: 1, max_ttl_days: 365, auto_rebuild: true, build_after_research: true }
+        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, long_max_tokens: 8000, external_ttl_secs: 7 * 86_400, per_day: 20, min_ttl_days: 1, max_ttl_days: 365, auto_rebuild: true, build_after_research: true }
     }
 }
 
@@ -2454,6 +2457,8 @@ pub(crate) mod tests {
         assert!(d.build_after_research, "specs/139 §2.5 item 3: the seed is written when research ends unless it is turned off");
         assert!(!Config::parse(&format!("{}\n[library.pages]\nbuild_after_research = false\n", SAMPLE)).unwrap().library.pages.build_after_research);
         assert_eq!((d.max_tokens, d.external_ttl_secs, d.per_day, d.min_ttl_days, d.max_ttl_days), (3000, 7 * 86_400, 20, 1, 365));
+        assert_eq!(d.long_max_tokens, 8000, "specs/139 §2.3 item 4: a topic page's cap");
+        assert_eq!(Config::parse(&format!("{}\n[library.pages]\nlong_max_tokens = 6000\n", SAMPLE)).unwrap().library.pages.long_max_tokens, 6000);
         for (v, secs) in [("3", 3 * 86_400), ("\"12h\"", 12 * 3600), ("\"90m\"", 5400), ("\"7d\"", 7 * 86_400)] {
             let c = Config::parse(&format!("{}\n[library.pages]\nexternal = \"off\"\nexternal_ttl = {}\n", SAMPLE, v)).unwrap().library.pages;
             assert_eq!((c.external, c.external_ttl_secs), (PagesExternal::Off, secs), "{v}");
