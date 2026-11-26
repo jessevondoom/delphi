@@ -2,6 +2,7 @@
 state: built
 date: 2026-11-26
 title: "capture_source: body forms, batches, metadata, validation, dry run, limits"
+eval_waived: "no ranking term, search path or index rule changes in this slice: host captures are indexed as untrusted text like other sources; the diff base counts knowledge-v2's own retrieval changes"
 ---
 
 Built 2026-11-26 on branch `build/142-c` (from `knowledge-v2`). Not merged.
