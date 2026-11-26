@@ -1617,12 +1617,15 @@ impl Kb {
 
     /// Chunks nearest the query, best first, each once, with cosine similarity at or above the model's floor.
     /// Visibility is decided by `allowed` (the same filter the lexical rankings use), not by the vector table.
-    fn vector_ranked(&self, query: &str, opts: &SearchOpts, allowed: &str) -> Result<Vec<(i64, f32)>, KbError> {
+    fn vector_ranked(&self, query: &str, opts: &SearchOpts, allowed: &str, stages: &mut Stages) -> Result<Vec<(i64, f32)>, KbError> {
         let Some(model) = &self.embedder else { return Ok(vec![]) };
         if !has_vec(&self.conn) {
             return Ok(vec![]);
         }
-        let Ok(q) = model.embed_query(query) else { return Ok(vec![]) };
+        let t = std::time::Instant::now();
+        let embedded = model.embed_query(query);
+        stages.embed = t.elapsed();
+        let Ok(q) = embedded else { return Ok(vec![]) };
         let mut sql = format!("SELECT rowid, distance FROM kb_vec WHERE embedding MATCH ?1 AND k = {}", VEC_CANDIDATES);
         if !opts.include_untrusted {
             sql.push_str(" AND trusted = 1");
@@ -1781,6 +1784,23 @@ pub struct SharedResearch {
     /// The workspace's `[privacy] identifiers` (`query_guard::identifiers`): a shared result that names one is withheld and counted
     /// (item 6).
     pub identifiers: Vec<String>,
+}
+
+/// How long each stage of one search took (`specs/140` §2.5): the query's embedding, the nearest-neighbour search, the keyword
+/// rankings, and the whole search; what is left of `search` is fusion and assembling the results.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Stages {
+    pub embed: std::time::Duration,
+    pub vector: std::time::Duration,
+    pub lexical: std::time::Duration,
+    pub search: std::time::Duration,
+}
+
+impl Stages {
+    /// Fusion, ranking terms and assembling the hits: the search's time that no other stage accounts for.
+    pub fn fusion(&self) -> std::time::Duration {
+        self.search.saturating_sub(self.embed + self.vector + self.lexical)
+    }
 }
 
 /// What a search found: the hits, the best score the reranker gave (when it ran), and how many results of another project were
@@ -2011,13 +2031,28 @@ impl Kb {
 
     /// `search_scored`, and how many results of another project were withheld for naming a privacy identifier (`specs/115` §3 item 6).
     pub fn search_found(&self, query: &str, opts: &SearchOpts) -> Result<Found, KbError> {
+        self.search_staged(query, opts, &mut Stages::default())
+    }
+
+    /// `search_found`, with the time each stage took written to `stages` (`specs/140` §2.5).
+    pub fn search_staged(&self, query: &str, opts: &SearchOpts, stages: &mut Stages) -> Result<Found, KbError> {
+        let started = std::time::Instant::now();
+        let found = self.search_inner(query, opts, stages);
+        stages.search = started.elapsed();
+        found
+    }
+
+    fn search_inner(&self, query: &str, opts: &SearchOpts, stages: &mut Stages) -> Result<Found, KbError> {
         let terms = match_terms(query);
         if terms.is_empty() {
             return Ok(Found::default());
         }
         let allowed = allowed_sql(opts);
         let mut score: HashMap<i64, f64> = HashMap::new();
-        let nearest = if opts.legs != Legs::LexicalOnly { self.vector_ranked(query, opts, &allowed)? } else { vec![] };
+        let t = std::time::Instant::now();
+        let nearest = if opts.legs != Legs::LexicalOnly { self.vector_ranked(query, opts, &allowed, stages)? } else { vec![] };
+        stages.vector = t.elapsed().saturating_sub(stages.embed);
+        let t = std::time::Instant::now();
         if opts.legs != Legs::VectorOnly {
             // Precise first (every term), then any term, so a long question still finds something.
             let mut ident = Vec::new();
@@ -2052,6 +2087,7 @@ impl Kb {
                 *score.entry(*id).or_default() += factor / (RRF_K + r as f64 + 1.0);
             }
         }
+        stages.lexical = t.elapsed();
         for (r, (id, _)) in nearest.iter().enumerate() {
             *score.entry(*id).or_default() += opts.vec_weight / (RRF_K + r as f64 + 1.0);
         }

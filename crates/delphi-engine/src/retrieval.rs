@@ -3,12 +3,13 @@
 //! changed the index (`index_generation`). A search never writes, never syncs and never runs the reranker, and it falls
 //! back to keywords if the vector search does not answer within the deadline.
 
-use crate::kb::{Hit, Kb, KbError, Legs, SearchOpts};
+use crate::kb::{Hit, Kb, KbError, Legs, SearchOpts, Stages};
 use delphi_core::provenance::Tier;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How long the hybrid search may take before the keyword answer is used instead.
 pub const DEADLINE: Duration = Duration::from_millis(800);
@@ -31,10 +32,42 @@ impl Mode {
     }
 }
 
+/// Where the time of one service search went (`specs/140` §2.5, slice A). `open` and `models` are zero unless this search opened
+/// the reader (`cold`); `waited` is the time the search waited for the reader, which an earlier search that missed its deadline
+/// may still hold. `stages` is the search the worker ran, when it answered in time; after a missed deadline it is zero and
+/// `fallback` is the time the keyword answer took (opening the index again included).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Timing {
+    pub cold: bool,
+    pub waited: Duration,
+    pub open: Duration,
+    pub models: Duration,
+    pub stages: Stages,
+    pub fallback: Duration,
+}
+
+impl Timing {
+    /// The stages in milliseconds, for a report or a run file.
+    pub fn to_json(&self) -> serde_json::Value {
+        let ms = |d: Duration| (d.as_secs_f64() * 1000.0 * 100.0).round() / 100.0;
+        serde_json::json!({"cold": self.cold, "waited_ms": ms(self.waited), "open_ms": ms(self.open), "models_ms": ms(self.models), "embed_ms": ms(self.stages.embed), "vector_ms": ms(self.stages.vector), "lexical_ms": ms(self.stages.lexical), "fusion_ms": ms(self.stages.fusion()), "search_ms": ms(self.stages.search), "fallback_ms": ms(self.fallback)})
+    }
+}
+
+/// How many service searches this process answered in each mode, in the order of [`Mode`]: hybrid, lexical, lexical-deadline.
+static MODE_COUNTS: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+
+/// The service searches this process has answered, by mode (`specs/140` §2.5).
+pub fn mode_counts() -> [(Mode, u64); 3] {
+    [Mode::Hybrid, Mode::Lexical, Mode::Deadline].map(|m| (m, MODE_COUNTS[m as usize].load(Ordering::Relaxed)))
+}
+
 pub struct Retrieved {
     pub hits: Vec<Hit>,
     pub mode: Mode,
     pub ms: u128,
+    /// Where the time went.
+    pub timing: Timing,
     /// Results of another project that were withheld for naming a privacy identifier (`specs/115` §3 item 6); 0 in a search that
     /// asked for no shared research.
     pub withheld: usize,
@@ -53,11 +86,22 @@ fn slots() -> &'static Mutex<HashMap<PathBuf, Slot>> {
     S.get_or_init(Default::default)
 }
 
-fn open_reader(home: &Path, db: &Path) -> Result<Reader, KbError> {
+fn open_reader(home: &Path, db: &Path, timing: &mut Timing) -> Result<Reader, KbError> {
+    let t = Instant::now();
     let mut kb = Kb::open_readonly(db)?;
+    timing.open = t.elapsed();
+    let t = Instant::now();
     let hybrid = crate::kb::attach_default_readonly(home, &mut kb);
+    timing.models = t.elapsed();
+    timing.cold = true;
     let generation = kb.index_generation();
     Ok(Reader { kb, generation, hybrid })
+}
+
+/// Forget the reader of `db`, so the next search opens it again, as it does after a sync (the spike of `specs/140` §2.5).
+#[doc(hidden)]
+pub fn forget_reader(db: &Path) {
+    slots().lock().unwrap().remove(db);
 }
 
 fn current_generation(db: &Path) -> Option<i64> {
@@ -79,13 +123,16 @@ pub fn search(home: &Path, db: &Path, query: &str, mut opts: SearchOpts) -> Resu
     {
         let (slot, home, db, query, opts) = (slot.clone(), home.to_path_buf(), db.to_path_buf(), query.to_string(), opts.clone());
         std::thread::spawn(move || {
+            let mut timing = Timing::default();
+            let t = Instant::now();
             let mut guard = slot.lock().unwrap();
+            timing.waited = t.elapsed();
             let stale = match (&*guard, current_generation(&db)) {
                 (Some(r), Some(g)) => r.generation != g,
                 _ => true,
             };
             if stale {
-                match open_reader(&home, &db) {
+                match open_reader(&home, &db, &mut timing) {
                     Ok(r) => *guard = Some(r),
                     Err(e) => {
                         let _ = tx.send(Err(e));
@@ -93,23 +140,36 @@ pub fn search(home: &Path, db: &Path, query: &str, mut opts: SearchOpts) -> Resu
                     }
                 }
             }
+            #[cfg(test)]
+            if let Some(late) = test_hooks::LATE.lock().unwrap().iter().find(|(p, _)| *p == db).map(|(_, d)| *d) {
+                std::thread::sleep(late);
+            }
             let r = guard.as_ref().unwrap();
             let mode = if r.hybrid { Mode::Hybrid } else { Mode::Lexical };
-            let _ = tx.send(r.kb.search_found(&query, &opts).map(|f| (f, mode)));
+            let _ = tx.send(r.kb.search_staged(&query, &opts, &mut timing.stages).map(|f| (f, mode, timing)));
         });
     }
-    match rx.recv_timeout(DEADLINE) {
-        Ok(r) => {
-            let (found, mode) = r?;
-            Ok(Retrieved { hits: found.hits, mode, ms: start.elapsed().as_millis(), withheld: found.withheld })
-        }
+    let (found, mode, timing) = match rx.recv_timeout(DEADLINE) {
+        Ok(r) => r?,
         Err(_) => {
+            let t = Instant::now();
             let kb = Kb::open_readonly(db)?;
             opts.legs = Legs::LexicalOnly;
             let found = kb.search_found(query, &opts)?;
-            Ok(Retrieved { hits: found.hits, mode: Mode::Deadline, ms: start.elapsed().as_millis(), withheld: found.withheld })
+            (found, Mode::Deadline, Timing { fallback: t.elapsed(), ..Timing::default() })
         }
-    }
+    };
+    MODE_COUNTS[mode as usize].fetch_add(1, Ordering::Relaxed);
+    Ok(Retrieved { hits: found.hits, mode, ms: start.elapsed().as_millis(), timing, withheld: found.withheld })
+}
+
+/// Test-only: make the worker for one index answer late, as a slow reader would (`specs/140` AC-6).
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::time::Duration;
+    pub static LATE: Mutex<Vec<(PathBuf, Duration)>> = Mutex::new(Vec::new());
 }
 
 /// What a span starts with unless `[retrieval]` says otherwise (`specs/116` §4.2): six passages, 4,000 characters in all.
@@ -453,5 +513,69 @@ mod tests {
         kb.sync_lexical(&files, "").unwrap();
         assert!(kb.index_generation() > g);
         assert!(!search(home, &db, "otter", SearchOpts { include_untrusted: true, ..Default::default() }).unwrap().hits.is_empty());
+    }
+
+    /// `specs/140` AC-1: a service search reports where its time went and its mode; the first search opens the reader (cold),
+    /// the next does not, and the process counts the mode.
+    #[test]
+    fn a_service_search_reports_its_stage_timings_and_mode() {
+        let (d, db) = fixture();
+        let before = mode_counts()[1].1;
+        let opts = SearchOpts { include_untrusted: true, ..Default::default() };
+        let first = search(d.path(), &db, "heron water", opts.clone()).unwrap();
+        assert_eq!(first.mode, Mode::Lexical, "no model in a test home");
+        assert!(first.timing.cold && first.timing.open > Duration::ZERO, "the first search opens the reader");
+        assert!(first.timing.stages.search > Duration::ZERO && first.timing.stages.lexical > Duration::ZERO);
+        assert_eq!(first.timing.stages.embed, Duration::ZERO, "no model, no query embedding");
+        let second = search(d.path(), &db, "heron water", opts.clone()).unwrap();
+        assert!(!second.timing.cold && second.timing.open == Duration::ZERO && second.timing.models == Duration::ZERO, "a kept reader is not opened again");
+        assert!(mode_counts()[1].1 >= before + 2);
+        forget_reader(&db);
+        assert!(search(d.path(), &db, "heron water", opts).unwrap().timing.cold, "a forgotten reader is opened again, as after a sync");
+        let j = second.timing.to_json();
+        for k in ["cold", "waited_ms", "open_ms", "models_ms", "embed_ms", "vector_ms", "lexical_ms", "fusion_ms", "search_ms", "fallback_ms"] {
+            assert!(j.get(k).is_some(), "{k}");
+        }
+    }
+
+    /// The spike of `specs/140` §2.5 (slice A), run by hand on a copy of a workspace, never in CI:
+    /// `DELPHI_SPIKE_HOME=<home> DELPHI_SPIKE_QUERIES=<file, one query a line> DELPHI_SPIKE_OUT=<jsonl> cargo test --release -p delphi-engine -- --ignored spike_on_a_workspace_copy`
+    /// It opens the index read-only and writes only `DELPHI_SPIKE_OUT`: one line per search, with its phase (`cold`: the first
+    /// search of the process; `warm`; `reopen`: the reader forgotten first, as after a sync; `direct`: the hybrid search with no
+    /// deadline), its mode and its stage timings. No query text is written.
+    #[test]
+    #[ignore]
+    fn spike_on_a_workspace_copy() {
+        use std::io::Write;
+        let home = PathBuf::from(std::env::var("DELPHI_SPIKE_HOME").expect("DELPHI_SPIKE_HOME"));
+        let ws = home.join("workspaces").join(std::env::var("DELPHI_SPIKE_WORKSPACE").unwrap_or_else(|_| "default".into()));
+        let db = ws.join("local/state.db");
+        let queries: Vec<String> = std::fs::read_to_string(std::env::var("DELPHI_SPIKE_QUERIES").expect("DELPHI_SPIKE_QUERIES")).unwrap().lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
+        let reopen = std::env::var("DELPHI_SPIKE_REOPEN").ok().and_then(|v| v.parse().ok()).unwrap_or(20usize);
+        let mut out = std::fs::OpenOptions::new().create(true).append(true).open(std::env::var("DELPHI_SPIKE_OUT").expect("DELPHI_SPIKE_OUT")).unwrap();
+        let opts = SearchOpts { include_untrusted: true, ..Default::default() };
+        let mut line = |phase: &str, i: usize, mode: &str, ms: f64, hits: usize, timing: serde_json::Value| {
+            writeln!(out, "{}", serde_json::json!({"phase": phase, "i": i, "mode": mode, "ms": ms, "hits": hits, "timing": timing})).unwrap();
+        };
+        for (i, q) in queries.iter().enumerate() {
+            let t = Instant::now();
+            let r = search(&home, &db, q, opts.clone()).unwrap();
+            line(if i == 0 { "cold" } else { "warm" }, i, r.mode.as_str(), t.elapsed().as_secs_f64() * 1000.0, r.hits.len(), r.timing.to_json());
+        }
+        for (i, q) in queries.iter().take(reopen).enumerate() {
+            forget_reader(&db);
+            let t = Instant::now();
+            let r = search(&home, &db, q, opts.clone()).unwrap();
+            line("reopen", i, r.mode.as_str(), t.elapsed().as_secs_f64() * 1000.0, r.hits.len(), r.timing.to_json());
+        }
+        let mut kb = Kb::open_readonly(&db).unwrap();
+        let hybrid = crate::kb::attach_default_readonly(&home, &mut kb);
+        let direct = SearchOpts { rerank_weight: 0.0, ..opts };
+        for (i, q) in queries.iter().enumerate() {
+            let mut stages = Stages::default();
+            let t = Instant::now();
+            let n = kb.search_staged(q, &direct, &mut stages).unwrap().hits.len();
+            line("direct", i, if hybrid { "hybrid" } else { "lexical" }, t.elapsed().as_secs_f64() * 1000.0, n, Timing { stages, ..Timing::default() }.to_json());
+        }
     }
 }
