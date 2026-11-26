@@ -162,6 +162,42 @@ The builders decided these themselves. Confirm each, or amend the spec.
   - **Done (2026-11-26): the deadline tests.** The cause was the test hook of 140 AC-6 (`retrieval::test_hooks::LATE`). Its guard was taken in an `if let` scrutinee, so the lock lived through the hook's 1.1-second sleep. While `kb_eval`'s late-reader test ran, every other search worker in the process waited on it and missed its 800 ms deadline. The service path itself is not slower. The fix releases the lock before the sleep. `harness_single::a_call_past_the_timeout_is_terminated_then_killed` was also timing the CLI's launch and first line; it now times only the termination. A full `cargo test --workspace` then failed only `train_run::routing_arms…`, a known load flake that passes alone.
 - **Local gates at the push** (the last commit on this branch): clippy `--workspace --all-targets -D warnings` clean; `delphi lint` 0/0; the `delphi` crate's tests pass; `delphi-engine` lib 3,207 passed, 2 failed (the deadline tests above), 14 ignored.
 
+## 5a. Progress and rulings, 2026-11-26
+
+Built since the handoff, all on `knowledge-v2`. Each slice's tracker file has the detail.
+
+- **143 G** (`delphi bridge setup claude`).
+- **143 F parts 1 and 2:** `[bridge.jobs]`, the origin `command`, `bridge.preflight`, the typed confirmation and the ceiling, `pages rebuild --due | --all`, `memory consolidate`, `kb validate --pending`.
+- **143 F part 3** is left: `sessions summarize` needs a summary pipeline that does not exist yet (030 §4.3); the app's buttons need `app_grants.toml`, a gate-changing path.
+- **142 B** (held text and one predicate at every exit).
+- **140 E, F, G** (warm-up, the retrieval rule in `forge finish`, the quality history).
+- **139 D, E** (concept titles; seed now, expand at idle).
+
+In flight when this was written: 142 C, the 139 D/E rulings below, 141 A.
+
+**Operator rulings on the 139 D/E builder decisions (2026-11-26), all ten as recommended:**
+- Changed:
+  - "No written page" means no writer's page, so a seed-only topic may be re-slugged.
+  - Old slugs become aliases that `page:` links resolve through.
+  - An over-long `subject` is dropped with a reason instead of refusing `record_research`.
+  - The console's `research.status` names the page.
+- Kept:
+  - The capitalised derived title.
+  - No writer's title from a claims-only page.
+  - `retitle` prefers an accepted `subject`.
+  - The queue mark, which leaves after one failed try.
+  - `idle_job_may_start` as the admission check; spec 139 §2.5 should name it.
+  - No seed from a failed, timed-out or cancelled run.
+
+**Waiting for the operator:**
+- **142 B decision 1:** held text is indexed `external_untrusted`, so an agent's default search does not see it, against 142 §2.5 item 3.
+- **142 B decision 7:** the app's export guard is enforced in the window, not in Rust.
+- **140 OD-4:** the warm-up alone.
+- **140 F's diff base:** the retrieval rule compares against `origin/main`, so every slice on this branch is asked for an eval run or a waiver, even one that touches no retrieval code. Fix it (compare with the slice's own commits or the integration branch) or keep waiving until the branch reaches `main`.
+- **143 F:** the typed confirmation is enforced by the command; the daemon accepts `confirmed: true` from any console client.
+
+**New load-sensitive test:** `service::encyclopedia_reads_tests::every_encyclopedia_read_leaves_the_workspace_byte_identical_and_calls_no_model` failed once in a merged full run and passed on the rerun. It exempts `library/cache-use.json`, which the 142 D1 use ledger writes on its own thread; check whether that thread can write another file during the test.
+
 ## 6. Traps
 
 - **Rust:** cargo is not on PATH. Run `export PATH="/opt/homebrew/opt/rustup/bin:$PATH"`. Each builder's `target/` is about 30 GB; remove it at hand-back. Use `CARGO_BUILD_JOBS=3` with three builders on 8 cores.
