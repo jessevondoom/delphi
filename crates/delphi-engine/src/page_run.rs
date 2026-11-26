@@ -97,6 +97,9 @@ pub const NO_WRITER: &str = "no model is available for the writer right now";
 /// How the refusal of the validator's weekly share begins ([`share_allows`]).
 const SHARE_SPENT: &str = "the validator's share of this week's tokens is spent";
 
+/// How many seed pages waiting for their expansion one idle rebuild looks at for material (`specs/139` §2.5 item 1).
+const EXPANSION_CANDIDATES: usize = 5;
+
 /// What an idle rebuild did (`specs/143` §2.7): the page, or the reason, and the cause of the notice when the job could not run.
 /// A rebuild that wrote the claims alone although the library had material is a failed check: its page stands and it has a cause.
 pub struct IdleRebuild {
@@ -396,9 +399,30 @@ impl Engine {
         }
         lib.topics_from_research(&self.ws.dir, now);
         let ctx = crate::library::topics::DueCtx { ws: Some(&self.ws.dir), now, index: true };
+        use crate::library::topics::SEED_EXPANSION;
+        let expand_only = |t: &crate::library::topics::TopicEntry| t.due.as_deref() == Some(SEED_EXPANSION);
         let mut due: Vec<_> = lib.topic_pages(&ctx).into_iter().filter(|t| t.due.is_some()).collect();
-        due.sort_by_key(|t| (t.built.is_some(), t.built.unwrap_or(0)));
-        let slug = due.first()?.slug.clone();
+        // A page with something new comes first; a seed page that waits only for its expansion after it (`specs/139` §2.5 item 1).
+        due.sort_by_key(|t| (expand_only(t), t.built.is_some(), t.built.unwrap_or(0)));
+        let first = due.first()?;
+        let slug = if !expand_only(first) {
+            first.slug.clone()
+        } else if self.writer_key().is_none() {
+            // No writer to expand the seed: it stands, no new seed version is written, and the topic stays due, so the missing route is
+            // counted again at the next idle time (`specs/143` §2.7 item 6).
+            return Some(IdleRebuild { built: Err(NO_WRITER.into()), cause: Some(Cause::NoRoute) });
+        } else {
+            // The first seed page the writer has material for, of a bounded few: one with nothing to give the writer is left as it is.
+            let mut pick = None;
+            for t in due.iter().take(EXPANSION_CANDIDATES) {
+                let Some(side) = lib.topic_side(&t.slug) else { continue };
+                if !self.topic_material(&side).await.is_empty() {
+                    pick = Some(t.slug.clone());
+                    break;
+                }
+            }
+            pick?
+        };
         // A harness that would write the page is asked for admission first (`specs/143` §2.3 item 6): a rebuild that is not
         // admitted writes nothing and the topic stays due.
         if let Some(key) = self.writer_key() {
@@ -413,6 +437,8 @@ impl Engine {
             // A seed page built because no writer could be reached: the page stands, and the missing route is still the cause.
             Ok(t) if t.outcome.as_deref() == Some("seed") && self.writer_key().is_none() => Some(Cause::NoRoute),
             Err(e) if e.starts_with(SHARE_SPENT) => Some(Cause::Budget),
+            // The writer's page of a seed failed its check and the seed stands; a failed writer call has left its own cause.
+            Err(e) if material && e.starts_with(crate::library::topics::SEED_STANDS) && e.contains("check") => Some(Cause::CheckFailed),
             Ok(t) if material && t.outcome.as_deref() == Some("claims_only") => Some(Cause::CheckFailed),
             _ => None,
         };

@@ -188,6 +188,14 @@ pub fn waiting_message() -> String {
 /// What [`Library::topic_rebuild`] says when its [`Cancel`] stopped it.
 pub const CANCELLED: &str = "cancelled: the key that asked for it was revoked";
 
+/// Why a seed page that nothing else made due is due: it waits for the writer's expansion (`specs/139` §2.5 item 1, "seed now,
+/// expand at idle"). Only a writer's page ends it; a rebuild with no writer, or with nothing for one, writes no new seed version.
+pub const SEED_EXPANSION: &str = "a seed page, due for the writer's expansion";
+
+/// The start of what [`Library::topic_rebuild`] says when the writer could not expand a seed page: the seed stands
+/// (`specs/139` §2.3 item 5), and no page of the claims alone takes its place.
+pub const SEED_STANDS: &str = "the seed stands";
+
 /// Whether a piece of work may still be stopped, read and set without a lock. It starts going; a revoke stops it ([`Cancel::stop`])
 /// unless the work has already passed its last check ([`Cancel::commit`]), in which case it runs to its end and the revoke is noted
 /// ([`Cancel::revoked_late`]).
@@ -634,6 +642,9 @@ impl Library {
         if side["valid_until"].as_u64().is_some_and(|u| ctx.now > u) {
             return Some(format!("its lifetime ended on {}", page_meta::ymd(side["valid_until"].as_u64().unwrap_or(0))));
         }
+        if side["outcome"].as_str() == Some(Outcome::Seed.as_str()) {
+            return Some(SEED_EXPANSION.into());
+        }
         None
     }
 
@@ -688,6 +699,8 @@ impl Library {
         if g.is_empty() {
             return self.topic_seed_build(SeedRequest { slug: r.slug, now: r.now, settings: r.settings, style: r.style, seed: &r.seed, held: r.held, gaps: &r.gaps, cancel: r.cancel });
         }
+        // A seed page the writer could not expand stands (`specs/139` §2.3 item 5): no page of the claims alone replaces it.
+        let was_seed = side["outcome"].as_str() == Some(Outcome::Seed.as_str());
         let mut proposal = None;
         let checked = {
             if self.pages_today(r.now) >= r.settings.per_day {
@@ -706,9 +719,14 @@ impl Library {
                     proposal = p;
                     self.build_page_checked(&title, &clean_draft(&body, r.settings.max_tokens), r.style, SCOPE, validator, writer, ledger).await?
                 }
+                Err(e) if was_seed => return Err(format!("{SEED_STANDS}: the writer could not expand it: {e}")),
                 Err(e) => self.claims_only_page(&title, &format!("the writer could not write the page: {}", e), None, Vec::new(), 0, r.style, SCOPE)?,
             }
         };
+        if was_seed && checked.verdict.outcome == Outcome::ClaimsOnly {
+            self.log("topic_seed_kept", json!({"slug": r.slug}));
+            return Err(format!("{SEED_STANDS}: the writer's page did not pass its check"));
+        }
         // The last check: a rebuild stopped by now leaves the page as it was; past here it is written whatever is asked.
         if r.cancel.is_some_and(|c| !c.commit()) {
             return Err(CANCELLED.into());
@@ -1266,7 +1284,7 @@ mod seed_tests {
     }
 
     /// AC-3 and the due check: with no model, a research run that ends `done` leaves a page that holds the answer's first paragraph,
-    /// cites it, carries the seed banner and has outcome `seed`; it is not due until its answer changes.
+    /// cites it, carries the seed banner and has outcome `seed`; it is due only for the writer's expansion until its answer changes.
     #[test]
     fn a_finished_run_gives_a_seed_page_that_cites_the_answer_and_is_due_when_it_changes() {
         let home = tempfile::tempdir().unwrap();
@@ -1294,7 +1312,7 @@ mod seed_tests {
         assert_eq!(side["validator"]["result"], "seed");
         assert_eq!(l.pages_today(100), 0, "a seed counts against no page budget");
         let ctx = DueCtx { ws: Some(&ws), now: 101, index: true };
-        assert_eq!(l.topic_pages(&ctx)[0].due, None, "just seeded: not due");
+        assert_eq!(l.topic_pages(&ctx)[0].due.as_deref(), Some(SEED_EXPANSION), "just seeded: due only for the writer's expansion");
         // The answer changes: a span's hash changes and the page is due.
         t.amend(|_| {}).unwrap();
         let path = t.answer_path();
@@ -1304,6 +1322,50 @@ mod seed_tests {
         let again = seed_build(&l, &slug, &ws, 200).unwrap();
         assert_eq!((again.version, again.outcome.as_deref()), (2, Some("seed")));
         assert_eq!(l.topic_versions(&slug).unwrap().len(), 1, "the page it replaced is a version");
+    }
+
+    /// `specs/139` §2.3 item 5 and §2.5 item 1: a seed page waits for the writer's expansion; a writer that fails, or whose page does
+    /// not pass its check, leaves the seed standing (no page of the claims alone, no new version) and the topic still due.
+    #[test]
+    fn a_seed_the_writer_cannot_expand_stands_and_stays_due() {
+        struct Fails;
+        impl PageWriter for Fails {
+            fn write<'a>(&'a self, _b: &'a str) -> crate::library::page_validate::WriterFuture<'a> {
+                Box::pin(async move { Err("the model is away".to_string()) })
+            }
+            fn rewrite<'a>(&'a self, _d: &'a str, _f: &'a [String]) -> crate::library::page_validate::WriterFuture<'a> {
+                Box::pin(async move { Err("the model is away".to_string()) })
+            }
+        }
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let l = Library::in_home(home.path());
+        let doc = home.path().join("tides.md");
+        std::fs::write(&doc, "# Tides\n\nTides lag in a shallow estuary.\n").unwrap();
+        let s = l.add_file(&doc, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+        let anchor = crate::library::claims::AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "lag in a shallow estuary".into(), ..Default::default() };
+        let c = l.add_claim("Tides lag in a shallow estuary.", &Default::default(), &[anchor]).unwrap()["id"].as_str().unwrap().to_string();
+        let t = Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
+        t.finish("r-1", "done", Some(&json!({"answer": "Tides lag because the estuary is shallow.", "claims": [&c]})), std::slice::from_ref(&c), None, 0).unwrap();
+        let slug = l.topics_from_research(&ws, 1).remove(0);
+        let seeded = seed_build(&l, &slug, &ws, 100).unwrap();
+        assert_eq!((seeded.version, seeded.outcome.as_deref()), (1, Some("seed")));
+        let ctx = DueCtx { ws: Some(&ws), now: 101, index: false };
+        assert_eq!(l.topic_pages(&ctx)[0].due.as_deref(), Some(SEED_EXPANSION));
+
+        let side = l.topic_side(&slug).unwrap();
+        let g = l.topic_gather_library(&side, Some(&ws));
+        assert!(!g.is_empty(), "the writer has material");
+        let seed = assemble_linked(&l, &ws, &side);
+        let cfg = PagesConfig::default();
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let err = rt.block_on(l.topic_rebuild(TopicRequest { slug: &slug, now: 200, settings: &cfg, style: bib::Format::Plain, gathered: g, gaps: vec![], seed, held: &NoHeldText, cancel: None }, &Fails, &rebuild_tests::Pass, &TokenLedger::new(1_000_000), &|| Ok(()))).unwrap_err();
+        assert!(err.starts_with(SEED_STANDS), "{err}");
+        let after = l.topic_pages(&ctx).remove(0);
+        assert_eq!((after.version, after.outcome.as_deref(), after.due.as_deref()), (1, Some("seed"), Some(SEED_EXPANSION)), "the seed stands");
+        assert!(std::fs::read_to_string(l.pages_dir().join(format!("{slug}.md"))).unwrap().contains(SEED_BANNER));
+        assert!(l.topic_versions(&slug).unwrap().is_empty(), "no version was made");
     }
 
     /// AC-4: a topic with no span has no page file and is listed as `waiting for material`; no file under `library/pages/` holds the

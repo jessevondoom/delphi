@@ -5686,9 +5686,9 @@ mod tests {
 
     // `specs/143` AC-7 and §2.7 item 6: an idle rebuild that fails for want of a route writes one `daemon.notice` with cause
     // `no_route`, one line in the log at the default level and one line in `delphi kb health`; the same failure an hour later
-    // writes no second notice that day; the topic stays due and no stub is written; none of it holds text of a page or a claim.
+    // writes no second notice that day; the topic stays due (its seed page waits for the writer's expansion, `specs/139` §2.5 item 1),
+    // no stub and no second seed version is written; none of it holds text of a page or a claim.
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "knowledge-v2 integration: 143 §2.7 item 6 (the topic stays due) conflicts with 139 B (a seed page is not due); see the handoff §5"]
     async fn an_idle_rebuild_with_no_route_is_one_notice_a_day_and_holds_no_entry_text() {
         use crate::daemon_notice as dn;
         let f = setup(vec![], 5.0, |_| {});
@@ -5701,7 +5701,9 @@ mod tests {
         let notices = events_of(&f, "daemon.notice");
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].payload, json!({"cause": "no_route", "job": "pages", "key": null}));
-        assert!(fs::read(lib.root().join("pages/zanzibar-lighthouse-lamps.md")).is_err(), "no stub takes the page's place");
+        // The page is the seed (`specs/139` §2.2), never a stub; it is due for the writer's expansion (`specs/139` §2.5 item 1).
+        let page = fs::read_to_string(lib.root().join("pages/zanzibar-lighthouse-lamps.md")).expect("the seed page");
+        assert!(page.contains(crate::topic_seed::SEED_BANNER), "{page}");
         let now = (f.engine.clock_unix)();
         let due = |now: i64| lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(&f.engine.ws.dir), now: now as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
         assert_eq!(due(now), 1, "the topic stays due");
@@ -5710,6 +5712,9 @@ mod tests {
         f.now.fetch_add(3600, std::sync::atomic::Ordering::SeqCst);
         svc.topic_idle_rebuild_noticed().await;
         assert_eq!(events_of(&f, "daemon.notice").len(), 1, "one notice for a cause in a day");
+        assert_eq!(due(now + 3600), 1, "the seed still waits for its expansion");
+        let pages = lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(&f.engine.ws.dir), now: (now + 3600) as u64, index: false });
+        assert_eq!((pages[0].version, pages[0].due.as_deref()), (1, Some(crate::library::topics::SEED_EXPANSION)), "no second seed version");
         let console = svc.notices_json();
         assert_eq!(console, vec![dn::line(dn::Cause::NoRoute, 2, None)]);
 
