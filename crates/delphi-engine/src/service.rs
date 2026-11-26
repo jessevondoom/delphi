@@ -12403,6 +12403,11 @@ mod tests {
         let anchor = crate::library::claims::AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() };
         let c = lib.add_claim("Tides come twice a day.", &Default::default(), &[anchor]).unwrap()["id"].as_str().unwrap().to_string();
         lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        // The topic follows a research record, so a rebuild has a linked row to seed from (`specs/139` §2.1: none waits, no stub).
+        let b = crate::research_record::Begin { question: "When do tides come?", asked_by: crate::research_record::Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r1" };
+        let rt = crate::research_record::Topic::begin(&f.engine.ws.dir, &b).unwrap();
+        rt.finish("r1", "done", Some(&json!({"claims": [&c]})), std::slice::from_ref(&c), None, 0).unwrap();
+        lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Research(rt.id.clone()), 1).unwrap();
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         let ext = svc.extension();
@@ -12857,8 +12862,11 @@ mod encyclopedia_reads_tests {
         lib.add_claim("The ledger lists every visitor.", &Default::default(), &[anchor(&ps, "lists every visitor")]).unwrap();
         // A research topic, a topic page built twice (a version and a link), a finding, lessons and an index.
         let b = crate::research_record::Begin { question: "When do tides come?", asked_by: crate::research_record::Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r1" };
-        crate::research_record::Topic::begin(&ws, &b).unwrap().finish("r1", "done", Some(&json!({"claims": [&c]})), std::slice::from_ref(&c), None, 0).unwrap();
+        let rt = crate::research_record::Topic::begin(&ws, &b).unwrap();
+        rt.finish("r1", "done", Some(&json!({"claims": [&c]})), std::slice::from_ref(&c), None, 0).unwrap();
         lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
+        // The topic follows the research record, so its seed has a linked row (`specs/139` §2.1: a topic with none waits, no stub).
+        lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Research(rt.id.clone()), 1).unwrap();
         f.engine.topic_rebuild("lighthouse-lamps").await.unwrap();
         f.engine.topic_rebuild("lighthouse-lamps").await.unwrap();
         let finding = crate::finding_record::Finding::parse(&json!({"question": "Why do tides come twice?", "conclusion": "The moon and the sun.", "status": "open", "evidence": [], "ruled_out": [], "how_verified": "Read the tables."}), &[], &|s| s.to_string()).unwrap();
@@ -12900,6 +12908,10 @@ mod encyclopedia_reads_tests {
         }
         let mut after = BTreeMap::new();
         hashes(&f.root, &mut after);
+        // `specs/142` §2.4 (slice D1): opening a source counts as use, so `library.source` writes the cache's use ledger. That one
+        // bookkeeping file is the only exception; no content, page, claim or source file may change. The conflict with `specs/117`
+        // §3 item 2 is recorded for the architect in the knowledge-v2 handoff (§5).
+        after.retain(|k, _| !k.ends_with("library/cache-use.json"));
         assert_eq!(before, after, "an encyclopedia read changed, made or removed a file");
         assert_eq!(f.model.requests().len(), requests, "no model was called");
 

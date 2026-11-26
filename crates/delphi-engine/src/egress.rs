@@ -223,7 +223,9 @@ mod tests {
             }
             let text = std::fs::read_to_string(f.path()).unwrap();
             let prod = text.split("#[cfg(test)]\nmod ").next().unwrap_or("");
-            assert!(!prod.contains("may_leave("), "{name} calls may_leave directly: go through egress::check");
+            // A whole-word match: `body_may_leave(` (the held-text predicate of `specs/142` §2.5) is another function, not the gate.
+            let direct = prod.match_indices("may_leave(").any(|(i, _)| !prod[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_'));
+            assert!(!direct, "{name} calls may_leave directly: go through egress::check");
         }
     }
 
