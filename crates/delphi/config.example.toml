@@ -262,6 +262,7 @@ sandbox = "off"
 # use_boost = 0.0                    # raises an item the daemon handed to spans that then ended well (one count a task, at most three)
 # dispute_penalty = 0.0              # lowers an item disputed with flag_wrong or `delphi kb flag` (it is still returned, labelled)
 # confidence_weight = 0.0            # raises a validated fact by the confidence the fact store recorded
+# eval_every_days = 7               # the daemon runs the accepted golden set while idle every this many days and keeps the numbers (specs/140); 0: off
 
 # Research recall across projects (specs/115). Yours to set: no agent can write this file.
 # [projects]

@@ -467,7 +467,8 @@
         "start_chars": { "type": "integer", "minimum": 0, "maximum": 16000, "default": 4000, "description": "How many characters the start passages may take in all (specs/116 section 4.2)." },
         "use_boost": { "type": "number", "minimum": 0, "maximum": 0.5, "default": 0, "description": "Share of its score added to an item the daemon handed to spans that then ended well (specs/116 section 7 item 3): one count a task, saturating at three; a provisional note and an agent's own search earn none. 0 is off." },
         "dispute_penalty": { "type": "number", "minimum": 0, "maximum": 0.5, "default": 0, "description": "Share of its score taken from an item disputed with flag_wrong (counted disputes only) or by the operator; it is still returned, labelled. 0 is off." },
-        "confidence_weight": { "type": "number", "minimum": 0, "maximum": 0.5, "default": 0, "description": "Share of its score added to a validated fact by the confidence the fact store recorded (high: all of it, medium: half); a file elsewhere that claims a confidence counts as low. 0 is off." }
+        "confidence_weight": { "type": "number", "minimum": 0, "maximum": 0.5, "default": 0, "description": "Share of its score added to a validated fact by the confidence the fact store recorded (high: all of it, medium: half); a file elsewhere that claims a confidence counts as low. 0 is off." },
+        "eval_every_days": { "type": "integer", "minimum": 0, "default": 7, "description": "How often, in days, the daemon runs the accepted golden set's service path while idle and adds it to local/eval/history.jsonl (specs/140 section 2.6 item 4). It calls no model and spends no tokens. 0 is off." }
       }
     },
     "projects": {

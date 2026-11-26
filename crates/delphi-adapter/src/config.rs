@@ -955,7 +955,8 @@ impl AgentsConfig {
 /// and `start_chars`: how many, and how many characters in all (six and 4,000 by default; at most ten and 16,000; zero in either
 /// gives a span none). The three ranking terms of `specs/116` §7 item 3 are each a share of a result's score, off at zero (the
 /// default) and at most [`MAX_RANK_TERM`]: `use_boost` raises an item the daemon handed to spans that then ended well, `dispute_penalty`
-/// lowers an item flagged wrong, and `confidence_weight` raises a validated fact by its stored `confidence`.
+/// lowers an item flagged wrong, and `confidence_weight` raises a validated fact by its stored `confidence`. `eval_every_days`: how
+/// often the daemon runs the golden set's `service` path while idle (`specs/140` §2.6 item 4); 7 by default, 0 is off.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RetrievalConfig {
@@ -965,6 +966,7 @@ pub struct RetrievalConfig {
     pub use_boost: f64,
     pub dispute_penalty: f64,
     pub confidence_weight: f64,
+    pub eval_every_days: u32,
 }
 
 /// The most `[retrieval] start_passages` and `start_chars` may be.
@@ -975,7 +977,7 @@ pub const MAX_RANK_TERM: f64 = 0.5;
 
 impl Default for RetrievalConfig {
     fn default() -> RetrievalConfig {
-        RetrievalConfig { auto: true, start_passages: 6, start_chars: 4000, use_boost: 0.0, dispute_penalty: 0.0, confidence_weight: 0.0 }
+        RetrievalConfig { auto: true, start_passages: 6, start_chars: 4000, use_boost: 0.0, dispute_penalty: 0.0, confidence_weight: 0.0, eval_every_days: 7 }
     }
 }
 

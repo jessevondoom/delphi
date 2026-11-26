@@ -89,6 +89,8 @@ pub struct EngineService {
     merge_offset: Mutex<Option<u64>>,
     /// When the search service's warm-up and record last ran (`specs/140` §2.5); 0 until the first tick.
     retrieval_checked: std::sync::atomic::AtomicI64,
+    /// When the scheduled golden-set run was last looked at (`specs/140` §2.6 item 4); 0 until the first look.
+    eval_checked: std::sync::atomic::AtomicI64,
     research_jobs: crate::research_jobs::Jobs,
     /// What each app key asked in the last hour, and what of it still runs (`specs/120` §4.2 item 3).
     app_asked: Mutex<app_requests::Tally>,
@@ -466,7 +468,7 @@ impl EngineService {
         let _ = engine.research_ask.set(tx);
         // One queue for every research run, under the one limits table (`specs/112` §4 item 6).
         let research_queue = crate::research_jobs::Jobs::with_limits(&engine.settings.research_limits);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), retrieval_checked: Default::default(), research_jobs: research_queue, app_asked: Default::default(), update: Default::default(),
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), retrieval_checked: Default::default(), eval_checked: Default::default(), research_jobs: research_queue, app_asked: Default::default(), update: Default::default(),
             #[cfg(test)]
             research_web: Mutex::new(None),
             #[cfg(test)]
@@ -2950,6 +2952,7 @@ impl EngineService {
                 svc.merge_ledger_tick().await;
                 svc.health_tick().await;
                 let _ = svc.retrieval_tick().await;
+                let _ = svc.eval_tick().await;
                 svc.consolidate_tick().await;
                 svc.notices_tick().await;
             }
@@ -3026,6 +3029,33 @@ impl EngineService {
                 let _ = h.join();
             }
             let _ = crate::retrieval::record_modes(&ws, now, crate::retrieval::take_mode_counts(&db));
+        }))
+    }
+
+    /// The scheduled run of the golden set (`specs/140` §2.6 item 4): every `[retrieval] eval_every_days` (0 is off), when an
+    /// accepted set exists and the daemon has been idle five minutes with no task running, the `service` path is run on it, as
+    /// `delphi kb eval run --path service` would, with the trigger `scheduled`. It calls no model and spends no tokens. Looked at
+    /// once an hour; the run is on a blocking thread, one at a time.
+    pub async fn eval_tick(&self) -> Option<tokio::task::JoinHandle<()>> {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        static RUNNING: AtomicBool = AtomicBool::new(false);
+        let now = (self.engine.clock_unix)();
+        let last = self.eval_checked.load(SeqCst);
+        if (last != 0 && now - last < 3600) || self.eval_checked.compare_exchange(last, now, SeqCst, SeqCst).is_err() {
+            return None;
+        }
+        let every = self.engine.cfg.get().retrieval.eval_every_days;
+        let last_operator = self.last_operator.load(SeqCst);
+        let idle = self.running.lock().unwrap().is_empty() && (last_operator == 0 || now - last_operator >= crate::consolidate::IDLE_SECS);
+        let (home, ws) = (self.engine.ws.home.clone(), self.engine.ws.dir.clone());
+        if every == 0 || !idle || RUNNING.swap(true, SeqCst) {
+            return None;
+        }
+        Some(tokio::task::spawn_blocking(move || {
+            if crate::kb_eval::scheduled_due(every, now, crate::kb_eval::newest_run(&ws), idle) && crate::kb_eval::load_accepted(&ws, None).is_ok() {
+                let _ = crate::kb_eval::run_recorded(&home, &ws, &[crate::kb_eval::RunPath::Service], None, crate::kb_eval::Trigger::Scheduled);
+            }
+            RUNNING.store(false, SeqCst);
         }))
     }
 
@@ -5839,6 +5869,35 @@ mod tests {
         let health = crate::knowledge_health::gather(&home, &ws, (f.engine.clock_unix)());
         let line = health.lines((f.engine.clock_unix)()).into_iter().find(|l| l.text.contains("service searches in 24 hours")).expect("the health line");
         assert!(!line.warn && line.text.contains("lexical-deadline 0 (0.0%)"), "{}", line.text);
+    }
+
+    /// `specs/140` §2.6 item 4 and AC-14: with `[retrieval] eval_every_days = 0` the daemon makes no scheduled run; at the default
+    /// it runs the accepted set's service path while idle, adds a `scheduled` line to the ledger and rebuilds the view, then waits.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_scheduled_golden_set_run_is_made_while_idle_and_never_at_zero_days() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let f = setup(vec![], 5.0, |_| {});
+        f.now.store(1_795_608_000, SeqCst);
+        let ws = f.engine.ws.dir.clone();
+        crate::kb_eval::accepted_in(&ws);
+        let mut cfg = f.engine.cfg.get().as_ref().clone();
+        cfg.retrieval.eval_every_days = 0;
+        f.engine.cfg.set(cfg.clone());
+        let svc = EngineService::new(f.engine.clone(), "m1");
+        assert!(svc.eval_tick().await.is_none(), "0 is off");
+        assert!(crate::kb_eval::read_history(&ws).lines.is_empty());
+        cfg.retrieval.eval_every_days = 7;
+        f.engine.cfg.set(cfg);
+        f.now.fetch_add(3600, SeqCst);
+        svc.eval_tick().await.expect("an idle daemon looks").await.unwrap();
+        let h = crate::kb_eval::read_history(&ws);
+        assert_eq!(h.lines.len(), 1, "{:?}", h.lines);
+        assert_eq!((h.lines[0]["trigger"].as_str(), h.lines[0]["path"].as_str()), (Some("scheduled"), Some("service")));
+        assert!(ws.join(crate::kb_eval::VIEW).is_file());
+        // An hour later the run of today is not due again.
+        f.now.fetch_add(3600, SeqCst);
+        svc.eval_tick().await.expect("it looks again").await.unwrap();
+        assert_eq!(crate::kb_eval::read_history(&ws).lines.len(), 1, "one run in seven days");
     }
 
     /// An install whose only endpoint is a harness that cannot serve a single call (`agy`: its tools cannot be turned off).

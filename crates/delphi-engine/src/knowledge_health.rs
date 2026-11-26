@@ -59,6 +59,9 @@ pub struct Health {
     /// The daemon's service searches in the last 24 hours, by mode in the order of `retrieval::MODES` (`specs/140` §2.5 item 3), when
     /// the daemon recorded any.
     pub searches_24h: Option<[u64; 4]>,
+    /// The newest golden-set run against the median of the five before it in its series (`specs/140` §2.6 item 6): the series, its
+    /// nDCG@10 and that median (none for a series' first run), when the history holds a run.
+    pub retrieval_quality: Option<(String, f64, Option<f64>)>,
 }
 
 /// One printed line.
@@ -223,6 +226,7 @@ pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
         h.provisional = Some((notes.len(), notes.iter().min().map(|t| day_of(*t))));
     }
     h.searches_24h = modes_since(ws_dir, now - DAY);
+    h.retrieval_quality = crate::kb_eval::health_numbers(ws_dir);
     h
 }
 
@@ -264,6 +268,9 @@ impl Health {
         }
         if let Some(n) = &self.searches_24h {
             o.insert("service_searches_24h".into(), json!({"hybrid": n[0], "lexical": n[1], "lexical_deadline": n[2], "lexical_warming": n[3], "deadline_share": (deadline_share(n) * 10_000.0).round() / 10_000.0}));
+        }
+        if let Some((series, ndcg, median)) = &self.retrieval_quality {
+            o.insert("retrieval_quality".into(), json!({"series": series, "ndcg10": ndcg, "median_of_five_before": median}));
         }
         Value::Object(o)
     }
@@ -358,6 +365,14 @@ impl Health {
         });
 
         out.push(fact(format!("{} searches of the knowledge base found nothing in 30 days", self.searches_found_nothing)));
+
+        // `specs/140` §2.6 item 6: the newest golden-set run against the median of the five before it.
+        if let Some((series, ndcg, median)) = &self.retrieval_quality {
+            out.push(fact(match median {
+                Some(m) => format!("retrieval quality, {series}: nDCG@10 {ndcg:.4} in the newest run, {:+.4} from the median of the runs before it ({m:.4}). See delphi kb eval history.", ndcg - m),
+                None => format!("retrieval quality, {series}: nDCG@10 {ndcg:.4} in the first run. See delphi kb eval history."),
+            }));
+        }
 
         // `specs/140` §2.5 item 3: how the daemon's searches were answered in the last 24 hours; above 5% missed is a warning.
         if let Some(n) = &self.searches_24h {

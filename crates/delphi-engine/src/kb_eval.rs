@@ -719,13 +719,356 @@ pub fn list_runs(ws: &Path) -> Vec<Value> {
     names.into_iter().filter_map(|n| read_run(ws, &n).ok()).map(|v| json!({"run": v["run"], "set": v["set"]["version"], "label": v["label"], "paths": v["paths"].as_array().into_iter().flatten().map(|p| json!({"path": p["path"], "recall10": p["metrics"]["recall10"], "ndcg10": p["metrics"]["ndcg10"]})).collect::<Vec<_>>()})).collect()
 }
 
+
+// ── the history (§2.6) ──────────────────────────────────────────────────────
+
+/// The ledger's format version. A reader accepts every older one.
+pub const HISTORY_V: u32 = 1;
+/// The view of the ledger that a search finds (zone `knowledge`), in the workspace.
+pub const VIEW: &str = "local/knowledge/retrieval-quality.md";
+/// Thresholds of a noticeable change (§2.6 item 7, OD-5).
+pub const NOTICE_METRIC: f64 = 0.03;
+pub const NOTICE_VECTOR_LEG: f64 = 0.10;
+pub const NOTICE_P95: f64 = 1.5;
+/// How many earlier runs of a series a run is set against: the median of the five before it.
+pub const NOTICE_WINDOW: usize = 5;
+/// How many runs of a series the view's table shows.
+const VIEW_ROWS: usize = 20;
+
+/// The ledger: `local/eval/history.jsonl`. Append-only: only [`append_history`] writes it, and never truncates it.
+pub fn history_path(ws: &Path) -> PathBuf {
+    eval_dir(ws).join("history.jsonl")
+}
+
+/// What started a run (§2.6 item 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trigger {
+    Manual,
+    Scheduled,
+    Before,
+    After,
+}
+
+impl Trigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Trigger::Manual => "manual",
+            Trigger::Scheduled => "scheduled",
+            Trigger::Before => "before",
+            Trigger::After => "after",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Trigger> {
+        [Trigger::Manual, Trigger::Scheduled, Trigger::Before, Trigger::After].into_iter().find(|t| t.as_str() == s)
+    }
+}
+
+/// The SHA-256 of a model package, file or compiled in; computed once per process for each.
+fn model_sha(src: crate::embed::ModelSource, embedded: Option<&'static [u8]>) -> Option<String> {
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+    let key = match &src {
+        crate::embed::ModelSource::File(p) => p.display().to_string(),
+        crate::embed::ModelSource::Embedded => format!("embedded:{:p}", embedded?.as_ptr()),
+        _ => return None,
+    };
+    if let Some(h) = SEEN.get_or_init(Default::default).lock().unwrap().get(&key) {
+        return Some(h.clone());
+    }
+    let h = match src {
+        crate::embed::ModelSource::File(p) => sha256_hex(&std::fs::read(p).ok()?),
+        _ => sha256_hex(embedded?),
+    };
+    SEEN.get_or_init(Default::default).lock().unwrap().insert(key, h.clone());
+    Some(h)
+}
+
+/// The hash of the search options of a run and the `[retrieval]` keys in effect (§2.6 item 1, `config_sha256`).
+fn config_sha(ws: &Path) -> String {
+    let keys = std::fs::read_to_string(ws.join("config.toml")).ok().and_then(|t| toml::from_str::<toml::Value>(&t).ok()).and_then(|v| v.get("retrieval").cloned()).and_then(|v| serde_json::to_value(v).ok()).unwrap_or(Value::Null);
+    sha256_hex(json!({"opts": opts_json(&run_opts(ws)), "retrieval": keys}).to_string().as_bytes())
+}
+
+/// The ledger lines of a run file: one per path, numbers and identifiers only (§2.6 item 1).
+pub fn ledger_lines(home: &Path, ws: &Path, run: &Value, trigger: Trigger, at: &str) -> Vec<Value> {
+    let vectors = Kb::open_readonly(&ws.join("local/state.db")).ok().and_then(|k| k.vector_counts().ok()).map(|(v, _)| v);
+    let models = json!({
+        "embedder": {"id": crate::embed::installed_model_id(Some(home)), "sha256": model_sha(crate::embed::locate(Some(home)), crate::embed::embedded_bytes())},
+        "reranker": {"id": crate::embed::installed_reranker_id(Some(home)), "sha256": model_sha(crate::embed::locate_reranker(Some(home)), crate::embed::embedded_reranker_bytes())},
+    });
+    let config = config_sha(ws);
+    run["paths"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| {
+            let m = &p["metrics"];
+            json!({
+                "v": HISTORY_V, "at": at, "run": run["run"], "trigger": trigger.as_str(),
+                "set": {"version": run["set"]["version"], "sha256": run["set"]["sha256"], "counts": run["set"]["counts"]},
+                "corpus": {"documents": run["corpus"]["documents"], "chunks": run["corpus"]["chunks"], "vectors": vectors, "index_generation": run["corpus"]["index_generation"]},
+                "config_sha256": config, "models": models, "build": run["build"], "path": p["path"],
+                "recall10": m["recall10"], "recall20": m["recall20"], "ndcg10": m["ndcg10"], "mrr": m["mrr"],
+                "p50_ms": p["p50_ms"], "p95_ms": p["p95_ms"], "vector_leg": p.get("vector_leg").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect()
+}
+
+/// Append lines to the ledger. The file is opened to append and is never truncated or rewritten (§2.6 item 3).
+pub fn append_history(ws: &Path, lines: &[Value]) -> Result<(), String> {
+    let path = history_path(ws);
+    std::fs::create_dir_all(eval_dir(ws)).map_err(|e| e.to_string())?;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    f.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The ledger, read: every line that parses, and how many did not (a torn write is skipped and reported, §2.6 item 3).
+#[derive(Debug, Default)]
+pub struct History {
+    pub lines: Vec<Value>,
+    pub unreadable: usize,
+}
+
+pub fn read_history(ws: &Path) -> History {
+    let mut h = History::default();
+    for l in std::fs::read_to_string(history_path(ws)).unwrap_or_default().lines().filter(|l| !l.trim().is_empty()) {
+        match serde_json::from_str::<Value>(l) {
+            // Every version up to this one is read; a later one is not understood and is counted.
+            Ok(v) if v["v"].as_u64().is_some_and(|n| n >= 1 && n <= HISTORY_V as u64) => h.lines.push(v),
+            _ => h.unreadable += 1,
+        }
+    }
+    h
+}
+
+/// A series: one set version on one path (§2.6 item 2), in the order the ledger holds its runs.
+pub fn series(lines: &[Value]) -> BTreeMap<(u64, String), Vec<&Value>> {
+    let mut out: BTreeMap<(u64, String), Vec<&Value>> = BTreeMap::new();
+    for l in lines {
+        out.entry((l["set"]["version"].as_u64().unwrap_or(0), l["path"].as_str().unwrap_or("?").to_string())).or_default().push(l);
+    }
+    out
+}
+
+fn median(mut xs: Vec<f64>) -> Option<f64> {
+    if xs.is_empty() {
+        return None;
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = xs.len();
+    Some(if n % 2 == 1 { xs[n / 2] } else { (xs[n / 2 - 1] + xs[n / 2]) / 2.0 })
+}
+
+/// The median of `key` over the (at most five) runs before the last of `runs`.
+pub fn median_before(runs: &[&Value], key: &str) -> Option<f64> {
+    let before = &runs[..runs.len().saturating_sub(1)];
+    median(before.iter().rev().take(NOTICE_WINDOW).filter_map(|l| l[key].as_f64()).collect())
+}
+
+/// What moved noticeably in the last run of a series against the median of the five before it (§2.6 item 7): one phrase per
+/// metric, and whether the change is for the worse. `None` when fewer than five runs came before, or nothing moved that far.
+pub fn noticeable(runs: &[&Value]) -> Option<(Vec<String>, bool)> {
+    let new = runs.last()?;
+    if runs.len() <= NOTICE_WINDOW {
+        return None;
+    }
+    let (mut moved, mut worse) = (Vec::new(), false);
+    for (key, name, limit) in [("recall10", "recall@10", NOTICE_METRIC), ("ndcg10", "nDCG@10", NOTICE_METRIC), ("vector_leg", "the vector leg's share", NOTICE_VECTOR_LEG)] {
+        if let (Some(x), Some(m)) = (new[key].as_f64(), median_before(runs, key)) {
+            if (x - m).abs() >= limit - 1e-9 {
+                moved.push(format!("{name} {} from {m:.4} to {x:.4}", if x < m { "fell" } else { "rose" }));
+                worse |= x < m;
+            }
+        }
+    }
+    if let (Some(x), Some(m)) = (new["p95_ms"].as_f64(), median_before(runs, "p95_ms")) {
+        if m > 0.0 && x >= m * NOTICE_P95 {
+            moved.push(format!("p95 latency rose from {m:.0} ms to {x:.0} ms"));
+            worse = true;
+        }
+    }
+    (!moved.is_empty()).then_some((moved, worse))
+}
+
+/// What differed between two runs' lines: the build, the models, the config hash and the corpus size.
+pub fn differed(a: &Value, b: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    if a["build"] != b["build"] {
+        out.push(format!("the build ({} {} -> {} {})", a["build"]["version"].as_str().unwrap_or("?"), a["build"]["commit"].as_str().unwrap_or("?"), b["build"]["version"].as_str().unwrap_or("?"), b["build"]["commit"].as_str().unwrap_or("?")));
+    }
+    if a["models"] != b["models"] {
+        out.push(format!("the models ({} -> {})", a["models"]["embedder"]["id"].as_str().unwrap_or("none"), b["models"]["embedder"]["id"].as_str().unwrap_or("none")));
+    }
+    if a["config_sha256"] != b["config_sha256"] {
+        out.push("the search options or [retrieval] keys".into());
+    }
+    if a["corpus"]["chunks"] != b["corpus"]["chunks"] {
+        out.push(format!("the corpus ({} -> {} chunks)", a["corpus"]["chunks"], b["corpus"]["chunks"]));
+    }
+    out
+}
+
+/// The one-line trend of a series: the last run against the median of the five before it.
+pub fn trend(runs: &[&Value]) -> String {
+    let Some(last) = runs.last() else { return String::new() };
+    let x = last["ndcg10"].as_f64().unwrap_or(0.0);
+    match median_before(runs, "ndcg10") {
+        None => format!("nDCG@10 {x:.4}, one run so far"),
+        Some(m) if (x - m).abs() < NOTICE_METRIC => format!("nDCG@10 {x:.4}, steady over {} runs", runs.len()),
+        Some(m) => format!("nDCG@10 {x:.4}, {} {:.4} from the median of the {} runs before it", if x < m { "down" } else { "up" }, (x - m).abs(), (runs.len() - 1).min(NOTICE_WINDOW)),
+    }
+}
+
+fn series_name(set: u64, path: &str) -> String {
+    format!("set v{set}, {path} path")
+}
+
+/// The rows of a series' table: the run, its trigger, the metrics, and the change in nDCG@10 from the run before.
+fn table(runs: &[&Value]) -> String {
+    let f = |x: &Value| x.as_f64().map_or("-".to_string(), |x| format!("{x:.4}"));
+    let ms = |x: &Value| x.as_f64().map_or("-".to_string(), |x| format!("{x:.0}"));
+    let mut s = String::from("| Run | Trigger | recall@10 | recall@20 | nDCG@10 | change | MRR | p95 ms | vector leg |\n| :-- | :-- | --: | --: | --: | --: | --: | --: | --: |\n");
+    let from = runs.len().saturating_sub(VIEW_ROWS);
+    for (i, l) in runs.iter().enumerate().skip(from) {
+        let change = match (i.checked_sub(1).and_then(|j| runs[j]["ndcg10"].as_f64()), l["ndcg10"].as_f64()) {
+            (Some(a), Some(b)) => format!("{:+.4}", b - a),
+            _ => "-".into(),
+        };
+        s.push_str(&format!("| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n", l["run"].as_str().unwrap_or("?"), l["trigger"].as_str().unwrap_or("?"), f(&l["recall10"]), f(&l["recall20"]), f(&l["ndcg10"]), change, f(&l["mrr"]), ms(&l["p95_ms"]), f(&l["vector_leg"])));
+    }
+    s
+}
+
+/// The view (§2.6 item 5): one sentence per series and a table of its last twenty runs, rebuilt from the ledger. Numbers and run
+/// stamps only. Written only inside a workspace whose `local/` exists.
+pub fn write_view(ws: &Path) -> Result<bool, String> {
+    if !ws.join("local").is_dir() {
+        return Ok(false);
+    }
+    let h = read_history(ws);
+    let mut s = String::from("# Retrieval quality\n\nHow well the knowledge base's search finds what the operator's golden set expects (specs/140), as measured by `delphi kb eval run` and the daemon's scheduled run. This page is a view of the ledger `local/eval/history.jsonl`, rebuilt after every run; the ledger is the record.\n");
+    for ((set, path), runs) in series(&h.lines) {
+        s.push_str(&format!("\n## Retrieval quality: {}\n\nSet v{set}, {path} path: {}.\n\n{}", series_name(set, &path), trend(&runs), table(&runs)));
+    }
+    if h.lines.is_empty() {
+        s.push_str("\nNo run yet.\n");
+    }
+    let path = ws.join(VIEW);
+    std::fs::create_dir_all(path.parent().unwrap_or(ws)).map_err(|e| e.to_string())?;
+    std::fs::write(&path, s).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(true)
+}
+
+/// Where the note state lives: which series already has a note, and for which direction (§2.6 item 7: one note per series and
+/// direction until a run is back inside the thresholds).
+fn noted_path(ws: &Path) -> PathBuf {
+    eval_dir(ws).join("noticed.json")
+}
+
+/// After a run: for each series the run added to, a provisional note when the run moved noticeably and the series has no note for
+/// that direction yet; a run back inside the thresholds clears the series. Returns the notes written (their logical paths).
+pub fn note_changes(ws: &Path, now: &str) -> Vec<String> {
+    let h = read_history(ws);
+    let mut noted: BTreeMap<String, String> = std::fs::read_to_string(noted_path(ws)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let mut written = Vec::new();
+    for ((set, path), runs) in series(&h.lines) {
+        let key = format!("v{set}/{path}");
+        match noticeable(&runs) {
+            None => {
+                noted.remove(&key);
+            }
+            Some((moved, worse)) => {
+                let dir = if worse { "worse" } else { "better" };
+                if noted.get(&key).map(String::as_str) == Some(dir) {
+                    continue;
+                }
+                let (new, prev) = (runs[runs.len() - 1], runs[runs.len() - 2]);
+                let diff = differed(prev, new);
+                let text = format!(
+                    "Retrieval quality, {}: {} in run {} against the median of the five runs before it; the run before it was {}. Between those two runs {}.",
+                    series_name(set, &path),
+                    moved.join("; "),
+                    new["run"].as_str().unwrap_or("?"),
+                    prev["run"].as_str().unwrap_or("?"),
+                    if diff.is_empty() { "nothing recorded differed (not the build, the models, the config hash or the corpus size)".to_string() } else { format!("these differed: {}", diff.join(", ")) }
+                );
+                if let Ok(Some(p)) = crate::provisional_notes::keep_daemon_fact(ws, &key, &text, now) {
+                    written.push(p);
+                }
+                noted.insert(key, dir.into());
+            }
+        }
+    }
+    if std::fs::create_dir_all(eval_dir(ws)).is_ok() {
+        let _ = std::fs::write(noted_path(ws), serde_json::to_string(&noted).unwrap_or_default());
+    }
+    written
+}
+
+/// What follows every run, whoever started it: its ledger lines, the view, and a note on a noticeable change.
+pub fn record(home: &Path, ws: &Path, run: &Value, trigger: Trigger) -> Result<Vec<String>, String> {
+    let now = delphi_core::time::now_rfc3339();
+    append_history(ws, &ledger_lines(home, ws, run, trigger, &now))?;
+    let _ = write_view(ws);
+    Ok(note_changes(ws, &now))
+}
+
+/// A run as the operator's command and the daemon make it: [`run`], then [`record`]. Returns the run file, the run, and the notes
+/// a noticeable change left.
+pub fn run_recorded(home: &Path, ws: &Path, paths: &[RunPath], label: Option<&str>, trigger: Trigger) -> Result<(PathBuf, Value, Vec<String>), String> {
+    let (file, v) = run(home, ws, paths, label)?;
+    let notes = record(home, ws, &v, trigger)?;
+    Ok((file, v, notes))
+}
+
+/// The newest run's line against the median of the five before it in its series, for `delphi kb health`: `(series, nDCG@10, median)`.
+pub fn health_numbers(ws: &Path) -> Option<(String, f64, Option<f64>)> {
+    let h = read_history(ws);
+    let newest = h.lines.iter().max_by(|a, b| a["at"].as_str().cmp(&b["at"].as_str()))?;
+    let (set, path) = (newest["set"]["version"].as_u64().unwrap_or(0), newest["path"].as_str().unwrap_or("?").to_string());
+    let all = series(&h.lines);
+    let runs = all.get(&(set, path.clone()))?;
+    Some((series_name(set, &path), newest["ndcg10"].as_f64()?, median_before(runs, "ndcg10")))
+}
+
+/// Is a scheduled run due (§2.6 item 4)? `every_days` 0 is off; otherwise when the newest line of the ledger is that old, or there is
+/// none, and the daemon is idle.
+pub fn scheduled_due(every_days: u32, now: i64, newest: Option<i64>, idle: bool) -> bool {
+    every_days > 0 && idle && newest.is_none_or(|t| now - t >= every_days as i64 * 86_400)
+}
+
+/// The time of the ledger's newest line, in Unix seconds.
+pub fn newest_run(ws: &Path) -> Option<i64> {
+    read_history(ws).lines.iter().filter_map(|l| l["at"].as_str().and_then(delphi_core::time::parse_rfc3339)).max()
+}
+
+/// `delphi kb eval history`: each series as a table, with the change from run to run and a one-line trend.
+pub fn history_text(ws: &Path, set: Option<u64>, path: Option<&str>) -> String {
+    let h = read_history(ws);
+    let mut s = String::new();
+    for ((v, p), runs) in series(&h.lines).into_iter().filter(|((v, p), _)| set.is_none_or(|s| s == *v) && path.is_none_or(|q| q == p)) {
+        s.push_str(&format!("{}: {}\n{}\n", series_name(v, &p), trend(&runs), table(&runs)));
+    }
+    if s.is_empty() {
+        s.push_str("no runs in the history yet (`delphi kb eval run`)\n");
+    }
+    if h.unreadable > 0 {
+        s.push_str(&format!("note: {} line(s) of {} could not be read and were skipped\n", h.unreadable, history_path(ws).display()));
+    }
+    s
+}
+
 // ── the command (§2.3) ──────────────────────────────────────────────────────
 
-pub const USAGE: &str = "usage: delphi kb eval build --real-only | accept | run [--path service|hybrid|lexical|all] [--label <text>] [--json] | compare <run> <run> [--json] | runs [--json]   [--workspace <name>] [--home <dir>]";
+pub const USAGE: &str = "usage: delphi kb eval build --real-only | accept | run [--path service|hybrid|lexical|all] [--label <text>] [--trigger before|after] [--json] | compare <run> <run> [--json] | runs [--json] | history [--set <n>] [--path <p>] [--json]   [--workspace <name>] [--home <dir>]";
 
-/// `delphi kb eval build|accept|run|compare|runs …` for the workspace at `ws`. The caller has refused `build` and `accept` inside an
-/// agent seat; `run`, `compare` and `runs` read only.
-pub fn cli(home: &Path, ws: &Path, args: &[String]) -> i32 {
+/// `delphi kb eval build|accept|run|compare|runs|history …` for the workspace at `ws`. The caller has refused `build` and `accept`
+/// inside an agent seat; `compare`, `runs` and `history` read only. `run` writes its run file, and with `record` (the operator's
+/// own process, not an agent seat's) its ledger lines, the view and a note on a noticeable change (`specs/140` §2.6 item 1).
+pub fn cli(home: &Path, ws: &Path, args: &[String], record_it: bool) -> i32 {
     let json_out = args.iter().any(|a| a == "--json");
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     match args.first().map(String::as_str) {
@@ -734,13 +1077,34 @@ pub fn cli(home: &Path, ws: &Path, args: &[String]) -> i32 {
                 eprintln!("delphi kb eval run: --path is service, hybrid, lexical or all\n{USAGE}");
                 return 2;
             };
-            match run(home, ws, &paths, flag("--label").as_deref()) {
-                Ok((file, v)) => {
+            // `--trigger before|after` marks the runs of a retrieval change (§2.4); a label of `before` or `after` says the same.
+            let label = flag("--label");
+            let trigger = match flag("--trigger").or_else(|| label.clone().filter(|l| l == "before" || l == "after")) {
+                None => Trigger::Manual,
+                Some(t) => match Trigger::parse(&t).filter(|t| matches!(t, Trigger::Before | Trigger::After)) {
+                    Some(t) => t,
+                    None => {
+                        eprintln!("delphi kb eval run: --trigger is before or after\n{USAGE}");
+                        return 2;
+                    }
+                },
+            };
+            let done = if record_it { run_recorded(home, ws, &paths, label.as_deref(), trigger) } else { run(home, ws, &paths, label.as_deref()).map(|(f, v)| (f, v, Vec::new())) };
+            match done {
+                Ok((file, v, notes)) => {
                     if json_out {
                         println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
                     } else {
                         print!("{}", summary(&v));
                         println!("  written: {}", file.display());
+                        if record_it {
+                            println!("  history: {} ({}), view: {}", history_path(ws).display(), trigger.as_str(), ws.join(VIEW).display());
+                        } else {
+                            println!("  not added to the history: this process was started by an agent seat");
+                        }
+                        for n in &notes {
+                            println!("  a noticeable change: provisional note {n} (delphi learn list)");
+                        }
                     }
                     0
                 }
@@ -776,6 +1140,29 @@ pub fn cli(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     1
                 }
             }
+        }
+        Some("history") => {
+            let set = match flag("--set").map(|s| s.trim_start_matches('v').parse::<u64>()) {
+                None => None,
+                Some(Ok(n)) => Some(n),
+                Some(Err(_)) => {
+                    eprintln!("delphi kb eval history: --set is a set version, such as 1\n{USAGE}");
+                    return 2;
+                }
+            };
+            let path = flag("--path");
+            if path.as_deref().is_some_and(|p| !matches!(p, "service" | "hybrid" | "lexical")) {
+                eprintln!("delphi kb eval history: --path is service, hybrid or lexical\n{USAGE}");
+                return 2;
+            }
+            if json_out {
+                let h = read_history(ws);
+                let lines: Vec<&Value> = h.lines.iter().filter(|l| set.is_none_or(|s| l["set"]["version"].as_u64() == Some(s)) && path.as_deref().is_none_or(|p| l["path"] == p)).collect();
+                println!("{}", serde_json::to_string_pretty(&json!({"lines": lines, "unreadable": h.unreadable})).unwrap_or_default());
+            } else {
+                print!("{}", history_text(ws, set, path.as_deref()));
+            }
+            0
         }
         Some("runs") => {
             let runs = list_runs(ws);
@@ -838,6 +1225,36 @@ pub fn cli(home: &Path, ws: &Path, args: &[String]) -> i32 {
     }
 }
 
+/// Tests only: three research records, two findings and four misses in the workspace at `ws`, indexed.
+#[cfg(test)]
+pub(crate) fn fixture_in(ws: &Path) {
+    const TIER: &str = "internal_generated";
+    let db = ws.join("local/state.db");
+    std::fs::create_dir_all(ws.join("local")).unwrap();
+    let mut kb = Kb::open(&db).unwrap();
+    for q in ["How do herons hunt in shallow water?", "Where do ospreys nest along the estuary?", "Why do kingfishers dive from perches?"] {
+        let id = crate::research_record::topic_id(q);
+        let dir = crate::research_record::topics_dir(ws).join(&id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("record.json"), serde_json::to_vec(&json!({"topic_id": id, "question": q, "private": false, "claims": []})).unwrap()).unwrap();
+        kb.upsert_from(&format!("research/topics/{id}/answer.md"), crate::research_index::ZONE, TIER, &format!("# Answer\n\n{q} The answer is long.\n\n## Detail\n\nMore about it.\n"), "t").unwrap();
+    }
+    for (slug, q) in [("why-do-terns-hover", "Why do terns hover?"), ("what-do-gulls-eat", "What do gulls eat?")] {
+        kb.upsert_from(&format!("missions/m1/findings/{slug}.md"), crate::finding_record::ZONE, TIER, &format!("# {q}\n\nConclusion (likely): fish.\n"), "t").unwrap();
+    }
+    for q in ["albatross wingspan", "puffin burrows", "cormorant drying wings", "pelican pouch size"] {
+        crate::kb::log_miss(ws, q, crate::kb::Searcher::Agent("scout"), 0);
+    }
+}
+
+/// Tests only: [`fixture_in`], built and accepted with every sampled case kept.
+#[cfg(test)]
+pub(crate) fn accepted_in(ws: &Path) {
+    fixture_in(ws);
+    build(ws, &Kb::open_readonly(&ws.join("local/state.db")).unwrap()).unwrap();
+    accept(ws, &mut std::io::Cursor::new("keep\n".repeat(SAMPLE).into_bytes()), &mut Vec::new()).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -849,22 +1266,7 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, PathBuf) {
         let d = tempfile::tempdir().unwrap();
         let ws = d.path().join("ws");
-        let db = ws.join("local/state.db");
-        std::fs::create_dir_all(ws.join("local")).unwrap();
-        let mut kb = Kb::open(&db).unwrap();
-        for q in ["How do herons hunt in shallow water?", "Where do ospreys nest along the estuary?", "Why do kingfishers dive from perches?"] {
-            let id = crate::research_record::topic_id(q);
-            let dir = crate::research_record::topics_dir(&ws).join(&id);
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("record.json"), serde_json::to_vec(&json!({"topic_id": id, "question": q, "private": false, "claims": []})).unwrap()).unwrap();
-            kb.upsert_from(&format!("research/topics/{id}/answer.md"), crate::research_index::ZONE, TIER, &format!("# Answer\n\n{q} The answer is long.\n\n## Detail\n\nMore about it.\n"), "t").unwrap();
-        }
-        for (slug, q) in [("why-do-terns-hover", "Why do terns hover?"), ("what-do-gulls-eat", "What do gulls eat?")] {
-            kb.upsert_from(&format!("missions/m1/findings/{slug}.md"), crate::finding_record::ZONE, TIER, &format!("# {q}\n\nConclusion (likely): fish.\n"), "t").unwrap();
-        }
-        for q in ["albatross wingspan", "puffin burrows", "cormorant drying wings", "pelican pouch size"] {
-            crate::kb::log_miss(&ws, q, crate::kb::Searcher::Agent("scout"), 0);
-        }
+        super::fixture_in(&ws);
         (d, ws)
     }
 
@@ -1049,5 +1451,148 @@ mod tests {
         let (file, _) = run(d.path(), &ws, &[RunPath::Lexical], None).unwrap();
         assert_eq!((std::fs::read(&db).unwrap(), std::fs::read(set_path(&ws, 1)).unwrap()), before);
         assert!(file.starts_with(runs_dir(&ws)));
+    }
+
+    /// `specs/140` AC-11: every run adds one ledger line per path with the fields of §2.6 item 1; after a reindex, a new set version
+    /// and pruned run files, every earlier line is still there byte for byte; a torn last line is skipped and reported; no code
+    /// path truncates or rewrites the ledger.
+    #[test]
+    fn every_run_adds_its_ledger_line_and_no_rebuild_new_set_or_pruning_touches_the_earlier_ones() {
+        let (d, ws) = accepted();
+        run_recorded(d.path(), &ws, &[RunPath::Lexical], None, Trigger::Manual).unwrap();
+        let h = read_history(&ws);
+        assert_eq!(h.lines.len(), 1, "one path, one line");
+        let l = &h.lines[0];
+        for k in ["v", "at", "run", "trigger", "set", "corpus", "config_sha256", "models", "build", "path", "recall10", "recall20", "ndcg10", "mrr", "p50_ms", "p95_ms", "vector_leg"] {
+            assert!(l.get(k).is_some(), "{k}");
+        }
+        for (o, k) in [("set", "version"), ("set", "sha256"), ("set", "counts"), ("corpus", "documents"), ("corpus", "chunks"), ("corpus", "vectors"), ("corpus", "index_generation"), ("models", "embedder"), ("models", "reranker"), ("build", "version"), ("build", "commit")] {
+            assert!(l[o].get(k).is_some(), "{o}.{k}");
+        }
+        assert_eq!((l["v"].as_u64(), l["trigger"].as_str(), l["path"].as_str()), (Some(HISTORY_V as u64), Some("manual"), Some("lexical")));
+        assert!(l["config_sha256"].as_str().is_some_and(|s| s.len() == 64));
+        let (_, cases) = load_accepted(&ws, None).unwrap();
+        let text = std::fs::read_to_string(history_path(&ws)).unwrap();
+        assert!(cases.iter().all(|c| !text.contains(&c.q)), "numbers and identifiers only");
+        let before = std::fs::read(history_path(&ws)).unwrap();
+        // A reindex, a new set version, and the run files pruned.
+        let mut kb = Kb::open(&ws.join("local/state.db")).unwrap();
+        kb.upsert_from("context/new.md", "context", "internal_generated", "# New\n\nA new page.\n", "t").unwrap();
+        drop(kb);
+        assert_eq!(build(&ws, &open(&ws)).unwrap().version, 2);
+        let n = sample(&parse_jsonl(&std::fs::read_to_string(set_path(&ws, 2)).unwrap()).unwrap()).len();
+        accept(&ws, &mut answers(&"keep\n".repeat(n)), &mut Vec::new()).unwrap();
+        std::fs::remove_dir_all(runs_dir(&ws)).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        run_recorded(d.path(), &ws, &[RunPath::Lexical, RunPath::Service], Some("after"), Trigger::After).unwrap();
+        let after = std::fs::read(history_path(&ws)).unwrap();
+        assert!(after.starts_with(&before), "every earlier line, byte for byte");
+        let h = read_history(&ws);
+        assert_eq!(h.lines.len(), 3);
+        assert_eq!(series(&h.lines).keys().cloned().collect::<Vec<_>>(), vec![(1, "lexical".to_string()), (2, "lexical".to_string()), (2, "service".to_string())], "a new set version is a new series");
+        assert!(h.lines[2]["vector_leg"].is_number() && h.lines[1]["vector_leg"].is_null(), "the vector leg is the service path's");
+        // A torn write: skipped and said.
+        let mut f = std::fs::OpenOptions::new().append(true).open(history_path(&ws)).unwrap();
+        f.write_all(b"{\"v\":1,\"at\":\"2026").unwrap();
+        assert_eq!((read_history(&ws).lines.len(), read_history(&ws).unreadable), (3, 1));
+        assert!(history_text(&ws, None, None).contains("1 line(s)"));
+        // Only `append_history` writes the ledger, and it appends.
+        let src = include_str!("kb_eval.rs");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert_eq!(code.matches("history_path(ws)").count(), 4, "the path is named by append_history, read_history and two messages only");
+        assert!(code.contains(".create(true).append(true).open(&path)") && !code.contains("truncate(") && !code.contains("File::create("));
+    }
+
+    /// `specs/140` AC-12: after a run the view holds the series' sentence and table and no question, and an inside agent's search for
+    /// `retrieval quality` returns it.
+    #[test]
+    fn after_a_run_the_view_holds_each_series_and_no_question_and_an_agent_search_finds_it() {
+        let (d, ws) = accepted();
+        let (_, v, _) = run_recorded(d.path(), &ws, &[RunPath::Lexical], None, Trigger::Manual).unwrap();
+        let view = std::fs::read_to_string(ws.join(VIEW)).unwrap();
+        assert!(view.contains("Set v1, lexical path: nDCG@10 ") && view.contains("one run so far"), "{view}");
+        assert!(view.contains(&format!("| {} | manual |", v["run"].as_str().unwrap())), "{view}");
+        let (_, cases) = load_accepted(&ws, None).unwrap();
+        assert!(cases.iter().all(|c| !view.contains(&c.q)), "no question");
+        // The index reads the view as zone `knowledge`; a builder's default search (nothing untrusted) finds it.
+        let db = ws.join("local/state.db");
+        Kb::open(&db).unwrap().sync_lexical(&crate::kb::sources(&ws), "2026-11-26T00:00:00Z").unwrap();
+        let hits = crate::retrieval::search(d.path(), &db, "retrieval quality", crate::kb::SearchOpts { role: Some("builder".into()), ..Default::default() }).unwrap().hits;
+        assert!(hits.iter().any(|h| h.rel_path == "knowledge/retrieval-quality.md" && h.zone == "knowledge"), "{:?}", hits.iter().map(|h| h.rel_path.clone()).collect::<Vec<_>>());
+    }
+
+    /// A ledger line of one series, made by hand: run `r`, nDCG@10 `ndcg`, on build `commit`.
+    fn line(r: &str, ndcg: f64, commit: &str) -> Value {
+        json!({"v": 1, "at": format!("2026-11-{:02}T00:00:00Z", 1 + r[1..].parse::<u32>().unwrap()), "run": r, "trigger": "scheduled", "set": {"version": 1, "sha256": "s"}, "corpus": {"chunks": 100}, "config_sha256": "c", "models": {"embedder": {"id": "m"}}, "build": {"version": "0.6.7", "commit": commit}, "path": "service", "recall10": 0.9, "recall20": 0.93, "ndcg10": ndcg, "mrr": 0.95, "p50_ms": 40.0, "p95_ms": 80.0, "vector_leg": 1.0})
+    }
+
+    fn notes_in(ws: &Path) -> Vec<String> {
+        let dir = ws.join(crate::provisional_notes::HOME_DIR).join(crate::provisional_notes::SHARED);
+        std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| std::fs::read_to_string(e.path()).unwrap()).collect()
+    }
+
+    /// `specs/140` AC-13: a run 0.05 below the median of the five before it leaves exactly one provisional note naming both runs and
+    /// what differed; a fall of 0.01 leaves none; a second low run leaves no second note; a run back inside the thresholds clears it.
+    #[test]
+    fn a_noticeable_fall_leaves_one_note_naming_both_runs_and_a_small_fall_or_a_second_low_run_none() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path().join("ws");
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        let five: Vec<Value> = (1..=5).map(|i| line(&format!("r{i}"), 0.90, "aaa")).collect();
+        append_history(&ws, &five).unwrap();
+        append_history(&ws, &[line("r6", 0.89, "aaa")]).unwrap();
+        assert!(note_changes(&ws, "2026-11-26T10:00:00Z").is_empty() && notes_in(&ws).is_empty(), "a fall of 0.01 leaves none");
+        append_history(&ws, &[line("r7", 0.85, "bbb")]).unwrap();
+        let written = note_changes(&ws, "2026-11-26T11:00:00Z");
+        assert_eq!(written.len(), 1);
+        let notes = notes_in(&ws);
+        assert_eq!(notes.len(), 1);
+        let n = &notes[0];
+        assert!(n.contains("nDCG@10 fell from 0.9000 to 0.8500") && n.contains("run r7") && n.contains("was r6") && n.contains("the build (0.6.7 aaa -> 0.6.7 bbb)"), "{n}");
+        assert!(n.contains("kind: fact") && n.contains("trigger: retrieval_eval") && n.contains("Unreviewed note"), "{n}");
+        assert_eq!(crate::provisional_notes::list(&ws).len(), 1, "a note of the tier, listed for review");
+        append_history(&ws, &[line("r8", 0.84, "bbb")]).unwrap();
+        assert!(note_changes(&ws, "2026-11-26T12:00:00Z").is_empty() && notes_in(&ws).len() == 1, "a second low run leaves no second note");
+        // Back inside the thresholds, then down again: a new note.
+        append_history(&ws, &[line("r9", 0.90, "bbb")]).unwrap();
+        assert!(note_changes(&ws, "2026-11-26T13:00:00Z").is_empty());
+        append_history(&ws, &[line("r10", 0.80, "bbb")]).unwrap();
+        assert_eq!(note_changes(&ws, "2026-11-26T14:00:00Z").len(), 1);
+        // With fewer than five runs before it, nothing is compared.
+        let few: Vec<&Value> = five.iter().take(4).collect();
+        assert!(noticeable(&few).is_none());
+    }
+
+    /// `specs/140` AC-14 (the command's half) and §2.6 item 6: `kb eval history` shows each series with the ledger's numbers, the
+    /// change from run to run and a trend; `--set` and `--path` narrow it.
+    #[test]
+    fn kb_eval_history_shows_the_ledgers_series_and_numbers() {
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path().join("ws");
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        let mut lines: Vec<Value> = (1..=6).map(|i| line(&format!("r{i}"), 0.90 + i as f64 / 1000.0, "aaa")).collect();
+        let mut lexical = line("r7", 0.61, "aaa");
+        lexical["path"] = json!("lexical");
+        lines.push(lexical);
+        append_history(&ws, &lines).unwrap();
+        let text = history_text(&ws, None, None);
+        assert!(text.contains("set v1, service path: nDCG@10 0.9060, steady over 6 runs"), "{text}");
+        assert!(text.contains("| r6 | scheduled | 0.9000 | 0.9300 | 0.9060 | +0.0010 |"), "{text}");
+        assert!(text.contains("set v1, lexical path: nDCG@10 0.6100, one run so far"), "{text}");
+        let narrowed = history_text(&ws, Some(1), Some("lexical"));
+        assert!(narrowed.contains("lexical path") && !narrowed.contains("service path"));
+        assert!(history_text(&ws, Some(2), None).contains("no runs in the history yet"));
+        assert_eq!(health_numbers(&ws).map(|(s, x, _)| (s, x)), Some(("set v1, lexical path".to_string(), 0.61)), "the newest run");
+    }
+
+    /// `specs/140` §2.6 item 4 and AC-14: a scheduled run is due every `eval_every_days` while idle; 0 is off.
+    #[test]
+    fn a_scheduled_run_is_due_every_eval_every_days_while_idle_and_never_at_zero() {
+        let day = 86_400;
+        assert!(scheduled_due(7, 100 * day, None, true), "no run yet");
+        assert!(scheduled_due(7, 100 * day, Some(93 * day), true));
+        assert!(!scheduled_due(7, 100 * day, Some(94 * day), true), "six days ago");
+        assert!(!scheduled_due(7, 100 * day, None, false), "not while busy");
+        assert!(!scheduled_due(0, 100 * day, None, true), "0 is off");
     }
 }

@@ -468,7 +468,7 @@ The knowledge base: index it, search it.
   delphi kb refresh [--stale [--minutes <n, at most 4>] | <id> (--still-current | <file.md | ->)]
   delphi kb quarantine [<id> [--restore]] | extract <page-id> (--auto | <candidates.json | ->)
   delphi kb index | reindex | stats | health [--json] | attest [<page-id>] | reads [--top <n>] | disputes [clear <ptr>]
-  delphi kb serve [--bind <host:port>] | eval build --real-only | accept | run [--path <p>] | compare <a> <b> | runs
+  delphi kb serve [--bind <host:port>] | eval build --real-only | accept | run | compare <a> <b> | runs | history
 ```
 
 ## Inspect
