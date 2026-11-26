@@ -306,7 +306,9 @@ sandbox = "off"
 # private list|purge` shows and removes it. private_to_models: "allow" lets a model of the host's own family read private entries.
 # [library]
 # unknown_licence = "excerpts"     # pointer | excerpts | private_text
-# private_text_max_mib = 500       # past it the oldest privately kept text is removed first
+# text_cache_max_mib = 1024        # the most text kept with no open licence, in MiB (at least 16); past it the least recently used
+#                                  # is evicted, its raw bytes first, then its text. private_text_max_mib is its old name and is
+#                                  # read when this key is absent.
 # private_to_models = "deny"       # deny | allow
 
 # Generated search pages (specs/057). `delphi pages search "<question>"` has the writer role write a page from the library and checks it

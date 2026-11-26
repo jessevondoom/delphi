@@ -742,7 +742,7 @@ impl Library {
             return Err(CANCELLED.into());
         }
         // The bibliography resolves the seed's spans as records, and names the sources read that gave no span.
-        let lib = Library { root: self.root.clone(), support: self.support.clone(), retractions: self.retractions.clone(), records: r.seed.records(), topic_slugs: None };
+        let lib = Library { root: self.root.clone(), support: self.support.clone(), retractions: self.retractions.clone(), records: r.seed.records(), topic_slugs: None, text_cache: self.text_cache };
         let mut cited: Vec<Cite> = Vec::new();
         for c in markers(&page.body).into_iter().chain(r.seed.named_sources.iter().map(|id| Cite { id: id.clone(), source: true, shown: None })) {
             if !cited.iter().any(|x| x.label() == c.label()) {
@@ -916,6 +916,8 @@ impl Library {
     /// host. Reads only.
     pub fn source_view(&self, id: &str, max: usize) -> Option<Value> {
         let meta = self.read_meta(id)?;
+        // the operator opened it: a use (`specs/142` §2.4 item 2)
+        self.note_use(&[id], delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0));
         let text = self.stored_text(id).unwrap_or_default();
         let truncated = text.chars().count() > max;
         let assets: Vec<String> = self.image_assets(id).into_iter().map(|a| a.uri).collect();

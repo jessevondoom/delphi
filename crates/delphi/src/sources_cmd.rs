@@ -258,6 +258,9 @@ fn show(lib: &Library, args: &[String], home: &Path) -> i32 {
         Some(Recheck::Fresh) | Some(Recheck::NotApplicable(_)) | None => {}
     }
     let Some(m) = lib.read_meta(id) else { return 1 };
+    // The operator opened it: a use, written to the ledger before this command ends (`specs/142` §2.4 item 2).
+    lib.note_use(&[id.as_str()], delphi_core::time::parse_rfc3339(&delphi_core::time::now_rfc3339()).unwrap_or(0));
+    lib.flush_uses();
     // `specs/142` §2.3 item 3: the anchors into this source that no longer resolve, each with its own quote, the version and date it
     // last resolved in, and why.
     let orphans = lib.orphans_of(id);

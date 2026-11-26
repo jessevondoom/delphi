@@ -461,7 +461,8 @@ pub struct KeepStep {
     /// `[library] unknown_licence` (`specs/119` §3): how much of a page no licence lets the library keep whole is kept. The default is
     /// `excerpts`: the passages the run quoted, with their context, and an ordinary anchor into each.
     pub unknown_licence: delphi_adapter::config::UnknownLicence,
-    /// `[library] private_text_max_mib`, in bytes: under `private_text`, past it the oldest privately kept text is removed first.
+    /// `[library] text_cache_max_mib`, in bytes (`specs/142` §2.4; `private_text_max_mib` is read as its old name): past it the least
+    /// recently used text kept with no open licence is evicted, its `raw` first.
     pub private_text_max: Option<u64>,
     /// `[research] archive_fallback` and `archive_endpoint` (`specs/119` §4): a page the run finds gone that a claim rests on is looked
     /// up in the archive. Off by default.
@@ -644,7 +645,8 @@ impl Library for LiveLibrary {
     /// `text` (a chained work's landing address, which the run never reads; `specs/101` §6 item 8) is fetched here, once.
     fn capture<'a>(&'a self, url: &'a str, text: &'a str, _trusted: bool) -> BoxFut<'a, Result<String, String>> {
         Box::pin(async move {
-            let lib = crate::library::Library::in_home(&self.home).with_retractions(self.retractions.clone());
+            // The cache cap is the library's own, after every capture it stores (`specs/142` §2.4 item 3).
+            let lib = crate::library::Library::in_home(&self.home).with_retractions(self.retractions.clone()).with_text_cache(self.keep.private_text_max);
             let budgets = crate::library::Budgets::default();
             if text.is_empty() {
                 return Ok(lib.add_url(&crate::fact_fetch::FetchPolicy::default(), url, &crate::library::AddOpts::default(), &budgets).await?.id);
@@ -654,13 +656,9 @@ impl Library for LiveLibrary {
             let opts = self.keep.opts(&snap)?;
             let stored = lib.add_fetched(url, &snap, &opts, &budgets)?;
             self.keep.remember(&stored);
-            // `specs/119` §3: anchors an earlier run wrote with the quote alone gain the passage now that the page is read again; and under
-            // `private_text` the privately kept text stays under its cap, oldest first, never the page just kept.
+            // `specs/119` §3: anchors an earlier run wrote with the quote alone gain the passage now that the page is read again.
             if self.keep.unknown_licence != delphi_adapter::config::UnknownLicence::Pointer && stored.level != crate::library::Level::Full {
                 lib.upgrade_quote_anchors(&stored.id, text);
-            }
-            if let Some(max) = self.keep.private_text_max.filter(|_| lib.read_meta(&stored.id).is_some_and(|m| m["kept_privately"].is_string())) {
-                lib.cap_private_text(max, &stored.id);
             }
             if stored.level == crate::library::Level::Full && matches!(stored.outcome, crate::library::Outcome::Added | crate::library::Outcome::NewVersion(_)) {
                 self.keep.pictures(&lib, &stored.id, &snap);

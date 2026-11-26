@@ -539,4 +539,7 @@ fn sources_show_lists_the_orphans_with_their_quote_version_date_and_reason() {
     let o = delphi_at(&home, &["sources", "show", &id, "--offline", "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!((v["orphans"][0]["quote"].as_str(), v["orphans"][0]["version"].as_str(), v["orphans"][0]["why"].as_str()), (Some("turns twice a day in this bay"), Some("1"), Some("not in the newer text")), "{v}");
+    // `show` is an open: the use is in the ledger
+    let ledger: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join("library/cache-use.json")).unwrap()).unwrap();
+    assert!(ledger["uses"][&id].is_i64(), "{ledger}");
 }

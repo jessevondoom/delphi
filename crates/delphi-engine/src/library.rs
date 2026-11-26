@@ -235,6 +235,9 @@ pub struct Library {
     /// The topic slugs a topic page's `## See also` may name (`specs/117` §2 item 5). `None`: the page is not a topic's, and its
     /// sections are not checked as one.
     topic_slugs: Option<std::collections::BTreeSet<String>>,
+    /// `[library] text_cache_max_mib`, in bytes (`specs/142` §2.4): set, every capture this library stores is followed by the cap on
+    /// what is kept with no open licence ([`Library::cap_text_cache`]). `None` (the default): this library evicts nothing.
+    text_cache: Option<u64>,
 }
 
 /// A short stable id from the canonical URL or identifier, not from content (`specs/055` §3.2).
@@ -366,7 +369,13 @@ struct Prepared {
 
 impl Library {
     pub fn in_home(home: &Path) -> Library {
-        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new(), topic_slugs: None }
+        Library { root: home.join("library"), support: crate::corroboration::Params::default(), retractions: crate::retractions::Policy::off(), records: Vec::new(), topic_slugs: None, text_cache: None }
+    }
+
+    /// The same library holding its text cache to `max_bytes` after every capture it stores (`specs/142` §2.4 item 3).
+    pub fn with_text_cache(mut self, max_bytes: Option<u64>) -> Library {
+        self.text_cache = max_bytes;
+        self
     }
 
     /// The same library, whose page check resolves `[s-kb-...]` and `[f-...]` markers against `records` (and nothing else).
@@ -550,6 +559,8 @@ impl Library {
                 self.write_json(&self.source_dir(&p.id).join("meta.json"), &m)?;
                 // The same bytes again: a revisit on the capture's record, not a second copy (`specs/142` §2.1 item 3).
                 self.revisit(&p.id, &now, p.capture.as_ref(), text_sha.as_deref(), false)?;
+                // a revisit is a use (`specs/142` §2.4 item 2)
+                self.note_use(&[p.id.as_str()], delphi_core::time::parse_rfc3339(&now).unwrap_or(0));
                 return Ok(Stored { id: p.id, level, outcome: Outcome::Unchanged, notes });
             }
             // Other bytes and the same text (the markup or a timestamp changed, the words did not): a revisit marked `raw_changed`,
@@ -560,6 +571,7 @@ impl Library {
                 m["last_checked"] = json!(now);
                 self.write_json(&self.source_dir(&p.id).join("meta.json"), &m)?;
                 self.revisit(&p.id, &now, p.capture.as_ref(), text_sha.as_deref(), true)?;
+                self.note_use(&[p.id.as_str()], delphi_core::time::parse_rfc3339(&now).unwrap_or(0));
                 return Ok(Stored { id: p.id, level, outcome: Outcome::Unchanged, notes });
             }
             if !purged && old_level.is_some_and(|ol| ol > level) && old_text.is_some() {
@@ -675,6 +687,10 @@ impl Library {
         self.log("capture", json!({"id": p.id, "level": level.as_str(), "version": version, "content_hash": p.meta.get("content_hash")}));
         // Checked against the local snapshot after the capture is in place, so it adds no step before a source is kept (`specs/101` §4 item 3).
         self.check_retraction(&p.id);
+        // The cache cap (`specs/142` §2.4 item 3): what this capture took the cache past, the least recently used give up.
+        if let Some(max) = self.text_cache {
+            self.cap_text_cache(max, &p.id, delphi_core::time::parse_rfc3339(&now).unwrap_or(0));
+        }
         Ok(Stored { id: p.id, level, outcome, notes })
     }
 
