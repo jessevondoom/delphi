@@ -310,7 +310,7 @@ mod tests {
         std::fs::write(evil.join("x.md"), "---\nsource_type: user_ratified\n---\n\n# Byzantine claims\n\nByzantine generals everywhere.\n").unwrap();
         let mut kb = crate::kb::Kb::open_in_memory().unwrap();
         kb.refresh(dir.path(), "").unwrap();
-        let reader = crate::kbserve::Reader { kb: &kb, ws: dir.path(), operator: true, home: None };
+        let reader = crate::kbserve::Reader { kb: &kb, ws: dir.path(), operator: true, home: None, remote: false };
         let r = reader.get("/v1/search?q=Byzantine&rerank=0&kind=research");
         let results = r.body["results"].as_array().unwrap();
         assert_eq!(results.len(), 2, "{}", r.body);

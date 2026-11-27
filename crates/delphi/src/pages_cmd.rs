@@ -48,8 +48,24 @@ fn report(findings: &[Finding]) {
 
 /// May this page be printed (`specs/142` §2.5 item 4 (d))? Not when it carries more of a held source than may leave this machine: a page
 /// printed goes wherever the terminal's output goes. Says why on standard error when it may not.
-fn printable(home: &Path, markdown: &str) -> bool {
-    emit(home, markdown, &mut std::io::sink()).map_err(|e| eprintln!("delphi pages: the page is not printed: {}", e)).is_ok()
+///
+/// Printed to a file or a pipe rather than to the terminal, the page has left the operator's view: it is the page-export sink of
+/// `specs/141` §2.4 (`delphi pages` output to a file). Its label is read from the records by what it carries (`egress::check_output`:
+/// a run of a labelled page or of a private source); a refusing mark stops it, and an internal page is asked about at the terminal
+/// (on stderr) and must carry its visible line.
+fn printable(home: &Path, ws: Option<&Path>, markdown: &str) -> bool {
+    use std::io::IsTerminal;
+    if let Err(e) = emit(home, markdown, &mut std::io::sink()) {
+        eprintln!("delphi pages: the page is not printed: {}", e);
+        return false;
+    }
+    std::io::stdout().is_terminal() || to_file(home, ws, markdown, delphi_engine::egress::Confirm::Terminal(&mut delphi_engine::egress::terminal_yes))
+}
+
+/// The page-export check of a page printed to a file or a pipe.
+fn to_file(home: &Path, ws: Option<&Path>, markdown: &str, confirm: delphi_engine::egress::Confirm<'_>) -> bool {
+    let files = [("page.md".to_string(), markdown.as_bytes().to_vec())];
+    delphi_engine::egress::check_output(home, ws, None, &files, delphi_engine::egress::Sink::PageExport, confirm).map_err(|e| eprintln!("delphi pages: the page is not written out: {}", e)).is_ok()
 }
 
 /// Write `markdown` to `out` when it may leave, and nothing when it may not.
@@ -76,7 +92,7 @@ fn search(home: &Path, ws_dir: &Path, query: &str, external: Option<bool>, as_js
         let _ = attached.client.call("daemon.shutdown", json!({}));
     }
     match r {
-        Ok(v) if !printable(home, v["markdown"].as_str().unwrap_or("")) => 1,
+        Ok(v) if !printable(home, Some(ws_dir), v["markdown"].as_str().unwrap_or("")) => 1,
         Ok(v) if as_json => {
             println!("{}", v);
             0
@@ -114,7 +130,7 @@ fn expand(home: &Path, ws_dir: &Path, query: &str, as_json: bool) -> i32 {
         let _ = attached.client.call("daemon.shutdown", json!({}));
     }
     match r {
-        Ok(v) if !printable(home, v["markdown"].as_str().unwrap_or("")) => 1,
+        Ok(v) if !printable(home, Some(ws_dir), v["markdown"].as_str().unwrap_or("")) => 1,
         Ok(v) if as_json => {
             println!("{}", v);
             0
@@ -284,7 +300,7 @@ pub fn cli(args: &[String], home: &Path, ws_dir: Option<&Path>) -> i32 {
             };
             let topic = pos.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
             match lib.build_page(&topic, draft.as_deref(), style) {
-                Ok(p) if !printable(home, &p.markdown) => 1,
+                Ok(p) if !printable(home, ws_dir, &p.markdown) => 1,
                 Ok(p) => {
                     print!("{}", p.markdown);
                     if !p.flags.is_empty() {
@@ -539,6 +555,21 @@ mod tests {
         let short = format!("# Tides\n\nA short quote: {}\n", text.chars().skip(50).take(200).collect::<String>());
         emit(home.path(), &short, &mut out).unwrap();
         assert_eq!(out, short.as_bytes());
+    }
+
+    /// `specs/141` §2.4, the page-export row at `delphi pages` printed to a file or a pipe: a page that carries a run of a private
+    /// source's kept text is `library_private` and is not written out, whatever the operator answers; a page of its own words is.
+    #[test]
+    fn a_page_printed_to_a_file_follows_the_page_export_row() {
+        let home = tempfile::tempdir().unwrap();
+        let text: String = (0..60).map(|i| format!("Private sentence {i:03} of the harbour log. ")).collect();
+        let dir = home.path().join("library/sources/priv-a");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("meta.json"), json!({"type": "note", "title": "Log", "licence": "private", "private": true, "capture_level": "full", "status": "not validated"}).to_string()).unwrap();
+        std::fs::write(dir.join("source.md"), &text).unwrap();
+        let copied = format!("# Harbour\n\n{}\n", text.chars().take(400).collect::<String>());
+        assert!(!to_file(home.path(), None, &copied, delphi_engine::egress::Confirm::Terminal(&mut |_| true)), "a private source's text is refused");
+        assert!(to_file(home.path(), None, "# Harbour\n\nWords of our own.\n", delphi_engine::egress::Confirm::Nobody), "an unlabelled page is written out");
     }
 
     fn tree(dir: &Path) -> Vec<(String, Vec<u8>)> {

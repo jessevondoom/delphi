@@ -78,6 +78,8 @@ pub struct Api {
     kb: Kb,
     ws: PathBuf,
     refreshed: Instant,
+    /// Listening on an address that is not loopback (`--allow-remote`): a sink (`specs/141` §2.4, the remote-serve row).
+    remote: bool,
 }
 
 impl Api {
@@ -86,7 +88,14 @@ impl Api {
         let mut kb = Kb::open(&ws.join("local/state.db")).map_err(|e| e.to_string())?;
         kb::attach_default(home, &mut kb).map_err(|e| e.to_string())?;
         kb.refresh(ws, "").map_err(|e| e.to_string())?;
-        Ok(Api { kb, ws: ws.to_path_buf(), refreshed: Instant::now() })
+        Ok(Api { kb, ws: ws.to_path_buf(), refreshed: Instant::now(), remote: false })
+    }
+
+    /// [`Api::new`] for a server on `bind`: one that is not on a loopback address serves no labelled document.
+    pub fn for_bind(home: &Path, ws: &Path, bind: &str) -> Result<Api, String> {
+        let mut api = Api::new(home, ws)?;
+        api.remote = !is_loopback_bind(bind);
+        Ok(api)
     }
 
     fn fresh(&mut self) {
@@ -102,7 +111,7 @@ impl Api {
             return fail(405, "this API is read-only: only GET and HEAD");
         }
         self.fresh();
-        Reader { kb: &self.kb, ws: &self.ws, operator: false, home: None }.get(target)
+        Reader { kb: &self.kb, ws: &self.ws, operator: false, home: None, remote: self.remote }.get(target)
     }
 }
 
@@ -117,17 +126,45 @@ pub struct Reader<'a> {
     pub operator: bool,
     /// The install's home, for the library's pictures (`src=lib:<source>/<file>`). Only the operator's view reads them.
     pub home: Option<&'a Path>,
+    /// Served on an address that is not loopback (`kb serve --allow-remote`): a sink of `specs/141` §2.4 that refuses every mark, so
+    /// no labelled document is listed, found or served. Never with `operator`.
+    pub remote: bool,
+}
+
+/// The labels of the index's documents for one request of a remote server, from the daemon's records at the time of the request.
+struct Labels {
+    lib: Option<crate::library::Library>,
 }
 
 impl Reader<'_> {
-    /// A held source's text (`specs/142` §2.5 item 4 (c)) is not served over HTTP, which is how a client off this machine reads: only
-    /// the operator's own view (the console and the app, through the daemon's socket) is given it.
+    /// A held source's text (`specs/142` §2.5 item 4 (c)) is not served over HTTP: only the operator's own view (the console and the
+    /// app, through the daemon's socket) is given it. Served off loopback, no labelled document is either (`specs/141` §2.4, AC-7):
+    /// its label is recomputed from the records and joined with its row's (`egress::index_label`), and any mark refuses.
     fn withheld(&self, rel_path: &str) -> bool {
-        !self.operator
-            && match crate::held_text::home_of_ws(self.ws) {
-                Some(home) => crate::held_text::withholds_path(home, rel_path),
-                None => rel_path.starts_with("library/sources/"),
-            }
+        let labels = self.labels();
+        let labeller = labels.lib.as_ref().map(|l| crate::label::Labeller::new(Some(l), Some(self.ws)));
+        self.withheld_by(labeller.as_ref(), rel_path)
+    }
+
+    fn labels(&self) -> Labels {
+        Labels { lib: (self.remote && !self.operator).then(|| crate::held_text::home_of_ws(self.ws)).flatten().map(|h| crate::library::Library::in_home(h).with_workspace(self.ws)) }
+    }
+
+    /// [`Reader::withheld`] with the request's labeller made once.
+    fn withheld_by(&self, labeller: Option<&crate::label::Labeller<'_>>, rel_path: &str) -> bool {
+        if self.operator {
+            return false;
+        }
+        let held = match crate::held_text::home_of_ws(self.ws) {
+            Some(home) => crate::held_text::withholds_path(home, rel_path),
+            None => rel_path.starts_with("library/sources/"),
+        };
+        held || (self.remote
+            && match labeller {
+                Some(l) => crate::egress::check_label(&crate::egress::index_label(l, self.kb, rel_path), crate::egress::Sink::RemoteServe).refused(),
+                // no records to read: every mark
+                None => true,
+            })
     }
 
     /// The documents this request may see.
@@ -215,13 +252,22 @@ impl Reader<'_> {
             v["kind"] = json!(kind_of(&d.rel_path, &d.zone));
             v
         };
+        // Served off loopback, a labelled document is not listed either (`specs/141` §2.1 item 5: its path and title are its own);
+        // the listing is then filtered here, after the newest-first listing, as a kind is.
+        let labels = self.labels();
+        let labeller = labels.lib.as_ref().map(|l| crate::label::Labeller::new(Some(l), Some(self.ws)));
+        let shown = |d: &&kb::DocInfo| !self.remote || !self.withheld_by(labeller.as_ref(), &d.rel_path);
         let Some(kind) = q.get("kind").filter(|k| !k.is_empty()) else {
-            let docs = self.kb.documents(collection, limit, offset, &self.view(q)).map_err(|e| e.to_string())?;
-            return Ok(reply(200, json!(docs.iter().map(with_kind).collect::<Vec<_>>())));
+            if !self.remote {
+                let docs = self.kb.documents(collection, limit, offset, &self.view(q)).map_err(|e| e.to_string())?;
+                return Ok(reply(200, json!(docs.iter().map(with_kind).collect::<Vec<_>>())));
+            }
+            let all = self.kb.documents(collection, 100_000, 0, &self.view(q)).map_err(|e| e.to_string())?;
+            return Ok(reply(200, json!(all.iter().filter(shown).skip(offset).take(limit).map(with_kind).collect::<Vec<_>>())));
         };
         // A kind comes from the path, so it is filtered here, after the newest-first listing.
         let all = self.kb.documents(collection, 100_000, 0, &self.view(q)).map_err(|e| e.to_string())?;
-        let docs: Vec<Value> = all.iter().filter(|d| kind_of(&d.rel_path, &d.zone) == kind.as_str()).skip(offset).take(limit).map(with_kind).collect();
+        let docs: Vec<Value> = all.iter().filter(|d| kind_of(&d.rel_path, &d.zone) == kind.as_str()).filter(shown).skip(offset).take(limit).map(with_kind).collect();
         Ok(reply(200, json!(docs)))
     }
 
@@ -260,8 +306,10 @@ impl Reader<'_> {
         // `specs/115` §11 item 8: the operator sees private projects' research too, labelled private.
         let private: Vec<String> = if projects.is_some() { crate::scope::project_entries(self.ws).into_iter().filter(|e| e.private).map(|e| e.id.as_str().to_string()).collect() } else { Vec::new() };
         let mut out = Vec::new();
+        let labels = self.labels();
+        let labeller = labels.lib.as_ref().map(|l| crate::label::Labeller::new(Some(l), Some(self.ws)));
         for h in hits {
-            if self.withheld(&h.rel_path) {
+            if self.withheld_by(labeller.as_ref(), &h.rel_path) {
                 continue;
             }
             let Some(d) = self.kb.document(&h.rel_path, &self.view_of(q, &h.rel_path)).map_err(|e| e.to_string())? else { continue };
@@ -382,6 +430,10 @@ impl Reader<'_> {
             && [".png", ".jpg", ".jpeg", ".gif"].iter().any(|e| lower.ends_with(e));
         if !named_ok {
             return Ok(fail(400, "`src` must be a relative path to a .png, .jpg, .jpeg or .gif file below the document's directory"));
+        }
+        // a picture of a document a remote reader may not see is not served either
+        if self.remote && self.withheld(&path) {
+            return Ok(fail(404, "not in the knowledge base"));
         }
         let Some(info) = self.kb.document(&path, &self.view_of(q, &path)).map_err(|e| e.to_string())? else { return Ok(fail(404, "not in the knowledge base")) };
         let Some(src) = kb::sources(self.ws).into_iter().find(|s| s.rel_path == info.rel_path) else { return Ok(fail(404, "no longer on disk")) };
@@ -568,7 +620,7 @@ impl Running {
 
 /// Start serving on `bind` (`host:port`; port 0 picks one). The index is built before the first request.
 pub fn start(home: &Path, ws: &Path, bind: &str, token: &str) -> Result<Running, String> {
-    let mut api = Api::new(home, ws)?;
+    let mut api = Api::for_bind(home, ws, bind)?;
     let server = tiny_http::Server::http(bind).map_err(|e| format!("cannot listen on {}: {}", bind, e))?;
     let addr = server.server_addr().to_ip().ok_or("not an IP address")?;
     let (stop, loopback, token) = (Arc::new(AtomicBool::new(false)), is_loopback_bind(bind), token.to_string());
@@ -626,7 +678,7 @@ pub fn token_at(path: &Path) -> Result<String, String> {
     Ok(token)
 }
 
-const USAGE: &str = "usage: delphi kb serve [--bind <host:port>] [--token-file <path>] [--allow-remote]\n  a read-only JSON API over the knowledge base: /v1/search?q=  /v1/doc?path=  /v1/collections  /v1/kinds  /v1/documents  /v1/health\n  every request needs `Authorization: Bearer <token>`; the token is made on first use and kept in the token file";
+const USAGE: &str = "usage: delphi kb serve [--bind <host:port>] [--token-file <path>] [--allow-remote]\n  a read-only JSON API over the knowledge base: /v1/search?q=  /v1/doc?path=  /v1/collections  /v1/kinds  /v1/documents  /v1/health\n  every request needs `Authorization: Bearer <token>`; the token is made on first use and kept in the token file\n  with --allow-remote no labelled document (private, internal, confidential, held text) is listed, found or served";
 
 /// `delphi kb serve`.
 pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
@@ -833,7 +885,7 @@ mod tests {
         assert_eq!(size(&mut api, "src=wide.png&max=0"), (1, 1), "zero is the least there is, one pixel a side");
         assert_eq!(size(&mut api, "src=wide.png&max=%31%32%30%30"), (1200, 600), "the value is read after percent-decoding, as the bridge reads it");
         // The daemon's `kb.get` serves the operator's view through the same reader, with the target as written.
-        let operator = Reader { kb: &api.kb, ws: ws.path(), operator: true, home: Some(home.path()) }.get("/v1/image?path=specs/alpha.md&src=wide.png&max=1200");
+        let operator = Reader { kb: &api.kb, ws: ws.path(), operator: true, home: Some(home.path()), remote: false }.get("/v1/image?path=specs/alpha.md&src=wide.png&max=1200");
         assert_eq!((operator.status, operator.body["width"].as_u64(), operator.body["height"].as_u64()), (200, Some(1200), Some(600)));
     }
 
@@ -879,7 +931,7 @@ mod tests {
         let (home, ws) = workspace();
         std::fs::write(ws.path().join("base/specs/refs.md"), doc("internal_generated", "# Refs\n\nSee [wiki](https://en.wikipedia.org/wiki/Zebra) and [lookalike](https://en.wikipedia.org.evil.example/) and [plain](http://en.wikipedia.org/x).\n")).unwrap();
         let api = Api::new(home.path(), ws.path()).unwrap();
-        let d = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: None }.get("/v1/doc?path=specs/refs.md").body;
+        let d = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: None, remote: false }.get("/v1/doc?path=specs/refs.md").body;
         let listed: Vec<bool> = d["links"].as_array().unwrap().iter().map(|l| l["listed"].as_bool().unwrap()).collect();
         assert_eq!(listed, [true, false, false]);
     }
@@ -892,7 +944,7 @@ mod tests {
         std::fs::write(ctx.join("clip.mp4"), b"x").unwrap();
         std::fs::write(ctx.join("scan.pdf"), b"%PDF-1.4 junk").unwrap();
         let api = Api::new(home.path(), ws.path()).unwrap();
-        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: None };
+        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: None, remote: false };
         let clip = op.get("/v1/doc?path=context/clip.mp4");
         assert_eq!(clip.status, 200, "{}", clip.body);
         assert!(clip.body["text"].as_str().unwrap().contains("video file clip.mp4") && clip.body["stale"] == false);
@@ -905,7 +957,7 @@ mod tests {
     fn the_operator_sees_everything_with_its_provenance_and_http_cannot_widen_its_view() {
         let (home, ws) = workspace();
         let mut api = Api::new(home.path(), ws.path()).unwrap();
-        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: None };
+        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: None, remote: false };
         let paths = |r: Reply| -> Vec<String> { r.body["results"].as_array().unwrap().iter().map(|x| x["path"].as_str().unwrap().to_string()).collect() };
         let all = op.get("/v1/search?q=zebra&rerank=0");
         let listed = paths(Reply { status: all.status, body: all.body.clone() });
@@ -1018,7 +1070,7 @@ mod tests {
         let file = uri.strip_prefix("lib:_figures/").unwrap();
 
         let api = Api::new(home.path(), ws.path()).unwrap();
-        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: Some(home.path()) };
+        let op = Reader { kb: &api.kb, ws: &api.ws, operator: true, home: Some(home.path()), remote: false };
         let r = op.get(&format!("/v1/image?src={}", uri));
         assert_eq!(r.status, 200, "{}", r.body);
         assert!(r.body["credit"].is_null(), "a generated figure never carries a source picture credit: {}", r.body);

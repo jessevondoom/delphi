@@ -42,23 +42,44 @@ pub fn pages_list(home: &Path, ws: &Path, now: u64, ttl: u64) -> Value {
 }
 
 /// `pages.get {slug, version?}`: a topic, its page (or the version named) and the records its citation panel shows.
-pub fn pages_get(home: &Path, ws: &Path, now: u64, p: &Value) -> Result<Value, String> {
-    let lib = Library::in_home(home);
+///
+/// The reply says what the window may do with the page (`specs/141` §2.4): `export` (its export and print, at `Sink::PageExport`) and
+/// `copy` (at `Sink::Clipboard`), each `egress::view_decision` over the page's label as a sink reads it (recomputed from the material
+/// its sidecar lists, `label::at_sink`), and `label`. `may_export` is false when the export is refused. `on_this_machine`: whether the
+/// client is on this machine; a client off it is sent nothing of a labelled page (`egress::reply_to_client`).
+pub fn pages_get(home: &Path, ws: &Path, now: u64, p: &Value, on_this_machine: bool) -> Result<Value, String> {
+    let lib = Library::in_home(home).with_workspace(ws);
     let slug = arg(p, "slug")?;
     let version = p["version"].as_str();
     let (e, md) = lib.topic_get(slug, version, &ctx(ws, now)).ok_or_else(|| format!("no topic `{}`{}", slug, version.map(|v| format!(" with a version `{}`", v)).unwrap_or_default()))?;
+    let label = page_label(&lib, ws, slug, version);
+    crate::egress::reply_to_client(Some(&label), on_this_machine)?;
     let mut v = e.to_json();
-    // What the app may export or print of this page (`specs/142` §2.5 item 4 (h)): nothing, when it carries more of a held source than
-    // may leave this machine. The window is shown the page; its export and print are refused.
+    // What the app may export or print of this page: what its label's row allows (`specs/141` §2.4), and nothing when it carries more of
+    // a held source than may leave this machine (`specs/142` §2.5 item 4 (h)). The window is shown the page either way.
     let refused = lib.held().refused(&md, &[]);
-    v["may_export"] = json!(refused.is_empty());
-    if !refused.is_empty() {
-        v["export_refused"] = json!(crate::held_text::refusal(&refused));
+    let held = (!refused.is_empty()).then(|| crate::held_text::refusal(&refused));
+    let export = crate::egress::view_decision(&label, crate::egress::Sink::PageExport, held);
+    v["may_export"] = json!(export["decision"] != "refuse");
+    if export["decision"] == "refuse" {
+        v["export_refused"] = export["reason"].clone();
     }
+    v["export"] = export;
+    v["copy"] = crate::egress::view_decision(&label, crate::egress::Sink::Clipboard, None);
+    v["handling"] = label.to_json();
     v["markdown"] = json!(md);
     v["version_shown"] = json!(version);
     v["built"] = json!(!md.is_empty());
     Ok(v)
+}
+
+/// The label of the page shown, as a sink reads it: from the sidecar it was built with, recomputed against the records now. A page with
+/// no sidecar to read is every mark.
+fn page_label(lib: &Library, ws: &Path, slug: &str, version: Option<&str>) -> crate::label::Label {
+    match lib.topic_side_shown(slug, version) {
+        Some(side) => crate::label::at_sink(lib, Some(ws), &side),
+        None => crate::label::Label::every(&format!("the page `{slug}`")),
+    }
 }
 
 /// `pages.versions {slug}`.
@@ -102,15 +123,25 @@ pub fn topics_get(home: &Path, ws: &Path, p: &Value) -> Result<Value, String> {
 }
 
 /// `library.source {id}`: a source's record, its kept text (or excerpts) up to [`SOURCE_TEXT_MAX`], and its pictures.
-pub fn library_source(home: &Path, p: &Value) -> Result<Value, String> {
+pub fn library_source(home: &Path, ws: &Path, p: &Value, on_this_machine: bool) -> Result<Value, String> {
     let id = arg(p, "id")?;
     let id = id.strip_prefix("s-").unwrap_or(id);
-    let lib = Library::in_home(home);
+    let lib = Library::in_home(home).with_workspace(ws);
+    let label = crate::label::Labeller::new(Some(&lib), Some(ws)).source(id).label;
+    crate::egress::reply_to_client(Some(&label), on_this_machine)?;
     let mut v = lib.source_view(id, SOURCE_TEXT_MAX).ok_or_else(|| format!("no source `{}`", id))?;
     // A held source (`specs/142` §2.5 item 4 (h)): the paired app on this machine shows its text, the operator's own view, and is told
     // it may not export, copy or print more of it than the bound. These methods answer only the console and the app, on sockets of
-    // this machine (`need_reader`): no client off this machine is sent any of it.
+    // this machine (`need_reader`); a client off this machine is sent nothing labelled (`egress::reply_to_client`).
     crate::held_text::mark_view(&mut v, lib.read_meta(id).is_some_and(|m| crate::library::is_held(&m)));
+    // What its label's row allows the window's copy (`specs/141` §2.4, the clipboard row): a private, personal or confidential
+    // source is not copied; an internal one is copied labelled, after the operator confirms.
+    let copy = crate::egress::view_decision(&label, crate::egress::Sink::Clipboard, None);
+    if copy["decision"] != "send" {
+        v["may_export"] = json!(false);
+    }
+    v["copy"] = copy;
+    v["handling"] = label.to_json();
     Ok(v)
 }
 

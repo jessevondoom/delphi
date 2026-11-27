@@ -1244,7 +1244,7 @@ mod tests {
         let f = fx();
         let (theirs, _, _) = x4(&f);
         let kb = Kb::open_readonly(&f.ws.join("local/state.db")).unwrap();
-        let reader = |operator: bool| crate::kbserve::Reader { kb: &kb, ws: &f.ws, operator, home: Some(&f.home) };
+        let reader = |operator: bool| crate::kbserve::Reader { kb: &kb, ws: &f.ws, operator, home: Some(&f.home), remote: false };
         let results = |r: &crate::kbserve::Reply| -> Vec<(String, Option<String>)> { r.body["results"].as_array().unwrap().iter().map(|x| (x["path"].as_str().unwrap().to_string(), x["project"].as_str().map(String::from))).collect() };
         let all = reader(true).get("/v1/search?q=quokkatide+survey+spring+range&rerank=0&facets=1&projects=all&limit=30");
         assert_eq!(all.status, 200, "{}", all.body);

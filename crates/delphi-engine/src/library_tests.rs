@@ -2185,7 +2185,7 @@ mod page_search_cache {
 
         // the console's picture reader serves it to the operator only, and nothing outside `assets/`
         let kb = crate::kb::Kb::open_in_memory().unwrap();
-        let get = |operator: bool, src: &str| crate::kbserve::Reader { kb: &kb, ws: &ws, operator, home: Some(d.path()) }.get(&format!("/v1/image?src={src}"));
+        let get = |operator: bool, src: &str| crate::kbserve::Reader { kb: &kb, ws: &ws, operator, home: Some(d.path()), remote: false }.get(&format!("/v1/image?src={src}"));
         let ok = get(true, &format!("lib:{}/chart.png", s.id));
         assert_eq!((ok.status, ok.body["width"].as_u64()), (200, Some(64)), "{}", ok.body);
         assert_eq!(ok.body["credit"]["line"], "author not stated, internal, workspace:docs/img/chart.png", "the picture comes with its credit");
@@ -2229,7 +2229,7 @@ mod page_search_cache {
         l.write_json(&l.source_dir(&s.id).join("meta.json"), &meta).unwrap();
 
         let kb = crate::kb::Kb::open_in_memory().unwrap();
-        let get = |src: &str| crate::kbserve::Reader { kb: &kb, ws: &ws, operator: true, home: Some(d.path()) }.get(&format!("/v1/image?src={src}"));
+        let get = |src: &str| crate::kbserve::Reader { kb: &kb, ws: &ws, operator: true, home: Some(d.path()), remote: false }.get(&format!("/v1/image?src={src}"));
         let w = get(&format!("lib:{}/map.webp&max=40", s.id));
         assert_eq!((w.status, w.body["width"].as_u64(), w.body["height"].as_u64()), (200, Some(40), Some(20)), "{}", w.body);
         assert!(w.body["credit"]["line"].as_str().is_some_and(|c| c.contains("CC-BY-4.0")), "{}", w.body);

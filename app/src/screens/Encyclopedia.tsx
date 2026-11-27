@@ -5,7 +5,7 @@ import { Rich, toSection } from '../Rich.tsx';
 import type { Bridge } from '../bridge.ts';
 import {
   HELD_RUN_MAX, NOTE_MAX, builtAt, byDay, byLetter, byProject, changeRows, contents, continueCommand, dayOfUnix, disputeCommand, findQuote, kindOf, matching, parts, passages,
-  copyAllowed, exportAllowed, pieces, rebuildCommand, routeInAddress, sectionNote, shownValue, sourceFacts, statusWhy,
+  copyDecision, exportAllowed, exportDecision, labelledCopy, pieces, rebuildCommand, routeInAddress, sectionNote, shownValue, sourceFacts, statusWhy,
   type Anchor, type Changes, type ClaimView, type Links, type Orphan, type PageParts, type Research, type ResearchRecord, type Route, type SourceView, type Topic, type TopicPage, type Version,
 } from '../ency.ts';
 import { EMPTY, annotate, arrive, editNote, exportMarkdown, fresh, lastHere, markRead, newSince, parseMarks, passageKey, pinned, placed, togglePin, type Annotation, type Marks } from '../marks.ts';
@@ -373,6 +373,8 @@ function TopicView({ bridge, go, way, topics, marksSaid, slug, version, research
   const links = useRead<Links>(bridge, 'pages.links', { slug });
   const [citing, setCiting] = useState<string[] | null>(null);
   const [said, setSaid] = useState('');
+  // A labelled page's export, print or copy waits here for the operator's one confirmation (spec 141 §2.4 item 3).
+  const [confirming, setConfirming] = useState<{ what: 'export' | 'print' | 'copy'; text?: string } | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const page = got.data;
   const p = useMemo(() => (page ? parts(page.markdown) : null), [page]);
@@ -412,10 +414,23 @@ function TopicView({ bridge, go, way, topics, marksSaid, slug, version, research
   };
   const ctx = { bridge, cite: setCiting, openPage: (s: string) => go({ v: 'topic', slug: s }), anchors: true, wrap };
   const plainCtx = { ...ctx, wrap: undefined };
-  const out = () => {
+  const shown = (e: unknown) => setSaid(e instanceof Error ? e.message : String(e));
+  const ref = { slug, version: version ?? null };
+  // What the daemon says may leave of this page (spec 141 §2.4): the app's Rust side asks it again before it writes or prints.
+  const leaving = exportDecision(page);
+  const out = (confirmed: boolean) => {
     const file = exportMarkdown(page, new Date().toISOString().slice(0, 10));
     if (!file || !bridge) { setSaid('This page has no banner to export with; it is not exported.'); return; }
-    bridge.exportPage(file.name, file.text).then((where) => setSaid(`Exported as Markdown: ${where}`), (e: unknown) => setSaid(e instanceof Error ? e.message : String(e)));
+    bridge.exportPage(file.name, file.text, ref, confirmed).then((where) => setSaid(`Exported as Markdown: ${where}`), shown);
+  };
+  const print = (confirmed: boolean) => { void bridge?.print(ref, confirmed).catch(shown); };
+  const ask = (what: 'export' | 'print') => (leaving === 'labelled' ? setConfirming({ what }) : what === 'export' ? out(false) : print(false));
+  const confirm = () => {
+    const c = confirming;
+    setConfirming(null);
+    if (c?.what === 'export') out(true);
+    else if (c?.what === 'print') print(true);
+    else if (c?.what === 'copy' && c.text !== undefined) void navigator.clipboard?.writeText(labelledCopy(page.copy?.line ?? null, c.text)).then(() => setSaid('Copied, with its label.'), shown);
   };
   const earlier = versions.data?.versions ?? [];
 
@@ -443,18 +458,35 @@ function TopicView({ bridge, go, way, topics, marksSaid, slug, version, research
         {!version && page.change && <p className="changed"><span className="caps">What changed</span> {page.change}</p>}
         <div className="row no-print">
           <button type="button" className="btn small" aria-pressed={pinned(marks, slug)} onClick={() => mark((m) => togglePin(m, slug))}>{pinned(marks, slug) ? 'Unpin from the home page' : 'Pin to the home page'}</button>
-          {page.markdown && exportAllowed(page) && <button type="button" className="btn small" onClick={out}>Export as Markdown</button>}
-          {page.markdown && exportAllowed(page) && <button type="button" className="btn small" onClick={() => { void bridge?.print().catch((e: unknown) => setSaid(e instanceof Error ? e.message : String(e))); }}>Print or save as PDF</button>}
-          {page.markdown && !exportAllowed(page) && <span className="muted" style={{ fontSize: 12 }}>Not exported or printed: {page.export_refused ?? 'the page carries more of a source kept for reading on this machine than may leave it'}.</span>}
+          {page.markdown && exportAllowed(page) && leaving !== 'refuse' && <button type="button" className="btn small" onClick={() => ask('export')}>Export as Markdown</button>}
+          {page.markdown && exportAllowed(page) && leaving !== 'refuse' && <button type="button" className="btn small" onClick={() => ask('print')}>Print or save as PDF</button>}
+          {page.markdown && (!exportAllowed(page) || leaving === 'refuse') && <span className="muted" style={{ fontSize: 12 }}>Not exported or printed: {page.export_refused ?? 'the page carries more of a source kept for reading on this machine than may leave it'}.</span>}
           {!version && <CopyCommand small label="Rebuild now" command={rebuildCommand(slug)} request={rebuildRequest(slug)} />}
           {topicId && <Ask small label="Ask a follow-up" prompt={`One line that narrows the next research run on this topic (at most ${NOTE_MAX} characters).`} max={NOTE_MAX} build={(w) => (w.trim() ? continueCommand(topicId, w) : '')} request={(typed) => followUpRequest(topicId, typed)} asking={FOLLOW_UP} />}
         </div>
         {(said || marksSaid) && <div className="muted no-print" style={{ fontSize: 12 }} role="status">{[said, marksSaid].filter(Boolean).join(' ')}</div>}
+        {confirming && (
+          <div className="card gold no-print" role="alertdialog" aria-label="Confirm a labelled page leaving this machine">
+            <strong>{(confirming.what === 'copy' ? page.copy : page.export)?.line ?? 'This page is labelled.'}</strong>
+            <div className="muted" style={{ fontSize: 12 }}>{(confirming.what === 'copy' ? page.copy : page.export)?.reason} It leaves with this line at its top. {confirming.what === 'export' ? 'Export it?' : confirming.what === 'print' ? 'Print it?' : 'Copy it?'}</div>
+            <div className="row">
+              <button type="button" className="btn small" onClick={confirm}>{confirming.what === 'export' ? 'Export it labelled' : confirming.what === 'print' ? 'Print it labelled' : 'Copy it labelled'}</button>
+              <button type="button" className="btn small" onClick={() => setConfirming(null)}>Keep it here</button>
+            </div>
+          </div>
+        )}
 
         {!page.markdown ? (
           <div className="empty">This topic has no page yet. {page.due ?? ''} The daemon builds it while idle; "Rebuild now" asks for it at once.</div>
         ) : (
-          <div className="page-text">
+          <div className="page-text" onCopy={(e) => {
+            // A copy of the page (spec 141 §2.4, the clipboard row): refused, or held for the operator's confirmation and sent
+            // with its visible line, as the daemon's `copy` decision says.
+            const selected = window.getSelection()?.toString() ?? '';
+            const d = copyDecision(page, selected);
+            if (d === 'refuse') { e.preventDefault(); setSaid(`Not copied: ${page.copy?.reason || `at most ${HELD_RUN_MAX} characters of a source kept for reading on this machine are copied at a time`}.`); }
+            else if (d === 'labelled') { e.preventDefault(); setConfirming({ what: 'copy', text: selected }); }
+          }}>
             {p.banner && <p className="banner">{p.banner}</p>}
             {p.lead && <div className="said doc"><Rich text={p.lead} ctx={ctx} /></div>}
 
@@ -596,6 +628,8 @@ function SourcePage({ bridge, go, way, id, quote }: Shared & { id: string; quote
   const got = useRead<SourceView>(bridge, 'library.source', quote ? { id, quote } : { id });
   const at = useRef<HTMLElement>(null);
   const [copyNote, setCopyNote] = useState('');
+  // A labelled source's copy waits here for the operator's one confirmation (spec 141 §2.4 item 3).
+  const [pending, setPending] = useState<string | null>(null);
   const v = got.data;
   const range = useMemo(() => (v && quote ? findQuote(v.text, quote) : null), [v, quote]);
   // The quoted passage is brought into view at once: no gliding, so nothing for reduce motion to still.
@@ -626,11 +660,24 @@ function SourcePage({ bridge, go, way, id, quote }: Shared & { id: string; quote
 
       <section className={v.text_held ? 'stack no-print' : 'stack'} aria-label="Text" onCopy={(e) => {
         // A held source (spec 142 §2.5 item 4 (h)): shown here, but not copied out past the bound, and not printed (`no-print`).
+        // Its label (spec 141 §2.4, the clipboard row): a private, personal or confidential source is not copied; an internal one is
+        // copied with its visible line once the operator confirms.
         const selected = window.getSelection()?.toString() ?? '';
-        if (!copyAllowed(v, selected)) { e.preventDefault(); setCopyNote(`Not copied: this text is kept for reading on this machine only; copy at most ${HELD_RUN_MAX} characters at a time.`); }
+        const d = copyDecision(v, selected);
+        if (d === 'refuse') { e.preventDefault(); setCopyNote(v.copy && v.copy.decision === 'refuse' ? `Not copied: ${v.copy.reason}.` : `Not copied: this text is kept for reading on this machine only; copy at most ${HELD_RUN_MAX} characters at a time.`); }
+        else if (d === 'labelled') { e.preventDefault(); setPending(selected); }
       }}>
         <h2 className="caps">{v.passage_only ? 'The cited passage' : 'Its text as the library keeps it'}</h2>
         {copyNote && <div className="notice" role="status">{copyNote}</div>}
+        {pending !== null && (
+          <div className="card gold no-print" role="alertdialog" aria-label="Confirm a labelled copy">
+            <strong>{v.copy?.line}</strong> <span className="muted" style={{ fontSize: 12 }}>{v.copy?.reason} The copy carries this line at its top.</span>
+            <div className="row">
+              <button type="button" className="btn small" onClick={() => { const t = pending; setPending(null); void navigator.clipboard?.writeText(labelledCopy(v.copy?.line ?? null, t)).then(() => setCopyNote('Copied, with its label.'), () => setCopyNote('The text could not be copied.')); }}>Copy it labelled</button>
+              <button type="button" className="btn small" onClick={() => setPending(null)}>Keep it here</button>
+            </div>
+          </div>
+        )}
         {quote && !range && <div className="notice" role="status">{v.passage_only ? 'The quoted passage is not in the text the library keeps for this source, so nothing of it is shown.' : 'The quoted passage was not found in the stored text as written; the text is shown from its start.'} The quotation: <span className="quoted">{quote}</span></div>}
         {v.passage_only && <span className="muted" style={{ fontSize: 12 }}>This source is kept privately for retrieval (spec 119): this window shows the passage a claim cites and no more of it. <span className="mono">delphi sources show {v.id}</span> at a terminal prints its record.</span>}
         {v.text ? (

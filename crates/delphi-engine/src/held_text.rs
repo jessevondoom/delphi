@@ -554,12 +554,14 @@ pub const SENDERS: &[Sender] = &[
     Sender { name: "the archive writer of `delphi bundle package`", file: "crates/delphi/src/bundle_pack.rs", how: How::NotASink { why: "its one production caller, `package` in bundle_cmd.rs, asks the predicate over the bundle's files before it is called" }, proof: Some(("crates/delphi/src/bundle_cmd.rs", "a_bundle_whose_files_quote_a_held_source_is_not_packaged")) },
     Sender { name: "a bundle published through Xenia", file: "crates/delphi/src/bundle_xenia.rs", how: How::Asks { call: "egress::check_path(" }, proof: Some(("crates/delphi-engine/src/held_text_tests.rs", "a_file_that_quotes_a_held_source_is_refused_at_every_file_exit")) },
     // (f) a document or a deck written by the document path of 095
-    Sender { name: "write_html | write_report | write_deck | write_sheet | write_archive | write_chart | write_diagram", file: "crates/delphi-engine/src/artifacts.rs", how: How::Asks { call: "held_text::check_files(" }, proof: Some(("crates/delphi-engine/src/artifacts.rs", "a_document_or_deck_that_quotes_a_held_source_is_refused")) },
+    Sender { name: "write_html | write_report | write_deck | write_sheet | write_archive | write_chart | write_diagram", file: "crates/delphi-engine/src/artifacts.rs", how: How::Asks { call: "egress::check_output(" }, proof: Some(("crates/delphi-engine/src/artifacts.rs", "a_document_or_deck_that_quotes_a_held_source_is_refused")) },
     // (g) the daemon's own push
     Sender { name: "the daemon's push of a task branch (merge = \"pr\")", file: "crates/delphi-engine/src/worktree.rs", how: How::Asks { call: "held_text::check_files(" }, proof: Some(("crates/delphi-engine/src/worktree.rs", "a_push_whose_range_quotes_a_held_source_is_refused_and_nothing_is_pushed")) },
     // (h) the app's source view and its export, copy and print
     Sender { name: "library.source and pages.get (the reply says what may be exported)", file: "crates/delphi-engine/src/encyclopedia.rs", how: How::Asks { call: "held_text::mark_view(" }, proof: Some(("crates/delphi-engine/src/held_text_tests.rs", "the_apps_views_say_a_held_source_may_not_be_exported_and_no_client_off_this_machine_reads_them")) },
-    Sender { name: "the app's export_page, print_page and copy", file: "app/src-tauri/src/lib.rs", how: How::NotASink { why: "the window refuses export, print and a copy past the bound when the daemon's reply says `may_export: false` (app/src/screens/Encyclopedia.tsx, app/test/held.test.ts)" }, proof: Some(("app/test/held.test.ts", "")) },
+    // since `specs/141` slice C the app's export and print read the page again and act on the daemon's decision (`page_gate`), which
+    // refuses a page that carries more of a held source than may leave; the window's copy follows the reply's `copy` decision
+    Sender { name: "the app's export_page, print_page and copy", file: "app/src-tauri/src/lib.rs", how: How::Asks { call: "page_gate(" }, proof: Some(("app/src-tauri/src/sink.rs", "export_refuses_a_private_page")) },
     // the network files that carry no held text (`egress.rs` NETWORK_FILES)
     Sender { name: "model API calls", file: "crates/delphi-adapter/src/http.rs", how: How::NotASink { why: PROMPT }, proof: None },
     Sender { name: "the model-call abstraction", file: "crates/delphi-engine/src/model.rs", how: How::NotASink { why: PROMPT }, proof: None },

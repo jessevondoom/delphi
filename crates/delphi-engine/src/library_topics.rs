@@ -634,6 +634,17 @@ impl Library {
         (v["kind"] == KIND && v["slug"] == slug).then_some(v)
     }
 
+    /// The sidecar of the page a reader is shown (`specs/141` §2.2, read at the sink): the current one, or the record an earlier
+    /// version was kept with. `None` when there is none, which a sink reads as every mark.
+    pub fn topic_side_shown(&self, slug: &str, version: Option<&str>) -> Option<Value> {
+        let slug = self.topic_resolve(slug)?;
+        match version {
+            None => self.topic_side(&slug),
+            Some(v) if valid_stamp(v) => serde_json::from_slice(&std::fs::read(self.topic_versions_dir(&slug).join(format!("{}.json", v))).ok()?).ok(),
+            Some(_) => None,
+        }
+    }
+
     fn write_topic_side(&self, slug: &str, v: &Value) -> Result<(), String> {
         self.ensure().map_err(|e| e.to_string())?;
         self.write_json(&self.topic_side_path(slug), v)
@@ -2150,7 +2161,7 @@ mod seed_tests {
         assert!(md.contains("# Estuary lag"));
         assert_eq!(l.topic_versions(&old).unwrap().len(), 1);
         assert_eq!(l.topic_links(&old).unwrap()["links_here"], json!(["moon"]), "a link to the old slug links here");
-        let got = crate::encyclopedia::pages_get(home.path(), &ws, 300, &json!({"slug": old})).unwrap();
+        let got = crate::encyclopedia::pages_get(home.path(), &ws, 300, &json!({"slug": old}), true).unwrap();
         assert_eq!(got["slug"], "estuary-lag", "the app's lookup resolves the alias");
         // A new topic whose title gives the old slug takes the next free one; the alias still names the renamed topic.
         let fresh = l.topic_create(&title, Origin::Operator, 400).unwrap();

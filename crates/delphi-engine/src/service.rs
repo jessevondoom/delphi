@@ -412,6 +412,15 @@ fn need_reader(scope: Scope) -> Result<(), RpcError> {
     }
 }
 
+/// Is the client of this call on this machine (`specs/141` §2.4, the row of a client off this machine)? Yes for every client today:
+/// the daemon serves Unix sockets only (`delphi_core::server`, the console, narrator, relay, host and app listeners), which a program
+/// on another machine cannot reach, and the relay scope is refused every read (`need_reader`). A test holds that no listener of the
+/// daemon is a network one (`egress::sink_tests::no_daemon_listener_is_reachable_from_another_machine`); a listener added that is
+/// must answer no here, and `egress::reply_to_client` then refuses every labelled reply.
+fn client_on_this_machine(_ctx: &CallContext) -> bool {
+    true
+}
+
 /// Run one of the encyclopedia's reads on a blocking thread: they read files.
 async fn blocking_read(f: impl FnOnce() -> Result<Value, String> + Send + 'static) -> RpcOutcome {
     tokio::task::spawn_blocking(f).await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(code::NOT_FOUND, e))
@@ -3904,7 +3913,8 @@ impl EngineService {
     async fn pages_get(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_reader(ctx.scope)?;
         let (home, ws, now) = self.reader_paths();
-        blocking_read(move || crate::encyclopedia::pages_get(&home, &ws, now, &p)).await
+        let here = client_on_this_machine(&ctx);
+        blocking_read(move || crate::encyclopedia::pages_get(&home, &ws, now, &p, here)).await
     }
 
     /// `pages.versions {slug}` (`specs/117` §3). Reads only.
@@ -3938,8 +3948,9 @@ impl EngineService {
     /// `library.source {id}` (`specs/117` §3 item 3): a source's record and kept text, as the operator's console shows it. Reads only.
     async fn library_source(&self, p: Value, ctx: CallContext) -> RpcOutcome {
         need_reader(ctx.scope)?;
-        let (home, _, _) = self.reader_paths();
-        blocking_read(move || crate::encyclopedia::library_source(&home, &p)).await
+        let (home, ws, _) = self.reader_paths();
+        let here = client_on_this_machine(&ctx);
+        blocking_read(move || crate::encyclopedia::library_source(&home, &ws, &p, here)).await
     }
 
     /// `library.claim {id}` (`specs/117` §3). Reads only.
@@ -4721,7 +4732,7 @@ impl EngineService {
                     crate::kb::embed_in_background(&home, &ws);
                 }
             }
-            Ok(crate::kbserve::Reader { kb: &kb, ws: &ws, operator: true, home: Some(home.as_path()) }.get(&target))
+            Ok(crate::kbserve::Reader { kb: &kb, ws: &ws, operator: true, home: Some(home.as_path()), remote: false }.get(&target))
         })
         .await
         .map_err(|e| err(-32000, e.to_string()))?

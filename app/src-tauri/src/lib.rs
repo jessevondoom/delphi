@@ -12,6 +12,7 @@ pub mod ency;
 pub mod key;
 pub mod locate;
 pub mod marks;
+pub mod sink;
 
 use std::sync::Arc;
 
@@ -148,10 +149,22 @@ fn marks_save(marks: Value) -> Result<(), String> {
     marks::save(&home()?, &marks)
 }
 
+/// The daemon's decision for the page the window would export or print (spec 141 §2.4, the page-export row; `sink`): the page
+/// is read again, and its reply decides. `Ok(None)`: send; `Ok(Some(line))`: send labelled, once the operator confirmed.
+fn page_gate(bridge: &Bridge, slug: &str, version: Option<&str>, confirmed: bool) -> Result<(Value, Option<String>), String> {
+    let (method, params) = sink::page_read(slug, version).ok_or("that is not a page this app exports or prints")?;
+    let reply = bridge.call(method, params)?;
+    let line = sink::decide(&reply, confirmed)?;
+    Ok((reply, line))
+}
+
 /// Export a page as Markdown (spec 117 §5 item 4): written to `<home>/app/exports/<name>.md` with its banner, and shown
-/// in the Finder. Returns where it was written.
+/// in the Finder. Returns where it was written. Only what the page's label allows (spec 141 §2.4): a refused page is not
+/// written, and a labelled one only after the operator confirmed in the window, beginning with its visible line.
 #[tauri::command(async)]
-fn export_page(name: String, text: String) -> Result<String, String> {
+fn export_page(bridge: State<'_, Arc<Bridge>>, name: String, text: String, slug: String, version: Option<String>, confirmed: Option<bool>) -> Result<String, String> {
+    let (reply, line) = page_gate(&bridge, &slug, version.as_deref(), confirmed.unwrap_or(false))?;
+    let text = sink::exported(&reply, &text, line.as_deref())?;
     let file = marks::export(&home()?, &name, &text)?;
     // Shown, never opened or run; a system that cannot show it still has the file, and the window says where.
     if cfg!(target_os = "macos") {
@@ -160,9 +173,12 @@ fn export_page(name: String, text: String) -> Result<String, String> {
     Ok(file.to_string_lossy().into_owned())
 }
 
-/// The system's print dialog for the page in the window (spec 117 §5 item 4): the operator prints it or saves it as PDF.
-#[tauri::command]
-fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
+/// The system's print dialog for the page in the window (spec 117 §5 item 4): the operator prints it or saves it as PDF. Only
+/// what the page's label allows (spec 141 §2.4): a refused page is not printed, and a labelled one only after the operator
+/// confirmed in the window (the window shows the visible line at the top of the page it prints).
+#[tauri::command(async)]
+fn print_page(window: tauri::WebviewWindow, bridge: State<'_, Arc<Bridge>>, slug: String, version: Option<String>, confirmed: Option<bool>) -> Result<(), String> {
+    page_gate(&bridge, &slug, version.as_deref(), confirmed.unwrap_or(false))?;
     window.print().map_err(|e| format!("the print dialog could not be opened: {e}"))
 }
 

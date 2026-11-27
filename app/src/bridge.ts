@@ -3,7 +3,7 @@
 // the same interface is served from a fixture, so every screen runs as a plain web page (§3.3).
 import { BUILT_IN } from './avatar.ts';
 import type { Daemon, DaemonList } from './daemons.ts';
-import type { EncyRead } from './ency.ts';
+import type { EncyRead, PageRef } from './ency.ts';
 import type { Asked, AskArg, AskWhat } from './requests.ts';
 import type { Conn, Envelope, Info, OState } from './types.ts';
 
@@ -34,10 +34,11 @@ export interface Bridge {
   /** The operator's own marks (spec 117 §5), as kept in the app's folder; never sent to the daemon. */
   marks(): Promise<unknown>;
   saveMarks(marks: unknown): Promise<void>;
-  /** Write a page out as a Markdown file by `name` and say where it went. */
-  exportPage(name: string, text: string): Promise<string>;
-  /** The system's print dialog for what the window shows. */
-  print(): Promise<void>;
+  /** Write a page out as a Markdown file by `name` and say where it went. The app asks the daemon about `page` again first and
+   * writes only what its label allows (spec 141 §2.4); `confirmed`: the operator confirmed a labelled page in the window. */
+  exportPage(name: string, text: string, page: PageRef, confirmed: boolean): Promise<string>;
+  /** The system's print dialog for what the window shows, on the same terms as `exportPage`. */
+  print(page: PageRef, confirmed: boolean): Promise<void>;
   /** Show a workspace document in the Finder. Only the app has it; a browser has no Finder to show. */
   reveal?(path: string): Promise<void>;
   /** Open a deck, a page, a picture or a recording of the workspace or a registered project in the system's browser or viewer. */
