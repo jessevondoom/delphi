@@ -3109,6 +3109,44 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         assert!(matches!(&out.status, Status::Escalated(r) if r.contains("changed a project checkout") && r.contains("research/topics/t-3/answer.md")), "{:?}", out.status);
     }
 
+    /// Delphi's research writer itself, as a research run uses it: the topic's record, its answer and its search log written into the
+    /// registered project's `research/topics/<id>/` while the seat runs.
+    fn write_a_research_record(project: &std::path::Path, question: &str) {
+        use crate::research_record::{Asker, Begin, Topic};
+        let t = Topic::begin(project, &Begin { question, asked_by: Asker::host("host:claude-code/m"), project: Some("proj"), depth: delphi_core::research::Depth::Quick, run_id: "r-g-1" }).unwrap();
+        let result = json!({"answer": "An answer.", "search_log": {"lines": []}, "claims": []});
+        t.finish("r-g-1", "done", Some(&result), &[], None, 0).unwrap();
+        for name in ["record.json", "answer.md", "search-log.json"] {
+            assert!(t.dir.join(name).is_file(), "the writer wrote {name}");
+        }
+    }
+
+    /// `specs/128` S3, found again live (the 2026-11-20 council seats on 0.6.4, before S3 shipped): a research record written by
+    /// Delphi's own writer into the project during an agy seat's run (record, answer and search log) does not discard the seat's
+    /// answer.
+    #[tokio::test]
+    async fn a_research_record_written_by_delphi_during_an_agy_run_does_not_discard_the_seats_answer() {
+        let (f, out, _) = run_with_concurrent_write(|dir| write_a_research_record(dir, "does a research record void an agy seat")).await;
+        assert_eq!((out.status.clone(), out.text.as_str()), (Status::Done, "a good answer"), "{}", out.text);
+        let g = events_of(&f, "harness.checkout_guard");
+        assert_eq!((g[0].payload["discarded"].clone(), g[0].payload["own_writes_count"].clone(), g[0].payload["changed_paths"].clone()), (json!(false), json!(3), json!([])), "{}", g[0].payload);
+    }
+
+    /// The same run with a file the seat could have written outside `research/`: Delphi's own research writes are still left out,
+    /// and that one file still discards the answer. Only that file is named.
+    #[tokio::test]
+    async fn a_file_outside_research_still_discards_the_answer_when_delphi_also_wrote_a_research_record() {
+        let (f, out, _) = run_with_concurrent_write(|dir| {
+            write_a_research_record(dir, "does a research record hide a seat's write");
+            fs::create_dir_all(dir.join("src")).unwrap();
+            fs::write(dir.join("src/seat.rs"), "fn changed_by_the_seat() {}").unwrap();
+        })
+        .await;
+        assert!(matches!(&out.status, Status::Escalated(r) if r.contains("changed a project checkout") && r.contains("src/seat.rs") && !r.contains("research/")), "{:?}", out.status);
+        let g = events_of(&f, "harness.checkout_guard");
+        assert_eq!((g[0].payload["discarded"].clone(), g[0].payload["own_writes_count"].clone(), g[0].payload["changed_paths"].clone()), (json!(true), json!(3), json!(["src/seat.rs"])), "{}", g[0].payload);
+    }
+
     /// An `agy` stand-in that answers after two seconds, while `write` runs against the registered project 700 ms in.
     async fn run_with_concurrent_write(write: impl FnOnce(&std::path::Path) + Send + 'static) -> (Fx, crate::engine::TaskOutcome, ()) {
         let scripts = tempfile::tempdir().unwrap();
