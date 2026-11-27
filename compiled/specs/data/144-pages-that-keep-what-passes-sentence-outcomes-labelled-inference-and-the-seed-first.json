@@ -16,91 +16,121 @@
     },
     {
       "level": 3,
-      "line": 29,
+      "line": 37,
       "number": "1.1",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 35,
+      "line": 43,
       "number": "1.2",
       "title": "Options considered"
     },
     {
       "level": 2,
-      "line": 45,
+      "line": 53,
       "number": "2",
       "title": "Design"
     },
     {
       "level": 3,
-      "line": 47,
+      "line": 55,
       "number": "2.1",
-      "title": "A page keeps what passes"
+      "title": "Inputs: a source with no text is not citable"
     },
     {
       "level": 3,
-      "line": 58,
+      "line": 61,
       "number": "2.2",
-      "title": "Insight, labelled as inference"
+      "title": "Units, numbered by the daemon"
     },
     {
       "level": 3,
-      "line": 69,
+      "line": 67,
       "number": "2.3",
-      "title": "The seed first; the long page on request"
+      "title": "A verdict for every unit"
     },
     {
       "level": 3,
-      "line": 75,
+      "line": 73,
       "number": "2.4",
-      "title": "Every failure can be read"
+      "title": "What each verdict does"
     },
     {
       "level": 3,
-      "line": 79,
+      "line": 85,
       "number": "2.5",
-      "title": "The trial that decides the default"
+      "title": "The caps, and the checks after trimming"
+    },
+    {
+      "level": 3,
+      "line": 98,
+      "number": "2.6",
+      "title": "The best attempt"
+    },
+    {
+      "level": 3,
+      "line": 102,
+      "number": "2.7",
+      "title": "Fallback, by page kind"
+    },
+    {
+      "level": 3,
+      "line": 107,
+      "number": "2.8",
+      "title": "Outcomes, the banner, and the rejected drafts"
+    },
+    {
+      "level": 3,
+      "line": 114,
+      "number": "2.9",
+      "title": "The trial, fixed before it runs"
+    },
+    {
+      "level": 3,
+      "line": 130,
+      "number": "2.10",
+      "title": "Long pages on request"
     },
     {
       "level": 2,
-      "line": 93,
+      "line": 136,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 97,
+      "line": 140,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 107,
+      "line": 153,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 120,
+      "line": 170,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 124,
+      "line": 174,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 130,
+      "line": 180,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 136,
+      "line": 186,
       "number": "9",
       "title": "Review"
     }
@@ -108,20 +138,20 @@
   "schema_version": 1,
   "source": {
     "path": "specs/144-pages-that-keep-what-passes-sentence-outcomes-labelled-inference-and-the-seed-first.md",
-    "sha256": "8f68782b5f5edaa2702c3b20e34e3f48921549ad261fd41cf7034bacf1a24a2b"
+    "sha256": "b7e781e9822aaf3ad4802aaecba89f6922fb9f3434fdadac028273b4c99e9c9e"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 442,
+        "end": 463,
         "end_line": 6,
         "line": 6,
-        "start": 252
+        "start": 267
       },
-      "text": "status: draft   # the operator approved the approach on 2026-11-27 (\"i approve that approach\"), not this text; the text needs the review GOVERNANCE §1.3 asks for and the operator's approval"
+      "text": "status: draft   # revision 2. The operator approved the approach on 2026-11-27 (\"i approve that approach\"), not this text; it needs the review GOVERNANCE §1.3 asks for and the operator's approval"
     },
-    "sha256": "8f68782b5f5edaa2702c3b20e34e3f48921549ad261fd41cf7034bacf1a24a2b",
+    "sha256": "b7e781e9822aaf3ad4802aaecba89f6922fb9f3434fdadac028273b4c99e9c9e",
     "word": "draft"
   },
   "spec": {
@@ -131,7 +161,7 @@
     "superseded_by": null,
     "supersedes": null,
     "tier": 0,
-    "title": "144: Pages that keep what passes: sentence outcomes, labelled inference, and the seed first"
+    "title": "144: Pages that keep what passes: numbered units, a verdict for each, the best attempt, and the seed first"
   },
   "summary": null
 }
