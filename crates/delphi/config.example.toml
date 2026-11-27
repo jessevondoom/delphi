@@ -325,6 +325,7 @@ sandbox = "off"
 #                                  # read when this key is absent.
 # handover_session_mib = 16        # the most one host session may hand over with capture_source in an hour, in MiB (and 120 sources)
 # handover_hour_mib = 64           # the most all host sessions together may hand over in an hour, in MiB (and 300 sources)
+# summary_week_tokens = 300000    # the tokens source summaries may spend in a week; past it a source reads summary: pending
 # private_to_models = "deny"       # deny | allow
 
 # Generated search pages (specs/057). `delphi pages search "<question>"` has the writer role write a page from the library and checks it

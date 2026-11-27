@@ -74,6 +74,13 @@ pub fn export(lib: &Library, ids: &[String], format: Format) -> Result<Export, S
         .filter(|(_, m)| leaves(m))
         .map(|(id, m)| {
             let mut m = m.clone();
+            // `specs/142` §2.6 item 8: a source's summary is what a bibliography has of a source held as a pointer; it is its
+            // `abstract` where the record has none, shown as written by a model.
+            if m["abstract"].is_null() {
+                if let Some(s) = crate::source_summary::summary_text(lib, id) {
+                    m["abstract"] = json!(format!("{}: {}", crate::source_summary::SHOWN, s));
+                }
+            }
             if crate::library::is_held(&m) {
                 for k in ["title", "container-title", "attribution_text", "abstract", "note"] {
                     if let Some(t) = m[k].as_str().map(String::from) {

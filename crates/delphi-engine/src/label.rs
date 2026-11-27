@@ -533,6 +533,19 @@ impl<'a> Labeller<'a> {
         Facts { label, line: format!("{}|src:private={private};licence={licence};rights={rights};held={held}", t.line) }
     }
 
+    /// A source's summary (`specs/142` §2.6 item 6): its source's handling marks, and `library_private` when, and only when, its source
+    /// carries it; never `text_held`. What stops a summary carrying its held source out is the check its text passed when it was kept
+    /// (`body_may_leave`), not a label. A source whose record cannot be read is every mark, as for the source itself.
+    pub fn summary(&self, id: &str) -> Facts {
+        let f = self.source(id);
+        if f.line.contains("=unknown") {
+            return f;
+        }
+        let mut label = f.label;
+        label.marks.remove(&Mark::TextHeld);
+        Facts { label, line: format!("{}|summary", f.line) }
+    }
+
     /// A library claim: its handling traits (derived from what it used, `specs/121` §4) and the library marks of the sources it is
     /// anchored to.
     pub fn claim(&self, id: &str) -> Facts {
@@ -577,7 +590,12 @@ impl<'a> Labeller<'a> {
     pub fn path(&self, zone: &str, rel_path: &str) -> Facts {
         let p = rel_path.trim_start_matches("./").split('#').next().unwrap_or(rel_path);
         if let Some(rest) = p.strip_prefix("library/sources/") {
-            return self.source(rest.split('/').next().unwrap_or(""));
+            let mut parts = rest.split('/');
+            let id = parts.next().unwrap_or("");
+            if parts.next() == Some(crate::source_summary::SUMMARY_MD) && parts.next().is_none() {
+                return self.summary(id);
+            }
+            return self.source(id);
         }
         if let Some(rest) = p.strip_prefix("library/claims/").or_else(|| p.strip_prefix("research/claims/")) {
             return self.claim(rest.split('/').next().unwrap_or("").trim_end_matches(".json").trim_end_matches(".md"));

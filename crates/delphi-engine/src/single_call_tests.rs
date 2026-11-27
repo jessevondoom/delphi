@@ -80,6 +80,18 @@ async fn library_acquire_run_makes_one_request_with_no_tools() {
     one_request_with_no_tools(&f);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn source_summary_makes_one_request_with_no_tools() {
+    let f = setup(vec![Step::text("A page on the tides: they come twice a day.")], 5.0, |_| {});
+    let lib = crate::library::Library::in_home(&f.engine.ws.home);
+    let url = "https://tides.example/a";
+    let snap = crate::fact_fetch::test_snapshot(url, "Tides", &["The tide comes in twice a day."]);
+    let id = lib.add_fetched(url, &snap, &Default::default(), &Default::default()).unwrap().id;
+    let key = f.engine.source_summary_key().expect("a summariser");
+    let _ = f.engine.summarize_source(&lib, &id, &key).await;
+    one_request_with_no_tools(&f);
+}
+
 fn source(file: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));

@@ -85,6 +85,18 @@ fn report(s: &Stored) {
     }
 }
 
+/// A source's summary for `show`: `written` with its text, model and date; `pending`; or `none` (nothing to summarise yet).
+fn summary_view(lib: &Library, id: &str) -> Value {
+    use delphi_engine::source_summary as ss;
+    if ss::is_pending(lib, id) {
+        return serde_json::json!({"state": "pending"});
+    }
+    match (ss::summary_of(lib, id), ss::summary_text(lib, id)) {
+        (Some(w), Some(text)) => serde_json::json!({"state": "written", "model": w.model, "family": w.family, "text_sha256": w.text_sha256, "at": w.at, "tokens": w.tokens, "text": text, "shown": ss::SHOWN}),
+        _ => serde_json::json!({"state": "none"}),
+    }
+}
+
 pub fn cli(args: &[String], home: &Path) -> i32 {
     let lib = Library::in_home(home);
     let rest = &args[args.len().min(1)..];
@@ -268,11 +280,14 @@ fn show(lib: &Library, args: &[String], home: &Path) -> i32 {
     // `specs/142` §2.3 item 3: the anchors into this source that no longer resolve, each with its own quote, the version and date it
     // last resolved in, and why.
     let orphans = lib.orphans_of(id);
+    // `specs/142` §2.6: the source's summary, as a model wrote it, or that it is pending.
+    let summary = summary_view(lib, id);
     if args.iter().any(|a| a == "--json") {
         let mut m = m;
         if !orphans.is_empty() {
             m["orphans"] = Value::Array(orphans.iter().map(|o| o.to_json()).collect());
         }
+        m["summary"] = summary;
         println!("{}", serde_json::to_string_pretty(&m).unwrap_or_default());
         return 0;
     }
@@ -320,6 +335,16 @@ fn show(lib: &Library, args: &[String], home: &Path) -> i32 {
         Some(w) => println!("  host capture   {}: counts for no corroboration{}", w, if w == delphi_engine::library::capture::CANNOT_CONFIRM { " (read privately, or of a kind Delphi never reads)" } else { " until Delphi reads the address and finds the same text" }),
         None if !m["confirmed_by_daemon"].is_null() => println!("  host capture   confirmed by the daemon on {}", clean(m["confirmed_by_daemon"].as_str().unwrap_or("?"), 30)),
         None => {}
+    }
+    match summary["state"].as_str() {
+        Some("written") => {
+            println!("  summary        by {} on {} ({})", clean(summary["model"].as_str().unwrap_or("?"), 60), clean(summary["at"].as_str().unwrap_or("?"), 30), delphi_engine::source_summary::SHOWN);
+            for line in summary["text"].as_str().unwrap_or("").lines() {
+                println!("    {}", clean(line, 200));
+            }
+        }
+        Some("pending") => println!("  {}", delphi_engine::source_summary::PENDING),
+        _ => {}
     }
     if let Some(c) = m["licence_claimed"].as_str() {
         println!("  licence claimed {} (the host's word; never changes what is kept or what may leave)", clean(c, 60));

@@ -64,14 +64,33 @@ const DAY: i64 = 86_400;
 const WEEK: i64 = 7 * DAY;
 
 /// The weekly budget of a job, in tokens (§2.3 item 6), or `None` for a job bound only by the limits. Pages: `specs/139` §2.3
-/// item 8. Summaries: `specs/142` §2.6 item 3. Consolidation: `[memory] consolidate_tokens`.
-pub fn weekly_budget(job: Job, consolidate_tokens: u64) -> Option<u64> {
+/// item 8. Summaries: `[library] summary_week_tokens` (`specs/142` §2.6 item 3). Consolidation: `[memory] consolidate_tokens`.
+pub fn weekly_budget(job: Job, consolidate_tokens: u64, summary_week_tokens: u64) -> Option<u64> {
     match job {
         Job::Pages => Some(600_000),
-        Job::Summaries => Some(300_000),
+        Job::Summaries => Some(summary_week_tokens),
         Job::Consolidation => Some(consolidate_tokens),
         Job::Validation | Job::SessionSummaries => None,
     }
+}
+
+/// When a job whose weekly budget is spent may next spend (`specs/142` §2.6 item 3: `delphi kb health` says when the budget next
+/// allows more): the moment enough of the week's oldest calls of `job` on `credential` have left the seven days for the rest to be
+/// under `budget`. `None` while it is under the budget now.
+pub fn weekly_free_at(calls: &[Call], job: Job, credential: &str, budget: u64, now: i64) -> Option<i64> {
+    let mut week: Vec<&Call> = calls.iter().filter(|c| c.job == Some(job) && c.credential == credential && c.at > now - WEEK).collect();
+    let mut spent: u64 = week.iter().map(|c| c.tokens).sum();
+    if spent < budget {
+        return None;
+    }
+    week.sort_by_key(|c| c.at);
+    for c in week {
+        spent = spent.saturating_sub(c.tokens);
+        if spent < budget {
+            return Some(c.at + WEEK);
+        }
+    }
+    Some(now + WEEK)
 }
 
 /// One call, as the ledger holds it.
@@ -168,6 +187,8 @@ pub struct Inputs<'a> {
     pub switched_on: bool,
     /// `[memory] consolidate_tokens`, the weekly budget of consolidation.
     pub consolidate_tokens: u64,
+    /// `[library] summary_week_tokens`, the weekly budget of source summaries (`specs/142` §2.6 item 3).
+    pub summary_week_tokens: u64,
     /// The last sign of the operator at work: a console call, a host session's hook, or a host tool call over MCP. Unix seconds.
     pub last_active: i64,
 }
@@ -217,7 +238,7 @@ pub fn job_may_run(job: Option<Job>, origin: Origin, credential: &str, i: &Input
     if over(win, l.window_calls, l.window_tokens) || over(day, l.daily_calls, l.daily_tokens) {
         return Admission::Refuse(Cause::Budget);
     }
-    if let Some(budget) = job.and_then(|j| weekly_budget(j, i.consolidate_tokens)) {
+    if let Some(budget) = job.and_then(|j| weekly_budget(j, i.consolidate_tokens, i.summary_week_tokens)) {
         let week: u64 = mine.iter().filter(|c| c.job == job && c.at > i.now - WEEK).map(|c| c.tokens).sum();
         if week >= budget {
             return Admission::Refuse(Cause::Budget);
@@ -429,10 +450,24 @@ mod tests {
 
     fn ask(job: Option<Job>, origin: Origin, calls: &[Call], last_active: i64, on: bool) -> Admission {
         let limits = BridgeLimits::default();
-        job_may_run(job, origin, CRED, &Inputs { now: NOW, calls, limits: &limits, switched_on: on, consolidate_tokens: 30_000, last_active })
+        job_may_run(job, origin, CRED, &Inputs { now: NOW, calls, limits: &limits, switched_on: on, consolidate_tokens: 30_000, summary_week_tokens: 300_000, last_active })
     }
 
     const QUIET: i64 = NOW - 3600;
+
+    /// `specs/142` §2.6 item 3 and AC-21: the summaries' row reads `[library] summary_week_tokens`, a command is refused past it and
+    /// passes only `confirmed`, and the week's oldest call leaving the seven days is when it allows more.
+    #[test]
+    fn the_summaries_row_reads_summary_week_tokens_and_says_when_it_allows_more() {
+        let limits = BridgeLimits::default();
+        let spent: Vec<Call> = (0..2).map(|k| Call { job: Some(Job::Summaries), at: NOW - 86_400 * (3 - k as i64), ..call(k, 0, Origin::Idle, 6_000) }).collect();
+        let at = |budget: u64, origin: Origin| job_may_run(Some(Job::Summaries), origin, CRED, &Inputs { now: NOW, calls: &spent, limits: &limits, switched_on: true, consolidate_tokens: 30_000, summary_week_tokens: budget, last_active: QUIET });
+        assert_eq!(at(300_000, Origin::Command), Admission::Admit);
+        assert_eq!(at(12_000, Origin::Command), Admission::Refuse(Cause::Budget));
+        assert_eq!(at(12_000, Origin::Confirmed), Admission::Admit);
+        assert_eq!(weekly_free_at(&spent, Job::Summaries, CRED, 300_000, NOW), None);
+        assert_eq!(weekly_free_at(&spent, Job::Summaries, CRED, 12_000, NOW), Some(NOW - 3 * 86_400 + WEEK));
+    }
 
     // AC-16 and the fitness function "no limit is passed without a typed confirmation, and none past the ceiling": every job,
     // against every origin, every limit state and the switch, gives the answer written here.
@@ -490,7 +525,7 @@ mod tests {
             let under: Vec<Call> = week.iter().take(5).cloned().collect();
             assert_eq!(ask(Some(job), Origin::Idle, &under, QUIET, true), Admit, "{job:?} under its weekly budget");
             // Another job's spend is not this job's budget.
-            let other = Job::ALL.into_iter().find(|j| *j != job && weekly_budget(*j, 30_000).is_none()).unwrap();
+            let other = Job::ALL.into_iter().find(|j| *j != job && weekly_budget(*j, 30_000, 300_000).is_none()).unwrap();
             let theirs: Vec<Call> = week.iter().cloned().map(|c| Call { job: Some(other), ..c }).collect();
             assert_eq!(ask(Some(job), Origin::Idle, &theirs, QUIET, true), Admit, "{job:?}: {other:?} spent, not it");
         }
@@ -526,7 +561,7 @@ mod tests {
         assert_eq!(again.iter().map(|c| c.tokens).sum::<u64>(), 10 * 1000 + 20 * 400, "reported where it was, the estimate where it was not");
         assert_eq!(again.iter().filter(|c| c.outcome.is_none()).count(), 10);
         let limits = BridgeLimits::default();
-        let inputs = Inputs { now: NOW, calls: &again, limits: &limits, switched_on: true, consolidate_tokens: 30_000, last_active: QUIET };
+        let inputs = Inputs { now: NOW, calls: &again, limits: &limits, switched_on: true, consolidate_tokens: 30_000, summary_week_tokens: 300_000, last_active: QUIET };
         assert_eq!(job_may_run(Some(Job::Validation), Origin::Command, &cred, &inputs), Admission::Refuse(Cause::Budget), "30 calls over two endpoints of one credential");
         assert_eq!(job_may_run(Some(Job::Validation), Origin::Command, &credential_id("keychain:other"), &inputs), Admission::Admit);
         let text = std::fs::read_to_string(home.path().join("bridge/ledger.jsonl")).unwrap();

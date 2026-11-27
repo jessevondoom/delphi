@@ -379,10 +379,20 @@ impl LibraryHeld<'_> {
 
 }
 
-/// Is `rel_path` an indexed file of a held source of `home`'s library (`library/sources/<id>/…`)? What `kb seed-export` writes no
-/// vector of and a remote `kb serve` returns no chunk of (`specs/142` §2.5 item 4 (b), (c)). A record that cannot be read is withheld.
+/// Is `rel_path` an indexed file of a held or a private source of `home`'s library (`library/sources/<id>/…`)? What `kb seed-export`
+/// writes no vector of and a remote `kb serve` returns no chunk of (`specs/142` §2.5 item 4 (b), (c)). A record that cannot be read is
+/// withheld. A source's summary (`specs/142` §2.6 item 6) is withheld with a private source and sent with a held one: it carries no
+/// `text_held`, and the check it passed when it was kept is what stops it carrying the held text out.
 pub fn withholds_path(home: &Path, rel_path: &str) -> bool {
-    rel_path.strip_prefix("library/sources/").and_then(|r| r.split('/').next()).is_some_and(|id| Library::in_home(home).read_meta(id).is_none_or(|m| is_held(&m)))
+    let Some(rest) = rel_path.strip_prefix("library/sources/") else { return false };
+    let mut parts = rest.split('/');
+    let id = parts.next().unwrap_or("");
+    let summary = parts.next() == Some(crate::source_summary::SUMMARY_MD) && parts.next().is_none();
+    match Library::in_home(home).read_meta(id) {
+        None => true,
+        Some(m) if crate::library::is_private(&m) => true,
+        Some(m) => is_held(&m) && !summary,
+    }
 }
 
 impl crate::topic_seed::HeldText for LibraryHeld<'_> {

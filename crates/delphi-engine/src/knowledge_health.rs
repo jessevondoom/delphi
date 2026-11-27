@@ -45,6 +45,10 @@ pub struct Health {
     pub pages_mode: Option<delphi_adapter::config::JobMode>,
     pub summaries: usize,
     pub summaries_without_source: usize,
+    /// Source summaries (`specs/142` §2.6 item 9): sources that hold text or excerpts, those with a summary, and those whose summary is
+    /// pending; and when the week's budget next allows more, when it is spent (Unix seconds).
+    pub source_summaries: crate::source_summary::Counts,
+    pub source_summaries_free_at: Option<i64>,
     pub staged: usize,
     /// The day the oldest waiting note was staged.
     pub staged_oldest: Option<String>,
@@ -187,6 +191,12 @@ pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
     h.pages_failed = crate::daemon_notice::last_failure(ws_dir, crate::daemon_notice::Job::Pages).map(|(c, since)| (c.code().to_string(), since));
     h.pages_mode = bridged_mode(ws_dir, |j| j.pages);
 
+    // Source summaries (`specs/142` §2.6 item 9).
+    h.source_summaries = crate::source_summary::counts(&lib);
+    if h.source_summaries.pending > 0 {
+        h.source_summaries_free_at = std::fs::read_to_string(ws_dir.join("config.toml")).ok().and_then(|t| delphi_adapter::config::Config::parse(&t).ok()).and_then(|cfg| crate::source_summary::budget_free_at(home, &cfg, now));
+    }
+
     // Imported summary pages and their bibliographies (`specs/068`).
     let summaries = ws_dir.join(crate::kb_import::DIR);
     for e in std::fs::read_dir(&summaries).into_iter().flatten().flatten() {
@@ -270,6 +280,8 @@ impl Health {
             o.insert("pages_bridged".into(), json!({"due": self.pages_due, "mode": mode.as_str()}));
         }
         o.insert("summaries".into(), json!({"total": self.summaries, "no_source": self.summaries_without_source}));
+        let c = &self.source_summaries;
+        o.insert("source_summaries".into(), json!({"with_text": c.with_text, "summarised": c.summarised, "pending": c.pending, "budget_free_at": self.source_summaries_free_at.map(|t| delphi_core::time::format_unix_millis(t, 0))}));
         o.insert("staged_notes".into(), json!({"waiting": self.staged, "oldest": self.staged_oldest}));
         o.insert("lessons".into(), json!(self.lessons));
         o.insert("research_30d".into(), json!({"asked": self.research_asked, "ran": self.research_ran, "no_web_search": self.research_no_web}));
@@ -320,6 +332,17 @@ impl Health {
             let order = ["noted", "checking", "corroborated", "substantiated", "vetted", "validated", "contested", "disproved", "retired"];
             fact(format!("{} claims ({})", self.claims_total(), order.iter().filter_map(|k| self.claims.get(*k).map(|n| format!("{k} {n}"))).collect::<Vec<_>>().join(", ")))
         });
+
+        // Source summaries (`specs/142` §2.6 item 9): said when any source has text or a summary.
+        let c = &self.source_summaries;
+        if c.with_text > 0 || c.summarised > 0 || c.pending > 0 {
+            let when = match self.source_summaries_free_at {
+                Some(t) if c.pending > 0 => format!("; the week's budget ([library] summary_week_tokens) allows more from {}", day_of(t)),
+                _ => String::new(),
+            };
+            let then = if c.pending > 0 { ". See delphi kb summarize --pending." } else { "" };
+            out.push(fact(format!("source summaries: {} sources with text, {} with a summary, {} pending{when}{then}", c.with_text, c.summarised, c.pending)));
+        }
 
         // Anchors that no longer resolve (`specs/142` §2.3 item 3): said only when there are some.
         let orphans: usize = self.orphans.values().sum();

@@ -415,6 +415,138 @@ pub fn validate_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
     })
 }
 
+/// `delphi kb summarize [--pending | <source>]` (`specs/142` §2.6 item 10, `specs/143` §2.8 item 1): write source summaries now, as a
+/// job the operator started. It prints what it will spend before it starts, then asks the bridge's preflight (through the bridge, a
+/// limit passes only by the confirmation typed at a terminal). Exit codes: 0 written, or nothing pending · 1 refused or failed · 2 off
+/// through the bridge or usage · 3 a limit · 4 no daemon.
+pub fn summarize_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
+    const USAGE: &str = "usage: delphi kb summarize --pending | <source> [--home <dir>] [--workspace <name>]";
+    let pending = args.iter().any(|a| a == "--pending");
+    let source = args.iter().find(|a| !a.starts_with("--")).cloned();
+    if pending && source.is_some() {
+        eprintln!("{USAGE}");
+        return 2;
+    }
+    let target = match &source {
+        Some(id) => serde_json::json!({"source": id}),
+        None => serde_json::json!({"pending": true}),
+    };
+    with_daemon(home, ws_dir, "kb summarize", |client| {
+        let mut plan = target.clone();
+        plan["plan"] = serde_json::json!(true);
+        let p = match client.call("library.summarize", plan) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("delphi kb summarize: {e}");
+                return 1;
+            }
+        };
+        let n = p["count"].as_u64().unwrap_or(0);
+        if n == 0 {
+            println!("no source summary is pending");
+            return 0;
+        }
+        let route = p["route"].as_str().unwrap_or("no model that can serve a single call");
+        println!("{n} source(s) to summarise: about {} tokens, one call each on {route}{}.", p["tokens_estimate"], if p["bridged"] == true { " (through the bridge: your subscription's quota)" } else { "" });
+        if let Some(t) = p["free_at"].as_i64() {
+            println!("The week's budget ([library] summary_week_tokens = {}) is spent; it allows more from {}.", p["week_tokens"], delphi_core::time::format_unix_millis(t, 0));
+        }
+        let confirmed = match preflight(client, "summaries", "kb summarize") {
+            Ok(c) => c,
+            Err(code) => return code,
+        };
+        let mut run = target.clone();
+        run["confirmed"] = serde_json::json!(confirmed);
+        match client.call("library.summarize", run) {
+            Ok(v) => {
+                println!("{} summary(ies) written, {} dropped by the checks, {} tokens", v["written"].as_array().map_or(0, Vec::len), v["dropped"].as_array().map_or(0, Vec::len), v["tokens"]);
+                say_passed(client, "summaries", confirmed);
+                match v["stopped"].as_str() {
+                    Some(why) => {
+                        eprintln!("stopped: {why}");
+                        if why.starts_with(delphi_engine::service::LIMIT) || why.starts_with(delphi_engine::service::CEILING) || why.contains("summary_week_tokens") { 3 } else { 1 }
+                    }
+                    None => 0,
+                }
+            }
+            Err(e) => {
+                eprintln!("delphi kb summarize: {e}");
+                if e.to_string().contains("[bridge.jobs]") { 2 } else { 1 }
+            }
+        }
+    })
+}
+
+/// `delphi sources recheck --pointers [--limit <n>] [--dry-run]` (`specs/142` §2.7): read again the sources held as pointers. It
+/// prints first what it would read and spend; `--dry-run` stops there. Exit codes: 0 done · 1 failed · 2 usage or off · 3 a limit
+/// on the summaries · 4 no daemon.
+pub fn recheck_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
+    const USAGE: &str = "usage: delphi sources recheck --pointers [--limit <n>] [--dry-run] [--home <dir>] [--workspace <name>]";
+    if !args.iter().any(|a| a == "--pointers") {
+        eprintln!("{USAGE}");
+        return 2;
+    }
+    if crate::xenia_terminal::inside_an_agent_seat() {
+        eprintln!("delphi sources recheck: refused inside an agent seat; reading the library's pointers again is the operator's act");
+        return 2;
+    }
+    let limit = match crate::flag(args, "--limit").map(|l| l.parse::<u64>()) {
+        None => 20,
+        Some(Ok(n)) if n >= 1 => n,
+        Some(_) => {
+            eprintln!("delphi sources recheck: --limit takes a whole number of 1 or more");
+            return 2;
+        }
+    };
+    let dry = args.iter().any(|a| a == "--dry-run");
+    with_daemon(home, ws_dir, "sources recheck", |client| {
+        let plan = match client.call("library.recheck_pointers", serde_json::json!({"limit": limit, "plan": true})) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("delphi sources recheck: {e}");
+                return 1;
+            }
+        };
+        let would = plan["would_read"].as_array().cloned().unwrap_or_default();
+        println!("{} pointer(s); would read {} (each through the daemon's own fetcher, no tokens), then summarise them: about {} tokens.", plan["pointers"], would.len(), plan["summary_tokens_estimate"]);
+        for w in &would {
+            println!("  read  {}  {}", w["id"].as_str().unwrap_or(""), w["locator"].as_str().unwrap_or(""));
+        }
+        for h in plan["needs_host"].as_array().into_iter().flatten() {
+            println!("  needs a host capture  {}  {}", h["id"].as_str().unwrap_or(""), h["locator"].as_str().unwrap_or(""));
+        }
+        if dry || would.is_empty() {
+            return 0;
+        }
+        let confirmed = match preflight(client, "summaries", "sources recheck") {
+            Ok(c) => c,
+            Err(code) => return code,
+        };
+        match client.call("library.recheck_pointers", serde_json::json!({"limit": limit, "confirmed": confirmed})) {
+            Ok(v) => {
+                for r in v["rows"].as_array().into_iter().flatten() {
+                    let extra = r["level"].as_str().or(r["locator"].as_str()).or(r["why"].as_str()).unwrap_or("");
+                    println!("  {}  {}  {}", r["outcome"].as_str().unwrap_or(""), r["id"].as_str().unwrap_or(""), extra);
+                }
+                let s = &v["summaries"];
+                println!("{} summary(ies) written", s["written"].as_array().map_or(0, Vec::len));
+                say_passed(client, "summaries", confirmed);
+                match s["stopped"].as_str() {
+                    Some(why) => {
+                        eprintln!("summaries stopped: {why}");
+                        if why.starts_with(delphi_engine::service::LIMIT) || why.starts_with(delphi_engine::service::CEILING) { 3 } else { 0 }
+                    }
+                    None => 0,
+                }
+            }
+            Err(e) => {
+                eprintln!("delphi sources recheck: {e}");
+                1
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
