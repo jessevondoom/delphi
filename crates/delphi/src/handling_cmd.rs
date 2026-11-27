@@ -62,14 +62,23 @@ fn refused_unless_operator(cmd: &str) -> Option<i32> {
     None
 }
 
+/// The status line of the query notice (`specs/141` §2.5).
+fn planned_with_line(queries: usize, runs: usize) -> String {
+    format!("{queries} web search quer{} planned with labelled items in view (`planned_with`, in {runs} research run{}); each was sent as cleaned and guarded, and none was withheld for a mark", if queries == 1 { "y was" } else { "ies were" }, if runs == 1 { "" } else { "s" })
+}
+
 pub fn run(args: &[String], home: &Path, ws_dir: &Path) -> i32 {
     let json = args.iter().any(|a| a == "--json");
     let pos = positional(args);
     match pos.first().copied() {
         Some("status") => match handling_reconcile::status(ws_dir, home) {
             Ok(r) => {
+                // `specs/141` §2.5: the web queries research planned with labelled items in view. A notice: none was withheld.
+                let (planned_with, runs) = delphi_engine::research_record::planned_with_count(ws_dir);
                 if json {
-                    println!("{}", r.to_json());
+                    let mut v = r.to_json();
+                    v["planned_with"] = serde_json::json!({"queries": planned_with, "runs": runs});
+                    println!("{v}");
                 } else {
                     println!("handling (what would be labelled if the rules ran now; nothing was changed):");
                     for l in r.lines().iter().filter(|l| !l.starts_with("run `")).map(|l| l.trim_start_matches("dry run: nothing was changed. ")) {
@@ -78,6 +87,7 @@ pub fn run(args: &[String], home: &Path, ws_dir: &Path) -> i32 {
                     for bad in Handling::of(ws_dir, home).unreadable() {
                         println!("  the record {} cannot be read", bad.display());
                     }
+                    println!("  {}", planned_with_line(planned_with, runs));
                 }
                 0
             }
@@ -206,5 +216,21 @@ mod tests {
         assert!(md.contains("handling: [internal]\n") && md.contains("> Handling: INTERNAL\n"), "{md}");
         let r = delphi_engine::label::relabel(home, &ws, None).unwrap();
         assert_eq!((r.pages, r.pages_changed), (1, 0));
+    }
+
+    /// `specs/141` §2.5: `handling status` counts the queries research planned with labelled items in view, and says none was withheld.
+    #[test]
+    fn status_counts_the_queries_planned_with_labelled_items_in_view() {
+        assert_eq!(planned_with_line(0, 0), "0 web search queries were planned with labelled items in view (`planned_with`, in 0 research runs); each was sent as cleaned and guarded, and none was withheld for a mark");
+        assert!(planned_with_line(1, 1).starts_with("1 web search query was planned") && planned_with_line(1, 1).contains("in 1 research run)"));
+        let t = tempfile::tempdir().unwrap();
+        let (home, ws) = (t.path().join("home"), t.path().join("ws"));
+        std::fs::create_dir_all(&home).unwrap();
+        let topic = delphi_engine::research_record::Topic::begin(&ws, &delphi_engine::research_record::Begin { question: "Does aspirin reduce fever?", asked_by: delphi_engine::research_record::Asker::operator(), project: None, depth: delphi_core::research::Depth::Survey, run_id: "r-1" }).unwrap();
+        let with = serde_json::json!(["confidential", "internal"]);
+        let result = serde_json::json!({"answer": "a", "planned_with": with, "search_log": {"version": 1, "lines": [{"query": "aspirin", "planned_with": with}, {"query": "fever", "planned_with": with}, {"query": "x", "declared": true}]}});
+        topic.finish("r-1", "done", Some(&result), &[], None, 1).unwrap();
+        assert_eq!(delphi_engine::research_record::planned_with_count(&ws), (2, 1));
+        assert_eq!(run(&["status".into(), "--json".into()], &home, &ws), 0);
     }
 }

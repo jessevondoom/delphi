@@ -102,13 +102,14 @@ fn the_runner_only_writes_to_the_log_and_never_branches_on_it() {
     // identifier guard of spec 119, which records a line with no text), `local` (the line of a local run, spec 119 section 13.2,
     // which records how many known addresses were read and no text), `host_ran` (the line of a search the host ran and fed back, spec 119
     // section 2.1, which records the query the run itself planned and the count of addresses fed), `rows`, `failed`, `kept`,
-    // `duplicate`, `dropped`, `kb`, `declare`), the final read of its private flag and its two renderings. A condition on its content
+    // `duplicate`, `dropped`, `kb`, `declare`, and `planned_with`, which sets the query notice of spec 141 section 2.5 that later lines
+    // carry and nothing reads), the final read of its private flag and its two renderings. A condition on its content
     // (`log.lines()`/`log.flow()` inside an `if` or `match`) would let a result of the log change what the run does.
     let root = root();
     let src = std::fs::read_to_string(root.join("crates/delphi-engine/src/research_run.rs")).unwrap();
     let body = production(&src);
     let uses = Regex::new(r"\blog\.(\w+)").unwrap();
-    let allowed = ["begin", "withheld", "withheld_identifier", "local", "host_ran", "rows", "failed", "kept", "duplicate", "dropped", "kb", "declare", "private", "flow", "lines", "to_json"];
+    let allowed = ["begin", "withheld", "withheld_identifier", "local", "host_ran", "rows", "failed", "kept", "duplicate", "dropped", "kb", "declare", "planned_with", "private", "flow", "lines", "to_json"];
     let mut other = Vec::new();
     let mut reads = Vec::new();
     for (n, line) in body.lines().enumerate() {

@@ -900,6 +900,8 @@ impl EngineService {
         // cleaned and passes the identifier guard, and the reply and the result say the run was planned under the mark.
         let asked_at = (self.engine.clock_unix)();
         let marked = crate::private_read::state(&ws.dir, &c.mission()).would_affect_a_send();
+        // `specs/141` §2.5: the query notice, from what this session was given; the run adds its own `known` list.
+        let planned_with = Arc::new(crate::research_run::PlannedWith::for_asker(&ws.dir, &ws.home, Some(&crate::handling::span_key(&c.mission(), "host")), &asker_mark(&ws.dir, &c.mission())));
         // Spec 119 §13.1: in a host whose row of the host tool table names a search tool, the host's own tools are the source, unless
         // the request asks for Delphi's own runner. `tool` is the host's own word for itself: a host that names another only gets
         // itself asked to search, or not.
@@ -984,7 +986,7 @@ impl EngineService {
         let host_searches = crate::search_log::parse_declared(&p["host_searches"]);
         let web = self.run_web(RunWeb { list, engines, transport: Arc::new(transport), identifiers });
         let asked = offered.then(|| question.clone());
-        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: self.engine.settings.research_images, after: None, resume, known: Some(known), sources, marked, host }, web);
+        self.queue_run(RunAsk { question, depth, run_id: research_id.clone(), session: c.session.clone(), label, topic, project: project.map(|(name, _)| name), host_searches, mission, pictures: self.engine.settings.research_images, after: None, resume, known: Some(known), sources, marked, host, planned_with: Some(planned_with.clone()) }, web);
         let mut reply = json!({"research_id": research_id, "status": "queued", "depth": depth, "sources": sources.as_str(), "note": "research runs in the background, trusted sources first: read it with research_status, then research_result. Everything it returns is not validated unless a claim says otherwise. The result carries a coverage report per rung; `coverage: thin` means the knowledge base and the trusted sources gave little, and your own tools and connectors can search further."});
         if sources == crate::research_run::Sources::Local {
             reply["sources_note"] = json!(crate::research_setup::local_note());
@@ -1001,6 +1003,12 @@ impl EngineService {
             reply["queries"] = json!(queries);
             reply["host_tool"] = json!(host_tool);
             reply["host_note"] = json!(crate::research_setup::HOST_SEARCH_NOTE);
+        }
+        // `specs/141` §2.5: read after the host's plan was waited for, so a planned-query reply names the `known` list's marks too.
+        let with = planned_with.names();
+        if !with.is_empty() {
+            reply["planned_with"] = json!(with);
+            reply["planned_with_note"] = json!(crate::research_run::PLANNED_WITH_NOTE);
         }
         if switched {
             reply["runner_switched"] = json!({"from": "daemon", "to": "host", "reason": "no_model_seat"});
@@ -1088,7 +1096,7 @@ impl EngineService {
     /// record and the same claims in the library. The job waits for one of the running slots of the one queue.
     fn queue_run(&self, ask: RunAsk, web: RunWeb) {
         let ws = &self.engine.ws;
-        let RunAsk { question: q, depth, run_id: research_id, session, label, topic, project, host_searches, mission, pictures, after, resume, known, sources, marked, host } = ask;
+        let RunAsk { question: q, depth, run_id: research_id, session, label, topic, project, host_searches, mission, pictures, after, resume, known, sources, marked, host, planned_with } = ask;
         let RunWeb { list, engines, transport, identifiers } = web;
         // A local run is handed no engine at all (`specs/119` §13.2): whatever the runner did, there is nobody to send a query to.
         // So is a host's run with no engine configured: the host's tools are its only web source.
@@ -1138,7 +1146,7 @@ impl EngineService {
                 let (k, question) = (k.clone(), q.clone());
                 let _ = tokio::task::spawn_blocking(move || crate::research_method::KnownFirst::find(k.as_ref(), &question)).await;
             }
-            let deps = crate::research_run::Deps { sources, marked, host: host.as_ref(), web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain, record: recorder.as_ref().map(|r| r as &dyn crate::research_run::Recorder), limits, resume: resume.as_ref(), known: known.as_deref().map(|k| k as &dyn crate::research_method::KnownFirst) };
+            let deps = crate::research_run::Deps { sources, marked, host: host.as_ref(), web: web.as_ref(), scout: &scout, validator: &validator, library: &library, redactor: &redactor, sites: &sites, thin_below: engine.settings.thin_below, support: &engine.settings.support, host_searches: &host_searches, retractions: retractions_line.as_deref(), chain, record: recorder.as_ref().map(|r| r as &dyn crate::research_run::Recorder), limits, resume: resume.as_ref(), known: known.as_deref().map(|k| k as &dyn crate::research_method::KnownFirst), planned_with: planned_with.as_deref() };
             let mut out = crate::research_run::run_research(&jc, &q, depth, &deps).await;
             // What the run teaches (`specs/114` §6 item 1) leaves the result here: no reader of a result sees it.
             let teaches = match &mut out {
@@ -4993,6 +5001,8 @@ impl EngineService {
         let ws = &self.engine.ws;
         // An inside agent's task under the private-read mark researches as any other (`specs/119` §15); its result says so.
         let marked = report_to.as_ref().is_some_and(|(mission, _)| crate::private_read::state(&ws.dir, mission).would_affect_a_send());
+        // `specs/141` §2.5: the query notice, from what the asking agent's span was given; the operator's own run has only its `known` list.
+        let planned_with = Arc::new(crate::research_run::PlannedWith::for_asker(&ws.dir, &ws.home, report_to.as_ref().map(|(mission, role)| crate::handling::span_key(mission, role)).as_deref(), &report_to.as_ref().map_or(crate::research_run::AskerMark::None, |(mission, _)| asker_mark(&ws.dir, mission))));
         let caller = match &report_to {
             Some((_, role)) => crate::research_known::Caller::Role(role.clone()),
             None => crate::research_known::Caller::Operator,
@@ -5064,7 +5074,7 @@ impl EngineService {
                 }
             }
         });
-        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: self.engine.settings.research_images, after: Some(after), resume, known: Some(known), sources, marked, host: None }, web);
+        self.queue_run(RunAsk { question, depth, run_id: run_id.clone(), session: rc::SESSION.to_string(), label, topic: run.topic.clone(), project: project.map(|(name, _)| name), host_searches: Vec::new(), mission: observed_in, pictures: self.engine.settings.research_images, after: Some(after), resume, known: Some(known), sources, marked, host: None, planned_with: Some(planned_with) }, web);
         Ok(json!({"started": true, "research_id": run_id, "topic_id": topic_id, "topic": topic, "continued": again.is_some(), "offered": offered, "sources": sources.as_str()}))
     }
 
@@ -5791,6 +5801,18 @@ struct RunAsk {
     marked: bool,
     /// The host's turn, when the host's own search tool is the run's source (`specs/119` §13.1).
     host: Option<crate::research_run::HostTurn>,
+    /// The query notice (`specs/141` §2.5): the marks of what the asker was given; the run joins its `known` list's.
+    planned_with: Option<Arc<crate::research_run::PlannedWith>>,
+}
+
+/// The asker's private-read mark for the query notice (`specs/141` §2.5): read here, where the mark is already read, so the runner
+/// names no mark module. It only adds to a notice; it holds, grants and withholds nothing.
+fn asker_mark(ws_dir: &std::path::Path, key: &str) -> crate::research_run::AskerMark {
+    match crate::private_read::state(ws_dir, key) {
+        crate::private_read::State::Unmarked => crate::research_run::AskerMark::None,
+        crate::private_read::State::Marked { entries, .. } => crate::research_run::AskerMark::Entries(entries),
+        crate::private_read::State::Unreadable => crate::research_run::AskerMark::Unreadable,
+    }
 }
 
 /// How long `request_research` waits for the run's plan before it answers, so that the reply can carry the queries the host is
@@ -7897,7 +7919,24 @@ mod tests {
             assert!(r.get("sources_note").is_none(), "{r}");
             assert_eq!(crate::research_asks::counts_since(&dir, now - 60), crate::research_asks::Counts { asked: 3, ran: 3, no_web: 2 });
             let _ = c.call("host.cancel_job", json!({"session": "abcdef0123456789", "tool": "codex", "cwd": root.to_string_lossy(), "research_id": r["research_id"]}));
-            assert!(r.get("planned_under_mark").is_none(), "{r}");
+            assert!(r.get("planned_under_mark").is_none() && r.get("planned_with").is_none(), "{r}");
+
+            // specs/141 AC-10: a session that was given a confidential item researches as any other; the reply, the result and its
+            // search log carry `planned_with`, and the engine is asked as before.
+            let item = "local/knowledge/board-minutes.md";
+            let h = crate::handling::Handling::workspace_only(&dir);
+            h.operator_set(item, crate::handling::Trait::Confidential).unwrap();
+            crate::handling::note_given(&h, &dir, &crate::handling::span_key("host-abcdef0123456789", "host"), &[item.to_string()]);
+            let asked_before = web.seen.lock().unwrap().len();
+            let r = c.call("host.request_research", json!({"session": "abcdef0123456789", "tool": "codex", "cwd": root.to_string_lossy(), "question": "does aspirin reduce fever", "new": true})).unwrap();
+            assert_eq!((r["status"].as_str(), r["sources"].as_str(), r["planned_with"].clone()), (Some("queued"), Some("engines"), json!(["confidential", "internal"])), "{r}");
+            assert!(r["planned_with_note"].as_str().unwrap().contains("withholds nothing for a mark"), "{r}");
+            let done = c.call("host.research_result", json!({"session": "abcdef0123456789", "tool": "codex", "cwd": root.to_string_lossy(), "research_id": r["research_id"], "wait": true})).unwrap();
+            assert_eq!(done["planned_with"], json!(["confidential", "internal"]), "{done}");
+            let lines = done["search_log"]["lines"].as_array().cloned().unwrap_or_default();
+            assert!(lines.iter().any(|l| l["planned_with"] == json!(["confidential", "internal"])) && lines.iter().all(|l| l.get("withheld").is_none()), "{lines:?}");
+            assert!(web.seen.lock().unwrap().len() > asked_before, "the engine was asked as before");
+            assert_eq!(crate::research_record::planned_with_count(&dir).1, 1, "the status count has the run");
 
             // specs/119 §15: a session under the private-read mark researches as any other. Its run is not local; the reply says the
             // queries are cleaned, guarded and listed.

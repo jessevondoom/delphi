@@ -10,6 +10,9 @@
 //!   ([`SearchLog::declare`]); it is logged `declared: true`, `kept` is always 0, and it is excluded from every count.
 //! * **Private by inheritance.** The log carries the strictest `private` flag of the claims it served. [`log_allowed_out`] is the library's
 //!   own check (`specs/055` §10.1), so a private log is refused on every outbound channel, like a private source.
+//! * **The query notice** (`specs/141` §2.5). A query the run planned while it, or the span that asked for it, had been given labelled
+//!   items carries `planned_with: [marks]` on its line, and the log carries the marks once. It is a notice: nothing is withheld for it,
+//!   and no branch reads it.
 //! * Nothing here is read as a reason to trust, promote or permit anything (`specs/101` §12 item 6).
 
 use crate::library::Channel;
@@ -144,11 +147,13 @@ pub struct Line {
     pub local: bool,
     /// Run by the host with its own search tool, for a query the run asked of it, and handed back (`specs/119` §2.1 item 4).
     pub host_run: bool,
+    /// The marks of the labelled items in view when the run planned this query (`specs/141` §2.5): a notice, read by nothing.
+    pub planned_with: Vec<&'static str>,
 }
 
 impl Line {
     fn new(rung: &'static str, source: Source, purpose: Purpose) -> Line {
-        Line { rung, source, purpose, query: None, withheld: false, identifier: false, at: delphi_core::time::now_rfc3339(), hits: 0, kept: 0, duplicates: 0, not_kept: BTreeMap::new(), via: None, failed: None, declared: false, local: false, host_run: false }
+        Line { rung, source, purpose, query: None, withheld: false, identifier: false, at: delphi_core::time::now_rfc3339(), hits: 0, kept: 0, duplicates: 0, not_kept: BTreeMap::new(), via: None, failed: None, declared: false, local: false, host_run: false, planned_with: Vec::new() }
     }
 
     /// Does the line account for every result it found? A declared line, a withheld one and the knowledge-base line are not searches the
@@ -191,6 +196,9 @@ impl Line {
         }
         if self.host_run {
             o.insert("run_by_host".into(), json!(true));
+        }
+        if !self.planned_with.is_empty() {
+            o.insert("planned_with".into(), json!(self.planned_with));
         }
         Value::Object(o)
     }
@@ -249,6 +257,8 @@ pub struct SearchLog {
     lines: Vec<Line>,
     /// The strictest `private` flag of the claims this run produced (`specs/101` §3 item 3).
     pub private: bool,
+    /// The marks every query planned from now on carries (`specs/141` §2.5), set by the run before its first query. Empty: none.
+    planned_with: Vec<&'static str>,
 }
 
 impl SearchLog {
@@ -258,6 +268,20 @@ impl SearchLog {
 
     pub fn lines(&self) -> &[Line] {
         &self.lines
+    }
+
+    /// The marks of the labelled items the run had in view when it planned its queries (`specs/141` §2.5). Only a mark's code name
+    /// is kept, once each, in a fixed order; a word that is not a mark is dropped. Lines begun after this carry them.
+    pub fn planned_with(&mut self, marks: &[&'static str]) {
+        let mut m: Vec<&'static str> = marks.iter().copied().filter(|w| MARKS.contains(w)).collect();
+        m.sort_by_key(|w| MARKS.iter().position(|x| x == w));
+        m.dedup();
+        self.planned_with = m;
+    }
+
+    /// How many queries the run planned with labelled items in view (`specs/141` §2.5): the lines that carry `planned_with`.
+    pub fn planned_with_queries(&self) -> usize {
+        self.lines.iter().filter(|l| !l.planned_with.is_empty()).count()
     }
 
     fn push(&mut self, l: Line) -> usize {
@@ -277,6 +301,7 @@ impl SearchLog {
         let mut l = Line::new(rung, source, purpose);
         l.query = Some(query.chars().take(QUERY_CHARS).collect());
         l.via = via.and_then(clean_id);
+        l.planned_with = self.planned_with.clone();
         self.push(l)
     }
 
@@ -303,6 +328,7 @@ impl SearchLog {
         l.query = Some(query.chars().take(QUERY_CHARS).collect());
         l.host_run = true;
         l.hits = hits;
+        l.planned_with = self.planned_with.clone();
         self.push(l)
     }
 
@@ -399,8 +425,22 @@ impl SearchLog {
     }
 
     pub fn to_json(&self) -> Value {
-        json!({"version": 1, "private": self.private, "lines": self.lines.iter().map(Line::to_json).collect::<Vec<_>>(), "flow": self.flow().to_json()})
+        let mut v = json!({"version": 1, "private": self.private, "lines": self.lines.iter().map(Line::to_json).collect::<Vec<_>>(), "flow": self.flow().to_json()});
+        if !self.planned_with.is_empty() {
+            v["planned_with"] = json!(self.planned_with);
+            v["planned_with_queries"] = json!(self.planned_with_queries());
+        }
+        v
     }
+}
+
+/// The marks a `planned_with` may name (`specs/141` §2.1), in the order a notice lists them: the visible line's order (`specs/121` §8
+/// item 4: confidential, then private, then internal), the library's two marks placed as in the line.
+pub const MARKS: [&str; 5] = ["confidential", "personal", "library_private", "internal", "text_held"];
+
+/// How many lines of a kept log (its JSON) carry `planned_with` (`specs/141` §2.5): what `delphi handling status` counts.
+pub fn planned_with_in(log: &Value) -> usize {
+    log["lines"].as_array().into_iter().flatten().filter(|l| l["planned_with"].as_array().is_some_and(|a| !a.is_empty())).count()
 }
 
 /// May this log go out through `channel`? The shared egress check (`specs/098` §12 item 16), on the log's `private` flag: a private
@@ -689,5 +729,37 @@ mod tests {
         for needle in ["Observed", "research_observed", "fact_fetch", "LiveWeb"] {
             assert!(!prod.contains(needle), "the search log module must not reach the fetcher or the observed set: `{needle}`");
         }
+    }
+
+    /// `specs/141` §2.5: once the run sets its notice, each query it sends or hands a host carries `planned_with`; a declared search,
+    /// a withheld one and the knowledge-base line do not (the run planned none of them). A word that is not a mark is dropped, and
+    /// the marks are listed once each in the notice's order. Nothing is withheld and the flow is unchanged.
+    #[test]
+    fn a_query_begun_after_the_notice_carries_planned_with_and_nothing_else_changes() {
+        let r = Redactor::new();
+        let build = |with: &[&'static str]| {
+            let mut log = SearchLog::new();
+            log.declare(&HostSearch { tool: "codex".into(), query: "aspirin".into(), hits: 2 }, &r);
+            log.planned_with(with);
+            let i = log.begin("web", Source::Search("brave".into()), Purpose::Gap, "aspirin fever adults", None);
+            log.rows(i, 1);
+            log.kept(i);
+            log.host_ran("web", "codex", Purpose::Support, "aspirin fever children", 0);
+            log.withheld_identifier("web", Source::Search("brave".into()), Purpose::Contradiction);
+            log.kb(Some("aspirin fever"), 0);
+            log
+        };
+        let log = build(&["internal", "nonsense", "confidential", "internal"]);
+        let v = log.to_json();
+        let with = json!(["confidential", "internal"]);
+        assert_eq!((v["planned_with"].clone(), v["planned_with_queries"].as_u64()), (with.clone(), Some(2)), "{v}");
+        let lines = v["lines"].as_array().unwrap();
+        let carry: Vec<&str> = lines.iter().filter(|l| l["planned_with"] == with).map(|l| l["purpose"].as_str().unwrap()).collect();
+        assert_eq!(carry, ["gap", "support"], "{lines:?}");
+        assert!(lines.iter().filter(|l| l["purpose"] != "gap" && l["purpose"] != "support").all(|l| l.get("planned_with").is_none()), "{lines:?}");
+        assert_eq!(planned_with_in(&v), 2);
+        let plain = build(&[]).to_json();
+        assert_eq!(plain["flow"], v["flow"], "the notice changes no count");
+        assert!(plain.get("planned_with").is_none() && planned_with_in(&plain) == 0);
     }
 }

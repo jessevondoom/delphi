@@ -627,6 +627,24 @@ impl<'a> Labeller<'a> {
         }
     }
 
+    /// A handling item by its id (`handling::item_ok`), as a span's given list holds it (`handling::given`): a library claim or source,
+    /// a research record, or a workspace item by its handling record. The host-noted store has no record of its own: every mark.
+    pub fn item(&self, item: &str) -> Facts {
+        if let Some(id) = item.strip_prefix("library/claims/") {
+            return self.claim(id);
+        }
+        if let Some(id) = item.strip_prefix("library/sources/") {
+            return self.source(id);
+        }
+        if let Some(rest) = item.strip_prefix("research/topics/") {
+            return self.research_record(rest.split('/').next().unwrap_or(""));
+        }
+        if item.starts_with("local/staged/host-") || !handling::item_ok(item) {
+            return Facts { label: Label::every(item), line: format!("{item}=unknown") };
+        }
+        self.traits(item)
+    }
+
     /// A page's label (`specs/141` §2.2): the join over everything in its material, cited or not: every claim, source and record the
     /// sidecar lists, every seed span, and the research records it follows. Returns the label and the fingerprint of the facts it was
     /// computed from. A sidecar that lists nothing is every mark.

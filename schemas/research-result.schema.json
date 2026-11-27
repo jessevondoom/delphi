@@ -77,6 +77,8 @@
     },
     "web_search": { "type": "boolean", "description": "Whether any web search answered in the run. When none did, the answer's label ends with `no web search`." },
     "planned_under_mark": { "type": "boolean", "description": "The session or task that asked was under the private-read mark of specs/103 (specs/119 section 15). The run is the same as any other: each query was cleaned and passed the identifier guard, and the search log lists every query planned." },
+    "planned_with": { "type": "array", "items": { "enum": ["confidential", "personal", "library_private", "internal", "text_held"] }, "uniqueItems": true, "description": "The query notice (specs/141 section 2.5): the marks of the labelled items in view when the run planned its queries (what the asking span was given, and the known list handed to the planner). Empty when none was. A notice only: no query was changed or withheld for it." },
+    "planned_with_note": { "type": "string", "description": "Present when `planned_with` is not empty: what the notice means, in fixed words." },
     "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
     "citations": { "type": "array", "items": { "type": "string" } },
     "source_ids": { "type": "array", "items": { "type": "string" } },
@@ -153,7 +155,9 @@
         "version": { "const": 1 },
         "private": { "type": "boolean" },
         "lines": { "type": "array", "items": { "$ref": "#/$defs/search_line" } },
-        "flow": { "$ref": "#/$defs/search_flow" }
+        "flow": { "$ref": "#/$defs/search_flow" },
+        "planned_with": { "type": "array", "items": { "enum": ["confidential", "personal", "library_private", "internal", "text_held"] }, "uniqueItems": true, "minItems": 1, "description": "The query notice of the run (specs/141 section 2.5), once; absent when no labelled item was in view." },
+        "planned_with_queries": { "type": "integer", "minimum": 0, "description": "How many lines carry `planned_with`." }
       },
       "additionalProperties": false
     },
@@ -176,7 +180,8 @@
         "failed": { "enum": ["no_search_provider", "credential_unresolved", "search_failed", "no_results"], "description": "The search itself failed, in one word of the fixed list." },
         "declared": { "const": true, "description": "Reported by the host, not made by the daemon. Its kept is 0 and it counts as nothing." },
         "run_by_host": { "const": true, "description": "Run by the host with its own search tool, for a query the run asked of it, and handed back with research_feed (specs/119 section 2.1 item 4). Its results on the trusted list were read by the daemon; the others are counted under not_kept as `lead` and were not fetched." },
-        "local": { "const": true, "description": "Not a search: the addresses on the trusted list that a local run already knew for the question (specs/119 section 13.2). It has no query, and it is not counted in `searches`." }
+        "local": { "const": true, "description": "Not a search: the addresses on the trusted list that a local run already knew for the question (specs/119 section 13.2). It has no query, and it is not counted in `searches`." },
+        "planned_with": { "type": "array", "items": { "enum": ["confidential", "personal", "library_private", "internal", "text_held"] }, "uniqueItems": true, "minItems": 1, "description": "The marks of the labelled items in view when the run planned this query (specs/141 section 2.5). A notice only: the query was sent as it would have been." }
       },
       "not": { "required": ["withheld", "query"] },
       "additionalProperties": false

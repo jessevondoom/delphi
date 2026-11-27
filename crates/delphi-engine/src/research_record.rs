@@ -548,6 +548,13 @@ impl Topic {
                 if result.is_some_and(|r| r["planned_under_mark"] == true) {
                     run["planned_under_mark"] = json!(true);
                 }
+                // The query notice (`specs/141` §2.5): the marks in view when the run planned its queries, and how many queries it
+                // planned so. Only the marks' code names are kept; the count is what `delphi handling status` sums.
+                let with: Vec<&str> = result.and_then(|r| r["planned_with"].as_array()).into_iter().flatten().filter_map(Value::as_str).filter(|w| crate::search_log::MARKS.contains(w)).collect();
+                if !with.is_empty() {
+                    run["planned_with"] = json!(with);
+                    run["planned_with_queries"] = json!(result.map_or(0, |r| crate::search_log::planned_with_in(&r["search_log"])));
+                }
                 if let Some(why) = result.and_then(|r| r["stopped"].as_str()).filter(|w| STOPS.contains(w)) {
                     run["stopped"] = json!(why);
                     run["rounds"] = json!(result.and_then(|r| r["rounds"].as_u64()).unwrap_or(0));
@@ -779,6 +786,21 @@ pub fn list(ws: &Path) -> Vec<(Topic, Value)> {
     }
     out.sort_by(|a, b| b.1["updated"].as_str().cmp(&a.1["updated"].as_str()).then_with(|| a.0.id.cmp(&b.0.id)));
     out
+}
+
+/// The query notice's count (`specs/141` §2.5), for `delphi handling status`: over every run of every topic under the workspace and
+/// its registered projects, the queries planned with labelled items in view, and the runs that planned any. A run's own count is
+/// kept on its entry when it finishes, so a later run of the same topic, which replaces the search log, does not lose it.
+pub fn planned_with_count(ws: &Path) -> (usize, usize) {
+    let mut queries = 0usize;
+    let mut runs = 0usize;
+    for (_, rec) in list(ws) {
+        for run in rec["runs"].as_array().into_iter().flatten().filter(|r| r["planned_with"].as_array().is_some_and(|a| !a.is_empty())) {
+            runs += 1;
+            queries += run["planned_with_queries"].as_u64().unwrap_or(0) as usize;
+        }
+    }
+    (queries, runs)
 }
 
 /// The topic `id` wherever it lives: the workspace first, then each registered project.
@@ -1381,5 +1403,36 @@ mod tests {
         assert_eq!(listed.len(), 1);
         let text = render_due(&listed);
         assert!(text.contains(&t.id) && text.contains("due: its newest run is") && text.contains("Does aspirin reduce fever?") && text.contains("nothing is run again by itself"), "{text}");
+    }
+
+    /// `specs/141` AC-10, the record and the status count: a run whose queries were planned with labelled items in view keeps
+    /// `planned_with` in its result, its search log and its run entry, with how many queries it planned so; a word that is not a mark
+    /// is not kept; `planned_with_count` sums the runs, and a later run of the topic, which replaces the log, does not lose the count.
+    #[test]
+    fn a_run_planned_with_labelled_items_keeps_planned_with_in_its_record_and_the_status_counts_its_queries() {
+        let ws = tempfile::tempdir().unwrap();
+        assert_eq!(planned_with_count(ws.path()), (0, 0));
+        let t = Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-1")).unwrap();
+        let mut r = result("an answer");
+        r["planned_with"] = json!(["confidential", "internal", "secret"]);
+        let with = json!(["confidential", "internal"]);
+        r["search_log"] = json!({"version": 1, "private": false, "planned_with": with, "lines": [
+            {"rung": "kb", "source": "kb", "purpose": "kb", "query": "aspirin fever", "hits": 0},
+            {"rung": "trusted", "source": "trusted", "purpose": "trusted", "query": "aspirin fever", "hits": 1, "planned_with": with},
+            {"rung": "web", "source": "brave", "purpose": "gap", "query": "aspirin fever adults", "hits": 2, "planned_with": with},
+            {"rung": "web", "source": "host:codex", "purpose": "declared", "query": "aspirin", "declared": true, "hits": 3}], "flow": {}});
+        t.finish("r-t-1", "done", Some(&r), &[], None, 1).unwrap();
+        let rec = t.read().unwrap();
+        assert_eq!((rec["runs"][0]["planned_with"].clone(), rec["runs"][0]["planned_with_queries"].as_u64()), (with.clone(), Some(2)), "{}", rec["runs"][0]);
+        let back = result_of(&t, "r-t-1").unwrap();
+        assert_eq!(back["planned_with"], json!(["confidential", "internal", "secret"]), "the result reads back as the runner gave it");
+        assert_eq!(back["search_log"]["planned_with"], with);
+        assert_eq!(crate::search_log::planned_with_in(&back["search_log"]), 2);
+        assert_eq!(planned_with_count(ws.path()), (2, 1));
+        // A later run with no notice replaces the log; the count of the first stays, and the second adds nothing.
+        Topic::begin(ws.path(), &begin("Does aspirin reduce fever?", "r-t-2")).unwrap();
+        t.finish("r-t-2", "done", Some(&result("a newer answer")), &[], None, 1).unwrap();
+        assert!(t.read().unwrap()["runs"][1].get("planned_with").is_none());
+        assert_eq!(planned_with_count(ws.path()), (2, 1));
     }
 }
