@@ -40,6 +40,12 @@ async fn page_run_makes_one_request_with_no_tools() {
     let writer = crate::page_run::EnginePageWriter { engine: f.engine.clone(), key, max_tokens: 500 };
     let _ = writer.write("Write a page on tide tables from the material below.").await;
     one_request_with_no_tools(&f);
+    // The golden set's synthetic question (`specs/140` slice C), the file's second caller: one request, no tools, too.
+    let f = setup(vec![Step::text("When does the tide come in?")], 5.0, |_| {});
+    let key = f.engine.question_key().expect("a writer on the fast tier");
+    let q = f.engine.synthetic_question(&key, "Write one question the passage answers.\n\nPASSAGE:\nThe tide comes in twice a day.\nEND PASSAGE\n".into(), "internal_generated").await;
+    assert_eq!(q.map(|(t, _)| t).as_deref(), Ok("When does the tide come in?"));
+    one_request_with_no_tools(&f);
 }
 
 #[tokio::test(flavor = "multi_thread")]

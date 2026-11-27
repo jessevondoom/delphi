@@ -4148,6 +4148,60 @@ impl EngineService {
         Ok(out.to_json())
     }
 
+    /// `kb.eval.synthetic {n, plan}` (`specs/140` §2.1 item 4, slice C): the golden set's synthetic questions, for the operator's
+    /// `delphi kb eval build` at a terminal. It samples up to `n` chunks of the workspace's index (opened read-only). With `plan` it
+    /// makes no model call and says what the calls would take (the chunks, the model, the tokens, whether through the bridge); else it
+    /// asks the `fast` writer one question per chunk, one call at a time, stops at the first call that fails, and returns the cases the
+    /// two filters keep. It writes nothing: the command writes the set.
+    pub(crate) async fn kb_eval_synthetic(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::kb_eval as ke;
+        need_console(&ctx)?;
+        let n = (p["n"].as_u64().unwrap_or(ke::MIN_SYNTHETIC as u64) as usize).clamp(1, ke::SYNTHETIC_MAX);
+        let ws = self.engine.ws.dir.clone();
+        let db = ws.join("local/state.db");
+        let sample = {
+            let (ws, db) = (ws.clone(), db.clone());
+            tokio::task::spawn_blocking(move || crate::kb::Kb::open_readonly(&db).map(|kb| ke::sample_chunks(&kb, &ws, n)).map_err(|e| e.to_string()))
+        };
+        let chunks = sample.await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(code::INVALID_PARAMS, format!("the index cannot be read ({e}); run `delphi kb index` first")))?;
+        let key = self.engine.question_key();
+        let route = key.as_ref().map(|k| format!("{}/{}", k.endpoint_id, k.model_id));
+        if p["plan"].as_bool() == Some(true) {
+            let strata: std::collections::BTreeSet<&str> = chunks.iter().map(|c| c.stratum.as_str()).collect();
+            return Ok(json!({"chunks": chunks.len(), "strata": strata.len(), "tokens_estimate": ke::estimate_tokens(&chunks), "route": route, "bridged": key.as_ref().is_some_and(|k| self.engine.key_is_bridged(k))}));
+        }
+        let Some(key) = key else {
+            return Err(err(code::INVALID_PARAMS, "no model can serve a single call on the fast tier right now"));
+        };
+        let mut answers: Vec<Option<String>> = Vec::with_capacity(chunks.len());
+        let (mut tokens, mut stopped) = (0u64, None);
+        for c in &chunks {
+            match self.engine.synthetic_question(&key, ke::question_contract(c), &c.tier).await {
+                Ok((text, t)) => {
+                    tokens += t;
+                    answers.push(Some(text));
+                }
+                // An empty answer is that chunk's loss; any other failure would fail every call after it.
+                Err(crate::summary::CallError::Empty) => answers.push(None),
+                Err(e) => {
+                    stopped = Some(e.to_string());
+                    break;
+                }
+            }
+        }
+        let route = route.unwrap_or_default();
+        let made = tokio::task::spawn_blocking(move || {
+            let kb = crate::kb::Kb::open_readonly(&db).map_err(|e| e.to_string())?;
+            let mut s = ke::synthetic_from(&kb, &ws, &chunks, &answers);
+            s.route = route;
+            s.tokens = tokens;
+            s.stopped = stopped;
+            Ok::<_, String>(s)
+        });
+        let s = made.await.map_err(|e| err(-32000, e.to_string()))?.map_err(|e| err(code::INVALID_PARAMS, e))?;
+        serde_json::to_value(&s).map_err(|e| err(-32000, e.to_string()))
+    }
+
     /// `library.recheck_pointers {limit, plan, confirmed}` (`specs/142` §2.7): read again the sources held as pointers, at most
     /// `limit` (default 20), under the daemon's own fetch rules and the `[library] unknown_licence` in force. Each one read gains its
     /// text, its pinned excerpts and its resolved anchors, and is queued for its summary; the summaries of what was read are then
@@ -6048,6 +6102,7 @@ impl Extension for ServiceExt {
                 "memory.consolidate" => svc.memory_consolidate(params, ctx).await,
                 "validation.pending" => svc.validation_pending(params, ctx).await,
                 "library.summarize" => svc.library_summarize(params, ctx).await,
+                "kb.eval.synthetic" => svc.kb_eval_synthetic(params, ctx).await,
                 "library.recheck_pointers" => svc.library_recheck_pointers(params, ctx).await,
                 "pages.get" => svc.pages_get(params, ctx).await,
                 "pages.versions" => svc.pages_versions(params, ctx).await,

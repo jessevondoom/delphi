@@ -415,6 +415,41 @@ pub fn validate_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
     })
 }
 
+/// The daemon as the source of the golden set's synthetic questions (`kb.eval.synthetic`, `specs/140` slice C).
+struct DaemonQuestions<'a>(&'a mut delphi_core::client::Client);
+
+impl delphi_engine::kb_eval::SyntheticSource for DaemonQuestions<'_> {
+    fn plan(&mut self, n: usize) -> Result<serde_json::Value, String> {
+        let p = self.0.call("kb.eval.synthetic", serde_json::json!({"n": n, "plan": true})).map_err(|e| e.to_string())?;
+        if p["route"].is_null() {
+            return Err("no model can serve a single call on the fast tier right now".into());
+        }
+        Ok(p)
+    }
+
+    fn make(&mut self, n: usize) -> Result<delphi_engine::kb_eval::Synthetic, String> {
+        let v = self.0.call("kb.eval.synthetic", serde_json::json!({"n": n})).map_err(|e| e.to_string())?;
+        serde_json::from_value(v).map_err(|e| e.to_string())
+    }
+}
+
+/// `delphi kb eval build [--synthetic <n>]` (`specs/140` §2.1 item 4): the real cases, and synthetic ones written by the daemon's
+/// `fast` model after the cost is printed and the operator says yes. With no daemon or no model the real cases are built alone and
+/// the command says the synthetic ones were skipped. The caller has refused it inside an agent seat.
+pub fn eval_build_cli(home: &Path, ws_dir: &Path, args: &[String]) -> i32 {
+    use delphi_engine::kb_eval::{build_cli, NoModel};
+    let stdin = std::io::stdin();
+    let mut reached = false;
+    let code = with_daemon(home, ws_dir, "kb eval build", |client| {
+        reached = true;
+        build_cli(ws_dir, args, &mut DaemonQuestions(client), &mut stdin.lock(), &mut std::io::stdout())
+    });
+    if reached {
+        return code;
+    }
+    build_cli(ws_dir, args, &mut NoModel("the daemon could not be reached".into()), &mut stdin.lock(), &mut std::io::stdout())
+}
+
 /// `delphi kb summarize [--pending | <source>]` (`specs/142` §2.6 item 10, `specs/143` §2.8 item 1): write source summaries now, as a
 /// job the operator started. It prints what it will spend before it starts, then asks the bridge's preflight (through the bridge, a
 /// limit passes only by the confirmation typed at a terminal). Exit codes: 0 written, or nothing pending · 1 refused or failed · 2 off

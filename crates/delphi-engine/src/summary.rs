@@ -294,7 +294,7 @@ pub const CALL_SITES: [(&str, usize); 12] = [
     ("fact_judge.rs", 1),
     ("library_acquire_run.rs", 1),
     ("library_page_validate.rs", 1),
-    ("page_run.rs", 1),
+    ("page_run.rs", 2),
     ("research.rs", 1),
     ("research_host.rs", 3),
     ("source_summary.rs", 1),
