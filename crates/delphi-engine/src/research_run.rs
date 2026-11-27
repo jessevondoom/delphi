@@ -365,6 +365,107 @@ pub struct Deps<'a> {
     pub resume: Option<&'a Resume>,
     /// The search the run makes before its first query, with the caller's visibility (`specs/114` §3). `None` looks nothing up.
     pub known: Option<&'a dyn KnownFirst>,
+    /// The query notice (`specs/141` §2.5): the marks of what the asking span was given, joined by the run with those of its `known`
+    /// list. `None` gives no notice (a caller with no records to read them from).
+    pub planned_with: Option<&'a PlannedWith>,
+}
+
+/// What the result says when its queries were planned with labelled items in view (`specs/141` §2.5).
+pub const PLANNED_WITH_NOTE: &str = "the queries of this run were planned while labelled items were in view (`planned_with` names their marks). Each query was sent as it would have been, cleaned and through the identifier guard: Delphi cannot tell whether a query carries an item's substance, and withholds nothing for a mark. A person, or a host's own policy, can judge the queries in the search log.";
+
+/// The asker's private-read mark (`specs/103`), as the caller read it: the entries of a live mark, or a mark that cannot be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AskerMark {
+    None,
+    Entries(Vec<String>),
+    Unreadable,
+}
+
+/// The query notice of a run (`specs/141` §2.5, building `specs/121` §9 item 2): the label of the labelled items in view when its
+/// queries were planned. That is what the span that asked had been given (its given list, `handling::given`, and the entries of its
+/// private-read mark, `specs/103`) and the `known` list the run hands its planner. The label is computed from the daemon's records by
+/// `label.rs`; an item whose record cannot be read is every mark (`specs/141` §2.1 item 4). It is a notice only: nothing reads it to
+/// withhold, refuse or change a query, and it lowers nothing.
+pub struct PlannedWith {
+    /// The workspace and the home whose records label the items. `None`: no records (the notice stays what the asker gave).
+    roots: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    label: std::sync::Mutex<crate::label::Label>,
+}
+
+impl PlannedWith {
+    /// The notice of a run asked by the span whose given list is kept under `span` (`handling::span_key`) and whose private-read mark
+    /// is `mark` (read by the caller). The operator's own console run passes neither: only its `known` list counts.
+    pub fn for_asker(ws: &std::path::Path, home: &std::path::Path, span: Option<&str>, mark: &AskerMark) -> PlannedWith {
+        let lib = crate::library::Library::in_home(home).with_workspace(ws);
+        let lab = crate::label::Labeller::new(Some(&lib), Some(ws));
+        let mut label = crate::label::Label::none();
+        for item in span.map(|k| crate::handling::given(ws, k)).unwrap_or_default() {
+            label = label.join(&lab.item(&item).label);
+        }
+        match mark {
+            AskerMark::Entries(entries) => {
+                for e in entries {
+                    label = label.join(&Self::entry(&lab, &lib, e));
+                }
+            }
+            AskerMark::Unreadable => label = label.join(&crate::label::Label::every(crate::label::UNREADABLE)),
+            AskerMark::None => {}
+        }
+        PlannedWith { roots: Some((ws.to_path_buf(), home.to_path_buf())), label: std::sync::Mutex::new(label) }
+    }
+
+    /// No records to read: the notice is empty, whatever the run's `known` list holds.
+    pub fn none() -> PlannedWith {
+        PlannedWith { roots: None, label: std::sync::Mutex::new(crate::label::Label::none()) }
+    }
+
+    /// One entry of a private-read mark (`specs/103`): an internal-source claim (`shared-claim/<id>`), a library source or claim by
+    /// its id. Any other entry (a private noted entry of a host) names no record that labels it: every mark.
+    fn entry(lab: &crate::label::Labeller<'_>, lib: &crate::library::Library, e: &str) -> crate::label::Label {
+        if let Some(id) = e.strip_prefix("shared-claim/") {
+            return lab.claim(id).label;
+        }
+        if lib.read_meta(e).is_some() {
+            return lab.source(e).label;
+        }
+        if lib.claim(e).is_some() {
+            return lab.claim(e).label;
+        }
+        crate::label::Label::every(e)
+    }
+
+    /// Join the marks of the `known` list the run hands its planner (`specs/114` §3): its claims, sources and topics, and the files of
+    /// the knowledge base it points to.
+    fn add_known(&self, known: &Known) {
+        let mut l = self.label.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((ws, home)) = &self.roots {
+            if !known.is_empty() {
+                let lib = crate::library::Library::in_home(home).with_workspace(ws);
+                let lab = crate::label::Labeller::new(Some(&lib), Some(ws));
+                let mut add = crate::label::Label::none();
+                for c in &known.claims {
+                    add = add.join(&lab.claim(&c.id).label);
+                }
+                for s in &known.sources {
+                    add = add.join(&lab.source(&s.id).label);
+                }
+                for t in &known.topics {
+                    add = add.join(&lab.research_record(&t.id).label);
+                }
+                for p in &known.kb {
+                    add = add.join(&lab.path("", p).label);
+                }
+                *l = l.clone().join(&add);
+            }
+        }
+    }
+
+    /// The notice as it stands: every mark's code name, in the order of `search_log::MARKS`. Empty: no labelled item was in view.
+    pub fn names(&self) -> Vec<&'static str> {
+        let mut names = self.label.lock().unwrap_or_else(|p| p.into_inner()).names();
+        names.sort_by_key(|w| crate::search_log::MARKS.iter().position(|m| m == w));
+        names
+    }
 }
 
 /// What a run that continues a topic starts from (`specs/112` §5.1): the record's gaps, the pages it already holds, and the
@@ -1397,6 +1498,12 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     if deps.known.is_some() {
         note(deps, |r| r.known(&known.to_json()));
     }
+    // The query notice (`specs/141` §2.5): the marks of what the asker was given and of the `known` list the planner is handed. Every
+    // query planned below carries them on its log line. Nothing is withheld or changed for them.
+    let planned_with: Vec<&'static str> = deps.planned_with.map(|p| {
+        p.add_known(&known);
+        p.names()
+    }).unwrap_or_default();
     // The plan (`specs/114` §4 items 1 and 2). A run that continues a topic whose newest run left sub-questions uncovered takes
     // those as its plan. Otherwise one call as the scout, given the question and the `known` list and no page text, returns three
     // to five sub-questions; a call that fails or returns nothing usable leaves the fixed plan, and the record says so. A continued
@@ -1427,6 +1534,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     for h in deps.host_searches {
         st.log.declare(h, deps.redactor);
     }
+    st.log.planned_with(&planned_with);
     for kind in &planned.withheld {
         let (rung, source, purpose) = log_source(*kind, None);
         st.log.withheld_identifier(rung, source, purpose);
@@ -1730,6 +1838,7 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
         "known_before": known.to_json(), "read_from_library": from_library,
         "plan": plan_kind.as_str(), "sub_questions": sub_report, "stopped": stopped.as_str(), "rounds": rounds,
         "sources": deps.sources.as_str(), "web_search": cov.answered > 0, "planned_under_mark": deps.marked,
+        "planned_with": planned_with,
         "freshness": {"retrieved": retrieved, "last_checked": delphi_core::time::now_rfc3339()},
         "budget_used": {"steps": ctx.steps(), "check_steps": ctx.check_steps()},
         "answered_by": "scout", "consulted": ["scout", "validator"],
@@ -1742,6 +1851,9 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     }
     if let Some(e) = empty {
         result["empty"] = e;
+    }
+    if !planned_with.is_empty() {
+        result["planned_with_note"] = json!(PLANNED_WITH_NOTE);
     }
     result["search_log"] = log.to_json();
     result[RUN_NOTE] = taught;
@@ -2170,7 +2282,7 @@ mod tests {
             Fixture { sources: Sources::Engines, host: None, record: None, retractions: None, cites: None, bounds: (1, 2, 10, 30), pages: 0, web, scout, validator: FakeValidator { verdict, asked: Default::default(), handed: Default::default() }, lib: FakeLib::default(), redactor: Redactor::new(), sites: vec!["who.int".into(), "nih.gov".into()], thin_below: 3, support: Params::default(), host_searches: Vec::new(), limits: Limits::default(), resume: None, known: None }
         }
         fn deps(&self) -> Deps<'_> {
-            Deps { sources: self.sources, marked: false, host: self.host.as_ref(), web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder), limits: &self.limits, resume: self.resume.as_ref(), known: self.known.as_ref().map(|k| k as &dyn KnownFirst) }
+            Deps { sources: self.sources, marked: false, host: self.host.as_ref(), web: &self.web, scout: &self.scout, validator: &self.validator, library: &self.lib, redactor: &self.redactor, sites: &self.sites, thin_below: self.thin_below, support: &self.support, host_searches: &self.host_searches, retractions: self.retractions, chain: self.cites.as_ref().map(|c| ChainPlan { cites: c, depth: self.bounds.0, fanout: self.bounds.1, max_per_seed: self.bounds.2, max_calls: self.bounds.3, max_pages: self.pages }), record: self.record.as_ref().map(|r| r as &dyn Recorder), limits: &self.limits, resume: self.resume.as_ref(), known: self.known.as_ref().map(|k| k as &dyn KnownFirst), planned_with: None }
         }
     }
 
@@ -4335,5 +4447,110 @@ mod tests {
         let (_, v) = value(run_research(&ctx(Depth::Quick), "does aspirin reduce fever", Depth::Quick, &g.deps()).await.unwrap());
         assert_eq!(v["web_search"], true);
         assert!(!v["answer"].as_str().unwrap().contains("no web search"), "{}", v["answer"]);
+    }
+
+    // ---- `specs/141` slice E: the query notice ----
+
+    /// A workspace and a home, with `item` set `confidential` by the operator and handed to the span `m1/scout`.
+    fn given_confidential(item: &str) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let t = tempfile::tempdir().unwrap();
+        let (ws, home) = (t.path().join("ws"), t.path().join("home"));
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let h = crate::handling::Handling::of(&ws, &home);
+        h.operator_set(item, crate::handling::Trait::Confidential).unwrap();
+        crate::handling::note_given(&h, &ws, &crate::handling::span_key("m1", "scout"), &[item.to_string()]);
+        (t, ws, home)
+    }
+
+    fn sent(f: &Fixture) -> Vec<String> {
+        f.web.searched.lock().unwrap().clone()
+    }
+
+    /// AC-10: a query planned by a span that was given a `confidential` item is sent as it would have been, and the result and the
+    /// search log carry `planned_with: ["confidential", "internal"]`; no query is withheld for a mark.
+    #[tokio::test]
+    async fn a_query_planned_by_a_span_given_a_confidential_item_is_sent_unchanged_and_carries_planned_with() {
+        let (_t, ws, home) = given_confidential("local/knowledge/board-minutes.md");
+        let pw = PlannedWith::for_asker(&ws, &home, Some(&crate::handling::span_key("m1", "scout")), &AskerMark::None);
+        assert_eq!(pw.names(), ["confidential", "internal"]);
+        // The same run with no notice: what would have been sent.
+        let plain = Fixture::new(Verdict::Inconclusive);
+        let (_, without) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &plain.deps()).await.unwrap());
+        let f = Fixture::new(Verdict::Inconclusive);
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &Deps { planned_with: Some(&pw), ..f.deps() }).await.unwrap());
+        assert!(!sent(&f).is_empty(), "the run searched");
+        assert_eq!(sent(&f), sent(&plain), "every query is sent as it would have been");
+        assert_eq!(v["planned_with"], json!(["confidential", "internal"]), "{v}");
+        assert!(v["planned_with_note"].as_str().unwrap().contains("withholds nothing for a mark"), "{v}");
+        assert_eq!((without["planned_with"].clone(), without.get("planned_with_note")), (json!([]), None), "no notice without labelled items");
+        // The log: every query the run sent carries the marks; nothing was withheld; the flow is the plain run's.
+        let lines = log_lines(&v);
+        let queried: Vec<&Value> = lines.iter().filter(|l| l["query"].is_string() && l["rung"] != "kb").collect();
+        assert_eq!(queried.len(), sent(&f).len(), "{lines:?}");
+        assert!(queried.iter().all(|l| l["planned_with"] == json!(["confidential", "internal"])), "{lines:?}");
+        assert!(lines.iter().all(|l| l.get("withheld").is_none()), "no query is withheld for a mark: {lines:?}");
+        assert_eq!(v["search_log"]["flow"], without["search_log"]["flow"]);
+        assert_eq!((v["search_log"]["planned_with"].clone(), v["search_log"]["planned_with_queries"].as_u64()), (json!(["confidential", "internal"]), Some(queried.len() as u64)));
+        assert!(log_lines(&without).iter().all(|l| l.get("planned_with").is_none()) && without["search_log"].get("planned_with").is_none());
+        assert_balanced(&v);
+    }
+
+    /// AC-10, the planner's side: the `known` list the run hands its planner counts as given. A knowledge-base file it points to that is
+    /// labelled adds its marks; an unlabelled one adds none; a claim whose record cannot be read is every mark (`specs/141` §2.1 item 4).
+    #[tokio::test]
+    async fn the_known_list_handed_to_the_planner_adds_its_marks_and_an_unreadable_one_is_every_mark() {
+        let (_t, ws, home) = given_confidential("local/summaries/q3-plan.md");
+        let known = |kb: &str, claims: Vec<crate::research_method::KnownClaim>| FakeKnown { found: Known { kb: vec![kb.to_string()], claims, ..Default::default() }, asked: Default::default() };
+        // Asked by the operator (no span): the planner was handed the confidential summary.
+        let pw = PlannedWith::for_asker(&ws, &home, None, &AskerMark::None);
+        assert!(pw.names().is_empty());
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.known = Some(known("summaries/q3-plan.md#L1-L4", vec![]));
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &Deps { planned_with: Some(&pw), ..f.deps() }).await.unwrap());
+        assert_eq!(v["planned_with"], json!(["confidential", "internal"]), "{v}");
+        // An unlabelled file adds nothing.
+        let pw = PlannedWith::for_asker(&ws, &home, None, &AskerMark::None);
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.known = Some(known("REVIEW.md#L1-L4", vec![]));
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &Deps { planned_with: Some(&pw), ..f.deps() }).await.unwrap());
+        assert_eq!(v["planned_with"], json!([]), "{v}");
+        // A claim the library does not hold: every mark.
+        let pw = PlannedWith::for_asker(&ws, &home, None, &AskerMark::None);
+        let mut f = Fixture::new(Verdict::Inconclusive);
+        f.known = Some(known("REVIEW.md#L1-L4", vec![crate::research_method::KnownClaim { id: "c-000000000009".into(), status: "noted".into(), text: "a claim".into() }]));
+        let (_, v) = value(run_research(&ctx(Depth::Survey), "does aspirin reduce fever", Depth::Survey, &Deps { planned_with: Some(&pw), ..f.deps() }).await.unwrap());
+        assert_eq!(v["planned_with"], json!(crate::search_log::MARKS), "{v}");
+        assert!(!sent(&f).is_empty(), "still sent");
+    }
+
+    /// AC-10, a host's turn: the queries the run hands the host to search carry the notice on their lines when the host hands them back.
+    #[tokio::test]
+    async fn the_queries_a_host_searches_for_the_run_carry_planned_with() {
+        let (_t, ws, home) = given_confidential("local/knowledge/board-minutes.md");
+        let pw = PlannedWith::for_asker(&ws, &home, Some(&crate::handling::span_key("m1", "scout")), &AskerMark::None);
+        let f = host_fixture(false, 5_000);
+        let c = Arc::new(ctx(Depth::Survey));
+        let host = scripted_host(c.clone(), vec![row("https://who.int/a")], false);
+        let (_, v) = value(run_research(&c, "does aspirin reduce fever", Depth::Survey, &Deps { planned_with: Some(&pw), ..f.deps() }).await.unwrap());
+        let asked = host.await.unwrap();
+        let lines = host_lines(&v);
+        assert_eq!(lines.len(), asked.len(), "{lines:?}");
+        assert!(lines.iter().all(|l| l["planned_with"] == json!(["confidential", "internal"])), "{lines:?}");
+        assert_eq!(v["planned_with"], json!(["confidential", "internal"]));
+    }
+
+    /// The asker's private-read mark (`specs/103`) counts as given: an entry that names no record that labels it, and a mark that cannot
+    /// be read, are every mark.
+    #[test]
+    fn an_asker_mark_entry_with_no_record_and_an_unreadable_mark_are_every_mark() {
+        let t = tempfile::tempdir().unwrap();
+        let (ws, home) = (t.path().join("ws"), t.path().join("home"));
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        assert!(PlannedWith::for_asker(&ws, &home, Some("m1/scout"), &AskerMark::None).names().is_empty(), "nothing given, nothing marked");
+        assert_eq!(PlannedWith::for_asker(&ws, &home, None, &AskerMark::Entries(vec!["host-abcd1234/n1".into()])).names(), crate::search_log::MARKS);
+        assert_eq!(PlannedWith::for_asker(&ws, &home, None, &AskerMark::Unreadable).names(), crate::search_log::MARKS);
+        assert!(PlannedWith::none().names().is_empty());
     }
 }
