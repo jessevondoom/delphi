@@ -601,6 +601,14 @@ impl Library {
         if let Some(t) = &p.text {
             p.meta.insert("work_bytes".into(), json!(t.len()));
         }
+        // `specs/142` §2.6 item 1: whatever level this capture is kept at, a text read now is summarised. What the model is sent waits
+        // in the summary queue on this machine until the summary is written.
+        let in_hand = if p.capture.is_some() && self.preview.is_none() { p.text.clone().zip(text_sha.clone()) } else { None };
+        let summarise = |id: &str| {
+            if let Some((t, sha)) = &in_hand {
+                crate::source_summary::queue(self, id, sha, t);
+            }
+        };
         if level != Level::Full {
             p.text = None;
             p.assets = None;
@@ -638,6 +646,7 @@ impl Library {
                 self.write_json(&self.source_dir(&p.id).join("meta.json"), &m)?;
                 // The same bytes again: a revisit on the capture's record, not a second copy (`specs/142` §2.1 item 3).
                 self.revisit(&p.id, &now, p.capture.as_ref(), text_sha.as_deref(), false)?;
+                summarise(&p.id);
                 // a revisit is a use (`specs/142` §2.4 item 2)
                 self.note_use(&[p.id.as_str()], delphi_core::time::parse_rfc3339(&now).unwrap_or(0));
                 if confirming {
@@ -660,6 +669,7 @@ impl Library {
                 }
                 self.write_json(&self.source_dir(&p.id).join("meta.json"), &m)?;
                 self.revisit(&p.id, &now, p.capture.as_ref(), text_sha.as_deref(), true)?;
+                summarise(&p.id);
                 self.note_use(&[p.id.as_str()], delphi_core::time::parse_rfc3339(&now).unwrap_or(0));
                 if confirming {
                     self.refresh_citing(&p.id);
@@ -785,6 +795,7 @@ impl Library {
         }
         // The block index of held text (`specs/142` §2.5 item 4): a held capture's blocks are written as it is kept.
         crate::held_text::index_source(self, &p.id);
+        summarise(&p.id);
         self.log("capture", json!({"id": p.id, "level": level.as_str(), "version": version, "content_hash": p.meta.get("content_hash")}));
         // Checked against the local snapshot after the capture is in place, so it adds no step before a source is kept (`specs/101` §4 item 3).
         self.check_retraction(&p.id);
@@ -1073,6 +1084,8 @@ impl Library {
         self.write_json(&dir.join("meta.json"), &meta)?;
         let removed = before.saturating_sub(dir_bytes(&dir));
         crate::held_text::index_source(self, id);
+        // A takedown removes the summary too (`specs/142` §2.6 item 7); the loop above removed its files.
+        crate::source_summary::remove(self, id);
         self.source_purged(id);
         self.log("purge", json!({"id": id, "content_hash": meta["content_hash"], "bytes_removed": removed}));
         Ok(Some(removed))

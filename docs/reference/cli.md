@@ -410,6 +410,7 @@ The library's sources: capture, excerpts, bibliography.
   delphi sources show <id> [--json] [--offline] [--home <dir>]
   delphi sources history <id> [--json] [--home <dir>]
   delphi sources verify [<id>] [--json] [--home <dir>]
+  delphi sources recheck --pointers [--limit <n>] [--dry-run] [--home <dir>] [--workspace <name>]
   delphi sources capture <file.json> [--dry-run] [--json] [--home <dir>]
   delphi sources lint [<id>] [--json] [--home <dir>]
   delphi sources archive <id | url> [--licence <id>] [--title <t>] [--level full|excerpts|pointer] [--workspace <name>] [--home <dir>]
@@ -468,7 +469,7 @@ The knowledge base: index it, search it.
 ```
   delphi kb search <query> [--role <role>] [--untrusted|--all] [--staged] [--unreviewed] [--about] [--summaries|--bibs]
   delphi kb search <query> --project <name> | --all-projects
-  delphi kb import <file.md | dir | -> | validate --pending [--limit <n>] [--home <dir>] [--workspace <name>]
+  delphi kb import <file.md | dir | -> | validate --pending [--limit <n>] | summarize [--pending | <source>]
   delphi kb review [stats | show <ref> | keep <ref>…|--all | discard <ref>…|--all] | flag <ptr> --why <text>
   delphi kb refresh [--stale [--minutes <n, at most 4>] | <id> (--still-current | <file.md | ->)]
   delphi kb quarantine [<id> [--restore]] | extract <page-id> (--auto | <candidates.json | ->)

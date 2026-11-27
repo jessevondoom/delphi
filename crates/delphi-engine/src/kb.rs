@@ -398,6 +398,12 @@ fn library_files(ws: &Path, out: &mut Vec<SourceFile>) {
             out.push(SourceFile { rel_path: format!("library/sources/{}/excerpts.md", id), zone: "library", path, default_source: crate::research::TIER, bundle: None, vouched_by: None });
         }
     }
+    // A source's summary (`specs/142` §2.6 items 5, 6 and 8): a model's account of untrusted text, at `external_untrusted` whatever its
+    // source. Indexed for every source that has one, a private one included: its label is its source's (`library_private` with it,
+    // never `text_held`), and a sink decides by the label, not by whether it is indexed.
+    for (id, path) in crate::source_summary::indexable(&lib) {
+        out.push(SourceFile { rel_path: format!("library/sources/{}/{}", id, crate::source_summary::SUMMARY_MD), zone: "library", path, default_source: UNTRUSTED, bundle: None, vouched_by: None });
+    }
 }
 
 /// The Markdown under `skills/<skill>/references/` of one cached bundle, by logical path

@@ -38,6 +38,14 @@ impl Library {
 
     fn export_one(&self, dir: &Path, id: &str, replace: bool) -> Result<Exported, String> {
         let meta = self.read_meta(id).ok_or_else(|| format!("no source `{}` in the library", id))?;
+        // `specs/142` §2.6 item 6 and AC-25: a held source's text never travels, but its summary may. It carries no `text_held`, and
+        // it passed `body_may_leave` against the source when it was kept; it is asked again here. The copy is then a pointer: the
+        // citation, with the summary as its `abstract`.
+        if crate::library::is_held(&meta) && !crate::library::is_private(&meta) && meta["purged"].is_null() {
+            if let Some(summary) = crate::source_summary::summary_text(self, id) {
+                return self.export_summary(dir, id, &meta, &summary, replace);
+            }
+        }
         crate::egress::check(&meta, Channel::Bundle).map_err(|e| format!("flagged private: {} (unflag it in the library if that was a mistake)", e))?;
         let src = self.source_dir(id);
         let held = meta["purged"].is_null();
@@ -102,6 +110,40 @@ impl Library {
         }
         self.log("source_exported", json!({"id": id, "level": level.as_str()}));
         Ok(Exported { level, licence, text_bytes, assets: copied })
+    }
+
+    /// A held source's copy for a bundle: its citation and its summary, no text, no excerpts, no assets.
+    fn export_summary(&self, dir: &Path, id: &str, meta: &Value, summary: &str, replace: bool) -> Result<Exported, String> {
+        let abstract_text = format!("{}: {}", crate::source_summary::SHOWN, summary);
+        if let Ok(text) = std::fs::read_to_string(self.source_dir(id).join("source.md")) {
+            if !crate::held_text::body_may_leave(&text, &abstract_text) {
+                return Err("its summary carries more of the held text than may leave; it was not copied".into());
+            }
+        }
+        let dest = dir.join("sources").join(id);
+        if dest.exists() && !replace {
+            return Err("already under sources/ (use --replace to overwrite it)".into());
+        }
+        let mut out = Map::new();
+        for k in CITATION.iter().chain(RECORD.iter()) {
+            if let Some(v) = meta.get(*k).filter(|v| !v.is_null()) {
+                out.insert((*k).into(), v.clone());
+            }
+        }
+        for k in ["canonical_url", "URL"] {
+            https_only(&mut out, k);
+        }
+        let licence = out.get("licence").and_then(Value::as_str).map(str::trim).filter(|l| !l.is_empty()).unwrap_or("internal").to_string();
+        out.insert("licence".into(), json!(licence));
+        out.insert("capture_level".into(), json!(Level::Pointer.as_str()));
+        out.insert("abstract".into(), json!(abstract_text));
+        if replace && dest.exists() {
+            std::fs::remove_dir_all(&dest).map_err(|e| format!("{}: {}", dest.display(), e))?;
+        }
+        std::fs::create_dir_all(&dest).map_err(|e| format!("{}: {}", dest.display(), e))?;
+        std::fs::write(dest.join("meta.json"), serde_json::to_vec_pretty(&Value::Object(out)).unwrap_or_default()).map_err(|e| format!("meta.json: {}", e))?;
+        self.log("source_exported", json!({"id": id, "level": "pointer", "summary": true}));
+        Ok(Exported { level: Level::Pointer, licence, text_bytes: 0, assets: 0 })
     }
 
     fn asset_files(dir: &Path) -> Vec<PathBuf> {

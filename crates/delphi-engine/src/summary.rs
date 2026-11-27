@@ -286,7 +286,7 @@ pub fn single_call_tier(inputs: Option<Tier>) -> Tier {
 
 /// Every call site of [`Engine::one_shot_raw`] and [`Engine::one_shot`], by file, with how many it has (`specs/143` §2.2 item 4):
 /// each carries the error on. `summary::tests::every_call_site_of_a_single_call_is_on_the_list` fails when the sources disagree.
-pub const CALL_SITES: [(&str, usize); 11] = [
+pub const CALL_SITES: [(&str, usize); 12] = [
     ("consolidate.rs", 1),
     ("decision_run.rs", 2),
     ("emergency_run.rs", 1),
@@ -297,6 +297,7 @@ pub const CALL_SITES: [(&str, usize); 11] = [
     ("page_run.rs", 1),
     ("research.rs", 1),
     ("research_host.rs", 3),
+    ("source_summary.rs", 1),
     ("summary.rs", 2),
 ];
 
@@ -378,7 +379,7 @@ impl Engine {
         let cfg = self.cfg.get();
         let Some(reference) = cfg.bridge.claude_credential.as_deref() else { return adm::Admission::Refuse(crate::daemon_notice::Cause::NoRoute) };
         let calls = adm::Ledger::in_home(&self.ws.home).calls();
-        let inputs = adm::Inputs { now: (self.clock_unix)(), calls: &calls, limits: &cfg.bridge.limits, switched_on: self.job_switched_on(job, origin, &cfg, true), consolidate_tokens: cfg.memory.consolidate_tokens, pages_week_tokens: cfg.library.pages.week_tokens, reserve: 0, bridged: true, last_active: self.bridge.last_active.load(std::sync::atomic::Ordering::SeqCst) };
+        let inputs = adm::Inputs { now: (self.clock_unix)(), calls: &calls, limits: &cfg.bridge.limits, switched_on: self.job_switched_on(job, origin, &cfg, true), consolidate_tokens: cfg.memory.consolidate_tokens, summary_week_tokens: cfg.library.summary_week_tokens, pages_week_tokens: cfg.library.pages.week_tokens, reserve: 0, bridged: true, last_active: self.bridge.last_active.load(std::sync::atomic::Ordering::SeqCst) };
         adm::job_may_run(job, origin, &adm::credential_id(reference), &inputs)
     }
 

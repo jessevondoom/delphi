@@ -93,7 +93,7 @@ pub struct RouteRequest {
 /// The files whose route request sets `single_call` (`specs/143` §2.1 item 1). The list is closed and tested: a caller added later
 /// sets `single_call`, states the tier of its inputs to `Engine::one_shot_raw` and joins `single_call_tests`, or it does not go
 /// through the bridge (`route::tests::the_marked_callers_are_the_tested_callers`).
-pub const SINGLE_CALLERS: [&str; 7] = ["decision_run.rs", "fact_judge.rs", "library_acquire_run.rs", "library_page_validate.rs", "page_run.rs", "research.rs", "summary.rs"];
+pub const SINGLE_CALLERS: [&str; 8] = ["decision_run.rs", "fact_judge.rs", "library_acquire_run.rs", "library_page_validate.rs", "page_run.rs", "research.rs", "source_summary.rs", "summary.rs"];
 
 /// Whether a harness CLI can be run for one prompt with its tools off (`specs/143` §2.1 item 3), or why not.
 pub fn single_call_cli(harness: &str) -> Result<(), &'static str> {

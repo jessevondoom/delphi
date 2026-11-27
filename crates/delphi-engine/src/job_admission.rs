@@ -64,14 +64,33 @@ const DAY: i64 = 86_400;
 const WEEK: i64 = 7 * DAY;
 
 /// The weekly budget of a job, in tokens (§2.3 item 6), or `None` for a job bound only by the limits. Pages: `[library.pages]
-/// week_tokens` (`specs/139` §2.3 item 8). Summaries: `specs/142` §2.6 item 3. Consolidation: `[memory] consolidate_tokens`.
+/// week_tokens` (`specs/139` §2.3 item 8). Summaries: `[library] summary_week_tokens` (`specs/142` §2.6 item 3). Consolidation: `[memory] consolidate_tokens`.
 pub fn weekly_budget(job: Job, i: &Inputs<'_>) -> Option<u64> {
     match job {
         Job::Pages => Some(i.pages_week_tokens),
-        Job::Summaries => Some(300_000),
+        Job::Summaries => Some(i.summary_week_tokens),
         Job::Consolidation => Some(i.consolidate_tokens),
         Job::Validation | Job::SessionSummaries => None,
     }
+}
+
+/// When a job whose weekly budget is spent may next spend (`specs/142` §2.6 item 3: `delphi kb health` says when the budget next
+/// allows more): the moment enough of the week's oldest calls of `job` on `credential` have left the seven days for the rest to be
+/// under `budget`. `None` while it is under the budget now.
+pub fn weekly_free_at(calls: &[Call], job: Job, credential: &str, budget: u64, now: i64) -> Option<i64> {
+    let mut week: Vec<&Call> = calls.iter().filter(|c| c.job == Some(job) && c.credential == credential && c.at > now - WEEK).collect();
+    let mut spent: u64 = week.iter().map(|c| c.tokens).sum();
+    if spent < budget {
+        return None;
+    }
+    week.sort_by_key(|c| c.at);
+    for c in week {
+        spent = spent.saturating_sub(c.tokens);
+        if spent < budget {
+            return Some(c.at + WEEK);
+        }
+    }
+    Some(now + WEEK)
 }
 
 /// One call, as the ledger holds it.
@@ -178,6 +197,8 @@ pub struct Inputs<'a> {
     /// share, the pauses). `false` for a job served by an API endpoint: only its switch and its weekly budget apply, since the
     /// limits are the subscription's.
     pub bridged: bool,
+    /// `[library] summary_week_tokens`, the weekly budget of source summaries (`specs/142` §2.6 item 3).
+    pub summary_week_tokens: u64,
     /// The last sign of the operator at work: a console call, a host session's hook, or a host tool call over MCP. Unix seconds.
     pub last_active: i64,
 }
@@ -457,10 +478,24 @@ mod tests {
 
     fn ask(job: Option<Job>, origin: Origin, calls: &[Call], last_active: i64, on: bool) -> Admission {
         let limits = BridgeLimits::default();
-        job_may_run(job, origin, CRED, &Inputs { now: NOW, calls, limits: &limits, switched_on: on, consolidate_tokens: 30_000, pages_week_tokens: 600_000, reserve: 0, bridged: true, last_active })
+        job_may_run(job, origin, CRED, &Inputs { now: NOW, calls, limits: &limits, switched_on: on, consolidate_tokens: 30_000, summary_week_tokens: 300_000, pages_week_tokens: 600_000, reserve: 0, bridged: true, last_active })
     }
 
     const QUIET: i64 = NOW - 3600;
+
+    /// `specs/142` §2.6 item 3 and AC-21: the summaries' row reads `[library] summary_week_tokens`, a command is refused past it and
+    /// passes only `confirmed`, and the week's oldest call leaving the seven days is when it allows more.
+    #[test]
+    fn the_summaries_row_reads_summary_week_tokens_and_says_when_it_allows_more() {
+        let limits = BridgeLimits::default();
+        let spent: Vec<Call> = (0..2).map(|k| Call { job: Some(Job::Summaries), at: NOW - 86_400 * (3 - k as i64), ..call(k, 0, Origin::Idle, 6_000) }).collect();
+        let at = |budget: u64, origin: Origin| job_may_run(Some(Job::Summaries), origin, CRED, &Inputs { now: NOW, calls: &spent, limits: &limits, switched_on: true, consolidate_tokens: 30_000, summary_week_tokens: budget, pages_week_tokens: 600_000, reserve: 0, bridged: true, last_active: QUIET });
+        assert_eq!(at(300_000, Origin::Command), Admission::Admit);
+        assert_eq!(at(12_000, Origin::Command), Admission::Refuse(Cause::Budget));
+        assert_eq!(at(12_000, Origin::Confirmed), Admission::Admit);
+        assert_eq!(weekly_free_at(&spent, Job::Summaries, CRED, 300_000, NOW), None);
+        assert_eq!(weekly_free_at(&spent, Job::Summaries, CRED, 12_000, NOW), Some(NOW - 3 * 86_400 + WEEK));
+    }
 
     // AC-16 and the fitness function "no limit is passed without a typed confirmation, and none past the ceiling": every job,
     // against every origin, every limit state and the switch, gives the answer written here.
@@ -554,7 +589,7 @@ mod tests {
         assert_eq!(again.iter().map(|c| c.tokens).sum::<u64>(), 10 * 1000 + 20 * 400, "reported where it was, the estimate where it was not");
         assert_eq!(again.iter().filter(|c| c.outcome.is_none()).count(), 10);
         let limits = BridgeLimits::default();
-        let inputs = Inputs { now: NOW, calls: &again, limits: &limits, switched_on: true, consolidate_tokens: 30_000, pages_week_tokens: 600_000, reserve: 0, bridged: true, last_active: QUIET };
+        let inputs = Inputs { now: NOW, calls: &again, limits: &limits, switched_on: true, consolidate_tokens: 30_000, summary_week_tokens: 300_000, pages_week_tokens: 600_000, reserve: 0, bridged: true, last_active: QUIET };
         assert_eq!(job_may_run(Some(Job::Validation), Origin::Command, &cred, &inputs), Admission::Refuse(Cause::Budget), "30 calls over two endpoints of one credential");
         assert_eq!(job_may_run(Some(Job::Validation), Origin::Command, &credential_id("keychain:other"), &inputs), Admission::Admit);
         let text = std::fs::read_to_string(home.path().join("bridge/ledger.jsonl")).unwrap();
@@ -623,7 +658,7 @@ mod tests {
         let budget = Refuse(Cause::Budget);
         let limits = BridgeLimits::default();
         let ask = |calls: &[Call], week_tokens: u64, reserve: u64, bridged: bool, origin: Origin, on: bool| {
-            job_may_run(Some(Job::Pages), origin, CRED, &Inputs { now: NOW, calls, limits: &limits, switched_on: on, consolidate_tokens: 30_000, pages_week_tokens: week_tokens, reserve, bridged, last_active: QUIET })
+            job_may_run(Some(Job::Pages), origin, CRED, &Inputs { now: NOW, calls, limits: &limits, switched_on: on, consolidate_tokens: 30_000, summary_week_tokens: 300_000, pages_week_tokens: week_tokens, reserve, bridged, last_active: QUIET })
         };
         // 100,000 tokens of pages three days back: half through the bridge's credential, half through an API endpoint.
         let week: Vec<Call> = (0..2).map(|k| Call { credential: if k == 0 { CRED.into() } else { "endpoint-api".into() }, ..call(k, NOW - 3 * DAY - k as i64, Origin::Command, 50_000) }).collect();
@@ -642,7 +677,7 @@ mod tests {
         // Through an API endpoint the subscription's limits do not apply: 30 calls in the window, the operator at work.
         let busy = calls(30, Origin::Idle, 100, 3600);
         assert_eq!(ask(&busy, 600_000, 80_000, true, Origin::Command, true), budget, "the bridge's window");
-        assert_eq!(job_may_run(Some(Job::Pages), Origin::Idle, CRED, &Inputs { now: NOW, calls: &busy, limits: &limits, switched_on: true, consolidate_tokens: 30_000, pages_week_tokens: 600_000, reserve: 80_000, bridged: false, last_active: NOW }), Admit, "an API page is not held by the bridge's limits or its pause");
+        assert_eq!(job_may_run(Some(Job::Pages), Origin::Idle, CRED, &Inputs { now: NOW, calls: &busy, limits: &limits, switched_on: true, consolidate_tokens: 30_000, summary_week_tokens: 300_000, pages_week_tokens: 600_000, reserve: 80_000, bridged: false, last_active: NOW }), Admit, "an API page is not held by the bridge's limits or its pause");
     }
 
     #[test]

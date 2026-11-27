@@ -484,7 +484,7 @@ impl Engine {
         let calls = adm::Ledger::in_home(&self.ws.home).calls();
         let now = (self.clock_unix)();
         let reserve = page_reserve(depth);
-        let inputs = adm::Inputs { now, calls: &calls, limits: &cfg.bridge.limits, switched_on: self.job_switched_on(Some(Job::Pages), origin, &cfg, bridged), consolidate_tokens: cfg.memory.consolidate_tokens, pages_week_tokens: cfg.library.pages.week_tokens, reserve, bridged, last_active: self.bridge.last_active.load(std::sync::atomic::Ordering::SeqCst) };
+        let inputs = adm::Inputs { now, calls: &calls, limits: &cfg.bridge.limits, switched_on: self.job_switched_on(Some(Job::Pages), origin, &cfg, bridged), consolidate_tokens: cfg.memory.consolidate_tokens, summary_week_tokens: cfg.library.summary_week_tokens, pages_week_tokens: cfg.library.pages.week_tokens, reserve, bridged, last_active: self.bridge.last_active.load(std::sync::atomic::Ordering::SeqCst) };
         match adm::job_may_run(Some(Job::Pages), origin, &credential, &inputs) {
             Admission::Admit => Ok(()),
             Admission::Wait(_) => Err("the bridge asks idle work to wait (the operator is at work, or quota was spent); the topic stays due".into()),

@@ -1294,6 +1294,10 @@ pub struct LibraryConfig {
     /// The most bytes all host sessions together may hand over in an hour, in MiB (`specs/142` §2.2 item 7), so several sessions cannot
     /// do together what one may not. Default 64, at least 1. All sessions together may also hand over at most 300 sources an hour.
     pub handover_hour_mib: u64,
+    /// The tokens source summaries may spend in a week (`specs/142` §2.6 item 3). Default 300,000, at least 1. Through the bridge it is
+    /// the summaries' row of the admission table (`specs/143` §2.3), counted from its ledger; past it a source reads `summary: pending`
+    /// and is summarised when the week's spend falls back under it.
+    pub summary_week_tokens: u64,
     /// `deny` (the default) or `allow` (`specs/098` §7.2). Read by the doctor and the seat check from the file itself; named here so
     /// that `[library]` with it parses.
     #[serde(deserialize_with = "de_private_to_models")]
@@ -1302,7 +1306,7 @@ pub struct LibraryConfig {
 
 impl Default for LibraryConfig {
     fn default() -> Self {
-        LibraryConfig { pages: PagesConfig::default(), acquire: AcquireConfig::default(), unknown_licence: UnknownLicence::default(), private_text_max_mib: 500, text_cache_max_mib: 1024, handover_session_mib: 16, handover_hour_mib: 64, private_to_models: "deny".into() }
+        LibraryConfig { pages: PagesConfig::default(), acquire: AcquireConfig::default(), unknown_licence: UnknownLicence::default(), private_text_max_mib: 500, text_cache_max_mib: 1024, handover_session_mib: 16, handover_hour_mib: 64, summary_week_tokens: 300_000, private_to_models: "deny".into() }
     }
 }
 
@@ -1660,6 +1664,7 @@ impl Config {
                 Ok(v) if v.private_text_max_mib == 0 => errs.push("[library]: private_text_max_mib is at least 1".into()),
                 Ok(v) if v.text_cache_max_mib < 16 => errs.push("[library]: text_cache_max_mib is at least 16".into()),
                 Ok(v) if v.handover_session_mib == 0 || v.handover_hour_mib == 0 => errs.push("[library]: handover_session_mib and handover_hour_mib are at least 1".into()),
+                Ok(v) if v.summary_week_tokens == 0 => errs.push("[library]: summary_week_tokens is at least 1".into()),
                 Ok(mut v) => match v.acquire.check() {
                     Ok(()) => {
                         // `specs/142` §2.4 item 1: the old key is read as the new one's name when the new key is absent.

@@ -83,6 +83,9 @@ pub struct EngineService {
     /// The idle rebuild of topic pages (`specs/117` §2 item 3): when it last looked, and whether a rebuild is running.
     topics_checked: std::sync::atomic::AtomicI64,
     topics_running: std::sync::atomic::AtomicBool,
+    /// The idle summaries of sources (`specs/142` §2.6 item 3): when it last looked, and whether a run is going.
+    summaries_checked: std::sync::atomic::AtomicI64,
+    summaries_running: std::sync::atomic::AtomicBool,
     /// The merge trigger (`specs/102` §3.2): when the merge ledger was last looked at, and the byte offset the daemon has read to
     /// (`None` until the first look, which starts at the ledger's end so an old merge never concludes a later prompt).
     merge_checked: std::sync::atomic::AtomicI64,
@@ -425,6 +428,12 @@ pub const CONSOLIDATION_OFF: &str = "[bridge.jobs] consolidation = \"off\": no c
 /// What a validation the operator asked for says when `[bridge.jobs] validation = "off"`.
 pub const VALIDATION_OFF: &str = "[bridge.jobs] validation = \"off\": no claim is checked through the bridge. Set it to \"manual\" or \"auto\" in config.toml to allow it";
 
+/// What a summary run the operator asked for says when `[bridge.jobs] summaries = "off"`.
+pub const SUMMARIES_OFF: &str = "[bridge.jobs] summaries = \"off\": no source summary is written through the bridge. Set it to \"manual\" or \"auto\" in config.toml to allow it";
+/// How often the daemon looks for source summaries to write while idle (`specs/142` §2.6 item 3), and the most one look writes.
+const SUMMARIES_TICK_SECS: i64 = 300;
+const SUMMARIES_PER_TICK: usize = 5;
+
 /// Why a job the operator started must not run, from its preflight (`specs/143` §2.8 item 3), or `None` to go on: `off` says
 /// `off_words`; past a limit it needs `confirmed`; past the ceiling nothing runs.
 pub fn command_stop(pf: crate::summary::Preflight, confirmed: bool, off_words: &str) -> Option<String> {
@@ -468,7 +477,7 @@ impl EngineService {
         let _ = engine.research_ask.set(tx);
         // One queue for every research run, under the one limits table (`specs/112` §4 item 6).
         let research_queue = crate::research_jobs::Jobs::with_limits(&engine.settings.research_limits);
-        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), retrieval_checked: Default::default(), eval_checked: Default::default(), research_jobs: research_queue, app_asked: Default::default(), update: Default::default(),
+        let svc = Arc::new(EngineService { engine, aborts: Mutex::new(HashMap::new()), host_aborts: Mutex::new(HashMap::new()), default_mission: default_mission.to_string(), missions: Mutex::new(HashMap::new()), running: Arc::new(Mutex::new(HashMap::new())), notices: Mutex::new(Vec::new()), open_gate: tokio::sync::Mutex::new(()), host_gate: tokio::sync::Mutex::new(()), shown: Mutex::new(crate::host_shown::Tally::default()), helps: Arc::new(Mutex::new(HashMap::new())), asks: Arc::new(Mutex::new(HashMap::new())), recovery: Mutex::new(HashMap::new()), bundle_exe: Mutex::new(None), attest: Mutex::new(HashMap::new()), admin_card: Mutex::new(None), research: Mutex::new(None), briefs: Arc::new(Mutex::new(Briefs::default())), acquire_checked: Mutex::new(0), last_operator: Default::default(), background_checked: Default::default(), background_running: Default::default(), topics_checked: Default::default(), topics_running: Default::default(), summaries_checked: Default::default(), summaries_running: Default::default(), merge_checked: Default::default(), merge_offset: Mutex::new(None), retrieval_checked: Default::default(), eval_checked: Default::default(), research_jobs: research_queue, app_asked: Default::default(), update: Default::default(),
             #[cfg(test)]
             research_web: Mutex::new(None),
             #[cfg(test)]
@@ -3050,6 +3059,7 @@ impl EngineService {
                 svc.acquire_tick().await;
                 svc.background_validate_tick().await;
                 svc.topics_tick().await;
+                svc.summaries_tick().await;
                 svc.forge_probe_tick().await;
                 svc.merge_ledger_tick().await;
                 svc.health_tick().await;
@@ -3301,6 +3311,50 @@ impl EngineService {
             svc.topic_idle_rebuild_noticed().await;
             svc.topics_running.store(false, SeqCst);
         });
+    }
+
+    /// Every `SUMMARIES_TICK_SECS`, while the operator has been quiet for `fact_background::IDLE_SECS` and no task runs: write a few
+    /// pending source summaries (`specs/142` §2.6 item 3), as the job `summaries` nobody started. One run at a time, in its own task.
+    async fn summaries_tick(self: &Arc<Self>) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = (self.engine.clock_unix)();
+        if now - self.summaries_checked.load(SeqCst) < SUMMARIES_TICK_SECS {
+            return;
+        }
+        self.summaries_checked.store(now, SeqCst);
+        if now - self.last_operator.load(SeqCst) < crate::fact_background::IDLE_SECS || !self.running.lock().unwrap().is_empty() {
+            return;
+        }
+        if self.summaries_running.swap(true, SeqCst) {
+            return;
+        }
+        let svc = self.clone();
+        tokio::spawn(async move {
+            svc.summaries_idle().await;
+            svc.summaries_running.store(false, SeqCst);
+        });
+    }
+
+    /// One idle run of the summaries, and its notice when it could not run (`specs/143` §2.7). What it wrote is indexed now.
+    pub(crate) async fn summaries_idle(&self) -> crate::source_summary::Drained {
+        let e = self.engine.clone();
+        let home = e.ws.home.clone();
+        let has = tokio::task::spawn_blocking(move || !crate::source_summary::pending(&crate::library::Library::in_home(&home)).is_empty()).await.unwrap_or(false);
+        if !has {
+            return Default::default();
+        }
+        let (out, _) = crate::daemon_notice::in_job(crate::daemon_notice::Job::Summaries, e.summaries_drain(None, SUMMARIES_PER_TICK)).await;
+        if !out.written.is_empty() {
+            self.reindex_library().await;
+        }
+        self.notices_tick().await;
+        out
+    }
+
+    /// Bring the index up to date with the library now, so a search finds what was just kept. A failure is not the caller's.
+    async fn reindex_library(&self) {
+        let (w, hm) = (self.engine.ws.dir.clone(), self.engine.ws.home.clone());
+        let _ = tokio::task::spawn_blocking(move || refresh_kb(&w, &hm)).await;
     }
 
     /// One idle rebuild, and what the operator is told when it could not run (`specs/143` §2.7): a failure with a cause becomes a
@@ -3935,6 +3989,7 @@ impl EngineService {
         let key = match job {
             crate::daemon_notice::Job::Pages => self.engine.writer_key(),
             crate::daemon_notice::Job::Validation => self.engine.judge_key(None),
+            crate::daemon_notice::Job::Summaries => self.engine.source_summary_key(),
             _ => self.engine.scout_key(),
         };
         Ok(self.engine.bridge_preflight(job, key.as_ref()).to_json())
@@ -4031,6 +4086,99 @@ impl EngineService {
             }
         }
         Ok(json!({"checked": checked.len(), "facts": checked, "stopped": stopped}))
+    }
+
+    /// `library.summarize {source | pending, plan, confirmed}` (`specs/142` §2.6 item 10, `specs/143` §2.8): write source summaries now,
+    /// as the job `summaries` started by the operator. `plan: true` answers what it would do and spend and writes nothing. One `source`
+    /// must hold text or excerpts. Refused when the job is `off` through the bridge, past a limit unless `confirmed`, past the ceiling
+    /// always; a run over several sources stops at the first limit.
+    pub(crate) async fn library_summarize(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        use crate::source_summary as ss;
+        need_console(&ctx)?;
+        let confirmed = p["confirmed"].as_bool().unwrap_or(false);
+        let job = crate::daemon_notice::Job::Summaries;
+        let lib = crate::library::Library::in_home(&self.engine.ws.home);
+        let ids: Vec<String> = match p["source"].as_str() {
+            Some(id) => {
+                if lib.read_meta(id).is_none() {
+                    return Err(err(code::NOT_FOUND, format!("no source `{id}` in the library")));
+                }
+                if ss::input_of(&lib, id).is_none() {
+                    return Err(err(code::INVALID_PARAMS, ss::Skip::NothingToSummarise.words()));
+                }
+                vec![id.to_string()]
+            }
+            None if p["pending"].as_bool() == Some(true) => ss::pending(&lib),
+            None => return Err(err(code::INVALID_PARAMS, "name a source, or pending: true")),
+        };
+        let key = self.engine.source_summary_key();
+        if p["plan"].as_bool() == Some(true) {
+            let tokens: u64 = ids.iter().filter_map(|id| ss::input_of(&lib, id)).map(|i| ss::estimate(&i)).sum();
+            let cfg = self.engine.cfg.get();
+            let bridged = key.as_ref().is_some_and(|k| cfg.endpoint(&k.endpoint_id).is_some_and(|e| e.path == delphi_adapter::config::AccessPath::Harness));
+            return Ok(json!({"sources": ids, "count": ids.len(), "tokens_estimate": tokens, "route": key.as_ref().map(|k| format!("{}/{}", k.endpoint_id, k.model_id)), "bridged": bridged, "week_tokens": cfg.library.summary_week_tokens, "free_at": self.engine.summaries_free_at()}));
+        }
+        if let Some(why) = command_stop(self.engine.bridge_preflight(job, key.as_ref()), confirmed, SUMMARIES_OFF) {
+            return Err(err(code::INVALID_PARAMS, why));
+        }
+        let n = ids.len();
+        let out = crate::daemon_notice::in_command(job, confirmed, self.engine.summaries_drain(Some(ids), n.max(1))).await;
+        if !out.written.is_empty() {
+            self.reindex_library().await;
+        }
+        Ok(out.to_json())
+    }
+
+    /// `library.recheck_pointers {limit, plan, confirmed}` (`specs/142` §2.7): read again the sources held as pointers, at most
+    /// `limit` (default 20), under the daemon's own fetch rules and the `[library] unknown_licence` in force. Each one read gains its
+    /// text, its pinned excerpts and its resolved anchors, and is queued for its summary; the summaries of what was read are then
+    /// written as the job `summaries` started by the operator, within its limits (past one only when `confirmed`). A pointer the
+    /// daemon may not fetch is listed as `needs a host capture` with its locator. `plan: true` fetches nothing and writes nothing.
+    async fn library_recheck_pointers(&self, p: Value, ctx: CallContext) -> RpcOutcome {
+        need_console(&ctx)?;
+        let limit = p["limit"].as_u64().unwrap_or(20).clamp(1, 500) as usize;
+        let confirmed = p["confirmed"].as_bool().unwrap_or(false);
+        let (home, wsd, e) = (self.engine.ws.home.clone(), self.engine.ws.dir.clone(), self.engine.clone());
+        if p["plan"].as_bool() == Some(true) {
+            return Ok(crate::source_summary::recheck_plan(&crate::library::Library::in_home(&home), limit));
+        }
+        let library = self.engine.cfg.get().library.clone();
+        let wider = self.engine.settings.wider_fetch.clone();
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<crate::source_summary::Reread>, String> {
+            let lib = crate::library::Library::in_home(&home).with_text_cache(Some(library.text_cache_max_mib.saturating_mul(1024 * 1024)));
+            let keep = library.unknown_licence.as_str();
+            let opts = crate::library::AddOpts { keep_closed_held: keep == "local_text", keep_closed_privately: keep == "private_text", ..Default::default() };
+            let transport = Arc::new(delphi_adapter::research::transport::HttpTransport::new()?);
+            let list = Arc::new(crate::research_setup::lists(&wsd, &home)?);
+            let web = crate::research_host::LiveWeb::new(transport, list, crate::research_setup::engines(&e), wider);
+            let fetch = |u: &str| -> Result<crate::host_research::Fetched, String> {
+                use crate::research_run::Web;
+                let page = web.fetch(u)?;
+                let snap = web.held.read_as(&page.url, &page.text).ok_or_else(|| "fetch_failed".to_string())?;
+                Ok((page.url, snap))
+            };
+            Ok(crate::source_summary::recheck_pointers(&lib, limit, &opts, &fetch))
+        })
+        .await
+        .map_err(|e| err(-32000, e.to_string()))?
+        .map_err(|m| err(code::INVALID_PARAMS, m))?;
+        let read = crate::source_summary::read_ids(&rows);
+        self.reindex_library().await;
+        // The summaries of what was read, within the job's limits: past one only by the confirmation, never past the ceiling.
+        let job = crate::daemon_notice::Job::Summaries;
+        let summaries = match command_stop(self.engine.bridge_preflight(job, self.engine.source_summary_key().as_ref()), confirmed, SUMMARIES_OFF) {
+            Some(why) => json!({"written": [], "stopped": why}),
+            None if read.is_empty() => json!({"written": []}),
+            None => {
+                let n = read.len();
+                let out = crate::daemon_notice::in_command(job, confirmed, self.engine.summaries_drain(Some(read), n)).await;
+                if !out.written.is_empty() {
+                    self.reindex_library().await;
+                }
+                out.to_json()
+            }
+        };
+        Ok(json!({"rows": rows.iter().map(|r| r.to_json()).collect::<Vec<_>>(), "summaries": summaries}))
     }
 
     async fn pages_pin(&self, p: Value, ctx: CallContext) -> RpcOutcome {
@@ -5866,6 +6014,8 @@ impl Extension for ServiceExt {
                 "bridge.preflight" => svc.bridge_preflight(params, ctx),
                 "memory.consolidate" => svc.memory_consolidate(params, ctx).await,
                 "validation.pending" => svc.validation_pending(params, ctx).await,
+                "library.summarize" => svc.library_summarize(params, ctx).await,
+                "library.recheck_pointers" => svc.library_recheck_pointers(params, ctx).await,
                 "pages.get" => svc.pages_get(params, ctx).await,
                 "pages.versions" => svc.pages_versions(params, ctx).await,
                 "pages.links" => svc.pages_links(params, ctx).await,
@@ -6386,8 +6536,14 @@ mod tests {
                     f.engine.consolidate_pass(delphi_adapter::config::Consolidate::Model, 1000).await;
                     true
                 }
-                // Source summaries are `specs/142` §2.6 and are not built: the job joins this test when it is.
-                Job::Summaries => false,
+                // `specs/142` §2.6 item 9: a source waits for its summary and no model can serve a single call.
+                Job::Summaries => {
+                    let lib = crate::library::Library::in_home(&f.engine.ws.home);
+                    let url = "https://tides.example/a";
+                    lib.add_fetched(url, &crate::fact_fetch::test_snapshot(url, "Tides", &["Twice a day."]), &Default::default(), &Default::default()).unwrap();
+                    assert!(svc.summaries_idle().await.written.is_empty());
+                    true
+                }
             };
             svc.notices_tick().await;
             let record: Value = serde_json::from_slice(&fs::read(f.engine.ws.dir.join(crate::daemon_notice::FILE)).unwrap()).unwrap();
@@ -6396,9 +6552,9 @@ mod tests {
             built += exists as u64;
             assert_eq!(record["causes"]["no_route"]["count"], json!(built), "{job:?}");
         }
-        assert_eq!(built, 4);
+        assert_eq!(built, 5);
         assert_eq!(events_of(&f, "daemon.notice").len(), 1, "one notice for the cause, whatever the job");
-        assert_eq!(svc.notices_json(), vec![crate::daemon_notice::line(Cause::NoRoute, 4, None)]);
+        assert_eq!(svc.notices_json(), vec![crate::daemon_notice::line(Cause::NoRoute, 5, None)]);
         assert_eq!(f.model.requests().len(), 0, "no model was called");
     }
     use delphi_core::client::{Client, ClientError};
