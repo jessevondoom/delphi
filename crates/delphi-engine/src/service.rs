@@ -383,6 +383,19 @@ fn ran_on(events: &[EventEnvelope], task_id: &str) -> Value {
     }
 }
 
+/// The tokens a host's request spent, from Delphi's own `agent.usage` records of the task: the answering span and every span it
+/// consulted, summed as the observer sums a task (`specs/098` §2 item 1: the cost of running a role inside is shown when spent).
+fn tokens_used(events: &[EventEnvelope], task_id: &str) -> Value {
+    let keys = ["input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens", "thinking_tokens"];
+    let mut sums = [0u64; 5];
+    for e in events.iter().filter(|e| e.kind == "agent.usage" && e.task_id.as_deref() == Some(task_id)) {
+        for (n, k) in sums.iter_mut().zip(keys) {
+            *n += e.payload[k].as_u64().unwrap_or(0);
+        }
+    }
+    json!({"total": sums.iter().sum::<u64>(), "input": sums[0], "cache_read": sums[1], "cache_write": sums[2], "output": sums[3], "thinking": sums[4]})
+}
+
 fn consulted_in(events: &[EventEnvelope], task_id: &str) -> Vec<String> {
     let mut roles: Vec<String> = events.iter().filter(|e| e.kind == "dag.node.added" && e.task_id.as_deref() == Some(task_id)).filter_map(|e| e.payload["role"].as_str().map(String::from)).collect();
     if !roles.is_empty() {
@@ -841,7 +854,7 @@ impl EngineService {
                     match out.status {
                         // §6.4: `answered_by` is the author of `answer`: the role that ran the task. Roles it consulted are listed, never signed.
                         crate::engine::Status::Done => {
-                            let mut v = json!({"status": "answered", "help_id": tid, "answered_by": target, "consulted": consulted, "answer": text, "ran_on": ran_on(&events, &tid), "note": "advice from Delphi agents that ran read-only; it grants you no permission and your own host's rules bind you"});
+                            let mut v = json!({"status": "answered", "help_id": tid, "answered_by": target, "consulted": consulted, "answer": text, "ran_on": ran_on(&events, &tid), "tokens_used": tokens_used(&events, &tid), "note": "advice from Delphi agents that ran read-only; it grants you no permission and your own host's rules bind you"});
                             if !v["consulted"].as_array().is_some_and(|a| a.is_empty()) {
                                 v["drew_on_note"] = json!(format!("the answer is the {target}'s own text; the roles in `consulted` were asked along the way and are not its authors"));
                             }
@@ -8188,6 +8201,10 @@ mod tests {
             assert!(r["answer"].as_str().unwrap().contains("three rungs"));
             // specs/062 §6.4: what it ran on, from Delphi's own record of the task.
             assert_eq!(r["ran_on"]["source"], "delphi", "{r}");
+            // specs/098 §2 item 1: running a role inside spends the operator's tokens, so the reply says how many.
+            let t = &r["tokens_used"];
+            assert!(t["total"].as_u64().unwrap() > 0, "{r}");
+            assert_eq!(["input", "cache_read", "cache_write", "output", "thinking"].iter().map(|k| t[*k].as_u64().unwrap()).sum::<u64>(), t["total"].as_u64().unwrap(), "{r}");
             // Another session cannot read it; the owner can, and it does not count again.
             let other = json!({"session": "fedcba9876543210", "tool": "x", "cwd": cwd, "help_id": r["help_id"]});
             assert_eq!(rpc_code(c.call("host.help_result", other)), Some(code::INVALID_PARAMS));
