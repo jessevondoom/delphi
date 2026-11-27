@@ -1,7 +1,8 @@
 ---
 state: built
-date: 2026-11-26
+date: 2026-11-27
 title: "the sender inventory, then rule (a): local_text, held text in the index, body_may_leave at every exit (AC-9 blocks its merge)"
+eval_waived: "no ranking term, weight or chunking rule changes; with include_held the visibility filter also admits a held source's text (a library source.md at external_untrusted), so the set of documents the default search and span start of a role that does not act may return grows by held sources (a builder's, orchestrator's, messenger's, investigator's or writer's default is unchanged); the golden set holds no held source, so a before/after run would compare the same results; the diff base counts knowledge-v2's own retrieval changes"
 ---
 
 Built 2026-11-26 on branch `build/142-b` (from `knowledge-v2`). Not merged.
@@ -74,7 +75,7 @@ Senders that carry no held text, or are not sinks under 141 §2.4 item 1:
 
 ## Builder decisions (for the architect)
 
-1. **The tier hides held text from agents' default searches.** §2.5 item 3 says held text is indexed at `external_untrusted` "for the operator and the operator's agents". An agent's `kb_search` and a span's start passages ask for nothing untrusted, so they do not return it. The operator's view, the page gather and any search that asks for untrusted text do. Built as the spec words the tier; confirm, or say agents should see it by default (which would taint every span that does).
+1. **The tier hides held text from agents' default searches.** (Reversed by the operator on 2026-11-27; see the last section.) §2.5 item 3 says held text is indexed at `external_untrusted` "for the operator and the operator's agents". An agent's `kb_search` and a span's start passages ask for nothing untrusted, so they do not return it. The operator's view, the page gather and any search that asks for untrusted text do. Built as the spec words the tier; confirm, or say agents should see it by default (which would taint every span that does).
 2. **`is_held` is deny by default**: the mark, or any public full-text source under a licence that is not open, not the operator's, and not adopted from a bundle. A held source whose text was evicted keeps the mark, so its record is still refused by a bundle copy.
 3. **A bundle copy refuses a held source outright**, rather than copying its citation and excerpts. Its citation can still be exported with `sources bib`.
 4. **The bibliography (`Channel::Export`) sends a held source's citation** (141 §2.4 item 7), with free-text fields cut. The three lookups and the web search (tags) also pass; they send no body.
@@ -103,3 +104,30 @@ Senders that carry no held text, or are not sinks under 141 §2.4 item 1:
 - The app's copy guard and print hiding are tested by source checks and pure functions, not in a running window.
 - The cost of the block index on a full 1 GiB cache (about 16 million hashes, 128 MiB of files) is not measured.
 - `delphi handling check` and summaries do not exist yet (141, slice G); AC-27 is not tested there.
+
+
+## Operator ruling, 2026-11-27: agents see held text
+
+The operator reversed builder decision 1 (§2.5 item 3, "readable by the operator's agents"): every configured model route may see the whole knowledge base, and labels guard only the sinks that leave the machine. The same day, after a red-team review of spec 144, the operator narrowed the default: held text is `external_untrusted`, and under GOVERNANCE §4.3 a span that reads it loses its mutating and outbound tools, so a default-on search would disarm a role that acts on a routine query. Held text is therefore the default only for roles that do not act, and an explicit opt-in for roles that do.
+
+What changed (`kb.rs`, `retrieval.rs`, `tools.rs`, `engine.rs`, `strategy_trace.rs`, `align_run.rs`):
+
+- **`SearchOpts::include_held`** (default false). When set, a search that asks for nothing else untrusted also admits a held source's text: a library `source.md` indexed at `external_untrusted` (`kb::held_sql`), which `library_files` does for held sources only. A source's summary (`summary.md`, also `external_untrusted`) and every other untrusted text stay out. Private sources are still never indexed, so no option returns them.
+- **Who gets it by default: `retrieval::held_by_default(role, write, execute)`**, decided by the role's manifest: no write into `@worktree`, and every `execute` name in a known read-only list (`org-context`, `kb-search`, `web-search`, `daemon-fetch`, `repo-mapper`, `dependency-auditor`, `ast-search`, `scoped-web-verify`, `inspect-system`, `propose-admin-action`; any other name counts as acting), and never for `builder`, `orchestrator` or `messenger` (the operator's list, kept as a floor). The engine passes it to the span's tools (`ToolCtx::held_by_default`) and to its start passages (`StartBudget::held`).
+- With the shipped manifests, **on by default**: administrator, advocate, architect, assistant, red-team, scout, strategist, validator. **Opt-in only**: builder, orchestrator, messenger, and also **investigator** (its manifest holds `shell-worktree-scoped`, `git-worktree` and `benchmark-runner`) and **writer** (it writes `@worktree/README.md` and `@worktree/docs/**`). The operator's list named investigator and writer as read-only; their tools say otherwise, and the instruction was to decide by the tools, so they are opt-in. To change that, edit `held_by_default` or the manifests.
+- Administrator, assistant and advocate: no worktree write and no acting execute name (`org-context`, `inspect-system`, `propose-admin-action`: a proposal is a card the operator decides), so on. Red-team was not named; by its tools it is on.
+- **The opt-in:** `kb_search` takes `include_held: true`. Its description says that reading held text, for a role that writes code, runs commands or reaches out, takes those tools away for the rest of the task.
+- **Vectors:** a held source's vectors carry `trusted = 2` (`kb::vec_trust`); a search with `include_held` takes `trusted >= 1` as candidates, any other untrusted-free search `trusted = 1` as before, so a search without the option has exactly its old candidates. `VEC_SCOPE_VERSION` is 3; an index at 2 drops only the held sources' vectors once, and the next embedding pass stores them again (found by their words until then).
+- **The label:** a held passage reads `held text · untrusted · not validated` (`kb::HELD_LABEL`) in `kb_search` and in the start passages; its status stays `noted`.
+- **Unchanged:** the tier stays `external_untrusted`, so a span given held text starts at, or drops to, L0 as before (`kb_search` and `span_start` take the tier from the hit). `held_text::body_may_leave`, the sender inventory and every exit check are untouched. The host tools (`search_kb`, `kb_retrieve`) already return untrusted text with labels (`specs/109` §12) and are unchanged.
+
+Tests:
+
+- New: `retrieval::tests::held_text_is_the_default_only_for_the_shipped_roles_that_do_not_act` (reads every shipped `AGENT.md`; an unknown execute name counts as acting).
+- New: `tools::tests::kb_search_gives_held_text_to_a_role_that_does_not_act_and_to_a_builder_only_when_it_asks` (the scout's default `kb_search` returns the held passage labelled and its span drops to L0; the builder's default does not and keeps its worktree tools; the builder's `include_held: true` returns it, and its span then gets `Deny` for worktree writes and outbound actions).
+- New: `held_text::tests::a_role_that_does_not_act_is_given_held_text_by_default_and_a_builder_only_when_it_asks` (search and span start for scout and builder; the scout's start passage is labelled and starts the span at L0; a private source is returned to no role with or without the option; a run of the held text still may not leave).
+- New: `kb::tests::a_held_sources_text_is_found_when_held_text_is_asked_for_labelled_and_still_untrusted` (lexical, vector and hybrid legs; without the option the results are as before; a summary and other web text never; the version-2 index drops only the held vectors).
+- Changed: `held_text::tests::a_span_given_held_text_cannot_promote` still asserts that a default search is not given held text, and now also that a search with `include_held` is, labelled, at `external_untrusted`.
+- The exit tests and `every_sender_is_listed_and_every_exit_asks` are unchanged and pass.
+
+Not verified: no live run. A role that does not act now gets held text in its start passages, which taints the span from its first turn; for the scout and the validator that was already the usual case, but for the architect and the strategist it means a span that wrote specs or roadmaps may now be refused those writes (a tainted span writes only where output stays L0) after a held passage starts it. That consequence follows the operator's list and has not been measured.

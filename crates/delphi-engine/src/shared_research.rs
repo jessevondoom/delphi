@@ -1039,7 +1039,7 @@ mod tests {
         let guard = Guard { zones: Zones { local: f.ws.join("local"), team: f.ws.join("team"), base: f.ws.join("base"), ratified: f.ws.join("ratified"), worktree: None, projects: vec![], bundles: vec![], payload: None }, role: "builder".into(), read_globs: vec!["*".into()], write_globs: vec![], protected: Default::default() };
         let (mut span, mut index, rules) = (Span::root("sp1"), Index::new(), OriginRules::with_defaults());
         let mut search = |mission: &str, q: &str| -> (String, Vec<(String, Value)>) {
-            let mut ctx = crate::tools::ToolCtx { guard: &guard, span: &mut span, index: &mut index, rules: &rules, probe: &crate::probe::AssumeClean, role: "builder", mission_id: mission, now_rfc3339: "t", stamps: vec![], events: vec![] };
+            let mut ctx = crate::tools::ToolCtx { guard: &guard, span: &mut span, index: &mut index, rules: &rules, probe: &crate::probe::AssumeClean, role: "builder", mission_id: mission, now_rfc3339: "t", stamps: vec![], events: vec![], held_by_default: false };
             let r = crate::tools::run(&mut ctx, "kb_search", &json!({"query": q, "limit": 10}));
             (r.content, ctx.events)
         };

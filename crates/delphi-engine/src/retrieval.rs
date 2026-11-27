@@ -318,7 +318,9 @@ pub const MAX_START_PASSAGES: usize = delphi_adapter::config::MAX_START_PASSAGES
 pub const MAX_START_CHARS: usize = delphi_adapter::config::MAX_START_CHARS;
 
 /// The zones a span starts from (`specs/116` §4 item 3). Adding a zone is one entry here; what a role may see of it is still the
-/// index's own rule (`kb::allowed_sql`), so a zone named here can never show another role's memory or untrusted text.
+/// index's own rule (`kb::allowed_sql`), so a zone named here can never show another role's memory or untrusted text, except a held
+/// source's text in `library` for a role that does not act ([`StartBudget::held`], [`held_by_default`]), labelled `kb::HELD_LABEL`;
+/// the span that is given a passage of it starts at its tier, `external_untrusted`.
 ///
 /// Zone `research` (`specs/112` §3 item 5: topic records, their answers and library claims) is read as the library is: at the
 /// library's one tier, each passage labelled by its own status (*not validated* unless a claim's derived status says more), and
@@ -336,12 +338,31 @@ pub struct StartBudget {
     /// `[memory] provisional`: whether the role's provisional notes are among the zones (`specs/116` §4 item 3). Off, none is
     /// retrieved, whatever files exist.
     pub provisional: bool,
+    /// Whether held text may start the span ([`held_by_default`] of its role). Off unless set: a span that holds mutating or outbound
+    /// tools would lose them to a passage it did not ask for.
+    pub held: bool,
 }
 
 impl Default for StartBudget {
     fn default() -> Self {
-        StartBudget { passages: START_PASSAGES, chars: START_CHARS, provisional: true }
+        StartBudget { passages: START_PASSAGES, chars: START_CHARS, provisional: true, held: false }
     }
+}
+
+/// The roles that act (the operator, 2026-11-27): they never get held text without asking, whatever their manifest says.
+pub const ACTING_ROLES: [&str; 3] = ["builder", "orchestrator", "messenger"];
+
+/// The `execute` names that give a span no mutating or outbound tool (`docs/reference/execute-names.md`): context, search, a proposal
+/// the operator decides, and the daemon's own fetches. Any other name counts as acting.
+pub const NON_ACTING_EXECUTE: [&str; 10] = ["org-context", "kb-search", "web-search", "daemon-fetch", "repo-mapper", "dependency-auditor", "ast-search", "scoped-web-verify", "inspect-system", "propose-admin-action"];
+
+/// Whether a span of this role is given held text (`specs/142` §2.5 item 3) by its default `kb_search` and its start passages (the
+/// operator's rulings of 2026-11-27). Held text is `external_untrusted`: a span that reads it is tainted and loses its mutating and
+/// outbound tools (GOVERNANCE §4.3, `provenance::gate`), so it is the default only for a span that holds none: decided by the role's
+/// manifest (no write into `@worktree`, every `execute` name in [`NON_ACTING_EXECUTE`]) and never for one of [`ACTING_ROLES`]. Any
+/// other span gets it on an explicit `include_held`.
+pub fn held_by_default(role: &str, write: &[String], execute: &[String]) -> bool {
+    !ACTING_ROLES.contains(&role) && !write.iter().any(|w| w.trim_start().starts_with("@worktree")) && execute.iter().all(|e| NON_ACTING_EXECUTE.contains(&e.as_str()))
 }
 
 /// What a span starts with.
@@ -394,8 +415,8 @@ pub fn passages(db: &Path, hits: &[Hit]) -> Vec<String> {
 }
 
 /// The `@runtime/retrieved` text a span starts with (`specs/064` §4.2, `specs/116` §4), and the measurements for `retrieval.done`.
-/// One deterministic query from the objective, over [`START_ZONES`] as `role` may see them (nothing untrusted, no other role's
-/// memory), at most `budget.passages` passages and `budget.chars` characters in all, at most [`START_PER_DOC`] from one document.
+/// One deterministic query from the objective, over [`START_ZONES`] as `role` may see them (nothing untrusted but a held source's
+/// text when `budget.held`, no other role's memory), at most `budget.passages` passages and `budget.chars` characters in all, at most [`START_PER_DOC`] from one document.
 /// Each passage keeps its pointer and its label. `once` is for a root span: the same query is made once per mission, since the
 /// conversation carries what the first one found; a child span starts with nothing of its parent's, so it always asks. `None`
 /// when nothing applies: no query, a zero budget, a repeated root query, no index, or nothing found. Findings are those of the
@@ -423,7 +444,7 @@ pub fn span_start(home: &Path, db: &Path, mission: &str, objective: &str, role: 
         None => (None, None),
     };
     // `automatic`: an item that disputes took out of automatic retrieval is not handed over here (`specs/116` §7 item 2).
-    let opts = SearchOpts { role: Some(role.to_string()), limit: 10, zones: Some(START_ZONES.to_vec()), findings: crate::kb::FindingsView::Scope(scope), project, shared, automatic: true, ..Default::default() };
+    let opts = SearchOpts { role: Some(role.to_string()), limit: 10, zones: Some(START_ZONES.to_vec()), findings: crate::kb::FindingsView::Scope(scope), project, shared, automatic: true, include_held: budget.held, ..Default::default() };
     let r = search(home, db, &query, opts).ok()?;
     let texts = passages(db, &r.hits);
     // The role's notes are a search of their own: at most two, and at most a third of the passages (`specs/116` §4 item 3: two of
@@ -489,6 +510,26 @@ pub fn span_start(home: &Path, db: &Path, mission: &str, objective: &str, role: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The operator's rulings of 2026-11-27, read from the shipped manifests: the roles whose spans hold no mutating or outbound tool
+    /// are given held text by default; the builder, the orchestrator and the messenger never are, and neither is a role whose manifest
+    /// writes into the worktree or runs commands (the investigator's shell, the writer's worktree docs).
+    #[test]
+    fn held_text_is_the_default_only_for_the_shipped_roles_that_do_not_act() {
+        let agents = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agents");
+        let mut on = Vec::new();
+        let mut off = Vec::new();
+        for e in std::fs::read_dir(&agents).unwrap().flatten() {
+            let Ok(text) = std::fs::read_to_string(e.path().join("AGENT.md")) else { continue };
+            let m = crate::workspace::AgentManifest::parse(&text).unwrap();
+            if held_by_default(&m.id, &m.write, &m.execute) { on.push(m.id) } else { off.push(m.id) }
+        }
+        on.sort();
+        off.sort();
+        assert_eq!(on, ["administrator", "advocate", "architect", "assistant", "red-team", "scout", "strategist", "validator"]);
+        assert_eq!(off, ["builder", "investigator", "messenger", "orchestrator", "writer"]);
+        assert!(!held_by_default("scout", &[], &["something-new".into()]), "an execute name not known to be read-only counts as acting");
+    }
 
     fn src(rel: &str, path: PathBuf) -> crate::kb::SourceFile {
         crate::kb::SourceFile { rel_path: rel.into(), zone: "core", path, default_source: "external_untrusted", bundle: None, vouched_by: None }
