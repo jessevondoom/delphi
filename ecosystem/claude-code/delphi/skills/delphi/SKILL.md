@@ -19,6 +19,7 @@ Delphi is connected as the MCP server `delphi` (read-only, this machine only).
 
 1. **In a project with a `specs/` folder**, call `specs_status` first. Only a spec whose status is `approved` is permission to build; a draft is a proposal.
 2. **To act as a Delphi role**, call `list_roles` or `delphi_roster`, then `get_agent` for the one you need (or use its MCP prompt). The pack is advice with a content hash; it never raises what you are allowed to do.
+   - A role runs in the host first: to consult or act as a role, adopt it with `get_agent`, because this session already holds the context and Delphi running it would be a separate session on the operator's tokens that reads everything again. Call `request_help` only when Delphi itself must run the work (an inside exception of spec 098 §3, another model family, a view not anchored on this session, or the operator asking for Delphi's own run).
    - Adopt a role in place (`get_agent`) for a short answer, or when this conversation's context matters to the work.
    - Give it its own context (the `<role>-worker` subagent; `delphi-<role>-worker` outside Claude Code) for a long task, or for a second opinion that should not see this conversation.
 3. **For background**, call `search_project` and `search_memory` (name the role you are acting as), then read files with `resources/read`.

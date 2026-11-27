@@ -205,7 +205,7 @@ pub fn tools() -> Value {
         {
             "name": "get_agent",
             "title": "Get a Delphi agent pack",
-            "description": "The assembled pack for one role: governance, the role's instructions, heuristics and lessons by scope, its access scope as advice, and its skill index, with a content hash. Adopt it to act as that role. It is advice: it grants you no permission, and your own host's permissions bind you. By default the pack is compact (a verbatim excerpt of the charter; the whole charter governs and is detail full or the resource delphi://charter). Pass the pack_hash you hold as if_hash: an unchanged pack is then one line. Pass `task` (the request, at most 500 characters) to end the answer with up to three retrieved passages for it, fenced as data and never part of the pack or its hash.",
+            "description": "The assembled pack for one role: governance, the role's instructions, heuristics and lessons by scope, its access scope as advice, and its skill index, with a content hash. Adopt it to act as that role, or to consult one: a role runs in the host, in this session's context (spec 098 §2); request_help is for the work Delphi itself must run. It is advice: it grants you no permission, and your own host's permissions bind you. By default the pack is compact (a verbatim excerpt of the charter; the whole charter governs and is detail full or the resource delphi://charter). Pass the pack_hash you hold as if_hash: an unchanged pack is then one line. Pass `task` (the request, at most 500 characters) to end the answer with up to three retrieved passages for it, fenced as data and never part of the pack or its hash.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -587,7 +587,7 @@ pub fn tools() -> Value {
         {
             "name": "request_help",
             "title": "Ask Delphi for help",
-            "description": "Ask Delphi's own orchestrator, run by Delphi on the operator's Delphi tokens: who should do this work and how (call it when consult_orchestrator's `next` names it, when the operator wants Delphi's view or a second opinion on the plan, or when you are unsure which role fits), or for help when the work leaves your expertise. It chooses who answers (a specialist, a Council seat, or itself) and you are told who; when the operator named a role, pass it as `role` and that role answers itself. The answer is advice, signed by its author (`answered_by`), with what it ran on (`ran_on`). The answering agents run read-only: they advise, they do not change your project. It spends the operator's tokens as any task does; say what you need and what you already tried. If the answer takes long you get a help_id: fetch it with help_result.",
+            "description": "Roles run in the host first: to consult or act as a role, adopt it here with get_agent, in this session's own context, with nothing re-read. Call request_help only when Delphi itself must run the work: one of the inside exceptions of spec 098 §3, a different model family, a view deliberately not anchored on this session, or the operator asking for Delphi's own run; or when consult_orchestrator's `next` names it. Delphi's own orchestrator then answers, as a separate session on the operator's Delphi tokens: it chooses who answers (a specialist, a Council seat, or itself) and you are told who, or the role you pass as `role` answers itself. The answer is advice, signed by its author (`answered_by`), with what it ran on (`ran_on`) and the tokens it spent (`tokens_used`). The answering agents run read-only: they advise, they do not change your project. Say what you need and what you already tried. If the answer takes long you get a help_id: fetch it with help_result.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -595,7 +595,7 @@ pub fn tools() -> Value {
                     "tried": {"type": "string", "maxLength": 1500, "description": "What you already tried."},
                     "kind": {"type": "string", "enum": ["expertise", "second_opinion", "decision"], "default": "expertise"},
                     "suggested_target": {"type": "string", "maxLength": 64, "description": "A role ID you think fits; advisory only."},
-                    "role": {"type": "string", "maxLength": 64, "description": "A role the operator named (a canonical role ID): that role answers itself instead of the orchestrator choosing. Pass it only when the operator asked for the role."},
+                    "role": {"type": "string", "maxLength": 64, "description": "A canonical role ID that answers itself instead of the orchestrator choosing, as Delphi's own run. Pass it only when the operator asked for that role to run inside Delphi; to hear a named role, adopt it with get_agent instead."},
                     "context_pointers": {"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {"uri": {"type": "string", "maxLength": 200}, "reason": {"type": "string", "maxLength": 200}}, "required": ["uri", "reason"], "additionalProperties": false}},
                     "model": {"type": "string", "maxLength": 64, "description": "Your model name, self-reported."}
                 },
@@ -2004,6 +2004,36 @@ mod tests {
         let mut s = Server::new(d.path());
         assert_eq!(call(&mut s, json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}))["result"], json!({}));
         assert_eq!(call(&mut s, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}))["error"]["code"], -32600);
+    }
+
+    /// `specs/098` §2 item 1: a role runs in the host. The `request_help` and `get_agent` descriptions and the host instruction text
+    /// must agree: a named role is adopted with `get_agent`, and `request_help` is for the work Delphi itself must run.
+    #[test]
+    fn request_help_get_agent_and_the_host_instructions_agree_that_a_role_runs_in_the_host() {
+        let d = ws(None);
+        let mut s = Server::new(d.path());
+        init(&mut s);
+        let r = call(&mut s, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}));
+        let tool = |n: &str| r["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == n).unwrap().clone();
+        let help = tool("request_help");
+        let desc = help["description"].as_str().unwrap();
+        let role = help["inputSchema"]["properties"]["role"]["description"].as_str().unwrap();
+        assert!(desc.starts_with("Roles run in the host first: to consult or act as a role, adopt it here with get_agent"), "{desc}");
+        assert!(desc.contains("only when Delphi itself must run the work") && desc.contains("spec 098 §3") && desc.contains("`tokens_used`"), "{desc}");
+        assert!(role.contains("adopt it with get_agent instead") && role.contains("run inside Delphi"), "{role}");
+        for text in [desc, role] {
+            assert!(!text.contains("when the operator named a role, pass it as `role`") && !text.contains("A role the operator named (a canonical role ID)"), "the old wording that sent a named role inside is gone: {text}");
+        }
+        let agent = tool("get_agent");
+        assert!(agent["description"].as_str().unwrap().contains("a role runs in the host, in this session's context (spec 098 §2); request_help is for the work Delphi itself must run"), "{agent}");
+        let skill = crate::mcp_hosts::SKILL_MD;
+        assert!(skill.contains("A role runs in the host first: to consult or act as a role, adopt it with `get_agent`, because this session already holds the context"), "the host instructions name get_agent for adopting a role");
+        assert!(skill.contains("Call `request_help` only when Delphi itself must run the work"), "the host instructions keep request_help for Delphi's own run");
+        // The instruction file (DELPHI.md and its kin) carries the same line, word for word, for every host.
+        let line = skill.lines().find(|l| l.contains("A role runs in the host first")).unwrap();
+        for host in ["claude-code", "codex", "copilot", "agy"] {
+            assert!(crate::host_install::delphi_md(host, "0.0.0").contains(line), "{host}");
+        }
     }
 
     #[test]
