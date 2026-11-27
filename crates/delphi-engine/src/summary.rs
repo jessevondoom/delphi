@@ -378,7 +378,7 @@ impl Engine {
         let cfg = self.cfg.get();
         let Some(reference) = cfg.bridge.claude_credential.as_deref() else { return adm::Admission::Refuse(crate::daemon_notice::Cause::NoRoute) };
         let calls = adm::Ledger::in_home(&self.ws.home).calls();
-        let inputs = adm::Inputs { now: (self.clock_unix)(), calls: &calls, limits: &cfg.bridge.limits, switched_on: self.job_switched_on(job, origin, &cfg), consolidate_tokens: cfg.memory.consolidate_tokens, last_active: self.bridge.last_active.load(std::sync::atomic::Ordering::SeqCst) };
+        let inputs = adm::Inputs { now: (self.clock_unix)(), calls: &calls, limits: &cfg.bridge.limits, switched_on: self.job_switched_on(job, origin, &cfg, true), consolidate_tokens: cfg.memory.consolidate_tokens, pages_week_tokens: cfg.library.pages.week_tokens, reserve: 0, bridged: true, last_active: self.bridge.last_active.load(std::sync::atomic::Ordering::SeqCst) };
         adm::job_may_run(job, origin, &adm::credential_id(reference), &inputs)
     }
 
@@ -414,8 +414,8 @@ impl Engine {
     }
 
     /// The job's own switch, read in one place (§2.3 item 6). A job the operator started is not held by the switch that only
-    /// stops it running by itself.
-    fn job_switched_on(&self, job: Option<crate::daemon_notice::Job>, origin: crate::job_admission::Origin, cfg: &delphi_adapter::config::Config) -> bool {
+    /// stops it running by itself. `bridged`: the job's calls go through the bridge, so its `[bridge.jobs]` mode applies too.
+    pub(crate) fn job_switched_on(&self, job: Option<crate::daemon_notice::Job>, origin: crate::job_admission::Origin, cfg: &delphi_adapter::config::Config, bridged: bool) -> bool {
         use crate::daemon_notice::Job;
         let idle = origin == crate::job_admission::Origin::Idle;
         let own = match job {
@@ -427,7 +427,7 @@ impl Engine {
         };
         // `[bridge.jobs]` (`specs/143` §2.8 item 4): asked only here, for bridged calls. `manual` stops what nobody started; `off`
         // stops all of it. It never turns the job's own "no" into a yes.
-        own && match job.map(|j| bridge_job_mode(&cfg.bridge.jobs, j)) {
+        own && match job.filter(|_| bridged).map(|j| bridge_job_mode(&cfg.bridge.jobs, j)) {
             Some(delphi_adapter::config::JobMode::Off) => false,
             Some(delphi_adapter::config::JobMode::Manual) => !idle,
             _ => true,
@@ -585,15 +585,50 @@ impl Engine {
         let target = Target { provider: delphi_adapter::provider_for(ep).into(), endpoint_id: ep.id.clone(), model_id: key.model_id.clone() };
         let opts = CompileOptions { max_tokens, thinking_budget: None, temperature: None, tools: vec![], betas: ep.betas.clone() };
         let compiled = delphi_adapter::compile_for(ep, ipr, &[], &target, &opts).map_err(|_| CallError::Provider)?;
+        // A page's call is counted in the one ledger whatever serves it (`specs/139` §2.3 item 8): the page budget is a row of the
+        // admission table, so a page written through an API endpoint spends it as one written through the bridge does.
+        let counted = page_call(&self.ws.home, ep, ipr, (self.clock_unix)());
         let mut sink = |_e: delphi_adapter::claude::StreamEvent| {};
-        let done = self.model.call(ep, &key.model_id, &compiled, &mut sink).await.map_err(|e| CallError::of(&e))?;
+        let done = self.model.call(ep, &key.model_id, &compiled, &mut sink).await.map_err(|e| CallError::of(&e));
+        let reported = done.as_ref().ok().map(|d| {
+            let u = &d.usage;
+            u.input_tokens + u.cache_read_tokens + u.cache_write_tokens + u.output_tokens + u.thinking_tokens
+        });
+        if let Some((ledger, id)) = &counted {
+            ledger.end(id, (self.clock_unix)(), reported, reported.is_none(), match &done { Ok(_) => "ok", Err(e) => e.cause().code() });
+        }
+        let done = done?;
         let text = done.blocks.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n");
         if text.trim().is_empty() {
             return Err(CallError::Empty.into());
         }
-        let u = &done.usage;
-        Ok(Written { text, endpoint_id: ep.id.clone(), model_id: key.model_id.clone(), tokens: u.input_tokens + u.cache_read_tokens + u.cache_write_tokens + u.output_tokens + u.thinking_tokens, tier: single_call_tier(inputs) })
+        Ok(Written { text, endpoint_id: ep.id.clone(), model_id: key.model_id.clone(), tokens: reported.unwrap_or(0), tier: single_call_tier(inputs) })
     }
+}
+
+/// The ledger's name for an API endpoint (`specs/139` §2.3 item 8): its calls are counted in the one ledger, apart from every
+/// subscription's limits, which filter by the bridge's credential.
+pub(crate) fn endpoint_credential(endpoint_id: &str) -> String {
+    crate::job_admission::credential_id(&format!("endpoint:{endpoint_id}"))
+}
+
+/// A page's single call through an API endpoint: the start line in the one ledger, with the job and origin of the page build it is
+/// made in, and the estimate from its prompt. `None` outside a page build. Its end line is written when the call returns; a call
+/// the daemon died under counts with the estimate.
+fn page_call(home: &std::path::Path, ep: &delphi_adapter::config::Endpoint, ipr: &Ipr, now: i64) -> Option<(crate::job_admission::Ledger, String)> {
+    use crate::daemon_notice::Job;
+    use crate::job_admission::{self as adm, Origin};
+    let origin = match (crate::daemon_notice::current_job(), crate::daemon_notice::current_command()) {
+        (Some(Job::Pages), _) => Origin::Idle,
+        (None, Some((Job::Pages, confirmed))) => if confirmed { Origin::Confirmed } else { Origin::Command },
+        _ => return None,
+    };
+    static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = format!("api-{}-{}-{}", std::process::id(), now, CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    let estimate = ((ipr.system_sections().join("\n\n").len() + ipr.first_user_text().len()) / 4) as u64;
+    let ledger = adm::Ledger::in_home(home);
+    ledger.start(&adm::Call { id: id.clone(), at: now, job: Some(Job::Pages), origin, credential: endpoint_credential(&ep.id), endpoint: ep.id.clone(), tokens: estimate, outcome: None });
+    Some((ledger, id))
 }
 
 #[cfg(test)]

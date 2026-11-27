@@ -63,13 +63,13 @@ pub const PAUSE_SECS: i64 = 15 * 60;
 const DAY: i64 = 86_400;
 const WEEK: i64 = 7 * DAY;
 
-/// The weekly budget of a job, in tokens (§2.3 item 6), or `None` for a job bound only by the limits. Pages: `specs/139` §2.3
-/// item 8. Summaries: `specs/142` §2.6 item 3. Consolidation: `[memory] consolidate_tokens`.
-pub fn weekly_budget(job: Job, consolidate_tokens: u64) -> Option<u64> {
+/// The weekly budget of a job, in tokens (§2.3 item 6), or `None` for a job bound only by the limits. Pages: `[library.pages]
+/// week_tokens` (`specs/139` §2.3 item 8). Summaries: `specs/142` §2.6 item 3. Consolidation: `[memory] consolidate_tokens`.
+pub fn weekly_budget(job: Job, i: &Inputs<'_>) -> Option<u64> {
     match job {
-        Job::Pages => Some(600_000),
+        Job::Pages => Some(i.pages_week_tokens),
         Job::Summaries => Some(300_000),
-        Job::Consolidation => Some(consolidate_tokens),
+        Job::Consolidation => Some(i.consolidate_tokens),
         Job::Validation | Job::SessionSummaries => None,
     }
 }
@@ -168,6 +168,16 @@ pub struct Inputs<'a> {
     pub switched_on: bool,
     /// `[memory] consolidate_tokens`, the weekly budget of consolidation.
     pub consolidate_tokens: u64,
+    /// `[library.pages] week_tokens`, the weekly budget of pages (`specs/139` §2.3 item 8).
+    pub pages_week_tokens: u64,
+    /// The tokens this start sets aside against the job's weekly budget: 0 for one call, the worst case of the whole build before
+    /// a page starts (`specs/139` §2.3 item 8: in proportion to the page's depth). The job is refused when what it spent in the
+    /// week and the reserve together pass the budget.
+    pub reserve: u64,
+    /// The call goes through the bridge, so the subscription's limits apply (the ceiling, the window, the daily cap, the idle
+    /// share, the pauses). `false` for a job served by an API endpoint: only its switch and its weekly budget apply, since the
+    /// limits are the subscription's.
+    pub bridged: bool,
     /// The last sign of the operator at work: a console call, a host session's hook, or a host tool call over MCP. Unix seconds.
     pub last_active: i64,
 }
@@ -191,14 +201,35 @@ fn day_start(now: i64) -> i64 {
     now - now.rem_euclid(DAY)
 }
 
+/// The tokens `job` spent in the seven days before `now`, over every credential and endpoint: a weekly budget is the job's, however
+/// its calls were served (§2.3 item 6; `specs/139` §2.3 item 8).
+pub fn week_spent(calls: &[Call], job: Job, now: i64) -> u64 {
+    calls.iter().filter(|c| c.job == Some(job) && c.at > now - WEEK).map(|c| c.tokens).sum()
+}
+
+/// Whether `job`'s weekly budget leaves room for `reserve` more (`true` for a job with no weekly budget).
+fn week_has_room(job: Option<Job>, i: &Inputs<'_>) -> bool {
+    match job.and_then(|j| weekly_budget(j, i).map(|b| (j, b))) {
+        Some((j, budget)) => {
+            let week = week_spent(i.calls, j, i.now);
+            week < budget && week.saturating_add(i.reserve) <= budget
+        }
+        None => true,
+    }
+}
+
 /// May a call of `job`, started by `origin`, signed in by `credential` ([`credential_id`]), start now (§2.3 item 6)?
 ///
 /// In order: the job's switch; the ceiling, which nothing passes; `confirmed`, which passes what follows; the rolling window and
-/// the daily cap, of which jobs nobody started have a fixed share; the job's weekly budget; and, for a job nobody started, the
-/// pause while the operator is working and after spent quota until the window has passed.
+/// the daily cap, of which jobs nobody started have a fixed share; the job's weekly budget, with the start's reserve; and, for a
+/// job nobody started, the pause while the operator is working and after spent quota until the window has passed. A job served by
+/// an API endpoint (`bridged` false) meets only its switch and its weekly budget.
 pub fn job_may_run(job: Option<Job>, origin: Origin, credential: &str, i: &Inputs<'_>) -> Admission {
     if !i.switched_on {
         return Admission::Refuse(Cause::NoRoute);
+    }
+    if !i.bridged {
+        return if origin == Origin::Confirmed || week_has_room(job, i) { Admission::Admit } else { Admission::Refuse(Cause::Budget) };
     }
     let l = i.limits;
     let window = (l.window_hours as i64) * 3600;
@@ -217,11 +248,8 @@ pub fn job_may_run(job: Option<Job>, origin: Origin, credential: &str, i: &Input
     if over(win, l.window_calls, l.window_tokens) || over(day, l.daily_calls, l.daily_tokens) {
         return Admission::Refuse(Cause::Budget);
     }
-    if let Some(budget) = job.and_then(|j| weekly_budget(j, i.consolidate_tokens)) {
-        let week: u64 = mine.iter().filter(|c| c.job == job && c.at > i.now - WEEK).map(|c| c.tokens).sum();
-        if week >= budget {
-            return Admission::Refuse(Cause::Budget);
-        }
+    if !week_has_room(job, i) {
+        return Admission::Refuse(Cause::Budget);
     }
     if origin == Origin::Idle {
         // Half is always there for what the operator starts.
@@ -429,7 +457,7 @@ mod tests {
 
     fn ask(job: Option<Job>, origin: Origin, calls: &[Call], last_active: i64, on: bool) -> Admission {
         let limits = BridgeLimits::default();
-        job_may_run(job, origin, CRED, &Inputs { now: NOW, calls, limits: &limits, switched_on: on, consolidate_tokens: 30_000, last_active })
+        job_may_run(job, origin, CRED, &Inputs { now: NOW, calls, limits: &limits, switched_on: on, consolidate_tokens: 30_000, pages_week_tokens: 600_000, reserve: 0, bridged: true, last_active })
     }
 
     const QUIET: i64 = NOW - 3600;
@@ -490,7 +518,7 @@ mod tests {
             let under: Vec<Call> = week.iter().take(5).cloned().collect();
             assert_eq!(ask(Some(job), Origin::Idle, &under, QUIET, true), Admit, "{job:?} under its weekly budget");
             // Another job's spend is not this job's budget.
-            let other = Job::ALL.into_iter().find(|j| *j != job && weekly_budget(*j, 30_000).is_none()).unwrap();
+            let other = Job::ALL.into_iter().find(|j| *j != job && !matches!(j, Job::Pages | Job::Summaries | Job::Consolidation)).unwrap();
             let theirs: Vec<Call> = week.iter().cloned().map(|c| Call { job: Some(other), ..c }).collect();
             assert_eq!(ask(Some(job), Origin::Idle, &theirs, QUIET, true), Admit, "{job:?}: {other:?} spent, not it");
         }
@@ -526,7 +554,7 @@ mod tests {
         assert_eq!(again.iter().map(|c| c.tokens).sum::<u64>(), 10 * 1000 + 20 * 400, "reported where it was, the estimate where it was not");
         assert_eq!(again.iter().filter(|c| c.outcome.is_none()).count(), 10);
         let limits = BridgeLimits::default();
-        let inputs = Inputs { now: NOW, calls: &again, limits: &limits, switched_on: true, consolidate_tokens: 30_000, last_active: QUIET };
+        let inputs = Inputs { now: NOW, calls: &again, limits: &limits, switched_on: true, consolidate_tokens: 30_000, pages_week_tokens: 600_000, reserve: 0, bridged: true, last_active: QUIET };
         assert_eq!(job_may_run(Some(Job::Validation), Origin::Command, &cred, &inputs), Admission::Refuse(Cause::Budget), "30 calls over two endpoints of one credential");
         assert_eq!(job_may_run(Some(Job::Validation), Origin::Command, &credential_id("keychain:other"), &inputs), Admission::Admit);
         let text = std::fs::read_to_string(home.path().join("bridge/ledger.jsonl")).unwrap();
@@ -584,6 +612,37 @@ mod tests {
         drop(idle);
         let next = tokio::time::timeout(Duration::from_millis(500), gate.enter("other", true, 2)).await.expect("the first idle job ended");
         drop((asked, next));
+    }
+
+    // `specs/139` AC-11 (slice F): the page budget is one row of the admission table. It is `[library.pages] week_tokens`, counted
+    // over every credential and endpoint the job's calls went through; the reserve a build asks is added before it starts; a page
+    // served by an API endpoint meets only its switch and that budget (none of the subscription's limits); confirmed passes it.
+    #[test]
+    fn the_page_budget_is_week_tokens_counted_over_every_endpoint_with_the_reserve() {
+        use Admission::{Admit, Refuse};
+        let budget = Refuse(Cause::Budget);
+        let limits = BridgeLimits::default();
+        let ask = |calls: &[Call], week_tokens: u64, reserve: u64, bridged: bool, origin: Origin, on: bool| {
+            job_may_run(Some(Job::Pages), origin, CRED, &Inputs { now: NOW, calls, limits: &limits, switched_on: on, consolidate_tokens: 30_000, pages_week_tokens: week_tokens, reserve, bridged, last_active: QUIET })
+        };
+        // 100,000 tokens of pages three days back: half through the bridge's credential, half through an API endpoint.
+        let week: Vec<Call> = (0..2).map(|k| Call { credential: if k == 0 { CRED.into() } else { "endpoint-api".into() }, ..call(k, NOW - 3 * DAY - k as i64, Origin::Command, 50_000) }).collect();
+        assert_eq!(week_spent(&week, Job::Pages, NOW), 100_000);
+        for bridged in [true, false] {
+            for (week_tokens, reserve, want) in [(200_000, 0, Admit), (200_000, 100_000, Admit), (200_000, 100_001, budget), (100_000, 0, budget), (90_000, 0, budget), (600_000, 80_000, Admit)] {
+                assert_eq!(ask(&week, week_tokens, reserve, bridged, Origin::Command, true), want, "bridged {bridged}: {week_tokens} with a reserve of {reserve}");
+                assert_eq!(ask(&week, week_tokens, reserve, bridged, Origin::Idle, true), want, "bridged {bridged}, idle");
+                assert_eq!(ask(&week, week_tokens, reserve, bridged, Origin::Confirmed, true), Admit, "confirmed passes the page budget");
+            }
+            assert_eq!(ask(&week, 600_000, 0, bridged, Origin::Command, false), Refuse(Cause::NoRoute), "a switch that says no");
+        }
+        // A week ago is outside the week.
+        let old: Vec<Call> = week.iter().cloned().map(|c| Call { at: NOW - WEEK - 1, ..c }).collect();
+        assert_eq!(ask(&old, 100_000, 80_000, true, Origin::Idle, true), Admit);
+        // Through an API endpoint the subscription's limits do not apply: 30 calls in the window, the operator at work.
+        let busy = calls(30, Origin::Idle, 100, 3600);
+        assert_eq!(ask(&busy, 600_000, 80_000, true, Origin::Command, true), budget, "the bridge's window");
+        assert_eq!(job_may_run(Some(Job::Pages), Origin::Idle, CRED, &Inputs { now: NOW, calls: &busy, limits: &limits, switched_on: true, consolidate_tokens: 30_000, pages_week_tokens: 600_000, reserve: 80_000, bridged: false, last_active: NOW }), Admit, "an API page is not held by the bridge's limits or its pause");
     }
 
     #[test]

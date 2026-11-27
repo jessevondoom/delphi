@@ -1384,8 +1384,12 @@ pub struct PagesConfig {
     pub long_max_tokens: u64,
     #[serde(deserialize_with = "de_ttl", rename = "external_ttl")]
     pub external_ttl_secs: u64,
-    /// Pages the daemon builds in one day; a cache hit is free. They also count against the validator's share (`specs/040` §20).
+    /// Pages the daemon builds in one day; a cache hit is free. Search pages also count against the validator's share (`specs/040`
+    /// §20); topic pages count against `week_tokens` instead.
     pub per_day: u32,
+    /// What writing and validating topic pages may spend in seven days, in tokens (`specs/139` §2.3 item 8). Not a meter of its own:
+    /// one row of the admission table (`specs/143` §2.3 item 6), counted from the one ledger.
+    pub week_tokens: u64,
     /// The bounds, in days, on the cache lifetime the `writer` proposes for a page (`specs/097` §4.4).
     pub min_ttl_days: u32,
     pub max_ttl_days: u32,
@@ -1400,7 +1404,7 @@ pub struct PagesConfig {
 
 impl Default for PagesConfig {
     fn default() -> Self {
-        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, long_max_tokens: 8000, external_ttl_secs: 7 * 86_400, per_day: 20, min_ttl_days: 1, max_ttl_days: 365, auto_rebuild: true, build_after_research: true }
+        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, long_max_tokens: 8000, external_ttl_secs: 7 * 86_400, per_day: 20, week_tokens: 600_000, min_ttl_days: 1, max_ttl_days: 365, auto_rebuild: true, build_after_research: true }
     }
 }
 
@@ -2459,6 +2463,8 @@ pub(crate) mod tests {
         assert_eq!((d.max_tokens, d.external_ttl_secs, d.per_day, d.min_ttl_days, d.max_ttl_days), (3000, 7 * 86_400, 20, 1, 365));
         assert_eq!(d.long_max_tokens, 8000, "specs/139 §2.3 item 4: a topic page's cap");
         assert_eq!(Config::parse(&format!("{}\n[library.pages]\nlong_max_tokens = 6000\n", SAMPLE)).unwrap().library.pages.long_max_tokens, 6000);
+        assert_eq!(d.week_tokens, 600_000, "specs/139 §2.3 item 8: the page budget of a week");
+        assert_eq!(Config::parse(&format!("{}\n[library.pages]\nweek_tokens = 90000\n", SAMPLE)).unwrap().library.pages.week_tokens, 90_000);
         for (v, secs) in [("3", 3 * 86_400), ("\"12h\"", 12 * 3600), ("\"90m\"", 5400), ("\"7d\"", 7 * 86_400)] {
             let c = Config::parse(&format!("{}\n[library.pages]\nexternal = \"off\"\nexternal_ttl = {}\n", SAMPLE, v)).unwrap().library.pages;
             assert_eq!((c.external, c.external_ttl_secs), (PagesExternal::Off, secs), "{v}");

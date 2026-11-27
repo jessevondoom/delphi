@@ -337,6 +337,7 @@ sandbox = "off"
 # long_max_tokens = 8000 # a topic page's cap: the writer expands the seed into a long page (specs/139)
 # external_ttl = "7d"     # a page that used the web is rebuilt after this
 # per_day = 20
+# week_tokens = 600000 # what writing and validating topic pages may spend in seven days (specs/139); spent: the seed stands
 # min_ttl_days = 1        # the writer proposes how long a page stays fresh (specs/097); the daemon keeps it within these bounds
 # max_ttl_days = 365
 # auto_rebuild = true     # topic pages that are due are rebuilt while the daemon is idle, within per_day (specs/117); false: only `delphi pages rebuild`

@@ -43,6 +43,9 @@ pub struct Health {
     /// `[bridge.jobs] pages`, when it is not `auto` and the pages would be written through the bridge (every allowed endpoint is a
     /// harness): due pages then wait for the operator, or are off (`specs/143` §2.8 item 5).
     pub pages_mode: Option<delphi_adapter::config::JobMode>,
+    /// The page budget is spent (`specs/139` §2.3 item 8): what pages spent in the last seven days, from the one ledger, and
+    /// `[library.pages] week_tokens`. Set when a long page's reserve no longer fits.
+    pub pages_week: Option<(u64, u64)>,
     pub summaries: usize,
     pub summaries_without_source: usize,
     pub staged: usize,
@@ -147,6 +150,16 @@ fn bridged_mode(ws_dir: &Path, pick: impl Fn(&delphi_adapter::config::BridgeJobs
     Some(pick(&cfg.bridge.jobs)).filter(|m| bridged && *m != JobMode::Auto)
 }
 
+/// The page budget, when it is spent (`specs/139` §2.3 item 8): the tokens pages spent in the seven days before `now`, counted from
+/// the one ledger in the home, and `[library.pages] week_tokens` (its default when `config.toml` cannot be read). Spent means a long
+/// page's reserve no longer fits, so the next topic page would not start.
+fn page_budget_spent(home: &Path, ws_dir: &Path, now: i64) -> Option<(u64, u64)> {
+    let budget = std::fs::read_to_string(ws_dir.join("config.toml")).ok().and_then(|t| delphi_adapter::config::Config::parse(&t).ok()).map(|c| c.library.pages.week_tokens).unwrap_or_else(|| delphi_adapter::config::PagesConfig::default().week_tokens);
+    let calls = crate::job_admission::Ledger::in_home(home).calls();
+    let spent = crate::job_admission::week_spent(&calls, crate::daemon_notice::Job::Pages, now);
+    (spent.saturating_add(crate::page_run::page_reserve(crate::library::page_meta::Depth::Long)) > budget).then_some((spent, budget))
+}
+
 /// Count everything. `now` is Unix seconds. Reads only.
 pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
     let mut h = Health { date: day_of(now), ..Health::default() };
@@ -186,6 +199,7 @@ pub fn gather(home: &Path, ws_dir: &Path, now: i64) -> Health {
     h.pages_due = lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(ws_dir), now: now.max(0) as u64, index: false }).iter().filter(|t| t.due.is_some()).count();
     h.pages_failed = crate::daemon_notice::last_failure(ws_dir, crate::daemon_notice::Job::Pages).map(|(c, since)| (c.code().to_string(), since));
     h.pages_mode = bridged_mode(ws_dir, |j| j.pages);
+    h.pages_week = page_budget_spent(home, ws_dir, now);
 
     // Imported summary pages and their bibliographies (`specs/068`).
     let summaries = ws_dir.join(crate::kb_import::DIR);
@@ -269,6 +283,9 @@ impl Health {
         if let Some(mode) = self.pages_mode {
             o.insert("pages_bridged".into(), json!({"due": self.pages_due, "mode": mode.as_str()}));
         }
+        if let Some((spent, budget)) = self.pages_week {
+            o.insert("pages_week".into(), json!({"due": self.pages_due, "spent": spent, "week_tokens": budget}));
+        }
         o.insert("summaries".into(), json!({"total": self.summaries, "no_source": self.summaries_without_source}));
         o.insert("staged_notes".into(), json!({"waiting": self.staged, "oldest": self.staged_oldest}));
         o.insert("lessons".into(), json!(self.lessons));
@@ -343,6 +360,10 @@ impl Health {
                 delphi_adapter::config::JobMode::Off => format!("pages: {} due, off: [bridge.jobs] pages = \"off\", so no page is written through the bridge. See delphi help bridge.", self.pages_due),
                 _ => format!("pages: {} due, waiting for the operator: [bridge.jobs] pages = \"manual\". See delphi pages rebuild --due.", self.pages_due),
             }));
+        }
+        // `specs/139` §2.3 item 8: the page budget is spent. The due topics keep their seed pages and wait for the week to roll on.
+        if let Some((spent, budget)) = self.pages_week {
+            out.push(stalled(format!("pages: {} due, this week's page budget is spent ({} of {} tokens in seven days): the topics stay due and their seed pages stand until the week rolls on. [library.pages] week_tokens sets it.", self.pages_due, spent, budget)));
         }
         // `specs/143` §2.7 item 3: the newest idle rebuild failed. The cause is a fixed code; no page or claim text is in the line.
         if let Some((cause, since)) = self.pages_failed.as_ref().and_then(|(c, s)| crate::daemon_notice::Cause::parse(c).map(|c| (c, s))) {

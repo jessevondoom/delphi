@@ -4,9 +4,11 @@
 //! data and the draft comes back as text the daemon still checks. External search asks the engines in `[search]` (the
 //! ratified table that names who receives queries), and what it finds enters the library as *noted, not validated*
 //! sources through the normal capture path; nothing goes straight into a page. A query that names a `private` source is
-//! not sent. A page costs a writer call and a validator call: the validator's tokens come out of the shared allowance and
-//! are journalled against the background share of `specs/040` §20, and `[library.pages] per_day` caps how many pages the
-//! daemon builds in a day. A cache hit costs nothing and passes none of these gates.
+//! not sent. A page costs a writer call and a validator call. A search page's validator tokens come out of the shared allowance
+//! and are journalled against the background share of `specs/040` §20. A topic page draws on no validator share: what its writer
+//! and validator spend is counted in the one ledger against `[library.pages] week_tokens`, a row of the admission table
+//! (`specs/139` §2.3 item 8, [`Engine::page_admission`]). `[library.pages] per_day` caps how many pages the daemon builds in a
+//! day. A cache hit costs nothing and passes none of these gates.
 
 use crate::engine::Engine;
 use crate::fact_audit::{Journal, BACKGROUND, BACKGROUND_SHARE, FLOOR_TOKENS, WEEK_SECS};
@@ -22,6 +24,18 @@ use std::sync::Arc;
 
 /// The worst case the share is asked for before a page is built: a writer's page and the validator's list.
 pub const PAGE_RESERVE: u64 = 20_000;
+
+/// What a page build sets aside against the page budget before it starts (`specs/139` §2.3 item 8): in proportion to its depth,
+/// a long page four times a summary page.
+pub fn page_reserve(depth: crate::library::page_meta::Depth) -> u64 {
+    match depth {
+        crate::library::page_meta::Depth::Long => 4 * PAGE_RESERVE,
+        _ => PAGE_RESERVE,
+    }
+}
+
+/// How the refusal of the page budget begins ([`Engine::page_admission`]).
+pub const PAGE_BUDGET_SPENT: &str = "this week's page budget is spent";
 /// Results captured from one external search.
 pub const EXTERNAL_CAPTURES: usize = 3;
 /// Reputable sources captured when expanding an encyclopedia search page (`specs/097` §4.2).
@@ -395,8 +409,19 @@ impl Engine {
         self.topic_rebuild_with(slug, cancel, &mut false).await
     }
 
-    /// The rebuild; `material` is set when the library had something for the page, so the writer was to be asked.
+    /// The rebuild; `material` is set when the library had something for the page, so the writer was to be asked. A rebuild is the
+    /// `pages` job (`specs/139` §2.3 item 8): one asked for outside the daemon's idle job or a page command (the app's button) runs as
+    /// a page command, so its calls are counted against the page budget like any other page's.
     async fn topic_rebuild_with(self: &Arc<Self>, slug: &str, cancel: Option<&crate::library::topics::Cancel>, material: &mut bool) -> Result<crate::library::topics::TopicEntry, String> {
+        use crate::daemon_notice::{current_command, current_job, in_command, Job};
+        if current_job() == Some(Job::Pages) || current_command().is_some_and(|(j, _)| j == Job::Pages) {
+            self.topic_rebuild_in_job(slug, cancel, material).await
+        } else {
+            in_command(Job::Pages, false, self.topic_rebuild_in_job(slug, cancel, material)).await
+        }
+    }
+
+    async fn topic_rebuild_in_job(self: &Arc<Self>, slug: &str, cancel: Option<&crate::library::topics::Cancel>, material: &mut bool) -> Result<crate::library::topics::TopicEntry, String> {
         let settings = self.cfg.get().library.pages.clone();
         if !settings.enabled {
             return Err("generated pages are off ([library.pages] enabled = false)".into());
@@ -424,20 +449,57 @@ impl Engine {
         // A topic page is written at the `long` depth, under its own cap (`specs/139` §2.3 item 4).
         let writer = EnginePageWriter { engine: self.clone(), key: key.clone(), max_tokens: settings.long_max_tokens };
         let validator = EnginePageValidator { engine: self.clone(), writer_family: Some(key.family.clone()), writer_model: Some(key.model_id.clone()) };
-        let ledger = self.validator.ledger();
-        let state = state_dir(&self.ws.dir);
-        let week = crate::fact_serve::shares_of(&self.ws.dir, "pages").install_week;
-        let gate = move || share_allows(&state, week, now);
-        let before = ledger.spent();
+        // A topic page draws on no validator share (`specs/139` §2.3 item 8): its validator reserves from an allowance of its own build,
+        // and nothing is journalled against the background share. What it spends is in the one ledger, as the `pages` job's.
+        let ledger = crate::fact_judge::TokenLedger::new(settings.week_tokens.max(page_reserve(crate::library::page_meta::Depth::Long)));
+        let (engine, gate_key) = (self.clone(), key.clone());
+        let gate = move || engine.page_admission(&gate_key, crate::library::page_meta::Depth::Long);
         let held = lib.held();
         let req = crate::library::topics::TopicRequest { slug, now: now.max(0) as u64, settings: &settings, style: crate::library::bib::Format::Apa, gathered, gaps, seed, held: &held, cancel };
-        let built = lib.topic_rebuild(req, &writer, &validator, &ledger, &gate).await;
-        // Written whether the rebuild was built, failed or was stopped after its writer was called: the tokens were spent.
-        let used = ledger.spent().saturating_sub(before);
-        if used > 0 {
-            Journal::new(&state_dir(&self.ws.dir)).append("span", json!({"mission": BACKGROUND, "tokens": used, "page": true}), now);
+        lib.topic_rebuild(req, &writer, &validator, &ledger, &gate).await
+    }
+
+    /// May a page of `depth`, written through `key`, start now (`specs/139` §2.3 item 8)? The one admission function decides
+    /// ([`crate::job_admission::job_may_run`]), over the one ledger: the page switches (read by `job_switched_on`, with `[bridge.jobs]
+    /// pages` when the bridge serves the page), the bridge's limits when it does, and the page budget with this page's reserve. The
+    /// origin is the build's: the daemon's idle job, or a command. `Err` is why not, in fixed words; the build keeps its seed.
+    pub(crate) fn page_admission(&self, key: &PoolKey, depth: crate::library::page_meta::Depth) -> Result<(), String> {
+        use crate::daemon_notice::{current_command, current_job, Cause, Job};
+        use crate::job_admission::{self as adm, Admission, Origin};
+        let cfg = self.cfg.get();
+        let bridged = cfg.endpoint(&key.endpoint_id).is_some_and(|e| e.path == delphi_adapter::config::AccessPath::Harness);
+        let origin = match (current_job(), current_command()) {
+            (Some(Job::Pages), _) => Origin::Idle,
+            (_, Some((Job::Pages, true))) => Origin::Confirmed,
+            _ => Origin::Command,
+        };
+        let credential = if bridged {
+            match cfg.bridge.claude_credential.as_deref() {
+                Some(r) => adm::credential_id(r),
+                None => return Err("no credential is set for the bridge ([bridge.claude] credential); the topic stays due".into()),
+            }
+        } else {
+            crate::summary::endpoint_credential(&key.endpoint_id)
+        };
+        let calls = adm::Ledger::in_home(&self.ws.home).calls();
+        let now = (self.clock_unix)();
+        let reserve = page_reserve(depth);
+        let inputs = adm::Inputs { now, calls: &calls, limits: &cfg.bridge.limits, switched_on: self.job_switched_on(Some(Job::Pages), origin, &cfg, bridged), consolidate_tokens: cfg.memory.consolidate_tokens, pages_week_tokens: cfg.library.pages.week_tokens, reserve, bridged, last_active: self.bridge.last_active.load(std::sync::atomic::Ordering::SeqCst) };
+        match adm::job_may_run(Some(Job::Pages), origin, &credential, &inputs) {
+            Admission::Admit => Ok(()),
+            Admission::Wait(_) => Err("the bridge asks idle work to wait (the operator is at work, or quota was spent); the topic stays due".into()),
+            Admission::Refuse(Cause::NoRoute) => Err("pages are switched off for this run ([library.pages] or [bridge.jobs] pages); the topic stays due".into()),
+            Admission::Refuse(Cause::Quota) => Err("the subscription's quota is spent; the topic stays due".into()),
+            Admission::Refuse(_) => {
+                let spent = adm::week_spent(&calls, Job::Pages, now);
+                let budget = cfg.library.pages.week_tokens;
+                if spent.saturating_add(reserve) > budget {
+                    Err(format!("{PAGE_BUDGET_SPENT} ({spent} of {budget} tokens in seven days; a {} page reserves {reserve}); the topic stays due and its seed stands", depth.as_str()))
+                } else {
+                    Err("the bridge's limits for now are reached; the topic stays due".into())
+                }
+            }
         }
-        built
     }
 
     /// The idle rebuild (`specs/117` §2 item 3): make a topic for each research topic that has none, then rebuild the due topic that
@@ -507,7 +569,7 @@ impl Engine {
             Err(e) if e == NO_WRITER => Some(Cause::NoRoute),
             // A seed page built because no writer could be reached: the page stands, and the missing route is still the cause.
             Ok(t) if t.outcome.as_deref() == Some("seed") && self.writer_key().is_none() => Some(Cause::NoRoute),
-            Err(e) if e.starts_with(SHARE_SPENT) || e.contains(SHARE_SPENT) => Some(Cause::Budget),
+            Err(e) if e.starts_with(SHARE_SPENT) || e.contains(SHARE_SPENT) || e.contains(PAGE_BUDGET_SPENT) => Some(Cause::Budget),
             // The writer's page of a seed failed its check and the seed stands; a failed writer call has left its own cause.
             Err(e) if material && e.starts_with(crate::library::topics::SEED_STANDS) && e.contains("check") => Some(Cause::CheckFailed),
             Ok(t) if material && t.outcome.as_deref() == Some("claims_only") => Some(Cause::CheckFailed),
@@ -607,5 +669,94 @@ mod tests {
                 assert!(first.contains("QUERY: Anchor tides early"), "the older due topic goes first: {first}");
             }
         }
+    }
+
+    /// `specs/139` AC-11 (slice F): the reserve a page build asks of the page budget is in proportion to its depth: a long page reserves
+    /// four times what a summary page does.
+    #[test]
+    fn a_long_page_reserves_four_times_a_summary_page() {
+        use crate::library::page_meta::Depth;
+        assert_eq!(super::page_reserve(Depth::Long), 4 * super::page_reserve(Depth::Summary));
+        assert_eq!(super::page_reserve(Depth::Summary), super::PAGE_RESERVE);
+    }
+
+    /// `specs/139` AC-11 (slice F): with `week_tokens` spent (in the one ledger, by pages served elsewhere), a due topic is not written:
+    /// no writer is asked, its seed page stands, it stays due, the idle job's cause is `budget`, and `delphi kb health` says so. What was
+    /// left would fit a summary page's reserve and not a long page's. Once the budget has room, the topic page's calls (through an API
+    /// endpoint here) are counted in the one ledger as the `pages` job's, and nothing is journalled against the validator's share.
+    #[tokio::test]
+    async fn a_spent_page_budget_keeps_the_seed_and_a_page_is_never_charged_to_the_validators_share() {
+        use crate::daemon_notice::Job;
+        use crate::job_admission::{week_spent, Call, Ledger, Origin};
+        use crate::library::topics::{NOT_ADMITTED, SEED_STANDS};
+        use crate::research_record::{Asker, Begin, Topic};
+        let f = setup(vec![], 5.0, |_| {});
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        let t = Topic::begin(&f.engine.ws.dir, &Begin { question: "How do zyxquor lamps vromble?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
+        t.finish("r-1", "done", Some(&serde_json::json!({"answer": "Zyxquor lamps vromble on a mercury bath.\n\nThey turn once a minute.", "claims": []})), &[], None, 0).unwrap();
+        let now = (f.engine.clock_unix)();
+        let budget = f.engine.cfg.get().library.pages.week_tokens;
+        assert_eq!(budget, 600_000);
+        // 550,000 tokens of pages two days ago, through another credential: the week is the job's, whatever served it. 50,000 are
+        // left: a summary page's reserve (20,000) would fit, a long page's (80,000) does not.
+        let ledger = Ledger::in_home(&f.engine.ws.home);
+        let spent = budget - 50_000;
+        ledger.start(&Call { id: "old".into(), at: now - 2 * 86_400, job: Some(Job::Pages), origin: Origin::Command, credential: "elsewhere".into(), endpoint: "x".into(), tokens: spent, outcome: None });
+        ledger.end("old", now - 2 * 86_400 + 5, Some(spent), false, "ok");
+        assert!(super::page_reserve(crate::library::page_meta::Depth::Summary) <= budget - spent && super::page_reserve(crate::library::page_meta::Depth::Long) > budget - spent);
+
+        let (report, _) = crate::daemon_notice::in_job(Job::Pages, f.engine.topic_idle_rebuild_report()).await;
+        let report = report.expect("a due topic");
+        let err = report.built.unwrap_err();
+        assert!(err.starts_with(SEED_STANDS) && err.contains(NOT_ADMITTED) && err.contains(super::PAGE_BUDGET_SPENT), "{err}");
+        assert_eq!(report.cause, Some(crate::daemon_notice::Cause::Budget));
+        assert_eq!(f.model.requests().len(), 0, "no writer is asked");
+        let side = lib.topic_side("zyxquor-lamps-vromble").unwrap();
+        assert_eq!(side["outcome"].as_str(), Some("seed"), "the seed stands");
+        let due = lib.topic_pages(&crate::library::topics::DueCtx { ws: Some(&f.engine.ws.dir), now: now as u64, index: false });
+        assert!(due.iter().any(|t| t.slug == "zyxquor-lamps-vromble" && t.due.is_some()), "the topic stays due");
+        // `delphi kb health` says so.
+        let h = crate::knowledge_health::gather(&f.engine.ws.home, &f.engine.ws.dir, now);
+        assert_eq!(h.pages_week, Some((spent, budget)));
+        assert!(h.lines(now).iter().any(|l| l.text.starts_with("pages: 1 due, this week's page budget is spent (550000 of 600000 tokens")), "{:?}", h.lines(now).iter().map(|l| l.text.clone()).collect::<Vec<_>>());
+        assert_eq!(h.to_json()["pages_week"], serde_json::json!({"due": 1, "spent": spent, "week_tokens": budget}));
+
+        // A week later the budget has room: the writer is asked, through an API endpoint, and its call is the `pages` job's in the
+        // one ledger. Nothing is journalled against the validator's share.
+        f.now.store(now + 8 * 86_400, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(crate::knowledge_health::gather(&f.engine.ws.home, &f.engine.ws.dir, now + 8 * 86_400).pages_week, None, "nothing to say");
+        let (report, _) = crate::daemon_notice::in_job(Job::Pages, f.engine.topic_idle_rebuild_report()).await;
+        assert!(report.expect("still due").built.unwrap_err().starts_with(SEED_STANDS), "the scripted writer gives nothing");
+        assert!(!f.model.requests().is_empty(), "the writer was asked");
+        let calls = ledger.calls();
+        let page_calls: Vec<&Call> = calls.iter().filter(|c| c.id != "old").collect();
+        assert!(!page_calls.is_empty() && page_calls.iter().all(|c| c.job == Some(Job::Pages) && c.origin == Origin::Idle && c.credential == crate::summary::endpoint_credential(&c.endpoint) && c.outcome.is_some()), "{page_calls:?}");
+        assert!(week_spent(&calls, Job::Pages, now + 8 * 86_400) > 0, "the page's tokens count against the page budget");
+        let journal = crate::fact_audit::Journal::new(&crate::fact_mode::state_dir(&f.engine.ws.dir)).all();
+        assert!(!journal.iter().any(|e| e["kind"] == "span" && e["mission"] == crate::fact_audit::BACKGROUND), "a topic page draws on no validator share: {journal:?}");
+        assert!(crate::fact_audit::background_allows(&crate::fact_mode::state_dir(&f.engine.ws.dir), 1_000_000, now + 8 * 86_400, 100_000).is_ok());
+    }
+
+    /// `specs/139` AC-11 (slice F): a rebuild the operator asks for outside a page command (the app's button) is the `pages` job too, so
+    /// a spent page budget stops it before its writer as it stops the idle rebuild, and the seed stands.
+    #[tokio::test]
+    async fn a_rebuild_outside_a_page_command_is_held_to_the_page_budget() {
+        use crate::daemon_notice::Job;
+        use crate::job_admission::{Call, Ledger, Origin};
+        use crate::research_record::{Asker, Begin, Topic};
+        let f = setup(vec![], 5.0, |_| {});
+        let t = Topic::begin(&f.engine.ws.dir, &Begin { question: "How do zyxquor lamps vromble?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
+        t.finish("r-1", "done", Some(&serde_json::json!({"answer": "Zyxquor lamps vromble on a mercury bath.", "claims": []})), &[], None, 0).unwrap();
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        lib.topics_from_research(&f.engine.ws.dir, 1);
+        let now = (f.engine.clock_unix)();
+        let ledger = Ledger::in_home(&f.engine.ws.home);
+        ledger.start(&Call { id: "old".into(), at: now - 60, job: Some(Job::Pages), origin: Origin::Command, credential: "elsewhere".into(), endpoint: "x".into(), tokens: 600_000, outcome: None });
+        let err = f.engine.topic_rebuild("zyxquor-lamps-vromble").await.unwrap_err();
+        assert!(err.contains(super::PAGE_BUDGET_SPENT), "{err}");
+        assert_eq!(f.model.requests().len(), 0, "no writer is asked");
+        // A typed confirmation passes the page budget, as it passes the bridge's daily cap.
+        let _ = crate::daemon_notice::in_command(Job::Pages, true, f.engine.topic_rebuild("zyxquor-lamps-vromble")).await;
+        assert!(!f.model.requests().is_empty(), "confirmed: the writer is asked");
     }
 }

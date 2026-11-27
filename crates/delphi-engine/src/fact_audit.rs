@@ -536,7 +536,8 @@ pub fn retract_all(ws: &Path, state: &Path, store: &FactStore, now: i64) -> Retr
     Retraction { retracted, readers }
 }
 
-/// The mission name the journal uses for background validation, which belongs to no mission (§20.2).
+/// The mission name the journal uses for background validation, which belongs to no mission (§20.2). Search pages are journalled
+/// under it too; topic pages are not: they spend the page budget of `specs/139` §2.3 item 8, counted in the one ledger.
 pub const BACKGROUND: &str = "background";
 /// §20.2: background validation is at most a tenth of the install's tokens over the trailing week.
 pub const BACKGROUND_SHARE: f64 = 0.10;
