@@ -660,11 +660,12 @@ fn bibliography(lib: &Library, args: &[String]) -> i32 {
         }
     };
     let ids: Vec<String> = positional(args).into_iter().cloned().collect();
-    match bib::export(lib, &ids, format) {
+    // the bibliography sink (`specs/141` §2.4): an internal citation is sent only when you confirm, at this terminal
+    match bib::export_with(lib, &ids, format, delphi_engine::egress::Confirm::Terminal(&mut delphi_engine::egress::terminal_yes)) {
         Ok(x) => {
             print!("{}", x.text);
             if x.withheld > 0 {
-                eprintln!("{} private source(s) left out: a private source is never exported", x.withheld);
+                eprintln!("{} source(s) left out by their labels: a private, confidential or library-private source is never exported, and an internal one only when you confirm (not in csl-json)", x.withheld);
             }
             0
         }

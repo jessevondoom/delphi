@@ -122,6 +122,8 @@ pub const READS: [Read; 35] = [
     Read { file: "research_known.rs", what: "the search a research run makes before its first query (`specs/114` §3 item 1): it names `source.md` only to tell a library source's row of the index from another row by its path", how: How::NoReturn { why: "it reads no source text and keeps no row's preview: a source is its id, its address and the day it was last checked; a claim is its one-line statement and status and is left out when it rests on a private or internal source; a private topic is not listed (`a_host_is_told_nothing_its_own_search_could_not_return`)" } },
     // ---- `specs/142` slice B (held text) ----
     Read { file: "held_text.rs", what: "the held-text predicate (`specs/142` §2.5 item 4): reads a held source's `source.md` to compare it with an output and to keep its block index", how: How::NoReturn { why: "it returns verdicts, source ids and an output cut to fit (the caller's own text with runs removed), never a source's text; a held source is not private, and a private one it does not read" } },
+    // ---- `specs/141` slice B (labels at the sinks) ----
+    Read { file: "label.rs", what: "`of_files` (`specs/141` §2.4, slice B): reads the kept `source.md` of each private library source to find whether a file about to leave by a bundle or a Xenia publish carries a run of it", how: How::NoReturn { why: "it returns a label (marks and item ids) for the sink to decide on, never a source's text; the refusal names marks, items and files only (`egress::sink_tests::sink_bundle_follows_its_row`)" } },
 ];
 
 // ---- slice M4 (`specs/103` §6, the red-team pass): every way a host reaches the daemon ---------------------------------------------------

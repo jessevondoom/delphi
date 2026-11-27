@@ -32,11 +32,21 @@ fn https_only(m: &mut Map<String, Value>, k: &str) {
 impl Library {
     /// Copy `ids` into `<dir>/sources/`. Each result is its own: a refused source does not stop the others. An id already
     /// under `sources/` is left alone unless `replace`.
+    ///
+    /// No person is asked here: a source whose label says `send labelled` (an `internal` one) is refused. The command passes a terminal
+    /// with [`Library::export_to_bundle_with`].
     pub fn export_to_bundle(&self, dir: &Path, ids: &[String], replace: bool) -> Vec<(String, Result<Exported, String>)> {
-        ids.iter().map(|id| (id.clone(), self.export_one(dir, id, replace))).collect()
+        self.export_to_bundle_with(dir, ids, replace, crate::egress::Confirm::Nobody)
     }
 
-    fn export_one(&self, dir: &Path, id: &str, replace: bool) -> Result<Exported, String> {
+    /// [`Library::export_to_bundle`] with the person who confirms a labelled copy (`specs/141` §2.4, the bundle row): each source's label
+    /// is computed from the records as they are now and decided at `Sink::Bundle`. A refusing mark (private, confidential, library
+    /// private) refuses the copy; `internal` asks; a held text is refused whole by the record's own check below.
+    pub fn export_to_bundle_with(&self, dir: &Path, ids: &[String], replace: bool, mut confirm: crate::egress::Confirm<'_>) -> Vec<(String, Result<Exported, String>)> {
+        ids.iter().map(|id| (id.clone(), self.export_one(dir, id, replace, &mut confirm))).collect()
+    }
+
+    fn export_one(&self, dir: &Path, id: &str, replace: bool, confirm: &mut crate::egress::Confirm<'_>) -> Result<Exported, String> {
         let meta = self.read_meta(id).ok_or_else(|| format!("no source `{}` in the library", id))?;
         // `specs/142` §2.6 item 6 and AC-25: a held source's text never travels, but its summary may. It carries no `text_held`, and
         // it passed `body_may_leave` against the source when it was kept; it is asked again here. The copy is then a pointer: the
@@ -47,9 +57,27 @@ impl Library {
             }
         }
         crate::egress::check(&meta, Channel::Bundle).map_err(|e| format!("flagged private: {} (unflag it in the library if that was a mistake)", e))?;
+        let label = crate::label::Labeller::new(Some(self), self.workspace()).source(id).label;
+        let decision = crate::egress::check_label(&label, crate::egress::Sink::Bundle);
+        match decision.kind {
+            crate::label::Kind::Refuse => return Err(format!("refused: {}", decision.reason)),
+            crate::label::Kind::SendLabelled => {
+                let asked = match confirm {
+                    crate::egress::Confirm::Terminal(ask) => ask(&format!("{} ({})", crate::label::visible_line(&label).unwrap_or_default(), decision.reason)),
+                    // a copy into the author's directory waits on no card: a card cannot stand in for the question here
+                    crate::egress::Confirm::Card | crate::egress::Confirm::Nobody => false,
+                };
+                if !asked {
+                    return Err(format!("not copied: {}, and it was not confirmed", decision.reason));
+                }
+            }
+            crate::label::Kind::Quotations | crate::label::Kind::Send => {}
+        }
         let src = self.source_dir(id);
         let held = meta["purged"].is_null();
-        let text = if held { std::fs::read_to_string(src.join("source.md")).ok() } else { None };
+        // a labelled copy carries its visible line (`specs/141` §2.3 item 1), written by the daemon at the top of its text
+        let line = (decision.kind == crate::label::Kind::SendLabelled).then(|| crate::label::visible_line(&label)).flatten();
+        let text = if held { std::fs::read_to_string(src.join("source.md")).ok().map(|t| line.map_or(t.clone(), |l| format!("{l}\n\n{t}"))) } else { None };
         if text.as_ref().is_some_and(|t| t.len() as u64 > delphi_bundle::sources::MAX_TEXT_BYTES) {
             return Err("the capture is over the 16 MiB cap for a bundle's source text".into());
         }

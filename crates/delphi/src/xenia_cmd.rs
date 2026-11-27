@@ -381,10 +381,15 @@ fn act(home: &Path, word: &str, p: &Parsed, approver: &mut dyn Approver) -> i32 
                 eprintln!("delphi xenia {word}: {e}; `publish` takes a file of your own, not one from the library or the host-noted store");
                 return 2;
             }
-            // A file of the operator's own that quotes a held source past the bound (`specs/142` §2.5 item 4).
-            if let Err(e) = delphi_engine::held_text::check_path(home, std::path::Path::new(t)) {
-                eprintln!("delphi xenia {word}: {e}; `publish` sends the file off this machine");
-                return 2;
+            // The file's label (`specs/141` §2.4, the Xenia row) and a held source quoted past the bound (`specs/142` §2.5 item 4). An
+            // internal file is sent labelled: its marks are printed above the card, and the answer to the card confirms it.
+            match delphi_engine::egress::check_path(home, ws.as_ref().map(|w| w.dir.as_path()), std::path::Path::new(t), delphi_engine::egress::Sink::Xenia, delphi_engine::egress::Confirm::Card) {
+                Ok(sent) if !sent.line().is_empty() => eprintln!("{}", sent.line()),
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("delphi xenia {word}: {e}; `publish` sends the file off this machine");
+                    return 2;
+                }
             }
         }
     }

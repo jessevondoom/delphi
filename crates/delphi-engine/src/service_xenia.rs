@@ -102,20 +102,24 @@ impl EngineService {
             move || {
                 // `specs/098` §12 item 16, channel Xenia: a private source in the library, and the host-noted store, never leave through a
                 // publish, whatever the operator names. Deny by default; a file outside both places passes as it did.
+                let mut marks = String::new();
                 if word == "publish" {
                     if let Some(t) = target.as_deref() {
                         let record = crate::egress::xenia_file_record(&guard_home, Some(&guard_ws), std::path::Path::new(t));
                         crate::egress::check(&record, crate::library::Channel::Xenia).map_err(|e| format!("{e}; `publish` takes a file of your own, not one from the library or the host-noted store"))?;
-                        // A file of the operator's own that quotes a held source past the bound (`specs/142` §2.5 item 4).
-                        crate::held_text::check_path(&guard_home, std::path::Path::new(t)).map_err(|e| format!("{e}; `publish` sends the file off this machine"))?;
+                        // The label of the file (`specs/141` §2.4, the Xenia row), and a held source quoted past the bound (`specs/142` §2.5
+                        // item 4). An internal file is sent labelled: the card below shows its marks and the operator's answer to it confirms.
+                        let sent = crate::egress::check_path(&guard_home, Some(&guard_ws), std::path::Path::new(t), crate::egress::Sink::Xenia, crate::egress::Confirm::Card).map_err(|e| format!("{e}; `publish` sends the file off this machine"))?;
+                        marks = sent.line();
                     }
                 }
-                Action::build(word, target.as_deref(), &opts, &ctx_scope)
+                Action::build(word, target.as_deref(), &opts, &ctx_scope).map(|a| (a, marks))
             }
         })
         .await
         .map_err(|e| err(-32000, e.to_string()))?
         .map_err(|m| err(code::INVALID_PARAMS, m))?;
+        let (action, marks) = action;
         let title = action.title();
         let key_path = home.join("xenia").join("identity.key");
         let job_store = store_ref.clone();
@@ -147,6 +151,8 @@ impl EngineService {
             Err(e) => Ok(json!({"ok": false, "reason": e.reason(), "message": e.to_string()})),
             Ok(pending) => {
                 let card = xenia_action::card(&title, &pending.preview);
+                // a labelled file: its marks lead the card the operator answers (`specs/141` §2.4 item 3)
+                let card = if marks.is_empty() { card } else { format!("{marks}\n\n{card}") };
                 let code_text = xenia_action::code(&pending.preview);
                 let (digest, flags) = (pending.preview.digest.clone(), pending.preview.flags.len());
                 let mut parked = self.attest.lock().unwrap();

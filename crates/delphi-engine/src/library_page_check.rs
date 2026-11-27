@@ -919,7 +919,7 @@ impl Library {
         for c in cited {
             let Ok(rec) = self.resolve(c, scope) else { continue };
             let citation = |ids: &[String]| -> String {
-                let text: Vec<String> = ids.iter().filter_map(|id| self.read_meta(id).map(|m| (id, m))).map(|(id, m)| if m["kept_privately"].is_string() { "(kept privately)".to_string() } else if is_private(&m) { "(private source)".to_string() } else { bib::export(self, std::slice::from_ref(id), style).map(|e| norm(&e.text)).unwrap_or_default() }).filter(|t| !t.is_empty()).collect();
+                let text: Vec<String> = ids.iter().filter_map(|id| self.read_meta(id).map(|m| (id, m))).map(|(id, m)| if m["kept_privately"].is_string() { "(kept privately)".to_string() } else if is_private(&m) { "(private source)".to_string() } else { bib::for_page(self, std::slice::from_ref(id), style).map(|e| norm(&e.text)).unwrap_or_default() }).filter(|t| !t.is_empty()).collect();
                 // `specs/142` §2.3 item 3: the orphans of a source, as a count beside its entry; they are listed under the source.
                 let orphans: Vec<String> = ids.iter().map(|id| (id, self.orphans_of(id).len())).filter(|(_, n)| *n > 0).map(|(id, n)| format!("{} orphaned anchor{}, listed under s-{}", n, if n == 1 { "" } else { "s" }, id)).collect();
                 let text: Vec<String> = text.into_iter().chain(orphans).collect();
