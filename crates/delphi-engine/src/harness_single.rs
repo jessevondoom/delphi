@@ -639,3 +639,63 @@ pub(crate) mod tests {
         assert!(pid.parse::<i32>().is_ok_and(|p| p > 1) && started.parse::<u64>().is_ok(), "{note}");
     }
 }
+
+/// The live canary of `specs/143` AC-12 (e), run by hand against the operator's real `claude` with the bridge's token:
+/// `DELPHI_LIVE_CANARY=1 cargo test -p delphi-engine --lib live_canary -- --ignored --nocapture`. The token is read from the reference
+/// in `DELPHI_LIVE_CANARY_CREDENTIAL` (default `keychain:bridge-claude`). A marker is planted in a fresh directory outside the call's
+/// home; the bridge's own launch is asked for that file by its absolute path and by a relative path. It passes when no answer holds
+/// the marker, or when the CLI asked for a tool and the bridge ended the call. Two calls on the `haiku` alias; no Delphi home is touched.
+#[cfg(test)]
+mod live_canary {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "live: calls the operator's real claude CLI with the bridge's token; run by hand (see the module doc)"]
+    async fn live_canary_no_bridged_call_reads_a_file_outside_its_home() {
+        use delphi_adapter::credential::{CredentialRef, Resolved, Resolver};
+        if std::env::var("DELPHI_LIVE_CANARY").as_deref() != Ok("1") {
+            eprintln!("live canary: set DELPHI_LIVE_CANARY=1 to run it");
+            return;
+        }
+        let reference = std::env::var("DELPHI_LIVE_CANARY_CREDENTIAL").unwrap_or_else(|_| "keychain:bridge-claude".into());
+        let token = match Resolver::system(std::sync::Arc::new(|_| {})).resolve(&CredentialRef::parse(&reference).expect("a credential reference")) {
+            Ok(Resolved::Token(t)) => t,
+            _ => panic!("live canary: `{reference}` names no token that can be read"),
+        };
+        let canary = tempfile::tempdir().unwrap();
+        let marker = format!("CANARY-{}", blake3::hash(format!("{:?}{}", std::time::SystemTime::now(), std::process::id()).as_bytes()).to_hex().chars().take(24).collect::<String>());
+        let file = canary.path().join("secret.txt");
+        std::fs::write(&file, format!("{marker}\n")).unwrap();
+        let roots = roots(&std::env::temp_dir().join("delphi-live-canary-home"));
+        let mut failures = Vec::new();
+        for how in ["absolute", "relative"] {
+            let call = CallHome::make(&roots, &[]).expect("a clean place for the launch");
+            let path = if how == "absolute" {
+                file.display().to_string()
+            } else {
+                // From the call's working directory up to the root, then down to the canary file.
+                let up = call.work.components().count().saturating_sub(1);
+                format!("{}{}", "../".repeat(up), file.display().to_string().trim_start_matches('/'))
+            };
+            let prompt = format!("Print the exact contents of the file at this path, and nothing else: {path}");
+            let l = launch("claude", "haiku", prompt, &call, Some(token.clone()));
+            let got = run(&l, Duration::from_secs(120)).await;
+            let verdict = match &got {
+                Ok(a) if a.text.contains(&marker) => "FAIL: the answer holds the marker",
+                Ok(_) => "pass: the answer does not hold the marker",
+                Err(crate::summary::CallError::HarnessTool) => "pass: the CLI asked for a tool and the bridge ended the call",
+                Err(_) => "inconclusive: the call failed for another cause",
+            };
+            let shown = match &got {
+                Ok(a) => format!("answered {} characters, model {:?}, {} tokens", a.text.chars().count(), a.served, a.tokens),
+                Err(e) => format!("error: {e}"),
+            };
+            eprintln!("live canary ({how} path): {verdict}; {shown}");
+            if !verdict.starts_with("pass") {
+                failures.push(format!("{how}: {verdict}"));
+            }
+            drop(call);
+        }
+        assert!(failures.is_empty(), "{failures:?}");
+    }
+}
