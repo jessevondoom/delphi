@@ -39,7 +39,8 @@ pub fn add(lib: &Library, dir: &Path, ids: &[String], replace: bool) -> i32 {
     }
     let mut failed = 0;
     let mut copied = 0;
-    for (id, r) in lib.export_to_bundle(dir, ids, replace) {
+    // the bundle row (`specs/141` §2.4): an internal source is copied only when you confirm at this terminal
+    for (id, r) in lib.export_to_bundle_with(dir, ids, replace, delphi_engine::egress::Confirm::Terminal(&mut delphi_engine::egress::terminal_yes)) {
         match r {
             Ok(e) => {
                 copied += 1;
@@ -105,7 +106,11 @@ pub fn cli(args: &[String], home: &Path) -> i32 {
         eprintln!("delphi bundle sources add: refused; exporting a source is the operator's act and this process was started by an agent seat");
         return 2;
     }
-    add(&Library::in_home(home), Path::new(dir), ids, args.iter().any(|a| a == "--replace"))
+    let lib = match crate::bundle_cmd::label_workspace(home, None) {
+        Some(ws) => Library::in_home(home).with_workspace(&ws),
+        None => Library::in_home(home),
+    };
+    add(&lib, Path::new(dir), ids, args.iter().any(|a| a == "--replace"))
 }
 
 #[cfg(test)]

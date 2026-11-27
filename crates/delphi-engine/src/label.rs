@@ -760,6 +760,145 @@ pub fn relabel_index(kb: &mut crate::kb::Kb, ws: &Path) -> Result<(usize, usize)
     }
 }
 
+// ---- the label of a record, and of files handed to a sink (`specs/141` §2.3, §2.4; slice B) --------------------------------------------
+
+/// The label of one record read on its own, for the one-record check `egress::check`: `library_private` when it is private (its flag or
+/// its licence), `text_held` when its whole text is kept for local reading. A record that is not an object, or cannot be read, carries
+/// every mark (§2.1 item 4). Its handling traits are not in a bare record; a sink that has the library asks [`Labeller::source`].
+pub fn of_meta(meta: &Value) -> Label {
+    if !meta.is_object() {
+        return Label::every(UNREADABLE);
+    }
+    let item = meta["id"].as_str().map(|i| format!("library/sources/{i}")).unwrap_or_else(|| "the entry".to_string());
+    let mut l = Label::none();
+    if crate::library::is_private(meta) {
+        l.add(Mark::LibraryPrivate, &item);
+    }
+    if crate::library::is_held(meta) {
+        l.add(Mark::TextHeld, &item);
+    }
+    l
+}
+
+/// The labels of files about to be handed to a sink: each file's own, and their join (the files leave together, as one output).
+#[derive(Debug, Clone, Default)]
+pub struct FileLabels {
+    /// Each file by the name it was given, with its label.
+    pub files: Vec<(String, Label)>,
+    /// The join of every file's label.
+    pub label: Label,
+}
+
+/// The labels of `files` (a name relative to `root`, when there is one, and the bytes), computed from the daemon's records only, never
+/// from a file's own frontmatter or visible line (§2.1 item 3). A file takes:
+///
+/// * **where it is**: a file of the library takes its source's, claim's or page's label (a page's as a sink reads it, [`at_sink`]); any
+///   other file of the library, which has no record to read, every mark. A file of the workspace takes its handling record's traits;
+///   the host-noted store (`local/staged/host-…`), whose `private` flag lives in an event and not in the file, every mark. A file under
+///   a bundle's `sources/<id>/` whose id is a library source takes that source's label, so a copy made earlier is labelled as it is now;
+/// * **what it carries**: a run of more than 300 characters of a labelled page of the library takes that page's label (a copy of a page,
+///   whole or in part, wherever it was copied to), and a run of more than 300 characters of a private source's kept text takes
+///   `library_private` from that source.
+///
+/// What it does not find: a paraphrase, and a copy of a workspace note made outside the workspace (`specs/121` §9 item 3).
+pub fn of_files(home: &Path, ws: Option<&Path>, root: Option<&Path>, files: &[(String, Vec<u8>)]) -> FileLabels {
+    let lib = match ws {
+        Some(w) => Library::in_home(home).with_workspace(w),
+        None => Library::in_home(home),
+    };
+    let labeller = Labeller::new(Some(&lib), ws);
+    let canon = |p: &Path| std::fs::canonicalize(p).ok();
+    let lib_root = canon(lib.root());
+    let ws_root = ws.and_then(canon);
+    // the library's pages, each with the body a copy would carry and the label a sink reads
+    let mut pages: Vec<(String, Label)> = Vec::new();
+    for side_path in std::fs::read_dir(lib.pages_dir()).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")) {
+        let Some(side) = std::fs::read(&side_path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { continue };
+        if !matches!(side["kind"].as_str(), Some("topic_page") | Some("search_page")) {
+            continue;
+        }
+        let Ok(md) = std::fs::read_to_string(side_path.with_extension("md")) else { continue };
+        let label = at_sink(&lib, ws, &side);
+        if !label.is_empty() {
+            pages.push((without_line(split_page(&md).1), label));
+        }
+    }
+    // the private sources whose text is kept
+    let private: Vec<(String, String)> = lib
+        .list()
+        .into_iter()
+        .filter(|(_, m)| crate::library::is_private(m) && m["purged"].is_null())
+        .filter_map(|(id, _)| std::fs::read_to_string(lib.source_dir(&id).join("source.md")).ok().map(|t| (id, t)))
+        .collect();
+    let mut out = FileLabels::default();
+    for (name, bytes) in files {
+        let path = root.map(|r| r.join(name));
+        let place = path.as_deref().and_then(canon);
+        let mut label = Label::none();
+        let in_lib = place.as_ref().zip(lib_root.as_ref()).and_then(|(p, l)| p.strip_prefix(l).ok().map(|r| r.to_string_lossy().replace('\\', "/")));
+        let in_ws = place.as_ref().zip(ws_root.as_ref()).and_then(|(p, w)| p.strip_prefix(w).ok().map(|r| r.to_string_lossy().replace('\\', "/")));
+        if let Some(rel) = in_lib {
+            label = label.join(&labeller.library_file(&lib, ws, &rel));
+        } else if let Some(rel) = in_ws {
+            label = label.join(&labeller.workspace_file(&rel));
+        }
+        if let Some(id) = name.strip_prefix("sources/").and_then(|r| r.split('/').next()).filter(|id| !id.is_empty() && lib.read_meta(id).is_some()) {
+            label = label.join(&labeller.source(id).label);
+        }
+        let text = String::from_utf8_lossy(bytes);
+        for (body, page_label) in &pages {
+            if crate::held_text::carries_run(body, &text) {
+                label = label.join(page_label);
+            }
+        }
+        for (id, t) in &private {
+            if crate::held_text::carries_run(t, &text) {
+                label.add(Mark::LibraryPrivate, &handling::source_item(id));
+            }
+        }
+        out.label = out.label.join(&label);
+        out.files.push((name.clone(), label));
+    }
+    out
+}
+
+impl Labeller<'_> {
+    /// A file of the library, by its path relative to the library's root: a source's file, a claim, a page (as a sink reads it). Any
+    /// other file of the library has no record to read: every mark.
+    fn library_file(&self, lib: &Library, ws: Option<&Path>, rel: &str) -> Label {
+        let mut parts = rel.split('/');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some("sources"), Some(id), Some(_)) if !id.is_empty() => self.source(id).label,
+            (Some("claims"), Some(f), None) => self.claim(f.trim_end_matches(".json").trim_end_matches(".md")).label,
+            (Some("pages"), Some(f), None) => {
+                let side = lib.pages_dir().join(f).with_extension("json");
+                match std::fs::read(&side).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
+                    Some(s) => at_sink(lib, ws, &s),
+                    None => Label::every(&format!("library/{rel}")),
+                }
+            }
+            _ => Label::every(&format!("library/{rel}")),
+        }
+    }
+
+    /// A file of the workspace, by its path relative to the workspace: its handling record's traits; a research record's label; the
+    /// host-noted store, every mark.
+    fn workspace_file(&self, rel: &str) -> Label {
+        if rel.starts_with("local/staged/host-") {
+            return Label::every(rel);
+        }
+        if rel.starts_with("research/") {
+            return self.path("", rel).label;
+        }
+        let item = match (rel.strip_prefix("local/"), rel.strip_prefix("team/")) {
+            (Some(p), _) => handling::item_of("local", p),
+            (_, Some(p)) => handling::item_of("team", p),
+            _ => None,
+        };
+        item.map(|i| self.traits(&i).label).unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 #[path = "label_tests.rs"]
 mod tests;

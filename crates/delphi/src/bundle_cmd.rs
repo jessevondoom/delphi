@@ -98,6 +98,19 @@ fn host_for(args: &[String]) -> Result<Box<dyn Host>, String> {
     Ok(Box::new(Scoped { identifiers: p.identifiers, handles: p.handles }))
 }
 
+/// The workspace whose records label a bundle's files (`specs/141` §2.2): the one named (`--workspace`, `DELPHI_WORKSPACE`), else the
+/// one this directory resolves to, else the default one. `None` when there is none: a page built from a workspace's records then reads
+/// as every mark, and is refused.
+pub(crate) fn label_workspace(home: &Path, named: Option<String>) -> Option<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let named = named.or_else(|| std::env::var("DELPHI_WORKSPACE").ok());
+    let name = match home::resolve_workspace(home, &cwd, named) {
+        home::Resolve::Found(n) => n,
+        _ => crate::start::DEFAULT_WORKSPACE.to_string(),
+    };
+    Some(home.join("workspaces").join(name)).filter(|w| w.is_dir())
+}
+
 pub(crate) fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
@@ -236,10 +249,12 @@ pub fn run(args: &[String]) -> i32 {
             bundle_pack::sign(&dir, &xenia_cmd::key_path(&h), flag(args, "--against").map(PathBuf::from), &*host, &bundle_pack::tty_confirm)
         }
         "package" => {
-            // Held text (`specs/142` §2.5 item 4 (e)): the bundle's files, `sources/` and knowledge alike, read as one output before
-            // the bundle crate is called. A bundle that carries more of a held source than may leave is not packaged.
+            // The bundle's label (`specs/141` §2.4, the bundle row; §2.4 item 9) and held text (`specs/142` §2.5 item 4 (e)): the
+            // bundle's files, `sources/` and knowledge alike, read as one output before the bundle crate is called. A labelled bundle
+            // is refused, or asked for at this terminal; one that carries more of a held source than may leave is not packaged.
             let h = home::delphi_home(flag(args, "--home").as_deref());
-            if let Err(e) = delphi_engine::held_text::check_path(&h, &dir) {
+            let ws = label_workspace(&h, flag(args, "--workspace"));
+            if let Err(e) = delphi_engine::egress::check_path(&h, ws.as_deref(), &dir, delphi_engine::egress::Sink::Bundle, delphi_engine::egress::Confirm::Terminal(&mut delphi_engine::egress::terminal_yes)) {
                 eprintln!("delphi bundle: the bundle {}; nothing was packaged", e);
                 return 1;
             }
@@ -574,6 +589,40 @@ mod tests {
         let clean = tempfile::tempdir().unwrap();
         copy(&golden(), clean.path());
         assert_eq!(package(clean.path()), 0);
+        assert!(out.is_file());
+    }
+
+    /// `specs/141` AC-5 and AC-17 (the package half): a bundle that holds a copy of a labelled library page, renamed and with its line
+    /// removed, is refused by the label check before any `delphi-bundle` function runs: no archive, and not even `files.json` is written.
+    #[test]
+    fn a_bundle_with_a_labelled_page_is_refused_before_the_bundle_crate_runs() {
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        fs::create_dir_all(&ws).unwrap();
+        let src = home.path().join("library/sources/mine-a");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("meta.json"), serde_json::json!({"id": "mine-a", "type": "document", "title": "Mine", "private": true, "capture_level": "full"}).to_string()).unwrap();
+        fs::write(src.join("source.md"), "# Mine\n\nA private note.\n").unwrap();
+        let pages = home.path().join("library/pages");
+        fs::create_dir_all(&pages).unwrap();
+        let body: String = (0..20).map(|i| format!("Line {i:02} of a page built from a private note. ")).collect();
+        fs::write(pages.join("mine.json"), serde_json::json!({"kind": "topic_page", "material": [{"id": "s-mine-a"}]}).to_string()).unwrap();
+        fs::write(pages.join("mine.md"), format!("---\ntitle: Mine\n---\n\n{body}\n")).unwrap();
+        delphi_engine::label::relabel(home.path(), &ws, None).unwrap();
+        assert!(fs::read_to_string(pages.join("mine.md")).unwrap().contains("> Handling: PRIVATE (LIBRARY)"));
+        let t = tempfile::tempdir().unwrap();
+        copy(&golden(), t.path());
+        let _ = fs::remove_dir_all(t.path().join(".delphi-bundle"));
+        fs::write(t.path().join("knowledge/renamed.md"), format!("# Renamed\n\n{body}\n")).unwrap();
+        let out_dir = tempfile::tempdir().unwrap();
+        let out = out_dir.path().join("b.xbundle");
+        let a: Vec<String> = ["package", t.path().to_str().unwrap(), "--home", home.path().to_str().unwrap(), "--no-eval", "-o", out.to_str().unwrap()].iter().map(|s| s.to_string()).collect();
+        assert_eq!(run(&a), 1);
+        assert!(!out.exists(), "nothing was packaged");
+        assert!(!t.path().join(".delphi-bundle/files.json").exists(), "no bundle-crate function ran");
+        // without the copy, the same bundle packages
+        fs::remove_file(t.path().join("knowledge/renamed.md")).unwrap();
+        assert_eq!(run(&a), 0);
         assert!(out.is_file());
     }
 

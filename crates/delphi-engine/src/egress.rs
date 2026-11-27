@@ -1,19 +1,165 @@
-//! The one place a private entry is refused (`specs/098` §12 item 16, `specs/055` §10.1). Every outbound path calls [`check`]; the
-//! test at the bottom lists the registered paths and fails when a channel has none, when a wired path does not call it, or when
-//! any other file calls the library's own `may_leave` directly.
+//! The one place an entry or a labelled output is refused (`specs/098` §12 item 16, `specs/055` §10.1, `specs/141` §2.3). Every
+//! outbound path calls [`check`] (one record) or, at a sink of `specs/141` §2.4, [`check_label`] through [`check_output`] or
+//! [`check_path`]; [`check`] is itself implemented by [`check_label`]. The tests at the bottom list the registered paths ([`PATHS`])
+//! and sinks ([`SINKS`]) and fail when a channel or a sink has none, when a wired path does not call its check with its own sink, or
+//! when any other file calls the library's own `may_leave` directly.
 //!
-//! Deny by default: metadata that is not an object, or that cannot be read, is treated as private.
+//! Deny by default: metadata that is not an object, or that cannot be read, carries every mark.
+
+use std::path::Path;
 
 use serde_json::Value;
 
-use crate::library::{is_private, may_leave, Channel};
+use crate::label::{self, Kind, Label};
+use crate::library::{is_private, Channel};
 
-/// May the body of this entry go out through `channel`? Only a public, readable record may.
+pub use crate::label::{Decision, Sink};
+
+/// What a sink does with `label` (`specs/141` §2.3 item 1): the row of §2.4 for each of its marks and the strictest of them (refuse,
+/// send labelled, quotations, send), the quotation bound kept whenever a mark brings it. The one decision path is `label::decide`.
+pub fn check_label(label: &Label, sink: Sink) -> Decision {
+    label::decide(label, sink)
+}
+
+/// The row a registered channel of `specs/055` §10.1 takes for one record. A channel that is a sink of `specs/141` §2.4 takes its own
+/// row. One that sends an address, a DOI, a source's tags or its citation, never a body (the three lookups, the web search, the
+/// bibliography), takes the bibliography's row. One that can carry a body and is not a sink of §2.4 (the debug bundle, the log,
+/// telemetry, a project-history record) takes the bundle's, which refuses a private record and a held body, as before.
+fn row_of(channel: Channel) -> Sink {
+    match channel {
+        Channel::Bundle | Channel::DebugBundle | Channel::Log | Channel::Telemetry | Channel::History => Sink::Bundle,
+        Channel::Xenia => Sink::Xenia,
+        Channel::Export | Channel::WebSearch | Channel::ArchiveLookup | Channel::CitationLookup | Channel::DoiResolve => Sink::Bibliography,
+        Channel::Relay | Channel::Connector | Channel::Mail | Channel::Outbound => Sink::Outbound,
+    }
+}
+
+/// May the body of this entry go out through `channel`? Only a public, readable record may. Implemented by [`check_label`] over the
+/// record's own label ([`label::of_meta`]): any decision but a plain send refuses a whole body (a whole body does not meet a quotation
+/// bound, and a bare record carries no handling trait to send labelled).
 pub fn check(meta: &Value, channel: Channel) -> Result<(), String> {
     if !meta.is_object() {
         return Err(format!("an entry whose record cannot be read is treated as private ({:?})", channel));
     }
-    may_leave(meta, channel)
+    let l = label::of_meta(meta);
+    let d = check_label(&l, row_of(channel));
+    if d.kind == Kind::Send && !d.quotations {
+        return Ok(());
+    }
+    if l.has(label::Mark::LibraryPrivate) {
+        return Err(format!("a private source never leaves the install ({:?})", channel));
+    }
+    Err(format!("the text of this source is kept for local reading only (text_held) and never leaves the install ({:?}); quote at most 300 characters of it in a page", channel))
+}
+
+/// Who confirms a `send labelled` decision (`specs/141` §2.4 item 3).
+pub enum Confirm<'a> {
+    /// A command at a terminal: the operator is shown the marks and the items they came from, and answers.
+    Terminal(&'a mut dyn FnMut(&str) -> bool),
+    /// The send already waits on a card the operator answers (a Xenia publish shows the exact bytes and asks once). The caller puts
+    /// [`Sent::line`] on that card; the card's answer is the confirmation, and nothing is sent without it.
+    Card,
+    /// No person can be asked: a `send labelled` decision is refused, never sent.
+    Nobody,
+}
+
+/// What a sink may send, after [`check_output`].
+#[derive(Debug, Clone)]
+pub struct Sent {
+    pub decision: Decision,
+    /// The join of the labels of everything sent.
+    pub label: Label,
+}
+
+impl Sent {
+    /// The line a card or a prompt shows for a labelled output: the visible line, and which marks decided and where they came from.
+    /// Empty for an unlabelled output.
+    pub fn line(&self) -> String {
+        match label::visible_line(&self.label) {
+            Some(v) if self.decision.reason.is_empty() => v,
+            Some(v) => format!("{v} ({})", self.decision.reason),
+            None => String::new(),
+        }
+    }
+}
+
+/// The check a sink runs over the files it is about to send together (a bundle's files, a published file), in the engine, before any
+/// call that copies, packages, publishes or exports them (`specs/141` §2.4 item 9). Each file's label is computed from the daemon's
+/// records ([`label::of_files`]); their join is decided once at `sink` ([`check_label`]); and the quotation bound is applied to all
+/// of them as one output (`held_text::check_files`, the one predicate of `specs/142` §2.5 item 4). The bound runs whatever the label
+/// says, so a held source no record names is still found by its blocks.
+///
+/// * refuse: `Err`, naming the marks, the items they came from and the files, never any text (§2.3 item 3). The output is refused
+///   whole (§2.4 item 4).
+/// * send labelled: every Markdown file that is itself labelled must carry its visible line, and the operator confirms ([`Confirm`]); with no
+///   person to ask, `Err`.
+/// * quotations and send: `Ok` when the bound holds.
+pub fn check_output(home: &Path, ws: Option<&Path>, root: Option<&Path>, files: &[(String, Vec<u8>)], sink: Sink, confirm: Confirm<'_>) -> Result<Sent, String> {
+    let labels = label::of_files(home, ws, root, files);
+    let decision = check_label(&labels.label, sink);
+    let named = |pick: &dyn Fn(&Label) -> bool| -> String {
+        let fs: Vec<String> = labels.files.iter().filter(|(_, l)| pick(l)).take(10).map(|(n, l)| format!("{} [{}]", n, l.names().join(", "))).collect();
+        fs.join(", ")
+    };
+    match decision.kind {
+        Kind::Refuse => return Err(format!("refused: {} (in {})", decision.reason, named(&|l: &Label| check_label(l, sink).refused()))),
+        Kind::SendLabelled => {
+            let unmarked: Vec<String> = labels
+                .files
+                .iter()
+                // the line is a line of text: a Markdown file carries it; a record (`meta.json`) or an asset cannot
+                .filter(|(n, l)| n.ends_with(".md") && check_label(l, sink).kind == Kind::SendLabelled)
+                .filter_map(|(n, l)| {
+                    let line = label::visible_line(l)?;
+                    let text = files.iter().find(|(m, _)| m == n).map(|(_, b)| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+                    (!text.lines().any(|x| x.trim_end() == line)).then(|| format!("{n} (add the line `{line}` at its top)"))
+                })
+                .take(10)
+                .collect();
+            if !unmarked.is_empty() {
+                return Err(format!("not sent: a labelled output carries its visible line, and these files do not: {}", unmarked.join(", ")));
+            }
+            let line = Sent { decision: decision.clone(), label: labels.label.clone() }.line();
+            match confirm {
+                Confirm::Terminal(ask) => {
+                    if !ask(&format!("{line}\nfiles: {}", named(&|l: &Label| !l.is_empty()))) {
+                        return Err(format!("not sent: a labelled send was not confirmed ({})", decision.reason));
+                    }
+                }
+                Confirm::Card => {}
+                Confirm::Nobody => return Err(format!("refused: {}, and no person can confirm it here", decision.reason)),
+            }
+        }
+        Kind::Quotations | Kind::Send => {}
+    }
+    crate::held_text::check_files(home, files)?;
+    Ok(Sent { decision, label: labels.label })
+}
+
+/// [`check_output`] over a file, or over every file under a directory (each named relative to it), sent as one output.
+pub fn check_path(home: &Path, ws: Option<&Path>, path: &Path, sink: Sink, confirm: Confirm<'_>) -> Result<Sent, String> {
+    let (root, files) = if path.is_dir() {
+        (path.to_path_buf(), crate::held_text::files_under(path))
+    } else {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        (path.parent().map(Path::to_path_buf).unwrap_or_default(), std::fs::read(path).map(|b| vec![(name, b)]).unwrap_or_default())
+    };
+    check_output(home, ws, Some(&root), &files, sink, confirm)
+}
+
+/// The operator's answer at a terminal to a `send labelled` decision of a command (`specs/141` §2.4 item 3). The question goes to
+/// stderr, so a command whose output is redirected to a file still asks; with stdin or stderr not a terminal there is no person to ask,
+/// and the answer is no.
+pub fn terminal_yes(question: &str) -> bool {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        eprintln!("{question}\nno terminal to confirm a labelled send on: not sent");
+        return false;
+    }
+    eprint!("{question}\nsend it labelled? type `send` to confirm, anything else keeps it here: ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line).is_ok() && line.trim() == "send"
 }
 
 /// May this entry be placed in a seat's prompt? A private entry never goes to a foreign-family seat, whatever
@@ -127,9 +273,71 @@ pub const EXEMPT: [Exempt; 1] = [Exempt {
     ],
 }];
 
+/// How a sink of `specs/141` §2.4 is wired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SinkWired {
+    /// Each sender (relative to the `crates/` directory) calls [`check_label`], [`check_output`] or [`check_path`] with this sink.
+    /// `proof` (a file relative to `crates/`, and a test's name) sends a fixture with each one mark through the sink's real entry
+    /// point and compares the outcome with the row (AC-4).
+    Yes { senders: &'static [&'static str], proof: (&'static str, &'static str) },
+    /// Wired by a later slice of `specs/141`. Until then its row is held by `label::tests::the_rows_are_the_table_of_section_2_4`, and
+    /// what it already refuses for held text by `held_text::SENDERS`.
+    Later { slice: &'static str },
+}
+
+/// The sinks of `specs/141` §2.4: each sink, the files that send through it, and the test that holds it to its row. The policy for each
+/// mark is the row, `label::row`; this table says who must ask it.
+pub const SINKS: [(Sink, SinkWired); 12] = [
+    (Sink::PageExport, SinkWired::Later { slice: "C" }),
+    (
+        Sink::Bundle,
+        SinkWired::Yes {
+            senders: &["delphi-engine/src/library_export.rs", "delphi/src/bundle_cmd.rs", "delphi/src/bundle_xenia.rs", "delphi/src/bundle_compat.rs"],
+            proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_bundle_follows_its_row"),
+        },
+    ),
+    (Sink::Bibliography, SinkWired::Yes { senders: &["delphi-engine/src/library_bib.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_bibliography_follows_its_row") }),
+    (Sink::Document, SinkWired::Later { slice: "C" }),
+    (Sink::Clipboard, SinkWired::Later { slice: "C" }),
+    (Sink::OffMachineClient, SinkWired::Later { slice: "C" }),
+    (Sink::Xenia, SinkWired::Yes { senders: &["delphi-engine/src/service_xenia.rs", "delphi/src/xenia_cmd.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_xenia_follows_its_row") }),
+    (Sink::SeedExport, SinkWired::Later { slice: "C" }),
+    (Sink::RemoteServe, SinkWired::Later { slice: "C" }),
+    (Sink::Repository { internal_remote: false }, SinkWired::Later { slice: "D" }),
+    (Sink::Repository { internal_remote: true }, SinkWired::Later { slice: "D" }),
+    (Sink::Outbound, SinkWired::Later { slice: "D" }),
+];
+
+/// How a call into `delphi-bundle` that writes what leaves the machine is guarded (`specs/141` §2.4 item 9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleGuard {
+    /// The function that holds the call runs [`check_path`] or [`check_output`] at [`Sink::Bundle`] before it.
+    InFn,
+    /// The function that holds the call has one production caller, in `file` (relative to `crates/`), which runs the check before
+    /// `call`.
+    Caller { file: &'static str, call: &'static str },
+}
+
+/// Every call into `delphi-bundle` that packages, publishes or exports a bundle's files, by `(the call, the file that holds it, its
+/// guard)`. Not here, on purpose: `write_manifest` and `sign` (they write the hash and the signature into the author's own
+/// directory, and nothing leaves), `validate` and `inspect` where they only read, `import` and `add` (they bring a bundle in), the
+/// marketplace export (it writes bundle names, a repository and a commit, no file of a bundle), and `distill` (the writer drafts into a
+/// mission's staging directory, not into a bundle).
+pub const BUNDLE_WRITERS: [(&str, &str, BundleGuard); 4] = [
+    ("delphi_bundle::archive::write(", "delphi/src/bundle_pack.rs", BundleGuard::Caller { file: "delphi/src/bundle_cmd.rs", call: "bundle_pack::package(" }),
+    ("delphi_bundle::export::claude_plugin(", "delphi/src/bundle_compat.rs", BundleGuard::InFn),
+    ("delphi_bundle::export::agents_md(", "delphi/src/bundle_compat.rs", BundleGuard::InFn),
+    // a bundle published through a Xenia store: the record is built from what `inspect` reads, then sent
+    ("delphi_bundle::inspect(", "delphi/src/bundle_xenia.rs", BundleGuard::InFn),
+];
+
 #[cfg(test)]
 #[path = "egress_xenia_tests.rs"]
 mod xenia_file_tests;
+
+#[cfg(test)]
+#[path = "egress_sink_tests.rs"]
+mod sink_tests;
 
 #[cfg(test)]
 mod tests {
@@ -291,6 +499,74 @@ mod tests {
         for f in ["fn search(&self, query: &str)", "fn search_via(&self, query: &str)"] {
             let body = host.split(f).nth(1).and_then(|b| b.split("\n    }\n").next()).unwrap_or_else(|| panic!("{f} is gone"));
             assert!(body.contains("self.provider_search(query)"), "{f} must run the provider search that remembers");
+        }
+    }
+
+    /// `specs/141` §2.3 item 2: every sink of §2.4 is in [`SINKS`]; a wired one names senders that each call the label check with that
+    /// sink, and a proof test that exists.
+    #[test]
+    fn every_registered_sink_calls_check_label_with_its_own_sink() {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        for s in Sink::ALL {
+            assert_eq!(SINKS.iter().filter(|(k, _)| *k == s).count(), 1, "{} is not registered once in SINKS", s.name());
+        }
+        for (sink, wired) in SINKS {
+            let SinkWired::Yes { senders, proof } = wired else { continue };
+            for f in senders {
+                let text = std::fs::read_to_string(crates.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+                let prod = production(&text);
+                let asks = ["egress::check_label(", "egress::check_output(", "egress::check_path("].iter().any(|c| prod.contains(c));
+                assert!(asks && prod.contains(&format!("Sink::{sink:?}")), "{f} does not ask the label check at `Sink::{sink:?}`");
+            }
+            let text = std::fs::read_to_string(crates.join(proof.0)).unwrap_or_else(|e| panic!("{}: {e}", proof.0));
+            assert!(text.contains(&format!("fn {}(", proof.1)), "{}: the proof test `{}` is missing from {}", sink.name(), proof.1, proof.0);
+        }
+    }
+
+    /// `specs/141` §2.4 item 9 (the fitness function of AC-17, its list made in slice B): every call into `delphi-bundle` that writes what
+    /// leaves is in [`BUNDLE_WRITERS`], and each runs only after the label check at `Sink::Bundle`: in the function that holds it, or,
+    /// for the archive, in its one production caller, before the call.
+    #[test]
+    fn no_engine_file_calls_a_bundle_writer_before_check_label() {
+        let checked = |s: &str| (s.contains("egress::check_path(") || s.contains("egress::check_output(")) && s.contains("Sink::Bundle");
+        // the start of the function that holds byte `at`
+        let fn_start = |src: &str, at: usize| -> usize {
+            src[..at].match_indices("fn ").filter(|(i, _)| src[..*i].rsplit('\n').next().is_some_and(|pre| pre.trim().is_empty() || pre.trim().starts_with("pub"))).map(|(i, _)| i).last().unwrap_or(0)
+        };
+        let sources: Vec<(String, String)> = crate_sources().into_iter().filter(|(rel, _)| (rel.starts_with("delphi/src/") || rel.starts_with("delphi-engine/src/")) && !rel.ends_with("_tests.rs") && rel != "delphi-engine/src/egress.rs").collect();
+        let writers = ["delphi_bundle::archive::write(", "delphi_bundle::export::claude_plugin(", "delphi_bundle::export::agents_md("];
+        for (rel, src) in &sources {
+            let prod = production(src);
+            for w in writers {
+                assert!(!prod.contains(w) || BUNDLE_WRITERS.iter().any(|(c, f, _)| *c == w && f == rel), "{rel} calls `{w}`, which is not in BUNDLE_WRITERS: register it and check the label before it");
+            }
+        }
+        for (call, file, guard) in BUNDLE_WRITERS {
+            let (_, src) = sources.iter().find(|(r, _)| r == file).unwrap_or_else(|| panic!("{file} is gone"));
+            let prod = production(src);
+            let hits: Vec<usize> = prod.match_indices(call).map(|(i, _)| i).collect();
+            assert!(!hits.is_empty(), "{file} no longer calls `{call}`: update BUNDLE_WRITERS");
+            match guard {
+                BundleGuard::InFn => {
+                    for at in hits {
+                        assert!(checked(&prod[fn_start(prod, at)..at]), "{file}: `{call}` runs before the label check at Sink::Bundle in its function");
+                    }
+                }
+                BundleGuard::Caller { file: caller, call: via } => {
+                    let (_, csrc) = sources.iter().find(|(r, _)| r == caller).unwrap_or_else(|| panic!("{caller} is gone"));
+                    let cprod = production(csrc);
+                    let at = cprod.find(via).unwrap_or_else(|| panic!("{caller} no longer calls `{via}`"));
+                    assert!(checked(&cprod[fn_start(cprod, at)..at]), "{caller}: `{via}` runs before the label check at Sink::Bundle");
+                    // and that caller is the only production one
+                    let confirmed = via.replace("(", "_confirmed(");
+                    for (rel, s) in &sources {
+                        let n = production(s).matches(via).count() + production(s).matches(confirmed.as_str()).count();
+                        if rel != caller {
+                            assert_eq!(n, 0, "{rel} calls `{via}` too: it must check the label first and be listed");
+                        }
+                    }
+                }
+            }
         }
     }
 

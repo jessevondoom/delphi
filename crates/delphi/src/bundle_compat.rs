@@ -115,6 +115,10 @@ pub fn export(home: &Path, ws: &Path, names: &[String], args: &[String]) -> i32 
         Ok(v) => v,
         Err(e) => return crate::bundle_add::fail(e),
     };
+    // The bundle row (`specs/141` §2.4, item 9): the files written out are labelled from the records before the bundle crate runs.
+    if let Err(e) = delphi_engine::egress::check_path(home, Some(ws), &dir, delphi_engine::egress::Sink::Bundle, delphi_engine::egress::Confirm::Terminal(&mut delphi_engine::egress::terminal_yes)) {
+        return crate::bundle_add::fail(format!("the bundle {e}; nothing was exported"));
+    }
     if flag_set("--claude-plugin") {
         let Some(out) = flag(args, "--claude-plugin") else { return usage("--claude-plugin wants an output directory") };
         let out = PathBuf::from(out);

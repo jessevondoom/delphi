@@ -55,23 +55,77 @@ pub fn csl_item(id: &str, meta: &Value) -> Value {
     Value::Object(o)
 }
 
-/// Export `ids` (all sources when empty) in `format`. Unknown ids are an error; private sources are withheld.
+/// Export `ids` (all sources when empty) in `format`, with no person to confirm a labelled citation. Unknown ids are an error; a
+/// source whose label refuses, and one whose label asks (`internal`), are withheld and counted. See [`export_with`].
 pub fn export(lib: &Library, ids: &[String], format: Format) -> Result<Export, String> {
+    export_with(lib, ids, format, crate::egress::Confirm::Nobody)
+}
+
+/// The bibliography sink (`specs/141` §2.4, its row): each source's label is computed from the records as they are now and decided at
+/// `Sink::Bibliography`. A refusing mark (private, confidential, library private, or a record that cannot be read) withholds the
+/// citation. An `internal` citation is sent only when the operator confirms, once for the export, and the export then begins with
+/// the visible line (`% Handling: …` in BibTeX); CSL-JSON has no place for the line, so a labelled citation is withheld there. A
+/// held source's citation is sent, its free-text fields cut (§2.4 item 7).
+pub fn export_with(lib: &Library, ids: &[String], format: Format, confirm: crate::egress::Confirm<'_>) -> Result<Export, String> {
     let all = lib.list();
     let chosen: Vec<&(String, Value)> = if ids.is_empty() {
         all.iter().collect()
     } else {
         ids.iter().map(|i| all.iter().find(|(id, _)| id == i).ok_or_else(|| format!("no source `{}`", i))).collect::<Result<_, _>>()?
     };
+    let labeller = crate::label::Labeller::new(Some(lib), lib.workspace());
+    let decided: Vec<(&(String, Value), crate::label::Label, crate::label::Kind)> = chosen
+        .into_iter()
+        .map(|c| {
+            let l = labeller.source(&c.0).label;
+            let k = crate::egress::check_label(&l, crate::egress::Sink::Bibliography).kind;
+            (c, l, k)
+        })
+        .collect();
+    use crate::label::Kind;
+    let labelled: Vec<&(&(String, Value), crate::label::Label, Kind)> = decided.iter().filter(|(_, _, k)| *k == Kind::SendLabelled).collect();
+    let joined = labelled.iter().fold(crate::label::Label::none(), |acc, (_, l, _)| acc.join(l));
+    let line = crate::label::visible_line(&joined);
+    let labelled_ok = !labelled.is_empty()
+        && format != Format::CslJson
+        && match confirm {
+            crate::egress::Confirm::Terminal(ask) => ask(&format!("{} ({})", line.clone().unwrap_or_default(), crate::egress::check_label(&joined, crate::egress::Sink::Bibliography).reason)),
+            crate::egress::Confirm::Card | crate::egress::Confirm::Nobody => false,
+        };
+    let sendable = |k: Kind| k == Kind::Send || k == Kind::Quotations || (k == Kind::SendLabelled && labelled_ok);
+    let chosen: Vec<&(String, Value)> = decided.iter().filter(|(_, _, k)| sendable(*k)).map(|(c, _, _)| *c).collect();
     // The shared egress check (`specs/098` §12 item 16): a private source, and a record that cannot be read, never leave through an export.
     let leaves = |m: &Value| crate::egress::check(m, Channel::Export).is_ok();
+    let withheld = decided.len() - chosen.iter().filter(|(_, m)| leaves(m)).count();
+    let mut out = render(lib, chosen.into_iter().filter(|(_, m)| leaves(m)).collect(), format);
+    if labelled_ok {
+        if let Some(l) = line {
+            out = match format {
+                Format::BibTex => format!("% {}\n\n{out}", l.trim_start_matches("> ")),
+                _ => format!("{l}\n\n{out}"),
+            };
+        }
+    }
+    Ok(Export { text: out, withheld })
+}
+
+/// The citations of `ids` as a page of the library shows them in its own bibliography (`library_page_check`). Not a sink: nothing here
+/// leaves the machine, and the page is checked at its own sink when it does. A private source is left out, a held one's free-text
+/// fields cut, as at the bibliography sink.
+pub(crate) fn for_page(lib: &Library, ids: &[String], format: Format) -> Result<Export, String> {
+    let all = lib.list();
+    let chosen: Vec<&(String, Value)> = ids.iter().map(|i| all.iter().find(|(id, _)| id == i).ok_or_else(|| format!("no source `{}`", i))).collect::<Result<_, _>>()?;
+    let leaves = |m: &Value| crate::egress::check(m, Channel::Export).is_ok();
     let withheld = chosen.iter().filter(|(_, m)| !leaves(m)).count();
-    // A held source's citation is sent; its text is not (`specs/141` §2.4 item 7, the interim guard of `specs/142` §2.5 item 4): every
-    // free-text field of its record that is sent is cut to the bound if it carries a run of the text.
+    Ok(Export { text: render(lib, chosen.into_iter().filter(|(_, m)| leaves(m)).collect(), format), withheld })
+}
+
+/// The citations of `chosen` in `format`. A held source's citation is sent; its text is not (`specs/141` §2.4 item 7, the guard of
+/// `specs/142` §2.5 item 4): every free-text field of its record that is sent is cut to the bound if it carries a run of the text.
+fn render(lib: &Library, chosen: Vec<&(String, Value)>, format: Format) -> String {
     let held = lib.held();
     let cut: Vec<(String, Value)> = chosen
         .into_iter()
-        .filter(|(_, m)| leaves(m))
         .map(|(id, m)| {
             let mut m = m.clone();
             if crate::library::is_held(&m) {
@@ -86,12 +140,11 @@ pub fn export(lib: &Library, ids: &[String], format: Format) -> Result<Export, S
         .collect();
     let mut shown: Vec<&(String, Value)> = cut.iter().collect();
     shown.sort_by_key(|(id, m)| (sort_key(m), id.clone()));
-    let text = match format {
+    match format {
         Format::CslJson => serde_json::to_string_pretty(&shown.iter().map(|(id, m)| csl_item(id, m)).collect::<Vec<_>>()).unwrap_or_default() + "\n",
         Format::BibTex => shown.iter().map(|(id, m)| bibtex(id, m)).collect::<Vec<_>>().join("\n"),
-        _ => shown.iter().map(|(_, m)| format!("{}\n", render(m, format))).collect(),
-    };
-    Ok(Export { text, withheld })
+        _ => shown.iter().map(|(_, m)| format!("{}\n", render_one(m, format))).collect(),
+    }
 }
 
 fn sort_key(m: &Value) -> String {
@@ -168,7 +221,7 @@ fn stop(s: &str) -> String {
     if s.ends_with(['.', '?', '!']) { s.to_string() } else { format!("{}.", s) }
 }
 
-fn render(m: &Value, f: Format) -> String {
+fn render_one(m: &Value, f: Format) -> String {
     let au = names(&m["author"]);
     let title = text(m, "title").unwrap_or_else(|| "Untitled".into());
     let container = text(m, "container-title");
