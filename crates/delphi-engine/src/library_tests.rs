@@ -1534,10 +1534,32 @@ mod page_validation {
     fn replies_are_parsed_strictly_and_validator_text_is_made_safe() {
         assert!(parse_reply("I think the page is fine.").is_none());
         assert_eq!(parse_reply("NO ASSERTIONS").unwrap().len(), 0);
-        let r = parse_reply("ASSERTION fabricated | c-1 | see [c-9](http://x.test/y) `bad` | table\nASSERTION maybe | - | ignored\nASSERTION supported | - | fine").unwrap();
+        let r = parse_reply("ASSERTION fabricated | c-1 | see [c-9](http://x.test/y) `bad` | table\nASSERTION maybe | - | ignored\nASSERTION supported | - | fine\nEND ASSERTIONS").unwrap();
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].record.as_deref(), Some("c-1"));
         assert!(!r[0].text.contains(['[', ']', '(', ')', '`', '|']) && !r[0].text.contains("://"), "{}", r[0].text);
+        // A list cut off before its end line is no verdict: the statements after the cut were never judged.
+        assert!(parse_reply("ASSERTION supported | - | fine\nASSERTION supported | - | also fine").is_none());
+    }
+
+    /// The architect's review of the live proof (2026-11-27): a validator's reply is sized to the page, the contract says how far a
+    /// citation reaches and which records were shown in part or not at all, and a statement judged fabricated against a record the
+    /// validator saw only in part, or did not see, is unchecked rather than failed.
+    #[test]
+    fn the_validator_sees_its_limits_and_is_not_failed_on_what_it_was_not_shown() {
+        use crate::library::page_validate::*;
+        assert_eq!(validator_max_output("A short page."), VALIDATOR_MAX_OUTPUT);
+        let long = "A statement [s-kb-1]. ".repeat(200);
+        assert_eq!(validator_max_output(&long), VALIDATOR_MAX_OUTPUT_CAP);
+        let mid = "A statement [s-kb-1]. ".repeat(40);
+        assert!(validator_max_output(&mid) > VALIDATOR_MAX_OUTPUT && validator_max_output(&mid) < VALIDATOR_MAX_OUTPUT_CAP);
+        let m = |id: &str, partial: bool| Material { id: id.into(), standing: "○ not validated".into(), validated: false, cited: true, text: "Positioning says what a product is.".into(), unverifiable: false, host_word: None, partial };
+        let q = PageQuery { body: "Body [s-a].".into(), material: vec![m("s-a", true), m("s-b", false)], omitted: vec!["s-c".into()] };
+        let c = contract(&q);
+        assert!(c.contains("supports every sentence back to the previous marker") && c.contains("first part only") && c.contains("NOT SHOWN") && c.contains("s-c") && c.contains(END_ASSERTIONS), "{c}");
+        let fab = |rec: &str| Assertion { text: format!("a statement citing {rec}"), judgement: Judgement::FabricatedCitation, record: Some(rec.into()) };
+        let r = classify_for_test(&[fab("s-a"), fab("s-c"), fab("s-b")], &q.material, &q.omitted);
+        assert_eq!(r, vec!["unchecked", "unchecked", "fail"], "shown in part, not shown, shown whole");
     }
 
     #[test]

@@ -2290,6 +2290,21 @@ mod expand_tests {
         assert_eq!(Depth::Long.as_str(), "long");
     }
 
+    /// The live proof of `specs/143` E (2026-11-27): a seed carried a research answer's sentence about the search ("The retrieved papers
+    /// are ..."), the writer kept it, and the validator rightly found the cited paper did not support it. Every brief, of a search page and
+    /// of a topic page, tells the writer to write about the subject and leave out sentences about the research.
+    #[test]
+    fn every_brief_tells_the_writer_to_leave_out_sentences_about_the_research() {
+        let g = Gathered::default();
+        let rule = "Write about the subject, never about the research";
+        for b in [crate::library::page_search::brief("tides", &g, 3000), crate::library::page_search::brief_for("tides", &g, 3000, Depth::Expanded), topic_brief("Tides", &g, 8000, &[], "# Tides\n\nThe retrieved papers are A and B. [s-kb-1]\n")] {
+            assert!(b.contains(rule) && b.contains("the retrieved papers are"), "{b}");
+            // The second live page (2026-11-27): a lead that must start `**Title** is` led the writer to widen a passage about one
+            // practice into a definition of the whole subject. A definition is asked for only when a record gives one.
+            assert!(b.contains("When no record defines the subject, do not write a definition") && b.contains("Never widen what a record says about a part"), "{b}");
+        }
+    }
+
     /// AC-6: a writer that errors, a page that fails the check, and a refused budget (`per_day`, the share) each leave the seed page in
     /// place with outcome `seed` and the reason, and the topic stays due. No page of the claims alone is ever written.
     #[test]

@@ -389,8 +389,14 @@ fn row_answers(f: &Followed, mask: &dyn Fn(&str) -> String) -> Vec<Span> {
         }
         out.extend(body_spans(Row::Answer, false, "research answer", &format!("{}/results/{}", f.rel, run), answer, 1, &question, "○ not validated", Some(&f.topic.id), mask));
     }
+    // A run that drew no claim says so in its answer ("No claim could be drawn ..."): that is a report on the search, not about the
+    // subject, and a page built from it says nothing true about the subject (the live proof, 2026-11-27).
+    out.retain(|s| !s.text.trim_start().starts_with(NO_CLAIM));
     out
 }
+
+/// How a research answer that drew no claim begins (`research_run.rs`, `research_empty::answer`).
+pub const NO_CLAIM: &str = "No claim could be drawn";
 
 /// The source ids and page addresses the followed topics' records read.
 fn read_by(fs: &[Followed]) -> (BTreeSet<String>, BTreeSet<String>) {
@@ -876,6 +882,23 @@ mod tests {
             }
         }
         s
+    }
+
+    /// The live proof (2026-11-27): a research run that drew no claim answers "No claim could be drawn ...". That is a report on the
+    /// search, not about the subject, and the seed leaves it out; a run with a real answer keeps it.
+    #[test]
+    fn an_answer_that_drew_no_claim_is_not_a_span_of_the_seed() {
+        let home = tempfile::tempdir().unwrap();
+        let ws = home.path().join("workspaces/w");
+        std::fs::create_dir_all(ws.join("local")).unwrap();
+        research(&ws, "Why do estuary tides lag?", "r-1", "No claim could be drawn: 3 page(s) were read and none stated an answer. (not validated)", &[]);
+        let lib = Library::in_home(home.path());
+        let slug = lib.topics_from_research(&ws, 1).remove(0);
+        let seed = assemble(&lib, home.path(), &ws, &lib.topic_side(&slug).unwrap(), &none());
+        assert!(seed.spans.iter().all(|s| !s.text.contains("No claim could be drawn")), "{:?}", seed.spans);
+        research(&ws, "Why do estuary tides lag?", "r-2", "Estuary tides lag because the channel is shallow.", &[]);
+        let seed = assemble(&lib, home.path(), &ws, &lib.topic_side(&slug).unwrap(), &none());
+        assert!(seed.spans.iter().any(|s| s.row == Row::Answer && s.text.contains("channel is shallow")), "{:?}", seed.spans);
     }
 
     /// AC-1: the whole of a 6,000-character answer is in the seed as spans, in file order, before any span search found.
