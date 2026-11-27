@@ -249,11 +249,20 @@ pub struct Limits {
     /// pictures; zero keeps none.
     pub pictures_per_source: usize,
     pub pictures_per_run: usize,
+    /// How long the scout's planning call may take, in milliseconds, before the run falls back to the fixed plan (`specs/114` §4
+    /// items 1 and 2) and its tally says `plan_timed_out`. The plan is made before any query is sent, so a slow single-turn model
+    /// held a whole run, and a host's turn waiting for its queries, for minutes (142 s with a local 9B model, 2026-11-27). Not a
+    /// config key: [`PLAN_DEADLINE_MS`] for every caller; a test shortens it.
+    pub plan_ms: u64,
 }
+
+/// The default of [`Limits::plan_ms`]: 30 seconds. A plan is one short structured answer (three to five sub-questions); a model
+/// that has not given one by then is not going to make the run better by being waited for.
+pub const PLAN_DEADLINE_MS: u64 = 30_000;
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { pages: [3, 6, 10], steps: [Depth::Quick.max_steps(), Depth::Survey.max_steps(), Depth::Deep.max_steps()], job_secs: 600, concurrent: 2, page_chars: 24_000, depth: Depth::Survey, pictures_per_source: 6, pictures_per_run: 24 }
+        Limits { pages: [3, 6, 10], steps: [Depth::Quick.max_steps(), Depth::Survey.max_steps(), Depth::Deep.max_steps()], job_secs: 600, concurrent: 2, page_chars: 24_000, depth: Depth::Survey, pictures_per_source: 6, pictures_per_run: 24, plan_ms: PLAN_DEADLINE_MS }
     }
 }
 
@@ -1508,6 +1517,8 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     // those as its plan. Otherwise one call as the scout, given the question and the `known` list and no page text, returns three
     // to five sub-questions; a call that fails or returns nothing usable leaves the fixed plan, and the record says so. A continued
     // run with no open sub-question plans as before, and a question whose every query is withheld sends nothing, so neither asks.
+    // The call has a deadline (`Limits::plan_ms`): one that does not return in time is dropped and the fixed plan is used, exactly as
+    // for a failed call, with its own word in the tally.
     let open: Vec<SubQuestion> = deps.resume.map(|r| r.open.iter().filter(|t| !t.trim().is_empty()).take(crate::research_method::MAX_SUBS).enumerate().map(|(i, text)| SubQuestion { n: i + 1, text: text.trim().to_string(), status: SubStatus::Open, queries: Vec::new() }).collect()).unwrap_or_default();
     let mut tally = Tally::default();
     let (plan_kind, subs): (PlanKind, Vec<SubQuestion>) = if !open.is_empty() {
@@ -1515,10 +1526,14 @@ pub async fn run_research(ctx: &JobCtx, question: &str, depth: Depth, deps: &Dep
     } else if deps.resume.is_some() || planned.queries.is_empty() {
         (PlanKind::Fixed, Vec::new())
     } else {
-        match deps.scout.plan(question, &known).await {
-            Ok(subs) if subs.len() >= crate::research_method::MIN_SUBS => (PlanKind::Scout, subs),
+        match tokio::time::timeout(std::time::Duration::from_millis(deps.limits.plan_ms), deps.scout.plan(question, &known)).await {
+            Err(_) => {
+                tally.plan = Some("plan_timed_out");
+                (PlanKind::Fixed, Vec::new())
+            }
+            Ok(Ok(subs)) if subs.len() >= crate::research_method::MIN_SUBS => (PlanKind::Scout, subs),
             // Why the plan is the fixed one is kept as a fixed word, for a run that ends with no claim (`specs/124` S11).
-            Err(e) if e == crate::research_empty::NO_SCOUT_MODEL => {
+            Ok(Err(e)) if e == crate::research_empty::NO_SCOUT_MODEL => {
                 tally.plan = Some("plan_no_model_seat");
                 (PlanKind::Fixed, Vec::new())
             }
@@ -1963,7 +1978,8 @@ mod tests {
         /// Every answer call's input, as the contract the live scout would build from it, and whether it was the rewrite.
         asks: Mutex<Vec<(String, bool)>>,
         /// The error every plan call and every page-reading call returns, when the scout cannot be called at all.
-        down: Option<&'static str>,
+        down: Option<&'static str>,        /// The plan call never returns, as a slow single-turn model that has not answered yet.
+        plan_hangs: bool,
     }
 
     impl FakeScout {
@@ -1976,6 +1992,9 @@ mod tests {
         fn plan<'a>(&'a self, question: &'a str, known: &'a Known) -> BoxFut<'a, Result<Vec<SubQuestion>, String>> {
             Box::pin(async move {
                 self.1.plan_calls.lock().unwrap().push((question.to_string(), known.clone()));
+                if self.1.plan_hangs {
+                    std::future::pending::<()>().await;
+                }
                 if let Some(e) = self.1.down {
                     return Err(e.to_string());
                 }
@@ -4023,6 +4042,33 @@ mod tests {
         assert!(!e.to_string().contains("example") && !e.to_string().contains("who.int"), "no address is in the field: {e}");
         assert_eq!(v["synthesis"]["by"], "none");
         assert_balanced(&v);
+    }
+
+    /// `specs/114` §4 items 1 and 2, with a deadline (found live 2026-11-27: a host-searched run waited 142 s on a local model's plan
+    /// and handed the host no query). A scout whose plan call never returns gives the fixed plan once the deadline passes, the host
+    /// is handed the fixed plan's queries, and a run that then keeps no claim says the plan timed out.
+    #[tokio::test]
+    async fn a_plan_call_that_never_returns_gives_the_fixed_plan_at_the_deadline_and_the_host_gets_its_queries() {
+        let mut f = host_fixture(false, 5_000);
+        f.scout.1.plan_hangs = true;
+        f.limits.plan_ms = 100;
+        f.web.gone = BTreeSet::from(["https://who.int/gone".to_string()]);
+        let c = Arc::new(ctx(Depth::Survey));
+        let host = scripted_host(c.clone(), vec![row("https://who.int/gone")], false);
+        let run = tokio::time::timeout(Duration::from_secs(10), run_research(&c, "does aspirin reduce fever", Depth::Survey, &f.deps())).await;
+        let (_, v) = value(run.expect("the run waited on the plan past its deadline").unwrap());
+        let asked = tokio::time::timeout(Duration::from_secs(5), host).await.expect("the host was never handed a query").unwrap();
+        assert_eq!(f.scout.1.plan_calls.lock().unwrap().len(), 1, "the plan was asked for once");
+        assert_eq!(v["plan"].as_str(), Some("fixed"), "{v}");
+        assert!(!asked.is_empty(), "the host was handed the fixed plan's queries");
+        assert_eq!(v["empty"]["causes"].as_array().unwrap().last().unwrap()["reason"], "plan_timed_out", "{}", v["empty"]);
+        assert!(v["empty"]["text"].as_str().unwrap().contains("the scout's plan call did not return in time"), "{}", v["empty"]);
+    }
+
+    /// The deadline is the one limits table's: thirty seconds unless a caller shortens it.
+    #[test]
+    fn the_plan_deadline_defaults_to_thirty_seconds() {
+        assert_eq!((Limits::default().plan_ms, PLAN_DEADLINE_MS), (30_000, 30_000));
     }
 
     /// `specs/124` S11, the daemon runs of observation O-2: with no model to serve the scout the plan is the fixed one and no

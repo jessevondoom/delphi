@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 pub const NO_SCOUT_MODEL: &str = "no model is available for the scout right now";
 
 /// Every word `empty.reason` and `empty.causes[].reason` can be, from the step nearest a claim to the one furthest from it.
-pub const REASONS: [&str; 21] = [
+pub const REASONS: [&str; 22] = [
     "claims_not_stored",
     "no_model_seat",
     "scout_call_failed",
@@ -35,12 +35,14 @@ pub const REASONS: [&str; 21] = [
     "no_local_sources",
     "plan_no_model_seat",
     "plan_unusable",
+    "plan_timed_out",
 ];
 
 /// What a run counts as it goes, for the case that it ends with no claim.
 #[derive(Debug, Default, Clone)]
 pub struct Tally {
-    /// Why the plan is the fixed one, when the scout's plan call was made and gave no plan: `plan_no_model_seat` or `plan_unusable`.
+    /// Why the plan is the fixed one, when the scout's plan call was made and gave no plan: `plan_no_model_seat`, `plan_unusable`, or
+    /// `plan_timed_out` (the call did not return within the plan deadline, [`crate::research_run::Limits::plan_ms`]).
     pub plan: Option<&'static str>,
     /// Claims the scout drew that the library kept no record of, so none has an id to cite.
     pub not_stored: usize,
@@ -184,6 +186,7 @@ fn says(c: &Value, t: &Tally, e: &Ended) -> String {
         "no_local_sources" => "no query was sent and Delphi holds no source on the trusted list for the question".to_string(),
         "plan_no_model_seat" => "no model could serve the scout to plan sub-questions, so the run used the fixed plan (the question itself, not sub-questions)".to_string(),
         "plan_unusable" => "the scout's plan call failed or gave no usable plan, so the run used the fixed plan (the question itself, not sub-questions)".to_string(),
+        "plan_timed_out" => "the scout's plan call did not return in time, so the run used the fixed plan (the question itself, not sub-questions)".to_string(),
         _ => String::new(),
     }
 }
@@ -194,7 +197,7 @@ fn next_for(reason: &str) -> &'static str {
         "claims_not_stored" => "Rerun the request; if the library again keeps no record of the claims, ask the operator to run delphi doctor.",
         "leads_unread" => "Read the addresses in host_leads with your own tool and hand over what you find with record_research.",
         "no_model_seat" | "plan_no_model_seat" => "Rerun when a model can serve the scout, or read the sources yourself and hand over what you find with record_research.",
-        "scout_call_failed" | "plan_unusable" => "Rerun the request; if it fails again, read the sources yourself and hand over what you find with record_research.",
+        "scout_call_failed" | "plan_unusable" | "plan_timed_out" => "Rerun the request; if it fails again, read the sources yourself and hand over what you find with record_research.",
         "no_claims_on_pages" => "Ask a narrower question, or read the pages yourself and hand over what you find with record_research.",
         "pages_refused" => "Name other sources, or ask the operator whether these sources belong on the trusted list.",
         "trusted_fetch_failed" | "fetch_failed" => "Read those pages with your own tool and hand over what you find with record_research, or rerun later.",
