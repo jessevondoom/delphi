@@ -494,6 +494,7 @@
         "org_domains": { "type": "array", "items": { "type": "string" }, "default": [], "description": "The organisation's mail domains (example.com). A message or meeting whose every address is on one is also internal." },
         "list_addresses": { "type": "array", "items": { "type": "string" }, "default": [], "description": "List addresses: an email sent to one is internal and not private." },
         "company_wide_recipients": { "type": "integer", "minimum": 1, "default": 10, "description": "An email to more than this many recipients is company-wide: internal, not private." },
+        "internal_remotes": { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 400, "pattern": "^\\S+$" }, "default": [], "description": "The git remotes an internal file may be pushed to (specs/141 section 2.4, the repository row): by `delphi handling check --remote` and the daemon's push, labelled with its `> Handling:` line and after the operator confirms. Compared whole, after a trailing / and .git are dropped; no prefix or pattern. Empty: an internal file is refused at every remote. Private, confidential and private (library) are refused at every remote whatever this says." },
         "path": {
           "type": "array",
           "maxItems": 200,

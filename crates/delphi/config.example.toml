@@ -279,6 +279,7 @@ sandbox = "off"
 # org_domains = ["example.com"]
 # list_addresses = ["all@example.com"]
 # company_wide_recipients = 10
+# internal_remotes = ["https://git.example.com/team/notes.git"]  # remotes an internal file may be pushed to, labelled and confirmed (specs/141); compared whole, without a trailing / or .git; empty: refused everywhere
 # [[handling.path]]
 # kind = "wiki"                        # a connector or import kind: email, dm, slack, wiki, private-doc, meeting, file, web, import, ...
 # under = "https://wiki.example.com/hr/"  # optional: the start of the locator (a folder, channel, space, address); the longest match wins

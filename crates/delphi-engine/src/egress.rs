@@ -348,9 +348,11 @@ pub const SINKS: [(Sink, SinkWired); 12] = [
     (Sink::Xenia, SinkWired::Yes { senders: &["delphi-engine/src/service_xenia.rs", "delphi/src/xenia_cmd.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_xenia_follows_its_row") }),
     (Sink::SeedExport, SinkWired::Yes { senders: &["delphi-engine/src/kb.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_seed_export_writes_no_labelled_vector") }),
     (Sink::RemoteServe, SinkWired::Yes { senders: &["delphi-engine/src/kbserve.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_remote_serve_returns_no_labelled_document") }),
-    (Sink::Repository { internal_remote: false }, SinkWired::Later { slice: "D" }),
-    (Sink::Repository { internal_remote: true }, SinkWired::Later { slice: "D" }),
-    (Sink::Outbound, SinkWired::Later { slice: "D" }),
+    // the daemon's push (`Worktree::push_check`) and `delphi handling check` (the pre-push hook) both run `worktree::repository_check`
+    (Sink::Repository { internal_remote: false }, SinkWired::Yes { senders: &["delphi-engine/src/worktree.rs"], proof: ("delphi-engine/src/egress_sink_d_tests.rs", "sink_repository_check_follows_its_row") }),
+    (Sink::Repository { internal_remote: true }, SinkWired::Yes { senders: &["delphi-engine/src/worktree.rs"], proof: ("delphi-engine/src/egress_sink_d_tests.rs", "sink_repository_check_follows_its_row") }),
+    // every outbound send is already a card the operator answers; the card names the marks of what the task was given (§2.4 item 5)
+    (Sink::Outbound, SinkWired::Yes { senders: &["delphi-engine/src/harness_run.rs", "delphi-engine/src/connector_run.rs"], proof: ("delphi-engine/src/harness_run.rs", "sink_outbound_card_names_the_marks") }),
 ];
 
 /// What a command of the desktop app (`app/src-tauri/src/lib.rs`, `generate_handler!`) does with entry text (`specs/141` §2.4 item 8).
@@ -423,6 +425,10 @@ mod xenia_file_tests;
 #[cfg(test)]
 #[path = "egress_sink_tests.rs"]
 mod sink_tests;
+
+#[cfg(test)]
+#[path = "egress_sink_d_tests.rs"]
+pub(crate) mod sink_d_tests;
 
 #[cfg(test)]
 mod tests {

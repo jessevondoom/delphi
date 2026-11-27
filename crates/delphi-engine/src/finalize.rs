@@ -318,7 +318,28 @@ impl Engine {
         let verb = if pr_mode { "pull_request" } else { "merge" };
         let mut payload = payload;
         payload["tool"] = json!(verb);
-        let summary = format!("{} {} ({} file(s), +{} -{}){}", if pr_mode { "push the branch and open a pull request for" } else { "merge" }, &sha[..sha.len().min(8)], diff.files.len(), diff.added(), diff.removed(), if diff.host_exec().is_empty() { "" } else { " — touches host-executed files" });
+        let mut summary = format!("{} {} ({} file(s), +{} -{}){}", if pr_mode { "push the branch and open a pull request for" } else { "merge" }, &sha[..sha.len().min(8)], diff.files.len(), diff.added(), diff.removed(), if diff.host_exec().is_empty() { "" } else { " — touches host-executed files" });
+        // `specs/141` §2.4 item 6 (slice D): the push is the repository sink. Its range is checked before the card: a refusal asks
+        // nothing and names the files and the marks; a labelled push (`internal` to a remote on `[handling] internal_remotes`) puts the
+        // label's line on the card, and the push goes ahead only if the card it is answered on showed that same line.
+        let mut guard = crate::worktree::PushGuard { home: self.ws.home.clone(), ws: Some(self.ws.dir.clone()), card_line: None };
+        if pr_mode {
+            let (w, g) = (wt.clone(), guard.clone());
+            let pre = tokio::task::spawn_blocking(move || w.push_check(&g)).await.map_err(|e| EngineError::Invalid(e.to_string()))?;
+            match pre {
+                Ok(Err(why)) => return Ok(BuildOutcome::MergeRefused { report, why: format!("the branch {why}; nothing was pushed") }),
+                Ok(Ok(sent)) => {
+                    let line = sent.line();
+                    if !line.is_empty() {
+                        payload["handling"] = json!({"line": line, "marks": sent.label.names(), "decision": sent.decision.kind.as_str()});
+                        summary = format!("{summary} — {line}");
+                        guard.card_line = Some(line);
+                    }
+                }
+                // git could not read the range: the push itself reports it, after the card, as before
+                Err(_) => {}
+            }
+        }
         let who = Asker { m, task_id, span_id: "merge", role: "orchestrator" };
         if self.ask_as(&who, ApprovalTier::Red, verb, &format!("{} {}", verb, sha), &summary, &payload).await?.is_some() {
             return Ok(BuildOutcome::Declined(report));
@@ -349,11 +370,11 @@ impl Engine {
         e.task_id = Some(task_id.to_string());
         m.append(e).await?;
         let (ok, detail, result) = if pr_mode {
-            let (w, s2, gh, home) = (wt.clone(), sha.clone(), self.settings.gh_program.clone(), self.ws.home.clone());
+            let (w, s2, gh, guard) = (wt.clone(), sha.clone(), self.settings.gh_program.clone(), guard.clone());
             let spec = events_for(m, task_id, "worktree.created")?.last().and_then(|e| e.payload["implements_spec"].as_str().map(String::from));
             let title = format!("Delphi build {}{}", task_id, spec_title(spec.as_deref()));
             let body = pr_body(&report, &diff, &wt.branch);
-            let run = tokio::task::spawn_blocking(move || w.open_pr(&s2, &title, &body, &gh, Some(&home))).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string()));
+            let run = tokio::task::spawn_blocking(move || w.open_pr(&s2, &title, &body, &gh, Some(&guard))).await.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string()));
             let outcome = match run {
                 Ok(o) => o,
                 Err(why) => return Err(record_failure(m, task_id, &action, why).await),
