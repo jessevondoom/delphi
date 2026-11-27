@@ -41,7 +41,7 @@ impl Engine {
         let now = self.now();
         let (read, stamps) = {
             let mut idx = sc.m.index.lock().unwrap();
-            let mut ctx = tools::ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &sc.m.id, now_rfc3339: &now, stamps: vec![], events: vec![] };
+            let mut ctx = tools::ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &sc.m.id, now_rfc3339: &now, stamps: vec![], events: vec![], held_by_default: crate::retrieval::held_by_default(&sc.role, &sc.manifest.write, &sc.manifest.execute) };
             let r = tools::read_pointer(&mut ctx, path);
             (r, std::mem::take(&mut ctx.stamps))
         };

@@ -331,8 +331,65 @@ fn a_span_given_held_text_cannot_promote() {
         assert!(gate_write(p, span.ceiling()).is_err(), "{p}");
     }
     assert_ne!(gate(span.ceiling(), Action::Outbound), Gate::Allow);
-    let trusted = kb.search("held sentence tides", &crate::kb::SearchOpts::default()).unwrap();
-    assert!(!trusted.iter().any(|h| h.rel_path == f.rel_path), "a search that asks for nothing untrusted is not given it");
+    // The operator's rulings of 2026-11-27: a search that asks for nothing untrusted is not given it, one that asks for held text is,
+    // labelled, at the same tier.
+    let plain = kb.search("held sentence tides", &crate::kb::SearchOpts::default()).unwrap();
+    assert!(!plain.iter().any(|h| h.rel_path == f.rel_path), "a search that asks for nothing untrusted is not given it");
+    let asked = kb.search("held sentence tides", &crate::kb::SearchOpts { include_held: true, ..Default::default() }).unwrap();
+    let hit = asked.iter().find(|h| h.rel_path == f.rel_path).expect("a search that asks for held text is given it");
+    assert_eq!((hit.label, hit.source_type.as_str()), (crate::kb::HELD_LABEL, "external_untrusted"));
+}
+
+/// The operator's rulings of 2026-11-27 (they reverse slice B's builder decision 1): a role that does not act (here the scout) is
+/// given a held source's passage by its default search and its span's start, labelled held text, untrusted and not validated; a
+/// role that acts (the builder) is not, unless it asks with `include_held`. Its taint is unchanged: the span that is given it starts
+/// at `external_untrusted` (L0). A private source is never returned to anyone, and what may leave the machine is unchanged.
+#[test]
+fn a_role_that_does_not_act_is_given_held_text_by_default_and_a_builder_only_when_it_asks() {
+    use delphi_core::provenance::Tier;
+    let home = tempfile::tempdir().unwrap();
+    let (lib, id, stored) = held_lib(home.path());
+    let private = home.path().join("private.md");
+    std::fs::write(&private, "Held sentence of the tides, a private copy of the tides survey.\n").unwrap();
+    let p = lib.add_file(&private, &AddOpts { private: true, level: Some(crate::library::Level::Full), licence: Some("all-rights-reserved".into()), ..Default::default() }, &Budgets::default()).unwrap();
+    let ws = home.path().join("workspaces/w");
+    std::fs::create_dir_all(ws.join("local")).unwrap();
+    let db = ws.join("local/state.db");
+    {
+        let mut kb = crate::kb::Kb::open(&db).unwrap();
+        kb.sync_lexical(&crate::kb::sources(&ws), "2026-11-27T00:00:00Z").unwrap();
+    }
+    let held = format!("library/sources/{id}/source.md");
+    let strs = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let scout = crate::retrieval::held_by_default("scout", &strs(&["missions/**/research/**", "context/domains/**"]), &strs(&["repo-mapper", "web-search", "dependency-auditor"]));
+    let builder = crate::retrieval::held_by_default("builder", &strs(&["@worktree/**"]), &strs(&["shell-worktree-scoped", "test-runner", "git-worktree", "cli-harness-delegate"]));
+    assert!(scout && !builder);
+    let ask = |role: &str, include_held: bool| crate::retrieval::search(home.path(), &db, "held sentence tides", crate::kb::SearchOpts { role: Some(role.into()), include_held, ..Default::default() }).unwrap().hits;
+    // The scout's default search, as `kb_search` asks for it.
+    let r = ask("scout", scout);
+    let hit = r.iter().find(|h| h.rel_path == held).expect("a role that does not act is given the held passage");
+    assert_eq!((hit.shown_label().as_str(), hit.source_type.as_str()), (crate::kb::HELD_LABEL, "external_untrusted"));
+    assert_eq!(crate::retrieval::tier_of(&hit.source_type), Tier::L0, "its taint is unchanged");
+    // The builder's default search: not given it. Asked for, it is.
+    assert!(!ask("builder", builder).iter().any(|h| h.rel_path == held), "a builder's default search is not given held text");
+    assert!(ask("builder", true).iter().any(|h| h.rel_path == held && h.label == crate::kb::HELD_LABEL), "a builder that asks is given it");
+    for role in ["scout", "builder"] {
+        for include_held in [false, true] {
+            assert!(!ask(role, include_held).iter().any(|h| h.rel_path.contains(&p.id)), "a private source is never returned");
+        }
+    }
+    // A span's start passages: the scout's carry it, labelled, and start at L0; the builder's do not.
+    let budget = |held: bool| crate::retrieval::StartBudget { held, ..Default::default() };
+    let start = crate::retrieval::span_start(home.path(), &db, "m-held", "Summarise the held sentence of the tides", "scout", budget(scout), false).expect("passages");
+    let line = start.text.lines().find(|l| l.starts_with(&format!("- {held}#"))).unwrap_or_else(|| panic!("a held passage starts the span: {}", start.text));
+    assert!(line.contains(&format!(" [{}]: ", crate::kb::HELD_LABEL)), "{line}");
+    assert_eq!(start.tier, Tier::L0, "the span is tainted by the held passage as before");
+    assert!(!start.text.contains(&p.id) && !start.text.contains("private copy"), "a private source never starts a span");
+    let built = crate::retrieval::span_start(home.path(), &db, "m-held", "Summarise the held sentence of the tides", "builder", budget(builder), false);
+    assert!(built.as_ref().is_none_or(|s| !s.text.contains(&held)), "a builder's span does not start with held text");
+    // Nothing about leaving changed: the passage the span was given is held text, and a whole run of it may not leave.
+    assert!(!body_may_leave(&stored, &take(&stored, 0, 400)));
+    assert!(crate::library::is_held(&lib.read_meta(&id).unwrap()));
 }
 
 // ---- the inventory (AC-9) -------------------------------------------------------------------------------------------------------

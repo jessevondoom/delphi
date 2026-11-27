@@ -107,7 +107,7 @@ mod tests {
         let r = std::path::Path::new("/nonexistent");
         let guard = Guard { zones: Zones { local: r.join("l"), team: r.join("t"), base: r.join("b"), ratified: r.join("r"), worktree: None, projects: vec![], bundles: vec![], payload: None }, role: role.into(), read_globs: vec![], write_globs: vec![], protected: HashSet::new() };
         let (mut span, mut index, rules) = (Span::root("s"), Index::new(), OriginRules::with_defaults());
-        let mut ctx = ToolCtx { guard: &guard, span: &mut span, index: &mut index, rules: &rules, probe: &AssumeClean, role, mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![] };
+        let mut ctx = ToolCtx { guard: &guard, span: &mut span, index: &mut index, rules: &rules, probe: &AssumeClean, role, mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![], held_by_default: false };
         let res = Registry::builtin().with_validator(ValidatorMode::Advisory).run(&mut ctx, tool, &args);
         (res, ctx.events)
     }

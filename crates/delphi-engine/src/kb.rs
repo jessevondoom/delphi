@@ -348,6 +348,24 @@ pub struct BundleTag {
 
 const UNTRUSTED: &str = "external_untrusted";
 
+/// The label of a held source's passage (`specs/142` §2.5 item 3): web text kept whole for local reading, untrusted and not validated.
+pub const HELD_LABEL: &str = "held text · untrusted · not validated";
+
+/// The SQL condition (over a `kb_documents` row) for a held source's text: a library `source.md` indexed at `external_untrusted`,
+/// which `library_files` does for a held source only (every other library text is at the research tier; a summary is `summary.md`).
+/// The operator's rulings of 2026-11-27: every configured model route may see the whole knowledge base, so a search that asks for
+/// nothing else untrusted returns it when it asks for held text ([`SearchOpts::include_held`]: by default for a role that does not
+/// act, on opt-in for one that does), labelled [`HELD_LABEL`]. Its tier is unchanged, so a span that reads it is tainted as before,
+/// and what may leave the machine is still decided by `held_text::body_may_leave` at every exit.
+fn held_sql(t: &str) -> String {
+    format!("({t}zone = 'library' AND {t}source_type = 'external_untrusted' AND {t}rel_path LIKE 'library/sources/%/source.md')")
+}
+
+/// [`held_sql`] for one row.
+fn held_row(zone: &str, source_type: &str, rel_path: &str) -> bool {
+    zone == "library" && source_type == UNTRUSTED && rel_path.strip_prefix("library/sources/").and_then(|r| r.strip_suffix("/source.md")).is_some_and(|id| !id.is_empty())
+}
+
 /// The exact machine label of an imported summary page (`specs/068` §6.3); MCP and CLI output carry it unsoftened.
 pub const SUMMARY_LABEL: &str = "summary · operator-imported · external_unvalidated";
 /// A fixed share of the fused score a stale bundle's result keeps (`specs/024` §4.6): lower, never hidden.
@@ -768,7 +786,7 @@ impl Kb {
                 if let Some(blobs) = carried.get(&embed::vectors::key(&pieces)).filter(|b| b.len() == pieces.len()) {
                     tx.execute("INSERT INTO kb_chunk_vec(chunk_id, windows) VALUES (?1, ?2)", params![chunk_id, blobs.len() as i64])?;
                     for (w, blob) in blobs.iter().enumerate() {
-                        tx.execute("INSERT INTO kb_vec(rowid, trusted, scope, embedding) VALUES (?1, ?2, ?3, ?4)", params![chunk_id * VEC_STRIDE + w as i64, trusted(&source_type, &status) as i64, vec_scope(zone, rel_path), blob])?;
+                        tx.execute("INSERT INTO kb_vec(rowid, trusted, scope, embedding) VALUES (?1, ?2, ?3, ?4)", params![chunk_id * VEC_STRIDE + w as i64, vec_trust(&source_type, &status, zone, rel_path), vec_scope(zone, rel_path), blob])?;
                     }
                 }
             }
@@ -1156,8 +1174,11 @@ fn drop_vectors(conn: &Connection, doc_id: Option<i64>) -> Result<(), KbError> {
     Ok(())
 }
 
-/// The version of the vector scopes ([`vec_scope`]). 2: a project's research has a scope of its own (`specs/115` §3 item 7).
-const VEC_SCOPE_VERSION: &str = "2";
+/// The version of the vector scopes ([`vec_scope`]) and flags. 2: a project's research has a scope of its own (`specs/115` §3 item 7).
+/// 3: a held source's vectors carry their own `trusted` value, so a search that asks for held text and nothing else untrusted can
+/// take them as candidates ([`vec_trust`], the operator's rulings of 2026-11-27); an index at 2 drops only those, so they are stored
+/// again with the new value.
+const VEC_SCOPE_VERSION: &str = "3";
 
 /// Once per index: the vectors of project research that were stored under the project's one scope are dropped, so the next
 /// embedding pass stores them again under the research scope (their chunks become pending; nothing else is touched and no text
@@ -1171,7 +1192,12 @@ fn rescope_project_research(conn: &Connection) -> Result<(), KbError> {
     let tx = conn.unchecked_transaction()?;
     if has_vec(&tx) {
         let docs: Vec<i64> = {
-            let mut st = tx.prepare("SELECT doc_id FROM kb_documents WHERE (zone = 'project' AND rel_path LIKE 'projects/%/files/research/%') OR (zone = 'research' AND rel_path LIKE 'research/projects/%')")?;
+            let sql = if at.as_deref() == Some("2") {
+                format!("SELECT doc_id FROM kb_documents WHERE {}", held_sql(""))
+            } else {
+                format!("SELECT doc_id FROM kb_documents WHERE (zone = 'project' AND rel_path LIKE 'projects/%/files/research/%') OR (zone = 'research' AND rel_path LIKE 'research/projects/%') OR {}", held_sql(""))
+            };
+            let mut st = tx.prepare(&sql)?;
             let rows = st.query_map([], |r| r.get::<_, i64>(0))?;
             rows.flatten().collect()
         };
@@ -1257,6 +1283,22 @@ fn trusted(source_type: &str, status: &str) -> bool {
     status == "active" && !matches!(source_type, "external_untrusted" | "federated_peer")
 }
 
+/// The `trusted` value of a vector, which lets a nearest-neighbour search skip what it could never return: 1 for trusted text, 2 for a
+/// held source's text ([`held_sql`], a candidate only for a search with `include_held`), 0 for the rest. The authoritative check is
+/// still [`allowed_sql`].
+fn vec_trust(source_type: &str, status: &str, zone: &str, rel_path: &str) -> i64 {
+    if trusted(source_type, status) {
+        1
+    } else if status == "active" && held_row(zone, source_type, rel_path) {
+        VEC_HELD
+    } else {
+        0
+    }
+}
+
+/// [`vec_trust`] of a held source's vector.
+const VEC_HELD: i64 = 2;
+
 /// What the model reads for a window of a chunk: where it is, then the text.
 fn embed_text(rel_path: &str, heading_path: &str, piece: &str) -> String {
     if heading_path.is_empty() {
@@ -1284,10 +1326,13 @@ fn allowed_sql(opts: &SearchOpts) -> String {
     // A quarantined fact (`specs/040` §15.2) is out of search for everyone, the operator's view included.
     let mut allowed = String::from("d.status != 'quarantined'");
     if !opts.include_untrusted {
+        // A held source's text is the one untrusted text this view admits, and only when it is asked for (`include_held`); it is
+        // labelled as what it is.
+        let held = if opts.include_held { format!(" OR {}", held_sql("d.")) } else { String::new() };
         if opts.include_episodes {
-            allowed.push_str(" AND d.status = 'active' AND (d.zone = 'episodes' OR d.source_type NOT IN ('external_untrusted', 'federated_peer'))");
+            allowed.push_str(&format!(" AND d.status = 'active' AND (d.zone = 'episodes' OR d.source_type NOT IN ('external_untrusted', 'federated_peer'){held})"));
         } else {
-            allowed.push_str(" AND d.status = 'active' AND d.source_type NOT IN ('external_untrusted', 'federated_peer')");
+            allowed.push_str(&format!(" AND d.status = 'active' AND (d.source_type NOT IN ('external_untrusted', 'federated_peer'){held})"));
         }
     }
     // An attribution ("SOURCE states X") is not a fact: it is invisible to search, listing and reading, whatever else
@@ -1588,7 +1633,7 @@ impl Kb {
         loop {
             struct Pending {
                 id: i64,
-                trusted: bool,
+                trusted: i64,
                 scope: String,
                 pieces: Vec<String>,
             }
@@ -1600,7 +1645,7 @@ impl Kb {
                 rows.flatten()
                     .map(|(id, path, heading, raw, src, status, zone)| Pending {
                         id,
-                        trusted: trusted(&src, &status),
+                        trusted: vec_trust(&src, &status, &zone, &path),
                         scope: vec_scope(&zone, &path),
                         pieces: embed::windows(&raw, WINDOW_CHARS, VEC_STRIDE as usize).into_iter().map(|p| embed_text(&path, &heading, &p)).collect(),
                     })
@@ -1626,7 +1671,7 @@ impl Kb {
                 let claimed = tx.execute("INSERT OR IGNORE INTO kb_chunk_vec(chunk_id, windows) SELECT chunk_id, ?2 FROM kb_chunks WHERE chunk_id = ?1", params![p.id, mine.len() as i64])?;
                 if claimed == 1 {
                     for (w, v) in mine.iter().enumerate() {
-                        tx.execute("INSERT INTO kb_vec(rowid, trusted, scope, embedding) VALUES (?1, ?2, ?3, ?4)", params![p.id * VEC_STRIDE + w as i64, p.trusted as i64, p.scope, embed::blob(v)])?;
+                        tx.execute("INSERT INTO kb_vec(rowid, trusted, scope, embedding) VALUES (?1, ?2, ?3, ?4)", params![p.id * VEC_STRIDE + w as i64, p.trusted, p.scope, embed::blob(v)])?;
                     }
                 }
             }
@@ -1694,7 +1739,8 @@ impl Kb {
         let Ok(q) = embedded else { return Ok(vec![]) };
         let mut sql = format!("SELECT rowid, distance FROM kb_vec WHERE embedding MATCH ?1 AND k = {}", VEC_CANDIDATES);
         if !opts.include_untrusted {
-            sql.push_str(" AND trusted = 1");
+            // A held source's vectors are candidates only when held text is asked for (`vec_trust`).
+            sql.push_str(if opts.include_held { " AND trusted >= 1" } else { " AND trusted = 1" });
         }
         // `specs/115` §3 item 7: the project filter is applied BEFORE the nearest candidates are taken, wherever the scopes a visible
         // row can have are known, so a large project (or a large home layer) cannot crowd a small project's research out of them.
@@ -1735,6 +1781,10 @@ pub struct SearchOpts {
     pub cap: usize,
     /// Include documents whose provenance is untrusted or federated-peer, and inactive ones.
     pub include_untrusted: bool,
+    /// Include a held source's text (`held_sql`) where nothing else untrusted is asked for (`specs/142` §2.5 item 3, the operator's
+    /// rulings of 2026-11-27): on by default for a role that does not act (`retrieval::held_by_default`), and an explicit opt-in for
+    /// one that does, since the span that reads it is tainted and loses its mutating and outbound tools (GOVERNANCE §4.3).
+    pub include_held: bool,
     /// Include `kind: attributed` records, which are otherwise never returned (`specs/040` §24.3).
     pub include_attributed: bool,
     /// Which rankings take part. Everything by default; the recall eval compares them.
@@ -1954,7 +2004,7 @@ pub enum Legs {
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        SearchOpts { role: None, limit: 10, cap: SEARCH_CAP, include_untrusted: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None, provisional: ProvisionalView::Off, automatic: false, ranking: Ranking::default() }
+        SearchOpts { role: None, limit: 10, cap: SEARCH_CAP, include_untrusted: false, include_held: false, include_attributed: false, legs: Legs::Hybrid, vec_weight: VEC_WEIGHT, natural_lex_weight: NATURAL_LEX_WEIGHT, loose_weight: LOOSE_WEIGHT, rerank_weight: RERANK_WEIGHT, rerank_top: RERANK_TOP, rerank_windows: RERANK_WINDOWS, rerank_chars: RERANK_CHARS, rerank_floor: None, bundle: None, no_bundles: false, include_staged: false, include_episodes: false, about: false, kinds: None, max_episodes: None, today: None, xenia: XeniaView::Off, zones: None, summary_target: SummaryTarget::Bibliography, paths: None, project: None, source_types: None, exclude_paths: None, findings: FindingsView::All, shared: None, provisional: ProvisionalView::Off, automatic: false, ranking: Ranking::default() }
     }
 }
 
@@ -2411,6 +2461,9 @@ impl Kb {
                 "release reference, not build authority"
             } else if zone == "summaries" {
                 SUMMARY_LABEL
+            } else if held_row(&zone, &tier_name, &rel_path) {
+                // A held source says what it is (`specs/142` §2.5 item 3, the operator's ruling of 2026-11-27).
+                HELD_LABEL
             } else if zone == crate::finding_record::ZONE && ks == delphi_core::knowledge_status::Status::Noted {
                 // A finding says what it is (`specs/116` §5.2); one that was superseded keeps the status's own word.
                 crate::finding_record::label_for(&tier_name)
@@ -4029,6 +4082,41 @@ mod tests {
         assert_eq!(kb.embed_pending(&mut |_, _| {}).unwrap(), 1, "the next pass embeds it again");
         rescope_project_research(&kb.conn).unwrap();
         assert_eq!(kb.vector_counts().unwrap(), (3, 3));
+    }
+
+    /// `specs/142` §2.5 item 3, the operator's rulings of 2026-11-27: a held source's text (a library `source.md` at
+    /// `external_untrusted`) is found by a search that asks for held text and nothing else untrusted, by its words and by its vectors,
+    /// labelled held text and still at its tier; without the ask it is not. Other untrusted text, a source's summary (also
+    /// `external_untrusted`) included, is never in that view. An index whose vectors were stored at version 2 drops only the held
+    /// source's, so they come back with the new value.
+    #[test]
+    fn a_held_sources_text_is_found_when_held_text_is_asked_for_labelled_and_still_untrusted() {
+        let mut kb = Kb::open_in_memory().unwrap();
+        kb.attach_embedder(concepts()).unwrap();
+        let held = "library/sources/h1/source.md";
+        kb.upsert_from(held, "library", UNTRUSTED, "# Held\n\nzebra stripes on the held page\n", "t").unwrap();
+        kb.upsert_from("library/sources/h1/summary.md", "library", UNTRUSTED, "# Summary\n\nzebra stripes in a summary\n", "t").unwrap();
+        kb.upsert_from("context/web.md", "context", UNTRUSTED, "# Web\n\nzebra stripes from the web\n", "t").unwrap();
+        kb.upsert("context/c.md", "context", &ok_doc("zebra stripes"), "t").unwrap();
+        kb.embed_pending(&mut |_, _| {}).unwrap();
+        for legs in [Legs::LexicalOnly, Legs::VectorOnly, Legs::Hybrid] {
+            // Without the ask, held text is not there: the search is what it was.
+            let plain = kb.search("zebra stripes", &SearchOpts { role: Some("builder".into()), legs, ..Default::default() }).unwrap();
+            assert_eq!(plain.iter().map(|h| h.rel_path.as_str()).collect::<Vec<_>>(), ["context/c.md"], "{legs:?}");
+            let hits = kb.search("zebra stripes", &SearchOpts { role: Some("scout".into()), legs, include_held: true, ..Default::default() }).unwrap();
+            let mut paths: Vec<&str> = hits.iter().map(|h| h.rel_path.as_str()).collect();
+            paths.sort();
+            assert_eq!(paths, ["context/c.md", held], "{legs:?}");
+            let h = hits.iter().find(|h| h.rel_path == held).unwrap();
+            assert_eq!((h.label, h.shown_label().as_str(), h.source_type.as_str(), h.status), (HELD_LABEL, HELD_LABEL, UNTRUSTED, "noted"), "{legs:?}");
+        }
+        assert!(held_row("library", UNTRUSTED, held) && !held_row("library", UNTRUSTED, "library/sources/h1/summary.md") && !held_row("library", "federated_verified", held) && !held_row("context", UNTRUSTED, held));
+        // An index from version 2: only the held source's vectors go, and the next pass stores them again.
+        kb.conn.execute("INSERT OR REPLACE INTO kb_meta(key, value) VALUES ('vec_scope_version', '2')", []).unwrap();
+        let before = kb.vector_counts().unwrap();
+        rescope_project_research(&kb.conn).unwrap();
+        assert_eq!(kb.vector_counts().unwrap(), (before.0 - 1, before.1), "only the held source's vector was dropped");
+        assert_eq!(kb.embed_pending(&mut |_, _| {}).unwrap(), 1);
     }
 
     #[test]
