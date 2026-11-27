@@ -917,6 +917,40 @@ impl Labeller<'_> {
     }
 }
 
+// ---- what an outbound card says (`specs/141` §2.4 item 5; slice D) ----------------------------------------------------------------
+
+/// The label of the labelled items the span `mission`/`role` was given (`handling::given`, kept per mission and role, not per span:
+/// `specs/141` §7). A library source or claim takes its whole label (its traits and its library marks); any other item its traits. A
+/// store that cannot be read is every mark. It reads only; it sets no mark and changes nothing a reader returns.
+pub fn given(ws: &Path, home: &Path, mission: &str, role: &str) -> Label {
+    let items = handling::given(ws, &handling::span_key(mission, role));
+    if items.is_empty() {
+        return Label::none();
+    }
+    let lib = Library::in_home(home).with_workspace(ws);
+    let labeller = Labeller::new(Some(&lib), Some(ws));
+    items.iter().fold(Label::none(), |l, item| {
+        let f = if let Some(id) = item.strip_prefix("library/sources/") {
+            labeller.source(id)
+        } else if let Some(id) = item.strip_prefix("library/claims/") {
+            labeller.claim(id)
+        } else {
+            labeller.traits(item)
+        };
+        l.join(&f.label)
+    })
+}
+
+/// The line an outbound card carries (`specs/141` §2.4 item 5, AC-9): each mark of the items the sending task was given, with how
+/// many items brought it (`private (2), internal (1)`). `None` for a task given nothing labelled: the card is as before.
+pub fn card_line(label: &Label) -> Option<String> {
+    if label.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = label.marks().into_iter().map(|m| format!("{} ({})", m.shown(), label.from(m).len())).collect();
+    Some(format!("Handling: this task was given {}.", parts.join(", ")))
+}
+
 #[cfg(test)]
 #[path = "label_tests.rs"]
 mod tests;

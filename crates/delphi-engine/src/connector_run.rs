@@ -137,6 +137,16 @@ impl Engine {
             sc.m.append(ev).await?;
             return Ok(r);
         }
+        // Spec 141 §2.4, the outbound row's `Q` column (slice D): a write or a draft whose arguments quote more of a held source than
+        // may leave this machine is not sent (the one predicate, `body_may_leave`, over the arguments as one output). A read's query is
+        // a search, which ruling 2 leaves alone.
+        if class != ToolClass::Read {
+            if let Err(e) = crate::held_text::check_files(&self.ws.home, &[("the arguments".to_string(), all_strings(args).join("\n").into_bytes())]) {
+                let (ev, r) = deny(sc, format!("{e}; it was not sent"));
+                sc.m.append(ev).await?;
+                return Ok(r);
+            }
+        }
 
         let ceiling = sc.span.ceiling();
         let tainted = ceiling <= Tier::L1;
@@ -157,13 +167,27 @@ impl Engine {
         // agent wrote, so it is not held. Nothing is sent before an answer; a timeout is a denial.
         // Spec 103 OD-5: the task is held by its own mark, its recorded ancestors' and its session's (`private_read::task_scope`).
         let scope = crate::private_read::task_scope(&self.ws.dir, Some(&sc.m.id), &sc.task_id);
-        let held = crate::egress::check(&crate::private_read::scope_record(&scope.state), crate::library::Channel::Connector).is_err() && (class != ToolClass::Read || has_query);
+        let marked = crate::egress::check(&crate::private_read::scope_record(&scope.state), crate::library::Channel::Connector).is_err();
+        // Spec 141 §2.4 item 5 (slice D): the card names the marks of the items this task was given, with counts; the line adds what
+        // the operator is told and removes nothing. A given library-private item (the row's refusal) is held as the mark holds a send.
+        let given = crate::label::given(&self.ws.dir, &self.ws.home, &sc.m.id, &sc.role);
+        let handling = crate::egress::check_label(&given, crate::egress::Sink::Outbound);
+        let held = (marked || handling.refused()) && (class != ToolClass::Read || has_query);
+        if !given.is_empty() {
+            payload["handling"] = json!(given.names());
+        }
         let (args_line, banner) = if held {
-            crate::private_read::note_held(&self.ws.dir, "connector", &scope);
+            if marked {
+                crate::private_read::note_held(&self.ws.dir, "connector", &scope);
+            }
             payload["private_read_mark"] = json!(true);
             (crate::private_read::exact(args), format!("{} ", crate::private_read::HELD_BANNER))
         } else {
             (args_line, String::new())
+        };
+        let args_line = match crate::label::card_line(&given) {
+            Some(l) => format!("{args_line} {l}"),
+            None => args_line,
         };
         match class {
             ToolClass::Write => {
@@ -387,6 +411,42 @@ tools = { search = "read", draft_note = "draft", send = "write" }
         assert_eq!(events_of(&f, "connector.call").len(), 2);
         assert_eq!(f.engine.connectors.read_payload(&hash).as_deref(), Some("SECRET-BODY: the meeting is at noon"));
         assert!(events_of(&f, "span.taint").iter().any(|e| e.payload["ceiling"] == "L0" && e.payload["cause"] == "docs.search"));
+    }
+
+    /// `specs/141` §2.4, the outbound row (slice D), through a connector write: the card of a task given two `personal` items names
+    /// `private (2)` and the private-read mark is unchanged; a write whose arguments quote 400 characters of a held source is not
+    /// sent, and one that quotes a short passage is asked about as before.
+    #[tokio::test]
+    async fn a_connector_write_names_the_given_marks_and_one_that_quotes_a_held_source_is_not_sent() {
+        let text: String = (0..300).map(|i| format!("Held sentence {i:03} runs on and on. ")).collect();
+        let long: String = text.chars().skip(20).take(400).collect();
+        let short: String = text.chars().skip(20).take(120).collect();
+        let f = crate::testkit::setup(vec![Step::tool("c1", "docs__send", json!({"to": "a@b.c", "body": long})), Step::tool("c2", "docs__send", json!({"to": "a@b.c", "body": short})), Step::text("Done.")], 5.0, |_| {});
+        f.engine.cfg.set(Config::parse(&format!("{}\n{}", crate::testkit::CONFIG, CONNECTORS.replace("max_arg_chars = 40", "max_arg_chars = 2000"))).unwrap());
+        *f.connector_mock.tools.lock().unwrap() = vec![tool("search", "Search documents"), tool("draft_note", "Create a draft"), tool("send", "Send a message")];
+        f.engine.connectors.refresh("docs").await.unwrap();
+        f.engine.connectors.propose_pins("docs").unwrap();
+        ratify_pins(&f.engine.ws.dir, "docs");
+        f.engine.connectors.refresh("docs").await.unwrap();
+        let held = f.engine.ws.home.join("library/sources/held-a");
+        std::fs::create_dir_all(&held).unwrap();
+        std::fs::write(held.join("meta.json"), json!({"type": "webpage", "title": "Held", "licence": "unknown", "capture_level": "full", "text_held": true}).to_string()).unwrap();
+        std::fs::write(held.join("source.md"), &text).unwrap();
+        let (ws, home) = (f.engine.ws.dir.clone(), f.engine.ws.home.clone());
+        let h = crate::handling::Handling::of(&ws, &home);
+        for i in ["local/summaries/a.md", "local/summaries/b.md"] {
+            h.operator_set(i, crate::handling::Trait::Personal).unwrap();
+        }
+        crate::handling::note_given(&h, &ws, &crate::handling::span_key(&f.m.id, "orchestrator"), &["local/summaries/a.md".to_string(), "local/summaries/b.md".to_string()]);
+        let seen = approver(&f, allow);
+        f.engine.run_task(&f.m, "orchestrator", "Send the notes").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        assert_eq!(cards.len(), 1, "the quoting write asked nothing: {cards:?}");
+        assert!(cards[0].1.contains("private (2)") && cards[0].0 == "red", "{cards:?}");
+        let calls = f.connector_mock.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1, "only the short quotation was sent");
+        assert!(!format!("{calls:?}").contains(&text.chars().skip(20).take(301).collect::<String>()));
+        assert_eq!(crate::private_read::state(&ws, &crate::private_read::task_key(&f.m.id, "t_0001")), crate::private_read::State::Unmarked);
     }
 
     #[tokio::test]

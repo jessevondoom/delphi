@@ -313,6 +313,13 @@ pub fn localize(fix: &str, source: &Source) -> String {
     }
 }
 
+/// `specs/141` §2.4 item 10: every `delphi connect` says whether the pre-push label check is installed in the project here, and
+/// the one command that installs it. A host pushes with its own git, which Delphi cannot stop; the hook can refuse.
+fn print_hook_line() {
+    let dir = std::env::current_dir().unwrap_or_else(|_| ".".into());
+    println!("{}", crate::handling_cmd::hook_line(&dir));
+}
+
 fn usage() -> i32 {
     eprintln!("usage: delphi connect claude-code|copilot|codex|gemini [--dry-run | --status | --remove]\n       delphi connect claude-code|copilot --update [--dry-run]\n       delphi connect claude-code|copilot [--dry-run | --update | --status] --source owner/repo[#branch]\n       delphi connect claude-code --theme [--dry-run | --remove] [--light | --dark]");
     2
@@ -413,6 +420,7 @@ pub fn cmd(args: &[String]) -> i32 {
         if let Some(p) = update_pointer(t.host, pre.state) {
             println!("or:   {p} (the same update, run for you after you confirm its plan)");
         }
+        print_hook_line();
         return 0;
     }
     if !dry {
@@ -440,12 +448,14 @@ pub fn cmd(args: &[String]) -> i32 {
         let plan = connect_run::update_plan_from(t, &exe, &pre, &link, home, &source);
         print!("{plan}");
         println!("confirmation that `delphi connect {} --update` will require for exactly this plan: {}", t.host, connect_run::update_confirmation(t.host, &plan));
+        print_hook_line();
         return 0;
     }
     if dry {
         let plan = render_plan_from(t, &exe, &pre, addable, &link, home, &source);
         print!("{plan}");
         println!("confirmation that `delphi connect {}` will require for exactly this plan: {}", t.host, confirmation(t.host, &plan));
+        print_hook_line();
         return 0;
     }
     let (plan, expect) = if remove {
@@ -490,6 +500,7 @@ pub fn cmd(args: &[String]) -> i32 {
     match result {
         Ok(m) => {
             println!("{m}");
+            print_hook_line();
             if !remove && t.host == "claude-code" {
                 println!("{AUTO_UPDATE_TIP}");
             }

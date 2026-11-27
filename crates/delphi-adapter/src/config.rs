@@ -1041,6 +1041,10 @@ pub struct HandlingConfig {
     /// An email to more than this many recipients is company-wide: `internal`, not `personal`.
     pub company_wide_recipients: usize,
     pub path: Vec<HandlingPath>,
+    /// The git remotes an `internal` file may be pushed to, labelled, after the operator confirms (`specs/141` §2.4, the repository
+    /// row). Compared whole, after a trailing `/` and `.git` are dropped ([`HandlingConfig::is_internal_remote`]); no prefix and no
+    /// pattern. Empty (the default): an `internal` file is refused at every remote.
+    pub internal_remotes: Vec<String>,
 }
 
 /// One `[[handling.path]]` row.
@@ -1061,10 +1065,18 @@ pub struct HandlingPath {
 pub const HANDLING_TRAITS: [&str; 3] = ["personal", "internal", "confidential"];
 /// The most `[[handling.path]]` rows.
 pub const MAX_HANDLING_PATHS: usize = 200;
+/// The most `internal_remotes`.
+pub const MAX_INTERNAL_REMOTES: usize = 50;
+
+/// A remote URL as `internal_remotes` compares it: trimmed, without a trailing `/` or `.git`.
+fn remote_key(url: &str) -> &str {
+    let u = url.trim().trim_end_matches('/');
+    u.strip_suffix(".git").unwrap_or(u).trim_end_matches('/')
+}
 
 impl Default for HandlingConfig {
     fn default() -> HandlingConfig {
-        HandlingConfig { org_domains: Vec::new(), list_addresses: Vec::new(), company_wide_recipients: 10, path: Vec::new() }
+        HandlingConfig { org_domains: Vec::new(), list_addresses: Vec::new(), company_wide_recipients: 10, path: Vec::new(), internal_remotes: Vec::new() }
     }
 }
 
@@ -1087,6 +1099,14 @@ impl HandlingConfig {
                 return Err(format!("list_addresses: `{}` is not an address", a));
             }
         }
+        if self.internal_remotes.len() > MAX_INTERNAL_REMOTES {
+            return Err(format!("at most {} internal_remotes", MAX_INTERNAL_REMOTES));
+        }
+        for r in &self.internal_remotes {
+            if remote_key(r).is_empty() || r.len() > 400 || r.contains(char::is_whitespace) {
+                return Err(format!("internal_remotes: `{}` is not a remote URL (write it as `git remote get-url` prints it)", r));
+            }
+        }
         for (i, p) in self.path.iter().enumerate() {
             let ok = !p.kind.is_empty() && p.kind.len() <= 40 && p.kind.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
             if !ok {
@@ -1100,6 +1120,13 @@ impl HandlingConfig {
             }
         }
         Ok(())
+    }
+
+    /// Is `url` (as `git remote get-url` prints it) on `internal_remotes`? The whole URL, after a trailing `/` and `.git` are
+    /// dropped from both; nothing else is normalised, so a remote written another way (SSH for HTTPS) is not on the list.
+    pub fn is_internal_remote(&self, url: &str) -> bool {
+        let key = remote_key(url);
+        !key.is_empty() && self.internal_remotes.iter().any(|r| remote_key(r) == key)
     }
 
     /// The table as `config.toml` holds it. A file that does not parse, or a table that fails [`HandlingConfig::check`], reads as
@@ -2992,6 +3019,23 @@ tools = { search = "read", note = "draft", send = "write" }
             assert!(errs.contains("[handling]"), "{bad}: {errs}");
             assert_eq!(HandlingConfig::read(bad), HandlingConfig::default(), "{bad}: a broken table configures nothing");
         }
+    }
+
+    /// `specs/141` §2.4 (the repository row; slice D): `internal_remotes` is empty by default; a listed remote matches whole, with or
+    /// without a trailing `.git` or `/`; a prefix, another scheme or another repository does not; a remote with a space is a problem.
+    #[test]
+    fn internal_remotes_match_a_whole_remote_and_nothing_else() {
+        assert!(HandlingConfig::default().internal_remotes.is_empty());
+        assert!(!HandlingConfig::default().is_internal_remote("https://git.example.com/team/notes.git"));
+        let c = HandlingConfig::read("[handling]\ninternal_remotes = [\"https://git.example.com/team/notes.git\"]\n");
+        for yes in ["https://git.example.com/team/notes.git", "https://git.example.com/team/notes", "https://git.example.com/team/notes/", " https://git.example.com/team/notes.git "] {
+            assert!(c.is_internal_remote(yes), "{yes}");
+        }
+        for no in ["https://git.example.com/team", "https://git.example.com/team/notes-public.git", "git@git.example.com:team/notes.git", "https://git.example.com/team/notes.git/extra", ""] {
+            assert!(!c.is_internal_remote(no), "{no}");
+        }
+        let errs = Config::parse(&format!("{}\n[handling]\ninternal_remotes = [\"a b\"]\n", SAMPLE)).unwrap_err().join("\n");
+        assert!(errs.contains("internal_remotes"), "{errs}");
     }
 }
 

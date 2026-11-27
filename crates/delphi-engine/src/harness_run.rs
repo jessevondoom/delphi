@@ -505,19 +505,36 @@ impl Engine {
                     // approvable by a relay reply (`merge_class::console_only`). Nothing is sent before an answer; a timeout is a denial.
                     // Spec 103 OD-5: the task is held by its own mark, its recorded ancestors' and its session's (`private_read::task_scope`).
                     let scope = crate::private_read::task_scope(&self.ws.dir, Some(&sc.m.id), &sc.task_id);
-                    if crate::egress::check(&crate::private_read::scope_record(&scope.state), crate::library::Channel::Outbound).is_err() {
-                        crate::private_read::note_held(&self.ws.dir, "outbound", &scope);
-                        let card = format!("{} {} {}", crate::private_read::HELD_BANNER, name, crate::private_read::exact(&p.input));
+                    // Spec 141 §2.4 item 5 (slice D): the card names the marks of the items this task was given, with counts. The line
+                    // adds what the operator is told and removes nothing; a web query is never refused for a mark (ruling 2). A given
+                    // library-private item (the row's refusal) is held as the private-read mark holds a send: the held card below.
+                    let given = crate::label::given(&self.ws.dir, &self.ws.home, &sc.m.id, &sc.role);
+                    let handling = crate::egress::check_label(&given, crate::egress::Sink::Outbound);
+                    let marks_line = crate::label::card_line(&given).map(|l| format!(" {l}")).unwrap_or_default();
+                    let marked = crate::egress::check(&crate::private_read::scope_record(&scope.state), crate::library::Channel::Outbound).is_err();
+                    if marked || handling.refused() {
+                        if marked {
+                            crate::private_read::note_held(&self.ws.dir, "outbound", &scope);
+                        }
+                        let card = format!("{} {} {}{}", crate::private_read::HELD_BANNER, name, crate::private_read::exact(&p.input), marks_line);
                         let tool = crate::private_read::OUTBOUND_TOOL;
-                        return match self.ask(sc, ApprovalTier::Red, tool, tool, &card, &json!({"tool": name, "input": p.input, "private_read_mark": true})).await? {
+                        let mut payload = json!({"tool": name, "input": p.input, "private_read_mark": true});
+                        if !given.is_empty() {
+                            payload["handling"] = json!(given.names());
+                        }
+                        return match self.ask(sc, ApprovalTier::Red, tool, tool, &card, &payload).await? {
                             Some(d) => Ok(Decision::Deny(d.content)),
                             None => Ok(Decision::Allow),
                         };
                     }
-                    let summary = format!("{} {}", name, summarize(name, &p.input));
+                    let summary = format!("{} {}{}", name, summarize(name, &p.input), marks_line);
                     // Delegated: the CLI's own policy has already had its say, so this is one ordinary card, not a Red one.
                     let tier = if ctl.delegate { ApprovalTier::Amber } else { ApprovalTier::Red };
-                    match self.ask(sc, tier, "harness_outbound", "harness_outbound", &summary, &json!({"tool": name, "input": p.input})).await? {
+                    let mut payload = json!({"tool": name, "input": p.input});
+                    if !given.is_empty() {
+                        payload["handling"] = json!(given.names());
+                    }
+                    match self.ask(sc, tier, "harness_outbound", "harness_outbound", &summary, &payload).await? {
                         Some(d) => Ok(Decision::Deny(d.content)),
                         None => Ok(Decision::Allow),
                     }
@@ -4328,6 +4345,74 @@ echo "$answer" > '{answer_file}'
         task.await.unwrap().unwrap();
         assert!(fs::read_to_string(answer).unwrap().contains("\"behavior\":\"allow\""));
         assert_eq!(crate::private_read::counter(&f.engine.ws.dir).outbound_would_change, 0);
+    }
+
+    /// `specs/141` AC-9 and the outbound row of §2.4, through a harness's real outbound request (the fitness function `SINKS` names for
+    /// `Sink::Outbound`). (1) A task given two `personal` items and one `internal` item: its ordinary card says `private (2)` and
+    /// `internal (1)`, the request is sent as it would have been once the operator allows it, and the task's private-read mark is
+    /// still unmarked (the line adds what the operator is told and removes nothing; handling traits never set the mark). (2) A task
+    /// given a library-private item (the row's refusal): held as the mark holds a send, on the Red console-only card, although the
+    /// task is not marked; the mark and its counter are unchanged. (3) A task given nothing labelled: the card is as before.
+    #[tokio::test]
+    async fn sink_outbound_card_names_the_marks() {
+        use crate::handling::{note_given, span_key, Handling, Trait};
+        for case in ["personal", "library_private", "none"] {
+            let scripts = tempfile::tempdir().unwrap();
+            let (body, answer) = ask_cli(scripts.path(), "WebSearch", r#"{"query":"tide tables"}"#, r#"{"name":"delphi","status":"connected"}"#);
+            let (f, _s) = fixture(&body, |_| {});
+            use_harness_profile(&f, "[harness.claude]\nbridge = false\napprovals = \"delphi\"\nnative_tools = [\"WebSearch\"]\n");
+            let (ws, home) = (f.engine.ws.dir.clone(), f.engine.ws.home.clone());
+            let h = Handling::of(&ws, &home);
+            let items: Vec<String> = match case {
+                "personal" => {
+                    for (i, t) in [("local/summaries/a.md", Trait::Personal), ("local/summaries/b.md", Trait::Personal), ("local/summaries/c.md", Trait::Internal)] {
+                        h.operator_set(i, t).unwrap();
+                    }
+                    vec!["local/summaries/a.md".into(), "local/summaries/b.md".into(), "local/summaries/c.md".into()]
+                }
+                "library_private" => {
+                    let src = home.join("library/sources/p1");
+                    fs::create_dir_all(&src).unwrap();
+                    fs::write(src.join("meta.json"), serde_json::json!({"id": "p1", "type": "file", "title": "Own notes", "private": true, "licence": "own"}).to_string()).unwrap();
+                    let item = crate::handling::source_item("p1");
+                    Handling::of(&ws, &home).operator_set(&item, Trait::Internal).unwrap();
+                    vec![item]
+                }
+                _ => vec![],
+            };
+            note_given(&Handling::of(&ws, &home), &ws, &span_key(&f.m.id, "architect"), &items);
+            let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Find the tide tables").await }) };
+            let key = crate::private_read::task_key(&f.m.id, "t_0001");
+            match case {
+                "personal" => {
+                    let card = pending_card(&f, "harness_outbound").await;
+                    assert!(card.summary.contains("private (2)") && card.summary.contains("internal (1)"), "the card names the marks with counts: {}", card.summary);
+                    assert!(!card.summary.contains("PRIVATE-READ MARK"), "not held: {}", card.summary);
+                    assert_eq!(card.payload["handling"], serde_json::json!(["personal", "internal"]));
+                    f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+                    task.await.unwrap().unwrap();
+                    assert!(fs::read_to_string(&answer).unwrap().contains("\"behavior\":\"allow\""), "sent as it would have been");
+                }
+                "library_private" => {
+                    let card = pending_card(&f, crate::private_read::OUTBOUND_TOOL).await;
+                    assert_eq!(card.tier, ApprovalTier::Red);
+                    assert!(card.summary.contains("private (library) (1)") && card.summary.contains("tide tables"), "{}", card.summary);
+                    assert!(crate::merge_class::console_only(&card.tool, &card.payload).is_some(), "a relay reply cannot approve it");
+                    assert!(f.engine.broker.pending().iter().all(|c| c.tool != "harness_outbound"), "one card");
+                    f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+                    task.await.unwrap().unwrap();
+                    assert!(fs::read_to_string(&answer).unwrap().contains("\"behavior\":\"deny\""));
+                }
+                _ => {
+                    let card = pending_card(&f, "harness_outbound").await;
+                    assert!(!card.summary.contains("Handling:") && card.payload.get("handling").is_none(), "{}", card.summary);
+                    f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+                    task.await.unwrap().unwrap();
+                }
+            }
+            assert_eq!(crate::private_read::state(&ws, &key), crate::private_read::State::Unmarked, "{case}: the private-read mark is unchanged");
+            assert_eq!(crate::private_read::counter(&ws).outbound_would_change, 0, "{case}: the mark's counter is unchanged");
+        }
     }
 
     /// `specs/103` §7.1 OD-5 (the operator, 2026-11-12: "the child should have the same scope as the parent in a given session"): a task started on

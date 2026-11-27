@@ -505,10 +505,11 @@ impl Worktree {
     /// operator approved `approved_sha`. These two calls need the operator's own credentials (git's helper, the
     /// SSH agent, `gh`'s login), so they run with the operator's environment; hooks and external protocols stay off.
     ///
-    /// With `home`, the files of the range about to be pushed are read as one output first (`specs/142` §2.5 item 4 (g)): when they carry
-    /// more of a held source of that home's library than may leave this machine, nothing is pushed and the refusal names the source and
-    /// the files.
-    pub fn open_pr(&self, approved_sha: &str, title: &str, body: &str, gh: &str, home: Option<&Path>) -> Result<PrOutcome, GitError> {
+    /// With `guard`, the files of the range about to be pushed are checked first at the repository sink ([`Worktree::push_check`],
+    /// `specs/141` §2.4 item 6, `specs/142` §2.5 item 4 (g)): a refusal (a labelled file, or more of a held source than may leave this
+    /// machine) pushes nothing and names the files and the marks or the source. A label that is sent labelled (`internal` to a remote on
+    /// `[handling] internal_remotes`) is pushed only when the card the operator answered showed exactly that label's line.
+    pub fn open_pr(&self, approved_sha: &str, title: &str, body: &str, gh: &str, guard: Option<&PushGuard>) -> Result<PrOutcome, GitError> {
         let project = |args: &[&str], label: &str| {
             let mut c = git_command(None, None, &self.scratch_home);
             c.arg("-C").arg(&self.project).args(args);
@@ -525,9 +526,13 @@ impl Worktree {
         if project(&["remote", "get-url", "origin"], "remote get-url").is_err() {
             return Ok(PrOutcome::Refused("the project has no `origin` remote to push to".into()));
         }
-        if let Some(home) = home {
-            if let Err(e) = crate::held_text::check_files(home, &self.range_files()?) {
-                return Ok(PrOutcome::Refused(format!("the branch {e}; nothing was pushed")));
+        if let Some(g) = guard {
+            match self.push_check(g)? {
+                Err(e) => return Ok(PrOutcome::Refused(format!("the branch {e}; nothing was pushed"))),
+                Ok(sent) if sent.decision.kind == crate::label::Kind::SendLabelled && g.card_line.as_deref() != Some(sent.line().as_str()) => {
+                    return Ok(PrOutcome::Refused(format!("the branch is labelled ({}) and the card you answered did not show that label; nothing was pushed", sent.line())));
+                }
+                Ok(_) => {}
             }
         }
         let mut push = Command::new("git");
@@ -544,6 +549,18 @@ impl Worktree {
             },
             Err(e) => Ok(PrOutcome::Refused(format!("the branch was pushed, but opening the pull request failed: {}", e))),
         }
+    }
+
+    /// The repository sink over the range a push would send (`specs/141` §2.4 item 6): each file's label from the daemon's records
+    /// and the quotation bound over all of them as one output, at the sink of `origin` (on `[handling] internal_remotes` or not). A
+    /// labelled send is confirmed by the card (`Confirm::Card`); the caller shows `Sent::line` on it. The outer `Err` is git's; the
+    /// inner one is the refusal.
+    pub fn push_check(&self, g: &PushGuard) -> Result<Result<crate::egress::Sent, String>, GitError> {
+        let mut c = git_command(None, None, &self.scratch_home);
+        c.arg("-C").arg(&self.project).args(["remote", "get-url", "origin"]);
+        let remote = run(c, "remote get-url").ok().map(|u| u.trim().to_string());
+        let files = self.range_files()?;
+        Ok(repository_check(&g.home, g.ws.as_deref(), &self.project, &files, remote.as_deref(), crate::egress::Confirm::Card))
     }
 
     /// The files the branch changed since its base, as they are at its tip (deleted files are not read): what a push would send.
@@ -782,6 +799,109 @@ fn open_up_at(parent: libc::c_int, name: &std::ffi::CStr, depth: usize) {
     }
 }
 
+
+/// What the daemon's push is checked against (`specs/141` §2.4 item 6): the Delphi home (its library), the workspace (its handling
+/// records and `[handling] internal_remotes`), and the label line the operator's card showed, if any.
+#[derive(Debug, Clone, Default)]
+pub struct PushGuard {
+    pub home: PathBuf,
+    pub ws: Option<PathBuf>,
+    pub card_line: Option<String>,
+}
+
+// ---- the repository sink (`specs/141` §2.4, the repository row; slice D) ----------------------------------------------------------
+
+/// Which files of a repository `delphi handling check` reads.
+pub enum Pick<'a> {
+    /// The index: what the next commit would hold.
+    Staged,
+    /// `<a>..<b>`: the files changed between the two, as they are at `<b>` (deleted files are not read).
+    Range(&'a str),
+    /// Files or directories, as they are on disk, relative to the directory the check runs in.
+    Paths(&'a [String]),
+}
+
+/// Files by name, with their bytes.
+pub type Files = Vec<(String, Vec<u8>)>;
+
+/// An empty `HOME` for the git calls of the check: no user config is read.
+const NO_GIT_HOME: &str = "/nonexistent-delphi-git-home";
+
+/// The files `pick` names in the repository at (or above) `dir`, each by its path relative to the returned root, with its bytes.
+/// Git runs with the daemon's hardening (no hooks, no user or system config, no external diff); nothing is written.
+pub fn repo_files(dir: &Path, pick: &Pick<'_>) -> Result<(PathBuf, Files), String> {
+    let git = |args: &[&str], label: &str| -> Result<String, String> {
+        let mut c = git_command(None, None, Path::new(NO_GIT_HOME));
+        c.arg("-C").arg(dir).args(args);
+        run(c, label).map_err(|e| e.to_string())
+    };
+    let (names, rev) = match pick {
+        Pick::Paths(paths) => {
+            let mut out = Vec::new();
+            for p in paths.iter() {
+                let path = dir.join(p);
+                if path.is_dir() {
+                    let base = p.trim_end_matches('/');
+                    out.extend(crate::held_text::files_under(&path).into_iter().map(|(n, b)| (format!("{base}/{n}"), b)));
+                } else {
+                    out.push((p.clone(), std::fs::read(&path).map_err(|e| format!("{p}: {e}"))?));
+                }
+            }
+            return Ok((dir.to_path_buf(), out));
+        }
+        Pick::Staged => (git(&["diff", "--cached", "--name-only", "-z", "--no-renames", "--diff-filter=d"], "diff --cached")?, String::new()),
+        Pick::Range(r) => {
+            let (a, b) = r.split_once("..").filter(|(a, b)| !a.is_empty() && !b.is_empty() && !b.starts_with('.')).ok_or_else(|| format!("`{r}` is not a range (write <a>..<b>)"))?;
+            if [a, b].iter().any(|x| x.starts_with('-')) {
+                return Err(format!("`{r}` is not a range"));
+            }
+            (git(&["diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", a, b], "diff range")?, b.to_string())
+        }
+    };
+    let root = PathBuf::from(git(&["rev-parse", "--show-toplevel"], "rev-parse")?.trim());
+    let mut out = Vec::new();
+    for name in names.split('\0').filter(|n| !n.is_empty()) {
+        let mut c = git_command(None, None, Path::new(NO_GIT_HOME));
+        c.arg("-C").arg(&root).args(["show", &format!("{rev}:{name}")]);
+        let o = c.output().map_err(|e| format!("cannot run git: {e}"))?;
+        if !o.status.success() {
+            return Err(format!("git show {rev}:{name} failed"));
+        }
+        out.push((name.to_string(), o.stdout));
+    }
+    Ok((root, out))
+}
+
+/// Where git runs the pre-push hook of the repository at (or above) `dir` (`specs/141` §2.4 item 10): `core.hooksPath` from the
+/// repository's own config when it is set (relative to the top of the work tree), else `hooks/` in its common git directory. `None`
+/// outside a repository. A `core.hooksPath` set in the operator's global config is not read here (no user config is), so a hook
+/// written for a repository that relies on one is not where git looks; `delphi handling hook` says where it wrote.
+pub fn pre_push_hook_path(dir: &Path) -> Option<PathBuf> {
+    let git = |args: &[&str]| -> Option<String> {
+        let mut c = git_command(None, None, Path::new(NO_GIT_HOME));
+        c.arg("-C").arg(dir).args(args);
+        run(c, "rev-parse").ok().map(|o| o.trim().to_string()).filter(|o| !o.is_empty())
+    };
+    let common = PathBuf::from(git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?);
+    let config = common.join("config");
+    let hooks = match git(&["config", "--file", &config.to_string_lossy(), "--get", "core.hooksPath"]) {
+        Some(h) if Path::new(&h).is_absolute() => PathBuf::from(h),
+        Some(h) => PathBuf::from(git(&["rev-parse", "--show-toplevel"])?).join(h),
+        None => common.join("hooks"),
+    };
+    Some(hooks.join("pre-push"))
+}
+
+/// The repository sink of `specs/141` §2.4 (item 6): `files` (named relative to `root`) as one output, each labelled from the daemon's
+/// records and scanned for held text, decided at the repository row for `remote`. An `internal` file goes only to a remote on the
+/// workspace's `[handling] internal_remotes`, labelled and confirmed; every other mark but `text_held` is refused at every remote; held
+/// text is bounded by `body_may_leave`. The refusal names the files and the marks, never any text.
+pub fn repository_check(home: &Path, ws: Option<&Path>, root: &Path, files: &[(String, Vec<u8>)], remote: Option<&str>, confirm: crate::egress::Confirm<'_>) -> Result<crate::egress::Sent, String> {
+    let internal = remote.is_some_and(|r| ws.map(crate::handling::config_of).unwrap_or_default().is_internal_remote(r));
+    let sink = if internal { crate::egress::Sink::Repository { internal_remote: true } } else { crate::egress::Sink::Repository { internal_remote: false } };
+    crate::egress::check_output(home, ws, Some(root), files, sink, confirm)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -998,14 +1118,75 @@ pub(crate) mod tests {
             c.arg("--git-dir").arg(&remote).args(["branch", "--list"]);
             run(c, "branch list").unwrap()
         };
-        match wt.open_pr(&sha, "t", "b", "/nonexistent-gh", Some(&home)).unwrap() {
+        match wt.open_pr(&sha, "t", "b", "/nonexistent-gh", Some(&PushGuard { home: home.clone(), ..Default::default() })).unwrap() {
             PrOutcome::Refused(why) => assert!(why.contains("s-held-a") && why.contains("notes.md") && why.contains("nothing was pushed"), "{why}"),
             other => panic!("{other:?}"),
         }
         assert!(branches().trim().is_empty(), "nothing reached the remote: {}", branches());
         let empty = d.path().join("empty-home");
-        let _ = wt.open_pr(&sha, "t", "b", "/nonexistent-gh", Some(&empty)).unwrap();
+        let _ = wt.open_pr(&sha, "t", "b", "/nonexistent-gh", Some(&PushGuard { home: empty.clone(), ..Default::default() })).unwrap();
         assert!(branches().contains("delphi/t_push"), "with nothing held the branch is pushed");
+    }
+
+    /// `specs/141` AC-8, the daemon's push (the repository row, slice D). A branch that adds a copy of a `personal` page is refused by
+    /// the check the card runs first (`push_check`) and again by the push itself, naming the file and the mark; the remote gains no
+    /// branch. A copy of an `internal` page is refused while `origin` is not on `[handling] internal_remotes`; once it is, it is pushed
+    /// only when the card the operator answered showed the label's line.
+    #[test]
+    fn a_push_whose_range_holds_a_labelled_page_is_refused_before_the_card_and_after_it() {
+        use crate::egress::sink_d_tests::{Fx, INTERNAL_REMOTE};
+        use crate::label::Mark;
+        let fx = Fx::new();
+        let (d, p, w) = fx_with_remote();
+        let remote = d.path().join("remote.git");
+        let branches = || {
+            let mut c = git_command(None, None, &w.scratch_home);
+            c.arg("--git-dir").arg(&remote).args(["branch", "--list"]);
+            run(c, "branch list").unwrap()
+        };
+        let guard = |card_line: Option<String>| PushGuard { home: fx.home.clone(), ws: Some(fx.ws.clone()), card_line };
+        // personal: refused before the card and by the push
+        let id = fx.source("p.md", "A personal note.\n", Mark::Personal);
+        let page = fx.page("harbour-p", &[&id]);
+        let (wt, sha) = built(&w, &p, "t_lab1", "harbour.md", &page);
+        let e = wt.push_check(&guard(None)).unwrap().unwrap_err();
+        assert!(e.contains("harbour.md") && e.contains("private") && !e.contains("Line 03"), "{e}");
+        match wt.open_pr(&sha, "t", "b", "/nonexistent-gh", Some(&guard(None))).unwrap() {
+            PrOutcome::Refused(why) => assert!(why.contains("harbour.md") && why.contains("nothing was pushed"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(branches().trim().is_empty(), "nothing reached the remote");
+        // internal: refused while origin is not on the list
+        let id = fx.source("i.md", "An internal note.\n", Mark::Internal);
+        let page = fx.page("harbour-i", &[&id]);
+        let (wt, sha) = built(&w, &p, "t_lab2", "harbour.md", &page);
+        assert!(wt.push_check(&guard(None)).unwrap().is_err(), "{INTERNAL_REMOTE} is listed, origin is not");
+        // listed: the card shows the line, and the push goes ahead only on a card that showed it
+        fs::write(fx.ws.join("config.toml"), format!("[handling]\ninternal_remotes = [\"{}\"]\n", remote.display())).unwrap();
+        let sent = wt.push_check(&guard(None)).unwrap().unwrap();
+        assert_eq!(sent.decision.kind, crate::label::Kind::SendLabelled);
+        let line = sent.line();
+        assert!(line.starts_with("> Handling: INTERNAL"), "{line}");
+        match wt.open_pr(&sha, "t", "b", "/nonexistent-gh", Some(&guard(None))).unwrap() {
+            PrOutcome::Refused(why) => assert!(why.contains("did not show that label"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(branches().trim().is_empty(), "nothing reached the remote");
+        let _ = wt.open_pr(&sha, "t", "b", "/nonexistent-gh", Some(&guard(Some(line)))).unwrap();
+        assert!(branches().contains("delphi/t_lab2"), "the card showed the line: pushed");
+    }
+
+    /// A worktree fixture whose project has a bare `origin`.
+    fn fx_with_remote() -> (tempfile::TempDir, PathBuf, Worktrees) {
+        let (d, p, w) = fx();
+        let remote = d.path().join("remote.git");
+        let mut c = git_command(None, None, &w.scratch_home);
+        c.args(["init", "--quiet", "--bare"]).arg(&remote);
+        run(c, "init bare").unwrap();
+        let mut c = git_command(None, None, &w.scratch_home);
+        c.arg("-C").arg(&p).args(["remote", "add", "origin"]).arg(&remote);
+        run(c, "remote add").unwrap();
+        (d, p, w)
     }
 
     #[test]
