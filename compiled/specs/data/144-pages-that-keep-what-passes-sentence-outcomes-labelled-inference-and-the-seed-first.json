@@ -6,7 +6,7 @@
       "level": 1,
       "line": 13,
       "number": null,
-      "title": "Spec 144: Pages that keep what passes"
+      "title": "Spec 144: Pages built from evidence"
     },
     {
       "level": 2,
@@ -16,121 +16,127 @@
     },
     {
       "level": 3,
-      "line": 37,
+      "line": 20,
       "number": "1.1",
+      "title": "The goal this serves"
+    },
+    {
+      "level": 3,
+      "line": 24,
+      "number": "1.2",
+      "title": "The evidence (2026-11-27)"
+    },
+    {
+      "level": 3,
+      "line": 42,
+      "number": "1.3",
       "title": "Non-goals"
     },
     {
       "level": 3,
-      "line": 43,
-      "number": "1.2",
+      "line": 49,
+      "number": "1.4",
       "title": "Options considered"
     },
     {
       "level": 2,
-      "line": 53,
+      "line": 59,
       "number": "2",
       "title": "Design"
     },
     {
       "level": 3,
-      "line": 55,
-      "number": "2.1",
-      "title": "Inputs: a source with no text is not citable"
-    },
-    {
-      "level": 3,
       "line": 61,
-      "number": "2.2",
-      "title": "Units, numbered by the daemon"
+      "number": "2.1",
+      "title": "Only text can be cited"
     },
     {
       "level": 3,
-      "line": 67,
-      "number": "2.3",
-      "title": "A verdict for every unit"
+      "line": 68,
+      "number": "2.2",
+      "title": "Each statement carries its own citation"
     },
     {
       "level": 3,
       "line": 73,
+      "number": "2.3",
+      "title": "What the validator sees, and what it must show"
+    },
+    {
+      "level": 3,
+      "line": 80,
       "number": "2.4",
-      "title": "What each verdict does"
+      "title": "A support check after research"
     },
     {
       "level": 3,
-      "line": 85,
+      "line": 87,
       "number": "2.5",
-      "title": "The caps, and the checks after trimming"
+      "title": "The evidence pack"
     },
     {
       "level": 3,
-      "line": 98,
+      "line": 93,
       "number": "2.6",
-      "title": "The best attempt"
+      "title": "What agents see"
     },
     {
       "level": 3,
-      "line": 102,
+      "line": 99,
       "number": "2.7",
-      "title": "Fallback, by page kind"
+      "title": "Pages are built from evidence"
     },
     {
       "level": 3,
-      "line": 107,
+      "line": 110,
       "number": "2.8",
-      "title": "Outcomes, the banner, and the rejected drafts"
+      "title": "The trial"
     },
     {
       "level": 3,
-      "line": 114,
+      "line": 138,
       "number": "2.9",
-      "title": "The trial, fixed before it runs"
-    },
-    {
-      "level": 3,
-      "line": 130,
-      "number": "2.10",
-      "title": "Long pages on request"
+      "title": "Standing checks after the trial"
     },
     {
       "level": 2,
-      "line": 136,
+      "line": 143,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 140,
+      "line": 149,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 153,
+      "line": 161,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 170,
+      "line": 180,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 174,
+      "line": 184,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 180,
+      "line": 191,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 186,
+      "line": 202,
       "number": "9",
       "title": "Review"
     }
@@ -138,20 +144,20 @@
   "schema_version": 1,
   "source": {
     "path": "specs/144-pages-that-keep-what-passes-sentence-outcomes-labelled-inference-and-the-seed-first.md",
-    "sha256": "b7e781e9822aaf3ad4802aaecba89f6922fb9f3434fdadac028273b4c99e9c9e"
+    "sha256": "3b844efa87218fb7a5b91b61a85b7f33aca129fa44f018c3b22093264f17a90e"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 463,
+        "end": 555,
         "end_line": 6,
         "line": 6,
-        "start": 267
+        "start": 286
       },
-      "text": "status: draft   # revision 2. The operator approved the approach on 2026-11-27 (\"i approve that approach\"), not this text; it needs the review GOVERNANCE §1.3 asks for and the operator's approval"
+      "text": "status: draft   # revision 3. The operator approved the approach and the architect's choices on 2026-11-27 (\"i agree with the [architect's] choices — accept them, including the change to 142B, and proceed. i'll approve all specs when ready\"); not yet approved as text"
     },
-    "sha256": "b7e781e9822aaf3ad4802aaecba89f6922fb9f3434fdadac028273b4c99e9c9e",
+    "sha256": "3b844efa87218fb7a5b91b61a85b7f33aca129fa44f018c3b22093264f17a90e",
     "word": "draft"
   },
   "spec": {
@@ -161,7 +167,7 @@
     "superseded_by": null,
     "supersedes": null,
     "tier": 0,
-    "title": "144: Pages that keep what passes: numbered units, a verdict for each, the best attempt, and the seed first"
+    "title": "144: Pages built from evidence: citable text only, research handed over as evidence packs, and a trial before defaults change"
   },
   "summary": null
 }
