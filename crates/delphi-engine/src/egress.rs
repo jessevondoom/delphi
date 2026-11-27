@@ -162,6 +162,47 @@ pub fn terminal_yes(question: &str) -> bool {
     std::io::stdin().lock().read_line(&mut line).is_ok() && line.trim() == "send"
 }
 
+/// The label a sink acts on for a document of the index (`specs/141` §2.1 item 4, §2.2, AC-19): recomputed from the daemon's records
+/// at the time of the send and joined with the label its row holds. A row written before labels existed, and a document the index
+/// does not hold, are every mark.
+pub fn index_label(labeller: &label::Labeller<'_>, kb: &crate::kb::Kb, rel_path: &str) -> Label {
+    match kb.row_label(rel_path) {
+        Some((zone, stored)) => labeller.path(&zone, rel_path).label.join(&stored),
+        None => Label::every(rel_path),
+    }
+}
+
+/// What the operator's own view tells the window it may do with what it shows, at `sink` (`specs/141` §2.4: the app's export and print
+/// at [`Sink::PageExport`], its copy at [`Sink::Clipboard`]): `decision` is `send`, `labelled` (the window asks the operator once and
+/// what leaves begins with `line`) or `refuse` (`reason` names the marks and the items, never text). `quotations`: the 300-character
+/// bound of `held_text::body_may_leave` applies to whatever leaves. `held_refusal` is the bound's own refusal of the whole thing, when
+/// it refuses: a page that carries more of a held source than may leave is refused whole (§2.4 item 4).
+pub fn view_decision(label: &Label, sink: Sink, held_refusal: Option<String>) -> Value {
+    let d = check_label(label, sink);
+    let (word, reason) = match (d.kind, held_refusal) {
+        (Kind::Refuse, _) => ("refuse", format!("refused: {}", d.reason)),
+        (_, Some(r)) => ("refuse", r),
+        (Kind::SendLabelled, None) => ("labelled", d.reason.clone()),
+        _ => ("send", String::new()),
+    };
+    serde_json::json!({"decision": word, "reason": reason, "quotations": d.quotations, "line": label::visible_line(label), "marks": label.names()})
+}
+
+/// May a reply that carries entry text go to this client (`specs/141` §2.4, the row of a client off this machine)? A client on this
+/// machine is the operator's own view and not a sink (§2.4 item 1). A client off it is refused anything labelled, every mark
+/// refusing there; and a reply whose label was not computed (`None`) is every mark, so nothing of it goes.
+pub fn reply_to_client(label: Option<&Label>, on_this_machine: bool) -> Result<(), String> {
+    if on_this_machine {
+        return Ok(());
+    }
+    let every = Label::every("a reply whose label is not computed");
+    let d = check_label(label.unwrap_or(&every), Sink::OffMachineClient);
+    if d.refused() {
+        return Err(format!("refused: a client off this machine is sent nothing labelled ({})", d.reason));
+    }
+    Ok(())
+}
+
 /// May this entry be placed in a seat's prompt? A private entry never goes to a foreign-family seat, whatever
 /// `[library] private_to_models` says. On a seat of the host's own family the setting decides (`allow` or the default `deny`).
 pub fn check_for_seat(meta: &Value, foreign_family: bool, private_to_models_allow: bool) -> Result<(), String> {
@@ -288,7 +329,8 @@ pub enum SinkWired {
 /// The sinks of `specs/141` §2.4: each sink, the files that send through it, and the test that holds it to its row. The policy for each
 /// mark is the row, `label::row`; this table says who must ask it.
 pub const SINKS: [(Sink, SinkWired); 12] = [
-    (Sink::PageExport, SinkWired::Later { slice: "C" }),
+    // the daemon's decision in the page reply; the app's export and print act on it (`APP_COMMANDS`)
+    (Sink::PageExport, SinkWired::Yes { senders: &["delphi-engine/src/encyclopedia.rs", "delphi/src/pages_cmd.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_page_export_follows_its_row") }),
     (
         Sink::Bundle,
         SinkWired::Yes {
@@ -297,15 +339,58 @@ pub const SINKS: [(Sink, SinkWired); 12] = [
         },
     ),
     (Sink::Bibliography, SinkWired::Yes { senders: &["delphi-engine/src/library_bib.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_bibliography_follows_its_row") }),
-    (Sink::Document, SinkWired::Later { slice: "C" }),
-    (Sink::Clipboard, SinkWired::Later { slice: "C" }),
-    (Sink::OffMachineClient, SinkWired::Later { slice: "C" }),
+    (Sink::Document, SinkWired::Yes { senders: &["delphi-engine/src/artifacts.rs"], proof: ("delphi-engine/src/artifacts.rs", "sink_document_follows_its_row") }),
+    // the daemon's decision in the page and source replies; the window's copy acts on it (`WINDOW_COPIES`)
+    (Sink::Clipboard, SinkWired::Yes { senders: &["delphi-engine/src/encyclopedia.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_clipboard_follows_its_row") }),
+    // every reply that carries a page or a source asks `reply_to_client`; no client off this machine exists today (`service.rs`
+    // `client_on_this_machine`), so its proof is a fixture sender
+    (Sink::OffMachineClient, SinkWired::Yes { senders: &["delphi-engine/src/encyclopedia.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_off_machine_client_follows_its_row") }),
     (Sink::Xenia, SinkWired::Yes { senders: &["delphi-engine/src/service_xenia.rs", "delphi/src/xenia_cmd.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_xenia_follows_its_row") }),
-    (Sink::SeedExport, SinkWired::Later { slice: "C" }),
-    (Sink::RemoteServe, SinkWired::Later { slice: "C" }),
+    (Sink::SeedExport, SinkWired::Yes { senders: &["delphi-engine/src/kb.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_seed_export_writes_no_labelled_vector") }),
+    (Sink::RemoteServe, SinkWired::Yes { senders: &["delphi-engine/src/kbserve.rs"], proof: ("delphi-engine/src/egress_sink_tests.rs", "sink_remote_serve_returns_no_labelled_document") }),
     (Sink::Repository { internal_remote: false }, SinkWired::Later { slice: "D" }),
     (Sink::Repository { internal_remote: true }, SinkWired::Later { slice: "D" }),
     (Sink::Outbound, SinkWired::Later { slice: "D" }),
+];
+
+/// What a command of the desktop app (`app/src-tauri/src/lib.rs`, `generate_handler!`) does with entry text (`specs/141` §2.4 item 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppCommand {
+    /// It hands text out of the app at `sink`, and its function holds `asks`: the call that reads the daemon's decision first.
+    Sink { sink: Sink, asks: &'static str },
+    /// It hands no entry text out of the app, and why.
+    NotASink { why: &'static str },
+}
+
+/// Every command the app's window can invoke, by name. The registry test fails on a command that is not here, and on a row whose
+/// command is gone.
+pub const APP_COMMANDS: [(&str, AppCommand); 17] = [
+    ("info", AppCommand::NotASink { why: "where the daemon's sockets are, to the window" }),
+    ("conn", AppCommand::NotASink { why: "the connection's state, to the window" }),
+    ("state", AppCommand::NotASink { why: "a daemon read shown in the window on this machine: the operator's own view (§2.4 item 1)" }),
+    ("snapshot", AppCommand::NotASink { why: "a daemon read shown in the window on this machine: the operator's own view" }),
+    ("session", AppCommand::NotASink { why: "a daemon read shown in the window on this machine: the operator's own view" }),
+    ("daemons", AppCommand::NotASink { why: "the daemons of this machine, read from its run folder" }),
+    ("attach", AppCommand::NotASink { why: "points the bridge at a daemon of this machine; sends nothing" }),
+    ("kb", AppCommand::NotASink { why: "a knowledge base read shown in the window on this machine: the operator's own view" }),
+    ("encyclopedia", AppCommand::NotASink { why: "the encyclopedia's reads shown in the window on this machine: the operator's own view" }),
+    ("request", AppCommand::NotASink { why: "asks the daemon on this machine to start a run; ids and the operator's typed words only" }),
+    ("marks_load", AppCommand::NotASink { why: "the operator's own marks, read from the app's folder" }),
+    ("marks_save", AppCommand::NotASink { why: "the operator's own marks, kept in the app's folder of the Delphi home and never sent" }),
+    ("export_page", AppCommand::Sink { sink: Sink::PageExport, asks: "page_gate(" }),
+    ("print_page", AppCommand::Sink { sink: Sink::PageExport, asks: "page_gate(" }),
+    ("reveal", AppCommand::NotASink { why: "shows a workspace file in the Finder; copies and sends nothing" }),
+    ("open_file", AppCommand::NotASink { why: "opens a workspace file in the system's viewer on this machine; copies and sends nothing" }),
+    ("open_url", AppCommand::NotASink { why: "opens a web address in the browser: a web query, not a sink (ruling 2)" }),
+];
+
+/// Every file of the app's window that writes to the clipboard, and what it writes. A copy of a page or a source asks the daemon's
+/// `copy` decision (`copyDecision`); the others copy a command or a path, never entry text.
+pub const WINDOW_COPIES: [(&str, Option<&str>); 4] = [
+    ("app/src/screens/Encyclopedia.tsx", Some("copyDecision(")),
+    ("app/src/EncyParts.tsx", None),
+    ("app/src/screens/Start.tsx", None),
+    ("app/src/DocView.tsx", None),
 ];
 
 /// How a call into `delphi-bundle` that writes what leaves the machine is guarded (`specs/141` §2.4 item 9).
@@ -515,8 +600,10 @@ mod tests {
             for f in senders {
                 let text = std::fs::read_to_string(crates.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
                 let prod = production(&text);
-                let asks = ["egress::check_label(", "egress::check_output(", "egress::check_path("].iter().any(|c| prod.contains(c));
-                assert!(asks && prod.contains(&format!("Sink::{sink:?}")), "{f} does not ask the label check at `Sink::{sink:?}`");
+                let asks = ["egress::check_label(", "egress::check_output(", "egress::check_path(", "egress::view_decision("].iter().any(|c| prod.contains(c));
+                // `reply_to_client` is `check_label` at `Sink::OffMachineClient`, in this file
+                let off_machine = sink == Sink::OffMachineClient && prod.contains("egress::reply_to_client(");
+                assert!(off_machine || (asks && prod.contains(&format!("Sink::{sink:?}"))), "{f} does not ask the label check at `Sink::{sink:?}`");
             }
             let text = std::fs::read_to_string(crates.join(proof.0)).unwrap_or_else(|e| panic!("{}: {e}", proof.0));
             assert!(text.contains(&format!("fn {}(", proof.1)), "{}: the proof test `{}` is missing from {}", sink.name(), proof.1, proof.0);
@@ -656,6 +743,65 @@ mod tests {
         assert!(gone.is_empty(), "these registered files no longer name a network crate: remove them from NETWORK_FILES: {gone:?}");
         for (f, what) in NETWORK_FILES {
             assert!(!what.to_lowercase().contains("telemetry") && !what.to_lowercase().contains("analytics"), "{f} is described as a reporter: {what}");
+        }
+    }
+
+    /// `specs/141` §2.4 item 8 and AC-15, the app: every command the window can invoke is in [`APP_COMMANDS`], and no row names a
+    /// command that is gone; a command that hands text out of the app asks the daemon's decision first; and every file of the window
+    /// that writes to the clipboard is in [`WINDOW_COPIES`], a copy of entry text asking the `copy` decision.
+    #[test]
+    fn every_command_that_hands_text_out_is_registered() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let lib = std::fs::read_to_string(repo.join("app/src-tauri/src/lib.rs")).expect("the app's commands");
+        let prod = production(&lib);
+        let list = prod.split("generate_handler![").nth(1).and_then(|r| r.split(']').next()).expect("generate_handler!");
+        let named: std::collections::BTreeSet<&str> = list.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        let listed: std::collections::BTreeSet<&str> = APP_COMMANDS.iter().map(|(n, _)| *n).collect();
+        let new: Vec<&&str> = named.difference(&listed).collect();
+        let gone: Vec<&&str> = listed.difference(&named).collect();
+        assert!(new.is_empty(), "these app commands are not in egress::APP_COMMANDS (read each: does it hand entry text out of the app?): {new:?}");
+        assert!(gone.is_empty(), "these rows of egress::APP_COMMANDS name no command of the app: {gone:?}");
+        for (name, what) in APP_COMMANDS {
+            match what {
+                AppCommand::Sink { sink, asks } => {
+                    assert!(SINKS.iter().any(|(s, w)| *s == sink && matches!(w, SinkWired::Yes { .. })), "{name}: its sink {} is not wired", sink.name());
+                    let body = prod.split(&format!("fn {name}(")).nth(1).unwrap_or_else(|| panic!("fn {name} is gone"));
+                    let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
+                    let at = body.find(asks).unwrap_or_else(|| panic!("{name} does not ask the daemon (`{asks}`) before it sends"));
+                    for send in ["marks::export(", "window.print("] {
+                        if let Some(s) = body.find(send) {
+                            assert!(at < s, "{name}: `{send}` runs before `{asks}`");
+                        }
+                    }
+                }
+                AppCommand::NotASink { why } => assert!(!why.is_empty(), "{name}"),
+            }
+        }
+        // the clipboard, in the window
+        let mut found = Vec::new();
+        fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "ts" || x == "tsx") {
+                    out.push(p);
+                }
+            }
+        }
+        walk(&repo.join("app/src"), &mut found);
+        for f in found {
+            let rel = f.strip_prefix(&repo).unwrap().to_string_lossy().replace('\\', "/");
+            let src = std::fs::read_to_string(&f).unwrap_or_default();
+            let copies = ["clipboard.write", "clipboard?.write", "onCopy=", "execCommand("].iter().any(|m| src.contains(m));
+            let row = WINDOW_COPIES.iter().find(|(p, _)| *p == rel);
+            assert!(!copies || row.is_some(), "{rel} writes to the clipboard and is not in egress::WINDOW_COPIES");
+            if let Some((_, Some(asks))) = row {
+                assert!(src.contains(asks), "{rel} copies entry text without asking `{asks}`");
+            }
+        }
+        for (p, _) in WINDOW_COPIES {
+            assert!(repo.join(p).is_file(), "{p} is gone: remove it from WINDOW_COPIES");
         }
     }
 }

@@ -442,11 +442,16 @@ fn string_leaves(v: &Value) -> String {
     }
 }
 
-/// The held-text exit of the document path (`specs/142` §2.5 item 4 (f)): `files`, read as one output, against the library of the
-/// workspace's home. A workspace with no home above it has no library and nothing held.
+/// The document sink (`specs/141` §2.4, the row of a document or a deck written out; `specs/142` §2.5 item 4 (f)): `files`, read as
+/// one output, are labelled from the daemon's records by what they carry (a run of a labelled page or of a private source's text,
+/// `label::of_files`) and decided at `Sink::Document`, with the quotation bound over all of them. A tool call has no person to
+/// confirm a labelled send (`Confirm::Nobody`), so an `internal` document is refused too. A workspace with no home above it has no
+/// library: nothing in it is labelled or held.
 fn held_check(guard: &Guard, files: &[(String, Vec<u8>)]) -> Result<(), ToolResult> {
     match crate::hostmap::home_of_local(&guard.zones.local) {
-        Some(home) => crate::held_text::check_files(home, files).map_err(|e| ToolResult::err(format!("the document is {e}; quote less of it"))),
+        Some(home) => crate::egress::check_output(home, guard.zones.local.parent(), None, files, crate::egress::Sink::Document, crate::egress::Confirm::Nobody)
+            .map(|_| ())
+            .map_err(|e| ToolResult::err(format!("the document is not written: {e}; quote less of it, or leave out what is labelled"))),
         None => Ok(()),
     }
 }
@@ -1405,6 +1410,72 @@ mod tests {
             assert!(!f.root.join("local/missions/m1/artifacts").join(name).exists(), "{name} was written");
         }
         let (r, _) = run_tool(&mut f, "write_deck", deck(quote(30, 200)));
+        assert!(!r.is_error, "{}", r.content);
+    }
+
+    /// `specs/141` AC-4 and AC-15, the row of a document or a deck written out, through the document path's real entry point (the
+    /// artifact tools): a deck that copies a library page built from a source with each one mark is refused (personal, confidential,
+    /// library private), refused because no person can confirm a labelled send from a tool call (internal), or written under the
+    /// quotation bound (text held, the page's own words); a deck of the operator's own words is written. A refusal names the marks and
+    /// the items, and no text.
+    #[test]
+    fn sink_document_follows_its_row() {
+        use crate::handling::{self, Handling, Trait};
+        use crate::label::{Kind, Mark};
+        let mut f = fx(&["missions/**"]);
+        let ws = f.root.clone();
+        let home = ws.parent().unwrap().parent().unwrap().to_path_buf();
+        let lib = crate::library::Library::in_home(&home).with_workspace(&ws);
+        let pages = lib.pages_dir();
+        fs::create_dir_all(&pages).unwrap();
+        let mut got = String::new();
+        let mut want = String::new();
+        for (k, m) in Mark::ALL.into_iter().enumerate() {
+            let p = home.join(format!("{}.md", m.as_str()));
+            fs::write(&p, format!("A source note {k} about the tides.")).unwrap();
+            let private = m == Mark::LibraryPrivate;
+            let opts = crate::library::AddOpts { private, licence: Some(if private { "own" } else { "CC0-1.0" }.into()), ..Default::default() };
+            let id = lib.add_file(&p, &opts, &crate::library::Budgets::default()).unwrap().id;
+            let h = Handling::of(&ws, &home);
+            match m {
+                Mark::Personal => drop(h.operator_set(&handling::source_item(&id), Trait::Personal).unwrap()),
+                Mark::Internal => drop(h.operator_set(&handling::source_item(&id), Trait::Internal).unwrap()),
+                Mark::Confidential => drop(h.operator_set(&handling::source_item(&id), Trait::Confidential).unwrap()),
+                Mark::TextHeld => {
+                    let path = lib.source_dir(&id).join("meta.json");
+                    let mut meta: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                    meta["text_held"] = json!(true);
+                    fs::write(&path, meta.to_string()).unwrap();
+                }
+                Mark::LibraryPrivate => {}
+            }
+            // a page of this one source, in words of its own long enough to be found when copied
+            let body: String = (0..12).map(|i| format!("Page {} sentence {i:02} on the harbour and its moorings. ", m.as_str())).collect();
+            let slug = format!("doc-{k}");
+            fs::write(pages.join(format!("{slug}.json")), json!({"kind": "topic_page", "slug": slug, "title": slug, "material": [{"id": format!("s-{id}")}]}).to_string()).unwrap();
+            fs::write(pages.join(format!("{slug}.md")), format!("---\ntitle: {slug}\n---\n\n{body}")).unwrap();
+            crate::label::relabel(&home, &ws, None).unwrap();
+            let deck = json!({"path": format!("copy-{k}"), "title": "Copy", "slides": [{"title": "One", "body_md": body}]});
+            let (r, _) = run_tool(&mut f, "write_deck", deck);
+            let row = crate::label::row(crate::label::Sink::Document, m);
+            want.push(match row {
+                Kind::Refuse => 'R',
+                Kind::SendLabelled => 'L',
+                Kind::Quotations => 'Q',
+                Kind::Send => 'S',
+            });
+            got.push(match (r.is_error, r.content.contains("no person can confirm")) {
+                (true, true) => 'L',
+                (true, false) => 'R',
+                (false, _) => 'Q',
+            });
+            if r.is_error {
+                assert!(r.content.contains(&handling::source_item(&id)) && !r.content.contains("on the harbour"), "the refusal names the item and no text: {}", r.content);
+                assert!(!f.root.join(format!("local/missions/m1/artifacts/copy-{k}.html")).exists(), "nothing is written");
+            }
+        }
+        assert_eq!(got, want);
+        let (r, _) = run_tool(&mut f, "write_deck", json!({"path": "own", "title": "Own", "slides": [{"title": "One", "body_md": "Words of the operator's own."}]}));
         assert!(!r.is_error, "{}", r.content);
     }
 

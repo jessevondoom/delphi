@@ -23,8 +23,9 @@ export function appBridge(): Bridge {
     request: (what, arg) => invoke<Asked>('request', { what, arg }).catch(said),
     marks: () => invoke<unknown>('marks_load').catch(said),
     saveMarks: (marks) => invoke<void>('marks_save', { marks }).catch(said),
-    exportPage: (name, text) => invoke<string>('export_page', { name, text }).catch(said),
-    print: () => invoke<void>('print_page').catch(said),
+    // The Rust side reads the page again and acts on the daemon's decision (spec 141 §2.4; `src-tauri/src/sink.rs`).
+    exportPage: (name, text, page, confirmed) => invoke<string>('export_page', { name, text, slug: page.slug, version: page.version ?? null, confirmed }).catch(said),
+    print: (page, confirmed) => invoke<void>('print_page', { slug: page.slug, version: page.version ?? null, confirmed }).catch(said),
     reveal: (path: string) => invoke<void>('reveal', { path }),
     open: (path: string) => invoke<void>('open_file', { path }),
     openUrl: (url: string) => invoke<void>('open_url', { url }),

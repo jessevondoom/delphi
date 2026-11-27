@@ -18,7 +18,13 @@ export type Topic = {
   cited?: string[]; due: string | null;
   key_terms?: KeyTerm[]; start_here?: { cites: string[]; why: string }[]; see_also?: string[]; open_questions?: string[]; links?: string[]; records?: KbRecord[];
 };
-export type TopicPage = Topic & { markdown: string; version_shown: string | null; may_export?: boolean; export_refused?: string };
+/** What the daemon says may leave this machine of what the window shows, at one sink (spec 141 §2.4): `send`; `labelled` (the operator
+ * confirms once and what leaves begins with `line`); `refuse` (`reason` names the marks and the items, never text). `quotations`: at
+ * most 300 characters of a held source leave in one run. */
+export type SinkDecision = { decision: 'send' | 'labelled' | 'refuse'; reason: string; quotations: boolean; line: string | null; marks: string[] };
+/** A page the window exports or prints: its slug, and the earlier version shown, if one is. */
+export type PageRef = { slug: string; version?: string | null };
+export type TopicPage = Topic & { markdown: string; version_shown: string | null; may_export?: boolean; export_refused?: string; export?: SinkDecision; copy?: SinkDecision };
 export type Version = { version: string; built: number | null; number: number | null; change: string | null; outcome: string | null };
 export type Links = { slug: string; links_here: string[]; links_out: string[]; exists: boolean };
 /** One research topic as `topics.list` has it. */
@@ -31,7 +37,7 @@ export type Claim = { id: string; text: string; kind?: string; scope?: string; c
 export type ClaimView = { claim: Claim; status: string; shown: string; sources: { id: string; title: string | null; private: boolean }[] };
 /** An anchor into a source that no longer resolves (spec 142 §2.3 item 3): its own quote, the version and date it last resolved in, and why. */
 export type Orphan = { claim: string; quote: string; version: string; date: string; why: string };
-export type SourceView = { id: string; label: string; meta: Record<string, unknown>; private: boolean; capture_level?: string | null; status?: string | null; text: string; truncated: boolean; assets: string[]; passage_only?: boolean; orphans?: Orphan[]; text_held?: boolean; may_export?: boolean };
+export type SourceView = { id: string; label: string; meta: Record<string, unknown>; private: boolean; capture_level?: string | null; status?: string | null; text: string; truncated: boolean; assets: string[]; passage_only?: boolean; orphans?: Orphan[]; text_held?: boolean; may_export?: boolean; copy?: SinkDecision };
 
 /** The longest run of a held source's text the window lets out by a copy (spec 142 §2.5 item 4: the daemon's `RUN_MAX`). */
 export const HELD_RUN_MAX = 300;
@@ -47,6 +53,29 @@ export function exportAllowed(v: { may_export?: boolean }): boolean {
 export function copyAllowed(v: Pick<SourceView, 'text_held' | 'may_export'>, selected: string): boolean {
   if (!v.text_held && v.may_export !== false) return true;
   return selected.replace(/\s+/g, ' ').trim().length <= HELD_RUN_MAX;
+}
+
+/** What may become of the page or the source the window shows when it is exported or printed (spec 141 §2.4, the page-export
+ * row): the daemon's decision; a page it says may not leave is refused. */
+export function exportDecision(v: { may_export?: boolean; export?: SinkDecision }): SinkDecision['decision'] {
+  if (v.may_export === false) return 'refuse';
+  return v.export?.decision ?? 'send';
+}
+
+/** What a copy of `selected` from what the window shows may do (spec 141 §2.4, the clipboard row): refused when the daemon's `copy`
+ * decision refuses, or when a held text's selection is longer than the bound; `labelled` when the operator must confirm it and it
+ * leaves with its visible line; else `send`. A reply with no `copy` decision is an older daemon's: the rule of spec 142 alone. */
+export function copyDecision(v: { text_held?: boolean; may_export?: boolean; copy?: SinkDecision }, selected: string): SinkDecision['decision'] {
+  const d = v.copy;
+  if (!d) return copyAllowed(v, selected) ? 'send' : 'refuse';
+  if (d.decision === 'refuse') return 'refuse';
+  if ((d.quotations || v.text_held) && selected.replace(/\s+/g, ' ').trim().length > HELD_RUN_MAX) return 'refuse';
+  return d.decision === 'labelled' ? 'labelled' : 'send';
+}
+
+/** The text a labelled copy puts on the clipboard: the visible line, then the selection. */
+export function labelledCopy(line: string | null, selected: string): string {
+  return line ? `${line}\n\n${selected}` : selected;
 }
 export type Changes = { since: number; pages: { slug: string; title: string; built: number | null; version: number; change: string | null }[]; research: { id: string; question: string; updated: string; state: string }[]; findings: FindingRow[]; notes: Note[] };
 export type RoleCount = { role: string; lesson_files: number; notes: number; findings: number };

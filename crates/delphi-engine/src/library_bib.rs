@@ -97,7 +97,7 @@ pub fn export_with(lib: &Library, ids: &[String], format: Format, confirm: crate
     // The shared egress check (`specs/098` §12 item 16): a private source, and a record that cannot be read, never leave through an export.
     let leaves = |m: &Value| crate::egress::check(m, Channel::Export).is_ok();
     let withheld = decided.len() - chosen.iter().filter(|(_, m)| leaves(m)).count();
-    let mut out = render(lib, chosen.into_iter().filter(|(_, m)| leaves(m)).collect(), format);
+    let mut out = render(lib, chosen.into_iter().filter(|(_, m)| leaves(m)).collect(), format, true);
     if labelled_ok {
         if let Some(l) = line {
             out = match format {
@@ -117,17 +117,25 @@ pub(crate) fn for_page(lib: &Library, ids: &[String], format: Format) -> Result<
     let chosen: Vec<&(String, Value)> = ids.iter().map(|i| all.iter().find(|(id, _)| id == i).ok_or_else(|| format!("no source `{}`", i))).collect::<Result<_, _>>()?;
     let leaves = |m: &Value| crate::egress::check(m, Channel::Export).is_ok();
     let withheld = chosen.iter().filter(|(_, m)| !leaves(m)).count();
-    Ok(Export { text: render(lib, chosen.into_iter().filter(|(_, m)| leaves(m)).collect(), format), withheld })
+    Ok(Export { text: render(lib, chosen.into_iter().filter(|(_, m)| leaves(m)).collect(), format, false), withheld })
 }
 
 /// The citations of `chosen` in `format`. A held source's citation is sent; its text is not (`specs/141` §2.4 item 7, the guard of
 /// `specs/142` §2.5 item 4): every free-text field of its record that is sent is cut to the bound if it carries a run of the text.
-fn render(lib: &Library, chosen: Vec<&(String, Value)>, format: Format) -> String {
+/// At the sink (`sink`), a held source's own `abstract` and `note` are not sent at all (`specs/141` AC-16: the closed citation list
+/// has neither); its checked summary may still stand as its abstract (`specs/142` §2.6 item 8), cut like any other field.
+fn render(lib: &Library, chosen: Vec<&(String, Value)>, format: Format, sink: bool) -> String {
     let held = lib.held();
     let cut: Vec<(String, Value)> = chosen
         .into_iter()
         .map(|(id, m)| {
             let mut m = m.clone();
+            if sink && crate::library::is_held(&m) {
+                if let Some(o) = m.as_object_mut() {
+                    o.remove("abstract");
+                    o.remove("note");
+                }
+            }
             // `specs/142` §2.6 item 8: a source's summary is what a bibliography has of a source held as a pointer; it is its
             // `abstract` where the record has none, shown as written by a model.
             if m["abstract"].is_null() {

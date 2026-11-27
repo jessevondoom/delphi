@@ -79,7 +79,7 @@ impl Fx {
         let dir = self.lib().pages_dir();
         std::fs::create_dir_all(&dir).unwrap();
         let material: Vec<Value> = sources.iter().map(|s| json!({"id": format!("s-{s}")})).collect();
-        std::fs::write(dir.join(format!("{slug}.json")), json!({"kind": "topic_page", "material": material}).to_string()).unwrap();
+        std::fs::write(dir.join(format!("{slug}.json")), json!({"kind": "topic_page", "slug": slug, "title": slug, "material": material}).to_string()).unwrap();
         std::fs::write(dir.join(format!("{slug}.md")), format!("---\ntitle: {slug}\n---\n\n{body}")).unwrap();
         crate::label::relabel(&self.home, &self.ws, None).unwrap();
         std::fs::read_to_string(dir.join(format!("{slug}.md"))).unwrap()
@@ -352,4 +352,282 @@ fn q_is_body_may_leave() {
     assert!(crate::held_text::body_may_leave(&stored, &four));
     std::fs::write(&note, &four).unwrap();
     assert!(check_path(&fx.home, Some(&fx.ws), &note, Sink::Bundle, Confirm::Nobody).is_ok());
+}
+
+/// AC-16: a bibliography export of a held source whose title holds 400 characters of the source's text sends at most 300 of them,
+/// and sends no abstract and no note of its record, in every format.
+#[test]
+fn no_exported_field_holds_a_run_of_held_text() {
+    let fx = Fx::new();
+    let id = fx.source("held.md", &long_text(), Mark::TextHeld);
+    let text = fx.text(&id);
+    let path = fx.lib().source_dir(&id).join("meta.json");
+    let mut meta: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    meta["title"] = json!(take(&text, 40, 400));
+    meta["abstract"] = json!(format!("ABSTRACT-MARK {}", take(&text, 1000, 120)));
+    meta["note"] = json!(format!("NOTE-MARK {}", take(&text, 2000, 120)));
+    std::fs::write(&path, meta.to_string()).unwrap();
+    for f in [bib::Format::Plain, bib::Format::CslJson, bib::Format::BibTex] {
+        let e = bib::export_with(&fx.lib(), std::slice::from_ref(&id), f, Confirm::Nobody).unwrap();
+        assert_eq!(e.withheld, 0, "{f:?}: the citation is sent");
+        assert!(!crate::held_text::carries_run(&text, &e.text), "{f:?}: no run of more than 300 characters: {}", e.text);
+        assert!(e.text.contains(&take(&text, 40, 120)), "{f:?}: the title is cut, not dropped: {}", e.text);
+        assert!(!e.text.contains("ABSTRACT-MARK") && !e.text.contains("NOTE-MARK"), "{f:?}: no abstract and no note: {}", e.text);
+    }
+}
+
+// ---- slice C: the page reply, the app's export, print and copy, a client off this machine, a document, seed-export, remote serve ----
+
+/// The row's letter for a decision the window is given (`egress::view_decision`).
+fn letter(d: &Value) -> char {
+    match (d["decision"].as_str(), d["quotations"] == true) {
+        (Some("refuse"), _) => 'R',
+        (Some("labelled"), _) => 'L',
+        (Some("send"), true) => 'Q',
+        (Some("send"), false) => 'S',
+        other => panic!("not a decision: {other:?} in {d}"),
+    }
+}
+
+impl Fx {
+    /// One source with exactly `m` and a topic page built from it alone, labelled by the daemon. Returns the source and the slug.
+    fn page_of(&self, m: Mark) -> (String, String) {
+        let text = if m == Mark::TextHeld { long_text() } else { BODY.to_string() };
+        let id = self.source(&format!("{}.md", m.as_str()), &text, m);
+        let slug = format!("page-{}", m.as_str().replace('_', "-"));
+        self.page(&slug, &[&id], &format!("Generated page. Not authoritative.\n\n{BODY}"));
+        (id, slug)
+    }
+
+    fn get(&self, slug: &str, here: bool) -> Result<Value, String> {
+        crate::encyclopedia::pages_get(&self.home, &self.ws, 1_000, &json!({"slug": slug}), here)
+    }
+}
+
+/// AC-4 and AC-6, the page-export row through its real entry point, the page reply (`pages.get`) the app's export and print act on:
+/// a page built from a source with each one mark is refused, sent labelled with its visible line, or sent under the quotation bound
+/// as the row says; an unlabelled page is sent as before; a page that quotes more of a held source than may leave is refused whole;
+/// a refusal names the marks and the items and no text. The app's side (`app/src-tauri/src/sink.rs`) refuses, asks once and writes
+/// the line first, by its own tests.
+#[test]
+fn sink_page_export_follows_its_row() {
+    let fx = Fx::new();
+    let mut got = String::new();
+    for m in Mark::ALL {
+        let (id, slug) = fx.page_of(m);
+        let v = fx.get(&slug, true).unwrap();
+        got.push(letter(&v["export"]));
+        assert_eq!(v["may_export"] == false, v["export"]["decision"] == "refuse", "{}", v["export"]);
+        if v["export"]["decision"] == "refuse" {
+            let why = v["export_refused"].as_str().unwrap();
+            assert!(why.contains(&handling::source_item(&id)) && why.contains(m.shown()), "the refusal names the mark and its item: {why}");
+            assert!(!why.contains("tide comes in") && !why.contains("Held sentence"), "and no text: {why}");
+        }
+        if m == Mark::Internal {
+            assert_eq!(v["export"]["line"], "> Handling: INTERNAL");
+            assert!(v["markdown"].as_str().unwrap().starts_with("> Handling: INTERNAL"), "the page the app exports begins with its line");
+        }
+    }
+    assert_eq!(got, want(Sink::PageExport));
+    // an unlabelled page (its one source is open and carries no trait): as before labels
+    let p = fx.home.join("open.md");
+    std::fs::write(&p, "An open note about harbours.").unwrap();
+    let open = fx.lib().add_file(&p, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
+    fx.page("plain", &[&open], "Generated page. Not authoritative.\n\nNothing labelled.");
+    let side_path = fx.lib().pages_dir().join("plain.json");
+    let v = fx.get("plain", true).unwrap();
+    assert_eq!((v["export"]["decision"].as_str(), v["export"]["line"].is_null(), v["may_export"].as_bool()), (Some("send"), true, Some(true)), "{}", v["export"]);
+    // a page whose body quotes 400 characters of a held source is refused whole, whatever its label
+    let held_id = fx.page_of(Mark::TextHeld).0;
+    let quoting = format!("Generated page. Not authoritative.\n\n{}", take(&fx.text(&held_id), 0, 400));
+    fx.page("quoting", &[&held_id], &quoting);
+    let v = fx.get("quoting", true).unwrap();
+    assert_eq!(v["export"]["decision"], "refuse", "{}", v["export"]);
+    assert!(!v["export"]["reason"].as_str().unwrap().contains("Held sentence"));
+    // AC-19 at this sink: a page with no stored label is every mark
+    let mut side: Value = serde_json::from_str(&std::fs::read_to_string(&side_path).unwrap()).unwrap();
+    side.as_object_mut().unwrap().remove("label");
+    std::fs::write(&side_path, side.to_string()).unwrap();
+    assert_eq!(fx.get("plain", true).unwrap()["export"]["decision"], "refuse");
+}
+
+/// AC-15, the clipboard row: the page reply and the source reply say what the window's copy may do, by the label of the page or of
+/// the source; a held one's copy is bounded (the window refuses a selection past 300 characters, `app/test/held.test.ts`).
+#[test]
+fn sink_clipboard_follows_its_row() {
+    let fx = Fx::new();
+    let (mut pages, mut sources) = (String::new(), String::new());
+    for m in Mark::ALL {
+        let (id, slug) = fx.page_of(m);
+        pages.push(letter(&fx.get(&slug, true).unwrap()["copy"]));
+        let s = crate::encyclopedia::library_source(&fx.home, &fx.ws, &json!({"id": id}), true).unwrap();
+        sources.push(letter(&s["copy"]));
+        assert!(s["text"].is_string() && s["label"].is_string(), "the operator's own view is shown the source, its own `label` kept");
+        if s["copy"]["decision"] != "send" {
+            assert_eq!(s["may_export"], false);
+        }
+    }
+    assert_eq!(pages, want(Sink::Clipboard));
+    assert_eq!(sources, want(Sink::Clipboard));
+}
+
+/// AC-15, a client off this machine: no such client exists today (every listener of the daemon is a Unix socket, below), so the row
+/// is proved with a fixture sender: the page and source replies asked for a client off this machine refuse every labelled page and
+/// source, and send an unlabelled one; a reply whose label was not computed sends nothing.
+#[test]
+fn sink_off_machine_client_follows_its_row() {
+    let fx = Fx::new();
+    let mut got = String::new();
+    for m in Mark::ALL {
+        let (id, slug) = fx.page_of(m);
+        let page = fx.get(&slug, false);
+        let source = crate::encyclopedia::library_source(&fx.home, &fx.ws, &json!({"id": id}), false);
+        assert_eq!(page.is_err(), source.is_err(), "{m:?}");
+        got.push(if page.is_err() { 'R' } else { 'S' });
+        let e = page.unwrap_err();
+        assert!(e.contains("off this machine") && !e.contains("tide comes in") && !e.contains("Held sentence"), "{e}");
+        assert!(fx.get(&slug, true).is_ok(), "the operator's own view on this machine is not a sink");
+    }
+    assert_eq!(got, want(Sink::OffMachineClient));
+    assert!(reply_to_client(Some(&Label::none()), false).is_ok());
+    assert!(reply_to_client(None, false).is_err(), "a reply whose label is not computed is every mark");
+}
+
+/// The fact the row of a client off this machine rests on today: no listener of the daemon can be reached from another machine. The
+/// daemon's server and the engine's sockets bind Unix sockets only; the one HTTP listener, `kb serve`, is its own sink (remote serve).
+#[test]
+fn no_daemon_listener_is_reachable_from_another_machine() {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    for f in ["delphi-core/src/server.rs", "delphi-engine/src/service.rs", "delphi-engine/src/bridge.rs", "delphi-engine/src/host_rpc.rs"] {
+        let src = std::fs::read_to_string(crates.join(f)).unwrap_or_default();
+        let prod = &src[..src.find("\n#[cfg(test)]").unwrap_or(src.len())];
+        for net in ["TcpListener", "UdpSocket", "tiny_http::", "tokio::net::Tcp", "hyper::server"] {
+            assert!(!prod.contains(net), "{f} names `{net}`: a client off this machine may reach it; make `client_on_this_machine` say so");
+        }
+    }
+    let server = std::fs::read_to_string(crates.join("delphi-core/src/server.rs")).unwrap();
+    assert!(server.contains("UnixListener"), "the daemon serves Unix sockets");
+    let service = std::fs::read_to_string(crates.join("delphi-engine/src/service.rs")).unwrap();
+    let f = service.split("fn client_on_this_machine(").nth(1).unwrap();
+    assert!(f[..f.find("\n}\n").unwrap()].contains("true"));
+    for m in ["async fn pages_get(", "async fn library_source("] {
+        let body = service.split(m).nth(1).unwrap();
+        assert!(body[..body.find("\n    }\n").unwrap()].contains("client_on_this_machine(&ctx)"), "{m} tells the reply who asks");
+    }
+}
+
+/// A model that puts each text at a point set by its bytes: enough to embed and export.
+struct Words;
+impl crate::embed::Embedder for Words {
+    fn model_id(&self) -> &str {
+        "words-test"
+    }
+    fn dim(&self) -> usize {
+        4
+    }
+    fn min_similarity(&self) -> f32 {
+        0.0
+    }
+    fn embed_documents(&self, t: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        Ok(t.iter().map(|s| (0..4).map(|i| s.bytes().filter(|b| *b as usize % 4 == i).count() as f32 + 1.0).collect()).collect())
+    }
+    fn embed_query(&self, t: &str) -> Result<Vec<f32>, String> {
+        Ok(self.embed_documents(&[t.to_string()])?.remove(0))
+    }
+}
+
+const NOTE: &str = "---\nstatus: active\n---\n# Notes\n\nThe harbour master keeps the tide tables of our own.\n";
+
+impl Fx {
+    /// An index of one source with each mark and one unlabelled note, each row labelled from the records.
+    fn index(&self) -> (crate::kb::Kb, Vec<(Mark, String)>) {
+        let mut kb = crate::kb::Kb::open_in_memory().unwrap();
+        kb.attach_embedder(std::sync::Arc::new(Words)).unwrap();
+        kb.set_seed_vectors(None);
+        let mut paths = Vec::new();
+        for m in Mark::ALL {
+            let text = if m == Mark::TextHeld { long_text() } else { format!("# {}\n\nThe tide note, {}.\n", m.as_str(), m.as_str()) };
+            let id = self.source(&format!("{}.md", m.as_str()), &text, m);
+            let path = format!("library/sources/{id}/source.md");
+            kb.upsert_from(&path, "library", "federated_verified", &format!("---\nstatus: active\n---\n{text}"), "2026-11-27T00:00:00Z").unwrap();
+            paths.push((m, path));
+        }
+        kb.upsert_from("context/notes.md", "context", "federated_verified", NOTE, "2026-11-27T00:00:00Z").unwrap();
+        crate::label::relabel_rows(&mut kb, &self.home, &self.ws).unwrap();
+        kb.embed_pending(&mut |_, _| {}).unwrap();
+        (kb, paths)
+    }
+}
+
+/// AC-4 and AC-7, the seed-export row through `kb::seed_export` (what `delphi kb seed-export` writes): no vector of a chunk of a
+/// document with any mark is written, and the count of what was left out is returned; the unlabelled note's vectors are; a row the
+/// index wrote before labels existed (no `marks`) is every mark (AC-19).
+#[test]
+fn sink_seed_export_writes_no_labelled_vector() {
+    let fx = Fx::new();
+    let (mut kb, paths) = fx.index();
+    let (bytes, left_out) = crate::kb::seed_export(&kb, &fx.home, &fx.ws).unwrap();
+    let out = crate::embed::vectors::VecCache::parse(&bytes).unwrap();
+    let all = crate::embed::vectors::VecCache::parse(&kb.export_vectors().unwrap()).unwrap();
+    let only_note = {
+        let mut k = crate::kb::Kb::open_in_memory().unwrap();
+        k.attach_embedder(std::sync::Arc::new(Words)).unwrap();
+        k.set_seed_vectors(None);
+        k.upsert_from("context/notes.md", "context", "federated_verified", NOTE, "2026-11-27T00:00:00Z").unwrap();
+        k.embed_pending(&mut |_, _| {}).unwrap();
+        crate::embed::vectors::VecCache::parse(&k.export_vectors().unwrap()).unwrap()
+    };
+    assert_eq!(out.len(), only_note.len(), "only the unlabelled note's vectors are written");
+    assert!(out.entries().all(|(k, v)| only_note.get(k) == Some(v)));
+    assert!(all.len() > out.len() && left_out >= paths.len(), "every labelled document had a chunk left out ({left_out})");
+    let mut got = String::new();
+    for (m, p) in &paths {
+        let lib = fx.lib();
+        let labeller = crate::label::Labeller::new(Some(&lib), Some(&fx.ws));
+        got.push(if check_label(&index_label(&labeller, &kb, p), Sink::SeedExport).refused() { 'R' } else { 'S' });
+        assert!(index_label(&labeller, &kb, p).has(*m), "{p}");
+    }
+    assert_eq!(got, want(Sink::SeedExport));
+    // a row from before labels
+    kb.upsert_from("context/old.md", "context", "federated_verified", "---\nstatus: active\n---\n# Old\n\nAn older harbour note.\n", "2026-11-27T00:00:00Z").unwrap();
+    kb.embed_pending(&mut |_, _| {}).unwrap();
+    let lib = fx.lib();
+    let labeller = crate::label::Labeller::new(Some(&lib), Some(&fx.ws));
+    if kb.row_label("context/old.md").is_some_and(|(_, l)| !l.is_empty()) {
+        assert!(check_label(&index_label(&labeller, &kb, "context/old.md"), Sink::SeedExport).refused(), "a row with no marks is every mark");
+        let (_, more) = crate::kb::seed_export(&kb, &fx.home, &fx.ws).unwrap();
+        assert!(more > left_out, "its chunks are left out too");
+    }
+}
+
+/// AC-4 and AC-7, the remote-serve row through `kb serve`'s reader on an address that is not loopback: no labelled document is found
+/// by a search, listed or served, and the unlabelled note is; on loopback the results are as they were (only a held source's text is
+/// withheld there, as before this slice).
+#[test]
+fn sink_remote_serve_returns_no_labelled_document() {
+    let fx = Fx::new();
+    let (kb, paths) = fx.index();
+    let reader = |remote: bool| crate::kbserve::Reader { kb: &kb, ws: &fx.ws, operator: false, home: None, remote };
+    let found = |remote: bool| -> Vec<String> {
+        let r = reader(remote).get("/v1/search?q=tide%20note&limit=20");
+        assert_eq!(r.status, 200, "{}", r.body);
+        r.body["results"].as_array().unwrap().iter().filter_map(|h| h["path"].as_str().map(String::from)).collect()
+    };
+    let listed = |remote: bool| -> Vec<String> { reader(remote).get("/v1/documents?limit=200").body.as_array().unwrap().iter().filter_map(|d| d["rel_path"].as_str().map(String::from)).collect() };
+    let (remote_found, local_found) = (found(true), found(false));
+    let (remote_listed, local_listed) = (listed(true), listed(false));
+    let mut got = String::new();
+    for (m, p) in &paths {
+        let reached = remote_found.contains(p) || remote_listed.contains(p);
+        got.push(if reached { 'S' } else { 'R' });
+        // the document itself: refused before the index or the disk is read
+        assert_eq!(reader(true).get(&format!("/v1/doc?path={p}")).body["error"], "not in the knowledge base", "{p}");
+        // loopback: unchanged; only a held or a private source's text is withheld there, as before
+        let local = local_found.contains(p);
+        assert_eq!(local, *m != Mark::TextHeld && *m != Mark::LibraryPrivate, "{p} on loopback: {local_found:?}");
+        assert_eq!(local_listed.contains(p), local || *m == Mark::TextHeld || *m == Mark::LibraryPrivate, "{p} is listed on loopback as before");
+    }
+    assert_eq!(got, want(Sink::RemoteServe));
+    let note = "context/notes.md".to_string();
+    assert!(remote_found.contains(&note) && local_found.contains(&note) && remote_listed.contains(&note), "an unlabelled document reaches a remote reader: {remote_found:?}");
 }

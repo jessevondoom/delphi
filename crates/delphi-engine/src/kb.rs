@@ -933,6 +933,13 @@ impl Kb {
         crate::label::Label::from_column(v.flatten().as_deref())
     }
 
+    /// The zone and the stored label of the document at `rel_path`, or `None` when the index does not hold it: what a sink joins with
+    /// the label it recomputes from the records (`egress::index_label`).
+    pub fn row_label(&self, rel_path: &str) -> Option<(String, crate::label::Label)> {
+        let (zone, marks): (String, Option<String>) = self.conn.query_row("SELECT zone, marks FROM kb_documents WHERE rel_path = ?1", [rel_path], |r| Ok((r.get(0)?, r.get(1)?))).ok()?;
+        Some((zone, crate::label::Label::from_column(marks.as_deref())))
+    }
+
     /// Write every row's `marks` column with `label_of(zone, rel_path)`, the daemon's own computation (`label::relabel_rows`). Only rows
     /// whose label changed are written. Returns the rows read and the rows changed.
     pub fn relabel_rows(&mut self, label_of: &mut dyn FnMut(&str, &str) -> crate::label::Label) -> Result<(usize, usize), KbError> {
@@ -1639,6 +1646,11 @@ impl Kb {
 
     /// [`Kb::export_vectors`] with the chunks of the documents `withhold` names left out (`specs/142` §2.5 item 4 (b): a held source's).
     pub fn export_vectors_except(&self, withhold: &dyn Fn(&str) -> bool) -> Result<Vec<u8>, KbError> {
+        self.export_vectors_counted(withhold).map(|(b, _)| b)
+    }
+
+    /// [`Kb::export_vectors_except`], and how many chunks it left out because `withhold` named their document (asked once a document).
+    pub fn export_vectors_counted(&self, withhold: &dyn Fn(&str) -> bool) -> Result<(Vec<u8>, usize), KbError> {
         let model = self.embedder.as_ref().ok_or_else(|| KbError::Io("there is no embedding model to export vectors for".into()))?;
         let rows: Vec<(i64, String, String, String, i64)> = {
             let mut st = self.conn.prepare("SELECT c.chunk_id, c.rel_path, c.heading_path, c.raw_content, m.windows FROM kb_chunks c JOIN kb_chunk_vec m ON m.chunk_id = c.chunk_id ORDER BY c.chunk_id")?;
@@ -1647,8 +1659,11 @@ impl Kb {
         };
         let mut seen = HashSet::new();
         let mut entries: Vec<(embed::vectors::Key, Vec<Vec<f32>>)> = Vec::new();
+        let mut left_out = 0;
+        let mut asked: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
         for (id, path, heading, raw, windows) in rows {
-            if withhold(&path) {
+            if *asked.entry(path.clone()).or_insert_with(|| withhold(&path)) {
+                left_out += 1;
                 continue;
             }
             let pieces: Vec<String> = embed::windows(&raw, WINDOW_CHARS, VEC_STRIDE as usize).into_iter().map(|p| embed_text(&path, &heading, &p)).collect();
@@ -1663,7 +1678,7 @@ impl Kb {
             }
             entries.push((k, vecs));
         }
-        Ok(embed::vectors::VecCache::serialize(model.model_id(), model.dim(), EMBED_FORMAT, &entries))
+        Ok((embed::vectors::VecCache::serialize(model.model_id(), model.dim(), EMBED_FORMAT, &entries), left_out))
     }
 
     /// Chunks nearest the query, best first, each once, with cosine similarity at or above the model's floor.
@@ -3296,6 +3311,14 @@ pub fn import_text(ws: &Path, name: &str, text: &str) -> Result<crate::kb_import
     crate::kb_import::import(ws, &crate::kb_import::Input { text, name_hint: name, modified_secs: None, now_secs, keep_id: None }, &|t| kb.resolve_link(t))
 }
 
+/// What `delphi kb seed-export` writes, and how many chunks it left out: every chunk of a document whose label, as the seed-export sink
+/// reads it (`egress::index_label`), is refused there (every mark is, `specs/141` §2.4), and every chunk of a held source.
+pub fn seed_export(kb: &Kb, home: &Path, ws: &Path) -> Result<(Vec<u8>, usize), KbError> {
+    let lib = crate::library::Library::in_home(home).with_workspace(ws);
+    let labeller = crate::label::Labeller::new(Some(&lib), Some(ws));
+    kb.export_vectors_counted(&|p| crate::egress::check_label(&crate::egress::index_label(&labeller, kb, p), crate::egress::Sink::SeedExport).refused() || crate::held_text::withholds_path(home, p))
+}
+
 pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
     let sub = args.first().map(String::as_str).unwrap_or("");
     let open = || Kb::open(&db_path(ws));
@@ -3545,10 +3568,14 @@ pub fn run(home: &Path, ws: &Path, args: &[String]) -> i32 {
                     eprintln!("delphi kb: {} of {} chunk(s) have no vector; run `delphi kb index` first", c - v, c);
                     return Ok(1);
                 }
-                // No vector of a chunk of a held source is written out (`specs/142` §2.5 item 4 (b)).
-                let bytes = kb.export_vectors_except(&|p| crate::held_text::withholds_path(home, p))?;
+                // No vector of a chunk of a labelled document or of a held source is written out (`specs/141` §2.4, the seed-export row;
+                // `specs/142` §2.5 item 4 (b)). Each document's label is recomputed from the records now (AC-7, AC-19).
+                let (bytes, left_out) = seed_export(&kb, home, ws)?;
                 std::fs::write(out, &bytes).map_err(|e| KbError::Io(format!("{}: {}", out, e)))?;
                 println!("wrote {} ({:.1} KB) for {}", out, bytes.len() as f64 / 1024.0, kb.embedder().map(|e| e.model_id()).unwrap_or(""));
+                if left_out > 0 {
+                    println!("left out {} chunk(s) of labelled or held documents: no vector of them leaves this machine", left_out);
+                }
                 Ok(0)
             }
             "model" => model_cmd(home, &args[1..]),

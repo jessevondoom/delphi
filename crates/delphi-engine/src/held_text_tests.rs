@@ -213,13 +213,13 @@ fn kb_serve_returns_no_chunk_of_a_held_source() {
     std::fs::create_dir_all(&ws).unwrap();
     let held_path = format!("library/sources/{id}/source.md");
     let kb = index_with(&[(&held_path, "library", "federated_verified", &text), ("context/notes.md", "context", "federated_verified", "---\nstatus: active\n---\n# Notes\n\nHeld sentence about the tides, in a note of our own.\n")]);
-    let remote = crate::kbserve::Reader { kb: &kb, ws: &ws, operator: false, home: None };
+    let remote = crate::kbserve::Reader { kb: &kb, ws: &ws, operator: false, home: None, remote: false };
     let r = remote.get("/v1/search?q=held%20sentence%20tides&limit=10");
     assert_eq!(r.status, 200, "{}", r.body);
     let paths: Vec<&str> = r.body["results"].as_array().unwrap().iter().filter_map(|h| h["path"].as_str()).collect();
     assert!(!paths.contains(&held_path.as_str()) && paths.contains(&"context/notes.md"), "{paths:?}");
     assert_eq!(remote.get(&format!("/v1/doc?path={held_path}")).status, 404);
-    let mine = crate::kbserve::Reader { kb: &kb, ws: &ws, operator: true, home: Some(home.path()) };
+    let mine = crate::kbserve::Reader { kb: &kb, ws: &ws, operator: true, home: Some(home.path()), remote: false };
     let paths: Vec<String> = mine.get("/v1/search?q=held%20sentence%20tides&limit=10").body["results"].as_array().unwrap().iter().filter_map(|h| h["path"].as_str().map(String::from)).collect();
     assert!(paths.contains(&held_path), "the operator's view: {paths:?}");
 }
@@ -283,17 +283,19 @@ fn a_seed_page_built_by_the_daemon_passes_body_may_leave_for_a_held_source() {
 fn the_apps_views_say_a_held_source_may_not_be_exported_and_no_client_off_this_machine_reads_them() {
     let home = tempfile::tempdir().unwrap();
     let (lib, id, _) = held_lib(home.path());
-    let v = crate::encyclopedia::library_source(home.path(), &json!({"id": format!("s-{id}")})).unwrap();
+    let ws = home.path().join("workspaces/w");
+    let v = crate::encyclopedia::library_source(home.path(), &ws, &json!({"id": format!("s-{id}")}), true).unwrap();
     assert_eq!((v["text_held"].as_bool(), v["may_export"].as_bool()), (Some(true), Some(false)), "{}", v["may_export"]);
     assert!(v["text"].as_str().is_some_and(|t| t.contains("Held sentence")), "the operator's own view is shown the text");
     let open_file = home.path().join("open.md");
     std::fs::write(&open_file, "# Open\n\nAn open text.\n").unwrap();
     let open = lib.add_file(&open_file, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
-    let v = crate::encyclopedia::library_source(home.path(), &json!({"id": open})).unwrap();
+    let v = crate::encyclopedia::library_source(home.path(), &ws, &json!({"id": open}), true).unwrap();
     assert_eq!((v["text_held"].as_bool(), v["may_export"].as_bool()), (Some(false), Some(true)));
-    // pages.get carries the same answer for a page, and the reads are the console's and the app's only.
+    // pages.get carries the same answer for a page (the held refusal is part of its export decision since `specs/141` slice C), and
+    // the reads are the console's and the app's only.
     let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/encyclopedia.rs")).unwrap();
-    assert!(src.contains("v[\"may_export\"] = json!(refused.is_empty())"));
+    assert!(src.contains("lib.held().refused(&md, &[])") && src.contains("view_decision(&label, crate::egress::Sink::PageExport, held)"));
     let service = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/service.rs")).unwrap();
     let reader = service.split("fn need_reader(scope: Scope)").nth(1).unwrap();
     assert!(reader[..reader.find("\n}\n").unwrap()].contains("matches!(scope, Scope::Console | Scope::App)"));
