@@ -286,7 +286,7 @@ Proposed here, from the review of revision 3:
     - the summary's status;
     - the rule text;
     - the file renamed to match the title.
-- **Revision 4:** red-team (Ares) in Delphi on Gemini (`gemini-3.8-flash-medium`, help `t_0011`; a first attempt, `t_0010`, ended empty): approve with named changes.
+- **Revision 4:** red-team in Delphi on Gemini (`gemini-3.8-flash-medium`, help `t_0011`; a first attempt, `t_0010`, ended empty): approve with named changes.
   - **Applied:** lead-ins may state no fact, and captions and key terms carry markers (P0); a page carries its evidence's marks (P0); held text by the span's tools (P1, with the operator's choice (b)); kept-statement floor 5%, at least 10 topics, no default change without the operator (P1); soft 404s, parked domains and the HTTP status in `citable_text` (P2); whole-passage matching, with negations and numbers checked first (P2).
   - **Not applied as asked:** a 3% floor and 20 topics (on about 100 hand-checked statements 3% is noise, and 20 topics may not qualify; 5% and at least 10 are used).
 - **Still needed:** an independent review of this revision by a second model family (a committed Council or Panel record cited in `reviewed_by`), or the operator's waiver quoted in the status line. Then the operator's approval.

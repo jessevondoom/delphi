@@ -144,7 +144,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/144-pages-built-from-evidence-citable-text-evidence-packs-and-a-trial.md",
-    "sha256": "4e13558a3c17017dc4b905ffd10af69af76a19aba6ca7316ffb9e67b70acf581"
+    "sha256": "e7df1e46b44dfa35c9b1bf16e7bf27e2bce66ca10d5121cc110e5717359b49cb"
   },
   "source_status_at_hash": {
     "line": {
@@ -157,7 +157,7 @@
       },
       "text": "status: draft   # revision 5. The operator approved the approach and the architect's choices on 2026-11-27 (\"i agree with the [architect's] choices — accept them, including the change to 142B, and proceed. i'll approve all specs when ready\"); not yet approved as text"
     },
-    "sha256": "4e13558a3c17017dc4b905ffd10af69af76a19aba6ca7316ffb9e67b70acf581",
+    "sha256": "e7df1e46b44dfa35c9b1bf16e7bf27e2bce66ca10d5121cc110e5717359b49cb",
     "word": "draft"
   },
   "spec": {
