@@ -1,0 +1,137 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 13,
+      "number": null,
+      "title": "Spec 144: Pages that keep what passes"
+    },
+    {
+      "level": 2,
+      "line": 18,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 3,
+      "line": 29,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 35,
+      "number": "1.2",
+      "title": "Options considered"
+    },
+    {
+      "level": 2,
+      "line": 45,
+      "number": "2",
+      "title": "Design"
+    },
+    {
+      "level": 3,
+      "line": 47,
+      "number": "2.1",
+      "title": "A page keeps what passes"
+    },
+    {
+      "level": 3,
+      "line": 58,
+      "number": "2.2",
+      "title": "Insight, labelled as inference"
+    },
+    {
+      "level": 3,
+      "line": 69,
+      "number": "2.3",
+      "title": "The seed first; the long page on request"
+    },
+    {
+      "level": 3,
+      "line": 75,
+      "number": "2.4",
+      "title": "Every failure can be read"
+    },
+    {
+      "level": 3,
+      "line": 79,
+      "number": "2.5",
+      "title": "The trial that decides the default"
+    },
+    {
+      "level": 2,
+      "line": 93,
+      "number": "3",
+      "title": "Authority"
+    },
+    {
+      "level": 2,
+      "line": 97,
+      "number": "4",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 107,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 120,
+      "number": "6",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 124,
+      "number": "7",
+      "title": "What is not verified"
+    },
+    {
+      "level": 2,
+      "line": 130,
+      "number": "8",
+      "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 136,
+      "number": "9",
+      "title": "Review"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/144-pages-that-keep-what-passes-sentence-outcomes-labelled-inference-and-the-seed-first.md",
+    "sha256": "8f68782b5f5edaa2702c3b20e34e3f48921549ad261fd41cf7034bacf1a24a2b"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 442,
+        "end_line": 6,
+        "line": 6,
+        "start": 252
+      },
+      "text": "status: draft   # the operator approved the approach on 2026-11-27 (\"i approve that approach\"), not this text; the text needs the review GOVERNANCE §1.3 asks for and the operator's approval"
+    },
+    "sha256": "8f68782b5f5edaa2702c3b20e34e3f48921549ad261fd41cf7034bacf1a24a2b",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "144",
+    "stem": "144-pages-that-keep-what-passes-sentence-outcomes-labelled-inference-and-the-seed-first",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "144: Pages that keep what passes: sentence outcomes, labelled inference, and the seed first"
+  },
+  "summary": null
+}
