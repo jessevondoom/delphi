@@ -14,7 +14,7 @@ tags: [spec, governance, taint, authority, prompt-injection, held-text]
 
 # Spec 145: Taint gates what leaves
 
-> **Status: approved** by the operator on 2026-11-27 ("145 is approved. keep going"). Amendment 145-A1 (§2.4, from the review of §6, OpenAI ask `t_0014`) narrows it and awaits the operator's yes.
+> **Status: approved** by the operator on 2026-11-27 ("145 is approved. keep going"). Amendments 145-A1 and 145-A2 (§2.4, from the reviews of §6, OpenAI asks `t_0014` and `t_0016`) narrow it and await the operator's yes.
 > **Amends:**
 > - `GOVERNANCE.md` §4.3, its fourth bullet ("Taint gates actions, not only memory"). This is a constitutional change: Red-tier, applied only when the operator ratifies the diff (§5.7), in its own gate-changing pull request.
 > - [`specs/001`](001-governance-and-manifests.md) §5.2 (the taint-gated tools table) and its amendment refining §5.1 and §5.2 ("a tainted span cannot launder through a broader glob").
@@ -128,13 +128,36 @@ From the red-team review (OpenAI `gpt-6.2-sol`, ask `t_0014`: "do not ratify" un
    - the approval is single-use and bound to the hash of the exact operation sent.
 
    A remote approval relay is shown only what §5.10 already allows.
-6. **The order.** The code keeps the current, stricter gate until slice A, with these items, passes and merges. Slice G only states the rule, so the code never allows more than the charter.
+6. **The order.**
+   - Slice A merges first, with the new gate built but switched off: the current, stricter gate stays in force.
+   - The operator then ratifies slice G.
+   - Then the new gate is switched on.
+   - The code never allows more than the charter, and the charter never promises more than verified code.
+
+### 2.5 Amendment 145-A2: the recheck (narrows only)
+
+From the red-team recheck (OpenAI `gpt-6.2-sol`, ask `t_0016`).
+
+1. **Commands start at the lowest trust they can read.** Taint can't be tracked inside a running command. So a command whose readable tree holds any marked file, or that reads one, runs **tainted from launch**: no network, no writes to host-run paths, and its output taints the span that called it. Being tainted now costs a span almost nothing (§2.2), so this default is cheap.
+2. **Host-run paths are one list, checked on resolved targets.**
+   - The list is the merge flow's Red list of host-run files, one table in code.
+   - The write refusal of 145-A1 item 2 is checked on the resolved target (after symlinks and `..`) on every write route: file tools, artifact tools, patch application, and command output inside the sandbox.
+   - **The list cannot be complete.** A file the host loads that is not on it is the residual risk; adding one is a one-line change.
+3. **The egress boundary is the verified OS sandbox.** Network-off for tainted execution is enforced by the OS sandbox the daemon probes with its escape canaries (`specs/092`). Where no verified sandbox exists, a tainted span runs no command. Everything else outbound leaves through the daemon's gated send.
+4. **Dispatch.**
+   - A dispatch within this machine's trust boundary needs no card.
+   - A transfer to a federated peer is an outbound action and asks.
+   - A dispatch to a model seat on another provider is a model call. Model calls are not exits (operator, 2026-11-27, recorded in `specs/144` §8), and this spec does not change that.
+5. **Approval needs the full view on the approving channel.** Item 5 of 145-A1 applies to every channel that can approve. A remote relay (§5.10) that cannot show the full inert view (destination, account, body and every attachment) cannot approve that card, and it waits for the console or is denied.
+6. **Tests prove a taint-specific restriction.** Clean spans also get Red cards for outbound actions, so a Red card proves nothing. The lineage and end-to-end tests therefore assert both of these:
+   - the retained taint;
+   - a restriction only taint imposes: the file mark, network-off, or the host-run refusal.
 
 ### 2.3 Charter text (proposed; applied only by the operator's ratification)
 
 GOVERNANCE §4.3, fourth bullet, becomes:
 
-> - **Taint gates what leaves, and marks what stays:** a span whose computed taint is `federated_peer` or lower keeps its local writes and sandboxed execution, under the ordinary approval tier; every file it writes carries its computed taint, enforced when the file is later read, and each such write is noticed in the log; it may not write a file the host runs outside the sandbox, and code it runs has no network. Every outbound action it requests (network, `gh`, agent-to-agent, connector) requires a Red-tier approval of the exact payload, which no permission mode waives; a dispatch it requests starts the child at its taint. Writes to the promotion paths remain barred as above.
+> - **Taint gates what leaves, and marks what stays:** a span whose computed taint is `federated_peer` or lower keeps its local writes and sandboxed execution, under the ordinary approval tier; every file it writes carries its computed taint, enforced when the file is later read, and each such write is noticed in the log; it may not write a file the host runs outside the sandbox, and code it runs, or code run over its marked files, has no network. Every outbound action it requests (network, `gh`, agent-to-agent, connector) requires a Red-tier approval of the exact payload, shown in full on the approving channel, which no permission mode waives; a dispatch it requests starts the child at its taint. Writes to the promotion paths remain barred as above.
 
 ## 3. Authority
 
@@ -154,11 +177,11 @@ This spec **loosens** a charter invariant, and says so.
 | Slice | Content | Criteria | Hours |
 | :-- | :-- | :-- | --: |
 | G | the `GOVERNANCE.md` §4.3 diff and the `specs/001` §5.2 table, as their own gate-changing pull request, merged by the operator after ratification | AC-1 | 1 |
-| A | `provenance::gate`: tainted `WorktreeWrite` → Allow; tainted `Outbound` → Red; tainted `DispatchAgent` → Allow (child inherits); the laundering check becomes a mark; the notice; 145-A1 (marks on read, host-run paths refused, lasting taint, no network in tainted execution, informed cards) | AC-2 to AC-5, AC-7 to AC-10 | 8-11 |
+| A | `provenance::gate`: tainted `WorktreeWrite` → Allow; tainted `Outbound` → Red; tainted `DispatchAgent` → Allow (child inherits); the laundering check becomes a mark; the notice; 145-A1 and A2 (marks on read, commands tainted from launch, host-run paths refused on resolved targets, lasting taint, no network in tainted execution, informed cards on every channel); built behind a switch that stays off until G | AC-2 to AC-5, AC-7 to AC-11 | 10-13 |
 | B | held text for every role: `held_by_default` → true; `include_held` kept, documented as a no-op; 142 B's tracker and 144 §2.6 updated | AC-6 | 1-2 |
-| | **Total** | | **10-14** |
+| | **Total** | | **12-16** |
 
-Slice A is built only after G is merged.
+Order (145-A1 item 6): A merges with the new gate switched off; the operator ratifies G; the gate is switched on.
 
 ## 5. Acceptance criteria
 
@@ -187,7 +210,13 @@ Slice A is built only after G is merged.
     - an outbound route the gate does not classify is denied, with no effect on denial or timeout;
     - an outbound card shows the resolved destination, account and full body with hidden characters made visible, refuses a body it cannot show, and its approval sends only the operation whose hash it bound, once.
 
-Each of AC-2 to AC-10 is run at $L_0$ and at $L_1$, with a clean span as the control, and one test runs the whole chain: a tainted write, a later clean read, then an outbound decision.
+11. **AC-11:**
+    - a command run in a tree holding a marked file starts tainted: it cannot reach the network or write `build.rs`, and its output taints its caller;
+    - a write to a host-run path through a symlink or `..` is refused;
+    - a relay that cannot show an attachment cannot approve that card;
+    - each lineage and chain test asserts the retained taint and a taint-only restriction, not only a Red card.
+
+Each of AC-2 to AC-11 is run at $L_0$ and at $L_1$, with a clean span as the control, and one test runs the whole chain: a tainted write, a later clean read, then an outbound decision.
 
 ## 6. Verification plan
 
@@ -200,7 +229,8 @@ Scripted tests in `delphi-core` (`provenance`) and `delphi-engine` (`tools`, the
 ## 7. What is not verified
 
 - **Whether a tainted local write is caught by review in practice.** The taint mark and the notice make it visible; nothing measures how often a reviewer reads them.
-- **Whether every outbound path goes through `provenance::gate`.** AC-3 lists the kinds; an outbound path that skips the gate would be a defect today as well.
+- **Whether every outbound path goes through `provenance::gate`.** AC-3 lists the kinds; an outbound path that skips the gate would be a defect today as well. For commands, the verified sandbox's network-off is the boundary (145-A2 item 3).
+- **Whether the host-run list is complete.** It cannot be proven complete (145-A2 item 2).
 
 ## 8. Decisions for the operator
 
@@ -213,6 +243,9 @@ Scripted tests in `delphi-core` (`provenance`) and `delphi-engine` (`tools`, the
 - **Red-team, §6.**
   - **Attempts:** in Delphi on Gemini, help `t_0013`, which ended with an empty answer; then OpenAI (`gpt-6.2-sol`, ask `t_0014`), which answered "do not ratify" with five P0s and one P1.
   - **Applied:** all six, as amendment 145-A1 (§2.4), each of which narrows the change.
+- **Recheck:** OpenAI (`gpt-6.2-sol`, ask `t_0016`): "do not ratify §2.3 yet".
+  - It found lasting taint closed and five items open. All are applied as 145-A2, with one exception: a dispatch to another provider's model is a model call, which the operator ruled is not an exit.
+  - It names two limits that stay: the host-run list cannot be proven complete, and mediation for commands rests on the verified sandbox.
 - **Still needed:**
-  - the operator's yes to 145-A1;
+  - the operator's yes to 145-A1 and A2;
   - a red-team recheck that the six are closed, before the operator ratifies slice G.

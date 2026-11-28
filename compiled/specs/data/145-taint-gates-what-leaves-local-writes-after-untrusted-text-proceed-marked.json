@@ -70,49 +70,55 @@
     },
     {
       "level": 3,
-      "line": 133,
+      "line": 137,
+      "number": "2.5",
+      "title": "Amendment 145-A2: the recheck (narrows only)"
+    },
+    {
+      "level": 3,
+      "line": 156,
       "number": "2.3",
       "title": "Charter text (proposed; applied only by the operator's ratification)"
     },
     {
       "level": 2,
-      "line": 139,
+      "line": 162,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 152,
+      "line": 175,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 163,
+      "line": 186,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 192,
+      "line": 221,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 200,
+      "line": 229,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 205,
+      "line": 235,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 210,
+      "line": 240,
       "number": "9",
       "title": "Review"
     }
@@ -120,7 +126,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/145-taint-gates-what-leaves-local-writes-after-untrusted-text-proceed-marked.md",
-    "sha256": "1925bf97c1fea775ab935900ddfbb36a7d15fbee9ea3d82bceeaa54d42e96c5c"
+    "sha256": "1b5fea0e1c4eb552bdba67f216a7f077f76e9a4812d6ac91186ba08aa6b60de5"
   },
   "source_status_at_hash": {
     "line": {
@@ -133,7 +139,7 @@
       },
       "text": "status: approved   # by the operator on 2026-11-27: \"145 is approved. keep going\", approved before the red-team review of §6, which still runs before slice G is ratified"
     },
-    "sha256": "1925bf97c1fea775ab935900ddfbb36a7d15fbee9ea3d82bceeaa54d42e96c5c",
+    "sha256": "1b5fea0e1c4eb552bdba67f216a7f077f76e9a4812d6ac91186ba08aa6b60de5",
     "word": "approved"
   },
   "spec": {

@@ -58,85 +58,85 @@
     },
     {
       "level": 3,
-      "line": 102,
+      "line": 103,
       "number": "2.3",
       "title": "What the validator sees, and what it must show"
     },
     {
       "level": 3,
-      "line": 125,
+      "line": 126,
       "number": "2.4",
       "title": "A support check after research (built only if called for)"
     },
     {
       "level": 3,
-      "line": 134,
+      "line": 135,
       "number": "2.5",
       "title": "The evidence pack"
     },
     {
       "level": 3,
-      "line": 150,
+      "line": 151,
       "number": "2.6",
       "title": "What agents see"
     },
     {
       "level": 3,
-      "line": 163,
+      "line": 164,
       "number": "2.7",
       "title": "Pages are built from evidence"
     },
     {
       "level": 3,
-      "line": 181,
+      "line": 182,
       "number": "2.8",
       "title": "The trial"
     },
     {
       "level": 3,
-      "line": 234,
+      "line": 236,
       "number": "2.9",
       "title": "Standing checks after the trial"
     },
     {
       "level": 2,
-      "line": 239,
+      "line": 241,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 252,
+      "line": 254,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 265,
+      "line": 267,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 321,
+      "line": 325,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 325,
+      "line": 329,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 333,
+      "line": 337,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 357,
+      "line": 361,
       "number": "9",
       "title": "Review"
     }
@@ -144,7 +144,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/144-pages-built-from-evidence-citable-text-evidence-packs-and-a-trial.md",
-    "sha256": "c80cefe75325337be95e585a31dd81b2fb96b9bc8b7ce0e6b95572dbed0586b6"
+    "sha256": "4f45d0b6f25ba2ae13e4cc62f6a40f222a59008f20e068c288e20cd2d67ac459"
   },
   "source_status_at_hash": {
     "line": {
@@ -155,9 +155,9 @@
         "line": 6,
         "start": 268
       },
-      "text": "status: draft   # revision 6. The operator approved the approach and the architect's choices on 2026-11-27 (\"i agree with the [architect's] choices — accept them, including the change to 142B, and proceed. i'll approve all specs when ready\"); not yet approved as text"
+      "text": "status: draft   # revision 7. The operator approved the approach and the architect's choices on 2026-11-27 (\"i agree with the [architect's] choices — accept them, including the change to 142B, and proceed. i'll approve all specs when ready\"); not yet approved as text"
     },
-    "sha256": "c80cefe75325337be95e585a31dd81b2fb96b9bc8b7ce0e6b95572dbed0586b6",
+    "sha256": "4f45d0b6f25ba2ae13e4cc62f6a40f222a59008f20e068c288e20cd2d67ac459",
     "word": "draft"
   },
   "spec": {

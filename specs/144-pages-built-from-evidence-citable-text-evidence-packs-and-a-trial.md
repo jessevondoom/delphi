@@ -3,7 +3,7 @@ id: spec-144-pages-built-from-evidence-citable-text-evidence-packs-and-a-trial
 title: "144: Pages built from evidence: citable text only, research handed over as evidence packs, and a trial before defaults change"
 author: architect
 timestamp: 2026-11-28T06:00:00Z
-status: draft   # revision 6. The operator approved the approach and the architect's choices on 2026-11-27 ("i agree with the [architect's] choices — accept them, including the change to 142B, and proceed. i'll approve all specs when ready"); not yet approved as text
+status: draft   # revision 7. The operator approved the approach and the architect's choices on 2026-11-27 ("i agree with the [architect's] choices — accept them, including the change to 142B, and proceed. i'll approve all specs when ready"); not yet approved as text
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,7 @@ tags: [spec, pages, research, validator, writer, retrieval, encyclopedia]
 
 # Spec 144: Pages built from evidence
 
-> **Status: draft, revision 6.** The operator approved the approach (2026-11-27: "i approve that approach") and the architect's choices ("i agree with the [architect's] choices — accept them, including the change to 142B, and proceed"). This text is not approved. Revision 6 applies Council `t_0012` on revision 5, aligns with [`specs/145`](145-taint-gates-what-leaves-local-writes-after-untrusted-text-proceed-marked.md) (taint gates what leaves), and records the operator's ruling that model calls are not exits (section 9).
+> **Status: draft, revision 7.** The operator approved the approach (2026-11-27: "i approve that approach") and the architect's choices ("i agree with the [architect's] choices — accept them, including the change to 142B, and proceed"). This text is not approved. Revision 7 applies the red-team recheck of revision 6 (OpenAI, ask `t_0015`); revision 6 applied Council `t_0012` on revision 5, aligns with [`specs/145`](145-taint-gates-what-leaves-local-writes-after-untrusted-text-proceed-marked.md) (taint gates what leaves), and records the operator's ruling that model calls are not exits (section 9).
 > **Amends:**
 > - [`specs/057`](057-search-pages-generated-and-checked.md) §3.1, §3.2 and §3.3, for topic pages only (one marker per statement; `unchecked`). Search pages are unchanged.
 > - [`specs/139`](139-pages-seeded-from-research-a-seed-that-is-never-empty-a-long-depth-and-concept-titles.md) §2.1 (rows 1 and 6 of a research topic's seed), §2.3 item 3 (what `DRAFT TO EXPAND` is) and §2.5 item 3 (the default of `auto_rebuild`).
@@ -69,7 +69,7 @@ Four other facts:
 
 ### 2.1 Only text can be cited
 
-1. **Citable text.** A source is citable only when its stored text holds content. Code decides this by a fixed rule (`citable_text`): the capture's HTTP status was a success; the text is not empty; it is not only navigation, an error or "not found" page (a soft 404), a parked domain, a CAPTCHA, a paywall notice or a cookie banner; and its share of prose (sentences of ordinary text against links, menus and repeated lines) passes a fixed threshold. Each excluded source is logged with its reason. **A summary (142 §2.6) is not citable text:** a pointer source with a summary is listed under titles only.
+1. **Citable text.** A source is citable only when its stored text holds content. Code decides this by a fixed rule (`citable_text`): for a web capture, its HTTP status was a success; the text is not empty; it is not only navigation, an error or "not found" page (a soft 404), a parked domain, a CAPTCHA, a paywall notice or a cookie banner; and its share of content (sentences of ordinary text and table rows, against links, menus and repeated lines) passes a fixed threshold. A local file or a table of figures is judged by the same content share, without the HTTP test. Each excluded source is logged with its reason. **A summary (142 §2.6) is not citable text:** a pointer source with a summary is listed under titles only.
 2. **The rest are read, titles only.** A source without citable text is not a `RECORD` for the writer or the validator. It is listed once under `SOURCES READ (titles only; not citable for what they say)`. The page check rejects a marker naming it (`cited a source with no text`).
 3. **Research prose is not evidence.** A research answer (`answer.md`, a run's answer; 139 §2.1 row 1) is an outline. For a page it is not a citable record. Its claim markers are followed back to the claims and their passages, and unmarked answer prose supports nothing. It stays in agents' search, labelled (§2.6).
 4. **Research topics leave out the repository.**
@@ -87,6 +87,7 @@ Four other facts:
      - the hatnote, which code writes from the topic's title and its links;
      - a lead-in ending in ":" that matches one of a fixed list of phrases kept in code ("The main approaches are:", "It has these parts:" and the like).
    - **What else:** any other lead-in is a sentence and needs a marker.
+   - **One parsed form:** code parses a draft once into units, and the same parsed form is what the page renders and what the validator judges. A construct the parser cannot place in a unit class (raw HTML, an image with a descriptive text, a footnote that states a fact) is rejected (`a construct the page check cannot read`).
    - **Headings are still checked:** each heading is a unit the validator judges (item 2 of §2.3) against its section's records, so a heading that states a fact the section does not support fails like a sentence.
    - **What the writer drops:** a sentence it would add with no record behind it (a gloss, a transition).
 2. **The page check** rejects:
@@ -115,7 +116,7 @@ Four other facts:
    - For each `supported` verdict, the validator gives the passage it relied on. Code checks that:
      - the passage lies in the cited record's **source text** as shown, never in a claim, a finding, a summary, the seed or other generated prose;
      - it is made of **whole sentences**;
-     - where the sentence before or after it carries a qualifier the statement drops ("not", "no", "only", "unless", "except", a number or a condition), that sentence is part of the passage.
+     - where the sentence before or after it **in the stored capture** (the passage is resolved to its offsets in the capture, not only in the excerpt shown) carries a qualifier the statement drops ("not", "no", "only", "unless", "except", a number or a condition), that sentence is part of the passage.
    - A passage that fails any of these makes the verdict `unchecked`.
    - The passage check proves the words exist, not that they mean what the statement says. The validator's judgement and the trial's hand checks cover meaning, and statements that turn on a negation or a number are listed first in the trial's hand-check sample.
 5. **Conflicts.** When a contradicting record is shown and the page does not state the conflict with citations to both sides, the attempt fails (`a conflict the page does not state`).
@@ -155,9 +156,9 @@ Under spec 145, reading untrusted text no longer takes a span's tools away; it m
    - Its taint stays `external_untrusted`, so a span that reads it is marked as 145 says.
    - Until 145's slice A is merged, 142 B's rule as built stands: held text by default only for roles that do not act, `include_held: true` for the rest.
 2. **Research answers and evidence packs** are in agents' search, labelled `research summary · not evidence` and `evidence pack · not validated`.
-   - Each is taken at the lowest taint of the sources it carries: an answer or a pack that quotes held text is `external_untrusted`, like the held text itself.
+   - Each is taken at the lowest taint, and the strongest mark, of **every source its run read**, quoted or not: an answer may paraphrase without quoting, so its label comes from the run's inputs, not its quotes. An answer or a pack from a run that read held text is `external_untrusted`, like the held text itself.
    - It carries the marks of §2.5 item 3.
-3. **Private sources stay out.** No search returns a private source, an answer or pack that quotes one, or a page whose label (§2.7 item 4) is private, to any agent span. The operator's own reading of local pages is 141 F's.
+3. **Private sources stay out.** No search returns a private source, an answer or pack from a run that read one, or a page whose label (§2.7 item 4) is private, to any agent span. Every label is computed from the current marks of its material **before any result or snippet is returned**, cached answers and pages included; a result whose material cannot be traced is treated as private. The operator's own reading of local pages is 141 F's.
 4. **Model calls are not exits** (operator, 2026-11-27). What a writer, validator or checker is shown is governed by items 1 to 3 and 141's search rules, not by the exit checks. The exit checks (141's sinks, `body_may_leave`) stay where they are.
 
 ### 2.7 Pages are built from evidence
@@ -168,7 +169,7 @@ Under spec 145, reading untrusted text no longer takes a span's tools away; it m
 4. **A page carries the marks of all its material.**
    - A topic page's label (141 A, `Labeller::page`, which joins all material) is the join over **everything the writer and the validator were given, cited or not**: the seed, the evidence packs, findings, knowledge-base passages and the contradicting records, with each pack at the strongest mark of the sources it quotes.
    - A page that paraphrases private material while citing only a public source is therefore still private.
-   - The label is computed again at every exit check from the current marks of that material (§2.5 item 3).
+   - The label is computed again, from the current marks of that material, at every exit check and every search (§2.5 item 3, §2.6 item 3).
    - Every exit that carries the page checks it (141's label decision, `body_may_leave`).
 5. **Builds nobody asked for** are governed by existing switches, with their defaults changed until a trial passes (§2.8 item 7):
    - **`[bridge.jobs] pages`:** default `manual` (amends 143 §2.8 item 4).
@@ -209,6 +210,7 @@ Under spec 145, reading untrusted text no longer takes a span's tools away; it m
      - **Sample:** 10 per topic per arm, drawn at random (statements that turn on a negation or a number first).
      - **Checker:** a validator-role agent run in the host, blind to the arm and to the validator's verdict, on a model family other than both the writer's and the validator's where one is configured (else other than the writer's). The operator audits a fifth.
      - **Floor:** at most 5% may be wrong. Each wrong one is attributed: writer overreach, citation, or research distortion.
+   - **Each page's lead:** for every delivered page, its title, lead and section headings are checked the same way, in addition to the sample. A material error there fails that page, whatever the pooled rate.
    - **False rejections:**
      - **Sample:** 10 statements per arm that the validator failed, checked the same way.
      - **Floor:** at most 30% may be found supported.
@@ -278,7 +280,7 @@ Under spec 145, reading untrusted text no longer takes a span's tools away; it m
    A search page is checked as before.
 6. **AC-6:** for every cited record, the validator's material holds every passage the writer's brief held from it; a cited record left out for length is named.
 7. **AC-7:** the writer's brief and the validator's contract both contain §2.3 item 2's rule text verbatim, and a scripted test judges a planted strengthened statement not supported.
-8. **AC-8:** a `supported` verdict becomes `unchecked`, and on a topic page its unit fails, when its pinpoint passage:
+8. **AC-8:** a `supported` verdict becomes `unchecked`, and on a topic page its unit fails, when its pinpoint passage (resolved to its offsets in the stored capture):
    - is not in the shown record's source text;
    - is in a claim, finding, summary, the seed or generated prose;
    - is not whole sentences;
@@ -289,7 +291,8 @@ Under spec 145, reading untrusted text no longer takes a span's tools away; it m
    - every exit test passes unchanged.
 10. **AC-10:**
     - research answers and evidence packs are returned by an agent's search, each with its label;
-    - an answer or pack that quotes held text comes back at `external_untrusted`, and under 145 the span that reads it is marked as if it had read the held text.
+    - an answer or pack from a run that read held text, quoted or only paraphrased, comes back at `external_untrusted`, and under 145 the span that reads it is marked as if it had read the held text;
+    - a page or answer whose source was made private after it was built is not returned by the next search.
 11. **AC-11:**
     - a finished run writes an evidence pack with frontmatter, indexed, carrying the strongest mark of the sources it quotes;
     - a claim without an anchored quote is not in it;
@@ -312,7 +315,8 @@ Under spec 145, reading untrusted text no longer takes a span's tools away; it m
     - code lists every unit of a draft;
     - a unit the validator leaves without a verdict fails;
     - a compound sentence with one unsupported assertion fails;
-    - a draft that leaves a shown contradiction unstated fails with `a conflict the page does not state`.
+    - a draft that leaves a shown contradiction unstated fails with `a conflict the page does not state`;
+    - a draft holding raw HTML or a descriptive image text fails with `a construct the page check cannot read`, and the validator judges exactly the units the page renders.
 19. **AC-19:**
     - a bridged build runs only when both `[bridge.jobs] pages` and `auto_rebuild` allow it, an API build when `auto_rebuild` does;
     - a research run queues a page job only when the topic has citable evidence and page budget left;
@@ -404,4 +408,13 @@ Proposed here, from the reviews of revisions 3 and 5:
     - A2 dropped, trimming studied only if called for (P2);
     - §1.3's reference (P3).
   - **Superseded by spec 145:** the held-text-by-role rule and its tool-loss tests (the red-team's P0 on derived retrieval leaving tools enabled is moot once reading untrusted text marks writes instead of removing tools; its taint half is kept in §2.6 item 2).
+- **Revision 6:** red-team recheck on OpenAI (`gpt-6.2-sol`, ask `t_0015`): approve with named changes. It found the page-label and pinpoint P0s closed and three items open; all are applied here:
+  - labels and taint of answers and packs from every source the run read;
+  - one parsed form for rendering and validation;
+  - labels recomputed at search, untraceable results treated as private.
+
+  Its other findings are applied too:
+  - qualifiers resolved in the stored capture (P1);
+  - each delivered page's title, lead and headings checked (P1);
+  - `citable_text` split into capture validity and content, with tables counted (P2).
 - **Still needed:** an independent review of this revision by a second model family (a committed Council or Panel record cited in `reviewed_by`), or the operator's waiver quoted in the status line. Then the operator's approval.
