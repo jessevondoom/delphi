@@ -65,48 +65,54 @@
     {
       "level": 3,
       "line": 104,
+      "number": "2.4",
+      "title": "Amendment 145-A1: what the review closed (narrows only)"
+    },
+    {
+      "level": 3,
+      "line": 133,
       "number": "2.3",
       "title": "Charter text (proposed; applied only by the operator's ratification)"
     },
     {
       "level": 2,
-      "line": 110,
+      "line": 139,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 123,
+      "line": 152,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 134,
+      "line": 163,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 149,
+      "line": 192,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 157,
+      "line": 200,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 162,
+      "line": 205,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 167,
+      "line": 210,
       "number": "9",
       "title": "Review"
     }
@@ -114,7 +120,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/145-taint-gates-what-leaves-local-writes-after-untrusted-text-proceed-marked.md",
-    "sha256": "a983eced044b714b5b7971ac7ee945f62ae8ccd46838c8fdc4ecc0335a66437b"
+    "sha256": "1925bf97c1fea775ab935900ddfbb36a7d15fbee9ea3d82bceeaa54d42e96c5c"
   },
   "source_status_at_hash": {
     "line": {
@@ -127,7 +133,7 @@
       },
       "text": "status: approved   # by the operator on 2026-11-27: \"145 is approved. keep going\", approved before the red-team review of §6, which still runs before slice G is ratified"
     },
-    "sha256": "a983eced044b714b5b7971ac7ee945f62ae8ccd46838c8fdc4ecc0335a66437b",
+    "sha256": "1925bf97c1fea775ab935900ddfbb36a7d15fbee9ea3d82bceeaa54d42e96c5c",
     "word": "approved"
   },
   "spec": {
