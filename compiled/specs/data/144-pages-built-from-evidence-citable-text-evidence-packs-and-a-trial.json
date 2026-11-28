@@ -1,0 +1,173 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 15,
+      "number": null,
+      "title": "Spec 144: Pages built from evidence"
+    },
+    {
+      "level": 2,
+      "line": 27,
+      "number": "1",
+      "title": "Why"
+    },
+    {
+      "level": 3,
+      "line": 29,
+      "number": "1.1",
+      "title": "The goal this serves"
+    },
+    {
+      "level": 3,
+      "line": 33,
+      "number": "1.2",
+      "title": "The evidence (2026-11-27)"
+    },
+    {
+      "level": 3,
+      "line": 51,
+      "number": "1.3",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 58,
+      "number": "1.4",
+      "title": "Options considered"
+    },
+    {
+      "level": 2,
+      "line": 68,
+      "number": "2",
+      "title": "Design"
+    },
+    {
+      "level": 3,
+      "line": 70,
+      "number": "2.1",
+      "title": "Only text can be cited"
+    },
+    {
+      "level": 3,
+      "line": 80,
+      "number": "2.2",
+      "title": "Each statement carries its own citation (topic pages)"
+    },
+    {
+      "level": 3,
+      "line": 92,
+      "number": "2.3",
+      "title": "What the validator sees, and what it must show"
+    },
+    {
+      "level": 3,
+      "line": 104,
+      "number": "2.4",
+      "title": "A support check after research (built only if called for)"
+    },
+    {
+      "level": 3,
+      "line": 113,
+      "number": "2.5",
+      "title": "The evidence pack"
+    },
+    {
+      "level": 3,
+      "line": 124,
+      "number": "2.6",
+      "title": "What agents see"
+    },
+    {
+      "level": 3,
+      "line": 134,
+      "number": "2.7",
+      "title": "Pages are built from evidence"
+    },
+    {
+      "level": 3,
+      "line": 148,
+      "number": "2.8",
+      "title": "The trial"
+    },
+    {
+      "level": 3,
+      "line": 184,
+      "number": "2.9",
+      "title": "Standing checks after the trial"
+    },
+    {
+      "level": 2,
+      "line": 189,
+      "number": "3",
+      "title": "Authority"
+    },
+    {
+      "level": 2,
+      "line": 198,
+      "number": "4",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 211,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 238,
+      "number": "6",
+      "title": "Verification plan"
+    },
+    {
+      "level": 2,
+      "line": 242,
+      "number": "7",
+      "title": "What is not verified"
+    },
+    {
+      "level": 2,
+      "line": 249,
+      "number": "8",
+      "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 264,
+      "number": "9",
+      "title": "Review"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/144-pages-built-from-evidence-citable-text-evidence-packs-and-a-trial.md",
+    "sha256": "e7df1e46b44dfa35c9b1bf16e7bf27e2bce66ca10d5121cc110e5717359b49cb"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 537,
+        "end_line": 6,
+        "line": 6,
+        "start": 268
+      },
+      "text": "status: draft   # revision 5. The operator approved the approach and the architect's choices on 2026-11-27 (\"i agree with the [architect's] choices — accept them, including the change to 142B, and proceed. i'll approve all specs when ready\"); not yet approved as text"
+    },
+    "sha256": "e7df1e46b44dfa35c9b1bf16e7bf27e2bce66ca10d5121cc110e5717359b49cb",
+    "word": "draft"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "144",
+    "stem": "144-pages-built-from-evidence-citable-text-evidence-packs-and-a-trial",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "144: Pages built from evidence: citable text only, research handed over as evidence packs, and a trial before defaults change"
+  },
+  "summary": null
+}
