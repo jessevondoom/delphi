@@ -1155,7 +1155,7 @@ impl Engine {
                 let resolved = {
                     let mut idx = m.index.lock().unwrap();
                     let now = self.now();
-                    let mut ctx = ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &m.id, now_rfc3339: &now, stamps: vec![], events: vec![], held_by_default: crate::retrieval::held_by_default(&sc.role, &sc.manifest.write, &sc.manifest.execute) };
+                    let mut ctx = ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &m.id, now_rfc3339: &now, stamps: vec![], events: vec![], held_by_default: crate::retrieval::held_for(self.settings.taint_table, &sc.role, &sc.manifest.write, &sc.manifest.execute) };
                     let r = tools::read_pointer(&mut ctx, &p.uri);
                     stamps_unused.append(&mut ctx.stamps);
                     r
@@ -1187,7 +1187,7 @@ impl Engine {
             let start_cfg = self.cfg.get().retrieval.clone();
             if fresh && !council_seat && handoff.distill.is_none() && !sc.toolless && start_cfg.auto {
                 let (home, db, mid, obj, role) = (self.ws.home.clone(), self.ws.dir.join("local/state.db"), m.id.clone(), handoff.objective.clone(), sc.role.clone());
-                let (budget, root) = (crate::retrieval::StartBudget { passages: start_cfg.start_passages, chars: start_cfg.start_chars, provisional: crate::provisional_notes::enabled(&self.ws.dir), held: crate::retrieval::held_by_default(&sc.role, &sc.manifest.write, &sc.manifest.execute) }, handoff.parent_span_id == "operator");
+                let (budget, root) = (crate::retrieval::StartBudget { passages: start_cfg.start_passages, chars: start_cfg.start_chars, provisional: crate::provisional_notes::enabled(&self.ws.dir), held: crate::retrieval::held_for(self.settings.taint_table, &sc.role, &sc.manifest.write, &sc.manifest.execute) }, handoff.parent_span_id == "operator");
                 let got = tokio::task::spawn_blocking(move || crate::retrieval::span_start(&home, &db, &mid, &obj, &role, budget, root)).await.ok().flatten();
                 if let Some(start) = got {
                     // `specs/115` §2 item 3: a claim from an internal source among the passages marks this session as it is handed over.
@@ -2524,7 +2524,7 @@ impl Engine {
         let (result, stamps, asked) = {
             let mut idx = sc.m.index.lock().unwrap();
             let now = self.now();
-            let mut ctx = ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &sc.m.id, now_rfc3339: &now, stamps: vec![], events: vec![], held_by_default: crate::retrieval::held_by_default(&sc.role, &sc.manifest.write, &sc.manifest.execute) };
+            let mut ctx = ToolCtx { guard: &sc.guard, span: &mut sc.span, index: &mut idx, rules: &self.rules, probe: &*self.probe, role: &sc.role, mission_id: &sc.m.id, now_rfc3339: &now, stamps: vec![], events: vec![], held_by_default: crate::retrieval::held_for(self.settings.taint_table, &sc.role, &sc.manifest.write, &sc.manifest.execute) };
             let r = self.tools.run(&mut ctx, name, args);
             (r, std::mem::take(&mut ctx.stamps), std::mem::take(&mut ctx.events))
         };

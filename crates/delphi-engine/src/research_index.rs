@@ -215,6 +215,141 @@ pub fn record_text(rec: &Value) -> Option<String> {
     Some(out)
 }
 
+// ---- what a search shows of a research run (`specs/144` §2.6 items 2 and 3; slice B) ----------------------------------------------
+
+/// What a search shows for a research topic's answer (§2.6 item 2): a model's account of what the run read, never evidence.
+pub const ANSWER_LABEL: &str = "research summary · not evidence";
+
+/// What a file of a research topic's folder is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunFile {
+    /// `evidence-pack.md` (`evidence_pack`).
+    Pack,
+    /// `answer.md`.
+    Answer,
+    /// Any other file of the folder the index holds (the record, a project topic's other Markdown).
+    Other,
+}
+
+/// A research topic's file as the index names it: the workspace's, `research/topics/<id>/<file>` in zone `research`, or a registered
+/// project's, `projects/<project-id>/files/research/topics/<id>/<file>` in zone `project`. `(project id, topic id, kind)`.
+pub fn run_file<'a>(zone: &str, rel_path: &'a str) -> Option<(Option<&'a str>, &'a str, RunFile)> {
+    let p = rel_path.split('#').next().unwrap_or(rel_path);
+    let (project, rest) = match zone {
+        ZONE => (None, p.strip_prefix("research/topics/")?),
+        "project" => {
+            let (pid, r) = p.strip_prefix("projects/")?.split_once('/')?;
+            (Some(pid), r.strip_prefix("files/research/topics/")?)
+        }
+        _ => return None,
+    };
+    let (id, file) = rest.split_once('/')?;
+    if !crate::research_record::valid_topic_id(id) || file.is_empty() {
+        return None;
+    }
+    let kind = match file {
+        crate::evidence_pack::FILE => RunFile::Pack,
+        "answer.md" => RunFile::Answer,
+        _ => RunFile::Other,
+    };
+    Some((project, id, kind))
+}
+
+/// What a search may show of a research run's file, computed at the search: the label of every source its run read (an answer may
+/// paraphrase what it does not quote), and whether that makes it untrusted text (a run that read held text).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunShown {
+    pub label: crate::label::Label,
+    /// The run read held text: its file is `external_untrusted`, like the held text itself (§2.6 item 2).
+    pub untrusted: bool,
+}
+
+/// What a search traces its results to (`specs/144` §2.6 item 3): the workspace and the library of the index it reads, told from the
+/// index's own path (`<workspace>/local/state.db`), never from a result. An index anywhere else has no workspace: what it holds of a
+/// research run cannot be traced, so it is shown nothing of one.
+pub struct Trace {
+    ws: Option<std::path::PathBuf>,
+    lib: Option<crate::library::Library>,
+}
+
+impl Trace {
+    /// The trace of the index whose database is `db`.
+    pub fn of_db(db: Option<&Path>) -> Trace {
+        let ws = db.and_then(|db| {
+            let local = db.parent().filter(|p| p.file_name().is_some_and(|n| n == "local") && db.file_name().is_some_and(|n| n == "state.db"))?;
+            local.parent().map(Path::to_path_buf)
+        });
+        Trace::of_ws(ws.as_deref())
+    }
+
+    /// The trace of the workspace `ws` (and its home's library).
+    pub fn of_ws(ws: Option<&Path>) -> Trace {
+        let lib = ws.and_then(|ws| crate::held_text::home_of_ws(ws).map(|h| crate::library::Library::in_home(h).with_workspace(ws)));
+        Trace { ws: ws.map(Path::to_path_buf), lib }
+    }
+
+    /// The labeller over this trace's records. It reads the handling records once: make it when a result needs it, and once a search.
+    pub fn labeller(&self) -> crate::label::Labeller<'_> {
+        crate::label::Labeller::new(self.lib.as_ref(), self.ws.as_deref())
+    }
+
+    /// The topic a run file names, in its own folder: the workspace's, or the registered project's root. `None`: not found here.
+    fn topic(&self, project: Option<&str>, id: &str) -> Option<crate::research_record::Topic> {
+        let ws = self.ws.as_deref()?;
+        let root = match project {
+            None => ws.to_path_buf(),
+            Some(pid) => crate::scope::project_root(ws, &crate::scope::ProjectId::parse(pid).ok()?)?,
+        };
+        crate::research_record::Topic::at(&root, id).filter(crate::research_record::Topic::exists)
+    }
+
+    /// What a search shows of the run file `(project, id, kind)` ([`run_file`]), from the records now: `None` when it is withheld,
+    /// because a source its run read is private (`library_private`, `personal`) or because it cannot be traced (every mark).
+    pub fn shown(&self, l: &crate::label::Labeller<'_>, project: Option<&str>, id: &str, kind: RunFile) -> Option<RunShown> {
+        let topic = self.topic(project, id);
+        let facts = match kind {
+            RunFile::Pack => crate::evidence_pack::label_of_topic(l, id, topic.as_ref()),
+            RunFile::Answer | RunFile::Other => crate::evidence_pack::run_label_of_topic(l, id, topic.as_ref()),
+        };
+        if crate::evidence_pack::withheld(&facts.label) {
+            return None;
+        }
+        let untrusted = kind == RunFile::Pack || facts.label.has(crate::label::Mark::TextHeld);
+        Some(RunShown { label: facts.label, untrusted })
+    }
+
+    /// Is the library source a row of the index names (`library/sources/<id>/…`: its text, excerpts or summary) private now? Asked of
+    /// an index in a workspace only: the sync never lists a private source, and this keeps out one made private since the last sync.
+    /// A row whose source the library no longer holds a record of (removed since the sync) is left to the next sync, which drops it.
+    pub fn source_withheld(&self, l: &crate::label::Labeller<'_>, rel_path: &str) -> bool {
+        let (Some(_), Some(lib)) = (&self.ws, &self.lib) else { return false };
+        let Some(id) = rel_path.strip_prefix("library/sources/").and_then(|r| r.split('/').next()).filter(|id| !id.is_empty()) else { return false };
+        lib.read_meta(id).is_some() && crate::evidence_pack::withheld(&l.source(id).label)
+    }
+}
+
+/// A registered project's files (`mcp_project::scaffold_files`, by path under its root) without those of a research topic whose run is
+/// withheld ([`Trace::shown`]): what a host's word-ranked project search, its `kb_retrieve` project leg and its resources may read.
+pub fn visible_project_files(ws: &Path, root: &Path, files: Vec<(String, std::path::PathBuf)>) -> Vec<(String, std::path::PathBuf)> {
+    if !files.iter().any(|(rel, _)| rel.starts_with("research/topics/")) {
+        return files;
+    }
+    let trace = Trace::of_ws(Some(ws));
+    let l = trace.labeller();
+    let mut seen: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    files
+        .into_iter()
+        .filter(|(rel, _)| {
+            let Some(rest) = rel.strip_prefix("research/topics/") else { return true };
+            let Some((id, _)) = rest.split_once('/').filter(|(id, _)| crate::research_record::valid_topic_id(id)) else { return true };
+            *seen.entry(id.to_string()).or_insert_with(|| {
+                let topic = crate::research_record::Topic::at(root, id).filter(crate::research_record::Topic::exists);
+                !crate::evidence_pack::withheld(&crate::evidence_pack::run_label_of_topic(&l, id, topic.as_ref()).label)
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,7 +388,10 @@ mod tests {
     fn finished_topic(ws: &Path, question: &str, answer: &str, claims: &[String], private: bool) -> Topic {
         let t = Topic::begin(ws, &Begin { question, asked_by: Asker::host("host:claude-code/m"), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
         t.query("r-t-1", "zebrafish husbandry temperature", "topic", Some("brave"), Ok(2)).unwrap();
-        t.page("r-t-1", "https://example.org/page", "s-1", Some("sha256:00")).unwrap();
+        // The page it read is a source the library holds (`specs/144` §2.6 item 3: a run whose sources cannot be traced is withheld).
+        let home = ws.parent().and_then(Path::parent).unwrap();
+        let read = source(&Library::in_home(home), home, &format!("page-{}", crate::research_record::topic_id(question)), "A page the run read.", false);
+        t.page("r-t-1", "https://example.org/page", &read, Some("sha256:00")).unwrap();
         let result = json!({"answer": answer, "budget_used": {"steps": 2, "check_steps": 1}, "coverage": "thin", "coverage_report": {"thin_below": 3, "counted": 1, "rungs": []}, "search_log": {"version": 1, "private": private, "lines": [], "flow": {}}});
         t.finish("r-t-1", "done", Some(&result), claims, None, 5).unwrap();
         t
@@ -284,7 +422,7 @@ mod tests {
         assert_eq!((claim.zone.as_str(), claim.status, claim.label, claim.source_type.as_str()), (ZONE, "noted", "not validated", crate::research::TIER), "a research claim is labelled by its derived status: noted");
         assert!(claim.preview.contains("zebrafish tanks need 28 degrees"), "{}", claim.preview);
         let answer = by_path(&format!("research/topics/{}/answer.md", t.id));
-        assert_eq!((answer.zone.as_str(), answer.status, answer.source_type.as_str()), (ZONE, "noted", crate::research::TIER), "the answer's own frontmatter does not set its tier");
+        assert_eq!((answer.zone.as_str(), answer.status, answer.label, answer.source_type.as_str()), (ZONE, "noted", ANSWER_LABEL, crate::research::TIER), "the answer's own frontmatter does not set its tier");
         // The record is found by what it holds: the question and what was searched.
         let about_record = search(&f, "zebrafish husbandry temperature", zone());
         let record = about_record.iter().find(|h| h.rel_path == format!("research/topics/{}/record.json", t.id)).unwrap_or_else(|| panic!("the record is not among {:?}", about_record.iter().map(|h| &h.rel_path).collect::<Vec<_>>()));
@@ -366,7 +504,7 @@ mod tests {
         let objective = "Numbats shelter overnight in hollow logs";
         let start = span_start(&f.home, &db, "m-numbat", objective, "builder", StartBudget::default(), false).expect("the answer is found at the span's start");
         let line = start.text.lines().find(|l| l.contains(&format!("research/topics/{}/answer.md#L", open.id))).unwrap_or_else(|| panic!("no passage of the answer:\n{}", start.text));
-        assert!(line.starts_with("- research/topics/") && line.contains(" [not validated]: ") && line.contains("hollow logs lined with shredded bark"), "its pointer, its label, its text: {line}");
+        assert!(line.starts_with("- research/topics/") && line.contains(&format!(" [{ANSWER_LABEL}]: ")) && line.contains("hollow logs lined with shredded bark"), "its pointer, its label, its text: {line}");
         assert_eq!(start.tier, Tier::L2, "the span starts at the library's tier ({}), the lowest among its passages", crate::research::TIER);
         assert_eq!(crate::retrieval::tier_of(crate::research::TIER), Tier::L2);
         for needle in ["4417", "9931", closed.id.as_str(), hidden.as_str()] {
@@ -375,7 +513,7 @@ mod tests {
         assert!(start.provisional.is_empty());
         // Every role is given it under the same label; a root span asks once per mission.
         let again = span_start(&f.home, &db, "m-numbat-2", objective, "architect", StartBudget::default(), true).expect("a root span");
-        assert!(again.text.contains(&format!("research/topics/{}/answer.md#L", open.id)) && again.text.contains("[not validated]") && !again.text.contains("4417"), "{}", again.text);
+        assert!(again.text.contains(&format!("research/topics/{}/answer.md#L", open.id)) && again.text.contains(&format!("[{ANSWER_LABEL}]")) && !again.text.contains("4417"), "{}", again.text);
     }
 
     #[test]

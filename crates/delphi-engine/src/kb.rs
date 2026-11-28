@@ -360,7 +360,7 @@ pub const HELD_LABEL: &str = "held text · untrusted · not validated";
 ///
 /// A research topic's evidence pack (`specs/144` §2.5, §2.6 item 2) is admitted with it: untrusted text that quotes the sources its runs
 /// read, held text among them, at `external_untrusted`, labelled `evidence pack · not validated` and withheld at the search when any of
-/// those sources is private (`evidence_pack::search_label`).
+/// those sources is private (`research_index::Trace::shown`, at every search).
 fn held_sql(t: &str) -> String {
     format!("(({t}zone = 'library' AND {t}source_type = 'external_untrusted' AND {t}rel_path LIKE 'library/sources/%/source.md') OR ({t}zone = 'research' AND {t}source_type = 'external_untrusted' AND {t}rel_path LIKE 'research/topics/%/{}'))", crate::evidence_pack::FILE)
 }
@@ -2328,6 +2328,10 @@ impl Kb {
         let mut hits = Vec::new();
         let mut readiness: HashMap<String, Option<String>> = HashMap::new();
         let mut episodes = 0usize;
+        // What results are traced to (`specs/144` §2.6 item 3), from this index's own path; the labeller is made at the first result
+        // that needs it, once a search.
+        let trace = crate::research_index::Trace::of_db(self.conn.path().map(Path::new));
+        let mut labeller: Option<crate::label::Labeller<'_>> = None;
         for (id, s) in order.into_iter() {
             if hits.len() >= opts.limit.min(opts.cap) {
                 break;
@@ -2343,15 +2347,36 @@ impl Kb {
             }
             let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated, d.author, d.marks FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0, (r.get::<_, Option<String>>(10)?, r.get::<_, Option<String>>(11)?))));
             let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated, (doc_author, marks))) = row else { continue };
-            // `specs/144` §2.6 items 2-3: an evidence pack's label is computed again from the current marks of every source its runs read,
-            // before anything of it is returned. One from a run that read a private source, or one that cannot be traced, is not.
-            let pack_marks = match (zone == crate::research_index::ZONE).then(|| crate::evidence_pack::topic_of_path(&rel_path)).flatten() {
-                Some(topic) => match crate::evidence_pack::search_label(self.conn.path().map(Path::new), topic) {
-                    Some(l) => Some(l),
+            // `specs/144` §2.6 items 2-3: a research run's answer, record or evidence pack is labelled again from the current marks of
+            // every source its run read, quoted or not, before anything of it is returned. One from a run that read a private source, or
+            // one that cannot be traced, is not returned; one from a run that read held text is untrusted text, as the held text is, and
+            // is returned only to a search that admits held or untrusted text. A library source made private since the last sync is out.
+            let run = crate::research_index::run_file(&zone, &rel_path);
+            if run.is_some() || rel_path.starts_with("library/sources/") {
+                let l = labeller.get_or_insert_with(|| trace.labeller());
+                if run.is_none() && trace.source_withheld(l, &rel_path) {
+                    continue;
+                }
+            }
+            let run_shown = match run {
+                Some((project, topic, kind)) => match trace.shown(labeller.as_ref().expect("made above"), project, topic, kind) {
+                    Some(s) => Some((kind, s)),
                     None => continue,
                 },
                 None => None,
             };
+            let tier_name = match &run_shown {
+                Some((_, s)) if s.untrusted && tier_name != UNTRUSTED => {
+                    let admitted = (opts.include_untrusted || opts.include_held) && opts.source_types.as_ref().is_none_or(|t| t.contains(&UNTRUSTED));
+                    if !admitted {
+                        continue;
+                    }
+                    UNTRUSTED.to_string()
+                }
+                _ => tier_name,
+            };
+            let pack_marks = run_shown.as_ref().map(|(_, s)| s.label.clone());
+            let run_kind = run_shown.as_ref().map(|(k, _)| *k);
             // A finding of another project is not this search's to return (`specs/116` §5.3); a home finding is everyone's.
             // `specs/115` §3 item 1: unless the operator shares research and that project is in the caller's list.
             let theirs = project_of(&zone, &rel_path);
@@ -2471,8 +2496,10 @@ impl Kb {
             } else if shared_from.is_some() && ks == delphi_core::knowledge_status::Status::Noted {
                 // §3 item 2: another project's research, unless its claim status says more.
                 crate::shared_research::SHARED_LABEL
-            } else if pack_marks.is_some() {
+            } else if run_kind == Some(crate::research_index::RunFile::Pack) {
                 crate::evidence_pack::SEARCH_LABEL
+            } else if run_kind == Some(crate::research_index::RunFile::Answer) {
+                crate::research_index::ANSWER_LABEL
             } else if zone == "about" {
                 "release reference, not build authority"
             } else if zone == "summaries" {

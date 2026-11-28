@@ -2292,6 +2292,46 @@ mod tests {
         assert_eq!((gate(f.span.ceiling(), Action::WorktreeWrite), gate(f.span.ceiling(), Action::Outbound)), (Gate::Deny, Gate::Deny), "having asked, the builder's span loses its mutating and outbound tools");
     }
 
+    /// `specs/144` §2.6 item 1, AC-9: behind 145 A's switch. Under the what-leaves table every shipped role's default `kb_search` returns
+    /// a held passage, labelled, at `external_untrusted`, and its span is tainted (and, under that table, keeps its worktree write);
+    /// under the ratified table, which is in force, 142 B's role rule stands unchanged.
+    #[test]
+    fn spec_144_with_the_switch_on_every_roles_default_search_returns_held_text_and_off_142_bs_rule_stands() {
+        use delphi_core::provenance::{Action, Gate, TaintTable};
+        assert_eq!(delphi_core::provenance::TAINT_TABLE, TaintTable::Ratified, "the switch is off in this build");
+        let held = "library/sources/h1/source.md";
+        let agents = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agents");
+        let mut roles: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+        for e in std::fs::read_dir(&agents).unwrap().flatten() {
+            let Ok(text) = std::fs::read_to_string(e.path().join("AGENT.md")) else { continue };
+            let m = crate::workspace::AgentManifest::parse(&text).unwrap();
+            roles.push((m.id.clone(), m.write.clone(), m.execute.clone()));
+        }
+        assert!(roles.len() >= 10 && roles.iter().any(|(r, ..)| r == "builder"));
+        for (role, write, execute) in &roles {
+            assert!(crate::retrieval::held_for(TaintTable::WhatLeaves, role, write, execute), "{role}: on with the switch");
+            assert_eq!(crate::retrieval::held_for(TaintTable::Ratified, role, write, execute), crate::retrieval::held_by_default(role, write, execute), "{role}: 142 B's rule with the switch off");
+        }
+        for (role, write, execute) in roles.iter().filter(|(r, ..)| ["builder", "orchestrator", "scout"].contains(&r.as_str())) {
+            for table in [TaintTable::WhatLeaves, TaintTable::Ratified] {
+                let mut f = fx(&[]);
+                f.span = f.span.clone().under(table);
+                let mut kb = crate::kb::Kb::open(&f.root.join("local/state.db")).unwrap();
+                kb.upsert_from(held, "library", "external_untrusted", "# Tides\n\nThe tidal gauge readings of the held page.\n", "t").unwrap();
+                kb.upsert_from("context/ok.md", "context", "user_ratified", "---\nsource_type: user_ratified\nstatus: active\n---\n# Gauge\n\nThe tidal gauge readings, ratified.\n", "t").unwrap();
+                drop(kb);
+                let on = crate::retrieval::held_for(table, role, write, execute);
+                let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role, mission_id: "m1", now_rfc3339: "t", stamps: vec![], events: vec![], held_by_default: on };
+                let r = run(&mut ctx, "kb_search", &json!({"query": "tidal gauge readings"}));
+                assert_eq!(r.content.contains(&format!("[{}] {held}", crate::kb::HELD_LABEL)), on, "{role} {table:?}: {}", r.content);
+                assert_eq!(f.span.ceiling() == Tier::L0, on, "{role} {table:?}: a span given held text is tainted");
+                if on && table == TaintTable::WhatLeaves {
+                    assert_eq!(f.span.gate(Action::WorktreeWrite), Gate::Allow, "{role}: under 145 a tainted span keeps its worktree write");
+                }
+            }
+        }
+    }
+
     /// `specs/116` §4.5 (`specs/064` §4.1): the agent's search returns each hit's passage text, labelled, inside a per-call character
     /// budget; nothing in a passage can close its element; untrusted text is still left out; reading a federated passage is federated
     /// input, as reading its file would be.

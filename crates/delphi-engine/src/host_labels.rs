@@ -293,6 +293,10 @@ pub fn of_hit_with(ws_dir: &Path, h: &Hit, hashes: Option<&HashMap<String, Strin
     if h.zone == crate::finding_record::ZONE && status == "noted" {
         label = format!("{}{}", crate::finding_record::label_for(&h.source_type), if author == "host_session" { ", recorded by a host session" } else { "" });
     }
+    // `specs/144` §2.6 item 2: a research answer and an evidence pack say what they are, as the search labelled them.
+    if h.label == crate::research_index::ANSWER_LABEL || h.label == crate::evidence_pack::SEARCH_LABEL {
+        label = h.label.to_string();
+    }
     // `specs/115` §3 item 2, §2 item 3: another project's research says so, and a claim from an internal source says that first.
     if h.internal {
         // §11 item 5: a claim an internal source states reads `confirmed by an internal source (<project>)`.

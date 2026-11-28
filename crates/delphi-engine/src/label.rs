@@ -116,7 +116,7 @@ impl Label {
         Label { marks: Mark::ALL.into_iter().map(|m| (m, BTreeSet::from([why.to_string()]))).collect() }
     }
 
-    fn with(mut self, m: Mark, from: &str) -> Label {
+    pub(crate) fn with(mut self, m: Mark, from: &str) -> Label {
         self.add(m, from);
         self
     }

@@ -214,15 +214,24 @@ pub fn write_all(home: &Path, ws: &Path) -> Vec<(String, Result<Written, String>
 /// source its runs read or its claims rest on. A topic that cannot be found or read, a pack with no source to trace, and a source
 /// whose record cannot be read: every mark.
 pub fn label_of(l: &Labeller<'_>, topic_id: &str) -> Facts {
+    let found = l.workspace().and_then(|ws| research_record::find(ws, topic_id));
+    label_of_topic(l, topic_id, found.as_ref())
+}
+
+/// [`label_of`] for the topic at `topic`, wherever it lives (the workspace's folder or a project's): a project's topic may share its id
+/// with one of the workspace, so a project's file is labelled from its own folder. `None`, or no workspace known: every mark.
+pub fn label_of_topic(l: &Labeller<'_>, topic_id: &str, topic: Option<&Topic>) -> Facts {
     let item = format!("research/topics/{topic_id}/{FILE}");
     let every = |why: &str| Facts { label: Label::every(&item), line: format!("{item}={why}") };
-    let Some(ws) = l.workspace() else { return every("unknown") };
-    let Some(rec) = research_record::find(ws, topic_id).and_then(|t| t.read().ok()) else { return every("unknown") };
+    if l.workspace().is_none() {
+        return every("unknown");
+    }
+    let Some(rec) = topic.and_then(|t| t.read().ok()) else { return every("unknown") };
     let Some(sources) = sources_of(l.library(), &rec) else { return every("untraced") };
     if sources.is_empty() {
         return every("untraced");
     }
-    let r = l.research_record(topic_id);
+    let r = record_facts(topic_id, &rec);
     let mut label = r.label;
     let mut line = format!("{item}|{}", r.line);
     for s in &sources {
@@ -238,12 +247,20 @@ pub fn label_of(l: &Labeller<'_>, topic_id: &str) -> Facts {
 /// follows, since its seed's answer may paraphrase any of them. Unlike [`label_of`], a topic that read no source is the record's label
 /// alone; a record that cannot be read, or claims whose anchors cannot be traced, are every mark.
 pub fn run_label(l: &Labeller<'_>, topic_id: &str) -> Facts {
+    let found = l.workspace().and_then(|ws| research_record::find(ws, topic_id));
+    run_label_of_topic(l, topic_id, found.as_ref())
+}
+
+/// [`run_label`] for the topic at `topic`, wherever it lives (as [`label_of_topic`]). `None`, or no workspace known: every mark.
+pub fn run_label_of_topic(l: &Labeller<'_>, topic_id: &str, topic: Option<&Topic>) -> Facts {
     let item = format!("research/topics/{topic_id}");
     let every = |why: &str| Facts { label: Label::every(&item), line: format!("{item}=run:{why}") };
-    let Some(ws) = l.workspace() else { return every("unknown") };
-    let Some(rec) = research_record::find(ws, topic_id).and_then(|t| t.read().ok()) else { return every("unknown") };
+    if l.workspace().is_none() {
+        return every("unknown");
+    }
+    let Some(rec) = topic.and_then(|t| t.read().ok()) else { return every("unknown") };
     let Some(sources) = sources_of(l.library(), &rec) else { return every("untraced") };
-    let r = l.research_record(topic_id);
+    let r = record_facts(topic_id, &rec);
     let mut label = r.label;
     let mut line = format!("{}|run", r.line);
     for s in &sources {
@@ -252,6 +269,14 @@ pub fn run_label(l: &Labeller<'_>, topic_id: &str) -> Facts {
         line.push_str(&format!("|{}", f.line));
     }
     Facts { label, line }
+}
+
+/// A research record's own label, read: `library_private` when it is private (as `Labeller::research_record` gives it, same line).
+fn record_facts(topic_id: &str, rec: &Value) -> Facts {
+    let item = format!("research/topics/{topic_id}");
+    let private = rec["private"] != false;
+    let label = if private { Label::none().with(Mark::LibraryPrivate, &item) } else { Label::none() };
+    Facts { label, line: format!("{item}=rr:private={private}") }
 }
 
 /// The pack's label with a home and a workspace only.

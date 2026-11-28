@@ -70,7 +70,9 @@ impl LiveKnown {
                 hits
             }
             Caller::Role(role) => crate::retrieval::search(&self.home, db, query, SearchOpts { role: Some(role.clone()), limit: LIMIT, zones: Some(ZONES.to_vec()), ..Default::default() }).map(|r| r.hits).unwrap_or_default(),
-            Caller::Operator => crate::retrieval::search(&self.home, db, query, SearchOpts { role: None, limit: LIMIT, zones: Some(ZONES.to_vec()), ..Default::default() }).map(|r| r.hits).unwrap_or_default(),
+            // The operator reads held text (`specs/142` §2.5 item 3), and a topic whose run read it is held text's (`specs/144` §2.6
+            // item 2): without it the console would not find, so not continue, a topic whose run kept a page of unknown licence.
+            Caller::Operator => crate::retrieval::search(&self.home, db, query, SearchOpts { role: None, limit: LIMIT, zones: Some(ZONES.to_vec()), include_held: true, ..Default::default() }).map(|r| r.hits).unwrap_or_default(),
         }
     }
 
