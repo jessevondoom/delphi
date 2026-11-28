@@ -317,8 +317,11 @@ impl Project {
     }
 
     /// Project files the host may list and read: `_index.md` and the Markdown under the four scaffold folders.
+    /// The project's files a host may read, without a research topic's files whose run read a private source or cannot be traced
+    /// (`specs/144` §2.6 item 3, `research_index::visible_project_files`), computed at each call.
     fn files(&self) -> Vec<(String, PathBuf)> {
-        self.root.as_deref().map(scaffold_files).unwrap_or_default()
+        let Some(root) = self.root.as_deref() else { return Vec::new() };
+        crate::research_index::visible_project_files(&self.ws_dir, root, scaffold_files(root))
     }
 
     /// The registered project whose layer of the index this session reads (`specs/109` §11.3): the active project when it has a
@@ -1504,6 +1507,50 @@ mod tests {
         assert!(!out.contains("4417") && !out.contains(&closed.id), "{out}");
         let v = p.kb_retrieve_use("numbatkin", 10, "all", "all", crate::host_labels::Use::Verify).unwrap();
         assert!(!v.contains("research/topics/"), "{v}");
+    }
+
+    /// `specs/144` §2.6 items 2-3, AC-9, AC-10: the host's `kb_retrieve` (and through it `search_kb`'s index leg) labels a workspace
+    /// topic's answer `research summary · not evidence`, and returns nothing of it once a source its run read is made private, at the
+    /// next call, before any sync; the project's own research topic whose run read a private source is not among the project files a
+    /// host reads (`search_kb`'s project leg, `kb_retrieve`'s project leg, `search_project`), while an open one is.
+    #[test]
+    fn spec_144_host_reads_label_answers_and_return_nothing_of_a_run_that_read_a_private_source() {
+        use crate::research_record::{Asker, Begin, Topic};
+        let (t, ws, root) = corpus_fixture(false);
+        let lib = crate::library::Library::in_home(t.path());
+        let src = t.path().join("dunnart.md");
+        fs::write(&src, "Dunnarts shelter in cracks of dry clay soil during the day.").unwrap();
+        let sid = lib.add_file(&src, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), level: Some(crate::library::Level::Full), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+        let topic = |at: &Path, question: &str, answer: &str, read: Option<&str>| {
+            let tp = Topic::begin(at, &Begin { question, asked_by: Asker::host("host:claude-code/m"), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-t-1" }).unwrap();
+            if let Some(s) = read {
+                tp.page("r-t-1", "https://example.org/dunnart", s, Some("sha256:00")).unwrap();
+            }
+            let result = json!({"answer": answer, "budget_used": {"steps": 2, "check_steps": 1}, "coverage": "thin", "coverage_report": {"thin_below": 3, "counted": 1, "rungs": []}, "search_log": {"version": 1, "private": false, "lines": [], "flow": {}}});
+            tp.finish("r-t-1", "done", Some(&result), &[], None, 5).unwrap();
+            tp
+        };
+        let home_topic = topic(&ws, "Where do dunnarts shelter by day?", "The dunnartkin shelter in clay cracks by day.", Some(&sid));
+        let proj_open = topic(&root, "Do dunnarts hibernate?", "The dunnartkin enter torpor on cold nights.", None);
+        let proj_read = topic(&root, "What do dunnarts eat?", "The dunnartkin eat beetles and spiders.", Some(&sid));
+        crate::kb::Kb::open(&ws.join("local/state.db")).unwrap().sync_lexical(&crate::kb::sources(&ws), "t").unwrap();
+        let p = Project::new(&ws, &root);
+        let out = p.kb_retrieve("dunnartkin", 10, "all", "all").unwrap();
+        let answer = out.split("<!-- delphi:rag chunk_id").find(|c| c.contains(&format!("source=\"research/topics/{}/answer.md", home_topic.id))).unwrap_or_else(|| panic!("{out}"));
+        assert!(answer.contains(&format!("label=\"{}\"", crate::research_index::ANSWER_LABEL)), "{answer}");
+        assert!(out.contains("torpor") && out.contains("beetles"), "both project topics are read while the source is open: {out}");
+
+        let meta = lib.source_dir(&sid).join("meta.json");
+        let mut m: Value = serde_json::from_str(&fs::read_to_string(&meta).unwrap()).unwrap();
+        m["private"] = json!(true);
+        fs::write(&meta, m.to_string()).unwrap();
+        let out = p.kb_retrieve("dunnartkin", 10, "all", "all").unwrap();
+        assert!(!out.contains(&home_topic.id) && !out.contains("clay cracks"), "{out}");
+        assert!(out.contains("torpor") && !out.contains("beetles") && !out.contains(&proj_read.id), "{out}");
+        let kb_leg: Vec<String> = p.search_kb_project("dunnartkin", 10).iter().map(|r| r["path"].as_str().unwrap_or("").to_string()).collect();
+        assert!(kb_leg.iter().any(|r| r.contains(&proj_open.id)) && !kb_leg.iter().any(|r| r.contains(&proj_read.id)), "{kb_leg:?}");
+        let sp = p.search_project("dunnartkin", 10).unwrap();
+        assert!(sp.contains(&proj_open.id) && !sp.contains(&proj_read.id), "{sp}");
     }
 
     /// `specs/109` §13.3 (defects 2 and 3): a library passage carries the gloss for its fixed tier beside `source_type`, agrees with its

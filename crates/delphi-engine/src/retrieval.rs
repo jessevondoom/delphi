@@ -365,6 +365,15 @@ pub fn held_by_default(role: &str, write: &[String], execute: &[String]) -> bool
     !ACTING_ROLES.contains(&role) && !write.iter().any(|w| w.trim_start().starts_with("@worktree")) && execute.iter().all(|e| NON_ACTING_EXECUTE.contains(&e.as_str()))
 }
 
+/// Whether a span is given held text by default, under the taint table it runs under (`specs/144` §2.6 item 1). Under `specs/145`'s
+/// what-leaves table reading untrusted text marks what a span writes and leaves its tools in place, so every role's default search and
+/// start passages return held text (labelled, at `external_untrusted`). Under the ratified table, which is in force
+/// (`provenance::TAINT_TABLE`), 142 B's role rule stands: [`held_by_default`]. The engine passes `Settings::taint_table`, the same
+/// switch as 145 A's; nothing else turns it.
+pub fn held_for(table: delphi_core::provenance::TaintTable, role: &str, write: &[String], execute: &[String]) -> bool {
+    table == delphi_core::provenance::TaintTable::WhatLeaves || held_by_default(role, write, execute)
+}
+
 /// What a span starts with.
 pub struct Start {
     /// The `@runtime/retrieved` text: one line per passage, each with its pointer and its label.

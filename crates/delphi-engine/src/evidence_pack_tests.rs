@@ -249,6 +249,136 @@ fn packs_are_written_for_earlier_runs_from_their_records() {
     assert!(!pack_hits(&hits, &earlier).is_empty());
 }
 
+// ---- slice B (`specs/144` §2.6 items 2-3; AC-9, AC-10): what agents' searches return of a research run --------------------------
+
+fn finish_with(t: &Topic, claims: &[String], answer: &str) {
+    let result = json!({"answer": answer, "claims": claims, "budget_used": {"steps": 1, "check_steps": 0}, "search_log": {"version": 1, "private": false, "lines": [], "flow": {}}});
+    t.finish("r-1", "done", Some(&result), claims, None, 1).unwrap();
+}
+
+fn agent_search(ws: &Path, query: &str, zones: Vec<&'static str>, held: bool) -> Vec<crate::kb::Hit> {
+    let kb = Kb::open(&ws.join("local/state.db")).unwrap();
+    kb.search(query, &SearchOpts { role: Some("scout".into()), zones: Some(zones), include_held: held, limit: 30, rerank_weight: 0.0, ..Default::default() }).unwrap()
+}
+
+fn answer_of(t: &Topic) -> String {
+    format!("research/topics/{}/answer.md", t.id)
+}
+
+fn strs(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+/// AC-10: an answer and a pack come back labelled (`research summary · not evidence`, `evidence pack · not validated`); an answer from
+/// a run that read held text and only paraphrases it is `external_untrusted`, marked `text_held`, returned only to a search that admits
+/// held text, and a span that starts with it is tainted. Under the ratified table a builder's start passages do not carry it; under
+/// 145's table (the switch, `retrieval::held_for`) they do, at `L0`.
+#[test]
+fn answers_and_packs_are_labelled_and_an_answer_of_a_run_that_read_held_text_is_untrusted_and_taints_its_span() {
+    use crate::research_index::ANSWER_LABEL;
+    use delphi_core::provenance::TaintTable;
+    use delphi_core::provenance::Tier;
+    let f = fx();
+    let lib = Library::in_home(&f.home);
+    let open = open_source(&lib, &f.home, "numbat", "Numbats eat termites almost exclusively, about twenty thousand a day.");
+    let (held, _) = held_source(&lib, "https://held.example/quolls", &held_text());
+    let a = topic(&f.ws, "What do numbats eat?", &[("https://example.org/numbat", &open)]);
+    let c = claim(&lib, "numbats eat termites", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", &a.id, &open, "eat termites almost exclusively");
+    finish_with(&a, std::slice::from_ref(&c), "Numbats feed on termites, by the survey's account (not validated).");
+    after_run(&f.home, &a);
+    // Read held text, quoted nothing, kept no claim: the answer only paraphrases it.
+    let h = topic(&f.ws, "Where do quolls make dens?", &[("https://held.example/quolls", &held)]);
+    finish_with(&h, &[], "Wallaroo keepers report dens by creek banks beneath logs (not validated).");
+    Kb::open(&f.ws.join("local/state.db")).unwrap().refresh(&f.ws, "").unwrap();
+
+    // The open run's answer: in a default search, labelled, at the research tier, no mark.
+    let hits = agent_search(&f.ws, "numbats feed termites survey", vec![crate::research_index::ZONE], false);
+    let ans = hits.iter().find(|x| x.rel_path == answer_of(&a)).unwrap_or_else(|| panic!("{:?}", hits.iter().map(|x| &x.rel_path).collect::<Vec<_>>()));
+    assert_eq!((ans.label, ans.source_type.as_str(), ans.status), (ANSWER_LABEL, crate::research::TIER, "noted"));
+    assert!(ans.marks.names().is_empty(), "{:?}", ans.marks.names());
+    // Its pack: labelled, untrusted, with held text admitted.
+    let hits = agent_search(&f.ws, "numbats eat termites almost exclusively", vec![crate::research_index::ZONE], true);
+    assert!(pack_hits(&hits, &a).iter().all(|x| x.label == SEARCH_LABEL && x.source_type == TAINT) && !pack_hits(&hits, &a).is_empty());
+
+    // The held run's answer: not in a search that admits no held text; with it, untrusted, labelled, marked.
+    let q = "wallaroo keepers dens creek banks";
+    assert!(!agent_search(&f.ws, q, vec![crate::research_index::ZONE], false).iter().any(|x| x.rel_path.starts_with(&format!("research/topics/{}/", h.id))), "a paraphrase of held text is held text's");
+    let hits = agent_search(&f.ws, q, vec![crate::research_index::ZONE], true);
+    let ans = hits.iter().find(|x| x.rel_path == answer_of(&h)).expect("returned with held text");
+    assert_eq!((ans.label, ans.source_type.as_str()), (ANSWER_LABEL, "external_untrusted"));
+    assert!(ans.marks.has(Mark::TextHeld));
+    assert!(hits.iter().filter(|x| x.rel_path.starts_with(&format!("research/topics/{}/", h.id))).all(|x| x.source_type == "external_untrusted"), "its record too");
+
+    // A span that starts with it is tainted. A builder under the ratified table is not given it; under 145's table it is.
+    let db = f.ws.join("local/state.db");
+    let (w, x) = (strs(&["@worktree/**"]), strs(&["shell-worktree-scoped", "git-worktree"]));
+    let objective = "Report what wallaroo keepers say about dens by creek banks";
+    let off = crate::retrieval::held_for(TaintTable::Ratified, "builder", &w, &x);
+    assert!(!off);
+    let start = crate::retrieval::span_start(&f.home, &db, "m-b1", objective, "builder", crate::retrieval::StartBudget { held: off, ..Default::default() }, false);
+    assert!(start.as_ref().is_none_or(|s| !s.text.contains(&answer_of(&h)) && s.tier > Tier::L1), "{:?}", start.map(|s| s.text));
+    let on = crate::retrieval::held_for(TaintTable::WhatLeaves, "builder", &w, &x);
+    assert!(on);
+    let start = crate::retrieval::span_start(&f.home, &db, "m-b1", objective, "builder", crate::retrieval::StartBudget { held: on, ..Default::default() }, false).expect("passages");
+    assert!(start.text.contains(&format!("{}#L", answer_of(&h))) && start.text.contains(ANSWER_LABEL), "{}", start.text);
+    assert_eq!(start.tier, Tier::L0, "the span is tainted as if it had read the held text");
+}
+
+/// AC-9, AC-10 (§2.6 item 3): no agent search returns a library source made private, nor the answer, record or pack of a run that read
+/// it, quoted or not, from the very next search, before any refresh; a run whose record cannot be read is untraceable, so withheld; an
+/// index whose workspace cannot be told returns nothing of any run; topic pages are not indexed at all.
+#[test]
+fn no_search_returns_a_private_source_or_an_answer_record_or_pack_of_a_run_that_read_one_or_cannot_be_traced() {
+    let f = fx();
+    let lib = Library::in_home(&f.home);
+    let open = open_source(&lib, &f.home, "echidna", "Echidnas lay a single leathery egg into a pouch each breeding season.");
+    let other = open_source(&lib, &f.home, "platypus", "Platypus mothers nurse their young without nipples, from patches of skin.");
+    let t = topic(&f.ws, "How do echidnas breed?", &[("https://example.org/echidna", &open), ("https://example.org/platypus", &other)]);
+    let c = claim(&lib, "echidnas lay one egg into a pouch", "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0", &t.id, &open, "a single leathery egg into a pouch");
+    finish_with(&t, std::slice::from_ref(&c), "Echidnas lay one leathery egg into a pouch (not validated).");
+    after_run(&f.home, &t);
+    let u = topic(&f.ws, "How do bettongs forage?", &[]);
+    finish_with(&u, &[], "Bettongs forage for truffles at night (not validated).");
+    // A page file under the library's pages: never a document of the index.
+    std::fs::create_dir_all(lib.root().join("pages")).unwrap();
+    std::fs::write(lib.root().join("pages/echidna-0000.md"), "# Echidna\n\nEchidnas lay a single leathery egg.\n").unwrap();
+    Kb::open(&f.ws.join("local/state.db")).unwrap().refresh(&f.ws, "").unwrap();
+    assert!(!crate::kb::sources(&f.ws).iter().any(|s| s.rel_path.contains("pages/")), "no topic page is indexed");
+
+    let zones = || vec![crate::research_index::ZONE, "library"];
+    let of_run = |hits: &[crate::kb::Hit], t: &Topic| hits.iter().filter(|x| x.rel_path.starts_with(&format!("research/topics/{}/", t.id))).count();
+    let q = "echidnas leathery egg pouch";
+    let hits = agent_search(&f.ws, q, zones(), true);
+    assert!(of_run(&hits, &t) >= 2 && hits.iter().any(|x| x.rel_path == format!("library/sources/{open}/source.md")), "{:?}", hits.iter().map(|x| &x.rel_path).collect::<Vec<_>>());
+
+    // The source the run read but does not quote is made private: the next search, before any refresh, returns nothing of the run.
+    set_private(&lib, &other);
+    let hits = agent_search(&f.ws, q, zones(), true);
+    assert_eq!(of_run(&hits, &t), 0, "{:?}", hits.iter().map(|x| &x.rel_path).collect::<Vec<_>>());
+    assert!(hits.iter().any(|x| x.rel_path == format!("library/sources/{open}/source.md")), "the open source itself is still returned");
+    let start = crate::retrieval::span_start(&f.home, &f.ws.join("local/state.db"), "m-b2", "Explain how echidnas lay a leathery egg into a pouch", "scout", crate::retrieval::StartBudget { held: true, ..Default::default() }, false);
+    assert!(start.as_ref().is_none_or(|s| !s.text.contains(&format!("research/topics/{}/", t.id))), "nor do span start passages");
+    // The quoted source made private: it is not returned itself either.
+    set_private(&lib, &open);
+    let hits = agent_search(&f.ws, q, zones(), true);
+    assert!(!hits.iter().any(|x| x.rel_path.contains(&format!("library/sources/{open}/"))), "a source made private since the sync is out at the search");
+
+    // Untraceable: a record that cannot be read withholds the run's answer.
+    assert!(agent_search(&f.ws, "bettongs forage truffles night", zones(), false).iter().any(|x| x.rel_path == answer_of(&u)));
+    std::fs::write(u.record_path(), "not json").unwrap();
+    assert!(!agent_search(&f.ws, "bettongs forage truffles night", zones(), false).iter().any(|x| x.rel_path == answer_of(&u)));
+    // An index whose workspace cannot be told: nothing of a run.
+    let elsewhere = f.home.join("elsewhere.db");
+    let mut kb = Kb::open(&elsewhere).unwrap();
+    kb.upsert_from(&answer_of(&a_topic_id_holder(&f.ws)), crate::research_index::ZONE, crate::research::TIER, "# Answer\n\nKoalas sleep twenty hours a day.\n", "t").unwrap();
+    assert!(kb.search("koalas sleep twenty hours", &SearchOpts { role: Some("scout".into()), limit: 10, ..Default::default() }).unwrap().is_empty());
+}
+
+/// A topic of the workspace for a path only (no run).
+fn a_topic_id_holder(ws: &Path) -> Topic {
+    Topic::at(ws, &crate::research_record::topic_id("Do koalas sleep all day?")).unwrap()
+}
+
 /// The path and frontmatter readers name only a topic id this module makes.
 #[test]
 fn a_pack_is_known_by_its_path_and_its_own_frontmatter_names_its_topic() {

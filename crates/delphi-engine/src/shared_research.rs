@@ -792,9 +792,10 @@ mod tests {
         let all = Kb::open_readonly(&f.ws.join("local/state.db")).unwrap().indexed_paths().unwrap();
         assert!(all.iter().all(|p| !p.contains(&secret)), "the private source is not in the index at all");
         assert!(all.contains(&format!("projects/{A}/files/research/topics/{}/answer.md", closed.id)), "the fixture: the private topic's answer is in A's own layer");
-        // A reads its own private topic and its own claims, the internal one flagged for the mark, neither marked shared.
+        // A reads its own claims, the internal one flagged for the mark, neither marked shared.
         let own = search_as(&f, A, "numbatshelf cable landing grid drops ninety metres");
-        assert!(own.hits.iter().any(|h| h.rel_path.contains(&closed.id)), "{:?}", paths(&own));
+        // `specs/144` §2.6 item 3: a private topic (its run read a private source) is withheld from every agent search, its own project's too.
+        assert!(!own.hits.iter().any(|h| h.rel_path.contains(&closed.id)), "{:?}", paths(&own));
         let own_int = own.hits.iter().find(|h| h.rel_path.contains(&internal)).expect("A finds its own internal-source claim");
         assert_eq!((own_int.shared, own_int.internal, own_int.label), (false, true, OWN_CONFIRMED_LABEL));
         assert!(own.hits.iter().any(|h| h.rel_path.contains(&public) && !h.shared && !h.internal));
