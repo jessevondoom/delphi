@@ -227,10 +227,14 @@ mod tests {
         fn write<'a>(&'a self, b: &'a str) -> WriterFuture<'a> {
             let mut out = String::from("# Tides\n\n");
             let lines: Vec<&str> = b.lines().collect();
+            // A finding is not source text (`specs/144` §2.3 item 4): its statement also cites a passage, whose text supports it.
+            let passage = lines.iter().filter_map(|l| l.strip_prefix("RECORD s-kb-").and_then(|r| r.split(' ').next())).next().map(|h| format!("s-kb-{h}"));
             for (i, l) in lines.iter().enumerate() {
                 let Some(id) = l.strip_prefix("RECORD ").and_then(|r| r.split(' ').next()) else { continue };
                 if id.starts_with("c-") {
                     out.push_str(&format!("{} [{}].\n\n", lines.get(i + 1).unwrap_or(&"").trim_end_matches('.'), id));
+                } else if let (true, Some(p)) = (id.starts_with("f-"), &passage) {
+                    out.push_str(&format!("The workspace has a note that bears on this [{}, {}].\n\n", id, p));
                 } else {
                     out.push_str(&format!("The workspace has a note that bears on this [{}].\n\n", id));
                 }
@@ -244,8 +248,9 @@ mod tests {
     }
     struct Pass;
     impl PageValidator for Pass {
-        fn validate<'a>(&'a self, _q: &'a PageQuery) -> ValidatorFuture<'a> {
-            Box::pin(async move { Ok(ValidatorReply { assertions: vec![Assertion { text: "x".into(), judgement: Judgement::Supported, record: None }], model: "m".into(), family: "f".into(), tokens: 10 }) })
+        fn validate<'a>(&'a self, q: &'a PageQuery) -> ValidatorFuture<'a> {
+            let assertions = crate::library::page_validate::support_all(q);
+            Box::pin(async move { Ok(ValidatorReply { assertions, model: "m".into(), family: "f".into(), tokens: 10 }) })
         }
     }
 

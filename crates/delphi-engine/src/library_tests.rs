@@ -1400,7 +1400,7 @@ mod page_validation {
     }
 
     fn a(j: Judgement, rec: Option<&str>, t: &str) -> Assertion {
-        Assertion { text: t.into(), judgement: j, record: rec.map(String::from) }
+        Assertion { text: t.into(), judgement: j, record: rec.map(String::from), unit: None, passage: None }
     }
 
     /// (dir, library, validated claim, noted claim)
@@ -1450,7 +1450,7 @@ mod page_validation {
     #[test]
     fn a_rewrite_that_keeps_its_page_directive_is_checked_without_it() {
         let (_d, l, v, _n) = setup();
-        let bad = Assertion { text: "Tides come once a day.".into(), judgement: Judgement::Contradicts, record: Some(v.clone()) };
+        let bad = Assertion { text: "Tides come once a day.".into(), judgement: Judgement::Contradicts, record: Some(v.clone()), unit: None, passage: None };
         let f = Fake::new(vec![Ok(vec![bad]), Ok(vec![a(Judgement::Supported, None, "ok")])]);
         let w = Rewriter { out: Ok(format!("Tides come twice a day, again [{v}].\n\n## See also\n\n<!-- page: kind=article; volatility=low; days=30; reason=stable -->")), calls: Mutex::new(vec![]) };
         let p = run(&l, &format!("Tides come once a day [{v}]."), &f, &w, 1_000_000).unwrap();
@@ -1461,7 +1461,7 @@ mod page_validation {
     #[test]
     fn a_contradiction_with_a_validated_claim_fails_once_is_rewritten_with_the_findings_and_is_not_shown() {
         let (_d, l, v, _n) = setup();
-        let bad = Assertion { text: "Tides come once a day.".into(), judgement: Judgement::Contradicts, record: Some(v.clone()) };
+        let bad = Assertion { text: "Tides come once a day.".into(), judgement: Judgement::Contradicts, record: Some(v.clone()), unit: None, passage: None };
         let f = Fake::new(vec![Ok(vec![bad]), Ok(vec![a(Judgement::Supported, None, "ok")])]);
         let w = Rewriter { out: Ok(format!("Tides come twice a day, again [{v}].")), calls: Mutex::new(vec![]) };
         let p = run(&l, &format!("Tides come once a day [{v}]."), &f, &w, 1_000_000).unwrap();
@@ -1474,7 +1474,7 @@ mod page_validation {
     #[test]
     fn two_failures_give_the_claims_only_page_with_the_reason_in_the_banner() {
         let (_d, l, v, _n) = setup();
-        let bad = || Assertion { text: "Cited text says nothing like it.".into(), judgement: Judgement::FabricatedCitation, record: Some(v.clone()) };
+        let bad = || Assertion { text: "Cited text says nothing like it.".into(), judgement: Judgement::FabricatedCitation, record: Some(v.clone()), unit: None, passage: None };
         let f = Fake::new(vec![Ok(vec![bad()]), Ok(vec![bad()])]);
         let w = Rewriter { out: Ok(format!("Another try [{v}].")), calls: Mutex::new(vec![]) };
         let p = run(&l, &format!("Made up [{v}]."), &f, &w, 1_000_000).unwrap();
@@ -1491,7 +1491,7 @@ mod page_validation {
     #[test]
     fn a_contradiction_with_only_a_noted_claim_passes_under_contested() {
         let (_d, l, v, n) = setup();
-        let c = Assertion { text: "Spring tides are the lowest.".into(), judgement: Judgement::Contradicts, record: Some(n.clone()) };
+        let c = Assertion { text: "Spring tides are the lowest.".into(), judgement: Judgement::Contradicts, record: Some(n.clone()), unit: None, passage: None };
         let f = Fake::new(vec![Ok(vec![c])]);
         let w = rw(Err("unused"));
         let p = run(&l, &format!("Tides come twice a day [{v}]. Spring tides are the lowest."), &f, &w, 1_000_000).unwrap();
@@ -1505,7 +1505,7 @@ mod page_validation {
     #[test]
     fn a_contradiction_naming_an_unknown_record_fails_closed_and_an_unavailable_validator_falls_back() {
         let (_d, l, v, _n) = setup();
-        let c = Assertion { text: "x".into(), judgement: Judgement::Contradicts, record: Some("c-nope".into()) };
+        let c = Assertion { text: "x".into(), judgement: Judgement::Contradicts, record: Some("c-nope".into()), unit: None, passage: None };
         let f = Fake::new(vec![Ok(vec![c.clone()]), Ok(vec![c])]);
         let w = Rewriter { out: Ok(format!("Again [{v}].")), calls: Mutex::new(vec![]) };
         assert_eq!(run(&l, &format!("T [{v}]."), &f, &w, 1_000_000).unwrap().verdict.outcome, Outcome::ClaimsOnly);
@@ -1553,11 +1553,11 @@ mod page_validation {
         assert_eq!(validator_max_output(&long), VALIDATOR_MAX_OUTPUT_CAP);
         let mid = "A statement [s-kb-1]. ".repeat(40);
         assert!(validator_max_output(&mid) > VALIDATOR_MAX_OUTPUT && validator_max_output(&mid) < VALIDATOR_MAX_OUTPUT_CAP);
-        let m = |id: &str, partial: bool| Material { id: id.into(), standing: "○ not validated".into(), validated: false, cited: true, text: "Positioning says what a product is.".into(), unverifiable: false, host_word: None, partial };
-        let q = PageQuery { body: "Body [s-a].".into(), material: vec![m("s-a", true), m("s-b", false)], omitted: vec!["s-c".into()] };
+        let m = |id: &str, partial: bool| Material { id: id.into(), standing: "○ not validated".into(), validated: false, cited: true, text: "Positioning says what a product is.".into(), unverifiable: false, host_word: None, partial, parts: Vec::new(), text_kind: "" };
+        let q = PageQuery { body: "Body [s-a].".into(), material: vec![m("s-a", true), m("s-b", false)], omitted: vec!["s-c".into()], units: vec![] };
         let c = contract(&q);
         assert!(c.contains("supports every sentence back to the previous marker") && c.contains("first part only") && c.contains("NOT SHOWN") && c.contains("s-c") && c.contains(END_ASSERTIONS), "{c}");
-        let fab = |rec: &str| Assertion { text: format!("a statement citing {rec}"), judgement: Judgement::FabricatedCitation, record: Some(rec.into()) };
+        let fab = |rec: &str| Assertion { text: format!("a statement citing {rec}"), judgement: Judgement::FabricatedCitation, record: Some(rec.into()), unit: None, passage: None };
         let r = classify_for_test(&[fab("s-a"), fab("s-c"), fab("s-b")], &q.material, &q.omitted);
         assert_eq!(r, vec!["unchecked", "unchecked", "fail"], "shown in part, not shown, shown whole");
     }
@@ -1918,7 +1918,7 @@ mod page_search_cache {
     impl PageValidator for V {
         fn validate<'a>(&'a self, _q: &'a PageQuery) -> ValidatorFuture<'a> {
             let j = { let mut g = self.0.lock().unwrap(); if g.len() > 1 { g.remove(0) } else { g[0] } };
-            Box::pin(async move { Ok(ValidatorReply { assertions: vec![Assertion { text: "x".into(), judgement: j, record: None }], model: "m".into(), family: "f".into(), tokens: 10 }) })
+            Box::pin(async move { Ok(ValidatorReply { assertions: vec![Assertion { text: "x".into(), judgement: j, record: None, unit: None, passage: None }], model: "m".into(), family: "f".into(), tokens: 10 }) })
         }
     }
 
@@ -2517,7 +2517,7 @@ mod page_figures {
     struct PassValidator;
     impl PageValidator for PassValidator {
         fn validate<'a>(&'a self, _q: &'a crate::library::page_validate::PageQuery) -> ValidatorFuture<'a> {
-            Box::pin(async { Ok(ValidatorReply { model: "m".into(), family: "f".into(), tokens: 5, assertions: vec![Assertion { text: "ok".into(), judgement: Judgement::Supported, record: None }] }) })
+            Box::pin(async { Ok(ValidatorReply { model: "m".into(), family: "f".into(), tokens: 5, assertions: vec![Assertion { text: "ok".into(), judgement: Judgement::Supported, record: None, unit: None, passage: None }] }) })
         }
     }
 

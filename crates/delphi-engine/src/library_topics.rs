@@ -554,14 +554,58 @@ pub fn topic_brief(title: &str, g: &Gathered, max_tokens: u64, topics: &[(String
     s.push_str("\nAfter your last section, and only as far as the records support them, add these sections in this order:\n");
     s.push_str(&format!("- `## {}`: at most {} lines, each `- **Term**: one-line definition [marker]`, the marker citing the record the definition comes from.\n", KEY_TERMS, MAX_KEY_TERMS));
     s.push_str(&format!("- `## {}`: a numbered list of three to five records to read first, in the order to read them, each line naming one record by its marker and saying in a few words why it comes first.\n", START_HERE_HEADING));
-    s.push_str(&format!("- `## {}`: lines `- [Title](page:slug)` naming only topics from the TOPICS list below; leave the section out when none is related.\n", SEE_ALSO));
-    s.push_str(&format!("Do not write a `## {}` section: the daemon adds it.\n\nTOPICS (other topic pages that exist; data):\n", OPEN_QUESTIONS));
+    s.push_str(&format!("Do not write a `## {}` section: the daemon adds it.\n", OPEN_QUESTIONS));
+    s.push_str(&topic_rules());
+    s.push_str("\nTOPICS (other topic pages that exist; data):\n");
     for (slug, t) in topics.iter().take(60) {
         s.push_str(&format!("TOPIC {} | {}\n", slug, t.replace('\n', " ").chars().take(120).collect::<String>()));
     }
     s.push_str(&format!("\n{}\n", OUTLINE_NOTE));
     s.push_str(&super::page_search::draft_to_expand(draft));
     s
+}
+
+/// The closed marker rule of a topic page, as its brief states it (`specs/144` §2.2 item 1), and the rule text of §2.3 item 3.
+pub fn topic_rules() -> String {
+    let leads: Vec<String> = super::page_units::LEAD_INS.iter().map(|l| format!("\"{}\"", l)).collect();
+    format!(
+        "\nOn this page each statement carries its own citation:\n\
+- Every sentence of body prose, every list item, every table row, every figure caption and every `{}` line ends with at least one marker. A marker covers only the sentence, item or row it ends.\n\
+- Headings carry no marker, but each is judged against its section's records: a heading that states a fact its section does not support fails like a sentence.\n\
+- The daemon writes the hatnote, `## Contents` and `## {}`: do not write them.\n\
+- A lead-in ending in \":\" before a list or table carries no marker only when it is one of these: {}. Any other lead-in is a sentence and needs a marker.\n\
+- Leave out a sentence you would add with no record behind it, such as a gloss or a transition.\n\
+- No raw HTML, no footnotes and no code blocks. An image's text is a short label of at most {} words; what it shows goes in its cited caption.\n\
+- {}\n",
+        KEY_TERMS,
+        SEE_ALSO,
+        leads.join(", "),
+        super::page_units::IMAGE_LABEL_WORDS,
+        super::page_units::RULE_TEXT
+    )
+}
+
+/// The most topics code lists under a topic page's `## See also`.
+pub const MAX_SEE_ALSO: usize = 8;
+
+/// What code writes on a topic page from its title and the other topics (`specs/144` §2.2 item 1): the hatnote, when another topic's
+/// title starts with this one's or this one's with the other's (`Tides` and `Tides (music)`), and `See also`, the other topics whose
+/// titles share a content word with this one, by slug, at most [`MAX_SEE_ALSO`]. Nothing here is a model's.
+pub fn navigation(slug: &str, title: &str, topics: &[(String, String)]) -> (Option<String>, Vec<(String, String)>) {
+    let mine = content_words(title);
+    let low = title.trim().to_lowercase();
+    let mut others: Vec<&(String, String)> = topics.iter().filter(|(s, t)| s != slug && valid_slug(s) && !t.trim().is_empty()).collect();
+    others.sort_by(|a, b| a.0.cmp(&b.0));
+    let hatnote = others.iter().find(|(_, t)| {
+        let o = t.trim().to_lowercase();
+        o != low && (o.starts_with(&format!("{low} ")) || low.starts_with(&format!("{o} ")))
+    });
+    let hatnote = hatnote.map(|(s, t)| {
+        let t = t.replace(['[', ']', '*', '\n'], "");
+        format!("This page is about {}. For {}, see [{}](page:{}).", title.replace(['[', ']', '*', '\n'], ""), t, t, s)
+    });
+    let see_also: Vec<(String, String)> = others.iter().filter(|(_, t)| !content_words(t).is_disjoint(&mine)).take(MAX_SEE_ALSO).map(|(s, t)| (s.clone(), t.clone())).collect();
+    (hatnote, see_also)
 }
 
 /// What a topic brief says of the draft's research prose (`specs/144` §2.1 item 3).
@@ -1102,7 +1146,10 @@ impl Library {
             Ok(d) => {
                 // The closing comment is read from this first draft only (§2.3 item 7): a rewrite's is taken off and ignored.
                 let (body, proposal) = page_meta::extract(&d);
-                match lib.build_page_checked(&title, &clean_draft(&body, r.settings.long_max_tokens), r.style, SCOPE, validator, writer, ledger).await {
+                // `specs/144` §2.2, §2.3: the closed marker rule, every unit judged, pinpoints; code writes the hatnote and navigation.
+                let (hatnote, see_also) = navigation(r.slug, &title, &topics);
+                let t = super::page_validate::TopicPage { gathered: &g, hatnote, see_also };
+                match lib.build_topic_page_checked(&title, &clean_draft(&body, r.settings.long_max_tokens), r.style, SCOPE, validator, writer, ledger, &t).await {
                     Ok(c) if c.verdict.outcome != Outcome::ClaimsOnly => (c, proposal),
                     Ok(c) => return self.topic_keep_seed(&seed_req, &side, &format!("the writer's page did not pass its check: {}", c.verdict.reason.as_deref().unwrap_or("no reason given"))),
                     Err(e) => return self.topic_keep_seed(&seed_req, &side, &format!("the writer's page could not be checked: {e}")),
@@ -1616,8 +1663,9 @@ mod rebuild_tests {
     }
     pub(crate) struct Pass;
     impl PageValidator for Pass {
-        fn validate<'a>(&'a self, _q: &'a PageQuery) -> ValidatorFuture<'a> {
-            Box::pin(async move { Ok(ValidatorReply { assertions: vec![Assertion { text: "x".into(), judgement: Judgement::Supported, record: None }], model: "m".into(), family: "f".into(), tokens: 10 }) })
+        fn validate<'a>(&'a self, q: &'a PageQuery) -> ValidatorFuture<'a> {
+            let assertions = crate::library::page_validate::support_all(q);
+            Box::pin(async move { Ok(ValidatorReply { assertions, model: "m".into(), family: "f".into(), tokens: 10 }) })
         }
     }
 
@@ -1886,7 +1934,7 @@ mod section_tests {
     impl PageWriter for Sections {
         fn write<'a>(&'a self, b: &'a str) -> WriterFuture<'a> {
             let id = b.lines().find_map(|l| l.strip_prefix("RECORD c-").map(|r| format!("c-{}", r.split(' ').next().unwrap_or("")))).unwrap_or_default();
-            let topics_listed = b.contains("TOPIC moon | Moon");
+            let topics_listed = b.contains("TOPIC moon-tides | Moon tides");
             let d = format!("# Tides\n\nTides come twice a day [{id}].\n\n## Key terms\n\n- **Tide**: the rise and fall of the sea [{id}].\n\n## Start here\n\n1. [{id}] the main claim.\n2. [{id}] again, for its source.\n3. [{id}] once more.\n\n## See also\n\n- [Moon](page:{})\n", if topics_listed { self.0 } else { "no-topics-listed" });
             Box::pin(async move { Ok(d) })
         }
@@ -1897,8 +1945,9 @@ mod section_tests {
     }
     struct Pass;
     impl PageValidator for Pass {
-        fn validate<'a>(&'a self, _q: &'a PageQuery) -> ValidatorFuture<'a> {
-            Box::pin(async move { Ok(ValidatorReply { assertions: vec![Assertion { text: "x".into(), judgement: Judgement::Supported, record: None }], model: "m".into(), family: "f".into(), tokens: 10 }) })
+        fn validate<'a>(&'a self, q: &'a PageQuery) -> ValidatorFuture<'a> {
+            let assertions = crate::library::page_validate::support_all(q);
+            Box::pin(async move { Ok(ValidatorReply { assertions, model: "m".into(), family: "f".into(), tokens: 10 }) })
         }
     }
 
@@ -1912,7 +1961,7 @@ mod section_tests {
         std::fs::write(&doc, "# Tides\n\nThe tide comes in twice a day.\n").unwrap();
         let s = l.add_file(&doc, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
         l.add_claim("Tides come twice a day.", &ClaimOpts::default(), &[AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() }]).unwrap();
-        l.topic_create("Moon", Origin::Operator, 1).unwrap();
+        l.topic_create("Moon tides", Origin::Operator, 1).unwrap();
         let e = l.topic_create("Tides", Origin::Operator, 1).unwrap();
         let cfg = PagesConfig::default();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
@@ -1922,25 +1971,24 @@ mod section_tests {
             let lib = Library::in_home(home.path()).with_topic_slugs(l.topic_slugs());
             rt.block_on(lib.topic_rebuild(TopicRequest { slug: &e.slug, now: 100, settings: &cfg, style: bib::Format::Plain, seed: crate::topic_seed::of_material(&g), gathered: g, gaps, held: &crate::topic_seed::NoHeldText, cancel: None }, w, &Pass, &TokenLedger::new(1_000_000), &|| Ok(())))
         };
-        // A see-also slug that is no topic fails the check twice: the seed is the page, never the claims alone (`specs/139` §2.3 item 5).
-        let wrong = build(&Sections("sun"), vec![]).unwrap_err();
-        assert!(wrong.starts_with(SEED_STANDS), "{wrong}");
-        assert_eq!(l.topic_side(&e.slug).unwrap()["outcome"], "seed");
-        let built = build(&Sections("moon"), vec!["Why do spring tides follow the moon?".into()]).unwrap();
+        // `specs/144` §2.2 item 1: code writes `See also`, from the other topics whose titles share a word with this one; the writer's own
+        // (here naming `sun`, which is no topic) is taken out.
+        let built = build(&Sections("sun"), vec!["Why do spring tides follow the moon?".into()]).unwrap();
         assert_eq!(built.outcome.as_deref(), Some("pass"), "{built:?}");
         let side = l.topic_side(&e.slug).unwrap();
         assert_eq!(side["key_terms"][0]["term"], "Tide");
         assert_eq!(side["start_here"].as_array().unwrap().len(), 3);
-        assert_eq!(side["see_also"], json!(["moon"]));
+        assert_eq!(side["see_also"], json!(["moon-tides"]));
         assert_eq!(side["open_questions"], json!(["Why do spring tides follow the moon?"]));
         let md = std::fs::read_to_string(l.root().join(format!("pages/{}.md", e.slug))).unwrap();
         let (q, table) = (md.find("## Open questions").unwrap(), md.find("## Bibliography and citations").unwrap());
         assert!(q < table, "the open questions sit just above the bibliography");
         assert!(l.check_page_text(&md, Scope::External).findings.is_empty(), "the stored page still checks clean");
         // AC-5: `moon` is linked from `tides`.
-        let links = l.topic_links("moon").unwrap();
+        assert!(!md.contains("page:sun"), "{md}");
+        let links = l.topic_links("moon-tides").unwrap();
         assert_eq!((links["links_here"].clone(), links["exists"].clone()), (json!(["tides"]), json!(true)));
-        assert_eq!(l.topic_links("tides").unwrap()["links_out"], json!(["moon"]));
+        assert_eq!(l.topic_links("tides").unwrap()["links_out"], json!(["moon-tides"]));
     }
 }
 

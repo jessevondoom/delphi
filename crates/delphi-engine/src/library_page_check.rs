@@ -278,6 +278,11 @@ fn scan(text: &str) -> Vec<(usize, usize, Vec<Cite>)> {
     out
 }
 
+/// The byte ranges of the markers in `text`.
+pub(crate) fn marker_spans(text: &str) -> Vec<(usize, usize)> {
+    scan(text).into_iter().map(|(s, e, _)| (s, e)).collect()
+}
+
 pub fn markers(text: &str) -> Vec<Cite> {
     let mut seen = BTreeSet::new();
     scan(text).into_iter().flat_map(|(_, _, c)| c).filter(|c| seen.insert((c.source, c.id.clone()))).collect()
