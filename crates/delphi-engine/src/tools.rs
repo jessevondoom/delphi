@@ -716,7 +716,7 @@ fn kb_search(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
             let text: String = h.preview.chars().filter(|c| *c != '<' && *c != '>').take(400).collect();
             out.push_str(&format!("{line}\n<fact>{}</fact>\n", text.trim()));
         } else {
-            ctx.span.observe_input(crate::retrieval::tier_of(&h.source_type));
+            ctx.span.observe_input_from(crate::retrieval::tier_of(&h.source_type), &h.rel_path);
             out.push_str(&format!("{line}\n{}\n", passage_element(full, share)));
         }
     }
@@ -812,7 +812,7 @@ fn recall_memory(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
             continue;
         }
 
-        ctx.span.observe_input(doc_tier);
+        ctx.span.observe_input_from(doc_tier, &h.pointer);
 
         out.push_str(&format!("--- Episode: {} [{}] (score {:.2}) ---\n", h.pointer, h.shown_label(), h.score));
         if !h.heading_path.is_empty() {
@@ -1388,9 +1388,74 @@ pub(crate) fn zone_of(logical: &str) -> (Zone, String) {
     (Zone::Release, l.to_string())
 }
 
-/// A span at `L1` or below writes only where its output reads back as `L0`, so it cannot launder through a broader glob.
-pub(crate) fn gate_tainted_write(logical: &str, ceiling: Tier) -> Result<(), ToolResult> {
-    if ceiling > Tier::L1 {
+/// Whether a worktree path (relative to the worktree) is one the host runs outside the sandbox: the merge flow's table
+/// ([`crate::worktree::is_host_exec`], GOVERNANCE §5.5), also matched case-folded, since a folded path names the same file on a
+/// case-insensitive disk (`.GitHub/workflows/x.yml` is `.github/workflows/x.yml` there).
+pub(crate) fn host_run(rel: &str, extra: &[String]) -> bool {
+    crate::worktree::is_host_exec(rel, extra) || crate::worktree::is_host_exec(&rel.to_lowercase(), extra)
+}
+
+/// The notice of a tainted write (`specs/145` §2.2 item 1): one event, which nothing waits on, in the log and on the console.
+pub const TAINT_NOTICE: &str = "taint.write_noticed";
+
+/// The notice's payload for a write of `path` by `span`, or `None` when the span is not one whose writes are marked.
+pub fn taint_notice(span: &Span, path: &str) -> Option<Value> {
+    if !span.marks_writes() {
+        return None;
+    }
+    let path: String = path.chars().filter(|c| !c.is_control()).take(300).collect();
+    let sources: Vec<String> = span.sources().to_vec();
+    let from = if sources.is_empty() { "unrecorded".to_string() } else { sources.join(", ") };
+    Some(json!({
+        "path": path,
+        "tier": span.ceiling().as_str(),
+        "sources": sources,
+        "text": format!("wrote after untrusted text: {} (taint {}, from {})", path, span.ceiling(), from),
+    }))
+}
+
+/// The line an outbound card from a tainted span opens with (`specs/145` §2.2 item 2).
+pub const TAINTED_OUTBOUND_BANNER: &str = "[after untrusted text: Red, the console only]";
+
+/// The payload of an outbound card from a span under the `specs/145` table that has read untrusted text (145-A1 item 3, as connector
+/// cards do, `specs/005` §3.1): the resolved destination, the account, the full body and every attachment, all inside the payload whose
+/// blake3 the answer is bound to, so an approval sends exactly this, once. `taint_outbound` makes the card the console's alone
+/// (`merge_class::console_only`): a relay cannot show all of it, so it cannot approve it (it can still deny it).
+pub fn tainted_outbound_payload(tool: &str, destination: &str, account: &str, body: &Value, attachments: Vec<Value>, span: &Span) -> Value {
+    json!({
+        "tool": tool,
+        "destination": destination,
+        "account": account,
+        "body": body,
+        "attachments": attachments,
+        "taint": span.ceiling().as_str(),
+        "sources": span.sources(),
+        "taint_outbound": true,
+    })
+}
+
+/// A span at `L1` or below and the paths it writes.
+///
+/// Under the ratified table it writes only where its output reads back as `L0`, so it cannot launder through a broader glob
+/// (`specs/001` amendment 001-A4). Under the `specs/145` table (switched off until slice G) the laundering rule is a mark instead:
+/// the write goes through and the file is stamped at the span's taint, never the path's default (the caller stamps it, and
+/// [`taint_notice`] says so). Still refused there: a file the host runs outside the sandbox (145-A1 item 2, the merge flow's one
+/// table, `worktree::is_host_exec`), checked on the canonical path (the guard refuses `..` and every symlink before any byte is
+/// written); and `context/**`, which `specs/007` keeps below `L2` out of the team's shared files and `specs/145` does not open.
+pub(crate) fn gate_tainted_write(logical: &str, span: &Span, host_extra: &[String]) -> Result<(), ToolResult> {
+    let ceiling = span.ceiling();
+    if !span.tainted() {
+        return Ok(());
+    }
+    if span.marks_writes() {
+        let canon = delphi_core::pathguard::canonical(logical).map_err(denied)?;
+        let (zone, rel) = zone_of(&canon);
+        if zone == Zone::Worktree && host_run(&rel, host_extra) {
+            return Err(ToolResult::err(format!("refused: `{}` is a file the host runs outside the sandbox (a build script, a git, shell or editor setting, a CI workflow), and this span's ceiling is {}: a span that has read untrusted text may not write one (specs/145 145-A1 item 2)", logical, ceiling)));
+        }
+        if zone == Zone::Team && rel.to_lowercase().starts_with("context/") {
+            return Err(ToolResult::err(format!("provenance gate: `{}` is shared team knowledge, kept at L2 or above, and this span's ceiling is {}", logical, ceiling)));
+        }
         return Ok(());
     }
     let (zone, rel) = zone_of(logical);
@@ -1447,7 +1512,7 @@ fn project_root(ctx: &ToolCtx, logical: &str) -> Option<std::path::PathBuf> {
 pub(crate) fn observe(ctx: &mut ToolCtx, logical: &str, bytes: &[u8]) -> Tier {
     // A stored connector result is someone else's content, whatever the file's hash says (`specs/010` §5.1).
     if logical.starts_with("@payload/") {
-        ctx.span.observe_input(Tier::L0);
+        ctx.span.observe_input_from(Tier::L0, logical);
         return Tier::L0;
     }
     let (zone, rel) = zone_of(logical);
@@ -1457,7 +1522,7 @@ pub(crate) fn observe(ctx: &mut ToolCtx, logical: &str, bytes: &[u8]) -> Tier {
         _ => true,
     };
     let tier = ctx.index.tier_of(zone, &rel, &hash, ctx.rules, clean);
-    ctx.span.observe_input(tier);
+    ctx.span.observe_input_from(tier, logical);
     tier
 }
 
@@ -1774,7 +1839,8 @@ pub(crate) fn with_provenance_header(content: &str, role: &str, mission: &str, n
 /// Everything that can refuse a write *without touching the filesystem*: size, the role's scope and the
 /// deny lists, the provenance gate, and the header rules. Run before asking the operator, so a card is
 /// only ever raised for an action that would otherwise succeed. Returns the final content to write.
-pub fn precheck_write(guard: &Guard, ceiling: Tier, role: &str, mission_id: &str, now: &str, args: &Value) -> Result<String, ToolResult> {
+pub fn precheck_write(guard: &Guard, span: &Span, host_extra: &[String], role: &str, mission_id: &str, now: &str, args: &Value) -> Result<String, ToolResult> {
+    let ceiling = span.ceiling();
     let (path, content) = match (str_arg(args, "path"), str_arg(args, "content")) {
         (Ok(p), Ok(c)) => (p, c),
         (Err(e), _) | (_, Err(e)) => return Err(ToolResult::err(e.0)),
@@ -1784,7 +1850,7 @@ pub fn precheck_write(guard: &Guard, ceiling: Tier, role: &str, mission_id: &str
     }
     guard.check_policy(path, delphi_core::pathguard::Access::Write).map_err(denied)?;
     gate_write(path, ceiling).map_err(|g| ToolResult::err(g.to_string()))?;
-    gate_tainted_write(path, ceiling)?;
+    gate_tainted_write(path, span, host_extra)?;
     if path.to_lowercase().ends_with(".md") {
         with_provenance_header(content, role, mission_id, now, path).map_err(ToolResult::err)
     } else {
@@ -1797,7 +1863,7 @@ fn write_file(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
         Ok(p) => p,
         Err(e) => return ToolResult::err(e.0),
     };
-    let final_content = match precheck_write(ctx.guard, ctx.span.ceiling(), ctx.role, ctx.mission_id, ctx.now_rfc3339, args) {
+    let final_content = match precheck_write(ctx.guard, ctx.span, &[], ctx.role, ctx.mission_id, ctx.now_rfc3339, args) {
         Ok(c) => c,
         Err(r) => return r,
     };
@@ -1812,6 +1878,9 @@ fn write_file(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
             let hash = blake3::hash(final_content.as_bytes()).to_hex().to_string();
             ctx.index.stamp(zone, &rel, &hash, tier);
             ctx.stamps.push(Stamp { zone, path: rel, blake3: hash, tier });
+            if let Some(notice) = taint_notice(ctx.span, path) {
+                ctx.events.push((TAINT_NOTICE.into(), notice));
+            }
             ToolResult::ok(format!("{} {} ({} bytes, tier {})", if created { "created" } else { "replaced" }, path, final_content.len(), tier))
         }
         Err(d) => denied_in(ctx, d),
@@ -2928,6 +2997,135 @@ mod tests {
         let mut g = fx(&["missions/**"]);
         let r = run_tool_as(&mut g, "builder", "write_file", json!({"path": "missions/m1/notes.md", "content": "x"}));
         assert!(!r.is_error, "an untainted span keeps its scope: {}", r.content);
+    }
+
+    /// `specs/145`: the fixture with a task worktree (as `@worktree/…`) and write scope there and under `missions/` and `specs/`.
+    fn fx_145() -> Fx {
+        let mut f = fx(&["missions/**", "specs/**", "context/domains/**", "@worktree/**", "skills/custom/**/scripts/**"]);
+        let wt = f.root.join("wt");
+        for d in ["src", ".github/workflows", ".cargo", "crates/a"] {
+            fs::create_dir_all(wt.join(d)).unwrap();
+        }
+        f.guard.zones.worktree = Some(wt);
+        f
+    }
+
+    /// A tool call as `role`, returning what it stamped and the events it asked the engine to log.
+    fn run_logged(f: &mut Fx, role: &str, tool: &str, args: Value) -> (ToolResult, Vec<Stamp>, Vec<(String, Value)>) {
+        let mut ctx = ToolCtx { guard: &f.guard, span: &mut f.span, index: &mut f.index, rules: &f.rules, probe: &AssumeClean, role, mission_id: "m1", now_rfc3339: "1970-01-01T00:00:10.000Z", stamps: vec![], events: vec![], held_by_default: false };
+        let r = run(&mut ctx, tool, &args);
+        (r, ctx.stamps, ctx.events)
+    }
+
+    fn tainted_145() -> Span {
+        let mut s = Span::root("sp1").under(delphi_core::provenance::TaintTable::WhatLeaves);
+        s.observe_input_from(Tier::L0, "@project/app/vendor/lib/x.js");
+        s
+    }
+
+    /// `specs/145` AC-2 (switch on): a span at L0 writes what its manifest allows (a spec for the architect, a worktree file for the
+    /// builder); the file is recorded at L0 whatever its path's default; one notice names the path and the sources.
+    #[test]
+    fn spec_145_ac2_a_tainted_write_goes_through_marked_at_the_spans_taint_and_noticed_once() {
+        for (role, path) in [("architect", "missions/m1/specs/s.md"), ("architect", "specs/150-x.md"), ("builder", "@worktree/src/new.rs"), ("architect", "missions/m1/notes.md")] {
+            let mut f = fx_145();
+            f.span = tainted_145();
+            let (zone, rel) = zone_of(path);
+            assert!(delphi_core::provenance::origin_default(zone, &rel, &OriginRules::default(), true) > Tier::L0, "{path}: a path the ratified table refuses");
+            let (r, stamps, events) = run_logged(&mut f, role, "write_file", json!({"path": path, "content": "x\n"}));
+            assert!(!r.is_error, "{path}: {}", r.content);
+            assert_eq!(stamps.len(), 1);
+            assert_eq!(stamps[0].tier, Tier::L0, "{path}: the span's taint, not the path's default");
+            assert_eq!(f.index.lookup(zone, &rel, &stamps[0].blake3), Some(Tier::L0), "and read back at L0");
+            let notices: Vec<&Value> = events.iter().filter(|(k, _)| k == TAINT_NOTICE).map(|(_, v)| v).collect();
+            assert_eq!(notices.len(), 1, "{path}: one notice");
+            assert_eq!(notices[0]["text"], format!("wrote after untrusted text: {path} (taint L0, from @project/app/vendor/lib/x.js)"));
+            assert_eq!((notices[0]["path"].as_str(), notices[0]["tier"].as_str()), (Some(path), Some("L0")));
+        }
+        // An untainted span under the same table: no notice, the ordinary stamp.
+        let mut f = fx_145();
+        f.span = Span::root("sp1").under(delphi_core::provenance::TaintTable::WhatLeaves);
+        let (r, stamps, events) = run_logged(&mut f, "architect", "write_file", json!({"path": "missions/m1/notes.md", "content": "x"}));
+        assert!(!r.is_error && stamps[0].tier == Tier::L3 && events.is_empty(), "{}", r.content);
+    }
+
+    /// `specs/145` switch off (145-A1 item 5): the same tainted writes are refused exactly as today, and nothing is noticed.
+    #[test]
+    fn spec_145_switched_off_the_laundering_rule_still_refuses() {
+        for path in ["missions/m1/specs/s.md", "specs/150-x.md", "@worktree/src/new.rs", "missions/m1/notes.md"] {
+            let mut f = fx_145();
+            let mut s = Span::root("sp1");
+            s.observe_input_from(Tier::L0, "@project/app/vendor/lib/x.js");
+            assert_eq!(s.table(), delphi_core::provenance::TAINT_TABLE);
+            f.span = s;
+            let (r, stamps, events) = run_logged(&mut f, "architect", "write_file", json!({"path": path, "content": "x"}));
+            assert!(r.is_error && r.content.contains("provenance gate"), "{path}: {}", r.content);
+            assert!(stamps.is_empty() && events.is_empty());
+        }
+    }
+
+    /// `specs/145` AC-4 (switch on): the promotion paths, the never-writable paths, `.git` and the team's `context/` stay refused.
+    #[test]
+    fn spec_145_ac4_promotion_never_writable_and_git_paths_stay_refused_when_tainted() {
+        let mut f = fx_145();
+        f.guard.write_globs = vec!["**".into(), "*".into()];
+        for path in ["context/heuristics.md", "REVIEW.md", "memory/agents/builder/lessons.md", "skills/custom/x/SKILL.md", "@worktree/skills/x/SKILL.md", "@worktree/agents/b/AGENT.md", "GOVERNANCE.md"] {
+            f.span = tainted_145();
+            let (r, stamps, _) = run_logged(&mut f, "builder", "write_file", json!({"path": path, "content": "x"}));
+            assert!(r.is_error && stamps.is_empty(), "{path}: {}", r.content);
+        }
+        for path in ["config.toml", "local/ratified.lock", "state.db", "memory/operator/x.md", "missions/m1/events.jsonl", "@worktree/.git/config", "@worktree/src/.git/hooks/pre-commit", "context/domains/d.md", "context/index.md"] {
+            f.span = tainted_145();
+            let (r, stamps, _) = run_logged(&mut f, "builder", "write_file", json!({"path": path, "content": "x"}));
+            assert!(r.is_error && stamps.is_empty(), "{path}: {}", r.content);
+        }
+        assert!(gate_write("REVIEW.md", Tier::L0).is_err(), "provenance::gate_write is unchanged");
+    }
+
+    /// `specs/145` AC-8 (switch on): a host-run file is refused directly, through `..` and through a symlink; the same direct write
+    /// from a clean span goes through (a clean span is refused `..` and symlinks by the guard, as it always was).
+    #[test]
+    fn spec_145_ac8_a_tainted_span_may_not_write_a_host_run_file_by_any_path() {
+        let host_run = ["@worktree/build.rs", "@worktree/crates/a/build.rs", "@worktree/.envrc", "@worktree/.github/workflows/x.yml", "@worktree/.cargo/config.toml", "@worktree/.GitHub/workflows/y.yml", "@worktree/.gitattributes", "@worktree/.vscode/tasks.json"];
+        for path in host_run {
+            let mut f = fx_145();
+            f.span = tainted_145();
+            let (r, stamps, events) = run_logged(&mut f, "builder", "write_file", json!({"path": path, "content": "x"}));
+            assert!(r.is_error && r.content.contains("host runs outside the sandbox"), "{path}: {}", r.content);
+            assert!(stamps.is_empty() && events.is_empty());
+            assert!(!f.root.join("wt").join(path.trim_start_matches("@worktree/")).exists(), "{path}: nothing written");
+            let mut g = fx_145();
+            let (r, _, _) = run_logged(&mut g, "builder", "write_file", json!({"path": path, "content": "x"}));
+            assert!(!r.is_error, "{path} from a clean span: {}", r.content);
+        }
+        // The operator's own `host_exec_paths` entries count too, where the engine passes them.
+        let mut f = fx_145();
+        f.span = tainted_145();
+        assert!(gate_tainted_write("@worktree/tools/deploy/run", &f.span, &["tools/deploy".to_string()]).is_err());
+        assert!(gate_tainted_write("@worktree/tools/other", &f.span, &["tools/deploy".to_string()]).is_ok());
+        // Through `..`: refused before any byte is written.
+        for path in ["@worktree/src/../build.rs", "@worktree/src/../.github/workflows/x.yml"] {
+            let mut f = fx_145();
+            f.span = tainted_145();
+            let (r, stamps, _) = run_logged(&mut f, "builder", "write_file", json!({"path": path, "content": "x"}));
+            assert!(r.is_error && stamps.is_empty(), "{path}: {}", r.content);
+            assert!(!f.root.join("wt/build.rs").exists() && !f.root.join("wt/.github/workflows/x.yml").exists());
+        }
+        // Through a symlink inside the worktree that points at a host-run directory or file.
+        let mut f = fx_145();
+        let wt = f.root.join("wt");
+        std::os::unix::fs::symlink(wt.join(".github/workflows"), wt.join("src/flows")).unwrap();
+        std::os::unix::fs::symlink(wt.join("build.rs"), wt.join("src/notes.txt")).unwrap();
+        for path in ["@worktree/src/flows/x.yml", "@worktree/src/notes.txt"] {
+            f.span = tainted_145();
+            let (r, stamps, _) = run_logged(&mut f, "builder", "write_file", json!({"path": path, "content": "x"}));
+            assert!(r.is_error && stamps.is_empty(), "{path}: {}", r.content);
+        }
+        assert!(!wt.join(".github/workflows/x.yml").exists() && !wt.join("build.rs").exists(), "nothing reached a host-run file");
+        // A plain worktree file stays writable for the tainted span.
+        f.span = tainted_145();
+        let (r, _, _) = run_logged(&mut f, "builder", "write_file", json!({"path": "@worktree/src/lib.rs", "content": "x"}));
+        assert!(!r.is_error, "{}", r.content);
     }
 
     #[test]

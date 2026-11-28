@@ -30,7 +30,7 @@ use delphi_core::event::EventEnvelope;
 use delphi_core::hub::{DeltaKind, Hub};
 use delphi_core::ledger::Ledger;
 use delphi_core::pathguard::{Guard, Zones};
-use delphi_core::provenance::{gate, Action, Gate, OriginRules, OutputCheck, Span};
+use delphi_core::provenance::{Action, Gate, OriginRules, OutputCheck, Span};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
@@ -205,6 +205,10 @@ pub struct Settings {
     /// authenticator (`keychain:…`, `env:…`, `command:[…]`). With it, a relay may approve a Red card when the answer
     /// carries a valid code; without it a relay can only deny Red (`specs/014` §3).
     pub relay_totp_credential: Option<String>,
+    /// The taint-gated action table spans run under (`specs/145` slice A): always [`delphi_core::provenance::TAINT_TABLE`], the
+    /// ratified table. No configuration key sets it; only the daemon's own tests switch it, to exercise the `specs/145` table
+    /// before the operator ratifies it (145-A1 item 5).
+    pub taint_table: delphi_core::provenance::TaintTable,
 }
 
 impl Default for Settings {
@@ -280,6 +284,7 @@ impl Default for Settings {
             max_approver_calls: 100,
             hooks: Default::default(),
             relay_totp_credential: None,
+            taint_table: delphi_core::provenance::TAINT_TABLE,
         }
     }
 }
@@ -620,6 +625,14 @@ pub(crate) fn outbound_withheld(readonly: bool, ceiling: delphi_core::provenance
 /// (`t_0003`, `ho_t_0003_red-team_r1`), so the mission is part of it.
 pub(crate) fn readonly_key(mission: &str, id: &str) -> String {
     format!("{mission}/{id}")
+}
+
+/// `specs/145` 145-A1 item 1: under the `specs/145` table a span that has read untrusted text runs code only in the OS sandbox,
+/// whose profile always has the network off (`exec::ExecEnv::spec`, `run_investigation`). A command that would run directly on
+/// the operator's machine, with the network, is refused, as the ratified table refuses every tainted command. `None` lets the
+/// table decide (the ratified table, or an untainted span, is unchanged).
+pub(crate) fn tainted_exec_refusal(span: &Span, sandboxed: bool) -> Option<String> {
+    (span.marks_writes() && !sandboxed).then(|| format!("refused: this span's ceiling is {} (it has read untrusted text), so its commands run only in the OS sandbox, with the network off, and this one would run unsandboxed", span.ceiling()))
 }
 
 /// A Builder's shell: the scope, and a write scope in the task's worktree. It runs in that worktree.
@@ -1060,7 +1073,7 @@ impl Engine {
             let family = handoff.routing_directive.model_family.clone().unwrap_or_else(|| self.cfg.get().family_for_role(&role).to_string());
             let thinking = handoff.routing_directive.thinking_budget_tokens.unwrap_or_else(|| manifest.thinking_budget());
             let seat_readonly = self.readonly_handoffs.lock().unwrap().contains(&readonly_key(&m.id, &handoff.handoff_id));
-            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span, depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), forge_read: self.forge_reads.lock().unwrap().get(&handoff.handoff_id).cloned(), forge: None, readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), json_retry: None, half_budget: false, bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, task: handoff.task_text(), read_noted: false, investigate_in: None, investigation: None };
+            let mut sc = SpanCtx { served_tier: Mutex::new(None), m: m.clone(), task_id: task_id.to_string(), span_id: span_id.clone(), role: role.clone(), guard: self.guard_for(&manifest), manifest, span: span.under(self.settings.taint_table), depth, tier, family, thinking, child_escalation: None, content_ref: None, last_key: Mutex::new(None), parked: Mutex::new(None), blocked_since: Mutex::new(None), avoid_families: handoff.routing_directive.avoid_families.clone(), said_homogeneous: Mutex::new(false), harness_tried: std::sync::atomic::AtomicBool::new(false), toolless: self.toolless.lock().unwrap().contains(&handoff.handoff_id), forge_read: self.forge_reads.lock().unwrap().get(&handoff.handoff_id).cloned(), forge: None, readonly: self.readonly_tasks.lock().unwrap().contains(&readonly_key(&m.id, task_id)) || seat_readonly, output_schema: self.schemas.lock().unwrap().get(&handoff.handoff_id).cloned(), json_retry: None, half_budget: false, bundle_agent, streak: Default::default(), lp: crate::loopctl::SpanLoop::from_history(&history), seats: Default::default(), council_seat: false, task: handoff.task_text(), read_noted: false, investigate_in: None, investigation: None };
 
             // A resumed bundle agent keeps the name its start event recorded.
             if !fresh {
@@ -2484,11 +2497,11 @@ impl Engine {
         // Refuse what would fail anyway before the operator is asked about it.
         if name == "write_file" {
             let now = self.now();
-            if let Err(refused) = tools::precheck_write(&sc.guard, sc.span.ceiling(), &sc.role, &sc.m.id, &now, args) {
+            if let Err(refused) = tools::precheck_write(&sc.guard, &sc.span, &self.exec.cfg.host_exec_paths, &sc.role, &sc.m.id, &now, args) {
                 return Ok(refused);
             }
         } else if crate::artifacts::is_artifact_tool(name) {
-            if let Err(refused) = crate::artifacts::precheck(&sc.guard, sc.span.ceiling(), &sc.m.id, name, args) {
+            if let Err(refused) = crate::artifacts::precheck(&sc.guard, &sc.span, &self.exec.cfg.host_exec_paths, &sc.m.id, name, args) {
                 return Ok(refused);
             }
         }
@@ -2503,7 +2516,7 @@ impl Engine {
                 return Ok(tool_result_error(format!("This action was blocked by the hook `{}`: {}. Do not retry it; propose an alternative or ask.", hook, why)));
             }
         }
-        let before = sc.span.ceiling();
+        let (before, sources_before) = (sc.span.ceiling(), sc.span.sources().len());
         let (result, stamps, asked) = {
             let mut idx = sc.m.index.lock().unwrap();
             let now = self.now();
@@ -2568,6 +2581,10 @@ impl Engine {
         let mut events: Vec<EventEnvelope> = stamps.iter().map(|s| sc.ev("provenance.stamp", delphi_core::provenance::Index::stamp_payload(s.zone, &s.path, &s.blake3, s.tier))).collect();
         events.extend(asked.into_iter().map(|(kind, payload)| sc.ev(&kind, payload)));
         if sc.span.ceiling() != before {
+            // The notice of a later tainted write names what tainted the span; a tool that did not say what it read is named itself.
+            if sc.span.tainted() && sc.span.sources().len() == sources_before {
+                sc.span.note_source(name);
+            }
             events.push(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": name})));
         }
         if !events.is_empty() {
@@ -2701,7 +2718,10 @@ impl Engine {
         if let Err(e) = self.exec.can_run() {
             return Ok(tool_result_error(e.to_string()));
         }
-        match gate(sc.span.ceiling(), Action::WorktreeWrite) {
+        if let Some(why) = tainted_exec_refusal(&sc.span, matches!(place, Place::Investigate(_)) || self.exec.active_sandbox().is_some()) {
+            return Ok(tool_result_error(why));
+        }
+        match sc.span.gate(Action::WorktreeWrite) {
             Gate::Allow => {}
             Gate::Deny => return Ok(tool_result_error("code execution is not allowed from a span at this taint level")),
             Gate::Red => {
@@ -2780,7 +2800,10 @@ impl Engine {
         if let Err(e) = self.exec.can_run() {
             return Ok(tool_result_error(e.to_string()));
         }
-        match gate(sc.span.ceiling(), Action::WorktreeWrite) {
+        if let Some(why) = tainted_exec_refusal(&sc.span, matches!(place, Place::Investigate(_)) || self.exec.active_sandbox().is_some()) {
+            return Ok(tool_result_error(why));
+        }
+        match sc.span.gate(Action::WorktreeWrite) {
             Gate::Allow => {}
             Gate::Deny => return Ok(tool_result_error("code execution is not allowed from a span at this taint level")),
             Gate::Red => {
@@ -2869,6 +2892,10 @@ impl Engine {
                 let hash = blake3::hash(&bytes).to_hex().to_string();
                 idx.stamp(delphi_core::provenance::Zone::Worktree, rel, &hash, tier);
                 events.push(sc.ev("provenance.stamp", delphi_core::provenance::Index::stamp_payload(delphi_core::provenance::Zone::Worktree, rel, &hash, tier)));
+                // `specs/145` §2.2 item 1: a file a tainted command made or changed is noticed like one a file tool wrote.
+                if let Some(notice) = tools::taint_notice(&sc.span, &format!("@worktree/{rel}")) {
+                    events.push(sc.ev(tools::TAINT_NOTICE, notice));
+                }
             }
         }
         let o = &report.outcome;
@@ -3126,7 +3153,7 @@ impl Engine {
         let (result, child) = self.dispatch_child(sc, call_id, args, rec).await?;
         if let Some((ceiling, status)) = child {
             // What the child read is now in the parent's context: the parent inherits the child's taint.
-            if sc.span.observe_input(ceiling) {
+            if sc.span.observe_input_from(ceiling, &format!("the result of the dispatched {}", args["role"].as_str().unwrap_or("agent"))) {
                 sc.m.append(sc.ev("span.taint", json!({"ceiling": sc.span.ceiling().as_str(), "cause": "dispatch result"}))).await?;
             }
             if let NodeStatus::Escalated(r) = status {
@@ -3190,7 +3217,7 @@ impl Engine {
         }
         // The taint-gated action table: a span at L1 or below needs a Red approval to dispatch (the child
         // would inherit its taint); anything else dispatches freely.
-        match gate(sc.span.ceiling(), Action::DispatchAgent) {
+        match sc.span.gate(Action::DispatchAgent) {
             Gate::Allow => {}
             Gate::Deny => return Ok((tool_result_error("dispatch is not allowed from a span at this taint level"), None)),
             Gate::Red => {
@@ -3265,7 +3292,11 @@ impl Engine {
                     retry_child.objective,
                     crate::collaboration::TENACITY_PUSHBACK_MESSAGE
                 );
-                out = self.run_span(&sc.m.clone(), &sc.task_id.clone(), retry_child, Some(sc.span.clone()), sc.depth + 1).await?;
+                // `specs/145` 145-A1 item 4: a retry keeps the lowest taint the work reached, so the retried child starts where the
+                // first attempt ended, not at the parent's ceiling before it.
+                let mut retry_parent = sc.span.clone();
+                retry_parent.observe_input_from(out.ceiling, &format!("the first attempt of the dispatched {role}"));
+                out = self.run_span(&sc.m.clone(), &sc.task_id.clone(), retry_child, Some(retry_parent), sc.depth + 1).await?;
             }
         }
         let st = match &out.status {
@@ -6554,5 +6585,239 @@ mod tests {
         assert_eq!(events_of(&f, crate::collaboration::TENACITY_EVENT).len(), 1, "one pushback for the task");
         let investigators = events_of(&f, "dag.node.added").iter().filter(|e| e.payload["role"] == "investigator").count();
         assert_eq!(investigators, 3, "the first, its retry and the second; the second is not retried");
+    }
+
+    // ---- `specs/145` slice A: the what-leaves table, switched on in these tests only (`Settings::taint_table`). ----
+
+    fn what_leaves(s: &mut Settings) {
+        s.taint_table = delphi_core::provenance::TaintTable::WhatLeaves;
+    }
+
+    fn span_of(f: &Fx, role: &str, nth: usize) -> String {
+        events_of(f, "dag.node.added").into_iter().filter(|e| e.payload["role"] == role).nth(nth).unwrap().payload["node_id"].as_str().unwrap().to_string()
+    }
+
+    fn notices(f: &Fx) -> Vec<EventEnvelope> {
+        events_of(f, tools::TAINT_NOTICE)
+    }
+
+    /// AC-2 and AC-5 (switch on): a dispatch from a span at L0 is no card, the child starts at L0, and what the child writes goes
+    /// through, stamped L0 (not its path's default L3) with one notice that names the path and the source.
+    #[tokio::test]
+    async fn spec_145_ac2_ac5_a_tainted_dispatch_is_no_card_and_the_childs_write_is_marked_l0_and_noticed() {
+        let f = setup(
+            vec![
+                Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})),
+                Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Write the plan"})),
+                Step::tool("w1", "write_file", json!({"path": "missions/m1/specs/plan.md", "content": "# Plan\n"})),
+                Step::text("child done"),
+                Step::text("parent done"),
+            ],
+            5.0,
+            what_leaves,
+        );
+        let out = f.engine.run_task(&f.m, "orchestrator", "Plan from the vendored file").await.unwrap();
+        assert_eq!((out.status, out.text.as_str()), (Status::Done, "parent done"));
+        assert!(events_of(&f, "approval.requested").is_empty(), "no card: not the dispatch, not the Markdown write");
+        let child = events_of(&f, "dag.node.added").into_iter().find(|e| e.payload["role"] == "architect").unwrap();
+        assert_eq!(child.payload["ceiling"], "L0", "the child starts at the parent's taint");
+        let stamp = events_of(&f, "provenance.stamp").into_iter().find(|e| e.payload["path"] == "missions/m1/specs/plan.md").expect("written");
+        assert_eq!(stamp.payload["tier"], "L0");
+        let n = notices(&f);
+        assert_eq!(n.len(), 1, "{n:?}");
+        assert_eq!(n[0].span_id.as_deref(), child.payload["node_id"].as_str());
+        assert_eq!(n[0].payload["text"], "wrote after untrusted text: missions/m1/specs/plan.md (taint L0, from @project/app/vendor/x.js)");
+        assert!(f.root.join("workspaces/w/local/missions/m1/specs/plan.md").exists());
+    }
+
+    /// Switch off (145-A1 item 5), through the engine: the same dispatch is today's Red card, and the same write is refused.
+    #[tokio::test]
+    async fn spec_145_switched_off_a_tainted_dispatch_is_red_and_a_tainted_write_is_refused() {
+        let f = setup(
+            vec![
+                Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})),
+                Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Write the plan"})),
+                Step::tool("w1", "write_file", json!({"path": "missions/m1/specs/plan.md", "content": "# Plan\n"})),
+                Step::text("parent done"),
+            ],
+            5.0,
+            |_| {},
+        );
+        assert_eq!(f.engine.settings.taint_table, delphi_core::provenance::TaintTable::Ratified);
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "orchestrator", "Plan from the vendored file").await }) };
+        let card = wait_for_card(&f).await;
+        assert_eq!((card.tool.as_str(), card.tier), ("dispatch_agent", ApprovalTier::Red));
+        f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Deny { reason: "no".into() }, "console-1").unwrap();
+        assert_eq!(task.await.unwrap().unwrap().status, Status::Done);
+        let last = f.model.requests().last().unwrap().body["messages"].to_string();
+        assert!(last.contains("provenance gate"), "the write is refused: {last}");
+        assert!(notices(&f).is_empty() && !f.root.join("workspaces/w/local/missions/m1/specs/plan.md").exists());
+    }
+
+    /// AC-10, a child's result (switch on): a clean parent that reads the report of a child at L0 is at L0, and its next write is marked.
+    #[tokio::test]
+    async fn spec_145_ac10_a_childs_result_lowers_the_parent_and_its_next_write_is_marked() {
+        let f = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "architect", "objective": "Read the vendored file"})),
+                Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})),
+                Step::text("child report"),
+                Step::tool("w1", "write_file", json!({"path": "missions/m1/notes.md", "content": "# Notes\n"})),
+                Step::text("parent done"),
+            ],
+            5.0,
+            what_leaves,
+        );
+        f.engine.run_task(&f.m, "orchestrator", "Summarize via the architect").await.unwrap();
+        let parent = span_of(&f, "orchestrator", 0);
+        assert_eq!(events_of(&f, "dag.node.added").into_iter().find(|e| e.payload["role"] == "orchestrator").unwrap().payload["ceiling"], "L5", "the parent starts clean");
+        let stamp = events_of(&f, "provenance.stamp").into_iter().find(|e| e.payload["path"] == "missions/m1/notes.md").unwrap();
+        assert_eq!((stamp.payload["tier"].as_str(), stamp.span_id.as_deref()), (Some("L0"), Some(parent.as_str())));
+        let n = notices(&f);
+        assert_eq!(n.len(), 1);
+        let text = n[0].payload["text"].as_str().unwrap();
+        assert!(text == "wrote after untrusted text: missions/m1/notes.md (taint L0, from the result of the dispatched architect)", "{text}");
+    }
+
+    /// AC-10, retry and resume (switch on): a span that read untrusted text and was interrupted mid-call is resumed after a restart;
+    /// its interrupted turn is retried at the taint it had reached, so its next write is marked L0, not stamped at the path's L3.
+    #[tokio::test]
+    async fn spec_145_ac10_a_retried_and_resumed_span_keeps_its_lowest_taint() {
+        let f = setup(vec![Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::Hang], 5.0, what_leaves);
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Read the vendored file and note it").await }) };
+        let model = f.model.clone();
+        wait_until("the second call to be in flight", || model.requests().len() == 2).await;
+        kill(task).await;
+        let f2 = f.restart(vec![Step::tool("w1", "write_file", json!({"path": "missions/m1/specs/after.md", "content": "# After\n"})), Step::text("done")]);
+        assert_eq!(f2.engine.settings.taint_table, delphi_core::provenance::TaintTable::WhatLeaves, "the test's switch survives the restart");
+        let plan = f2.engine.recover_mission(&f2.m).await.unwrap().expect("there is work to recover");
+        assert!(plan.items[0].action.contains("retries its interrupted turn"), "{}", plan.items[0].action);
+        let out = f2.engine.resume_task(&f2.m, &plan.rec, "t_0001").await.unwrap();
+        assert_eq!(out.status, Status::Done, "{}", out.text);
+        let stamp = events_of(&f2, "provenance.stamp").into_iter().find(|e| e.payload["path"] == "missions/m1/specs/after.md").expect("written");
+        assert_eq!(stamp.payload["tier"], "L0", "the resumed span is still at L0");
+        assert_eq!(notices(&f2).len(), 1);
+    }
+
+    /// AC-10, a retried child (145-A1 item 4): the investigator's pushback retry starts where the first attempt ended, at L0, not at
+    /// the parent's clean ceiling. (A tightening, so it holds under either table; shown here under the ratified one.)
+    #[tokio::test]
+    async fn spec_145_ac10_a_pushed_back_retry_starts_at_the_first_attempts_taint() {
+        let f = setup(
+            vec![
+                Step::tool("d1", "dispatch_agent", json!({"role": "investigator", "objective": "Find root cause"})),
+                Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})),
+                Step::text("Exhausted all avenues, could not find bug."),
+                Step::text("Found it."),
+                Step::text("Mission complete."),
+            ],
+            5.0,
+            |_| {},
+        );
+        let out = f.engine.run_task(&f.m, "orchestrator", "Triage bug").await.unwrap();
+        assert_eq!(out.status, Status::Done);
+        let inv: Vec<EventEnvelope> = events_of(&f, "dag.node.added").into_iter().filter(|e| e.payload["role"] == "investigator").collect();
+        assert_eq!(inv.len(), 2);
+        assert_eq!((inv[0].payload["ceiling"].as_str(), inv[1].payload["ceiling"].as_str()), (Some("L5"), Some("L0")), "the retry keeps the first attempt's taint");
+    }
+
+    /// Answer every card with allow (the clean span's unsandboxed command asks).
+    fn allow_every_card(f: &Fx) {
+        let broker = f.engine.broker.clone();
+        tokio::spawn(async move {
+            loop {
+                for c in broker.pending() {
+                    let _ = broker.resolve(&c.approval_id, &c.payload_blake3, Answer::Allow, "console-1");
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+    }
+
+    /// A loopback listener that counts connections, and a command that tries to reach it.
+    fn listener() -> (std::net::TcpListener, Vec<String>) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let port = l.local_addr().unwrap().port();
+        let argv = vec!["/bin/bash".to_string(), "-c".to_string(), format!("(echo hi > /dev/tcp/127.0.0.1/{port}) 2>/dev/null && echo NET-OPEN-$((6*7)) || echo NET-SHUT-$((6*7))")];
+        (l, argv)
+    }
+
+    fn connected(l: &std::net::TcpListener) -> bool {
+        l.accept().is_ok()
+    }
+
+    fn builder_145(steps: Vec<Step>, sandbox: crate::exec::SandboxMode) -> Fx {
+        let f = crate::testkit::setup_with_exec(steps, 5.0, what_leaves, |c| c.sandbox = sandbox);
+        git_project(&f);
+        crate::testkit::ratify_spec(&f);
+        f
+    }
+
+    /// AC-7 (switch on): a span at L0 runs code only in the OS sandbox, whose profile has the network off. Without a sandbox its
+    /// command is refused before any card and never runs; the same command from a clean span is unchanged (asked, then run with
+    /// the network, as today).
+    #[tokio::test]
+    async fn spec_145_ac7_tainted_code_never_reaches_the_network_and_a_clean_spans_command_is_unchanged() {
+        let (l, argv) = listener();
+        let f = builder_145(vec![Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::tool("c1", "run_command", json!({"argv": argv})), Step::text("done")], crate::exec::SandboxMode::Off);
+        allow_every_card(&f);
+        assert_eq!(f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap().status, Status::Done);
+        assert!(!connected(&l), "nothing reached the listener");
+        assert!(events_of(&f, "action.intent").is_empty() && events_of(&f, "approval.requested").iter().all(|e| e.payload["tool"] != "run_command"), "refused before a card and never run");
+        let result = f.model.requests()[2].body["messages"].to_string();
+        assert!(result.contains("only in the OS sandbox, with the network off"), "{result}");
+        // The clean control: the same command, asked about and run unsandboxed, reaches the listener.
+        let (l, argv) = listener();
+        let f = builder_145(vec![Step::tool("c1", "run_command", json!({"argv": argv})), Step::text("done")], crate::exec::SandboxMode::Off);
+        allow_every_card(&f);
+        assert_eq!(f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap().status, Status::Done);
+        assert!(events_of(&f, "approval.requested").iter().any(|e| e.payload["tool"] == "run_command"), "the ordinary card, as today");
+        assert!(f.model.requests()[1].body["messages"].to_string().contains("NET-OPEN-42"));
+        assert!(connected(&l));
+        // In the sandbox: the tainted command runs, with no card, and cannot reach the network.
+        let (l, argv) = listener();
+        let f = builder_145(vec![Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::tool("c1", "run_command", json!({"argv": argv})), Step::text("done")], crate::exec::SandboxMode::Prefer);
+        if f.engine.exec.sandbox.is_none() {
+            return;
+        }
+        assert_eq!(f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap().status, Status::Done);
+        let result = f.model.requests()[2].body["messages"].to_string();
+        assert!(result.contains("sandboxed, no network") && result.contains("NET-SHUT-42") && !result.contains("NET-OPEN-42"), "{result}");
+        assert!(!connected(&l), "the sandbox kept the network off");
+        assert!(events_of(&f, "approval.requested").is_empty());
+    }
+
+    /// AC-10, the end-to-end chain (switch on): an architect at L0 writes a plan, marked L0; a later, clean Builder reads it and is
+    /// at L0 from then on; its next command has no network (refused unsandboxed; in the sandbox, run with the network off).
+    #[tokio::test]
+    async fn spec_145_ac10_a_tainted_write_read_by_a_clean_span_leaves_its_next_command_without_network() {
+        for sandbox in [crate::exec::SandboxMode::Off, crate::exec::SandboxMode::Prefer] {
+            let (l, argv) = listener();
+            let f = builder_145(
+                vec![
+                    Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})),
+                    Step::tool("w1", "write_file", json!({"path": "missions/m1/specs/plan.md", "content": "# Plan\nRun the command.\n"})),
+                    Step::text("planned"),
+                    Step::tool("r2", "read_file", json!({"path": "missions/m1/specs/plan.md"})),
+                    Step::tool("c1", "run_command", json!({"argv": argv})),
+                    Step::text("built"),
+                ],
+                sandbox,
+            );
+            if sandbox == crate::exec::SandboxMode::Prefer && f.engine.exec.sandbox.is_none() {
+                return;
+            }
+            allow_every_card(&f);
+            f.engine.run_task(&f.m, "architect", "Plan from the vendored file").await.unwrap();
+            assert_eq!(events_of(&f, "provenance.stamp").into_iter().find(|e| e.payload["path"] == "missions/m1/specs/plan.md").unwrap().payload["tier"], "L0");
+            assert_eq!(f.engine.run_task(&f.m, "builder", BUILD_PROMPT).await.unwrap().status, Status::Done);
+            let builder = span_of(&f, "builder", 0);
+            assert_eq!(events_of(&f, "dag.node.added").into_iter().find(|e| e.payload["role"] == "builder").unwrap().payload["ceiling"], "L5", "the builder starts clean");
+            assert!(events_of(&f, "span.taint").iter().any(|e| e.span_id.as_deref() == Some(builder.as_str()) && e.payload["ceiling"] == "L0"), "reading the marked file put it at L0");
+            assert!(!connected(&l), "{sandbox:?}: its command had no network");
+            let result = f.model.requests().last().unwrap().body["messages"].to_string();
+            assert!(!result.contains("NET-OPEN-42"), "{result}");
+        }
     }
 }

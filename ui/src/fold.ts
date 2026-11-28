@@ -231,6 +231,8 @@ export function fold(s: State, n: { method: string; params?: any }, now: number)
       const history = [...h, entry];
       return { ...s, activity: { ...s.activity, history: history.length > HISTORY_MAX ? history.slice(-HISTORY_MAX) : history } };
     }
+    // A write by a span that had read untrusted text (`specs/145` §2.2 item 1): one line, as the daemon wrote it; nothing waits on it.
+    case 'taint.write_noticed': return addBlock(s, { kind: 'note', text: sanitize(String(pl.text ?? `wrote after untrusted text: ${pl.path ?? ''}`)).replace(/\s+/g, ' ').slice(0, 400), at: stamp(e, now), tone: 'info' });
     // A setting changed (by the operator's command, by their words, or by accepting a suggestion): said once, as the daemon wrote it.
     case 'setting.changed': return addBlock(s, { kind: 'note', text: sanitize(String(pl.text ?? `${pl.key}: ${pl.old} → ${pl.new}`)), at: stamp(e, now), tone: 'ok' });
     // Somebody proposed a change that waits for the operator.
