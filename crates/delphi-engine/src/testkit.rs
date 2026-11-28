@@ -60,6 +60,10 @@ order = { claude = ["direct", "backup"] }
 allowed_endpoints = ["direct", "backup"]
 "#;
 
+/// The switches that let a page build nobody asked for run (`specs/144` §2.7 item 5 turned both off by default): appended to a
+/// config by the tests of idle page builds, which test what happens once the operator turns them on.
+pub(crate) const UNREQUESTED_PAGES_ON: &str = "[library.pages]\nauto_rebuild = true\n[bridge.jobs]\npages = \"auto\"\n";
+
 /// [`CONFIG`] with one endpoint, a `claude` harness, and nothing else allowed: the install of `specs/143` §1 (O1).
 pub(crate) fn harness_only_config() -> String {
     let models = CONFIG.split("[[endpoints]]").next().unwrap();

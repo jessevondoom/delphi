@@ -503,6 +503,8 @@ fn classify_with(assertions: &[Assertion], material: &[Material], omitted: &[Str
 
 /// How a check names a contradiction the page does not state (`specs/144` §2.3 item 5).
 pub const CONFLICT_UNSTATED: &str = "a conflict the page does not state";
+/// How a topic page's check names a marker that cites a record the writer was not given (`specs/144` §2.7 item 3).
+pub const NOT_GIVEN: &str = "cited a record the writer was not given";
 
 /// What code makes of a topic page's verdicts (`specs/144` §2.3 items 2 to 6): one result per unit, by number. A unit with no verdict
 /// is `unchecked`; a compound unit (several lines) is `supported` only if every line is; a `supported` line counts only when its passage
@@ -839,6 +841,12 @@ impl Library {
         // What the parse cannot read or finds uncited comes first, then the mechanical check.
         let mut findings: Vec<String> = parsed.findings.clone();
         findings.extend(checked.findings.iter().map(|f| f.to_string()));
+        // `specs/144` §2.7 item 3: the page is judged against exactly the writer's evidence; a marker naming a record the writer was
+        // not given (a library source the brief did not hold) fails it.
+        let given = super::topics::writer_evidence(t.gathered);
+        for c in checked.cited.iter().filter(|c| !given.contains(&c.label())) {
+            findings.push(format!("{} `{}`", NOT_GIVEN, c.label()));
+        }
         if !findings.is_empty() {
             return Attempt::Fail { findings, reply: None, records: Vec::new(), figure_failures: resolved.failures };
         }
@@ -1142,9 +1150,11 @@ mod topic_unit_tests {
     /// AC-8: a passage in a claim's text, not its source's, does not count.
     #[test]
     fn a_passage_from_claim_text_does_not_count() {
-        let fx = fixture();
+        let mut fx = fixture();
         let quote = "The tide turns twice a day at the harbour wall.";
         let c = fx.lib.add_claim("Harbour tides turn twice daily.", &Default::default(), &[super::super::claims::AnchorSpec { source_id: fx.sid.clone(), locator: Some("¶1".into()), quote: quote.into(), ..Default::default() }]).unwrap()["id"].as_str().unwrap().to_string();
+        // The writer was given the claim (`specs/144` §2.7 item 3: a page cites only what its writer was given).
+        fx.g.claims.push(fx.lib.claim(&c).unwrap());
         let body = format!("# Harbour tides\n\nHarbour tides turn twice daily, except at the neap when the wind does not hold [{c}].\n");
         let cc = c.clone();
         let claim_text = build(&fx, &body, &script(move |_| vec![verdict(1, Judgement::NoAssertion, None, None), verdict(2, Judgement::Supported, Some(&cc), Some("Harbour tides turn twice daily."))]));

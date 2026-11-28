@@ -858,6 +858,70 @@ pub fn seed_page(title: &str, seed: &Seed, held: &dyn HeldText) -> Result<SeedPa
     Ok(SeedPage { body, cited, dropped })
 }
 
+/// Take out of `text` every bracket that names only claims (`[c-…]`, `(c-…, c-…)`), with the space before it: what is left is the
+/// block's prose.
+fn without_claim_marks(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(['[', '(']) {
+        let close = if rest.as_bytes()[i] == b'[' { ']' } else { ')' };
+        let Some(len) = rest[i + 1..].find(close) else { break };
+        let inner = &rest[i + 1..i + 1 + len];
+        let only_claims = !inner.trim().is_empty() && inner.split([',', ';']).map(str::trim).all(|id| id.len() > 2 && id.starts_with("c-") && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+        if only_claims {
+            out.push_str(rest[..i].trim_end_matches(' '));
+        } else {
+            out.push_str(&rest[..i + len + 2]);
+        }
+        rest = &rest[i + len + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The seed page as the writer's outline (`specs/144` §2.7 item 2, amending `specs/139` §2.3 item 3): its headings and blocks in their
+/// order, each marker re-pointed to the records the text rests on. A research answer's block is cut into its paragraphs, and each rests
+/// on the claims its own markers name (`topic_gather::claim_ids_in`): those `citable` admits become its marker, and the claim marks in
+/// its prose are taken out. Any other block keeps its span's marker when `citable` admits it. Text that rests on no record the writer
+/// may cite keeps its words, for structure and order, and no marker: it is not given to the writer as citable. Code makes it from the
+/// seed page; no model is called.
+pub fn outline(page: &SeedPage, seed: &Seed, citable: &dyn Fn(&str) -> bool) -> String {
+    let labels: BTreeSet<&str> = seed.spans.iter().map(|s| s.label.as_str()).collect();
+    let answers: BTreeSet<&str> = seed.spans.iter().filter(|s| s.row == Row::Answer).map(|s| s.label.as_str()).collect();
+    let with_marker = |prose: &str, to: &[String]| if to.is_empty() { prose.trim_end().to_string() } else { format!("{} [{}]", prose.trim_end(), to.join(", ")) };
+    let mut out: Vec<String> = Vec::new();
+    // The paragraphs of the block being read: a block ends at the paragraph that carries its span's marker.
+    let mut pending: Vec<&str> = Vec::new();
+    for para in page.body.split("\n\n").map(str::trim_end).filter(|p| !p.is_empty()) {
+        // A heading between blocks is the outline's own; one inside a block stays with it.
+        if para.starts_with('#') && pending.is_empty() {
+            out.push(para.to_string());
+            continue;
+        }
+        let end = para.strip_suffix(']').and_then(|p| p.rfind(" [").map(|i| (&para[..i], &p[i + 2..]))).filter(|(_, l)| labels.contains(l));
+        let Some((last, label)) = end else {
+            pending.push(para);
+            continue;
+        };
+        pending.push(last);
+        if answers.contains(label) {
+            for p in pending.drain(..) {
+                if p.starts_with('#') {
+                    out.push(p.to_string());
+                    continue;
+                }
+                let to: Vec<String> = crate::topic_gather::claim_ids_in(p).into_iter().filter(|c| citable(c)).collect();
+                out.push(with_marker(&without_claim_marks(p), &to));
+            }
+        } else {
+            let to: Vec<String> = if citable(label) { vec![label.to_string()] } else { Vec::new() };
+            out.push(with_marker(&std::mem::take(&mut pending).join("\n\n"), &to));
+        }
+    }
+    out.extend(pending.into_iter().map(String::from));
+    out.join("\n\n").trim_end().to_string() + "\n"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

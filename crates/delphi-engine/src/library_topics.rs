@@ -19,10 +19,18 @@
 //! line and to keep the version, never put in a brief. When the writer errors, its page fails the check, or the budget or the share
 //! refuses the call, the seed is the page ([`Library::topic_keep_seed`]); the claims alone never are.
 //!
+//! **Built from evidence** (`specs/144` §2.7; slice D). The writer's evidence is the topic's evidence merged: the evidence packs of the
+//! research topics it follows ([`Library::merge_packs`]), its findings and knowledge-base passages, and its claims. The seed reaches the
+//! writer as an outline only ([`crate::topic_seed::outline`]): its structure and order, each marker re-pointed to the records the block
+//! rests on, and no marker on a block that rests on none. The validator judges the page against exactly that evidence and the topic's
+//! claims, the records a statement may contradict; a marker naming a record the writer was not given fails the page. The sidecar names
+//! the packs, the outline's spans and the contradicting claims, so the page's label (`Labeller::page`) joins all of it, cited or not,
+//! and is computed again from the records at every exit.
+//!
 //! **Due.** A page is due when it has never been built, a claim or source it was built from changed or left the library, a
 //! claim of one of its research topics is not yet in it, or its lifetime has passed ([`Library::topic_due`]). The daemon rebuilds
-//! due pages while it is idle, within `[library.pages] per_day`, unless `auto_rebuild = false`; the operator can always ask
-//! (`delphi pages rebuild <slug>`).
+//! due pages while it is idle, within `[library.pages] per_day`, only when `auto_rebuild = true` (off by default, `specs/144` §2.7
+//! item 5; a bridged build also needs `[bridge.jobs] pages = "auto"`); the operator can always ask (`delphi pages rebuild <slug>`).
 //!
 //! **What a topic page may carry.** It is written by the writer from the material the daemon gathered and checked by the same
 //! mechanical check and validator as a search page, so it is never a source and never trusted text. No private record is put on
@@ -54,6 +62,11 @@ const RESERVED: [&str; 4] = ["budget", "history", "versions", "links"];
 pub const LINKS_FILE: &str = "links.json";
 /// The page every topic is built at: never a private record (see the module's comment).
 pub const SCOPE: Scope = Scope::External;
+/// The sidecar's keys for what a written page's writer and validator were given besides its material (`specs/144` §2.7 item 4): the
+/// evidence packs merged (logical paths), the seed's spans given as its outline, and the claims shown as contradicting records.
+pub const EVIDENCE_PACKS: &str = "evidence_packs";
+pub const OUTLINE: &str = "outline";
+pub const CONTRADICTING: &str = "contradicting";
 /// How many versions a topic keeps; the oldest goes first.
 pub const MAX_VERSIONS: usize = 50;
 
@@ -585,6 +598,11 @@ pub fn topic_rules() -> String {
     )
 }
 
+/// The longest passage an evidence pack's entry gives the writer: the paragraph of its source's stored text that holds the quote.
+pub const PACK_PASSAGE_MAX: usize = 1536;
+/// The longest a source's cut grows to as pack passages are merged into it.
+pub const PACK_CUT_MAX: usize = 6 * 1024;
+
 /// The most topics code lists under a topic page's `## See also`.
 pub const MAX_SEE_ALSO: usize = 8;
 
@@ -609,7 +627,16 @@ pub fn navigation(slug: &str, title: &str, topics: &[(String, String)]) -> (Opti
 }
 
 /// What a topic brief says of the draft's research prose (`specs/144` §2.1 item 3).
-pub const OUTLINE_NOTE: &str = "A block of the DRAFT TO EXPAND whose marker names no RECORD above is research prose: an outline of the subject, which supports nothing. Use it for structure and order only; cite the records it rests on, or leave it out.";
+pub const OUTLINE_NOTE: &str = "The DRAFT TO EXPAND is an outline: use its structure and its order. Its markers name the RECORDS above each block rests on. A block with no marker rests on no record: it supports nothing; leave it out, or cite the records that say the same.";
+
+/// The labels of every record a topic page's writer is given (`specs/144` §2.7 items 1 and 3): its claims, its sources (`s-<id>`) and
+/// its knowledge-base passages and findings. The validator judges the page against these and the contradicting records, and nothing
+/// else: a marker naming any other record fails the page.
+pub fn writer_evidence(g: &Gathered) -> BTreeSet<String> {
+    let claims = g.claims.iter().filter_map(|c| c["id"].as_str().map(String::from));
+    let sources = g.sources.iter().map(|(id, _, _)| format!("s-{id}"));
+    claims.chain(sources).chain(g.records.iter().map(|r| r.label.clone())).collect()
+}
 
 /// The change line of `specs/117` §2 item 2, from the page's previous body and its new one: statements (paragraphs or items that
 /// carry a citation marker) added and removed, and cited records added, removed and replaced (one removed and one added is one
@@ -1123,8 +1150,19 @@ impl Library {
         let Ok(draft) = crate::topic_seed::seed_page(&title, &r.seed, r.held) else {
             return self.topic_seed_build(seed_req);
         };
-        // The writer's records: the seed's spans first, then what the search found that the seed does not hold, and the seed's claims.
-        let g = self.expansion_material(&r.seed, r.gathered);
+        // The writer's records: the seed's spans first, then what the search found that the seed does not hold, the seed's claims and
+        // the topic's evidence packs, merged (`specs/144` §2.7 item 1). Nothing of the page it replaces is among them.
+        let mut g = self.expansion_material(&r.seed, r.gathered);
+        self.merge_packs(&mut g, &side);
+        // The seed reaches the writer as an outline only, its markers re-pointed to the records it rests on (§2.7 item 2).
+        let outline = {
+            let given = writer_evidence(&g);
+            crate::topic_seed::outline(&draft, &r.seed, &|label| given.contains(label))
+        };
+        g.outline = r.seed.spans.iter().map(|s| s.to_json()).collect();
+        // The validator is shown these records and the topic's claims, the records a statement may contradict (§2.7 item 3): the
+        // page's label joins those too (§2.7 item 4).
+        g.contradicting = self.topic_claims(&norm_ws(&title)).0.iter().filter_map(|c| c["id"].as_str()).filter(|id| !g.claims.iter().any(|x| x["id"] == *id)).map(String::from).collect();
         let lib = self.with_more_records(&g.records);
         if self.pages_today(r.now) >= r.settings.per_day {
             return self.topic_keep_seed(&seed_req, &side, &format!("{NOT_ADMITTED}: today's page budget ({} pages) is spent; the topic stays due", r.settings.per_day));
@@ -1138,7 +1176,7 @@ impl Library {
         }
         self.count_page(r.now);
         let topics: Vec<(String, String)> = self.topic_sides().into_iter().filter(|(s, _)| s != r.slug).map(|(s, v)| (s, v["title"].as_str().unwrap_or("").to_string())).collect();
-        let mut brief = topic_brief(&title, &g, r.settings.long_max_tokens, &topics, &draft.body);
+        let mut brief = topic_brief(&title, &g, r.settings.long_max_tokens, &topics, &outline);
         if may_take_title(&side) {
             brief.push_str(TITLE_HINT);
         }
@@ -1193,6 +1231,71 @@ impl Library {
             }
         }
         g
+    }
+
+    /// Has a topic evidence with citable text (`specs/144` §2.5 item 6)? A seed span of a source's kept excerpt (a seed takes one only
+    /// from a source with citable text), a passage or research file whose text passes `citable_text`, or an evidence pack entry whose
+    /// source has citable text. A research answer, a finding, a summary and a claim alone are not. Reads only.
+    pub fn topic_has_citable_evidence(&self, seed: &crate::topic_seed::Seed, side: &Value) -> bool {
+        use crate::topic_seed::Row;
+        let spans = seed.spans.iter().any(|s| match s.row {
+            Row::SourceRead => true,
+            Row::Search | Row::IngestFile => crate::citable_text::citable_text(&s.text, None).is_ok(),
+            _ => false,
+        });
+        spans || {
+            let mut g = Gathered::default();
+            self.merge_packs(&mut g, side);
+            !g.sources.is_empty()
+        }
+    }
+
+    /// Merge into `g` the evidence packs of the research topics `side` follows (`specs/144` §2.7 item 1). Each pack is built again from
+    /// its record and the stored text (`evidence_pack::build`, so it is the pack as it is now, not the file's last copy): each entry's
+    /// claim joins the claims, and the paragraph of its source's stored text that holds the quote joins that source's cut, which the
+    /// writer is shown and the validator judges against. A pack that is withheld (a run that read a private source) is not merged; a
+    /// source that is private, gone, or has no citable text gives no passage. The packs merged are named in `g.packs`, so the page's
+    /// sidecar names them and its label joins theirs (§2.7 item 4). With no workspace known there is no pack. Reads only.
+    pub fn merge_packs(&self, g: &mut Gathered, side: &Value) {
+        let Some(ws) = self.workspace() else { return };
+        let labeller = crate::label::Labeller::new(Some(self), Some(ws));
+        for t in side["research_topics"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            let path = format!("research/topics/{t}/{}", crate::evidence_pack::FILE);
+            if g.packs.contains(&path) || crate::evidence_pack::withheld(&crate::evidence_pack::label_of(&labeller, t).label) {
+                continue;
+            }
+            let Some(pack) = crate::research_record::find(ws, t).and_then(|topic| crate::evidence_pack::build(self, &topic).ok()) else { continue };
+            let mut merged = false;
+            for e in &pack.entries {
+                let Some(meta) = self.read_meta(&e.source_id).filter(|m| !is_private(m) && m["purged"].is_null() && m["retired"].is_null()) else { continue };
+                if !self.citable_logged(&e.source_id) {
+                    g.read_title_only(&e.source_id, meta["title"].as_str().unwrap_or(&e.source_id));
+                    continue;
+                }
+                let Ok(text) = self.stored_text(&e.source_id) else { continue };
+                let q = norm_ws(&e.quote);
+                let passage: String = match text.split("\n\n").find(|p| norm_ws(p).contains(&q)) {
+                    Some(p) => p.trim().chars().take(PACK_PASSAGE_MAX).collect(),
+                    None => format!("{}{}{}", e.before, e.quote, e.after),
+                };
+                match g.sources.iter_mut().find(|(id, _, _)| *id == e.source_id) {
+                    Some((_, _, cut)) => {
+                        if !norm_ws(cut).contains(&norm_ws(&passage)) && cut.len() + passage.len() <= PACK_CUT_MAX {
+                            cut.push_str("\n\n");
+                            cut.push_str(&passage);
+                        }
+                    }
+                    None => g.sources.push((e.source_id.clone(), meta, passage)),
+                }
+                if !g.claims.iter().any(|c| c["id"] == e.claim_id.as_str()) {
+                    g.claims.extend(self.claim(&e.claim_id).filter(|c| live(c) && !self.rests_on_private(c)));
+                }
+                merged = true;
+            }
+            if merged {
+                g.packs.push(path);
+            }
+        }
     }
 
     /// This library, resolving `records` besides its own (the page check of a topic page resolves the seed's spans as records).
@@ -1400,6 +1503,16 @@ impl Library {
         side["built"] = json!(now);
         side["version"] = json!(old["version"].as_u64().unwrap_or(0) + 1);
         side["material"] = json!(material);
+        // What else the writer and the validator were given (`specs/144` §2.7 item 4): the evidence packs merged, the seed as outline and
+        // the contradicting records. The label joins them all, cited or not. A seed page was given to no one: it keeps none of them.
+        for (k, v) in [(EVIDENCE_PACKS, json!(g.packs)), (OUTLINE, json!(g.outline)), (CONTRADICTING, json!(g.contradicting))] {
+            match side.as_object_mut() {
+                Some(o) if v.as_array().is_none_or(Vec::is_empty) => {
+                    o.remove(k);
+                }
+                _ => side[k] = v,
+            }
+        }
         side["cited"] = json!(self.cited_labels(&md));
         side["change"] = json!(change);
         side["outcome"] = json!(c.verdict.outcome.as_str());
@@ -2351,7 +2464,10 @@ mod expand_tests {
         assert!(brief.contains("At most about 300 tokens."), "the cap the brief names is long_max_tokens");
         assert!(!brief.contains("about 150 to 400 words"), "not the summary size");
         // The seed page, as code renders it, is the draft: its blocks and their markers, after the records.
-        let draft = crate::topic_seed::seed_page(&built.title, &seed, &NoHeldText).unwrap().body;
+        // `specs/144` §2.7 item 2: the seed page as an outline, its markers re-pointed to the records the writer was given.
+        let seed_pg = crate::topic_seed::seed_page(&built.title, &seed, &NoHeldText).unwrap();
+        let given: BTreeSet<String> = seed.citable_records().iter().map(|r| r.label.clone()).chain(seed.spans.iter().filter(|s| s.row == crate::topic_seed::Row::Claim).map(|s| s.label.clone())).collect();
+        let draft = crate::topic_seed::outline(&seed_pg, &seed, &|l| given.contains(l));
         let at = brief.rfind("\nDRAFT TO EXPAND (").expect("the draft is in the brief");
         assert!(brief.find("RECORDS:").unwrap() < at && brief[at..].contains(draft.trim()) && brief[at..].contains("\nEND DRAFT\n"), "{brief}");
         let claim = seed.spans.iter().find(|s| s.row == crate::topic_seed::Row::Claim).unwrap();
@@ -2517,3 +2633,7 @@ mod expand_tests {
         assert!(!production.contains(&["claims_only_page", "("].concat()), "library_topics.rs calls the claims-only fallback");
     }
 }
+
+#[cfg(test)]
+#[path = "library_topics_evidence_tests.rs"]
+mod evidence_tests;
