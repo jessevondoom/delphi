@@ -114,21 +114,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/145-taint-gates-what-leaves-local-writes-after-untrusted-text-proceed-marked.md",
-    "sha256": "4fae8f4d985c1fd6c0a914663d4eda6745f29cd8b4d7e58191afa7d6716bc460"
+    "sha256": "a983eced044b714b5b7971ac7ee945f62ae8ccd46838c8fdc4ecc0335a66437b"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 383,
+        "end": 421,
         "end_line": 6,
         "line": 6,
         "start": 251
       },
-      "text": "status: draft   # the operator chose this direction on 2026-11-27 (\"yes please, this direction is better\"); not yet approved as text"
+      "text": "status: approved   # by the operator on 2026-11-27: \"145 is approved. keep going\", approved before the red-team review of §6, which still runs before slice G is ratified"
     },
-    "sha256": "4fae8f4d985c1fd6c0a914663d4eda6745f29cd8b4d7e58191afa7d6716bc460",
-    "word": "draft"
+    "sha256": "a983eced044b714b5b7971ac7ee945f62ae8ccd46838c8fdc4ecc0335a66437b",
+    "word": "approved"
   },
   "spec": {
     "group": "governance-and-safety",

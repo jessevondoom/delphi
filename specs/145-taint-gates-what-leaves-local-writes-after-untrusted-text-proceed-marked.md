@@ -3,7 +3,7 @@ id: spec-145-taint-gates-what-leaves-local-writes-after-untrusted-text-proceed-m
 title: "145: Taint gates what leaves: local writes after untrusted text proceed, marked; outbound actions ask"
 author: architect
 timestamp: 2026-11-28T04:00:00Z
-status: draft   # the operator chose this direction on 2026-11-27 ("yes please, this direction is better"); not yet approved as text
+status: approved   # by the operator on 2026-11-27: "145 is approved. keep going", approved before the red-team review of §6, which still runs before slice G is ratified
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,7 @@ tags: [spec, governance, taint, authority, prompt-injection, held-text]
 
 # Spec 145: Taint gates what leaves
 
-> **Status: draft.** The operator chose the direction on 2026-11-27. The text is not approved.
+> **Status: approved** by the operator on 2026-11-27 ("145 is approved. keep going"). The red-team review of §6 still runs before the operator ratifies slice G.
 > **Amends:**
 > - `GOVERNANCE.md` §4.3, its fourth bullet ("Taint gates actions, not only memory"). This is a constitutional change: Red-tier, applied only when the operator ratifies the diff (§5.7), in its own gate-changing pull request.
 > - [`specs/001`](001-governance-and-manifests.md) §5.2 (the taint-gated tools table) and its amendment refining §5.1 and §5.2 ("a tainted span cannot launder through a broader glob").
