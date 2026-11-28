@@ -233,6 +233,27 @@ pub fn label_of(l: &Labeller<'_>, topic_id: &str) -> Facts {
     Facts { label, line }
 }
 
+/// The label of what a research topic's runs read, computed now (`specs/144` §2.6 item 2, §2.7 item 4): its record's own private flag
+/// and the label of every source its runs read or its claims rest on, quoted or not. What a topic page joins for each research topic it
+/// follows, since its seed's answer may paraphrase any of them. Unlike [`label_of`], a topic that read no source is the record's label
+/// alone; a record that cannot be read, or claims whose anchors cannot be traced, are every mark.
+pub fn run_label(l: &Labeller<'_>, topic_id: &str) -> Facts {
+    let item = format!("research/topics/{topic_id}");
+    let every = |why: &str| Facts { label: Label::every(&item), line: format!("{item}=run:{why}") };
+    let Some(ws) = l.workspace() else { return every("unknown") };
+    let Some(rec) = research_record::find(ws, topic_id).and_then(|t| t.read().ok()) else { return every("unknown") };
+    let Some(sources) = sources_of(l.library(), &rec) else { return every("untraced") };
+    let r = l.research_record(topic_id);
+    let mut label = r.label;
+    let mut line = format!("{}|run", r.line);
+    for s in &sources {
+        let f = l.source(s);
+        label = label.join(&f.label);
+        line.push_str(&format!("|{}", f.line));
+    }
+    Facts { label, line }
+}
+
 /// The pack's label with a home and a workspace only.
 pub fn label(home: &Path, ws: &Path, topic_id: &str) -> Label {
     let lib = Library::in_home(home).with_workspace(ws);

@@ -689,12 +689,23 @@ impl<'a> Labeller<'a> {
         for (zone, rel) in records.values() {
             note(format!("record {rel}"), &|| self.path(zone, rel));
         }
-        for s in side["seed"].as_array().into_iter().flatten() {
+        // A seed page's spans, and a written page's outline: the seed the writer was given (`specs/144` §2.7 item 4).
+        for s in side["seed"].as_array().into_iter().chain(side[crate::library::topics::OUTLINE].as_array()).flatten() {
             let Some(rel) = s["rel_path"].as_str() else { continue };
             note(format!("record {rel}"), &|| self.path("", rel));
         }
+        // The evidence packs merged into the writer's evidence: each at the label of every source its run read, computed now.
+        for p in side[crate::library::topics::EVIDENCE_PACKS].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            note(format!("record {p}"), &|| self.path(crate::research_index::ZONE, p));
+        }
+        // The claims the validator was shown as the records a statement may contradict.
+        for id in side[crate::library::topics::CONTRADICTING].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            note(format!("claim {id}"), &|| self.claim(id));
+        }
+        // A research topic the page follows: its record, and every source its runs read, quoted or not (its answer is in the seed and
+        // may paraphrase any of them).
         for t in side["research_topics"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-            note(format!("topic {t}"), &|| self.research_record(t));
+            note(format!("topic {t}"), &|| crate::evidence_pack::run_label(self, t));
         }
         if facts.is_empty() {
             return (Label::every(UNREADABLE), "none".into());

@@ -61,6 +61,14 @@ pub struct Gathered {
     /// Sources read that hold no citable text (`specs/144` §2.1 items 1 and 2), as `(id, title)`: not a `RECORD`, listed under
     /// [`SOURCES_READ`] by title only.
     pub titles_only: Vec<(String, String)>,
+    /// A topic page only (`specs/144` §2.7 item 4): the evidence packs merged into these records, by logical path
+    /// (`research/topics/<id>/evidence-pack.md`), so the page's label joins theirs.
+    pub packs: Vec<String>,
+    /// A topic page only: the seed's spans the writer was given as its outline (`Span::to_json`), so the page's label joins them.
+    pub outline: Vec<Value>,
+    /// A topic page only: the claims the validator was shown besides these records, as the records a statement may contradict
+    /// (`specs/144` §2.7 item 3), by id.
+    pub contradicting: Vec<String>,
 }
 
 /// The heading the writer's brief lists sources without citable text under (`specs/144` §2.1 item 2).

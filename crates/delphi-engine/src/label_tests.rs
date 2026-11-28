@@ -315,7 +315,9 @@ fn no_label_and_a_stale_label_are_every_mark() {
     let l = Library::in_home(&home).with_workspace(&ws);
     let sid = source(&l, &home, "t.md", "# Tides\n\nThe tide comes in twice a day. Spring tides follow the full moon.\n", cc0());
     let c1 = claim(&l, "Ocean tides come twice a day.", &sid, "twice a day");
-    let c2 = claim(&l, "Spring tides follow the full moon.", &sid, "Spring tides follow the full moon");
+    // No content word of it is in "Ocean tides", so that page's validator is not shown it as a record a statement may contradict
+    // (`specs/144` §2.7 item 4: a page's label joins those too).
+    let c2 = claim(&l, "Spring floods follow the full moon.", &sid, "Spring tides follow the full moon");
     let h = Handling::of(&ws, &home);
     h.operator_set(&handling::claim_item(&c1), Trait::Internal).unwrap();
     h.operator_set(&handling::claim_item(&c2), Trait::Internal).unwrap();

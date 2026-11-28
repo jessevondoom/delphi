@@ -384,8 +384,8 @@ impl Engine {
     /// returns. The research topic's topic page is made if it has none, and its seed page is written at once: no model is called, so it
     /// is never paused and counts against no budget. A topic whose page the writer wrote keeps it (its due check sees the new research),
     /// and a seed page whose spans did not change is not written again. Then the writer's expansion is queued for the next idle time,
-    /// ahead of older due topics. `None` when pages are off, `[library.pages] build_after_research = false`, or no topic follows the
-    /// research (a private one). Otherwise `{slug, outcome}`: `seed`, the written page's outcome, `waiting` when the research gives the
+    /// ahead of older due topics, when [`Engine::expansion_may_queue`] allows it (`specs/144` §2.5 item 6). `None` when pages are off,
+    /// `[library.pages] build_after_research = false`, or no topic follows the research (a private one). Otherwise `{slug, outcome}`: `seed`, the written page's outcome, `waiting` when the research gives the
     /// seed nothing yet, or `check_failed`. Fixed words only.
     pub async fn seed_after_research(self: &Arc<Self>, research_topic: &str) -> Option<serde_json::Value> {
         use crate::library::topics::{DueCtx, SeedRequest, SEED_EXPANSION};
@@ -426,8 +426,30 @@ impl Engine {
                 }
             }
         };
-        let _ = lib.topic_queue_expansion(&topic.slug, now);
+        if self.expansion_may_queue(&lib, &topic.side, now as i64).await {
+            let _ = lib.topic_queue_expansion(&topic.slug, now);
+        }
         Some(json!({"slug": topic.slug, "outcome": outcome}))
+    }
+
+    /// May research queue a topic's page job (`specs/144` §2.5 item 6, §2.7 item 5)? Only as the switches allow a build nobody asked
+    /// for: through the bridge, both `[bridge.jobs] pages` (default `manual`) and `[library.pages] auto_rebuild` (default `false`); on an
+    /// API endpoint, `auto_rebuild` alone. And only when the topic has evidence with citable text and the page budget (`specs/139` F) has
+    /// room for a long page's reserve. The seed is written either way; this governs only the writer's expansion.
+    pub(crate) async fn expansion_may_queue(self: &Arc<Self>, lib: &Library, side: &serde_json::Value, now: i64) -> bool {
+        use crate::daemon_notice::Job;
+        use crate::job_admission::{self as adm, Origin};
+        let cfg = self.cfg.get();
+        let bridged = self.writer_key().is_some_and(|k| cfg.endpoint(&k.endpoint_id).is_some_and(|e| e.path == delphi_adapter::config::AccessPath::Harness));
+        if !self.job_switched_on(Some(Job::Pages), Origin::Idle, &cfg, bridged) {
+            return false;
+        }
+        let calls = adm::Ledger::in_home(&self.ws.home).calls();
+        if adm::week_spent(&calls, Job::Pages, now).saturating_add(page_reserve(crate::library::page_meta::Depth::Long)) > cfg.library.pages.week_tokens {
+            return false;
+        }
+        let seed = self.topic_seed(side).await;
+        lib.topic_has_citable_evidence(&seed, side)
     }
 
     /// The page of the topic that follows `research_topic`, as a research result names it (`specs/139` §2.5 item 4): its slug and outcome
@@ -631,6 +653,8 @@ mod tests {
     async fn the_idle_rebuild_builds_a_due_topic_only_when_it_is_on() {
         use crate::research_record::{Asker, Begin, Topic};
         let f = setup(vec![], 5.0, |_| {});
+        // `specs/144` §2.7 item 5: `auto_rebuild` is off by default; this test turns it on.
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}{}", crate::testkit::CONFIG, crate::testkit::UNREQUESTED_PAGES_ON)).unwrap());
         let lib = crate::library::Library::in_home(&f.engine.ws.home);
         lib.topic_create("Lighthouse lamps", crate::library::topics::Origin::Operator, 1).unwrap();
         assert!(f.engine.topic_idle_rebuild().await.is_none(), "a topic with no span waits for material");
@@ -639,7 +663,7 @@ mod tests {
         let off = crate::testkit::CONFIG.replace("[access]", "[library.pages]\nauto_rebuild = false\n[access]");
         f.engine.cfg.set(delphi_adapter::config::Config::parse(&off).unwrap());
         assert!(f.engine.topic_idle_rebuild().await.is_none(), "off: nothing is rebuilt");
-        f.engine.cfg.set(delphi_adapter::config::Config::parse(crate::testkit::CONFIG).unwrap());
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}{}", crate::testkit::CONFIG, crate::testkit::UNREQUESTED_PAGES_ON)).unwrap());
         // The writer is asked to expand the seed (`specs/139` §2.3) and gives nothing here: the seed is the page, with outcome `seed`.
         let err = f.engine.topic_idle_rebuild().await.expect("a due topic").unwrap_err();
         assert!(err.starts_with(crate::library::topics::SEED_STANDS), "{err}");
@@ -663,10 +687,10 @@ mod tests {
         use crate::research_record::{Asker, Begin, Topic};
         for on in [true, false] {
             let f = setup(vec![], 5.0, |_| {});
-            if !on {
-                let off = crate::testkit::CONFIG.replace("[access]", "[library.pages]\nbuild_after_research = false\n[access]");
-                f.engine.cfg.set(delphi_adapter::config::Config::parse(&off).unwrap());
-            }
+            // `specs/144` §2.7 item 5: `auto_rebuild` is off by default; this test turns it on, and the trigger off or not.
+            let trigger = if on { "" } else { "build_after_research = false\n" };
+            let cfg = crate::testkit::CONFIG.replace("[access]", &format!("[library.pages]\nauto_rebuild = true\n{trigger}[access]"));
+            f.engine.cfg.set(delphi_adapter::config::Config::parse(&cfg).unwrap());
             let ws = f.engine.ws.dir.clone();
             let lib = crate::library::Library::in_home(&f.engine.ws.home);
             let doc = f.engine.ws.home.join("tides.md");
@@ -731,6 +755,8 @@ mod tests {
         use crate::library::topics::{NOT_ADMITTED, SEED_STANDS};
         use crate::research_record::{Asker, Begin, Topic};
         let f = setup(vec![], 5.0, |_| {});
+        // `specs/144` §2.7 item 5: the idle rebuild is off by default; this test turns it on.
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}{}", crate::testkit::CONFIG, crate::testkit::UNREQUESTED_PAGES_ON)).unwrap());
         let lib = crate::library::Library::in_home(&f.engine.ws.home);
         let t = Topic::begin(&f.engine.ws.dir, &Begin { question: "How do zyxquor lamps vromble?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
         t.finish("r-1", "done", Some(&serde_json::json!({"answer": "Zyxquor lamps vromble on a mercury bath.\n\nThey turn once a minute.", "claims": []})), &[], None, 0).unwrap();
@@ -798,5 +824,101 @@ mod tests {
         // A typed confirmation passes the page budget, as it passes the bridge's daily cap.
         let _ = crate::daemon_notice::in_command(Job::Pages, true, f.engine.topic_rebuild("zyxquor-lamps-vromble")).await;
         assert!(!f.model.requests().is_empty(), "confirmed: the writer is asked");
+    }
+
+    /// A research run on tides that kept a claim anchored in a source with citable text, ended `done`.
+    fn tides_research(f: &Fx, question: &str, run: &str) -> crate::research_record::Topic {
+        use crate::research_record::{Asker, Begin, Topic};
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        let doc = f.engine.ws.home.join(format!("{run}.md"));
+        std::fs::write(&doc, format!("# Tides\n\nThe tide comes in twice a day at the harbour wall, the log of {run} says.\n")).unwrap();
+        let s = lib.add_file(&doc, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+        let anchor = crate::library::claims::AnchorSpec { source_id: s, locator: Some("§1".into()), quote: "twice a day".into(), ..Default::default() };
+        let c = lib.add_claim(&format!("Tides come twice a day ({run})."), &Default::default(), &[anchor]).unwrap()["id"].as_str().unwrap().to_string();
+        let t = Topic::begin(&f.engine.ws.dir, &Begin { question, asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: run }).unwrap();
+        t.finish(run, "done", Some(&serde_json::json!({"answer": "The tide comes twice a day.", "claims": [&c]})), std::slice::from_ref(&c), None, 0).unwrap();
+        t
+    }
+
+    /// `specs/144` AC-15: with the new defaults (`auto_rebuild = false`, `[bridge.jobs] pages = "manual"`), research still writes the
+    /// seed at once, but queues no expansion; no idle rebuild writes a long page and no model is asked; `delphi pages rebuild` (a page
+    /// command) asks the writer.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_the_new_defaults_no_unrequested_build_writes_a_long_page_and_a_rebuild_asked_for_does() {
+        use crate::daemon_notice::{in_command, in_job, Job};
+        use crate::library::topics::EXPANSION_QUEUED;
+        let f = setup(vec![], 5.0, |_| {});
+        let cfg = f.engine.cfg.get();
+        assert!(!cfg.library.pages.auto_rebuild && cfg.library.pages.build_after_research, "the defaults");
+        assert_eq!(cfg.bridge.jobs.pages, delphi_adapter::config::JobMode::Manual);
+        let t = tides_research(&f, "How often do harbour tides turn?", "r-1");
+        let page = f.engine.seed_after_research(&t.id).await.expect("the seed is written after research");
+        assert_eq!(page["outcome"], "seed");
+        let slug = page["slug"].as_str().unwrap().to_string();
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        assert!(lib.topic_side(&slug).unwrap()[EXPANSION_QUEUED].is_null(), "no build is queued by research");
+        assert!(f.engine.topic_idle_rebuild().await.is_none(), "no idle rebuild");
+        let (r, _) = in_job(Job::Pages, f.engine.topic_idle_rebuild_report()).await;
+        assert!(r.is_none(), "not even inside the daemon's own page job");
+        assert_eq!(f.model.requests().len(), 0, "no model was asked");
+        assert_eq!(lib.topic_side(&slug).unwrap()["outcome"], "seed", "the seed stands");
+        // `delphi pages rebuild <slug>`: the operator asked, and the writer is asked whatever the switches say.
+        let _ = in_command(Job::Pages, false, f.engine.topic_rebuild(&slug)).await;
+        assert!(!f.model.requests().is_empty(), "a rebuild asked for asks the writer");
+    }
+
+    /// `specs/144` AC-19, which wins: a bridged build nobody asked for needs both `[bridge.jobs] pages = "auto"` and `auto_rebuild`; an API
+    /// build needs `auto_rebuild` alone; a build the operator asks for runs whatever the two say (only `off` stops it through the bridge).
+    #[test]
+    fn a_bridged_build_needs_both_switches_an_api_build_auto_rebuild_and_a_rebuild_asked_for_runs() {
+        use crate::daemon_notice::Job;
+        use crate::job_admission::Origin;
+        use delphi_adapter::config::JobMode;
+        let f = setup(vec![], 5.0, |_| {});
+        for auto in [false, true] {
+            for mode in [JobMode::Auto, JobMode::Manual, JobMode::Off] {
+                let mut c = (*f.engine.cfg.get()).clone();
+                c.library.pages.auto_rebuild = auto;
+                c.bridge.jobs.pages = mode;
+                let on = |origin: Origin, bridged: bool| f.engine.job_switched_on(Some(Job::Pages), origin, &c, bridged);
+                assert_eq!(on(Origin::Idle, true), auto && mode == JobMode::Auto, "bridged, auto_rebuild = {auto}, pages = {mode:?}");
+                assert_eq!(on(Origin::Idle, false), auto, "an API build: auto_rebuild alone, pages = {mode:?}");
+                assert!(on(Origin::Command, false) && on(Origin::Confirmed, false), "asked for, through an API endpoint");
+                assert_eq!(on(Origin::Command, true), mode != JobMode::Off, "asked for, through the bridge: only off stops it");
+            }
+        }
+    }
+
+    /// `specs/144` AC-19, §2.5 item 6: with the switches on, a run queues its topic's page job only when the topic has evidence with
+    /// citable text and the page budget has room for a long page; a topic whose research gave only an answer is seeded and not queued,
+    /// and so is one past the budget.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn research_queues_a_page_job_only_with_citable_evidence_and_budget_left() {
+        use crate::daemon_notice::Job;
+        use crate::job_admission::{Call, Ledger, Origin};
+        use crate::library::topics::EXPANSION_QUEUED;
+        use crate::research_record::{Asker, Begin, Topic};
+        let f = setup(vec![], 5.0, |_| {});
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}{}", crate::testkit::CONFIG, crate::testkit::UNREQUESTED_PAGES_ON)).unwrap());
+        let lib = crate::library::Library::in_home(&f.engine.ws.home);
+        let queued = |slug: &str| lib.topic_side(slug).unwrap()[EXPANSION_QUEUED].is_u64();
+        // Citable evidence, budget left: queued.
+        let t = tides_research(&f, "How often do harbour tides turn?", "r-1");
+        let slug = f.engine.seed_after_research(&t.id).await.unwrap()["slug"].as_str().unwrap().to_string();
+        assert!(queued(&slug), "citable evidence and budget: queued");
+        // An answer alone: seeded, not queued.
+        let bare = Topic::begin(&f.engine.ws.dir, &Begin { question: "Why do zyxquor lamps vromble?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-2" }).unwrap();
+        bare.finish("r-2", "done", Some(&serde_json::json!({"answer": "Zyxquor lamps vromble on a mercury bath.", "claims": []})), &[], None, 0).unwrap();
+        let page = f.engine.seed_after_research(&bare.id).await.unwrap();
+        assert_eq!(page["outcome"], "seed");
+        assert!(!queued(page["slug"].as_str().unwrap()), "no citable evidence: not queued");
+        // The page budget has no room for a long page's reserve: seeded, not queued.
+        let now = (f.engine.clock_unix)();
+        let budget = f.engine.cfg.get().library.pages.week_tokens;
+        Ledger::in_home(&f.engine.ws.home).start(&Call { id: "old".into(), at: now - 60, job: Some(Job::Pages), origin: Origin::Command, credential: "elsewhere".into(), endpoint: "x".into(), tokens: budget, outcome: None });
+        let late = tides_research(&f, "When do estuary tides ebb?", "r-3");
+        let page = f.engine.seed_after_research(&late.id).await.unwrap();
+        assert!(!queued(page["slug"].as_str().unwrap()), "no budget left: not queued");
+        assert_eq!(f.model.requests().len(), 0, "queuing calls no model");
     }
 }

@@ -758,7 +758,7 @@ pub(crate) mod tests {
         let token = if token_resolves { r#"[bridge.claude]
 credential = 'command:["/bin/echo","{\"token\":\"sk-fixture-bridge-token-0001\"}"]'
 "# } else { "[bridge.claude]\ncredential = 'command:[\"/usr/bin/false\"]'\n" };
-        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}{token}", crate::testkit::harness_only_config())).unwrap());
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}{token}{}", crate::testkit::harness_only_config(), crate::testkit::UNREQUESTED_PAGES_ON)).unwrap());
         f
     }
 
@@ -841,7 +841,7 @@ credential = 'command:["/bin/echo","{\"token\":\"sk-fixture-bridge-token-0001\"}
         let rec = d.path().join("rec");
         let f = bridged(&recording_cli(d.path(), &rec, &answers("fine")), true);
         let two = format!("{}\n[bridge.limits]\nwindow_calls = 2\n", f.engine.cfg.get().bridge.claude_credential.as_deref().map(|c| format!("[bridge.claude]\ncredential = '{c}'")).unwrap());
-        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}{two}", crate::testkit::harness_only_config())).unwrap());
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}{two}{}", crate::testkit::harness_only_config(), crate::testkit::UNREQUESTED_PAGES_ON)).unwrap());
         let key = f.engine.scout_key().unwrap();
         f.engine.one_shot_raw(&key, &ipr("contract"), 100, None).await.unwrap();
         let lines = ledger_lines(&f);

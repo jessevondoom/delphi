@@ -745,14 +745,21 @@ impl JobMode {
     }
 }
 
-/// `[bridge.jobs]` (`specs/143` §2.8 item 4): one mode for each job the bridge can serve. Every one is `auto` unless set.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// `[bridge.jobs]` (`specs/143` §2.8 item 4): one mode for each job the bridge can serve. Every one is `auto` unless set, but `pages`,
+/// which is `manual` (`specs/144` §2.7 item 5: a long page nobody asked for is not built until the trial passes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BridgeJobs {
     pub pages: JobMode,
     pub summaries: JobMode,
     pub validation: JobMode,
     pub session_summaries: JobMode,
     pub consolidation: JobMode,
+}
+
+impl Default for BridgeJobs {
+    fn default() -> Self {
+        BridgeJobs { pages: JobMode::Manual, summaries: JobMode::Auto, validation: JobMode::Auto, session_summaries: JobMode::Auto, consolidation: JobMode::Auto }
+    }
 }
 
 impl BridgeJobs {
@@ -1424,18 +1431,20 @@ pub struct PagesConfig {
     /// The bounds, in days, on the cache lifetime the `writer` proposes for a page (`specs/097` §4.4).
     pub min_ttl_days: u32,
     pub max_ttl_days: u32,
-    /// Topic pages that are due are rebuilt by the daemon while it is idle, within `per_day` (`specs/117` §2 item 3). `false` leaves
-    /// rebuilding to the operator (`delphi pages rebuild`). Idle rebuilds spend model tokens nobody asked for at that moment.
+    /// Topic pages that are due are rebuilt by the daemon while it is idle, within `per_day` (`specs/117` §2 item 3). `false`, the
+    /// default (`specs/144` §2.7 item 5), leaves rebuilding to the operator (`delphi pages rebuild`), and a queued expansion waits for
+    /// it too. Idle rebuilds spend model tokens nobody asked for at that moment.
     pub auto_rebuild: bool,
     /// When a research run ends `done` or `partial`, and when a host's `record_research` returns, the research topic's topic page is made
-    /// and its seed written at once, and the writer's expansion is queued for the next idle time (`specs/139` §2.5). The seed calls no
-    /// model. `false` turns the trigger off; `auto_rebuild` still governs the writer's rebuilds.
+    /// and its seed written at once, and the writer's expansion is queued for the next idle time (`specs/139` §2.5): only as `auto_rebuild`
+    /// (and, through the bridge, `[bridge.jobs] pages`) allows, with citable evidence and page budget left (`specs/144` §2.5 item 6). The
+    /// seed calls no model. `false` turns the trigger off.
     pub build_after_research: bool,
 }
 
 impl Default for PagesConfig {
     fn default() -> Self {
-        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, long_max_tokens: 8000, external_ttl_secs: 7 * 86_400, per_day: 20, week_tokens: 600_000, min_ttl_days: 1, max_ttl_days: 365, auto_rebuild: true, build_after_research: true }
+        PagesConfig { enabled: true, external: PagesExternal::Ask, max_tokens: 3000, long_max_tokens: 8000, external_ttl_secs: 7 * 86_400, per_day: 20, week_tokens: 600_000, min_ttl_days: 1, max_ttl_days: 365, auto_rebuild: false, build_after_research: true }
     }
 }
 
@@ -2492,6 +2501,8 @@ pub(crate) mod tests {
         assert!(d.enabled && d.external == PagesExternal::Ask);
         assert!(d.build_after_research, "specs/139 §2.5 item 3: the seed is written when research ends unless it is turned off");
         assert!(!Config::parse(&format!("{}\n[library.pages]\nbuild_after_research = false\n", SAMPLE)).unwrap().library.pages.build_after_research);
+        assert!(!d.auto_rebuild, "specs/144 §2.7 item 5: no idle rebuild unless it is turned on");
+        assert!(Config::parse(&format!("{}\n[library.pages]\nauto_rebuild = true\n", SAMPLE)).unwrap().library.pages.auto_rebuild);
         assert_eq!((d.max_tokens, d.external_ttl_secs, d.per_day, d.min_ttl_days, d.max_ttl_days), (3000, 7 * 86_400, 20, 1, 365));
         assert_eq!(d.long_max_tokens, 8000, "specs/139 §2.3 item 4: a topic page's cap");
         assert_eq!(Config::parse(&format!("{}\n[library.pages]\nlong_max_tokens = 6000\n", SAMPLE)).unwrap().library.pages.long_max_tokens, 6000);
@@ -3043,11 +3054,13 @@ tools = { search = "read", note = "draft", send = "write" }
 mod bridge_jobs_tests {
     use super::*;
 
-    // `specs/143` §2.8 item 4: every job is `auto` unless set; each takes auto, manual or off; another value or another key is refused.
+    // `specs/143` §2.8 item 4: every job is `auto` unless set, but `pages`, which is `manual` (`specs/144` §2.7 item 5); each takes
+    // auto, manual or off; another value or another key is refused.
     #[test]
     fn bridge_jobs_default_to_auto_and_take_only_their_three_modes() {
         assert_eq!(Config::parse("").unwrap().bridge.jobs, BridgeJobs::default());
-        assert_eq!(BridgeJobs::default().pages, JobMode::Auto);
+        assert_eq!(BridgeJobs::default().pages, JobMode::Manual);
+        assert_eq!(Config::parse("[bridge.jobs]\npages = \"auto\"\n").unwrap().bridge.jobs.pages, JobMode::Auto);
         let c = Config::parse("[bridge.jobs]\npages = \"manual\"\nconsolidation = \"off\"\n").unwrap();
         assert_eq!((c.bridge.jobs.pages, c.bridge.jobs.consolidation, c.bridge.jobs.summaries), (JobMode::Manual, JobMode::Off, JobMode::Auto));
         let e = Config::parse("[bridge.jobs]\npages = \"sometimes\"\n").unwrap_err().join("; ");

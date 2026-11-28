@@ -6264,7 +6264,7 @@ mod tests {
 
     /// An install whose only endpoint is a harness that cannot serve a single call (`agy`: its tools cannot be turned off).
     fn harness_only(f: &Fx) -> Arc<EngineService> {
-        f.engine.cfg.set(delphi_adapter::config::Config::parse(&crate::testkit::harness_only_config().replace("harness = \"claude\"", "harness = \"agy\"")).unwrap());
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}{}", crate::testkit::harness_only_config().replace("harness = \"claude\"", "harness = \"agy\""), crate::testkit::UNREQUESTED_PAGES_ON)).unwrap());
         let svc = EngineService::new(f.engine.clone(), "m1");
         svc.adopt(f.m.clone());
         svc
@@ -6346,7 +6346,7 @@ mod tests {
     async fn with_the_bridge_off_the_no_route_notice_names_the_key() {
         let f = setup(vec![], 5.0, |_| {});
         let svc = harness_only(&f);
-        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}[routing]\nsingle_call_harness = \"off\"\n[bridge.claude]\ncredential = \"keychain:bridge-claude\"\n", crate::testkit::harness_only_config())).unwrap());
+        f.engine.cfg.set(delphi_adapter::config::Config::parse(&format!("{}[routing]\nsingle_call_harness = \"off\"\n[bridge.claude]\ncredential = \"keychain:bridge-claude\"\n{}", crate::testkit::harness_only_config(), crate::testkit::UNREQUESTED_PAGES_ON)).unwrap());
         topic_with_material(&f, "Tide tables");
         svc.topic_idle_rebuild_noticed().await;
         let notices = events_of(&f, "daemon.notice");
@@ -7801,8 +7801,8 @@ mod tests {
     }
 
     // `specs/139` AC-10 (slice E): `record_research` writes the topic's seed page at once, with no model call, and returns its slug with
-    // outcome `seed`; the research result names it too, and the writer's expansion is queued. With `[library.pages] build_after_research =
-    // false` no topic or page is made and neither reply names one.
+    // outcome `seed`; the research result names it too. No expansion is queued for an answer alone (`specs/144` §2.5 item 6). With
+    // `[library.pages] build_after_research = false` no topic or page is made and neither reply names one.
     #[tokio::test(flavor = "multi_thread")]
     async fn record_research_writes_the_seed_page_at_once_and_names_it_unless_the_trigger_is_off() {
         for on in [true, false] {
@@ -7835,7 +7835,8 @@ mod tests {
                 assert_eq!(r["page"], json!({"slug": "web-bot-auth", "outcome": "seed"}), "{r}");
                 assert_eq!(back["page"], json!({"slug": "web-bot-auth", "outcome": "seed"}), "{back}");
                 assert!(fs::read_to_string(&page).unwrap().contains("Web Bot Auth signs each request an agent sends."));
-                assert!(lib.topic_side("web-bot-auth").unwrap()[crate::library::topics::EXPANSION_QUEUED].is_u64());
+                // `specs/144` §2.5 item 6: an answer alone is no citable evidence, and `auto_rebuild` is off by default: nothing is queued.
+                assert!(lib.topic_side("web-bot-auth").unwrap()[crate::library::topics::EXPANSION_QUEUED].is_null());
                 assert_eq!(f.model.requests().len(), 0, "the seed calls no model");
             } else {
                 assert!(r.get("page").is_none() && back.get("page").is_none(), "{r} {back}");
