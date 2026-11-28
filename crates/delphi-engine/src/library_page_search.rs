@@ -58,6 +58,21 @@ pub struct Gathered {
     pub assets: Vec<GatheredAsset>,
     /// Knowledge-base passages and findings, for a topic page (`specs/117` §2 item 4); a search page gathers none.
     pub records: Vec<super::page_check::KbRecord>,
+    /// Sources read that hold no citable text (`specs/144` §2.1 items 1 and 2), as `(id, title)`: not a `RECORD`, listed under
+    /// [`SOURCES_READ`] by title only.
+    pub titles_only: Vec<(String, String)>,
+}
+
+/// The heading the writer's brief lists sources without citable text under (`specs/144` §2.1 item 2).
+pub const SOURCES_READ: &str = "SOURCES READ (titles only; not citable for what they say)";
+
+impl Gathered {
+    /// Name a source read for its title only, once.
+    pub fn read_title_only(&mut self, id: &str, title: &str) {
+        if !self.titles_only.iter().any(|(i, _)| i == id) {
+            self.titles_only.push((id.to_string(), title.to_string()));
+        }
+    }
 }
 
 /// One picture the writer may place on a page: a captured asset of a gathered library source (`specs/097` §4.2).
@@ -263,6 +278,11 @@ impl Library {
             let overlap = content_words(&scan).intersection(&q).count();
             g.stats.tokenize_ns += ns(t);
             if overlap == 0 && !extra.contains(&id) {
+                continue;
+            }
+            // `specs/144` §2.1: a source without citable text is read for its title only, never a record.
+            if !self.citable_logged(&id) {
+                g.read_title_only(&id, meta["title"].as_str().unwrap_or(&id));
                 continue;
             }
             sources.push((overlap, id, meta, text.chars().take(EXCERPT_MAX).collect()));
@@ -661,6 +681,12 @@ Rules:\n\
     }
     for r in &g.records {
         s.push_str(&format!("RECORD {} | {} | {}: {} ({})\n{}\nEND RECORD\n", r.label, r.status, record_text(&r.kind), record_text(&r.title), record_text(&r.locator), record_text(&r.text)));
+    }
+    if !g.titles_only.is_empty() {
+        s.push_str(&format!("\n{}:\n", SOURCES_READ));
+        for (_, title) in &g.titles_only {
+            s.push_str(&format!("- {}\n", record_text(title)));
+        }
     }
     if !g.assets.is_empty() {
         s.push_str("\nASSETS (pictures you may place; each belongs to the source named):\n");

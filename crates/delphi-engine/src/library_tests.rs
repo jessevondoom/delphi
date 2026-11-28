@@ -2044,20 +2044,22 @@ mod page_search_cache {
         let tampered = add("tamper.md", "tides in a document that changes", &open("CC0-1.0"));
         std::fs::write(l.source_dir(&tampered).join("source.md"), "something else entirely").unwrap();
         let pointer = add("ptr.md", "tides pointer body", &AddOpts { level: Some(Level::Pointer), title: Some("Tides pointer".into()), ..open("CC0-1.0") });
-        let unrelated = add("u.md", "gardening notes", &open("CC0-1.0"));
+        let unrelated = add("u.md", "Gardening notes on the roses in the yard.", &open("CC0-1.0"));
         let on_private = l.add_claim("Tides rest on the private ledger.", &ClaimOpts::default(), &[AnchorSpec { source_id: private.clone(), locator: Some("§1".into()), quote: "private ledger".into(), ..Default::default() }]).unwrap()["id"].as_str().unwrap().to_string();
 
         let internal = l.gather("tides", Scope::Internal, &[]);
         let ids = |g: &crate::library::page_search::Gathered| g.sources.iter().map(|(id, _, _)| id.clone()).collect::<BTreeSet<_>>();
-        let want: BTreeSet<String> = [&public, &private, &big, &pointer].into_iter().cloned().collect();
+        let want: BTreeSet<String> = [&public, &private, &big].into_iter().cloned().collect();
         assert_eq!(ids(&internal), want, "retired, tampered (empty text, no title match) and unrelated sources are left out");
+        // `specs/144` §2.1: a pointer holds no text, so it is read for its title only.
+        assert!(internal.titles_only.iter().any(|(id, _)| *id == pointer), "{:?}", internal.titles_only);
         assert!(internal.claims.iter().any(|c| c["id"] == on_private.as_str()));
         assert_eq!(internal.withheld, 0);
         assert!(internal.sources.iter().find(|(id, _, _)| *id == big).unwrap().2.chars().count() <= 3 * 1024);
         assert!(l.gather("lunarwave", Scope::Internal, &[]).sources.is_empty(), "only the first 20 KiB of text is scanned");
 
         let external = l.gather("tides", Scope::External, &[]);
-        let want: BTreeSet<String> = [&public, &big, &pointer].into_iter().cloned().collect();
+        let want: BTreeSet<String> = [&public, &big].into_iter().cloned().collect();
         assert_eq!(ids(&external), want, "a private source is left out of an external page");
         assert!(external.claims.iter().all(|c| c["id"] != on_private.as_str()));
         assert_eq!(external.withheld, 1, "a claim resting on a private source is withheld, and counted");

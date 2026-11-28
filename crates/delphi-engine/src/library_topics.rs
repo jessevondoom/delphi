@@ -559,9 +559,13 @@ pub fn topic_brief(title: &str, g: &Gathered, max_tokens: u64, topics: &[(String
     for (slug, t) in topics.iter().take(60) {
         s.push_str(&format!("TOPIC {} | {}\n", slug, t.replace('\n', " ").chars().take(120).collect::<String>()));
     }
+    s.push_str(&format!("\n{}\n", OUTLINE_NOTE));
     s.push_str(&super::page_search::draft_to_expand(draft));
     s
 }
+
+/// What a topic brief says of the draft's research prose (`specs/144` §2.1 item 3).
+pub const OUTLINE_NOTE: &str = "A block of the DRAFT TO EXPAND whose marker names no RECORD above is research prose: an outline of the subject, which supports nothing. Use it for structure and order only; cite the records it rests on, or leave it out.";
 
 /// The change line of `specs/117` §2 item 2, from the page's previous body and its new one: statements (paragraphs or items that
 /// carry a citation marker) added and removed, and cited records added, removed and replaced (one removed and one added is one
@@ -1117,7 +1121,19 @@ impl Library {
     /// `gathered` the seed does not hold (one label is one passage), and the live claims among the seed's spans beside `gathered`'s.
     pub fn expansion_material(&self, seed: &crate::topic_seed::Seed, gathered: Gathered) -> Gathered {
         let mut g = gathered;
-        let mut records = seed.records();
+        // `specs/144` §2.1 item 3: a research answer is an outline. Its spans are no record; the claims its markers name are.
+        let mut records = seed.citable_records();
+        for id in seed.answer_claims() {
+            if !g.claims.iter().any(|c| c["id"] == id.as_str()) {
+                g.claims.extend(self.claim(&id).filter(|c| live(c) && !self.rests_on_private(c)));
+            }
+        }
+        // The sources the seed only names are read for their titles (`specs/144` §2.1 item 2).
+        for id in &seed.named_sources {
+            if let Some(m) = self.read_meta(id).filter(|m| !is_private(m)) {
+                g.read_title_only(id, m["title"].as_str().unwrap_or(id));
+            }
+        }
         for r in std::mem::take(&mut g.records) {
             if !records.iter().any(|x| x.label == r.label) {
                 records.push(r);
@@ -2186,6 +2202,8 @@ mod expand_tests {
     use std::sync::Mutex;
 
     const ANSWER: &str = "Tides lag because the estuary is shallow.\n\n## Measurements\n\nThe lag is an hour at the harbour wall.";
+    /// The source the fixture's claims are anchored in.
+    const SOURCE: &str = "Tides lag in a shallow estuary. At the harbour wall the lag is about an hour.";
 
     /// A writer that keeps every text it is given (brief and rewrite alike) and answers with fixed drafts; `{a}` and `{b}` in a draft
     /// become the labels of the seed's first two spans.
@@ -2197,7 +2215,9 @@ mod expand_tests {
     }
     impl Scripted {
         fn new(seed: &Seed, first: Result<&str, &str>, rewrite: &str) -> Scripted {
-            let fill = |s: &str| s.replace("{a}", &seed.spans[0].label).replace("{b}", &seed.spans[seed.spans.len().min(2) - 1].label);
+            // The records a written page may cite (`specs/144` §2.1 item 3): not the research answer's spans, which are an outline.
+            let citable: Vec<&str> = seed.spans.iter().filter(|s| s.row != crate::topic_seed::Row::Answer).map(|s| s.label.as_str()).collect();
+            let fill = |s: &str| s.replace("{a}", citable[0]).replace("{b}", citable[citable.len().min(2) - 1]);
             Scripted { seen: Mutex::new(Vec::new()), calls: AtomicUsize::new(0), first: first.map(fill).map_err(String::from), rewrite: fill(rewrite) }
         }
         fn seen(&self) -> Vec<String> {
@@ -2227,8 +2247,15 @@ mod expand_tests {
         let ws = home.join("workspaces/w");
         std::fs::create_dir_all(&ws).unwrap();
         let l = Library::in_home(home).with_workspace(&ws);
+        // The claims the answer rests on, each anchored in a source's text (`specs/144` §2.1: a written page cites claims and passages,
+        // never the answer's prose).
+        let doc = home.join("tides.md");
+        std::fs::write(&doc, format!("# Tides\n\n{SOURCE}\n")).unwrap();
+        let src = l.add_file(&doc, &crate::library::AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &crate::library::Budgets::default()).unwrap().id;
+        let claim = |q: &str| l.add_claim(q, &Default::default(), &[crate::library::claims::AnchorSpec { source_id: src.clone(), locator: Some("¶1".into()), quote: q.into(), ..Default::default() }]).unwrap()["id"].as_str().unwrap().to_string();
+        let claims = vec![claim("Tides lag in a shallow estuary."), claim("At the harbour wall the lag is about an hour.")];
         let t = Topic::begin(&ws, &Begin { question: "Why do tides lag?", asked_by: Asker::operator(), project: None, depth: delphi_core::research::Depth::Quick, run_id: "r-1" }).unwrap();
-        t.finish("r-1", "done", Some(&json!({"answer": ANSWER, "claims": []})), &[], None, 0).unwrap();
+        t.finish("r-1", "done", Some(&json!({"answer": ANSWER, "claims": claims})), &claims, None, 0).unwrap();
         let slug = l.topics_from_research(&ws, 1).remove(0);
         (l, ws, slug, t)
     }
@@ -2279,7 +2306,10 @@ mod expand_tests {
         let draft = crate::topic_seed::seed_page(&built.title, &seed, &NoHeldText).unwrap().body;
         let at = brief.rfind("\nDRAFT TO EXPAND (").expect("the draft is in the brief");
         assert!(brief.find("RECORDS:").unwrap() < at && brief[at..].contains(draft.trim()) && brief[at..].contains("\nEND DRAFT\n"), "{brief}");
-        assert!(brief.contains(&format!("RECORD {} |", seed.spans[0].label)), "the spans are records the page may cite");
+        let claim = seed.spans.iter().find(|s| s.row == crate::topic_seed::Row::Claim).unwrap();
+        assert!(brief.contains(&format!("RECORD {} |", claim.label)), "the claim spans are records the page may cite");
+        // `specs/144` §2.1 item 3: the answer is an outline, in the draft only.
+        assert!(!brief.contains(&format!("RECORD {} |", seed.spans[0].label)) && brief.contains(OUTLINE_NOTE), "{brief}");
         // The page is cut at the cap, at a paragraph.
         let md = page(&l, &slug);
         assert!(md.contains("Paragraph 0:") && !md.contains("Paragraph 39:"), "{md}");
