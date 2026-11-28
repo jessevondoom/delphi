@@ -3,7 +3,7 @@ id: spec-144-pages-built-from-evidence-citable-text-evidence-packs-and-a-trial
 title: "144: Pages built from evidence: citable text only, research handed over as evidence packs, and a trial before defaults change"
 author: architect
 timestamp: 2026-11-28T06:00:00Z
-status: draft   # revision 7. The operator approved the approach and the architect's choices on 2026-11-27 ("i agree with the [architect's] choices — accept them, including the change to 142B, and proceed. i'll approve all specs when ready"); not yet approved as text
+status: approved   # revision 7, by the operator on 2026-11-27: "approved 144 rev 7"; reviewed by Council t_0012 (Claude and OpenAI heard) and the OpenAI rechecks t_0015, approved by the operator in place of a committed record
 governed_by: "GOVERNANCE.md"
 review_rubric: "REVIEW.md"
 source_type: internal_generated
@@ -14,7 +14,7 @@ tags: [spec, pages, research, validator, writer, retrieval, encyclopedia]
 
 # Spec 144: Pages built from evidence
 
-> **Status: draft, revision 7.** The operator approved the approach (2026-11-27: "i approve that approach") and the architect's choices ("i agree with the [architect's] choices — accept them, including the change to 142B, and proceed"). This text is not approved. Revision 7 applies the red-team recheck of revision 6 (OpenAI, ask `t_0015`); revision 6 applied Council `t_0012` on revision 5, aligns with [`specs/145`](145-taint-gates-what-leaves-local-writes-after-untrusted-text-proceed-marked.md) (taint gates what leaves), and records the operator's ruling that model calls are not exits (section 9).
+> **Status: approved, revision 7** (operator, 2026-11-27: "approved 144 rev 7"). The operator approved the approach (2026-11-27: "i approve that approach") and the architect's choices ("i agree with the [architect's] choices — accept them, including the change to 142B, and proceed"). Revision 7 applies the red-team recheck of revision 6 (OpenAI, ask `t_0015`); revision 6 applied Council `t_0012` on revision 5, aligns with [`specs/145`](145-taint-gates-what-leaves-local-writes-after-untrusted-text-proceed-marked.md) (taint gates what leaves), and records the operator's ruling that model calls are not exits (section 9).
 > **Amends:**
 > - [`specs/057`](057-search-pages-generated-and-checked.md) §3.1, §3.2 and §3.3, for topic pages only (one marker per statement; `unchecked`). Search pages are unchanged.
 > - [`specs/139`](139-pages-seeded-from-research-a-seed-that-is-never-empty-a-long-depth-and-concept-titles.md) §2.1 (rows 1 and 6 of a research topic's seed), §2.3 item 3 (what `DRAFT TO EXPAND` is) and §2.5 item 3 (the default of `auto_rebuild`).
