@@ -17,6 +17,9 @@
 //! `log` prints the search log of a finished host research job (`specs/101` §3): read-only, it prints what the daemon wrote beside the
 //! result, and calls no model and no network.
 //!
+//! `pack` writes the evidence pack of a topic whose runs ended before packs existed (`specs/144` §2.5 item 5), or of every topic with
+//! `--all`, by code from its record and the library's stored text: no model, no network. Refused inside an agent seat.
+//!
 //! `suggest` lists the questions asked of the knowledge base most often and not answered (`specs/114` §6 item 2): read-only, it
 //! researches nothing and needs no daemon.
 //!
@@ -31,7 +34,7 @@ pub struct Options {
     pub json: bool,
 }
 
-const USAGE: &str = "usage: delphi research topics [--due] [--json] [--home <dir>] [--workspace <name>]\n       delphi research continue <topic-id> [--note <text>] [--json] [--home <dir>] [--workspace <name>]\n       delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research ingest <path>... | --all [--apply] [--fetch] [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]\n       delphi research suggest [--limit <n>] [--json] [--home <dir>] [--workspace <name>]\n       delphi research setup [--engine <name>] [--credential <env:NAME|keychain:name>] [--url <instance>] [--cx <id>] [--no-test] [--home <dir>] [--workspace <name>]";
+const USAGE: &str = "usage: delphi research topics [--due] [--json] [--home <dir>] [--workspace <name>]\n       delphi research continue <topic-id> [--note <text>] [--json] [--home <dir>] [--workspace <name>]\n       delphi research migrate [--apply] [--json] [--home <dir>] [--workspace <name>]\n       delphi research ingest <path>... | --all [--apply] [--fetch] [--json] [--home <dir>] [--workspace <name>]\n       delphi research show <topic-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research log <topic-id | research-id> [--json] [--home <dir>] [--workspace <name>]\n       delphi research retractions import <file> [--home <dir>] [--workspace <name>]\n       delphi research retractions status [--home <dir>] [--workspace <name>]\n       delphi research suggest [--limit <n>] [--json] [--home <dir>] [--workspace <name>]\n       delphi research pack <topic-id> | --all [--json] [--home <dir>] [--workspace <name>]\n       delphi research setup [--engine <name>] [--credential <env:NAME|keychain:name>] [--url <instance>] [--cx <id>] [--no-test] [--home <dir>] [--workspace <name>]";
 
 /// `args` is what follows the command name: `log <id> [flags]` or `retractions import|status [<file>] [flags]`.
 pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
@@ -44,6 +47,7 @@ pub fn cli(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
         Some("ingest") => ingest(home, ws_dir, args, o),
         Some("retractions") => retractions(home, ws_dir, args, o),
         Some("suggest") => suggest(ws_dir, args, o),
+        Some("pack") => pack(home, ws_dir, args, o),
         _ => {
             eprintln!("{USAGE}");
             2
@@ -199,6 +203,55 @@ fn migrate(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
         print!("{}", rm::render(&plan, applied.as_ref()));
     }
     i32::from(applied.is_some_and(|a| a.failed > 0))
+}
+
+/// `delphi research pack <topic-id> | --all` (`specs/144` §2.5 item 5): write the evidence pack of one topic, or of every topic of the
+/// workspace and its registered projects, from the records and the stored text. A topic none of whose claims has an anchored quote keeps
+/// no pack. The next search's refresh indexes what was written.
+fn pack(home: &Path, ws_dir: &Path, args: &[String], o: &Options) -> i32 {
+    use delphi_engine::evidence_pack::{self as ep, Written};
+    if crate::xenia_terminal::inside_an_agent_seat() {
+        eprintln!("delphi research pack: refused; it writes into the research records, which is the operator's to ask for, and this process was started by an agent seat");
+        return 2;
+    }
+    let results = if args.iter().any(|a| a == "--all") {
+        ep::write_all(home, ws_dir)
+    } else {
+        let Some(id) = operand(args, 1) else {
+            eprintln!("{USAGE}");
+            return 2;
+        };
+        let shown: String = id.chars().filter(|c| !c.is_control()).take(80).collect();
+        let Some(t) = research_record::find(ws_dir, id) else {
+            eprintln!("delphi research pack: no research topic `{shown}`: `delphi research topics` lists them");
+            return 1;
+        };
+        vec![(t.id.clone(), ep::write(&delphi_engine::library::Library::in_home(home), &t))]
+    };
+    let failed = results.iter().filter(|(_, r)| r.is_err()).count();
+    if o.json {
+        let rows: Vec<serde_json::Value> = results
+            .iter()
+            .map(|(id, r)| match r {
+                Ok(Written::Pack { claims, left_out }) => serde_json::json!({"topic_id": id, "pack": true, "claims": claims, "left_out": left_out}),
+                Ok(Written::Empty { left_out }) => serde_json::json!({"topic_id": id, "pack": false, "claims": 0, "left_out": left_out}),
+                Err(e) => serde_json::json!({"topic_id": id, "error": e}),
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".into()));
+    } else {
+        if results.is_empty() {
+            println!("no research topics yet: a research run leaves one");
+        }
+        for (id, r) in &results {
+            match r {
+                Ok(Written::Pack { claims, left_out }) => println!("{id}: evidence pack written, {claims} claim(s) with a quote anchored in their source's stored text, {left_out} left out"),
+                Ok(Written::Empty { left_out }) => println!("{id}: no pack, no claim has a quote anchored in its source's stored text ({left_out} left out)"),
+                Err(e) => println!("{id}: not written: {e}"),
+            }
+        }
+    }
+    i32::from(failed > 0)
 }
 
 /// The operands after the subcommand word: every word that is not a flag or a flag's value.

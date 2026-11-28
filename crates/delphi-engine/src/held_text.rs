@@ -563,6 +563,9 @@ pub const SENDERS: &[Sender] = &[
     // since `specs/141` slice C the app's export and print read the page again and act on the daemon's decision (`page_gate`), which
     // refuses a page that carries more of a held source than may leave; the window's copy follows the reply's `copy` decision
     Sender { name: "the app's export_page, print_page and copy", file: "app/src-tauri/src/lib.rs", how: How::Asks { call: "page_gate(" }, proof: Some(("app/src-tauri/src/sink.rs", "export_refuses_a_private_page")) },
+    // a research topic's evidence pack (`specs/144` §2.5 item 4): every exit above that carries it labels it, through `label::of_files`,
+    // with the label of every source its runs read, computed at that moment; `check_files` applies the bound to its quotations
+    Sender { name: "an evidence pack, as a bundle, an export, a Xenia publish, a push or a document carries it", file: "crates/delphi-engine/src/label.rs", how: How::Asks { call: "crate::evidence_pack::label_of(" }, proof: Some(("crates/delphi-engine/src/evidence_pack_tests.rs", "a_bundle_export_or_push_that_carries_a_pack_of_a_held_or_private_source_is_refused")) },
     // the network files that carry no held text (`egress.rs` NETWORK_FILES)
     Sender { name: "model API calls", file: "crates/delphi-adapter/src/http.rs", how: How::NotASink { why: PROMPT }, proof: None },
     Sender { name: "the model-call abstraction", file: "crates/delphi-engine/src/model.rs", how: How::NotASink { why: PROMPT }, proof: None },

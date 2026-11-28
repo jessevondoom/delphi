@@ -1200,9 +1200,15 @@ impl EngineService {
         type EndedOwned = (crate::research_jobs::State, Option<Value>, Option<String>, u64);
         let ended_copy: Arc<std::sync::Mutex<Option<EndedOwned>>> = Default::default();
         let keep = ended_copy.clone();
+        let pack_home = ws.home.clone();
         let on_end = move |ended: &crate::research_jobs::Ended<'_>| {
             if let Some(t) = &topic {
                 crate::research_record::record_end(t, &ended_rid, ended);
+                // `specs/144` §2.5 item 1: a run that ended `done` or `partial` writes its topic's evidence pack, by code, from the record
+                // just written and the library's stored text. The next search's refresh indexes it.
+                if matches!(ended.state, crate::research_jobs::State::Done | crate::research_jobs::State::Partial) {
+                    crate::evidence_pack::after_run(&pack_home, t);
+                }
             }
             *keep.lock().unwrap() = Some((ended.state, ended.result.cloned(), ended.error.map(String::from), ended.ms));
         };
@@ -1297,6 +1303,8 @@ impl EngineService {
         let root = project.as_ref().map(|(_, r)| r.clone()).unwrap_or_else(|| ws.dir.clone());
         if let Some(t) = crate::research_record::Topic::at(&root, &topic_id) {
             let _ = crate::research_record::point_run(&ws.dir, &c.session, &run_id, &t, project.as_ref().map(|(n, _)| n.as_str()));
+            // `specs/144` §2.5 item 1: the host's run has ended; its topic's evidence pack is written by code before the index refresh.
+            crate::evidence_pack::after_run(&ws.home, &t);
         }
         // The pages kept are indexed now, so the next `search_kb` finds them, as after a research run. A failure is not the call's.
         let (w, hm) = (ws.dir.clone(), ws.home.clone());
