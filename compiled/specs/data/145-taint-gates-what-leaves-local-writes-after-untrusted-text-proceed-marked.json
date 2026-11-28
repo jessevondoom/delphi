@@ -65,54 +65,54 @@
     {
       "level": 3,
       "line": 104,
-      "number": "2.4",
-      "title": "Amendment 145-A1: what the review closed (narrows only)"
-    },
-    {
-      "level": 3,
-      "line": 133,
       "number": "2.3",
       "title": "Charter text (proposed; applied only by the operator's ratification)"
     },
     {
+      "level": 3,
+      "line": 110,
+      "number": "2.4",
+      "title": "Amendment 145-A1: what the reviews closed, prioritized"
+    },
+    {
       "level": 2,
-      "line": 139,
+      "line": 130,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 152,
+      "line": 143,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 163,
+      "line": 154,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 192,
+      "line": 180,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 200,
+      "line": 188,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 205,
+      "line": 198,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 210,
+      "line": 204,
       "number": "9",
       "title": "Review"
     }
@@ -120,7 +120,7 @@
   "schema_version": 1,
   "source": {
     "path": "specs/145-taint-gates-what-leaves-local-writes-after-untrusted-text-proceed-marked.md",
-    "sha256": "1925bf97c1fea775ab935900ddfbb36a7d15fbee9ea3d82bceeaa54d42e96c5c"
+    "sha256": "3f43b7fedb240c9698dd17cb78727134039e8a6ab6dc8238474b4f0437e3d41a"
   },
   "source_status_at_hash": {
     "line": {
@@ -133,7 +133,7 @@
       },
       "text": "status: approved   # by the operator on 2026-11-27: \"145 is approved. keep going\", approved before the red-team review of §6, which still runs before slice G is ratified"
     },
-    "sha256": "1925bf97c1fea775ab935900ddfbb36a7d15fbee9ea3d82bceeaa54d42e96c5c",
+    "sha256": "3f43b7fedb240c9698dd17cb78727134039e8a6ab6dc8238474b4f0437e3d41a",
     "word": "approved"
   },
   "spec": {

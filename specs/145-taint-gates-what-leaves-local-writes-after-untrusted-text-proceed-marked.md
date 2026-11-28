@@ -14,7 +14,7 @@ tags: [spec, governance, taint, authority, prompt-injection, held-text]
 
 # Spec 145: Taint gates what leaves
 
-> **Status: approved** by the operator on 2026-11-27 ("145 is approved. keep going"). Amendment 145-A1 (§2.4, from the review of §6, OpenAI ask `t_0014`) narrows it and awaits the operator's yes.
+> **Status: approved** by the operator on 2026-11-27 ("145 is approved. keep going"). Amendment 145-A1 (§2.4), prioritized from the reviews of §6 (OpenAI asks `t_0014` and `t_0016`), was accepted by the operator on 2026-11-27 ("yes").
 > **Amends:**
 > - `GOVERNANCE.md` §4.3, its fourth bullet ("Taint gates actions, not only memory"). This is a constitutional change: Red-tier, applied only when the operator ratifies the diff (§5.7), in its own gate-changing pull request.
 > - [`specs/001`](001-governance-and-manifests.md) §5.2 (the taint-gated tools table) and its amendment refining §5.1 and §5.2 ("a tainted span cannot launder through a broader glob").
@@ -101,40 +101,31 @@ Connector writes stay a Red gate at every taint level.
 3. **Dispatch.** Allowed. The child starts at the parent's taint (already so in `provenance::gate`), so the same table follows it. A dispatch is no longer an approval stop.
 4. **Held text** is in every role's default search, labelled. The opt-in `include_held` stays as a no-op for compatibility, and `retrieval::held_by_default` returns true for every role.
 
-### 2.4 Amendment 145-A1: what the review closed (narrows only)
-
-From the red-team review (OpenAI `gpt-6.2-sol`, ask `t_0014`: "do not ratify" until these hold). Every item narrows §2.2.
-
-1. **The mark is enforced when the file is read.**
-   - A file's taint is owned by the daemon, never by the file's text.
-   - A span that reads a marked file computes its taint from the mark, as from any input.
-   - Copies, renames and files generated from a marked file keep the lowest mark.
-   - A file in a path that keeps marks but has none, or has a stale one, counts as `external_untrusted`.
-   - An approval of a send never raises any file's mark.
-2. **No host-run files.** A tainted span is refused a write to any path the host may run outside the sandbox (the §5.5 list: `build.rs`, `.cargo/config*`, `.envrc`, `.gitattributes`, `.gitmodules`, `.github/**`, `.vscode/**` and the like, as the merge flow's Red list names them). Refusing the write closes the gap the merge flag leaves: such a file could run on the next build or checkout, or in CI on a push, before any merge.
-3. **Taint lasts the task's life.**
-   - The span's lowest taint persists across retries, restarts and resumed tasks, and a missing lineage counts as tainted.
-   - A child's result returned to its parent is an input to the parent and taints it at the child's level.
-   - Each test checks the next action after a transition, not only the starting label.
-4. **No way out but the gate.**
-   - Code a tainted span runs in the sandbox runs with the network off.
-   - Every outbound effect goes through the daemon's gated send.
-   - A route the gate does not classify is denied.
-   - 141's sinks keep their own checks as well.
-5. **Informed approval.** Every outbound card follows `specs/005` §3.1, as connector writes do:
-   - a daemon-rendered, inert view of the resolved destination, account, body and attachments;
-   - hidden and control characters shown;
-   - a card whose material content cannot be shown in full is refused;
-   - the approval is single-use and bound to the hash of the exact operation sent.
-
-   A remote approval relay is shown only what §5.10 already allows.
-6. **The order.** The code keeps the current, stricter gate until slice A, with these items, passes and merges. Slice G only states the rule, so the code never allows more than the charter.
-
 ### 2.3 Charter text (proposed; applied only by the operator's ratification)
 
 GOVERNANCE §4.3, fourth bullet, becomes:
 
-> - **Taint gates what leaves, and marks what stays:** a span whose computed taint is `federated_peer` or lower keeps its local writes and sandboxed execution, under the ordinary approval tier; every file it writes carries its computed taint, enforced when the file is later read, and each such write is noticed in the log; it may not write a file the host runs outside the sandbox, and code it runs has no network. Every outbound action it requests (network, `gh`, agent-to-agent, connector) requires a Red-tier approval of the exact payload, which no permission mode waives; a dispatch it requests starts the child at its taint. Writes to the promotion paths remain barred as above.
+> - **Taint gates what leaves, and marks what stays:** a span whose computed taint is `federated_peer` or lower keeps its local writes and sandboxed execution, under the ordinary approval tier; every file it writes carries its computed taint, and each such write is noticed in the log; it may not write a file the host runs outside the sandbox, and code it runs has no network. Every outbound action it requests (network, `gh`, agent-to-agent, connector) requires a Red-tier approval of the exact payload, shown in full on the approving channel, which no permission mode waives; a dispatch it requests starts the child at its taint. Writes to the promotion paths remain barred as above.
+
+### 2.4 Amendment 145-A1: what the reviews closed, prioritized
+
+The reviews of §6 (OpenAI `gpt-6.2-sol`, asks `t_0014` and `t_0016`) raised a dozen items. The operator asked for only the prioritized ones (2026-11-27: "the 145 amendments seem overly limiting. suggest only prioritized changes"; then "yes"). Kept are the five that stop something that cannot be undone, data leaving the machine or code running outside the sandbox:
+
+1. **No network for tainted commands.** Code that a tainted span runs in the OS sandbox runs with the network off. Without it, a command could send what the outbound gate guards.
+2. **No tainted writes to host-run files.** A tainted span is refused writes to the files the host runs outside the sandbox: the merge flow's Red list of host-run paths (`build.rs`, `.cargo/config*`, `.envrc`, `.gitattributes`, `.gitmodules`, `.github/**`, `.vscode/**` and the like), kept as one table in code. The file tools check the normalized path, so `..` and symlinks resolve first. Such a file could run on the next build or checkout, before any review.
+3. **Outbound cards show the full payload on the approving channel.** Every outbound card follows `specs/005` §3.1, as connector cards do: the resolved destination, the account, the full body and every attachment, bound to the hash of what is sent. A channel that cannot show all of it (a remote relay, §5.10) cannot approve that card.
+4. **Taint follows the work.** A span's lowest taint persists through retries and resumed tasks. A dispatched child starts at its parent's taint, and its result returned to the parent is an input that taints the parent at the child's level. A span that reads a file written at a taint is taken at that taint.
+5. **The order.**
+   - Slice A merges with the new gate built but switched off, so the current, stricter gate stays in force.
+   - The operator then ratifies slice G.
+   - Then the gate is switched on.
+
+**Considered and not adopted** (accepted risks, §7):
+- commands tainted from launch because they could read a marked file;
+- marks carried through copies, renames and generated files, with an unmarked file treated as untrusted;
+- resolved-path checks on every write route beyond the file tools;
+- every criterion tested at both $L_0$ and $L_1$ against a clean control;
+- a dispatch to another provider's model treated as an exit (model calls are not exits, operator 2026-11-27).
 
 ## 3. Authority
 
@@ -154,11 +145,11 @@ This spec **loosens** a charter invariant, and says so.
 | Slice | Content | Criteria | Hours |
 | :-- | :-- | :-- | --: |
 | G | the `GOVERNANCE.md` §4.3 diff and the `specs/001` §5.2 table, as their own gate-changing pull request, merged by the operator after ratification | AC-1 | 1 |
-| A | `provenance::gate`: tainted `WorktreeWrite` → Allow; tainted `Outbound` → Red; tainted `DispatchAgent` → Allow (child inherits); the laundering check becomes a mark; the notice; 145-A1 (marks on read, host-run paths refused, lasting taint, no network in tainted execution, informed cards) | AC-2 to AC-5, AC-7 to AC-10 | 8-11 |
+| A | `provenance::gate`: tainted `WorktreeWrite` → Allow; tainted `Outbound` → Red; tainted `DispatchAgent` → Allow (child inherits); the laundering check becomes a mark; the notice; 145-A1 (no network in tainted execution, host-run paths refused, full payload on the approving channel, taint that follows the work); built behind a switch that stays off until G | AC-2 to AC-5, AC-7 to AC-10 | 6-8 |
 | B | held text for every role: `held_by_default` → true; `include_held` kept, documented as a no-op; 142 B's tracker and 144 §2.6 updated | AC-6 | 1-2 |
-| | **Total** | | **10-14** |
+| | **Total** | | **8-11** |
 
-Slice A is built only after G is merged.
+Order (145-A1 item 5): A merges with the new gate switched off; the operator ratifies G; the gate is switched on.
 
 ## 5. Acceptance criteria
 
@@ -175,19 +166,16 @@ Slice A is built only after G is merged.
 5. **AC-5:** a dispatch from a span tainted to $L_0$ is not a card, and the child span's ceiling starts at $L_0$.
 6. **AC-6:** every shipped role's default `kb_search` returns a held source's passage, labelled; no role gets a private source; every exit test passes unchanged.
 
-7. **AC-7:** a clean span that reads a file written by a span tainted to $L_0$ is itself at $L_0$; a copy, a rename and a generated file keep the mark; a marked path with no mark reads as `external_untrusted`.
-8. **AC-8:** a span tainted to $L_0$ or $L_1$ writing `build.rs`, `.envrc`, `.github/workflows/x.yml` or `.cargo/config.toml` is refused; the same write from a clean span is not.
+7. **AC-7:** code run in the sandbox by a span tainted to $L_0$ cannot reach the network; the same command from a clean span is unchanged.
+8. **AC-8:** a span tainted to $L_0$ writing `build.rs`, `.envrc`, `.github/workflows/x.yml` or `.cargo/config.toml`, directly or through `..` or a symlink, is refused; the same write from a clean span is not.
 9. **AC-9:**
-   - a retry, a restart and a resumed task keep the span's lowest taint;
-   - a child's result returned to its parent lowers the parent to the child's taint;
-   - after each, the next outbound action is a Red card;
-   - a task whose lineage is missing is treated as tainted.
+   - an outbound card shows the resolved destination, account, full body and every attachment, and its approval sends only the operation whose hash it bound, once;
+   - a relay that cannot show an attachment cannot approve that card.
 10. **AC-10:**
-    - a command run in the sandbox by a tainted span cannot reach the network;
-    - an outbound route the gate does not classify is denied, with no effect on denial or timeout;
-    - an outbound card shows the resolved destination, account and full body with hidden characters made visible, refuses a body it cannot show, and its approval sends only the operation whose hash it bound, once.
-
-Each of AC-2 to AC-10 is run at $L_0$ and at $L_1$, with a clean span as the control, and one test runs the whole chain: a tainted write, a later clean read, then an outbound decision.
+    - a retry and a resumed task keep the span's lowest taint;
+    - a child's result returned to its parent lowers the parent to the child's taint;
+    - a span that reads a file written at $L_0$ is at $L_0$.
+    - **One end-to-end test:** a tainted write; a later read by a clean span; that span's next command has no network.
 
 ## 6. Verification plan
 
@@ -200,19 +188,26 @@ Scripted tests in `delphi-core` (`provenance`) and `delphi-engine` (`tools`, the
 ## 7. What is not verified
 
 - **Whether a tainted local write is caught by review in practice.** The taint mark and the notice make it visible; nothing measures how often a reviewer reads them.
-- **Whether every outbound path goes through `provenance::gate`.** AC-3 lists the kinds; an outbound path that skips the gate would be a defect today as well.
+- **Whether every outbound path goes through `provenance::gate`.** AC-3 lists the kinds; an outbound path that skips the gate would be a defect today as well. For commands, the sandbox's network-off is the boundary (145-A1 item 1).
+- **Whether the host-run list is complete.** It cannot be proven complete (145-A1 item 2); a file the host loads that is not on it is a residual risk, and adding one is a one-line change.
+- **The risks accepted in 145-A1** ("considered and not adopted"):
+  - **Marks through copies.** A file copied or generated from a marked file by a command, not a file tool, loses the mark. Only a model reading it can act on what it says, and that read marks the reader.
+  - **Clean commands over marked files.** A command a clean span runs over marked files keeps its network.
+  - **Other write routes.** Write routes other than the file tools are not checked for host-run targets.
 
 ## 8. Decisions for the operator
 
 1. The direction (decided 2026-11-27: "yes please, this direction is better").
-2. The charter text of §2.3, at ratification.
+2. Amendment 145-A1, prioritized (2026-11-27: "yes").
+3. The charter text of §2.3, at ratification.
 
 ## 9. Review
 
 - The operator approved the text on 2026-11-27, before review.
 - **Red-team, §6.**
   - **Attempts:** in Delphi on Gemini, help `t_0013`, which ended with an empty answer; then OpenAI (`gpt-6.2-sol`, ask `t_0014`), which answered "do not ratify" with five P0s and one P1.
-  - **Applied:** all six, as amendment 145-A1 (§2.4), each of which narrows the change.
-- **Still needed:**
-  - the operator's yes to 145-A1;
-  - a red-team recheck that the six are closed, before the operator ratifies slice G.
+  - Its six findings were first applied in full, then prioritized (below).
+- **Recheck:** OpenAI (`gpt-6.2-sol`, ask `t_0016`): "do not ratify §2.3 yet".
+  - It found lasting taint closed and five items open.
+- **Prioritized** at the operator's request: the five items of §2.4 are kept; the rest are accepted risks (§7). The operator accepted this on 2026-11-27.
+- **Still needed:** the operator's ratification of slice G's charter diff.

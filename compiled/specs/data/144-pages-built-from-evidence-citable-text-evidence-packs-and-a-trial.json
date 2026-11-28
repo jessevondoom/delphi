@@ -58,85 +58,85 @@
     },
     {
       "level": 3,
-      "line": 92,
+      "line": 103,
       "number": "2.3",
       "title": "What the validator sees, and what it must show"
     },
     {
       "level": 3,
-      "line": 104,
+      "line": 126,
       "number": "2.4",
       "title": "A support check after research (built only if called for)"
     },
     {
       "level": 3,
-      "line": 113,
+      "line": 135,
       "number": "2.5",
       "title": "The evidence pack"
     },
     {
       "level": 3,
-      "line": 124,
+      "line": 151,
       "number": "2.6",
       "title": "What agents see"
     },
     {
       "level": 3,
-      "line": 134,
+      "line": 164,
       "number": "2.7",
       "title": "Pages are built from evidence"
     },
     {
       "level": 3,
-      "line": 148,
+      "line": 182,
       "number": "2.8",
       "title": "The trial"
     },
     {
       "level": 3,
-      "line": 184,
+      "line": 236,
       "number": "2.9",
       "title": "Standing checks after the trial"
     },
     {
       "level": 2,
-      "line": 189,
+      "line": 241,
       "number": "3",
       "title": "Authority"
     },
     {
       "level": 2,
-      "line": 198,
+      "line": 254,
       "number": "4",
       "title": "Slices"
     },
     {
       "level": 2,
-      "line": 211,
+      "line": 267,
       "number": "5",
       "title": "Acceptance criteria"
     },
     {
       "level": 2,
-      "line": 238,
+      "line": 325,
       "number": "6",
       "title": "Verification plan"
     },
     {
       "level": 2,
-      "line": 242,
+      "line": 329,
       "number": "7",
       "title": "What is not verified"
     },
     {
       "level": 2,
-      "line": 249,
+      "line": 337,
       "number": "8",
       "title": "Decisions for the operator"
     },
     {
       "level": 2,
-      "line": 264,
+      "line": 361,
       "number": "9",
       "title": "Review"
     }
@@ -144,21 +144,21 @@
   "schema_version": 1,
   "source": {
     "path": "specs/144-pages-built-from-evidence-citable-text-evidence-packs-and-a-trial.md",
-    "sha256": "e7df1e46b44dfa35c9b1bf16e7bf27e2bce66ca10d5121cc110e5717359b49cb"
+    "sha256": "ca9a02c5c5e4786c7830f44256223c5da01285158acc48ad7803d6b037c1183c"
   },
   "source_status_at_hash": {
     "line": {
       "kind": "quote",
       "span": {
-        "end": 537,
+        "end": 494,
         "end_line": 6,
         "line": 6,
         "start": 268
       },
-      "text": "status: draft   # revision 5. The operator approved the approach and the architect's choices on 2026-11-27 (\"i agree with the [architect's] choices — accept them, including the change to 142B, and proceed. i'll approve all specs when ready\"); not yet approved as text"
+      "text": "status: approved   # revision 7, by the operator on 2026-11-27: \"approved 144 rev 7\"; reviewed by Council t_0012 (Claude and OpenAI heard) and the OpenAI rechecks t_0015, approved by the operator in place of a committed record"
     },
-    "sha256": "e7df1e46b44dfa35c9b1bf16e7bf27e2bce66ca10d5121cc110e5717359b49cb",
-    "word": "draft"
+    "sha256": "ca9a02c5c5e4786c7830f44256223c5da01285158acc48ad7803d6b037c1183c",
+    "word": "approved"
   },
   "spec": {
     "group": "knowledge-and-memory",
