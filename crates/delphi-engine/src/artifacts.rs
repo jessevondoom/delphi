@@ -14,7 +14,7 @@ use crate::tools::{denied, observe, str_arg, with_provenance_header, zone_of, Ac
 use delphi_adapter::claude::ToolDef;
 use delphi_docs::{chart, diagram, htmlkinds, htmlpage, sheetwriter};
 use delphi_core::pathguard::{Access, Guard};
-use delphi_core::provenance::{gate_write, OutputCheck, Tier};
+use delphi_core::provenance::{gate_write, OutputCheck, Span};
 use serde_json::{json, Value};
 
 /// Output cap for an artifact; plain-text `write_file` stays at 256 KB.
@@ -390,7 +390,8 @@ pub struct Target {
 /// Everything that can refuse an artifact without touching the filesystem, run before the operator is asked:
 /// the path, the role's write scope (for the file and its provenance record), the provenance gate, and read
 /// access to each input.
-pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args: &Value) -> Result<Target, ToolResult> {
+pub fn precheck(guard: &Guard, span: &Span, host_extra: &[String], mission_id: &str, tool: &str, args: &Value) -> Result<Target, ToolResult> {
+    let ceiling = span.ceiling();
     let normalized;
     let args = if tool == "write_chart" || tool == "write_diagram" {
         normalized = chart_normalize(args).map_err(ToolResult::err)?;
@@ -408,7 +409,7 @@ pub fn precheck(guard: &Guard, ceiling: Tier, mission_id: &str, tool: &str, args
     for p in std::iter::once(&resolved).chain(sidecar.iter()) {
         guard.check_policy(p, Access::Write).map_err(denied)?;
         gate_write(p, ceiling).map_err(|g| ToolResult::err(g.to_string()))?;
-        crate::tools::gate_tainted_write(p, ceiling)?;
+        crate::tools::gate_tainted_write(p, span, host_extra)?;
     }
     if tool == "write_archive" {
         for m in members_of(args).map_err(|e| ToolResult::err(e.0))? {
@@ -475,6 +476,10 @@ pub fn write_artifact(ctx: &mut ToolCtx, target: &Target, bytes: &[u8], tool: &s
     let (zone, rel) = zone_of(resolved);
     ctx.index.stamp(zone, &rel, &hash, tier);
     ctx.stamps.push(Stamp { zone, path: rel, blake3: hash.clone(), tier });
+    // `specs/145` §2.2 item 1: one notice for the write (its provenance record is part of it), when the span is marked.
+    if let Some(notice) = crate::tools::taint_notice(ctx.span, resolved) {
+        ctx.events.push((crate::tools::TAINT_NOTICE.into(), notice));
+    }
     let head = format!("{} {} ({} bytes, blake3 {}…, tier {} {})", if created { "created" } else { "replaced" }, resolved, bytes.len(), &hash[..12], tier, tier.name());
     let Some(side) = &target.sidecar else {
         return ToolResult::ok(format!("{}; no provenance record file (this role cannot write the mission folder): the stamp is in the mission log", head));
@@ -520,7 +525,7 @@ fn member_name(logical: &str) -> String {
 }
 
 fn write_archive(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
-    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_archive", args) {
+    let target = match precheck(ctx.guard, ctx.span, &[], ctx.mission_id, "write_archive", args) {
         Ok(t) => t,
         Err(e) => return e,
     };
@@ -572,7 +577,7 @@ fn write_deck(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
 }
 
 fn write_page(ctx: &mut ToolCtx, tool: &str, args: &Value) -> ToolResult {
-    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, tool, args) {
+    let target = match precheck(ctx.guard, ctx.span, &[], ctx.mission_id, tool, args) {
         Ok(t) => t,
         Err(e) => return e,
     };
@@ -612,7 +617,7 @@ fn write_page(ctx: &mut ToolCtx, tool: &str, args: &Value) -> ToolResult {
 }
 
 fn write_sheet(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
-    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_sheet", args) {
+    let target = match precheck(ctx.guard, ctx.span, &[], ctx.mission_id, "write_sheet", args) {
         Ok(t) => t,
         Err(e) => return e,
     };
@@ -625,7 +630,7 @@ fn write_sheet(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
 }
 
 fn write_diagram(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
-    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_diagram", args) {
+    let target = match precheck(ctx.guard, ctx.span, &[], ctx.mission_id, "write_diagram", args) {
         Ok(t) => t,
         Err(e) => return e,
     };
@@ -666,7 +671,7 @@ fn write_diagram(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
 }
 
 fn write_chart(ctx: &mut ToolCtx, args: &Value) -> ToolResult {
-    let target = match precheck(ctx.guard, ctx.span.ceiling(), ctx.mission_id, "write_chart", args) {
+    let target = match precheck(ctx.guard, ctx.span, &[], ctx.mission_id, "write_chart", args) {
         Ok(t) => t,
         Err(e) => return e,
     };
@@ -877,7 +882,7 @@ mod tests {
     use crate::probe::AssumeClean;
     use crate::tools::Registry;
     use delphi_core::pathguard::Zones;
-    use delphi_core::provenance::{Index, OriginRules, Span};
+    use delphi_core::provenance::{Index, OriginRules, Span, Tier};
     use std::collections::HashSet;
     use std::fs;
 

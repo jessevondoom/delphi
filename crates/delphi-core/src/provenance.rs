@@ -220,21 +220,75 @@ pub fn output_tier(ceiling: Tier, check: OutputCheck) -> Tier {
     }
 }
 
+/// Most sources a span remembers for the notice of a tainted write (`specs/145` §2.2 item 1).
+pub const MAX_SOURCES: usize = 8;
+
 /// A span's taint state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {
     pub id: String,
     ceiling: Tier,
+    /// The table that decides this span's taint-gated actions: [`TAINT_TABLE`] unless the daemon's own code says otherwise.
+    table: TaintTable,
+    /// What lowered the ceiling to `L1` or below, for the notice of a tainted write. Information only: nothing decides on it.
+    sources: Vec<String>,
 }
 
 impl Span {
     pub fn root(id: &str) -> Span {
-        Span { id: id.into(), ceiling: Tier::L5 }
+        Span { id: id.into(), ceiling: Tier::L5, table: TAINT_TABLE, sources: Vec::new() }
     }
 
     /// A span restored from the log with the ceiling it had reached.
     pub fn with_ceiling(id: &str, ceiling: Tier) -> Span {
-        Span { id: id.into(), ceiling }
+        Span { id: id.into(), ceiling, table: TAINT_TABLE, sources: Vec::new() }
+    }
+
+    /// This span under `table`. Only the daemon's own code calls it (from the engine's settings, which no configuration key and
+    /// no agent sets).
+    pub fn under(mut self, table: TaintTable) -> Span {
+        self.table = table;
+        self
+    }
+
+    pub fn table(&self) -> TaintTable {
+        self.table
+    }
+
+    /// The taint-gated action table (`specs/001` §5.2) for this span's ceiling, under this span's table.
+    pub fn gate(&self, action: Action) -> Gate {
+        gate_in(self.table, self.ceiling, action)
+    }
+
+    /// Whether this span is at `L1` or below (GOVERNANCE §4.3, "federated_peer or lower").
+    pub fn tainted(&self) -> bool {
+        is_tainted(self.ceiling)
+    }
+
+    /// Whether this span is tainted and under the `specs/145` table, so its local writes go through, marked and noticed.
+    pub fn marks_writes(&self) -> bool {
+        self.tainted() && self.table == TaintTable::WhatLeaves
+    }
+
+    /// What tainted this span, oldest first (at most [`MAX_SOURCES`]).
+    pub fn sources(&self) -> &[String] {
+        &self.sources
+    }
+
+    /// As [`Span::observe_input`], remembering `source` when the input is at `L1` or below.
+    pub fn observe_input_from(&mut self, tier: Tier, source: &str) -> bool {
+        if is_tainted(tier) {
+            self.note_source(source);
+        }
+        self.observe_input(tier)
+    }
+
+    /// Remember what tainted this span (deduplicated, capped). It changes no tier.
+    pub fn note_source(&mut self, source: &str) {
+        let s: String = source.chars().filter(|c| !c.is_control()).take(200).collect();
+        if !s.is_empty() && !self.sources.contains(&s) && self.sources.len() < MAX_SOURCES {
+            self.sources.push(s);
+        }
     }
 
     pub fn ceiling(&self) -> Tier {
@@ -253,9 +307,9 @@ impl Span {
         }
     }
 
-    /// A child span starts at its parent's ceiling.
+    /// A child span starts at its parent's ceiling, under its parent's table, knowing what tainted its parent.
     pub fn child(&self, id: &str) -> Span {
-        Span { id: id.into(), ceiling: self.ceiling }
+        Span { id: id.into(), ceiling: self.ceiling, table: self.table, sources: self.sources.clone() }
     }
 
     pub fn output_tier(&self, check: OutputCheck) -> Tier {
@@ -323,34 +377,70 @@ pub enum Gate {
     Deny,
 }
 
+/// Which taint-gated action table is in force.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaintTable {
+    /// GOVERNANCE §4.3 as ratified: a span at `L1` or below loses all mutating and outbound tools, and a dispatch it requests is
+    /// a Red card (`specs/001` §5.2).
+    Ratified,
+    /// `specs/145` §2.1, taint gates what leaves: a span at `L1` or below keeps its local writes and its execution in the OS
+    /// sandbox under the ordinary tier, each such write marked at its taint and noticed; every outbound action is a Red card that
+    /// no mode waives; a dispatch is allowed and the child starts at the parent's taint. **Not in force** until the operator
+    /// ratifies the charter change (`specs/145` slice G, 145-A1 item 5).
+    WhatLeaves,
+}
+
+/// The table in force. `specs/145` 145-A1 item 5: slice A ships the new table built but switched off, so the ratified, stricter
+/// table stays in force until the operator ratifies GOVERNANCE §4.3's new text (slice G); then this one line changes, in its own
+/// reviewed pull request. It is a constant on purpose: no configuration key, flag, environment variable or agent can change it.
+pub const TAINT_TABLE: TaintTable = TaintTable::Ratified;
+
+/// `L1` or below: the span has read external untrusted or unverified federated text (GOVERNANCE §4.3).
+pub fn is_tainted(ceiling: Tier) -> bool {
+    ceiling <= Tier::L1
+}
+
+/// The taint-gated action table in force ([`TAINT_TABLE`]).
 pub fn gate(ceiling: Tier, action: Action) -> Gate {
-    let tainted = ceiling <= Tier::L1;
-    match action {
-        Action::Read => Gate::Allow,
-        Action::WorktreeWrite => {
+    gate_in(TAINT_TABLE, ceiling, action)
+}
+
+/// The taint-gated action table `table` (`specs/001` §5.2; `specs/145` §2.1).
+pub fn gate_in(table: TaintTable, ceiling: Tier, action: Action) -> Gate {
+    let tainted = is_tainted(ceiling);
+    match (table, action) {
+        (_, Action::Read) => Gate::Allow,
+        (TaintTable::Ratified, Action::WorktreeWrite) => {
             if tainted {
                 Gate::Deny
             } else {
                 Gate::Allow
             }
         }
-        Action::Outbound => {
+        // Local and reversible: the ordinary tier. The caller marks the file at the span's taint, notices the write, refuses a
+        // host-run path and runs code only in the OS sandbox with the network off (`specs/145` §2.2 item 1, 145-A1 items 1-2).
+        (TaintTable::WhatLeaves, Action::WorktreeWrite) => Gate::Allow,
+        (TaintTable::Ratified, Action::Outbound) => {
             if tainted {
                 Gate::Deny
             } else {
                 Gate::Red
             }
         }
-        Action::DispatchAgent => {
+        // What leaves cannot be undone: Red at every level, never waived by a mode (`specs/145` §2.2 item 2).
+        (TaintTable::WhatLeaves, Action::Outbound) => Gate::Red,
+        (TaintTable::Ratified, Action::DispatchAgent) => {
             if tainted {
                 Gate::Red // the child inherits the taint
             } else {
                 Gate::Allow
             }
         }
+        // The child starts at the parent's ceiling and table ([`Span::child`]), so the same table follows it.
+        (TaintTable::WhatLeaves, Action::DispatchAgent) => Gate::Allow,
         // Never `Deny`: reading a thread and replying to it is the point of a connector. The control is the
         // operator's synchronous approval of the exact payload, at every taint level (specs/001 §5.2 note).
-        Action::ConnectorWrite => Gate::Red,
+        (_, Action::ConnectorWrite) => Gate::Red,
     }
 }
 
@@ -496,6 +586,66 @@ mod tests {
             assert_eq!(gate(ceiling, Action::Outbound), Gate::Deny);
             assert_eq!(gate(ceiling, Action::DispatchAgent), Gate::Red);
         }
+    }
+
+    /// `specs/145` 145-A1 item 5: slice A ships switched off. The table in force is the ratified one, and `gate` is exactly the
+    /// table of GOVERNANCE §4.3 as it stands, for every tier and action (written out, not computed from `gate_in`).
+    #[test]
+    fn spec_145_the_switch_is_off_and_gate_is_the_ratified_table() {
+        assert_eq!(TAINT_TABLE, TaintTable::Ratified, "the new table waits for the operator's ratification of slice G");
+        assert_eq!(Span::root("s").table(), TaintTable::Ratified);
+        assert_eq!(Span::with_ceiling("s", Tier::L0).table(), TaintTable::Ratified);
+        let today = |t: Tier, a: Action| -> Gate {
+            let tainted = t <= Tier::L1;
+            match a {
+                Action::Read => Gate::Allow,
+                Action::WorktreeWrite if tainted => Gate::Deny,
+                Action::WorktreeWrite => Gate::Allow,
+                Action::Outbound if tainted => Gate::Deny,
+                Action::Outbound => Gate::Red,
+                Action::DispatchAgent if tainted => Gate::Red,
+                Action::DispatchAgent => Gate::Allow,
+                Action::ConnectorWrite => Gate::Red,
+            }
+        };
+        for t in [Tier::L0, Tier::L1, Tier::L2, Tier::L3, Tier::L4, Tier::L5] {
+            for a in [Action::Read, Action::WorktreeWrite, Action::Outbound, Action::DispatchAgent, Action::ConnectorWrite] {
+                assert_eq!(gate(t, a), today(t, a), "{t} {a:?}");
+                assert_eq!(Span::with_ceiling("s", t).gate(a), today(t, a), "{t} {a:?}");
+                assert_eq!(gate_in(TaintTable::Ratified, t, a), today(t, a));
+            }
+        }
+        assert!(!Span::with_ceiling("s", Tier::L0).marks_writes(), "switched off, nothing is marked instead of refused");
+    }
+
+    /// `specs/145` §2.1, with the switch on: what leaves asks, what stays proceeds.
+    #[test]
+    fn spec_145_the_what_leaves_table() {
+        let on = TaintTable::WhatLeaves;
+        for t in [Tier::L0, Tier::L1] {
+            assert_eq!(gate_in(on, t, Action::Read), Gate::Allow);
+            assert_eq!(gate_in(on, t, Action::WorktreeWrite), Gate::Allow, "per the HITL tier, marked and noticed");
+            assert_eq!(gate_in(on, t, Action::Outbound), Gate::Red, "never Deny, never Allow");
+            assert_eq!(gate_in(on, t, Action::DispatchAgent), Gate::Allow, "no card; the child inherits");
+            assert_eq!(gate_in(on, t, Action::ConnectorWrite), Gate::Red);
+        }
+        for t in [Tier::L2, Tier::L3, Tier::L4, Tier::L5] {
+            for a in [Action::Read, Action::WorktreeWrite, Action::Outbound, Action::DispatchAgent, Action::ConnectorWrite] {
+                assert_eq!(gate_in(on, t, a), gate_in(TaintTable::Ratified, t, a), "an untainted span is unchanged: {t} {a:?}");
+            }
+        }
+        // The child starts at the parent's ceiling and under its table, and remembers what tainted the parent.
+        let mut parent = Span::root("p").under(on);
+        assert!(parent.observe_input_from(Tier::L0, "@project/app/vendor/x.js"));
+        assert!(!parent.observe_input_from(Tier::L3, "missions/m/notes.md"), "local input taints nothing");
+        let child = parent.child("c");
+        assert_eq!((child.ceiling(), child.table(), child.sources()), (Tier::L0, on, &["@project/app/vendor/x.js".to_string()][..]));
+        assert!(child.marks_writes());
+        assert!(!Span::root("clean").under(on).marks_writes());
+        for i in 0..20 {
+            parent.note_source(&format!("s{i}"));
+        }
+        assert_eq!(parent.sources().len(), MAX_SOURCES);
     }
 
     #[test]

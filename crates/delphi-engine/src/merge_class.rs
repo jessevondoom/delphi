@@ -12,6 +12,11 @@ const PROTECTED: [&str; 5] = ["main", "master", "trunk", "develop", "production"
 
 /// Why a relay may not approve this card, or `None`.
 pub fn console_only(tool: &str, payload: &Value) -> Option<String> {
+    // `specs/145` 145-A1 item 3: an outbound card from a span that read untrusted text carries its destination, account, full body and
+    // every attachment; a relay cannot show all of that, so it cannot approve the card. Denying stays open.
+    if payload["taint_outbound"].as_bool() == Some(true) {
+        return Some("an outbound action from a span that read untrusted text".to_string());
+    }
     match tool {
         "merge" | "pull_request" => Some(format!("a {}", tool)),
         "harness_bash" => payload["command"].as_str().and_then(command_line).map(|v| format!("a command that looks like `{}`", v)),
@@ -148,5 +153,10 @@ mod tests {
         assert!(console_only("connector", &json!({"tool": "merge_pull_request"})).is_some());
         assert!(console_only("connector", &json!({"tool": "send"})).is_none());
         assert!(console_only("pull_request", &json!({})).is_some());
+        // `specs/145` 145-A1 item 3: an outbound card from a tainted span, whatever its tool.
+        for tool in ["harness_outbound", "connector", "anything"] {
+            assert!(console_only(tool, &json!({"tool": "send", "taint_outbound": true})).is_some(), "{tool}");
+        }
+        assert!(console_only("harness_outbound", &json!({"tool": "WebSearch"})).is_none(), "an ordinary card is unchanged");
     }
 }

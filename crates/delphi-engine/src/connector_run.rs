@@ -157,6 +157,10 @@ impl Engine {
             "taint": ceiling.as_str(),
             "notice": "Whatever this returns is sent to the model endpoint that runs this task.",
         });
+        // `specs/145` 145-A1 item 3: a send from a span that read untrusted text is approved only where all of it can be shown.
+        if sc.span.marks_writes() && class != ToolClass::Read {
+            payload["taint_outbound"] = json!(true);
+        }
         let who = format!("{}{}", dotted, if account.is_empty() { String::new() } else { format!(" as {}", account) });
         let args_line: String = args.to_string().chars().take(160).collect();
         // Spec 103 M2: the task's private-read mark goes through the one egress check (channel Connector). An unmarked task passes it
@@ -486,6 +490,42 @@ tools = { search = "read", draft_note = "draft", send = "write" }
         // The first draft's result is external content, so the span is tainted and the later drafts are Red.
         assert!(cards[0].0 == "amber" && cards[1..].iter().all(|c| c.0 == "red") && cards.iter().all(|c| c.1.contains("creates a draft")), "{:?}", cards);
         assert_eq!(f.connector_mock.calls.lock().unwrap().len(), 3);
+    }
+
+    /// `specs/145` AC-3 and AC-9 (switch on), a connector write from a span at L0: Red (as at every level), not waived by the most
+    /// permissive mode, with the destination, the account and the full arguments in the bound payload, and the console's alone;
+    /// nobody answering (a headless run) sends nothing.
+    #[tokio::test]
+    async fn spec_145_a_tainted_connector_write_is_red_shows_everything_and_only_the_console_approves_it() {
+        let what_leaves = |s: &mut crate::engine::Settings| s.taint_table = delphi_core::provenance::TaintTable::WhatLeaves;
+        let steps = || vec![Step::tool("r1", "read_file", json!({"path": "@project/app/vendor/x.js"})), Step::tool("c1", "docs__send", json!({"to": "a@b.c", "body": "the whole body", "attachments": [{"name": "f.txt", "text": "x"}]})), Step::text("ok")];
+        let f = fixture_with(steps(), what_leaves).await;
+        f.engine.broker.set_mode(crate::approval::Mode::MissionAuto);
+        let seen = approver_full(&f);
+        f.engine.run_task(&f.m, "orchestrator", "Send it").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        let card = cards.iter().find(|c| c.tool == "connector" && c.pattern.ends_with("write")).expect("a card for the send");
+        assert_eq!(card.tier, crate::approval::Tier::Red);
+        assert_eq!((card.payload["connector"].as_str(), card.payload["tool"].as_str(), card.payload["account"].as_str(), card.payload["taint"].as_str()), (Some("docs"), Some("send"), Some("me@example.com"), Some("L0")));
+        assert_eq!(card.payload["arguments"]["attachments"][0]["name"], "f.txt", "every attachment is in the bound payload");
+        assert_eq!(card.payload_blake3, crate::approval::payload_blake3(&card.payload));
+        assert!(crate::merge_class::console_only(&card.tool, &card.payload).is_some(), "a relay reply cannot approve it");
+        assert_eq!(f.connector_mock.calls.lock().unwrap().len(), 1, "sent once, as approved");
+        // Nobody answers: denied, nothing sent.
+        let f = fixture_with(steps(), |s| {
+            what_leaves(s);
+            s.approval_timeout = std::time::Duration::from_millis(200);
+        })
+        .await;
+        f.engine.run_task(&f.m, "orchestrator", "Send it").await.unwrap();
+        assert!(f.connector_mock.calls.lock().unwrap().is_empty());
+        // Switched off: the same send is Red as before, and a relay could still be asked (with step-up), exactly as today.
+        let f = fixture(steps()).await;
+        let seen = approver_full(&f);
+        f.engine.run_task(&f.m, "orchestrator", "Send it").await.unwrap();
+        let cards = seen.lock().unwrap().clone();
+        let card = cards.iter().find(|c| c.tool == "connector" && c.pattern.ends_with("write")).unwrap();
+        assert!(card.tier == crate::approval::Tier::Red && card.payload.get("taint_outbound").is_none());
     }
 
     #[tokio::test]
