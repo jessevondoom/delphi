@@ -199,3 +199,4 @@ order = 9
 "142-the-source-text-cache-immutable-captures-host-text-handover-and-anchors-that-show-their-orphans" = "knowledge-and-memory"
 "143-a-single-turn-harness-bridge-one-prompt-one-answer-through-an-allowed-harness" = "runtime-models-and-tools"
 "144-pages-built-from-evidence-citable-text-evidence-packs-and-a-trial" = "knowledge-and-memory"
+"145-taint-gates-what-leaves-local-writes-after-untrusted-text-proceed-marked" = "governance-and-safety"
