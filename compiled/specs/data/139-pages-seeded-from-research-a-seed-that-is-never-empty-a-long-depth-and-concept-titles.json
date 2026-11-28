@@ -1,0 +1,170 @@
+{
+  "authoritative": false,
+  "generated_by": "delphi-spec-compile/1",
+  "outline": [
+    {
+      "level": 1,
+      "line": 17,
+      "number": null,
+      "title": "Spec 139: Pages seeded from research"
+    },
+    {
+      "level": 2,
+      "line": 25,
+      "number": "1",
+      "title": "Scope and objectives"
+    },
+    {
+      "level": 3,
+      "line": 43,
+      "number": "1.1",
+      "title": "Non-goals"
+    },
+    {
+      "level": 3,
+      "line": 50,
+      "number": "1.2",
+      "title": "Simpler alternative considered"
+    },
+    {
+      "level": 3,
+      "line": 55,
+      "number": "1.3",
+      "title": "Options considered"
+    },
+    {
+      "level": 2,
+      "line": 65,
+      "number": "2",
+      "title": "Design"
+    },
+    {
+      "level": 3,
+      "line": 67,
+      "number": "2.1",
+      "title": "The seed"
+    },
+    {
+      "level": 3,
+      "line": 87,
+      "number": "2.2",
+      "title": "The seed page"
+    },
+    {
+      "level": 3,
+      "line": 99,
+      "number": "2.3",
+      "title": "The writer expands the seed; a failure keeps it"
+    },
+    {
+      "level": 3,
+      "line": 110,
+      "number": "2.4",
+      "title": "Titles that are concepts"
+    },
+    {
+      "level": 3,
+      "line": 123,
+      "number": "2.5",
+      "title": "Build now"
+    },
+    {
+      "level": 3,
+      "line": 130,
+      "number": "2.6",
+      "title": "The writer role, used properly"
+    },
+    {
+      "level": 3,
+      "line": 139,
+      "number": "2.7",
+      "title": "Learning from validation"
+    },
+    {
+      "level": 2,
+      "line": 149,
+      "number": "3",
+      "title": "Authority"
+    },
+    {
+      "level": 2,
+      "line": 156,
+      "number": "4",
+      "title": "Slices"
+    },
+    {
+      "level": 2,
+      "line": 177,
+      "number": "5",
+      "title": "Acceptance criteria"
+    },
+    {
+      "level": 2,
+      "line": 198,
+      "number": "6",
+      "title": "Verification plan"
+    },
+    {
+      "level": 3,
+      "line": 232,
+      "number": "6.1",
+      "title": "Premortem (three months after release): how this most likely fails"
+    },
+    {
+      "level": 2,
+      "line": 245,
+      "number": "7",
+      "title": "What is not verified"
+    },
+    {
+      "level": 2,
+      "line": 257,
+      "number": "8",
+      "title": "Decisions for the operator"
+    },
+    {
+      "level": 2,
+      "line": 271,
+      "number": "9",
+      "title": "Review"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "path": "specs/139-pages-seeded-from-research-a-seed-that-is-never-empty-a-long-depth-and-concept-titles.md",
+    "sha256": "c7d543f811a96d67da6648578bad2ecce9dbd4088c36205b22e62a6fb9875dc9"
+  },
+  "source_status_at_hash": {
+    "line": {
+      "kind": "quote",
+      "span": {
+        "end": 1041,
+        "end_line": 6,
+        "line": 6,
+        "start": 256
+      },
+      "text": "status: approved   # by the operator, 2026-11-25: \"approve 139–143 as recommended, waive §1.3\". The words are the operator's, as relayed by the coordinating session to the architect agent that wrote this line; the approval takes effect when the operator merges the pull request that carries it. \"As recommended\" settles every open decision of section 8 at its recommended value. \"waive §1.3\" is the operator's own waiver of the review GOVERNANCE §1.3 asks for, and it is needed: no independent review of this text exists. Panel t_0004 read it, with a red-team seat, and its findings and its recheck are applied (section 9); every seat was on one model family, the family that wrote the spec, so the Panel does not count as an independent review and cannot be cited in reviewed_by."
+    },
+    "sha256": "c7d543f811a96d67da6648578bad2ecce9dbd4088c36205b22e62a6fb9875dc9",
+    "word": "approved"
+  },
+  "spec": {
+    "group": "knowledge-and-memory",
+    "number": "139",
+    "stem": "139-pages-seeded-from-research-a-seed-that-is-never-empty-a-long-depth-and-concept-titles",
+    "superseded_by": null,
+    "supersedes": null,
+    "tier": 0,
+    "title": "139: Pages seeded from research: a seed that is never empty, a long depth, and concept titles"
+  },
+  "summary": {
+    "kind": "quote",
+    "span": {
+      "end": 4259,
+      "end_line": 27,
+      "line": 27,
+      "start": 4099
+    },
+    "text": "The operator's workspace holds nine topic pages and none has ever been built. Reading the code explains why a built page would be poor even when the build runs:"
+  }
+}
