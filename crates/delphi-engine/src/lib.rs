@@ -181,6 +181,7 @@ pub mod decision_brief;
 pub mod decision_run;
 pub mod decision_raised;
 pub mod egress;
+pub mod evidence_pack;
 pub mod host_noted;
 pub mod host_research;
 pub mod host_capture;

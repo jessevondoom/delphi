@@ -127,7 +127,7 @@ pub fn topics_dir(root: &Path) -> PathBuf {
 }
 
 /// Write `bytes` to `path` whole: a temporary file beside it (mode 0600 on Unix), then a rename over it.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = path.parent().ok_or("no parent")?;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;

@@ -58,6 +58,11 @@ fn yaml(s: &str) -> String {
 pub fn files(ws: &Path, out: &mut Vec<SourceFile>) {
     let small = |p: &Path| std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.len() <= MAX_BYTES);
     let doc = |rel_path: String, path: std::path::PathBuf| SourceFile { rel_path, zone: ZONE, path, default_source: crate::research::TIER, bundle: None, vouched_by: None };
+    // A topic's evidence pack (`specs/144` §2.5 item 2) is untrusted text, and is listed only while no source its runs read is private
+    // (§2.6 item 3), its label computed now from the records. A search computes it again before it returns the pack.
+    let home = ws.parent().and_then(Path::parent);
+    let pack_lib = home.map(|h| crate::library::Library::in_home(h).with_workspace(ws));
+    let pack_labeller = crate::label::Labeller::new(pack_lib.as_ref(), Some(ws));
     if let Ok(rd) = std::fs::read_dir(crate::research_record::topics_dir(ws)) {
         for e in rd.flatten() {
             let Some(topic) = crate::research_record::Topic::at(ws, &e.file_name().to_string_lossy()) else { continue };
@@ -69,6 +74,10 @@ pub fn files(ws: &Path, out: &mut Vec<SourceFile>) {
             out.push(doc(format!("research/topics/{}/record.json", topic.id), topic.record_path()));
             if small(&topic.answer_path()) {
                 out.push(doc(format!("research/topics/{}/answer.md", topic.id), topic.answer_path()));
+            }
+            let pack = crate::evidence_pack::path_of(&topic);
+            if small(&pack) && crate::evidence_pack::listed(&pack_labeller, &topic.id) {
+                out.push(SourceFile { rel_path: format!("research/topics/{}/{}", topic.id, crate::evidence_pack::FILE), zone: ZONE, path: pack, default_source: crate::evidence_pack::TAINT, bundle: None, vouched_by: None });
             }
         }
     }

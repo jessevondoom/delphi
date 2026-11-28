@@ -357,13 +357,18 @@ pub const HELD_LABEL: &str = "held text · untrusted · not validated";
 /// nothing else untrusted returns it when it asks for held text ([`SearchOpts::include_held`]: by default for a role that does not
 /// act, on opt-in for one that does), labelled [`HELD_LABEL`]. Its tier is unchanged, so a span that reads it is tainted as before,
 /// and what may leave the machine is still decided by `held_text::body_may_leave` at every exit.
+///
+/// A research topic's evidence pack (`specs/144` §2.5, §2.6 item 2) is admitted with it: untrusted text that quotes the sources its runs
+/// read, held text among them, at `external_untrusted`, labelled `evidence pack · not validated` and withheld at the search when any of
+/// those sources is private (`evidence_pack::search_label`).
 fn held_sql(t: &str) -> String {
-    format!("({t}zone = 'library' AND {t}source_type = 'external_untrusted' AND {t}rel_path LIKE 'library/sources/%/source.md')")
+    format!("(({t}zone = 'library' AND {t}source_type = 'external_untrusted' AND {t}rel_path LIKE 'library/sources/%/source.md') OR ({t}zone = 'research' AND {t}source_type = 'external_untrusted' AND {t}rel_path LIKE 'research/topics/%/{}'))", crate::evidence_pack::FILE)
 }
 
 /// [`held_sql`] for one row.
 fn held_row(zone: &str, source_type: &str, rel_path: &str) -> bool {
-    zone == "library" && source_type == UNTRUSTED && rel_path.strip_prefix("library/sources/").and_then(|r| r.strip_suffix("/source.md")).is_some_and(|id| !id.is_empty())
+    (zone == "library" && source_type == UNTRUSTED && rel_path.strip_prefix("library/sources/").and_then(|r| r.strip_suffix("/source.md")).is_some_and(|id| !id.is_empty()))
+        || (zone == crate::research_index::ZONE && source_type == UNTRUSTED && crate::evidence_pack::topic_of_path(rel_path).is_some())
 }
 
 /// The exact machine label of an imported summary page (`specs/068` §6.3); MCP and CLI output carry it unsoftened.
@@ -2338,6 +2343,15 @@ impl Kb {
             }
             let row = self.conn.query_row("SELECT c.rel_path, c.start_line, c.end_line, c.heading_path, c.raw_content, d.content_blake3, d.zone, d.source_type, d.status, d.web_corroborated, d.author, d.marks FROM kb_chunks c JOIN kb_documents d ON d.doc_id = c.doc_id WHERE c.chunk_id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, i64>(9)? != 0, (r.get::<_, Option<String>>(10)?, r.get::<_, Option<String>>(11)?))));
             let Ok((rel_path, a, b, heading_path, raw, blake3, zone, tier_name, doc_status, web_corroborated, (doc_author, marks))) = row else { continue };
+            // `specs/144` §2.6 items 2-3: an evidence pack's label is computed again from the current marks of every source its runs read,
+            // before anything of it is returned. One from a run that read a private source, or one that cannot be traced, is not.
+            let pack_marks = match (zone == crate::research_index::ZONE).then(|| crate::evidence_pack::topic_of_path(&rel_path)).flatten() {
+                Some(topic) => match crate::evidence_pack::search_label(self.conn.path().map(Path::new), topic) {
+                    Some(l) => Some(l),
+                    None => continue,
+                },
+                None => None,
+            };
             // A finding of another project is not this search's to return (`specs/116` §5.3); a home finding is everyone's.
             // `specs/115` §3 item 1: unless the operator shares research and that project is in the caller's list.
             let theirs = project_of(&zone, &rel_path);
@@ -2457,6 +2471,8 @@ impl Kb {
             } else if shared_from.is_some() && ks == delphi_core::knowledge_status::Status::Noted {
                 // §3 item 2: another project's research, unless its claim status says more.
                 crate::shared_research::SHARED_LABEL
+            } else if pack_marks.is_some() {
+                crate::evidence_pack::SEARCH_LABEL
             } else if zone == "about" {
                 "release reference, not build authority"
             } else if zone == "summaries" {
@@ -2474,7 +2490,7 @@ impl Kb {
                 ks.label()
             };
             let disputed = disputes.get(&rel_path).map(|d| d.by.clone()).unwrap_or_default();
-            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author, shared: shared_from.is_some(), project: shared_from, internal, confirmed_by, disputed, marks: crate::label::Label::from_column(marks.as_deref()) });
+            hits.push(Hit { pointer, rel_path, start_line: a as usize, end_line: b as usize, heading_path, blake3, preview, score: s, note, status: ks.as_str(), label, vouched_by, zone, source_type: tier_name, doc_status, doc_author, shared: shared_from.is_some(), project: shared_from, internal, confirmed_by, disputed, marks: pack_marks.unwrap_or_else(|| crate::label::Label::from_column(marks.as_deref())) });
         }
         Ok(Found { hits, best_rerank, withheld })
     }

@@ -494,6 +494,16 @@ impl<'a> Labeller<'a> {
         Labeller { lib, ws: ws.map(Path::to_path_buf), h, ws_unreadable, lib_unreadable, records, metas: RefCell::new(HashMap::new()) }
     }
 
+    /// The library this labeller reads, when it has one.
+    pub fn library(&self) -> Option<&'a Library> {
+        self.lib
+    }
+
+    /// The workspace this labeller reads, when it has one.
+    pub fn workspace(&self) -> Option<&Path> {
+        self.ws.as_deref()
+    }
+
     fn meta(&self, id: &str) -> Option<Value> {
         let lib = self.lib?;
         self.metas.borrow_mut().entry(id.to_string()).or_insert_with(|| lib.read_meta(id)).clone()
@@ -603,6 +613,10 @@ impl<'a> Labeller<'a> {
         if let Some(rest) = p.strip_prefix("research/projects/") {
             let id = rest.rsplit('/').next().unwrap_or("").trim_end_matches(".json").trim_end_matches(".md");
             return self.claim(id);
+        }
+        // A topic's evidence pack (`specs/144` §2.5 item 3): the label of every source its runs read, computed now.
+        if let Some(topic) = crate::evidence_pack::topic_of_path(p) {
+            return crate::evidence_pack::label_of(self, topic);
         }
         if let Some(rest) = p.strip_prefix("research/topics/") {
             return self.research_record(rest.split('/').next().unwrap_or(""));
@@ -859,6 +873,10 @@ pub fn of_files(home: &Path, ws: Option<&Path>, root: Option<&Path>, files: &[(S
             pages.push((without_line(split_page(&md).1), label));
         }
     }
+    // the evidence packs of the workspace's topics, each with its body and the label computed now (`specs/144` §2.5 item 4)
+    let packs: Vec<(String, Label)> = ws
+        .map(|w| crate::research_record::list(w).into_iter().filter_map(|(t, _)| std::fs::read_to_string(crate::evidence_pack::path_of(&t)).ok().map(|md| (split_page(&md).1.to_string(), crate::evidence_pack::label_of(&labeller, &t.id).label))).collect())
+        .unwrap_or_default();
     // the private sources whose text is kept
     let private: Vec<(String, String)> = lib
         .list()
@@ -885,6 +903,15 @@ pub fn of_files(home: &Path, ws: Option<&Path>, root: Option<&Path>, files: &[(S
         for (body, page_label) in &pages {
             if crate::held_text::carries_run(body, &text) {
                 label = label.join(page_label);
+            }
+        }
+        // a file that says it is a pack takes that topic's pack label; one that carries a run of a pack takes the pack's
+        if let Some(topic) = crate::evidence_pack::named_in(&text) {
+            label = label.join(&crate::evidence_pack::label_of(&labeller, &topic).label);
+        }
+        for (body, pack_label) in &packs {
+            if crate::held_text::carries_run(body, &text) {
+                label = label.join(pack_label);
             }
         }
         for (id, t) in &private {
