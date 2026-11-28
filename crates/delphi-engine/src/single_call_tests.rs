@@ -53,7 +53,7 @@ async fn library_page_validate_makes_one_request_with_no_tools() {
     use crate::library::page_validate::{EnginePageValidator, PageQuery, PageValidator};
     let f = setup(vec![Step::text("[]")], 5.0, |_| {});
     let validator = EnginePageValidator { engine: f.engine.clone(), writer_family: None, writer_model: None };
-    let _ = validator.validate(&PageQuery { body: "Tides follow the moon.".into(), material: vec![], omitted: vec![] }).await;
+    let _ = validator.validate(&PageQuery { body: "Tides follow the moon.".into(), material: vec![], omitted: vec![], units: vec![] }).await;
     one_request_with_no_tools(&f);
 }
 

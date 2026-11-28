@@ -6,9 +6,9 @@
 //!
 //! 1. the answer of each research topic the page follows (`answer.md`, and each run's own answer the record keeps when `answer.md` does
 //!    not already hold it), newest topic first, split at `## ` headings, in file order;
-//! 2. the summary of each library source the topic's records read (`summary.md` beside the source's record, `specs/142` §2.6) and its
-//!    kept excerpts, each at most [`SOURCE_PIECE_MAX`] characters. **A source's own text is never a span**; a source with neither is
-//!    only named ([`Seed::named_sources`]);
+//! 2. the kept excerpts of each library source the topic's records read that holds citable text, each at most [`SOURCE_PIECE_MAX`]
+//!    characters. **A source's own text is never a span.** A summary (`specs/142` §2.6) is not citable text (`specs/144` §2.1 item 1):
+//!    it is no span, and a source with no excerpt or no citable text is only named, by its title ([`Seed::named_sources`]);
 //! 3. the findings of a session that ran or recorded research on the topic (the run pointer files `research/runs/<session>.<run>.json`
 //!    name the session);
 //! 4. kept summary pages (`local/summaries/`, `kb_import::is_kept`) whose bibliography names a page or source the topic's records read;
@@ -176,6 +176,25 @@ impl Seed {
     /// The knowledge-base records a page check is given for the seed's spans.
     pub fn records(&self) -> Vec<KbRecord> {
         self.spans.iter().filter_map(Span::to_record).collect()
+    }
+
+    /// The records a written page may cite of the seed (`specs/144` §2.1 item 3): every span's but a research answer's, which is an
+    /// outline. The seed page itself, which code writes, still cites its answer spans ([`Seed::records`]).
+    pub fn citable_records(&self) -> Vec<KbRecord> {
+        self.spans.iter().filter(|s| s.row != Row::Answer).filter_map(Span::to_record).collect()
+    }
+
+    /// The claim ids the research answers' own markers name: what a written page cites in their place (`specs/144` §2.1 item 3).
+    pub fn answer_claims(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for s in self.spans.iter().filter(|s| s.row == Row::Answer) {
+            for id in crate::topic_gather::claim_ids_in(&s.text) {
+                if !out.contains(&id) {
+                    out.push(id);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -424,15 +443,11 @@ fn row_sources(lib: &Library, ids: &BTreeSet<String>, mask: &dyn Fn(&str) -> Str
         let status = record_status(meta["status"].as_str().unwrap_or(""));
         let title = meta["title"].as_str().unwrap_or(id).chars().take(200).collect::<String>();
         let mut gave = false;
-        if let Ok(file) = std::fs::read_to_string(lib.source_dir(id).join("summary.md")) {
-            let (body, line) = below_frontmatter(&file);
-            let text = mask(&chars(body.trim(), SOURCE_PIECE_MAX));
-            if !text.is_empty() {
-                let rel = format!("library/sources/{}/summary.md", id);
-                let lines = text.lines().count().max(1);
-                out.push(Span { row: Row::SourceRead, label: label_of(false, &rel, line), kind: "source summary".into(), rel_path: rel, start_line: line, end_line: line + lines - 1, title: mask(&title), hash: text_hash(&text), text, status: status.clone(), topic: None });
-                gave = true;
-            }
+        // `specs/144` §2.1 items 1 and 2: a summary is not citable text, and a source without citable text gives no span; it is named,
+        // read for its title only. Its kept excerpts are its own words, and are spans when the source holds citable text.
+        if !lib.citable_logged(id) {
+            named.push(id.clone());
+            continue;
         }
         for (i, e) in lib.excerpts(id).iter().enumerate() {
             let text = mask(&chars(e["text"].as_str().unwrap_or(""), SOURCE_PIECE_MAX));
@@ -990,8 +1005,8 @@ mod tests {
         assert_eq!(seed.named_sources, vec![other], "a source with no summary and no excerpt is only named");
     }
 
-    /// `topic_seed::tests::no_span_is_a_source_body` (AC-2's fitness function): a source held whole, with a long summary, gives its
-    /// summary cut to 300 characters and nothing of its text.
+    /// `topic_seed::tests::no_span_is_a_source_body` (AC-2's fitness function): a source held whole, with a long summary, gives nothing
+    /// of its text; since `specs/144` §2.1 item 1 its summary is no span either (a summary is not citable text), and it is only named.
     #[test]
     fn no_span_is_a_source_body() {
         let home = tempfile::tempdir().unwrap();
@@ -1006,10 +1021,9 @@ mod tests {
         research(&ws, "What does the source say?", "r-1", "It says things.", &[("https://e.org/s", &id)]);
         let slug = lib.topics_from_research(&ws, 1).remove(0);
         let seed = assemble(&lib, home.path(), &ws, &lib.topic_side(&slug).unwrap(), &none());
-        let sum: Vec<&Span> = seed.spans.iter().filter(|s| s.kind == "source summary").collect();
-        assert_eq!(sum.len(), 1);
-        assert!(sum[0].text.chars().count() <= SOURCE_PIECE_MAX && sum[0].text.starts_with("A summary"));
+        assert!(seed.spans.iter().all(|s| s.kind != "source summary" && !s.text.contains("A summary in the model's words")), "{:?}", seed.spans);
         assert!(seed.spans.iter().all(|s| !s.text.contains("must never be a span")));
+        assert_eq!(seed.named_sources, vec![id], "read for its title only");
     }
 
     /// `topic_seed::tests::a_private_record_is_never_a_span`; and AC-12: a record with `claims: []` gives a seed from its answer.
@@ -1041,7 +1055,7 @@ mod tests {
         std::fs::create_dir_all(ws.join("local")).unwrap();
         let lib = Library::in_home(home.path());
         let doc = home.path().join("s.md");
-        std::fs::write(&doc, "# S\n\nText.\n").unwrap();
+        std::fs::write(&doc, "# S\n\nThe source text says the tides turn twice a day.\n").unwrap();
         let id = lib.add_file(&doc, &AddOpts { licence: Some("CC0-1.0".into()), ..Default::default() }, &Budgets::default()).unwrap().id;
         excerpts(&lib, &id, &(0..50).map(|i| format!("Excerpt number {i} of the source.")).collect::<Vec<_>>());
         let long: String = (0..60).map(|i| format!("Paragraph {i} of a long answer about acme widgets and their tides, written to fill the span cap.\n\n")).collect::<String>().repeat(2);

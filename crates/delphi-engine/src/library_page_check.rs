@@ -16,6 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const TABLE_HEADING: &str = "Bibliography and citations";
 pub const NO_SOURCES: &str = "no sources cited";
+/// How a check names a marker on a source without citable text (`specs/144` §2.1 item 2).
+pub const NO_TEXT: &str = "cited a source with no text";
 const BANNER_HEAD: &str = "Generated page. Not authoritative. Written by the writer role on ";
 const BANNER_MID: &str = " from the sources listed below; ";
 const BANNER_TAIL: &str = "). Read the cited sources before relying on it.";
@@ -79,6 +81,8 @@ pub enum Finding {
     StartHere(String),
     /// A topic page's `## See also` names a slug that is no topic, or a line that is not a `page:` link.
     UnknownSeeAlso(String),
+    /// A marker names a source with no citable text (`specs/144` §2.1 item 2): it is read for its title only.
+    NoText(String),
 }
 
 impl std::fmt::Display for Finding {
@@ -113,6 +117,7 @@ impl std::fmt::Display for Finding {
             Finding::KeyTerm(why) => write!(f, "key terms: {}", short(why)),
             Finding::StartHere(why) => write!(f, "start here: {}", short(why)),
             Finding::UnknownSeeAlso(s) => write!(f, "see also: `{}` is not a topic page of this library", short(s)),
+            Finding::NoText(id) => write!(f, "{}: `{}` was read for its title only", NO_TEXT, id),
         }
     }
 }
@@ -271,6 +276,11 @@ fn scan(text: &str) -> Vec<(usize, usize, Vec<Cite>)> {
         i = start + 1;
     }
     out
+}
+
+/// The byte ranges of the markers in `text`.
+pub(crate) fn marker_spans(text: &str) -> Vec<(usize, usize)> {
+    scan(text).into_iter().map(|(s, e, _)| (s, e)).collect()
 }
 
 pub fn markers(text: &str) -> Vec<Cite> {
@@ -642,6 +652,34 @@ impl Library {
         (out, cost)
     }
 
+    /// Whether a source holds citable text (`specs/144` §2.1 item 1): its stored text, or, with none held, its kept and pinned excerpts,
+    /// judged by [`crate::citable_text::citable_text`], with the HTTP status of its capture when it was fetched. A summary is never
+    /// judged: a source with only a summary has no text. `Err` says why.
+    pub fn citable(&self, id: &str) -> Result<(), String> {
+        let meta = self.read_meta(id).ok_or_else(|| "the source is not in the library".to_string())?;
+        if !meta["purged"].is_null() {
+            return Err("the source was purged".into());
+        }
+        // Text that no longer matches its recorded hash is the check's own finding (`SourceAltered`); it is not judged here.
+        let Ok(text) = self.stored_text(id) else { return Ok(()) };
+        if text.trim().is_empty() {
+            return Err(if self.source_dir(id).join(crate::source_summary::SUMMARY_MD).is_file() { "only a summary is held, and a summary is not citable text".into() } else { crate::citable_text::Exclusion::Empty.to_string() });
+        }
+        let status = self.capture_record(id).and_then(|r| r["status"].as_u64()).map(|s| s as u16);
+        crate::citable_text::citable_text(&text, status).map_err(|e| e.to_string())
+    }
+
+    /// [`Library::citable`], logging an exclusion with its reason (`specs/144` AC-1).
+    pub(crate) fn citable_logged(&self, id: &str) -> bool {
+        match self.citable(id) {
+            Ok(()) => true,
+            Err(why) => {
+                self.log("source_not_citable", json!({"id": id, "reason": why}));
+                false
+            }
+        }
+    }
+
     /// The body checks of §3.1: records, quotations, tables, images, links; plus the unverified-figure flags.
     pub fn check_body(&self, body: &str, scope: Scope) -> Checked {
         let mut out = Checked::default();
@@ -683,6 +721,8 @@ impl Library {
         let mut recs: BTreeMap<String, Rec> = BTreeMap::new();
         for c in &out.cited {
             match self.resolve(c, scope) {
+                // `specs/144` §2.1 item 2: a source without citable text is read for its title, and cited for nothing.
+                Ok(Rec::Source(id, _)) if !self.citable_logged(&id) => push(Finding::NoText(c.label()), &mut out.findings),
                 Ok(r) => {
                     recs.insert(c.label(), r);
                 }

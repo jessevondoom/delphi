@@ -47,6 +47,8 @@ pub mod pages;
 pub mod page_meta;
 #[path = "library_page_search.rs"]
 pub mod page_search;
+#[path = "library_page_units.rs"]
+pub mod page_units;
 #[path = "library_page_validate.rs"]
 pub mod page_validate;
 #[path = "library_topics.rs"]

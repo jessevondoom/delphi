@@ -63,8 +63,9 @@ impl PageWriter for Declares {
 
 struct Pass;
 impl PageValidator for Pass {
-    fn validate<'a>(&'a self, _q: &'a PageQuery) -> ValidatorFuture<'a> {
-        Box::pin(async move { Ok(ValidatorReply { assertions: vec![Assertion { text: "x".into(), judgement: Judgement::Supported, record: None }], model: "m".into(), family: "f".into(), tokens: 10 }) })
+    fn validate<'a>(&'a self, q: &'a PageQuery) -> ValidatorFuture<'a> {
+        let assertions = crate::library::page_validate::support_all(q);
+        Box::pin(async move { Ok(ValidatorReply { assertions, model: "m".into(), family: "f".into(), tokens: 10 }) })
     }
 }
 
