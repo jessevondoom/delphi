@@ -1302,15 +1302,19 @@ impl Engine {
                     // A cut complaint (`specs/131` S4 item 7) takes the same one retry, with half the carrier's budget.
                     let cut = f.kind == crate::harness_run::FailKind::CutComplaint;
                     let retry_kind = (f.cli_error && f.kind != crate::harness_run::FailKind::AnswerRefused) || f.kind == crate::harness_run::FailKind::AnswerNotFound || cut;
-                    if let (true, true, Some(left)) = (retry_kind, f.retryable, left) {
-                        if left >= crate::harness_run::RETRY_MIN_REMAINING {
-                            m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.as_millis() as u64, "json_retry": f.retry_note.is_some(), "budget_halved": cut}))).await?;
-                            // A JSON-in-text answer that was not found or did not validate is retried with the fixed message (`specs/132`
-                            // §6.1); this is the seat's one retry whatever its cause (OD-3), so a second failure is final.
-                            sc.json_retry = f.retry_note.clone();
-                            sc.half_budget = cut;
-                            first = self.run_harness(&mut sc, &ipr, &hep).await?;
-                        }
+                    // A span with no seat clock (a host's `request_help`, a console task) takes the retry for an empty finish only
+                    // (`specs/062` §6.4, defect 2026-11-27); the retry after a CLI error stays a seat's.
+                    let time_ok = match left {
+                        Some(l) => l >= crate::harness_run::RETRY_MIN_REMAINING,
+                        None => f.kind == crate::harness_run::FailKind::AnswerNotFound,
+                    };
+                    if retry_kind && f.retryable && time_ok {
+                        m.append(sc.ev("harness.retry", json!({"task_id": sc.task_id, "role": sc.role, "attempt": 2, "reason": self.secrets.redact(&f.reason).chars().take(200).collect::<String>(), "remaining_ms": left.map(|l| l.as_millis() as u64), "json_retry": f.retry_note.is_some(), "budget_halved": cut}))).await?;
+                        // A JSON-in-text answer that was not found or did not validate is retried with the fixed message (`specs/132`
+                        // §6.1); this is the seat's one retry whatever its cause (OD-3), so a second failure is final.
+                        sc.json_retry = f.retry_note.clone();
+                        sc.half_budget = cut;
+                        first = self.run_harness(&mut sc, &ipr, &hep).await?;
                     }
                 }
                 // A run that produced no event at all (no output, no tool, no token) is tried once more on any CLI, and after a second

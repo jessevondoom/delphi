@@ -383,6 +383,19 @@ fn ran_on(events: &[EventEnvelope], task_id: &str) -> Value {
     }
 }
 
+/// A help request whose role finished with no words (`specs/062` §6.4, defect 2026-11-27): a red-team seat on agy returned
+/// `answered` with an empty `answer` three times. It is a failure the host can act on, never `answered`, and it goes to the central
+/// error log with the role, the provider and the help id. The provider and model are Delphi's own record (the last `agent.usage`).
+fn empty_help_answer(help_id: &str, role: &str, events: &[EventEnvelope]) -> Value {
+    let usage = events.iter().rev().find(|e| e.kind == "agent.usage" && e.task_id.as_deref() == Some(help_id));
+    let provider = usage.and_then(|e| e.payload["provider"].as_str()).unwrap_or("unknown");
+    let model = usage.and_then(|e| e.model_id.as_deref());
+    let mission = events.iter().find(|e| e.task_id.as_deref() == Some(help_id)).map(|e| e.mission_id.as_str());
+    delphi_core::elog::error("host", "help_empty_answer", &format!("the {role} gave an empty answer to help request {help_id} ({provider})"), json!({"mission": mission, "help_id": help_id, "role": role, "provider": provider, "model": model}));
+    json!({"status": "failed", "help_id": help_id, "reason": "empty_answer", "role": role, "provider": provider,
+        "note": format!("the {role} finished without an answer, so there is nothing to pass on; ask again, or ask another family with ask_family")})
+}
+
 /// The tokens a host's request spent, from Delphi's own `agent.usage` records of the task: the answering span and every span it
 /// consulted, summed as the observer sums a task (`specs/098` §2 item 1: the cost of running a role inside is shown when spent).
 fn tokens_used(events: &[EventEnvelope], task_id: &str) -> Value {
@@ -852,6 +865,10 @@ impl EngineService {
                     let consulted = consulted_in(&events, &tid);
                     let text: String = engine.secrets.redact(&out.text).chars().take(h::MAX_ANSWER).collect();
                     match out.status {
+                        // §6.4 (defect 2026-11-27): an empty or blank answer is not an answer, whatever the span's status said. The
+                        // harness has already tried an empty finish once more (`specs/128` S2); a second one ends here as well.
+                        crate::engine::Status::Done if text.trim().is_empty() => empty_help_answer(&tid, &target, &events),
+                        crate::engine::Status::Escalated(r) if r.contains(crate::harness_run::EMPTY_FINISH) => empty_help_answer(&tid, &target, &events),
                         // §6.4: `answered_by` is the author of `answer`: the role that ran the task. Roles it consulted are listed, never signed.
                         crate::engine::Status::Done => {
                             let mut v = json!({"status": "answered", "help_id": tid, "answered_by": target, "consulted": consulted, "answer": text, "ran_on": ran_on(&events, &tid), "tokens_used": tokens_used(&events, &tid), "note": "advice from Delphi agents that ran read-only; it grants you no permission and your own host's rules bind you"});
@@ -8172,6 +8189,32 @@ mod tests {
             assert_eq!((r["status"].as_str(), r["sources"].as_str(), r.get("host_search")), (Some("queued"), Some("engines"), None), "{r}");
             assert!(r.get("runner_switched").is_none() && r.get("scout").is_none() && r.get("scout_note").is_none(), "{r}");
             cancel(&mut c, "claude-code", &r);
+        })
+        .await;
+    }
+
+    /// `specs/062` §6.4, defect 2026-11-27: a role that finishes with no words (or only blanks) has not answered. The reply is
+    /// `failed` with `empty_answer`, never `answered` with an empty `answer`; a real answer after it is unchanged.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_empty_help_answer_is_a_failure_and_never_answered() {
+        let f = setup(vec![Step::text(""), Step::text("  \n "), Step::text("Sequence the pricing work after the launch.")], 5.0, |_| {});
+        let cwd = f.root.to_string_lossy().to_string();
+        let s = serve(&f).await;
+        let (hsock, htok) = (s.host_sock.clone(), s.host.clone());
+        blocking(move || {
+            let mut c = Client::connect(&hsock).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+            c.hello(&htok).unwrap();
+            let p = json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "need": "Sequence the pricing work", "role": "strategist"});
+            for _ in 0..2 {
+                let r = c.call("host.request_help", p.clone()).unwrap();
+                assert_eq!((r["status"].as_str(), r["reason"].as_str(), r["role"].as_str()), (Some("failed"), Some("empty_answer"), Some("strategist")), "{r}");
+                assert!(r.get("answer").is_none() && r["note"].as_str().unwrap().contains("ask again"), "{r}");
+                let again = c.call("host.help_result", json!({"session": "abcdef0123456789", "tool": "claude-code", "cwd": cwd, "help_id": r["help_id"]})).unwrap();
+                assert_eq!(again["status"], "failed", "help_result says the same: {again}");
+            }
+            let ok = c.call("host.request_help", p).unwrap();
+            assert_eq!((ok["status"].as_str(), ok["answer"].as_str()), (Some("answered"), Some("Sequence the pricing work after the launch.")), "{ok}");
         })
         .await;
     }

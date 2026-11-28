@@ -223,8 +223,21 @@ pub(crate) const RETRY_MIN_REMAINING: std::time::Duration = std::time::Duration:
 /// to touch the same files, one of them outside the worktree guard.
 const DUPLICATED_FOR_BUILDERS: [&str; 6] = ["read_file", "list_dir", "search", "write_file", "run_command", "shell"];
 
-/// Delphi tools that only read: a task that used nothing else can still be retried by another method.
-const READ_ONLY_TOOLS: [&str; 4] = ["read_file", "list_dir", "search", "check"];
+/// Delphi tools that only read: a task that used nothing else can still be retried by another method. They are the tools a Council
+/// seat may read with (`kb_search` and `read_doc` among them): before 2026-11-27 this list had four names, so a span that only
+/// searched the knowledge base counted as acting and its wordless finish was taken as a success (an empty `request_help` answer).
+const READ_ONLY_TOOLS: [&str; 8] = crate::tools::SEAT_READING_TOOLS;
+
+/// The reason a run gives when the CLI finished with success and no words at all (`specs/128` S2). `request_help` reads it to tell
+/// an empty answer from any other failure (`specs/062` §6.4).
+pub(crate) const EMPTY_FINISH: &str = "the CLI finished with success and no words (an empty finish)";
+
+/// Whether a tool the CLI's stream names is one of Delphi's bridge tools, which count as acting only when the call reaches the bridge,
+/// by their own kind. The `agy` CLI shows them as `mcp_delphi_delphi_<name>`, not `mcp__delphi__<name>`: before 2026-11-27 a Gemini
+/// seat's `kb_search` counted as acting here, and its empty finish was never retried.
+fn is_bridge_tool(cli: Cli, name: &str) -> bool {
+    name.starts_with(TOOL_PREFIX) || (cli == Cli::Agy && name.starts_with(AGY_TOOL_PREFIX))
+}
 
 /// The system sections a CLI seat is given: the prompt's own, with the skills index (`specs/124` §17) kept only when the seat
 /// holds Delphi's `read_file`, the one way it can open `skills/<name>/SKILL.md`. A seat with no bridge, and a Builder that
@@ -1232,7 +1245,7 @@ impl Engine {
                     }
                     // A Delphi tool counts as acting when its call runs (above), by its own kind.
                     any_tool = true;
-                    used_tools |= !name.starts_with(TOOL_PREFIX);
+                    used_tools |= !is_bridge_tool(cli, &name);
                     let line = self.secrets.redact(&summarize(&name, &input));
                     sc.m.append(sc.agent_ev("harness.tool", json!({"tool": name, "summary": line}), ep, &launch.model)).await?;
                     // In the CLI's auto mode a connector call raises no permission request, so the taint is set when the
@@ -1313,7 +1326,7 @@ impl Engine {
                                 let words = text.split_whitespace().count() + text_parts.iter().map(|t| t.split_whitespace().count()).sum::<usize>();
                                 failure = Some((format!("the CLI finished without the answer that was asked for (prompt {} bytes; budget {budget}; {} tool calls; {words} words)", counts["prompt_bytes"], tool_names.len()), !used_tools));
                             }
-                            FailKind::AnswerNotFound => failure = Some(("the CLI finished with success and no words (an empty finish)".into(), !used_tools)),
+                            FailKind::AnswerNotFound => failure = Some((EMPTY_FINISH.into(), !used_tools)),
                             _ => {}
                         }
                     }
@@ -3589,6 +3602,66 @@ echo '{"event":"result","result":{"status":"SUCCESS","response":"a good answer",
         let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_EMPTY_FINISH), Duration::from_secs(5));
         assert!(matches!(seat_r2(&f).await, crate::council::Stance::Abstained(_)));
         assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0));
+    }
+
+    /// The 2026-11-27 `request_help` shape: an agy seat searches the knowledge base through Delphi's bridge (shown in the stream as
+    /// `mcp_delphi_delphi_kb_search`), spends output tokens and finishes with success and no words.
+    const AGY_KB_SEARCH_THEN_EMPTY: &str = r#"echo '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"mcp_delphi_delphi_kb_search","tool_info":{"parameters":{"query":"q"}}}}'
+echo '{"event":"result","result":{"status":"SUCCESS","response":"","usage":{"input_tokens":35972,"output_tokens":1005}}}'"#;
+
+    /// A host's help task, as `host.request_help` runs it: read-only, with no seat clock.
+    async fn help_task(f: &Fx) -> crate::engine::TaskOutcome {
+        let tid = f.m.next_task_id();
+        f.engine.run_task_for_host(&f.m, tid, "architect", "Is this plan sound?").await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_empty_help_answer_after_a_kb_search_is_tried_once_more_and_the_retry_answers() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 1, AGY_KB_SEARCH_THEN_EMPTY), Duration::from_secs(600));
+        let out = help_task(&f).await;
+        assert!(matches!(out.status, crate::engine::Status::Done) && out.text == "a good answer", "{:?} {:?}", out.status, out.text);
+        assert_eq!(starts(&count), 2);
+        let r = events_of(&f, "harness.retry");
+        assert_eq!(r.len(), 1, "{r:?}");
+        assert!(r[0].payload["reason"].as_str().unwrap().contains(EMPTY_FINISH) && r[0].payload["remaining_ms"].is_null(), "no seat clock: {}", r[0].payload);
+        let n = events_of(&f, "harness.no_answer");
+        assert_eq!((n.len(), n[0].payload["tool_calls"].as_u64(), n[0].payload["output_tokens"].as_u64()), (1, Some(1), Some(1005)), "{n:?}");
+    }
+
+    #[tokio::test]
+    async fn two_empty_help_answers_end_the_task_with_the_empty_finish_never_done() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 5, AGY_KB_SEARCH_THEN_EMPTY), Duration::from_secs(600));
+        let out = help_task(&f).await;
+        assert!(matches!(&out.status, crate::engine::Status::Escalated(r) if r.contains(EMPTY_FINISH)), "{:?}", out.status);
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len(), events_of(&f, "harness.no_answer").len()), (2, 1, 2));
+    }
+
+    #[tokio::test]
+    async fn a_help_answer_with_words_is_not_retried() {
+        let scripts = tempfile::tempdir().unwrap();
+        let count = scripts.path().join("count");
+        let f = retry_fx(flaky_agy(scripts.path(), &count, 0, AGY_KB_SEARCH_THEN_EMPTY), Duration::from_secs(600));
+        let out = help_task(&f).await;
+        assert!(matches!(out.status, crate::engine::Status::Done) && out.text == "a good answer", "{:?}", out.status);
+        assert_eq!((starts(&count), events_of(&f, "harness.retry").len()), (1, 0));
+    }
+
+    /// Delphi's own tools as each CLI names them are not "acting" by their name alone; the CLI's own tools are.
+    #[test]
+    fn delphi_bridge_tools_are_known_by_each_clis_prefix() {
+        assert!(is_bridge_tool(Cli::Agy, "mcp_delphi_delphi_kb_search") && is_bridge_tool(Cli::Claude, "mcp__delphi__kb_search"));
+        assert!(!is_bridge_tool(Cli::Claude, "mcp_delphi_delphi_kb_search"), "only agy names them so");
+        assert!(!is_bridge_tool(Cli::Agy, "run_command") && !is_bridge_tool(Cli::Agy, "mcp_delphi_other_kb_search"));
+        for t in ["kb_search", "read_doc", "read_file", "recall_memory"] {
+            assert!(READ_ONLY_TOOLS.contains(&t), "{t}");
+        }
+        for t in ["write_file", "run_command", "propose_note", "dispatch_agent"] {
+            assert!(!READ_ONLY_TOOLS.contains(&t), "{t}");
+        }
     }
 
     #[test]
